@@ -1,0 +1,10 @@
+
+<!-- launch/test_serial_read.launch -->
+<launch>
+    <node name="test_serial_read_node" pkg="alicia_duo_ros_control" type="hardware_interface_node" output="screen" />
+</launch>
+
+
+<!-- <launch>
+  <node name="serial_communication" pkg="alicia_duo_ros_control" type="serial_comm" output="screen" />
+</launch> -->

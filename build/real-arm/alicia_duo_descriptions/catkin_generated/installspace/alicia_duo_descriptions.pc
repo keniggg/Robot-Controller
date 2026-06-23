@@ -1,0 +1,8 @@
+prefix=/home/zhuyupei/alicia_wa_full/install
+
+Name: alicia_duo_descriptions
+Description: Description of alicia_duo_descriptions
+Version: 1.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

@@ -1,0 +1,37 @@
+<launch>
+  <!-- Load robot description -->
+  <param name="robot_description" textfile="$(find alicia_duo_descriptions)/urdf/alicia_duo_with_gripper.urdf" />
+  <!-- Load the camera and calibration result -->
+  <!-- <param name="camera_load" value="true" /> -->
+  <arg name="camera_load" default="false" />
+
+  <!-- Load controller configuration -->
+  <rosparam file="$(find alicia_duo_moveit)/config/ros_controllers.yaml" command="load" />
+
+  <!-- Load the controllers -->
+  <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false"
+        output="screen" args="joint_state_controller arm_pos_controller"/>
+
+  <!-- Robot State Publisher -->
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+
+  <!-- Hardware Interface -->
+  <node name="alicia_hardware_interface_node" pkg="alicia_duo_ros_control" type="hardware_interface_node" output="screen" />
+
+  <!-- MoveIt -->
+  <include file="$(find alicia_duo_moveit)/launch/move_group.launch">
+    <arg name="load_robot_description" value="false"/>
+  </include>
+
+
+  <!-- RViz -->
+  <include file="$(find alicia_duo_moveit)/launch/moveit_rviz.launch">
+    <arg name="rviz_config" value="$(find alicia_duo_moveit)/config/alicia_rviz.rviz"/>
+  </include>
+
+
+<include file="$(find easy_handeye)/launch/publish_orbbec.launch" if="$(arg camera_load)">
+  <arg name="namespace_prefix" value="orbbec_handeyecalibration"/>
+</include>
+
+</launch>

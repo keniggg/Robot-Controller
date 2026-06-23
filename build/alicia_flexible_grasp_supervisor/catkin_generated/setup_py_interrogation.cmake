@@ -1,0 +1,7 @@
+set(alicia_flexible_grasp_supervisor_SETUP_PY_SETUP_MODULE "distutils.core")
+set(alicia_flexible_grasp_supervisor_SETUP_PY_VERSION "0.1.0")
+set(alicia_flexible_grasp_supervisor_SETUP_PY_SCRIPTS "")
+set(alicia_flexible_grasp_supervisor_SETUP_PY_PACKAGES "alicia_flexible_grasp")
+set(alicia_flexible_grasp_supervisor_SETUP_PY_PACKAGE_DIRS "src/alicia_flexible_grasp")
+set(alicia_flexible_grasp_supervisor_SETUP_PY_MODULES "")
+set(alicia_flexible_grasp_supervisor_SETUP_PY_MODULE_DIRS "")

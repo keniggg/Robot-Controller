@@ -1,0 +1,3 @@
+coacd
+trimesh
+opencv-python

@@ -1,0 +1,15 @@
+<launch>
+  <!-- Load MoveIt control -->
+  <include file="$(find alicia_duo_moveit)/launch/real_robot_control.launch">
+    <arg name="camera_load" value="true"/>
+  </include>
+
+  <!-- Object Pose Transformer Node -->
+  <node name="object_detection" pkg="alicia_duo_grasp_2d" type="obpose.py" output="screen"/>
+
+  <!-- Object Detection Node -->
+  <node name="object_pose_transformer" pkg="alicia_duo_grasp_2d" type="obj_detection.py" output="screen"/>
+
+  <!-- Grasp Controller Node -->
+  <node name="grasp_controller" pkg="alicia_duo_grasp_2d" type="grasp_2d.py" output="screen"/>
+</launch>
