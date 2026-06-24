@@ -7,7 +7,7 @@
     <!-- ==                 启动机械臂的moveit控制                    == -->
     <!-- ============================================================== -->
 
-    <include file="$(find alicia_duo_moveit)/launch/real_robot_control.launch">
+    <include file="$(find alicia_d_driver)/launch/alicia_d_bringup.launch">
     </include>
 
     <!-- ============================================================== -->
