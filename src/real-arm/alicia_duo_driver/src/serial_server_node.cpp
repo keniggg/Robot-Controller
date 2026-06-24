@@ -320,10 +320,22 @@ void SerialServerNode::readFrameThread() {
             
             {
                 std::lock_guard<std::mutex> lock(serial_mutex_);
+                ROS_INFO_STREAM_THROTTLE(
+                    1.0,
+                     "serial available bytes: " << serial_port_.available()
+                );
                 // 只有串口打开且有数据可读时才读取
                 if (serial_port_.isOpen() && serial_port_.available() > 0) {
                     try {
                         bytes_read = serial_port_.read(&byte, 1);
+                        if (bytes_read > 0) {
+                            ROS_INFO_STREAM_THROTTLE(
+                            0.1,
+                            "RAW RX byte: 0x"
+                            << std::hex << std::uppercase << std::setw(2)
+                            << std::setfill('0') << static_cast<int>(byte)
+                        );
+                        }
                     } catch (const std::exception& e) {
                         // 读取出错，可能是串口断开
                         ROS_ERROR_STREAM("读取串口数据异常: " << e.what());

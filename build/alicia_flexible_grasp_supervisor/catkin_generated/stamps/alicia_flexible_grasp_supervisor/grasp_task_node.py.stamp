@@ -20,7 +20,7 @@ class GraspTaskNode:
         self.stop_flag = False
         self.state = GraspStates.IDLE
         self.message = 'idle'
-        self.planner = MoveItPlanner(rospy.get_param('~move_group', 'arm'))
+        self.planner = MoveItPlanner(rospy.get_param('~move_group', 'alicia'))
         self.gripper = GripperCommander('/gripper_control')
         self.pose_gen = GraspPoseGenerator(rospy.get_param('~pregrasp_distance_m', 0.08), rospy.get_param('~lift_height_m', 0.05))
         self.verifier = GraspVerifier(rospy.get_param('~hold_force_min_mn', 800.0))

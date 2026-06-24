@@ -10,7 +10,7 @@ class MotionGatewayNode:
     def __init__(self):
         self.arm_pub = rospy.Publisher('/arm_joint_command', ArmJointState, queue_size=10)
         self.gripper_pub = rospy.Publisher('/gripper_control', Float32, queue_size=10)
-        self.planner = MoveItPlanner(rospy.get_param('~move_group', 'arm'))
+        self.planner = MoveItPlanner(rospy.get_param('~move_group', 'alicia'))
         rospy.Service('/motion/set_target_pose', SetTargetPose, self.handle_target_pose)
 
     def handle_target_pose(self, req):

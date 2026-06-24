@@ -39,7 +39,7 @@ from tactile_sdk import TactilePressureSDK, CommunicationError, CalibrationMode
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
-PORT = "COM6"
+PORT = "/dev/ttyACM0"
 SLAVE_ADDRESS = 1
 
 # 11 个拟合点（用于恢复后读回验证）

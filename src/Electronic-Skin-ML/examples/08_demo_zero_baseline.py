@@ -31,7 +31,7 @@ from tactile_sdk import TactilePressureSDK, CommunicationError
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
-PORT = "COM6"
+PORT = "/dev/ttyACM0"
 SLAVE_ADDRESS = 1
 
 

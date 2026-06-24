@@ -1,7 +1,7 @@
 <launch>
   <!-- 全局参数 -->
   <arg name="debug_mode" default="false" doc="启用调试模式"/>
-  <arg name="port" default="ttyACM0" doc="指定roslaunch --screen alicia_duo_driver serial_server.launch串口设备，留空则自动检测"/>
+  <arg name="port" default="ttyACM1" doc="指定roslaunch --screen alicia_duo_driver serial_server.launch串口设备，留空则自动检测"/>
   <arg name="baudrate" default="921600" doc="串口波特率"/>
   <arg name="servo_count" default="9" doc="舵机数量"/>
   <arg name="output" default="screen" doc="日志输出位置"/>

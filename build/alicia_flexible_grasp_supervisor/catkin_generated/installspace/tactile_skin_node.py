@@ -12,7 +12,7 @@ class TactileSkinNode:
     def __init__(self):
         def gp(name, default):
             return rospy.get_param('~' + name, rospy.get_param('/tactile/' + name, default))
-        self.port = gp('port', '/dev/ttyUSB0')
+        self.port = gp('port', '/dev/ttyACM0')
         self.baudrate = int(gp('baudrate', 4000000))
         self.slave_address = int(gp('slave_address', 1))
         self.timeout = float(gp('timeout', 1.0))
