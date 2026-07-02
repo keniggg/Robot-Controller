@@ -2,8 +2,9 @@ gui:
   window_title: "Alicia-D 柔顺抓取上位机 v2"
   camera_topic: "/supervisor/camera/color/image_raw"
   depth_topic: "/supervisor/camera/depth/image_raw"
-  camera_display_hz: 10
+  camera_display_hz: 15
   depth_display_hz: 10
+  camera_smooth_scale: false
   object_topic: "/perception/object"
   tactile_topic: "/tactile/state"
   joint_state_topic: "/joint_states"
@@ -11,6 +12,7 @@ gui:
   refresh_ms: 50
   pregrasp_plan_timeout_sec: 12
   pregrasp_execute_max_age_sec: 30
+  grasp_flow_lock_max_age_sec: 60
   pregrasp_required_stable_detections: 3
   pregrasp_stability_pixel_radius_px: 45
   pregrasp_stability_depth_radius_m: 0.15

@@ -12,6 +12,8 @@ robot:
   joint_max_rad: [ 3.14,  2.5,  2.5,  3.14,  2.5,  3.14]
   pose_fallback_enabled: true
   position_only_fallback_enabled: true
+  # 规划阶段可以用 position-only 辅助诊断可达性，真实执行阶段禁止该兜底，避免姿态丢失后乱动。
+  position_only_execute_enabled: false
   orientation_fallback_enabled: true
   cached_plan_position_tolerance_m: 0.01
   pregrasp_candidate_orientations_xyzw:

@@ -91,9 +91,9 @@ AliciaDDriverNode::AliciaDDriverNode() : pnh_("~"), last_process_time_(0.0)
         std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
         communicator_->write_raw_frame(torque_on_frame);
     } else {
-        ROS_ERROR("Initial connection failed. Starting reconnect timer.");
-        reconnect_timer_ = nh_.createTimer(ros::Duration(5.0), &AliciaDDriverNode::reconnect_callback, this);
+        ROS_ERROR("Initial connection failed. Reconnect timer will keep trying.");
     }
+    reconnect_timer_ = nh_.createTimer(ros::Duration(5.0), &AliciaDDriverNode::reconnect_callback, this);
 
     // Initialize last feedback time to now so we don't immediately consider it stale
     last_feedback_time_ = ros::Time::now();
@@ -197,10 +197,7 @@ void AliciaDDriverNode::reconnect_callback(const ros::TimerEvent& event)
             ROS_INFO("Reconnect successful! Enabling full torque mode.");
             std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
             communicator_->write_raw_frame(torque_on_frame);
-            reconnect_timer_.stop(); // Stop the timer upon success
         }
-    } else {
-        reconnect_timer_.stop(); // Stop if already connected
     }
 
 }

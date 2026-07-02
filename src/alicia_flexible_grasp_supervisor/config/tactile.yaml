@@ -5,11 +5,17 @@ tactile:
   port: "/dev/alicia_skin"
   baudrate: 4000000
   slave_address: 1
+  # 当前实测：机械臂左侧夹爪皮肤=Modbus 地址 2，右侧夹爪皮肤=地址 1。
+  # 双地址模式下，每块皮肤都是完整 60 点阵列，不再把单块 60 点数据 half split。
+  dual_slave_addresses: true
+  left_slave_address: 2
+  right_slave_address: 1
   pressure_value_type: 1      # 1=mN calibrated, 0=raw ADC
   dynamic_zero_on_start: true
   read_hz: 120
   rows: 5
   cols: 12
+  # dual_slave_addresses=true 时，split_mode 不参与左右拆分；每个地址各读取一整块 5x12 皮肤。
   # 如果只有一块 60 点电子皮肤，可把 split_mode 设为 single。
   # 如果左右指各占一半，则设为 half: left=0..29, right=30..59。
   split_mode: "half"          # single | half

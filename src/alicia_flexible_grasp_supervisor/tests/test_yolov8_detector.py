@@ -47,13 +47,14 @@ class FakeBackend:
         self.names = {0: 'cup', 1: 'bottle'}
         self.calls = []
 
-    def predict(self, image, conf=0.25, iou=0.45, device='cpu', verbose=False):
+    def predict(self, image, conf=0.25, iou=0.45, device='cpu', verbose=False, imgsz=None):
         self.calls.append({
             'shape': image.shape,
             'conf': conf,
             'iou': iou,
             'device': device,
             'verbose': verbose,
+            'imgsz': imgsz,
         })
         boxes = FakeBoxes(
             xyxy=[
@@ -83,6 +84,18 @@ class YOLOv8DetectorTest(unittest.TestCase):
         self.assertEqual(det['bbox'], (140, 30, 90, 100))
         self.assertEqual((det['u'], det['v']), (185, 80))
         self.assertAlmostEqual(det['confidence'], 0.82)
+
+    def test_predict_receives_configured_image_size(self):
+        backend = FakeBackend()
+        detector = YOLOv8ObjectDetector(
+            model_backend=backend,
+            target_class='bottle',
+            imgsz=416,
+        )
+
+        detector.detect(np.zeros((480, 640, 3), dtype=np.uint8))
+
+        self.assertEqual(backend.calls[0]['imgsz'], 416)
 
     def test_preferred_point_selects_near_candidate_over_higher_confidence(self):
         detector = YOLOv8ObjectDetector(model_backend=FakeBackend(), target_class='')

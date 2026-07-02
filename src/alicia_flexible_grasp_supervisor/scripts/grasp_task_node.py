@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
+from copy import deepcopy
+import math
+import time
 import rospy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseArray, PoseStamped
+from sensor_msgs.msg import JointState
 from alicia_flexible_grasp_supervisor.msg import ObjectPose, GraspState
 from alicia_flexible_grasp_supervisor.srv import StartGrasp, StartGraspResponse, StopGrasp, StopGraspResponse, SetTargetPose, SetFloat
 from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages, STATE_NAMES
@@ -13,6 +17,10 @@ except Exception:
 class GraspTaskNode:
     def __init__(self):
         self.latest_obj = None
+        self.latest_obj_time = None
+        self.latest_grasp6d_plan = None
+        self.latest_grasp6d_plan_time = None
+        self.latest_joint_state = None
         self.active = False
         self.stage = GraspStages.IDLE
         self.tf_buffer = None
@@ -22,13 +30,57 @@ class GraspTaskNode:
             self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.pub = rospy.Publisher('/grasp/state', GraspState, queue_size=10)
         rospy.Subscriber('/perception/object', ObjectPose, self.obj_cb, queue_size=1)
+        rospy.Subscriber(rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'), PoseArray, self.grasp6d_plan_cb, queue_size=1)
+        rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
         rospy.Service('/grasp/start', StartGrasp, self.start_cb)
         rospy.Service('/grasp/stop', StopGrasp, self.stop_cb)
         rospy.loginfo('GraspTaskNode ready')
 
     def obj_cb(self, msg):
-        if msg.detected:
-            self.latest_obj = msg
+        if not msg.detected:
+            return
+        gcfg = rospy.get_param('/grasp', {})
+        confidence = float(getattr(msg, 'confidence', 1.0) or 0.0)
+        min_confidence = self._cfg_float(gcfg, 'min_object_confidence', 0.50)
+        if confidence < min_confidence:
+            rospy.logwarn_throttle(
+                1.0,
+                'Grasp ignored low-confidence object %.3f < %.3f',
+                confidence,
+                min_confidence,
+            )
+            return
+
+        now = rospy.Time.now()
+        previous = getattr(self, 'latest_obj', None)
+        previous_time = getattr(self, 'latest_obj_time', None)
+        max_jump = self._cfg_float(gcfg, 'max_object_jump_m', 0.12)
+        jump_window = self._cfg_float(gcfg, 'object_jump_filter_window_sec', 4.0)
+        if previous is not None and previous_time is not None and max_jump > 0.0:
+            try:
+                age = (now - previous_time).to_sec()
+            except Exception:
+                age = float('inf')
+            jump = self._object_distance(previous, msg)
+            if age <= jump_window and jump > max_jump:
+                rospy.logwarn_throttle(
+                    1.0,
+                    'Grasp ignored object jump %.3f m > %.3f m within %.1fs',
+                    jump,
+                    max_jump,
+                    jump_window,
+                )
+                return
+
+        self.latest_obj = msg
+        self.latest_obj_time = now
+
+    def joint_cb(self, msg):
+        self.latest_joint_state = msg
+
+    def grasp6d_plan_cb(self, msg):
+        self.latest_grasp6d_plan = msg
+        self.latest_grasp6d_plan_time = rospy.Time.now()
 
     def set_state(self, stage, message='', success=False):
         self.stage = stage
@@ -73,7 +125,11 @@ class GraspTaskNode:
         final_offset = max(0.0, float(gcfg.get('final_approach_offset_m', 0.015)))
         pregrasp_mode = str(gcfg.get('pregrasp_offset_mode', 'base_z'))
         lift_height = float(gcfg.get('lift_height_m', 0.05))
+        pregrasp_reached_tolerance = float(gcfg.get('pregrasp_reached_tolerance_m', 0.04))
         open_position = float(gripper_cfg.get('open_position_m', 0.0))
+
+        if bool(gcfg.get('use_grasp6d_plan', False)):
+            return self._execute_grasp6d_plan(gcfg, open_position, move_pose, set_gripper, close)
 
         self.set_state(GraspStages.SEARCH_OBJECT, 'waiting for object')
         t0 = rospy.Time.now()
@@ -82,41 +138,61 @@ class GraspTaskNode:
         if self.latest_obj is None:
             self.set_state(GraspStages.FAILED, 'no object')
             return False
+        locked_obj = deepcopy(self.latest_obj)
+        self._log_object_pose('locked target', locked_obj)
 
         self.set_state(GraspStages.PLAN_PREGRASP, 'compute pregrasp')
         camera_pose = self._lookup_camera_pose_base()
         pre = make_pregrasp_pose(
-            self.latest_obj.pose_base,
+            locked_obj.pose_base,
             pregrasp_distance,
             camera_pose=camera_pose,
             mode=pregrasp_mode,
         )
-        self.set_state(GraspStages.MOVE_PREGRASP, 'moving')
-        resp = move_pose(pre, True)
-        if not resp.success:
-            self.set_state(GraspStages.FAILED, resp.message)
-            return False
+        if self._pose_close_enough(self._current_tool_pose_base(), pre, pregrasp_reached_tolerance):
+            self.set_state(GraspStages.MOVE_PREGRASP, 'already at pregrasp')
+        else:
+            self.set_state(GraspStages.MOVE_PREGRASP, 'planning')
+            resp = move_pose(pre, False)
+            if not resp.success:
+                self.set_state(GraspStages.FAILED, 'pregrasp planning failed: ' + resp.message)
+                return False
+            self.set_state(GraspStages.MOVE_PREGRASP, 'moving')
+            resp = move_pose(pre, True)
+            if not resp.success:
+                self.set_state(GraspStages.FAILED, resp.message)
+                return False
+            self._wait_for_motion_settle('pregrasp')
 
         set_gripper(open_position)
         rospy.sleep(0.5)
+        self._wait_for_motion_settle('before approach')
 
         if not self.active:
             self.set_state(GraspStages.IDLE, 'stopped before target approach')
             return False
 
         camera_pose = self._lookup_camera_pose_base() or camera_pose
-        target_obj = self.latest_obj
+        target_obj = self._target_for_approach(locked_obj, gcfg)
+        self._log_object_pose('approach target', target_obj)
         approach = make_pregrasp_pose(
             target_obj.pose_base,
             final_offset,
             camera_pose=camera_pose,
             mode=pregrasp_mode,
         )
+        self.set_state(GraspStages.APPROACH_TARGET, 'planning target approach')
+        resp = move_pose(approach, False)
+        if not resp.success:
+            self.set_state(GraspStages.FAILED, 'approach target planning failed: ' + resp.message)
+            return False
+
         self.set_state(GraspStages.APPROACH_TARGET, 'moving to target')
         resp = move_pose(approach, True)
         if not resp.success:
             self.set_state(GraspStages.FAILED, 'approach target failed: ' + resp.message)
             return False
+        self._wait_for_motion_settle('approach')
 
         self.set_state(GraspStages.COMPLIANT_CLOSE, 'force-guided close')
         resp = close(True)
@@ -132,6 +208,211 @@ class GraspTaskNode:
             return False
         self.set_state(GraspStages.SUCCESS, 'grasp done', True)
         return True
+
+    def _execute_grasp6d_plan(self, gcfg, open_position, move_pose, set_gripper, close):
+        plan = self._fresh_grasp6d_plan(gcfg)
+        if plan is None:
+            self.set_state(GraspStages.FAILED, 'no fresh 6D grasp plan')
+            return False
+
+        pregrasp = self._pose_array_item_as_stamped(plan, 0)
+        approach = self._pose_array_item_as_stamped(plan, 1)
+        grasp = self._pose_array_item_as_stamped(plan, 2)
+        lift = self._pose_array_item_as_stamped(plan, 3)
+
+        self.set_state(GraspStages.PLAN_PREGRASP, 'using 6D grasp plan')
+        set_gripper(open_position)
+        if not self._plan_and_execute_pose(GraspStages.MOVE_PREGRASP, '6D pregrasp', pregrasp, move_pose, '6D pregrasp'):
+            return False
+        if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D approach', approach, move_pose, '6D approach'):
+            return False
+        if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D grasp pose', grasp, move_pose, '6D grasp pose'):
+            return False
+
+        self.set_state(GraspStages.COMPLIANT_CLOSE, 'force-guided close')
+        resp = close(True)
+        if not resp.success:
+            self.set_state(GraspStages.FAILED, resp.message)
+            return False
+
+        if not self._plan_and_execute_pose(GraspStages.LIFT_OBJECT, '6D lift', lift, move_pose, '6D lift'):
+            return False
+        self.set_state(GraspStages.SUCCESS, '6D grasp done', True)
+        return True
+
+    def _plan_and_execute_pose(self, stage, label, pose, move_pose, settle_reason):
+        self.set_state(stage, 'planning ' + label)
+        resp = move_pose(pose, False)
+        if not resp.success:
+            self.set_state(GraspStages.FAILED, '%s planning failed: %s' % (label, resp.message))
+            return False
+        self.set_state(stage, 'moving ' + label)
+        resp = move_pose(pose, True)
+        if not resp.success:
+            self.set_state(GraspStages.FAILED, '%s failed: %s' % (label, resp.message))
+            return False
+        self._wait_for_motion_settle(settle_reason)
+        return True
+
+    def _fresh_grasp6d_plan(self, gcfg):
+        plan = getattr(self, 'latest_grasp6d_plan', None)
+        if plan is None or len(getattr(plan, 'poses', [])) < 4:
+            return None
+        plan_time = getattr(self, 'latest_grasp6d_plan_time', None)
+        if plan_time is None:
+            return None
+        max_age = max(0.0, self._cfg_float(gcfg, 'grasp6d_plan_max_age_sec', 2.0))
+        try:
+            age = (rospy.Time.now() - plan_time).to_sec()
+        except Exception:
+            return None
+        if age > max_age:
+            rospy.logwarn('Rejected stale 6D grasp plan age %.2fs > %.2fs', age, max_age)
+            return None
+        return plan
+
+    @staticmethod
+    def _pose_array_item_as_stamped(plan, index):
+        pose = PoseStamped()
+        pose.header = plan.header
+        pose.pose = deepcopy(plan.poses[index])
+        return pose
+
+    def _current_tool_pose_base(self):
+        tf_buffer = getattr(self, 'tf_buffer', None)
+        if tf_buffer is None:
+            return None
+        base_frame = str(rospy.get_param('/handeye/base_frame', 'base_link'))
+        tool_frame = str(rospy.get_param('/handeye/parent_frame', 'tool0'))
+        timeout = float(rospy.get_param('/handeye/tf_timeout_sec', 0.2))
+        try:
+            transform = tf_buffer.lookup_transform(
+                base_frame,
+                tool_frame,
+                rospy.Time(0),
+                rospy.Duration(timeout),
+            )
+        except Exception as exc:
+            rospy.logwarn_throttle(2.0, 'Grasp tool TF lookup failed: %s', exc)
+            return None
+        pose = PoseStamped()
+        pose.header = transform.header
+        pose.pose.position.x = transform.transform.translation.x
+        pose.pose.position.y = transform.transform.translation.y
+        pose.pose.position.z = transform.transform.translation.z
+        pose.pose.orientation = transform.transform.rotation
+        return pose
+
+    @staticmethod
+    def _pose_distance(first, second):
+        if first is None or second is None:
+            return float('inf')
+        try:
+            a = first.pose.position
+            b = second.pose.position
+            return math.sqrt(
+                (float(a.x) - float(b.x)) ** 2
+                + (float(a.y) - float(b.y)) ** 2
+                + (float(a.z) - float(b.z)) ** 2
+            )
+        except Exception:
+            return float('inf')
+
+    def _pose_close_enough(self, first, second, tolerance_m):
+        return self._pose_distance(first, second) <= max(0.0, float(tolerance_m))
+
+    @staticmethod
+    def _cfg_float(cfg, key, default):
+        try:
+            if isinstance(cfg, dict) and key in cfg:
+                return float(cfg.get(key))
+        except Exception:
+            pass
+        return float(default)
+
+    def _object_distance(self, first, second):
+        try:
+            return self._pose_distance(first.pose_base, second.pose_base)
+        except Exception:
+            return float('inf')
+
+    def _target_for_approach(self, locked_obj, gcfg):
+        latest = getattr(self, 'latest_obj', None)
+        if latest is None:
+            return deepcopy(locked_obj)
+        max_refine = self._cfg_float(gcfg, 'max_locked_target_refine_m', 0.06)
+        distance = self._object_distance(locked_obj, latest)
+        if distance <= max(0.0, max_refine):
+            if distance > 1e-6:
+                rospy.loginfo('Grasp refined locked target by %.3f m before approach', distance)
+            return deepcopy(latest)
+        rospy.logwarn(
+            'Grasp kept locked target; latest detection jumped %.3f m > %.3f m',
+            distance,
+            max_refine,
+        )
+        return deepcopy(locked_obj)
+
+    def _log_object_pose(self, label, obj):
+        try:
+            p = obj.pose_base.pose.position
+            rospy.loginfo(
+                'Grasp %s: xyz=(%.3f, %.3f, %.3f) confidence=%.3f',
+                label,
+                float(p.x),
+                float(p.y),
+                float(p.z),
+                float(getattr(obj, 'confidence', 1.0) or 0.0),
+            )
+        except Exception:
+            rospy.loginfo('Grasp %s: pose unavailable', label)
+
+    def _wait_for_motion_settle(self, reason='motion'):
+        timeout = max(0.0, float(rospy.get_param('/grasp/motion_settle_timeout_sec', 2.0)))
+        min_sec = max(0.0, float(rospy.get_param('/grasp/motion_settle_min_sec', 0.8)))
+        sample_period = max(0.02, float(rospy.get_param('/grasp/motion_settle_sample_sec', 0.05)))
+        epsilon = max(0.0, float(rospy.get_param('/grasp/motion_settle_position_epsilon_rad', 0.0025)))
+        required = max(1, int(rospy.get_param('/grasp/motion_settle_required_samples', 3)))
+        if timeout <= 0.0:
+            return True
+
+        start = time.monotonic()
+        previous = self._joint_positions_tuple()
+        stable_count = 0
+        if previous is None:
+            rospy.logwarn_throttle(2.0, 'Grasp settle fallback sleep: no joint state for %s', reason)
+            rospy.sleep(min_sec if min_sec > 0.0 else min(timeout, 0.2))
+            return False
+
+        while self.active and time.monotonic() - start < timeout and not rospy.is_shutdown():
+            rospy.sleep(sample_period)
+            current = self._joint_positions_tuple()
+            elapsed = time.monotonic() - start
+            if current is None:
+                stable_count = 0
+                continue
+            max_delta = max(abs(float(a) - float(b)) for a, b in zip(previous, current))
+            if max_delta <= epsilon and elapsed >= min_sec:
+                stable_count += 1
+                if stable_count >= required:
+                    rospy.loginfo('Grasp motion settled after %.2fs for %s', elapsed, reason)
+                    return True
+            else:
+                stable_count = 0
+            previous = current
+
+        rospy.logwarn('Grasp motion settle timeout after %.2fs for %s', time.monotonic() - start, reason)
+        return False
+
+    def _joint_positions_tuple(self):
+        msg = getattr(self, 'latest_joint_state', None)
+        positions = getattr(msg, 'position', None)
+        if not positions:
+            return None
+        try:
+            return tuple(float(v) for v in positions)
+        except Exception:
+            return None
 
     def _lookup_camera_pose_base(self):
         tf_buffer = getattr(self, 'tf_buffer', None)

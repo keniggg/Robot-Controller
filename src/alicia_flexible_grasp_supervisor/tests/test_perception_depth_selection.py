@@ -36,6 +36,22 @@ def make_node(module, depth):
 
 
 class PerceptionDepthSelectionTest(unittest.TestCase):
+    def test_latest_frame_buffer_drops_old_color_frames_and_reuses_latest_depth(self):
+        module = load_perception_node()
+        buffer = module.LatestFrameBuffer()
+
+        buffer.update_depth('depth-a')
+        buffer.update_color('color-old', 'stamp-old', 'camera_link')
+        buffer.update_color('color-new', 'stamp-new', 'camera_link')
+
+        frame = buffer.take_latest()
+
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame.color, 'color-new')
+        self.assertEqual(frame.depth, 'depth-a')
+        self.assertEqual(frame.stamp, 'stamp-new')
+        self.assertIsNone(buffer.take_latest())
+
     def test_center_roi_depth_wins_over_bad_center_pixel(self):
         module = load_perception_node()
         depth = np.full((80, 80), 3000, dtype=np.uint16)

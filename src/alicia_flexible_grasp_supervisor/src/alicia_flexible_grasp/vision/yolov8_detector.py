@@ -3,22 +3,25 @@ import numpy as np
 
 class YOLOv8ObjectDetector:
     def __init__(self, model_path='yolov8n.pt', target_class='', conf=0.35,
-                 iou=0.45, device='cpu', model_backend=None, model_loader=None):
+                 iou=0.45, device='cpu', imgsz=None, model_backend=None, model_loader=None):
         self.model_path = str(model_path or 'yolov8n.pt')
         self.target_classes = self._normalize_targets(target_class)
         self.conf = float(conf)
         self.iou = float(iou)
         self.device = str(device or 'cpu')
+        self.imgsz = self._positive_int(imgsz)
         self.model = model_backend if model_backend is not None else self._load_model(model_loader)
 
     def detect(self, bgr, preferred_uv=None, max_preferred_distance_px=None):
-        results = self.model.predict(
-            bgr,
-            conf=self.conf,
-            iou=self.iou,
-            device=self.device,
-            verbose=False,
-        )
+        kwargs = {
+            'conf': self.conf,
+            'iou': self.iou,
+            'device': self.device,
+            'verbose': False,
+        }
+        if self.imgsz is not None:
+            kwargs['imgsz'] = self.imgsz
+        results = self.model.predict(bgr, **kwargs)
         candidates = []
         for result in results or []:
             candidates.extend(self._result_candidates(result, bgr.shape))
@@ -138,3 +141,13 @@ class YOLOv8ObjectDetector:
         except Exception:
             return None
         return value if value > 0.0 else None
+
+    @staticmethod
+    def _positive_int(value):
+        if value is None:
+            return None
+        try:
+            value = int(value)
+        except Exception:
+            return None
+        return value if value > 0 else None

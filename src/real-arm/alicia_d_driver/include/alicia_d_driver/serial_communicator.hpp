@@ -36,6 +36,7 @@ public:
 
 private:
     void read_thread_loop();
+    void handle_read_error_disconnect();
     bool validate_checksum(const std::vector<uint8_t>& frame) const;
     uint8_t calculate_checksum(const std::vector<uint8_t>& payload) const;
     std::string current_port_path_;

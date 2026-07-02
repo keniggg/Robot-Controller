@@ -41,6 +41,7 @@ class FakeManipulator:
         self.pose_targets = []
         self.position_targets = []
         self.executed_plans = []
+        self.go_calls = 0
         self.stopped = False
         self.cleared = False
 
@@ -52,6 +53,7 @@ class FakeManipulator:
         self.position_targets.append(list(position))
 
     def go(self, wait=True):
+        self.go_calls += 1
         if len(self.go_results) > 1:
             return self.go_results.pop(0)
         return self.go_results[0]
@@ -90,9 +92,9 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         ok, message = planner.move_to_pose(make_pose(), execute=True)
 
         self.assertFalse(ok)
-        self.assertIn('execute failed', message)
+        self.assertIn('execute planning failed before motion', message)
         self.assertIn('target xyz=(0.123, -0.456, 2.500)', message)
-        self.assertTrue(manipulator.stopped)
+        self.assertEqual(manipulator.go_calls, 0)
         self.assertTrue(manipulator.cleared)
 
     def test_plan_failure_message_includes_target_xyz(self):
@@ -118,6 +120,37 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertEqual(len(manipulator.pose_targets), 1)
         self.assertEqual(manipulator.position_targets, [[0.123, -0.456, 2.5]])
         self.assertTrue(manipulator.cleared)
+
+    def test_execute_does_not_use_position_only_fallback_by_default(self):
+        manipulator = FakeManipulator(go_result=[False, True], plan_result=[EmptyPlan(), SuccessfulPlan()])
+        planner = self.make_planner(manipulator)
+        planner.orientation_fallback_enabled = False
+        planner.position_only_fallback_enabled = True
+        planner.position_only_execute_enabled = False
+
+        ok, message = planner.move_to_pose(make_pose(), execute=True)
+
+        self.assertFalse(ok)
+        self.assertIn('execute blocked for position-only cached plan', message)
+        self.assertEqual(manipulator.position_targets, [[0.123, -0.456, 2.5]])
+        self.assertEqual(manipulator.go_calls, 0)
+
+    def test_execute_plans_then_executes_cached_plan_without_live_go_fallbacks(self):
+        planned = SuccessfulPlan()
+        manipulator = FakeManipulator(
+            go_result=[False, True],
+            plan_result=[planned],
+            execute_result=True,
+        )
+        planner = self.make_planner(manipulator)
+        planner.candidate_orientations = []
+
+        ok, message = planner.move_to_pose(make_pose(), execute=True)
+
+        self.assertTrue(ok, message)
+        self.assertIn('executed cached plan', message)
+        self.assertEqual(manipulator.executed_plans, [planned])
+        self.assertEqual(manipulator.go_calls, 0)
 
     def test_plan_tries_current_orientation_before_position_only_fallback(self):
         current = types.SimpleNamespace(pose=make_pose(q=(0.0, 0.0, 0.0, 1.0)))

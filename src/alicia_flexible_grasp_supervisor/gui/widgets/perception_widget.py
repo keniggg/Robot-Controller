@@ -101,6 +101,8 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._planned_pregrasp_executable = False
         self._planned_pregrasp_time = 0.0
         self._planned_target_base_xyz = None
+        self._locked_grasp_target_base_xyz = None
+        self._locked_grasp_target_time = 0.0
         self._pending_plan_pose = None
         self._pending_plan_token = None
         self._last_object_receive_time = None
@@ -109,6 +111,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._plan_token = 0
         self._plan_timeout_sec = float(rospy.get_param('/gui/pregrasp_plan_timeout_sec', 12.0))
         self._planned_pregrasp_max_age_sec = float(rospy.get_param('/gui/pregrasp_execute_max_age_sec', 30.0))
+        self._grasp_flow_lock_max_age_sec = float(rospy.get_param('/gui/grasp_flow_lock_max_age_sec', 60.0))
         self._pregrasp_status_hold_sec = float(rospy.get_param('/gui/pregrasp_status_hold_sec', 8.0))
         self._status_hold_until = 0.0
         self._pregrasp_mode = str(rospy.get_param('/grasp/pregrasp_offset_mode', 'camera_ray'))
@@ -345,6 +348,7 @@ class PerceptionWidget(QtWidgets.QWidget):
             rospy.set_param('/perception/shape', parsed['shape'])
             rospy.set_param('/perception/min_area', int(self.min_area.value()))
             rospy.set_param('/grasp/pregrasp_distance', float(self.pregrasp.value()))
+            self._clear_locked_grasp_target()
             self.interpret_chip.setText(parsed['summary'])
             self.status.setText('识别指令已更新，视觉节点会自动刷新')
         except Exception as exc:
@@ -357,12 +361,15 @@ class PerceptionWidget(QtWidgets.QWidget):
         self.last_object = msg
         if not msg.detected:
             self.pregrasp_pose = None
-            self._clear_planned_pregrasp()
             self._reset_target_stability()
-            self._localization_ok = False
             self._localization_error_m = None
             self.detected_chip.setText('未检测到 %s' % (msg.label or self.label_edit.text()))
-            self._set_perception_status('未识别到目标，调整 HSV 阈值或移动目标到视野内')
+            if self._has_recent_locked_grasp_target():
+                self._set_perception_status('当前画面暂时丢失目标；已保留锁定目标，可继续执行抓取流程')
+            elif self.__dict__.get('_planned_pregrasp_pose', None) is not None:
+                self._set_perception_status('当前画面暂时丢失目标；已保留已规划预抓取轨迹，可在有效期内执行')
+            else:
+                self._set_perception_status('未识别到目标，调整 HSV 阈值或移动目标到视野内')
             if hasattr(self, 'camera_preview'):
                 self.camera_preview.set_detection_overlay(None)
             return
@@ -528,6 +535,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._planning_active = False
         if execute:
             if success:
+                self._lock_grasp_target_from_current_plan()
                 self._clear_planned_pregrasp()
         elif success:
             if self._is_position_only_plan_message(message):
@@ -573,18 +581,20 @@ class PerceptionWidget(QtWidgets.QWidget):
             rospy.logwarn('GUI grasp flow ignored: previous request still active')
             return
         last_object = self.__dict__.get('last_object', None)
-        if last_object is None or not getattr(last_object, 'detected', False):
+        has_live_object = last_object is not None and getattr(last_object, 'detected', False)
+        has_locked_target = self._has_recent_locked_grasp_target()
+        if not has_live_object and not has_locked_target:
             self.status.setText('没有可用目标，无法执行抓取流程')
             rospy.logwarn('GUI grasp flow blocked: no detected object')
             return
-        if not self._pregrasp_target_is_stable():
+        if has_live_object and not has_locked_target and not self._pregrasp_target_is_stable():
             self.status.setText(
                 '目标识别还不稳定，已禁止执行抓取流程；当前稳定度 %s'
                 % self._target_stability_progress_text()
             )
             rospy.logwarn('GUI grasp flow blocked: target not stable')
             return
-        if not getattr(self, '_localization_ok', True):
+        if has_live_object and not has_locked_target and not getattr(self, '_localization_ok', True):
             self.status.setText('定位不可信，已禁止执行抓取流程；请重新识别或检查手眼标定')
             rospy.logwarn('GUI grasp flow blocked: localization is not trusted')
             return
@@ -593,7 +603,13 @@ class PerceptionWidget(QtWidgets.QWidget):
         if start_grasp_btn is not None:
             start_grasp_btn.setEnabled(False)
         self._set_pregrasp_buttons_enabled(False)
-        self.status.setText('后台执行抓取流程中：预抓取、接近目标、柔顺闭合、抬升')
+        if has_locked_target:
+            self.status.setText('后台执行抓取流程中：使用锁定目标，接近目标、柔顺闭合、抬升')
+        else:
+            self.status.setText('后台执行抓取流程中：预抓取、接近目标、柔顺闭合、抬升')
+        self._start_grasp_flow_worker()
+
+    def _start_grasp_flow_worker(self):
         thread = threading.Thread(target=self._run_grasp_flow_request, daemon=True)
         thread.start()
 
@@ -798,11 +814,45 @@ class PerceptionWidget(QtWidgets.QWidget):
         if self._xyz_distance(planned, current) <= threshold:
             return False
         self._clear_planned_pregrasp()
+        self._clear_locked_grasp_target()
         rospy.logwarn(
             'GUI pregrasp planned pose invalidated: target moved %.3f m',
             self._xyz_distance(planned, current),
         )
         return True
+
+    def _lock_grasp_target_from_current_plan(self):
+        xyz = self.__dict__.get('_planned_target_base_xyz', None)
+        if xyz is None:
+            last_object = self.__dict__.get('last_object', None)
+            if last_object is not None and getattr(last_object, 'detected', False):
+                xyz = self._object_base_xyz(last_object)
+        if xyz is None:
+            return False
+        self._locked_grasp_target_base_xyz = tuple(float(value) for value in xyz)
+        self._locked_grasp_target_time = time.monotonic()
+        return True
+
+    def _clear_locked_grasp_target(self):
+        self._locked_grasp_target_base_xyz = None
+        self._locked_grasp_target_time = 0.0
+
+    def _has_recent_locked_grasp_target(self):
+        if self.__dict__.get('_locked_grasp_target_base_xyz', None) is None:
+            return False
+        try:
+            max_age = max(0.0, float(self.__dict__.get('_grasp_flow_lock_max_age_sec', 60.0)))
+            locked_time = float(self.__dict__.get('_locked_grasp_target_time', 0.0) or 0.0)
+        except Exception:
+            return False
+        if max_age <= 0.0:
+            return True
+        if locked_time <= 0.0:
+            return False
+        if time.monotonic() - locked_time <= max_age:
+            return True
+        self._clear_locked_grasp_target()
+        return False
 
     @staticmethod
     def _object_base_xyz(msg):

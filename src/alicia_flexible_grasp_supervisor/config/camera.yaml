@@ -30,14 +30,17 @@ perception:
   yolo_conf: 0.35
   yolo_iou: 0.45
   yolo_device: "cpu"
+  # CPU 上实时跟随优先，降低 YOLO 输入尺寸并只处理最新帧，避免红框落后于画面。
+  yolo_imgsz: 416
+  detect_hz: 8.0
   hsv_lower: [28, 35, 35]
   hsv_upper: [95, 255, 255]
   hsv_ranges: []
   shape: "any"
   min_area: 300
-  detection_hold_sec: 0.8
-  tracking_max_jump_px: 90.0
-  tracking_switch_confirmations: 3
+  detection_hold_sec: 0.35
+  tracking_max_jump_px: 180.0
+  tracking_switch_confirmations: 2
   # project_pixel_to_3d 输出的是 OpenCV 光学坐标；当前手眼标定的 camera_link
   # 已由 charuco_tracker 转成 ROS 相机坐标，所以这里需要转换成 [z, -x, -y]。
   # 如果以后 TF 直接使用 camera_color_optical_frame，改成 "opencv_optical"。

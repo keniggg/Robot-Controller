@@ -11,5 +11,8 @@ handeye:
   rotation_xyzw: [0.004411081891470849, -0.6852704741316863, 0.00005497500519710642, 0.7282753027651219]
   publish_static_tf: true
   use_tf: true
+  # 感知线程只处理最新帧后，使用最新 TF 可避免时间戳 TF 查询失败时落到错误静态兜底。
   tf_lookup_latest: true
+  # 静态 handeye 只描述 tool0 -> camera_link，不能单独当作 base 坐标发布。
+  allow_static_fallback: false
   tf_timeout_sec: 0.2

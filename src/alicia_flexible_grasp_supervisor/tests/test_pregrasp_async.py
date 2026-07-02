@@ -45,6 +45,22 @@ class FakeSpin:
         return self._value
 
 
+class FakeCamera:
+    def __init__(self):
+        self.overlay = 'initial'
+
+    def set_detection_overlay(self, overlay):
+        self.overlay = overlay
+
+
+class FakeText:
+    def __init__(self, text):
+        self._text = text
+
+    def text(self):
+        return self._text
+
+
 class PregraspAsyncTest(unittest.TestCase):
     def _pose(self, x):
         pose = PoseStamped()
@@ -265,6 +281,66 @@ class PregraspAsyncTest(unittest.TestCase):
         self.assertTrue(widget.execute_pregrasp_btn.enabled)
         self.assertIn('执行已规划预抓取', widget.status.text)
 
+    def test_detection_loss_does_not_clear_recent_planned_pregrasp(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget._alive = True
+        widget.pregrasp_pose = self._pose(1.0)
+        widget._planned_pregrasp_pose = self._pose(1.0)
+        widget._planned_pregrasp_executable = True
+        widget._planned_pregrasp_time = time.monotonic()
+        widget._planned_target_base_xyz = (0.1, 0.2, 0.3)
+        widget._object_stable_count = 3
+        widget._last_object_base_xyz = (0.1, 0.2, 0.3)
+        widget._last_target_signature = {'label': 'mouse'}
+        widget._localization_ok = True
+        widget._localization_error_m = None
+        widget._planning_active = False
+        widget._status_hold_until = 0.0
+        widget.status = FakeLabel()
+        widget.detected_chip = FakeLabel()
+        widget.label_edit = FakeText('mouse')
+        widget.camera_preview = FakeCamera()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn.setEnabled(True)
+
+        PerceptionWidget.update_object(widget, types.SimpleNamespace(detected=False, label='mouse'))
+
+        self.assertIsNotNone(widget._planned_pregrasp_pose)
+        self.assertTrue(widget._planned_pregrasp_executable)
+        self.assertTrue(widget.execute_pregrasp_btn.enabled)
+        self.assertIsNone(widget.pregrasp_pose)
+        self.assertIn('未检测到', widget.detected_chip.text)
+
+    def test_executed_pregrasp_success_locks_target_for_grasp_flow(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget._pending_plan_pose = None
+        widget._pending_plan_token = None
+        widget._planned_pregrasp_pose = self._pose(1.0)
+        widget._planned_pregrasp_executable = True
+        widget._planned_pregrasp_time = time.monotonic()
+        widget._planned_target_base_xyz = (0.1, 0.2, 0.3)
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget.start_grasp_btn = FakeButton()
+        widget._alive = True
+        widget._planning_active = True
+        widget._grasp_active = False
+        widget._plan_token = 4
+        widget._grasp_flow_lock_max_age_sec = 60.0
+
+        PerceptionWidget._finish_pregrasp_worker(
+            widget,
+            4,
+            True,
+            True,
+            '执行成功：executed cached plan',
+        )
+
+        self.assertEqual(widget.__dict__.get('_locked_grasp_target_base_xyz'), (0.1, 0.2, 0.3))
+        self.assertGreater(widget.__dict__.get('_locked_grasp_target_time', 0.0), 0.0)
+        self.assertIn('执行抓取流程', widget.status.text)
+
     def test_position_only_plan_result_does_not_enable_execution(self):
         widget = PerceptionWidget.__new__(PerceptionWidget)
         widget._pending_plan_pose = self._pose(1.0)
@@ -432,6 +508,28 @@ class PregraspAsyncTest(unittest.TestCase):
 
         self.assertFalse(widget._grasp_active)
         self.assertIn('没有可用目标', widget.status.text)
+
+    def test_grasp_flow_allows_recent_locked_target_when_current_detection_is_lost(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.status = FakeLabel()
+        widget.last_object = types.SimpleNamespace(detected=False, label='mouse')
+        widget._grasp_active = False
+        widget._locked_grasp_target_base_xyz = (0.1, 0.2, 0.3)
+        widget._locked_grasp_target_time = time.monotonic()
+        widget._grasp_flow_lock_max_age_sec = 60.0
+        widget._pregrasp_target_is_stable = lambda: False
+        widget._localization_ok = False
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget.start_grasp_btn = FakeButton()
+        started = []
+        widget._start_grasp_flow_worker = lambda: started.append(True)
+
+        PerceptionWidget.start_grasp_flow(widget)
+
+        self.assertTrue(widget._grasp_active)
+        self.assertEqual(started, [True])
+        self.assertIn('锁定目标', widget.status.text)
 
 
 if __name__ == '__main__':

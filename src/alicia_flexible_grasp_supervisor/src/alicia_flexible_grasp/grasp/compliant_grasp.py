@@ -19,6 +19,8 @@ class CompliantGraspLogic:
         if f > self.max_force:
             return max(self.gripper_min, pos - self.open_step_safe), 'over_force'
         if f < self.contact_threshold:
+            if pos >= self.gripper_max - 1e-9:
+                return self.gripper_max, 'no_contact_limit'
             return min(self.gripper_max, pos + self.close_step_fast), 'closing_fast'
         if f < self.target_force:
             return min(self.gripper_max, pos + self.close_step_slow), 'closing_slow'

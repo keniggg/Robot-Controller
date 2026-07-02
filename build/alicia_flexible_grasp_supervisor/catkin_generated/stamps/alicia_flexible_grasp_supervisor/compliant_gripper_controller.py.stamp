@@ -13,6 +13,8 @@ class CompliantGripperController:
             gcfg.get('close_step_fast_m',0.002), gcfg.get('close_step_slow_m',0.0007), gcfg.get('open_step_safe_m',0.003),
             gcfg.get('open_position_m',0.0), gcfg.get('close_limit_m',0.05))
         self.force = 0.0
+        self.tactile_valid = False
+        self.last_tactile_time = None
         self.gripper_pos = float(gcfg.get('open_position_m',0.0))
         self.rate_hz = float(gcfg.get('command_rate_hz',25))
         rospy.Subscriber('/tactile/state', TactileState, self.tactile_cb, queue_size=1)
@@ -22,10 +24,23 @@ class CompliantGripperController:
 
     def tactile_cb(self, msg):
         self.force = msg.total_grip_force_mn
+        self.tactile_valid = bool(getattr(msg, 'valid', False))
+        self.last_tactile_time = rospy.Time.now()
+
+    def _tactile_feedback_ready(self):
+        gcfg = rospy.get_param('/gripper', {})
+        if not bool(gcfg.get('require_tactile_feedback', True)):
+            return True
+        if not self.tactile_valid or self.last_tactile_time is None:
+            return False
+        timeout_sec = float(gcfg.get('tactile_feedback_timeout_sec', 1.0))
+        return (rospy.Time.now() - self.last_tactile_time).to_sec() <= timeout_sec
 
     def handle_close(self, req):
         if not req.execute:
             return StartGraspResponse(False, 'execute=false')
+        if not self._tactile_feedback_ready():
+            return StartGraspResponse(False, 'tactile feedback unavailable')
         rate = rospy.Rate(self.rate_hz)
         start = rospy.Time.now()
         while not rospy.is_shutdown() and (rospy.Time.now()-start).to_sec() < 8.0:
@@ -39,6 +54,8 @@ class CompliantGripperController:
                 return StartGraspResponse(True, 'target force reached')
             if state == 'over_force':
                 return StartGraspResponse(False, 'over force, opened safe step')
+            if state == 'no_contact_limit':
+                return StartGraspResponse(False, 'no contact before close limit')
             rate.sleep()
         return StartGraspResponse(False, 'timeout')
 

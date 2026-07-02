@@ -24,18 +24,9 @@ class CameraNode:
         self.pub_color = rospy.Publisher(self.color_topic, Image, queue_size=2)
         self.pub_depth = rospy.Publisher(self.depth_topic, Image, queue_size=2)
         simulate = bool(self.cfg.get('simulate', False))
-        self.cam = self._make_camera(simulate)
-        try:
-            self.cam.start()
-            self._publish_runtime_camera_params()
-            rospy.loginfo('Camera started: color=%s depth=%s', self.color_topic, self.depth_topic)
-        except Exception as exc:
-            if not self.fallback_to_simulation:
-                raise
-            rospy.logerr('Camera start failed: %s. Falling back to simulated camera.', exc)
-            self.cam = self._make_camera(True)
-            self.cam.start()
-            self._publish_runtime_camera_params()
+        self.cam = None
+        self._camera_started = False
+        self._start_camera_or_defer(simulate)
         self.rate = rospy.Rate(float(self.fps))
 
     def _make_camera(self, simulate):
@@ -47,11 +38,40 @@ class CameraNode:
             simulate=simulate
         )
 
+    def _start_camera(self, simulate):
+        self.cam = self._make_camera(simulate)
+        self.cam.start()
+        self._camera_started = True
+        self._publish_runtime_camera_params()
+        mode = 'simulated' if simulate else 'real'
+        rospy.loginfo('Camera started (%s): color=%s depth=%s', mode, self.color_topic, self.depth_topic)
+        return True
+
+    def _start_camera_or_defer(self, simulate):
+        try:
+            return self._start_camera(simulate)
+        except Exception as exc:
+            self._camera_started = False
+            self._stop_camera()
+            if self.fallback_to_simulation and not simulate:
+                rospy.logerr('Camera start failed: %s. Falling back to simulated camera.', exc)
+                return self._start_camera(True)
+            rospy.logerr(
+                'Camera start failed: %s. Node stays alive and will retry real camera; '
+                'check for stale camera_node/RealSense viewers if the device is busy.',
+                exc,
+            )
+            return False
+
     def _stop_camera(self):
+        if self.cam is None:
+            return
         try:
             self.cam.stop()
         except Exception as exc:
             rospy.logwarn('Camera stop failed during recovery: %s', exc)
+        finally:
+            self._camera_started = False
 
     def shutdown(self):
         self._stop_camera()
@@ -69,16 +89,12 @@ class CameraNode:
             return False
         self._stop_camera()
         if self.fallback_to_simulation:
-            self.cam = self._make_camera(True)
-            self.cam.start()
-            self._publish_runtime_camera_params()
+            self._start_camera(True)
             self._read_failures = 0
             rospy.logwarn('Camera stream switched to simulated fallback after read failures.')
             return True
         try:
-            self.cam = self._make_camera(False)
-            self.cam.start()
-            self._publish_runtime_camera_params()
+            self._start_camera(False)
             self._read_failures = 0
             rospy.logwarn('Camera stream restarted after read failures.')
             return True
@@ -106,6 +122,10 @@ class CameraNode:
 
     def spin(self):
         while not rospy.is_shutdown():
+            if not self._camera_started:
+                if not self._start_camera_or_defer(False):
+                    self.rate.sleep()
+                    continue
             try:
                 color, depth = self.cam.read()
                 self._read_failures = 0

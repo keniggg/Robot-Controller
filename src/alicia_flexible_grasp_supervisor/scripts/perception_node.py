@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from copy import deepcopy
+from types import SimpleNamespace
+import threading
 
 import rospy
 import numpy as np
@@ -19,6 +21,43 @@ from alicia_flexible_grasp.vision.object_detector import HSVObjectDetector
 from alicia_flexible_grasp.vision.yolov8_detector import YOLOv8ObjectDetector
 from alicia_flexible_grasp.vision.depth_projector import project_pixel_to_3d
 from alicia_flexible_grasp.vision.pose_estimator import PoseEstimator
+
+
+class LatestFrameBuffer:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._color = None
+        self._color_stamp = None
+        self._color_frame_id = ''
+        self._color_seq = 0
+        self._consumed_color_seq = 0
+        self._depth = None
+
+    def update_color(self, color, stamp, frame_id):
+        with self._lock:
+            self._color = color
+            self._color_stamp = stamp
+            self._color_frame_id = frame_id
+            self._color_seq += 1
+
+    def update_depth(self, depth):
+        with self._lock:
+            self._depth = depth
+
+    def take_latest(self):
+        with self._lock:
+            if self._color is None or self._depth is None:
+                return None
+            if self._color_seq == self._consumed_color_seq:
+                return None
+            self._consumed_color_seq = self._color_seq
+            return SimpleNamespace(
+                color=self._color,
+                depth=self._depth,
+                stamp=self._color_stamp,
+                frame_id=self._color_frame_id,
+                seq=self._color_seq,
+            )
 
 
 class DetectionStabilizer:
@@ -137,6 +176,8 @@ class PerceptionNode:
         self.detector_error = ''
         self.detector_signature = None
         self.enabled = bool(pcfg.get('enabled', True))
+        self.detect_hz = max(0.5, float(pcfg.get('detect_hz', 6.0)))
+        self.frames = LatestFrameBuffer()
         self.fx = float(cam_cfg.get('fx', 615.0)); self.fy = float(cam_cfg.get('fy', 615.0))
         self.cx = float(cam_cfg.get('cx', cam_cfg.get('width',640)/2.0)); self.cy = float(cam_cfg.get('cy', cam_cfg.get('height',480)/2.0))
         self.depth_scale = float(cam_cfg.get('depth_scale', 0.001))
@@ -166,9 +207,24 @@ class PerceptionNode:
             tf_buffer=self.tf_buffer,
             tf_timeout_sec=hcfg.get('tf_timeout_sec', 0.2),
             tf_lookup_latest=hcfg.get('tf_lookup_latest', True),
+            allow_static_fallback=hcfg.get('allow_static_fallback', True),
         )
-        rospy.Subscriber(cam_cfg.get('color_topic','/supervisor/camera/color/image_raw'), Image, self.color_cb, queue_size=1)
-        rospy.Subscriber(cam_cfg.get('depth_topic','/supervisor/camera/depth/image_raw'), Image, self.depth_cb, queue_size=1)
+        rospy.Subscriber(
+            cam_cfg.get('color_topic','/supervisor/camera/color/image_raw'),
+            Image,
+            self.color_cb,
+            queue_size=1,
+            buff_size=2**24,
+            tcp_nodelay=True,
+        )
+        rospy.Subscriber(
+            cam_cfg.get('depth_topic','/supervisor/camera/depth/image_raw'),
+            Image,
+            self.depth_cb,
+            queue_size=1,
+            buff_size=2**24,
+            tcp_nodelay=True,
+        )
         self.pub_obj = rospy.Publisher(pcfg.get('output_object_topic','/perception/object'), ObjectPose, queue_size=10)
         self.pub_cam = rospy.Publisher(pcfg.get('output_pose_camera_topic','/perception/object_pose_camera'), PoseStamped, queue_size=10)
         self.pub_base = rospy.Publisher(pcfg.get('output_pose_base_topic','/perception/object_pose_base'), PoseStamped, queue_size=10)
@@ -176,16 +232,29 @@ class PerceptionNode:
         self.label = pcfg.get('object_label','target')
         self.stabilizer = DetectionStabilizer(pcfg.get('detection_hold_sec', 0.8))
         self.refresh_detector(force=True)
+        self._detect_thread = threading.Thread(target=self.detect_loop, daemon=True)
+        self._detect_thread.start()
 
     def color_cb(self, msg):
         if not self.bridge: return
-        self.color = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        self.color_frame_id = msg.header.frame_id
-        self.try_detect(msg.header.stamp, msg.header.frame_id)
+        color = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        self.frames.update_color(color, msg.header.stamp, msg.header.frame_id)
 
     def depth_cb(self, msg):
         if not self.bridge: return
-        self.depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        self.frames.update_depth(depth)
+
+    def detect_loop(self):
+        rate = rospy.Rate(self.detect_hz)
+        while not rospy.is_shutdown():
+            frame = self.frames.take_latest()
+            if frame is not None:
+                self.color = frame.color
+                self.depth = frame.depth
+                self.color_frame_id = frame.frame_id
+                self.try_detect(frame.stamp, frame.frame_id)
+            rate.sleep()
 
     def try_detect(self, stamp, camera_frame=None):
         if self.color is None or self.depth is None:
@@ -221,7 +290,13 @@ class PerceptionNode:
             return
         p_cv = project_pixel_to_3d(u, v, z, self.fx, self.fy, self.cx, self.cy)
         p_cam = self._projected_point_for_camera_frame(p_cv)
-        pose_cam, pose_base = self.pose_estimator.make_poses(p_cam, stamp, camera_frame or self.color_frame_id)
+        try:
+            pose_cam, pose_base = self.pose_estimator.make_poses(p_cam, stamp, camera_frame or self.color_frame_id)
+        except Exception as exc:
+            obj.detected = False
+            rospy.logwarn_throttle(1.0, 'Perception pose transform failed: %s', exc)
+            self.publish_object(obj)
+            return
         obj.detected = True
         obj.label = str(det.get('label', self.label) or self.label)
         obj.confidence = float(det.get('confidence', 1.0)); obj.u = u; obj.v = v; obj.depth_m = z
@@ -232,9 +307,10 @@ class PerceptionNode:
         bp = pose_base.pose.position
         rospy.loginfo_throttle(
             1.0,
-            'Perception target label=%s frame=%s uv=(%d,%d) depth=%.3f[%s n=%d] cam=(%.3f, %.3f, %.3f) base=(%.3f, %.3f, %.3f) conf=%.3f bbox=(%d,%d,%d,%d)',
+            'Perception target label=%s frame=%s tf=%s uv=(%d,%d) depth=%.3f[%s n=%d] cam=(%.3f, %.3f, %.3f) base=(%.3f, %.3f, %.3f) conf=%.3f bbox=(%d,%d,%d,%d)',
             obj.label,
             pose_cam.header.frame_id,
+            getattr(self.pose_estimator, 'last_transform_source', 'unknown'),
             int(obj.u),
             int(obj.v),
             float(obj.depth_m),
@@ -261,12 +337,13 @@ class PerceptionNode:
 
     def _refresh_camera_params(self):
         cam_cfg = rospy.get_param('/camera', {})
+        pcfg = rospy.get_param('/perception', {})
+        self.detect_hz = max(0.5, float(pcfg.get('detect_hz', getattr(self, 'detect_hz', 6.0))))
         self.depth_scale = float(cam_cfg.get('depth_scale', self.depth_scale))
         self.fx = float(cam_cfg.get('fx', self.fx))
         self.fy = float(cam_cfg.get('fy', self.fy))
         self.cx = float(cam_cfg.get('cx', self.cx))
         self.cy = float(cam_cfg.get('cy', self.cy))
-        pcfg = rospy.get_param('/perception', {})
         self._refresh_depth_params(pcfg)
         self._refresh_projection_params(pcfg)
 
@@ -419,10 +496,11 @@ class PerceptionNode:
         yolo_conf = float(pcfg.get('yolo_conf', 0.35))
         yolo_iou = float(pcfg.get('yolo_iou', 0.45))
         yolo_device = str(pcfg.get('yolo_device', 'cpu'))
+        yolo_imgsz = int(pcfg.get('yolo_imgsz', 0) or 0)
         signature = (
             enabled, detector_kind, label, lower, upper, tuple(normalized_ranges),
             min_area, shape, hold_seconds, max_jump_px, switch_confirmations,
-            yolo_model, yolo_target_class, yolo_conf, yolo_iou, yolo_device,
+            yolo_model, yolo_target_class, yolo_conf, yolo_iou, yolo_device, yolo_imgsz,
         )
         if not force and signature == self.detector_signature:
             return
@@ -439,6 +517,7 @@ class PerceptionNode:
                     conf=yolo_conf,
                     iou=yolo_iou,
                     device=yolo_device,
+                    imgsz=yolo_imgsz,
                 )
             else:
                 self.detector_kind = 'simple_hsv'

@@ -30,6 +30,8 @@ class MotionGateway:
         self._last_planner_error = 'MoveIt not initialized'
         self._planner_retry_period_sec = float(rospy.get_param('~planner_retry_period_sec', 2.0))
         self._last_planner_attempt = 0.0
+        self._gripper_arm_hold_positions = None
+        self._last_gripper_command_time = 0.0
         self.jogger = CartesianJogger(self.planner)
         rospy.Service('/supervisor/move_to_joints', SetJointCommand, self.handle_joints)
         rospy.Service('/supervisor/set_gripper', SetFloat, self.handle_gripper)
@@ -46,7 +48,8 @@ class MotionGateway:
         return SetJointCommandResponse(ok, msg)
 
     def handle_gripper(self, req):
-        self.gripper.set_position(req.value)
+        arm_positions = self._gripper_arm_positions_for_command()
+        self.gripper.set_position(req.value, arm_positions=arm_positions)
         return SetFloatResponse(True, 'gripper command published')
 
     def handle_pose(self, req):
@@ -158,6 +161,29 @@ class MotionGateway:
             if state != 'running':
                 missing.append('%s=%s' % (name, state))
         return missing
+
+    def _gripper_arm_positions_for_command(self):
+        gcfg = rospy.get_param('/gripper', {})
+        if not bool(gcfg.get('hold_arm_during_gripper_commands', True)):
+            return None
+
+        now = rospy.get_time() if not rospy.is_shutdown() else 0.0
+        timeout = max(0.0, float(gcfg.get('arm_hold_timeout_sec', 0.5)))
+        last_time = float(getattr(self, '_last_gripper_command_time', 0.0))
+        hold_positions = getattr(self, '_gripper_arm_hold_positions', None)
+        hold_expired = hold_positions is None or (timeout > 0.0 and now - last_time > timeout)
+        if hold_expired:
+            hold_positions = self._current_arm_positions_snapshot()
+            self._gripper_arm_hold_positions = hold_positions
+        self._last_gripper_command_time = now
+        return hold_positions
+
+    def _current_arm_positions_snapshot(self):
+        positions = list(getattr(self.joint_cmd, 'last_positions', []) or [])
+        gripper_index = int(getattr(self.gripper, 'gripper_index', max(0, len(self.joint_names) - 1)))
+        if len(positions) < gripper_index:
+            positions += [0.0] * (gripper_index - len(positions))
+        return positions[:gripper_index]
 
     def _log_pose_request(self, req):
         try:

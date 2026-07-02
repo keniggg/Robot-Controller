@@ -4,6 +4,7 @@ import sys
 import unittest
 
 import numpy as np
+from PyQt5 import QtCore
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -26,6 +27,37 @@ class CameraOverlayTest(unittest.TestCase):
         self.assertTrue(np.any(drawn[15:40, 20] != 0))
         self.assertTrue(np.all(rgb == 0))
 
+    def test_overlay_change_rebuilds_cached_color_pixmap(self):
+        widget = CameraWidget.__new__(CameraWidget)
+        widget._alive = True
+        widget._last_color_rgb = np.zeros((80, 100, 3), dtype=np.uint8)
+        refreshed = []
+        widget._refresh_color_pixmap = lambda: refreshed.append(True)
+        widget._render_pixmaps = lambda: None
+
+        CameraWidget.set_detection_overlay(
+            widget,
+            (20, 15, 30, 25),
+            'mouse',
+            (80, 255, 120),
+        )
+
+        self.assertEqual(refreshed, [True])
+
+    def test_color_display_rgb_redraws_overlay_from_raw_frame(self):
+        widget = CameraWidget.__new__(CameraWidget)
+        widget._last_color_rgb = np.zeros((80, 100, 3), dtype=np.uint8)
+        widget._detection_overlay = {
+            'bbox': (20, 15, 30, 25),
+            'label': 'mouse',
+            'color': (80, 255, 120),
+        }
+
+        drawn = CameraWidget._color_display_rgb(widget)
+
+        self.assertTrue(np.any(drawn[15, 20:50] != 0))
+        self.assertTrue(np.all(widget._last_color_rgb == 0))
+
     def test_frame_gate_drops_pending_and_throttled_frames(self):
         widget = CameraWidget.__new__(CameraWidget)
         widget._alive = True
@@ -43,6 +75,24 @@ class CameraOverlayTest(unittest.TestCase):
         CameraWidget._end_frame(widget, 'color')
         self.assertFalse(CameraWidget._begin_frame(widget, 'color', 1.05))
         self.assertTrue(CameraWidget._begin_frame(widget, 'color', 1.11))
+
+    def test_scale_transform_defaults_to_fast_for_lower_latency(self):
+        widget = CameraWidget.__new__(CameraWidget)
+        widget.scale_smooth = False
+
+        self.assertEqual(CameraWidget._scale_transform_mode(widget), QtCore.Qt.FastTransformation)
+
+        widget.scale_smooth = True
+        self.assertEqual(CameraWidget._scale_transform_mode(widget), QtCore.Qt.SmoothTransformation)
+
+    def test_hidden_camera_widget_does_not_process_stream_frames(self):
+        widget = CameraWidget.__new__(CameraWidget)
+        widget.isVisible = lambda: False
+
+        self.assertFalse(CameraWidget._stream_visible(widget))
+
+        widget.isVisible = lambda: True
+        self.assertTrue(CameraWidget._stream_visible(widget))
 
     def test_shutdown_unregisters_camera_subscribers(self):
         class FakeSubscriber:

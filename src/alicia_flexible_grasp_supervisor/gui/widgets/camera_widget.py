@@ -24,12 +24,14 @@ class CameraWidget(QtWidgets.QWidget):
         self.bridge = CvBridge() if CvBridge else None
         self._alive = True
         self._subscribers = []
+        self._last_color_rgb = None
         self._last_color_pixmap = None
         self._last_depth_pixmap = None
         self._detection_overlay = None
         self._display_mode = default_mode
         self.color_display_hz = float(rospy.get_param('/gui/camera_display_hz', 10.0))
         self.depth_display_hz = float(rospy.get_param('/gui/depth_display_hz', 15.0))
+        self.scale_smooth = bool(rospy.get_param('/gui/camera_smooth_scale', False))
         self._color_pending = False
         self._depth_pending = False
         self._last_color_display_time = 0.0
@@ -98,6 +100,8 @@ class CameraWidget(QtWidgets.QWidget):
     def color_cb(self, msg):
         if self.bridge is None or cv2 is None:
             return
+        if not self._stream_visible():
+            return
         if getattr(self, '_display_mode', 'split') == 'depth':
             return
         if not self._begin_frame('color', rospy.get_time()):
@@ -112,6 +116,8 @@ class CameraWidget(QtWidgets.QWidget):
 
     def depth_cb(self, msg):
         if self.bridge is None or cv2 is None or np is None:
+            return
+        if not self._stream_visible():
             return
         if getattr(self, '_display_mode', 'split') == 'color':
             return
@@ -130,13 +136,8 @@ class CameraWidget(QtWidgets.QWidget):
         try:
             if not self.__dict__.get('_alive', False):
                 return
-            if self._detection_overlay is not None:
-                rgb = self._draw_detection_overlay(rgb, self._detection_overlay)
-            h, w, ch = rgb.shape
-            bytes_per_line = ch * w
-            qimg = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
-            self._last_color_pixmap = QtGui.QPixmap.fromImage(qimg.copy())
-            self.color_status.setText('彩色 %d x %d' % (w, h))
+            self._last_color_rgb = rgb.copy()
+            self._refresh_color_pixmap()
             self._render_pixmaps()
         except RuntimeError:
             self._shutdown_ros()
@@ -184,8 +185,21 @@ class CameraWidget(QtWidgets.QWidget):
         label.setPixmap(pixmap.scaled(
             label.size(),
             QtCore.Qt.KeepAspectRatio,
-            QtCore.Qt.SmoothTransformation
+            self._scale_transform_mode()
         ))
+
+    def _scale_transform_mode(self):
+        if self.__dict__.get('scale_smooth', False):
+            return QtCore.Qt.SmoothTransformation
+        return QtCore.Qt.FastTransformation
+
+    def _stream_visible(self):
+        try:
+            return bool(self.isVisible())
+        except RuntimeError:
+            return False
+        except Exception:
+            return True
 
     def set_detection_overlay(self, bbox=None, label='', color=(80, 255, 120)):
         try:
@@ -197,9 +211,32 @@ class CameraWidget(QtWidgets.QWidget):
                     'label': str(label or ''),
                     'color': tuple(int(v) for v in color[:3]),
                 }
+            if self.__dict__.get('_last_color_rgb', None) is not None:
+                self._refresh_color_pixmap()
             self._render_pixmaps()
         except RuntimeError:
             self._shutdown_ros()
+
+    def _refresh_color_pixmap(self):
+        rgb = self._color_display_rgb()
+        if rgb is None:
+            return
+        h, w, ch = rgb.shape
+        bytes_per_line = ch * w
+        qimg = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+        self._last_color_pixmap = QtGui.QPixmap.fromImage(qimg.copy())
+        status = self.__dict__.get('color_status', None)
+        if status is not None:
+            status.setText('彩色 %d x %d' % (w, h))
+
+    def _color_display_rgb(self):
+        rgb = self.__dict__.get('_last_color_rgb', None)
+        if rgb is None:
+            return None
+        overlay = self.__dict__.get('_detection_overlay', None)
+        if overlay is not None:
+            return self._draw_detection_overlay(rgb, overlay)
+        return rgb
 
     def _begin_frame(self, stream, now):
         if not self.__dict__.get('_alive', False):

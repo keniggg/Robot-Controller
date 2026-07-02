@@ -1,4 +1,7 @@
 grasp:
+  use_grasp6d_plan: true
+  grasp6d_plan_topic: "/grasp_6d/plan"
+  grasp6d_plan_max_age_sec: 2.0
   pregrasp_distance_m: 0.08
   pregrasp_offset_mode: "camera_ray"
   final_approach_offset_m: 0.015
@@ -7,6 +10,16 @@ grasp:
   lift_height_m: 0.05
   timeout_sec: 25.0
   default_orientation_xyzw: [0.0, 0.7071, 0.0, 0.7071]
+  pregrasp_reached_tolerance_m: 0.04
+  motion_settle_min_sec: 0.8
+  motion_settle_timeout_sec: 2.0
+  motion_settle_sample_sec: 0.05
+  motion_settle_position_epsilon_rad: 0.0025
+  motion_settle_required_samples: 3
+  min_object_confidence: 0.50
+  max_object_jump_m: 0.12
+  object_jump_filter_window_sec: 4.0
+  max_locked_target_refine_m: 0.06
 
 force:
   contact_threshold_mn: 200.0
@@ -22,3 +35,21 @@ gripper:
   close_step_slow_m: 0.0007
   open_step_safe_m: 0.003
   command_rate_hz: 25
+  hold_arm_during_gripper_commands: true
+  arm_hold_timeout_sec: 0.5
+  require_tactile_feedback: true
+  tactile_feedback_timeout_sec: 1.0
+
+grasp_6d:
+  enabled: true
+  backend: "alicia_d_grasp_6d"
+  root: ""
+  checkpoint_path: ""
+  device: "cpu"
+  seed_feat_dim: 512
+  num_points: 50000
+  voxel_size: 0.005
+  plan_hz: 1.0
+  collision_thresh: 0.05
+  collision_voxel_size: 0.01
+  tactile_weight: 0.2

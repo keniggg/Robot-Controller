@@ -26,12 +26,16 @@ SerialCommunicator::~SerialCommunicator()
 
 bool SerialCommunicator::connect()
 {
-    if (serial_port_.isOpen()) {
-        return true;
+    if (read_thread_.joinable() && std::this_thread::get_id() != read_thread_.get_id()) {
+        read_thread_.join();
     }
     ROS_INFO("Attempting to open serial port: %s @ %u bps", port_name_.c_str(), baud_rate_);
 
     try {
+        std::lock_guard<std::mutex> lock(serial_mutex_);
+        if (serial_port_.isOpen()) {
+            return true;
+        }
         serial_port_.setPort(port_name_);
         serial_port_.setBaudrate(baud_rate_);
         // Set a timeout. This is important for robust reading.
@@ -63,6 +67,7 @@ void SerialCommunicator::disconnect()
     if (read_thread_.joinable() && std::this_thread::get_id() != read_thread_.get_id()) {
         read_thread_.join();
     }
+    std::lock_guard<std::mutex> lock(serial_mutex_);
     if (serial_port_.isOpen()) {
         serial_port_.close();
         ROS_INFO("Serial port disconnected.");
@@ -92,18 +97,20 @@ bool SerialCommunicator::write_raw_frame(const std::vector<uint8_t>& frame)
         return false;
     }
     static int s_write_sleep_ms = 1;
-    std::lock_guard<std::mutex> lock(serial_mutex_);
-    try {
-        if (debug_mode_) {
-           print_hex_frame("Sending Raw Frame: ", frame);
-        }
-        size_t bytes_written = serial_port_.write(frame);
-        std::this_thread::sleep_for(std::chrono::milliseconds(s_write_sleep_ms));
+    bool should_disconnect = false;
+    {
+        std::lock_guard<std::mutex> lock(serial_mutex_);
+        try {
+            if (debug_mode_) {
+               print_hex_frame("Sending Raw Frame: ", frame);
+            }
+            size_t bytes_written = serial_port_.write(frame);
+            std::this_thread::sleep_for(std::chrono::milliseconds(s_write_sleep_ms));
 
-        if (bytes_written != frame.size()) {
-             ROS_WARN("Serial write timeout. Wrote %zu of %zu bytes.", bytes_written, frame.size());
-             return false; // Indicate failure
-        }
+            if (bytes_written != frame.size()) {
+                 ROS_WARN("Serial write timeout. Wrote %zu of %zu bytes.", bytes_written, frame.size());
+                 return false; // Indicate failure
+            }
 
         // Measure serial write call rate and throughput (logs once per second)
         // {
@@ -132,12 +139,30 @@ bool SerialCommunicator::write_raw_frame(const std::vector<uint8_t>& frame)
         //         s_last_log = now;
         //     }
         // }
-    } catch (const std::exception& e) {
-        ROS_ERROR("Exception while writing raw frame to serial port %s: %s", port_name_.c_str(), e.what());
-        disconnect(); // Disconnect on write error
+        } catch (const std::exception& e) {
+            ROS_ERROR("Exception while writing raw frame to serial port %s: %s", port_name_.c_str(), e.what());
+            should_disconnect = true;
+        }
+    }
+    if (should_disconnect) {
+        disconnect();
         return false;
     }
     return true;
+}
+
+void SerialCommunicator::handle_read_error_disconnect()
+{
+    is_running_ = false;
+    std::lock_guard<std::mutex> lock(serial_mutex_);
+    try {
+        if (serial_port_.isOpen()) {
+            serial_port_.close();
+            ROS_WARN("Serial port %s marked disconnected after read error.", port_name_.c_str());
+        }
+    } catch (const std::exception& e) {
+        ROS_WARN("Exception while closing serial port %s after read error: %s", port_name_.c_str(), e.what());
+    }
 }
 
 
@@ -199,11 +224,11 @@ void SerialCommunicator::read_thread_loop()
             }
         } catch (const serial::IOException& e) {
             ROS_ERROR("Serial read error on port %s: %s", port_name_.c_str(), e.what());
-            disconnect(); // Disconnect on read error
+            handle_read_error_disconnect();
             wait_for_start = true; // Reset state
         } catch (const std::exception& e) {
             ROS_ERROR("Exception in read thread: %s. Disconnecting.", e.what());
-            disconnect();
+            handle_read_error_disconnect();
             wait_for_start = true; // Reset state on disconnect
         }
     }

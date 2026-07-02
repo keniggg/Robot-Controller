@@ -20,6 +20,7 @@ class MoveItPlanner:
         self.error = None
         self.pose_fallback_enabled = self._bool_param('~pose_fallback_enabled', '/robot/pose_fallback_enabled', True)
         self.position_only_fallback_enabled = self._bool_param('~position_only_fallback_enabled', '/robot/position_only_fallback_enabled', True)
+        self.position_only_execute_enabled = self._bool_param('~position_only_execute_enabled', '/robot/position_only_execute_enabled', False)
         self.orientation_fallback_enabled = self._bool_param('~orientation_fallback_enabled', '/robot/orientation_fallback_enabled', True)
         self.cached_plan_position_tolerance_m = self._float_param(
             '~cached_plan_position_tolerance_m',
@@ -64,6 +65,13 @@ class MoveItPlanner:
                 cached_ok, cached_message = self._execute_cached_pose_plan(pose, target_text)
                 if cached_message:
                     return cached_ok, cached_message
+                plan_ok, plan_message = self.move_to_pose(pose, execute=False)
+                if not plan_ok:
+                    return False, 'execute planning failed before motion: %s' % plan_message
+                cached_ok, cached_message = self._execute_cached_pose_plan(pose, target_text)
+                if cached_message:
+                    return cached_ok, cached_message
+                return False, 'execute failed: no executable cached plan after planning; %s' % target_text
 
             if self._attempt_pose_target(pose, execute):
                 return True, '%s: %s' % (action_done, target_text)
@@ -79,10 +87,12 @@ class MoveItPlanner:
                 if labels:
                     failed_attempts.append('candidate orientations %s' % ','.join(labels))
 
-            if self._pose_fallbacks_enabled() and getattr(self, 'position_only_fallback_enabled', True):
+            if self._position_only_fallback_allowed(execute):
                 if self._attempt_position_target(pose, execute):
                     return True, '%s with position-only fallback: %s' % (action_done, target_text)
                 failed_attempts.append('position-only')
+            elif execute and getattr(self, 'position_only_fallback_enabled', True):
+                failed_attempts.append('position-only disabled for execute')
 
             attempts_text = ', '.join(failed_attempts) if failed_attempts else 'strict pose'
             return False, (
@@ -158,6 +168,8 @@ class MoveItPlanner:
         cached = self._matching_cached_pose_plan(pose)
         if cached is None:
             return False, None
+        if cached.get('kind') == 'position-only' and not getattr(self, 'position_only_execute_enabled', False):
+            return False, 'execute blocked for position-only cached plan: %s' % target_text
         if not hasattr(self.manipulator, 'execute'):
             return False, 'execute failed from cached plan: MoveIt execute API unavailable; %s' % target_text
         try:
@@ -203,6 +215,15 @@ class MoveItPlanner:
 
     def _pose_fallbacks_enabled(self):
         return bool(getattr(self, 'pose_fallback_enabled', True))
+
+    def _position_only_fallback_allowed(self, execute):
+        if not self._pose_fallbacks_enabled():
+            return False
+        if not getattr(self, 'position_only_fallback_enabled', True):
+            return False
+        if execute and not getattr(self, 'position_only_execute_enabled', False):
+            return False
+        return True
 
     def _candidate_orientations(self, original_pose):
         seen = set()

@@ -64,6 +64,7 @@ class PerceptionDetectorSelectionTest(unittest.TestCase):
             'yolo_conf': 0.42,
             'yolo_iou': 0.5,
             'yolo_device': 'cpu',
+            'yolo_imgsz': 416,
         })
         node = types.SimpleNamespace(
             detector_signature=None,
@@ -79,6 +80,7 @@ class PerceptionDetectorSelectionTest(unittest.TestCase):
         self.assertEqual(FakeYOLODetector.created[0]['model_path'], 'models/custom.pt')
         self.assertEqual(FakeYOLODetector.created[0]['target_class'], 'bottle')
         self.assertAlmostEqual(FakeYOLODetector.created[0]['conf'], 0.42)
+        self.assertEqual(FakeYOLODetector.created[0]['imgsz'], 416)
 
     def test_hsv_config_still_creates_hsv_detector(self):
         module = load_perception_node()
