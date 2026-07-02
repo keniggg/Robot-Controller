@@ -1,8 +1,0 @@
-prefix=/home/zhuyupei/alicia_wa_full/devel
-
-Name: alicia_duo_driver
-Description: Description of alicia_duo_driver
-Version: 1.0.0
-Cflags: -I/home/zhuyupei/alicia_wa_full/devel/include -I/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_driver/include
-Libs: -L${prefix}/lib -lalicia_duo_driver
-Requires: roscpp rospy std_msgs serial message_runtime

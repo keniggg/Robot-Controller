@@ -26,33 +26,31 @@ struct TactileFrame_
 
   TactileFrame_()
     : header()
-    , skin_id(0)
+    , skin_name()
+    , values()
     , rows(0)
     , cols(0)
-    , values()
-    , total_force(0.0)
-    , max_force(0.0)
+    , total_force_mn(0.0)
+    , max_force_mn(0.0)
     , max_index(0)
     , center_x(0.0)
     , center_y(0.0)
     , contact(false)
-    , valid(false)
-    , status()  {
+    , valid(false)  {
     }
   TactileFrame_(const ContainerAllocator& _alloc)
     : header(_alloc)
-    , skin_id(0)
+    , skin_name(_alloc)
+    , values(_alloc)
     , rows(0)
     , cols(0)
-    , values(_alloc)
-    , total_force(0.0)
-    , max_force(0.0)
+    , total_force_mn(0.0)
+    , max_force_mn(0.0)
     , max_index(0)
     , center_x(0.0)
     , center_y(0.0)
     , contact(false)
-    , valid(false)
-    , status(_alloc)  {
+    , valid(false)  {
   (void)_alloc;
     }
 
@@ -61,25 +59,25 @@ struct TactileFrame_
    typedef  ::std_msgs::Header_<ContainerAllocator>  _header_type;
   _header_type header;
 
-   typedef uint8_t _skin_id_type;
-  _skin_id_type skin_id;
-
-   typedef uint16_t _rows_type;
-  _rows_type rows;
-
-   typedef uint16_t _cols_type;
-  _cols_type cols;
+   typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _skin_name_type;
+  _skin_name_type skin_name;
 
    typedef std::vector<float, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<float>> _values_type;
   _values_type values;
 
-   typedef float _total_force_type;
-  _total_force_type total_force;
+   typedef uint32_t _rows_type;
+  _rows_type rows;
 
-   typedef float _max_force_type;
-  _max_force_type max_force;
+   typedef uint32_t _cols_type;
+  _cols_type cols;
 
-   typedef uint16_t _max_index_type;
+   typedef float _total_force_mn_type;
+  _total_force_mn_type total_force_mn;
+
+   typedef float _max_force_mn_type;
+  _max_force_mn_type max_force_mn;
+
+   typedef uint32_t _max_index_type;
   _max_index_type max_index;
 
    typedef float _center_x_type;
@@ -93,9 +91,6 @@ struct TactileFrame_
 
    typedef uint8_t _valid_type;
   _valid_type valid;
-
-   typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _status_type;
-  _status_type status;
 
 
 
@@ -127,18 +122,17 @@ template<typename ContainerAllocator1, typename ContainerAllocator2>
 bool operator==(const ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator1> & lhs, const ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator2> & rhs)
 {
   return lhs.header == rhs.header &&
-    lhs.skin_id == rhs.skin_id &&
+    lhs.skin_name == rhs.skin_name &&
+    lhs.values == rhs.values &&
     lhs.rows == rhs.rows &&
     lhs.cols == rhs.cols &&
-    lhs.values == rhs.values &&
-    lhs.total_force == rhs.total_force &&
-    lhs.max_force == rhs.max_force &&
+    lhs.total_force_mn == rhs.total_force_mn &&
+    lhs.max_force_mn == rhs.max_force_mn &&
     lhs.max_index == rhs.max_index &&
     lhs.center_x == rhs.center_x &&
     lhs.center_y == rhs.center_y &&
     lhs.contact == rhs.contact &&
-    lhs.valid == rhs.valid &&
-    lhs.status == rhs.status;
+    lhs.valid == rhs.valid;
 }
 
 template<typename ContainerAllocator1, typename ContainerAllocator2>
@@ -195,12 +189,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAlloca
 {
   static const char* value()
   {
-    return "02ca98ed2c6b94321c339531010cfc87";
+    return "a144ff6b8561cbba1f903254a0728a98";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x02ca98ed2c6b9432ULL;
-  static const uint64_t static_value2 = 0x1c339531010cfc87ULL;
+  static const uint64_t static_value1 = 0xa144ff6b8561cbbaULL;
+  static const uint64_t static_value2 = 0x1f903254a0728a98ULL;
 };
 
 template<class ContainerAllocator>
@@ -220,18 +214,17 @@ struct Definition< ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAl
   static const char* value()
   {
     return "std_msgs/Header header\n"
-"uint8 skin_id\n"
-"uint16 rows\n"
-"uint16 cols\n"
+"string skin_name\n"
 "float32[] values\n"
-"float32 total_force\n"
-"float32 max_force\n"
-"uint16 max_index\n"
+"uint32 rows\n"
+"uint32 cols\n"
+"float32 total_force_mn\n"
+"float32 max_force_mn\n"
+"uint32 max_index\n"
 "float32 center_x\n"
 "float32 center_y\n"
 "bool contact\n"
 "bool valid\n"
-"string status\n"
 "\n"
 "================================================================================\n"
 "MSG: std_msgs/Header\n"
@@ -267,18 +260,17 @@ namespace serialization
     template<typename Stream, typename T> inline static void allInOne(Stream& stream, T m)
     {
       stream.next(m.header);
-      stream.next(m.skin_id);
+      stream.next(m.skin_name);
+      stream.next(m.values);
       stream.next(m.rows);
       stream.next(m.cols);
-      stream.next(m.values);
-      stream.next(m.total_force);
-      stream.next(m.max_force);
+      stream.next(m.total_force_mn);
+      stream.next(m.max_force_mn);
       stream.next(m.max_index);
       stream.next(m.center_x);
       stream.next(m.center_y);
       stream.next(m.contact);
       stream.next(m.valid);
-      stream.next(m.status);
     }
 
     ROS_DECLARE_ALLINONE_SERIALIZER
@@ -303,16 +295,8 @@ struct Printer< ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAlloc
     Printer< ::std_msgs::Header_<ContainerAllocator> >::stream(s, indent + "  ", v.header);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "skin_id: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.skin_id);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "rows: ";
-    Printer<uint16_t>::stream(s, indent + "  ", v.rows);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "cols: ";
-    Printer<uint16_t>::stream(s, indent + "  ", v.cols);
+    s << indent << "skin_name: ";
+    Printer<std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>>>::stream(s, indent + "  ", v.skin_name);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "values: ";
@@ -330,16 +314,24 @@ struct Printer< ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAlloc
       s << "]";
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "total_force: ";
-    Printer<float>::stream(s, indent + "  ", v.total_force);
+    s << indent << "rows: ";
+    Printer<uint32_t>::stream(s, indent + "  ", v.rows);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "max_force: ";
-    Printer<float>::stream(s, indent + "  ", v.max_force);
+    s << indent << "cols: ";
+    Printer<uint32_t>::stream(s, indent + "  ", v.cols);
+    if (true || !indent.empty())
+      s << std::endl;
+    s << indent << "total_force_mn: ";
+    Printer<float>::stream(s, indent + "  ", v.total_force_mn);
+    if (true || !indent.empty())
+      s << std::endl;
+    s << indent << "max_force_mn: ";
+    Printer<float>::stream(s, indent + "  ", v.max_force_mn);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "max_index: ";
-    Printer<uint16_t>::stream(s, indent + "  ", v.max_index);
+    Printer<uint32_t>::stream(s, indent + "  ", v.max_index);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "center_x: ";
@@ -356,10 +348,6 @@ struct Printer< ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAlloc
       s << std::endl;
     s << indent << "valid: ";
     Printer<uint8_t>::stream(s, indent + "  ", v.valid);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "status: ";
-    Printer<std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>>>::stream(s, indent + "  ", v.status);
   }
 };
 

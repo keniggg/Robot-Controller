@@ -26,7 +26,7 @@ echo_and_run /usr/bin/env \
     CATKIN_BINARY_DIR="/home/zhuyupei/alicia_wa_full/build" \
     "/usr/bin/python3" \
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/setup.py" \
-     \
+    egg_info --egg-base /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor \
     build --build-base "/home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor" \
     install \
     --root="${DESTDIR-/}" \

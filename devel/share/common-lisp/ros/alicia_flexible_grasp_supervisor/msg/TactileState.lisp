@@ -12,24 +12,24 @@
     :initarg :header
     :type std_msgs-msg:Header
     :initform (cl:make-instance 'std_msgs-msg:Header))
-   (skin1
-    :reader skin1
-    :initarg :skin1
+   (left
+    :reader left
+    :initarg :left
     :type alicia_flexible_grasp_supervisor-msg:TactileFrame
     :initform (cl:make-instance 'alicia_flexible_grasp_supervisor-msg:TactileFrame))
-   (skin2
-    :reader skin2
-    :initarg :skin2
+   (right
+    :reader right
+    :initarg :right
     :type alicia_flexible_grasp_supervisor-msg:TactileFrame
     :initform (cl:make-instance 'alicia_flexible_grasp_supervisor-msg:TactileFrame))
-   (total_grip_force
-    :reader total_grip_force
-    :initarg :total_grip_force
+   (total_grip_force_mn
+    :reader total_grip_force_mn
+    :initarg :total_grip_force_mn
     :type cl:float
     :initform 0.0)
-   (force_diff
-    :reader force_diff
-    :initarg :force_diff
+   (force_diff_mn
+    :reader force_diff_mn
+    :initarg :force_diff_mn
     :type cl:float
     :initform 0.0)
    (left_contact
@@ -52,11 +52,11 @@
     :initarg :slip_detected
     :type cl:boolean
     :initform cl:nil)
-   (status
-    :reader status
-    :initarg :status
-    :type cl:string
-    :initform ""))
+   (valid
+    :reader valid
+    :initarg :valid
+    :type cl:boolean
+    :initform cl:nil))
 )
 
 (cl:defclass TactileState (<TactileState>)
@@ -72,25 +72,25 @@
   (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:header-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:header instead.")
   (header m))
 
-(cl:ensure-generic-function 'skin1-val :lambda-list '(m))
-(cl:defmethod skin1-val ((m <TactileState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:skin1-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:skin1 instead.")
-  (skin1 m))
+(cl:ensure-generic-function 'left-val :lambda-list '(m))
+(cl:defmethod left-val ((m <TactileState>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:left-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:left instead.")
+  (left m))
 
-(cl:ensure-generic-function 'skin2-val :lambda-list '(m))
-(cl:defmethod skin2-val ((m <TactileState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:skin2-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:skin2 instead.")
-  (skin2 m))
+(cl:ensure-generic-function 'right-val :lambda-list '(m))
+(cl:defmethod right-val ((m <TactileState>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:right-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:right instead.")
+  (right m))
 
-(cl:ensure-generic-function 'total_grip_force-val :lambda-list '(m))
-(cl:defmethod total_grip_force-val ((m <TactileState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:total_grip_force-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:total_grip_force instead.")
-  (total_grip_force m))
+(cl:ensure-generic-function 'total_grip_force_mn-val :lambda-list '(m))
+(cl:defmethod total_grip_force_mn-val ((m <TactileState>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:total_grip_force_mn-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:total_grip_force_mn instead.")
+  (total_grip_force_mn m))
 
-(cl:ensure-generic-function 'force_diff-val :lambda-list '(m))
-(cl:defmethod force_diff-val ((m <TactileState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:force_diff-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:force_diff instead.")
-  (force_diff m))
+(cl:ensure-generic-function 'force_diff_mn-val :lambda-list '(m))
+(cl:defmethod force_diff_mn-val ((m <TactileState>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:force_diff_mn-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:force_diff_mn instead.")
+  (force_diff_mn m))
 
 (cl:ensure-generic-function 'left_contact-val :lambda-list '(m))
 (cl:defmethod left_contact-val ((m <TactileState>))
@@ -112,21 +112,21 @@
   (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:slip_detected-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:slip_detected instead.")
   (slip_detected m))
 
-(cl:ensure-generic-function 'status-val :lambda-list '(m))
-(cl:defmethod status-val ((m <TactileState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:status-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:status instead.")
-  (status m))
+(cl:ensure-generic-function 'valid-val :lambda-list '(m))
+(cl:defmethod valid-val ((m <TactileState>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:valid-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:valid instead.")
+  (valid m))
 (cl:defmethod roslisp-msg-protocol:serialize ((msg <TactileState>) ostream)
   "Serializes a message object of type '<TactileState>"
   (roslisp-msg-protocol:serialize (cl:slot-value msg 'header) ostream)
-  (roslisp-msg-protocol:serialize (cl:slot-value msg 'skin1) ostream)
-  (roslisp-msg-protocol:serialize (cl:slot-value msg 'skin2) ostream)
-  (cl:let ((bits (roslisp-utils:encode-single-float-bits (cl:slot-value msg 'total_grip_force))))
+  (roslisp-msg-protocol:serialize (cl:slot-value msg 'left) ostream)
+  (roslisp-msg-protocol:serialize (cl:slot-value msg 'right) ostream)
+  (cl:let ((bits (roslisp-utils:encode-single-float-bits (cl:slot-value msg 'total_grip_force_mn))))
     (cl:write-byte (cl:ldb (cl:byte 8 0) bits) ostream)
     (cl:write-byte (cl:ldb (cl:byte 8 8) bits) ostream)
     (cl:write-byte (cl:ldb (cl:byte 8 16) bits) ostream)
     (cl:write-byte (cl:ldb (cl:byte 8 24) bits) ostream))
-  (cl:let ((bits (roslisp-utils:encode-single-float-bits (cl:slot-value msg 'force_diff))))
+  (cl:let ((bits (roslisp-utils:encode-single-float-bits (cl:slot-value msg 'force_diff_mn))))
     (cl:write-byte (cl:ldb (cl:byte 8 0) bits) ostream)
     (cl:write-byte (cl:ldb (cl:byte 8 8) bits) ostream)
     (cl:write-byte (cl:ldb (cl:byte 8 16) bits) ostream)
@@ -135,42 +135,30 @@
   (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'right_contact) 1 0)) ostream)
   (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'object_grasped) 1 0)) ostream)
   (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'slip_detected) 1 0)) ostream)
-  (cl:let ((__ros_str_len (cl:length (cl:slot-value msg 'status))))
-    (cl:write-byte (cl:ldb (cl:byte 8 0) __ros_str_len) ostream)
-    (cl:write-byte (cl:ldb (cl:byte 8 8) __ros_str_len) ostream)
-    (cl:write-byte (cl:ldb (cl:byte 8 16) __ros_str_len) ostream)
-    (cl:write-byte (cl:ldb (cl:byte 8 24) __ros_str_len) ostream))
-  (cl:map cl:nil #'(cl:lambda (c) (cl:write-byte (cl:char-code c) ostream)) (cl:slot-value msg 'status))
+  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'valid) 1 0)) ostream)
 )
 (cl:defmethod roslisp-msg-protocol:deserialize ((msg <TactileState>) istream)
   "Deserializes a message object of type '<TactileState>"
   (roslisp-msg-protocol:deserialize (cl:slot-value msg 'header) istream)
-  (roslisp-msg-protocol:deserialize (cl:slot-value msg 'skin1) istream)
-  (roslisp-msg-protocol:deserialize (cl:slot-value msg 'skin2) istream)
+  (roslisp-msg-protocol:deserialize (cl:slot-value msg 'left) istream)
+  (roslisp-msg-protocol:deserialize (cl:slot-value msg 'right) istream)
     (cl:let ((bits 0))
       (cl:setf (cl:ldb (cl:byte 8 0) bits) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 8) bits) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 16) bits) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 24) bits) (cl:read-byte istream))
-    (cl:setf (cl:slot-value msg 'total_grip_force) (roslisp-utils:decode-single-float-bits bits)))
+    (cl:setf (cl:slot-value msg 'total_grip_force_mn) (roslisp-utils:decode-single-float-bits bits)))
     (cl:let ((bits 0))
       (cl:setf (cl:ldb (cl:byte 8 0) bits) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 8) bits) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 16) bits) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 24) bits) (cl:read-byte istream))
-    (cl:setf (cl:slot-value msg 'force_diff) (roslisp-utils:decode-single-float-bits bits)))
+    (cl:setf (cl:slot-value msg 'force_diff_mn) (roslisp-utils:decode-single-float-bits bits)))
     (cl:setf (cl:slot-value msg 'left_contact) (cl:not (cl:zerop (cl:read-byte istream))))
     (cl:setf (cl:slot-value msg 'right_contact) (cl:not (cl:zerop (cl:read-byte istream))))
     (cl:setf (cl:slot-value msg 'object_grasped) (cl:not (cl:zerop (cl:read-byte istream))))
     (cl:setf (cl:slot-value msg 'slip_detected) (cl:not (cl:zerop (cl:read-byte istream))))
-    (cl:let ((__ros_str_len 0))
-      (cl:setf (cl:ldb (cl:byte 8 0) __ros_str_len) (cl:read-byte istream))
-      (cl:setf (cl:ldb (cl:byte 8 8) __ros_str_len) (cl:read-byte istream))
-      (cl:setf (cl:ldb (cl:byte 8 16) __ros_str_len) (cl:read-byte istream))
-      (cl:setf (cl:ldb (cl:byte 8 24) __ros_str_len) (cl:read-byte istream))
-      (cl:setf (cl:slot-value msg 'status) (cl:make-string __ros_str_len))
-      (cl:dotimes (__ros_str_idx __ros_str_len msg)
-        (cl:setf (cl:char (cl:slot-value msg 'status) __ros_str_idx) (cl:code-char (cl:read-byte istream)))))
+    (cl:setf (cl:slot-value msg 'valid) (cl:not (cl:zerop (cl:read-byte istream))))
   msg
 )
 (cl:defmethod roslisp-msg-protocol:ros-datatype ((msg (cl:eql '<TactileState>)))
@@ -181,40 +169,40 @@
   "alicia_flexible_grasp_supervisor/TactileState")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql '<TactileState>)))
   "Returns md5sum for a message object of type '<TactileState>"
-  "9b76704935dbe875f8fc5a941f64277a")
+  "5df6a8c43bd865ec0ec8d2f74fe1aa66")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql 'TactileState)))
   "Returns md5sum for a message object of type 'TactileState"
-  "9b76704935dbe875f8fc5a941f64277a")
+  "5df6a8c43bd865ec0ec8d2f74fe1aa66")
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql '<TactileState>)))
   "Returns full string definition for message of type '<TactileState>"
-  (cl:format cl:nil "std_msgs/Header header~%alicia_flexible_grasp_supervisor/TactileFrame skin1~%alicia_flexible_grasp_supervisor/TactileFrame skin2~%float32 total_grip_force~%float32 force_diff~%bool left_contact~%bool right_contact~%bool object_grasped~%bool slip_detected~%string status~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%================================================================================~%MSG: alicia_flexible_grasp_supervisor/TactileFrame~%std_msgs/Header header~%uint8 skin_id~%uint16 rows~%uint16 cols~%float32[] values~%float32 total_force~%float32 max_force~%uint16 max_index~%float32 center_x~%float32 center_y~%bool contact~%bool valid~%string status~%~%~%"))
+  (cl:format cl:nil "std_msgs/Header header~%alicia_flexible_grasp_supervisor/TactileFrame left~%alicia_flexible_grasp_supervisor/TactileFrame right~%float32 total_grip_force_mn~%float32 force_diff_mn~%bool left_contact~%bool right_contact~%bool object_grasped~%bool slip_detected~%bool valid~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%================================================================================~%MSG: alicia_flexible_grasp_supervisor/TactileFrame~%std_msgs/Header header~%string skin_name~%float32[] values~%uint32 rows~%uint32 cols~%float32 total_force_mn~%float32 max_force_mn~%uint32 max_index~%float32 center_x~%float32 center_y~%bool contact~%bool valid~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql 'TactileState)))
   "Returns full string definition for message of type 'TactileState"
-  (cl:format cl:nil "std_msgs/Header header~%alicia_flexible_grasp_supervisor/TactileFrame skin1~%alicia_flexible_grasp_supervisor/TactileFrame skin2~%float32 total_grip_force~%float32 force_diff~%bool left_contact~%bool right_contact~%bool object_grasped~%bool slip_detected~%string status~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%================================================================================~%MSG: alicia_flexible_grasp_supervisor/TactileFrame~%std_msgs/Header header~%uint8 skin_id~%uint16 rows~%uint16 cols~%float32[] values~%float32 total_force~%float32 max_force~%uint16 max_index~%float32 center_x~%float32 center_y~%bool contact~%bool valid~%string status~%~%~%"))
+  (cl:format cl:nil "std_msgs/Header header~%alicia_flexible_grasp_supervisor/TactileFrame left~%alicia_flexible_grasp_supervisor/TactileFrame right~%float32 total_grip_force_mn~%float32 force_diff_mn~%bool left_contact~%bool right_contact~%bool object_grasped~%bool slip_detected~%bool valid~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%================================================================================~%MSG: alicia_flexible_grasp_supervisor/TactileFrame~%std_msgs/Header header~%string skin_name~%float32[] values~%uint32 rows~%uint32 cols~%float32 total_force_mn~%float32 max_force_mn~%uint32 max_index~%float32 center_x~%float32 center_y~%bool contact~%bool valid~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:serialization-length ((msg <TactileState>))
   (cl:+ 0
      (roslisp-msg-protocol:serialization-length (cl:slot-value msg 'header))
-     (roslisp-msg-protocol:serialization-length (cl:slot-value msg 'skin1))
-     (roslisp-msg-protocol:serialization-length (cl:slot-value msg 'skin2))
+     (roslisp-msg-protocol:serialization-length (cl:slot-value msg 'left))
+     (roslisp-msg-protocol:serialization-length (cl:slot-value msg 'right))
      4
      4
      1
      1
      1
      1
-     4 (cl:length (cl:slot-value msg 'status))
+     1
 ))
 (cl:defmethod roslisp-msg-protocol:ros-message-to-list ((msg <TactileState>))
   "Converts a ROS message object to a list"
   (cl:list 'TactileState
     (cl:cons ':header (header msg))
-    (cl:cons ':skin1 (skin1 msg))
-    (cl:cons ':skin2 (skin2 msg))
-    (cl:cons ':total_grip_force (total_grip_force msg))
-    (cl:cons ':force_diff (force_diff msg))
+    (cl:cons ':left (left msg))
+    (cl:cons ':right (right msg))
+    (cl:cons ':total_grip_force_mn (total_grip_force_mn msg))
+    (cl:cons ':force_diff_mn (force_diff_mn msg))
     (cl:cons ':left_contact (left_contact msg))
     (cl:cons ':right_contact (right_contact msg))
     (cl:cons ':object_grasped (object_grasped msg))
     (cl:cons ':slip_detected (slip_detected msg))
-    (cl:cons ':status (status msg))
+    (cl:cons ':valid (valid msg))
 ))

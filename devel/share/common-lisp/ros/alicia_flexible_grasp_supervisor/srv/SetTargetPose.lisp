@@ -7,11 +7,11 @@
 ;//! \htmlinclude SetTargetPose-request.msg.html
 
 (cl:defclass <SetTargetPose-request> (roslisp-msg-protocol:ros-message)
-  ((pose
-    :reader pose
-    :initarg :pose
-    :type geometry_msgs-msg:Pose
-    :initform (cl:make-instance 'geometry_msgs-msg:Pose))
+  ((target
+    :reader target
+    :initarg :target
+    :type geometry_msgs-msg:PoseStamped
+    :initform (cl:make-instance 'geometry_msgs-msg:PoseStamped))
    (execute
     :reader execute
     :initarg :execute
@@ -27,10 +27,10 @@
   (cl:unless (cl:typep m 'SetTargetPose-request)
     (roslisp-msg-protocol:msg-deprecation-warning "using old message class name alicia_flexible_grasp_supervisor-srv:<SetTargetPose-request> is deprecated: use alicia_flexible_grasp_supervisor-srv:SetTargetPose-request instead.")))
 
-(cl:ensure-generic-function 'pose-val :lambda-list '(m))
-(cl:defmethod pose-val ((m <SetTargetPose-request>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-srv:pose-val is deprecated.  Use alicia_flexible_grasp_supervisor-srv:pose instead.")
-  (pose m))
+(cl:ensure-generic-function 'target-val :lambda-list '(m))
+(cl:defmethod target-val ((m <SetTargetPose-request>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-srv:target-val is deprecated.  Use alicia_flexible_grasp_supervisor-srv:target instead.")
+  (target m))
 
 (cl:ensure-generic-function 'execute-val :lambda-list '(m))
 (cl:defmethod execute-val ((m <SetTargetPose-request>))
@@ -38,12 +38,12 @@
   (execute m))
 (cl:defmethod roslisp-msg-protocol:serialize ((msg <SetTargetPose-request>) ostream)
   "Serializes a message object of type '<SetTargetPose-request>"
-  (roslisp-msg-protocol:serialize (cl:slot-value msg 'pose) ostream)
+  (roslisp-msg-protocol:serialize (cl:slot-value msg 'target) ostream)
   (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'execute) 1 0)) ostream)
 )
 (cl:defmethod roslisp-msg-protocol:deserialize ((msg <SetTargetPose-request>) istream)
   "Deserializes a message object of type '<SetTargetPose-request>"
-  (roslisp-msg-protocol:deserialize (cl:slot-value msg 'pose) istream)
+  (roslisp-msg-protocol:deserialize (cl:slot-value msg 'target) istream)
     (cl:setf (cl:slot-value msg 'execute) (cl:not (cl:zerop (cl:read-byte istream))))
   msg
 )
@@ -55,33 +55,33 @@
   "alicia_flexible_grasp_supervisor/SetTargetPoseRequest")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql '<SetTargetPose-request>)))
   "Returns md5sum for a message object of type '<SetTargetPose-request>"
-  "00e64715c2cedd5add3400704911c3af")
+  "2cf3c52fcc5b5b6cce00c68f65c0b916")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql 'SetTargetPose-request)))
   "Returns md5sum for a message object of type 'SetTargetPose-request"
-  "00e64715c2cedd5add3400704911c3af")
+  "2cf3c52fcc5b5b6cce00c68f65c0b916")
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql '<SetTargetPose-request>)))
   "Returns full string definition for message of type '<SetTargetPose-request>"
-  (cl:format cl:nil "geometry_msgs/Pose pose~%bool execute~%~%================================================================================~%MSG: geometry_msgs/Pose~%# A representation of pose in free space, composed of position and orientation. ~%Point position~%Quaternion orientation~%~%================================================================================~%MSG: geometry_msgs/Point~%# This contains the position of a point in free space~%float64 x~%float64 y~%float64 z~%~%================================================================================~%MSG: geometry_msgs/Quaternion~%# This represents an orientation in free space in quaternion form.~%~%float64 x~%float64 y~%float64 z~%float64 w~%~%~%"))
+  (cl:format cl:nil "geometry_msgs/PoseStamped target~%bool execute~%~%================================================================================~%MSG: geometry_msgs/PoseStamped~%# A Pose with reference coordinate frame and timestamp~%Header header~%Pose pose~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%================================================================================~%MSG: geometry_msgs/Pose~%# A representation of pose in free space, composed of position and orientation. ~%Point position~%Quaternion orientation~%~%================================================================================~%MSG: geometry_msgs/Point~%# This contains the position of a point in free space~%float64 x~%float64 y~%float64 z~%~%================================================================================~%MSG: geometry_msgs/Quaternion~%# This represents an orientation in free space in quaternion form.~%~%float64 x~%float64 y~%float64 z~%float64 w~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql 'SetTargetPose-request)))
   "Returns full string definition for message of type 'SetTargetPose-request"
-  (cl:format cl:nil "geometry_msgs/Pose pose~%bool execute~%~%================================================================================~%MSG: geometry_msgs/Pose~%# A representation of pose in free space, composed of position and orientation. ~%Point position~%Quaternion orientation~%~%================================================================================~%MSG: geometry_msgs/Point~%# This contains the position of a point in free space~%float64 x~%float64 y~%float64 z~%~%================================================================================~%MSG: geometry_msgs/Quaternion~%# This represents an orientation in free space in quaternion form.~%~%float64 x~%float64 y~%float64 z~%float64 w~%~%~%"))
+  (cl:format cl:nil "geometry_msgs/PoseStamped target~%bool execute~%~%================================================================================~%MSG: geometry_msgs/PoseStamped~%# A Pose with reference coordinate frame and timestamp~%Header header~%Pose pose~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%================================================================================~%MSG: geometry_msgs/Pose~%# A representation of pose in free space, composed of position and orientation. ~%Point position~%Quaternion orientation~%~%================================================================================~%MSG: geometry_msgs/Point~%# This contains the position of a point in free space~%float64 x~%float64 y~%float64 z~%~%================================================================================~%MSG: geometry_msgs/Quaternion~%# This represents an orientation in free space in quaternion form.~%~%float64 x~%float64 y~%float64 z~%float64 w~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:serialization-length ((msg <SetTargetPose-request>))
   (cl:+ 0
-     (roslisp-msg-protocol:serialization-length (cl:slot-value msg 'pose))
+     (roslisp-msg-protocol:serialization-length (cl:slot-value msg 'target))
      1
 ))
 (cl:defmethod roslisp-msg-protocol:ros-message-to-list ((msg <SetTargetPose-request>))
   "Converts a ROS message object to a list"
   (cl:list 'SetTargetPose-request
-    (cl:cons ':pose (pose msg))
+    (cl:cons ':target (target msg))
     (cl:cons ':execute (execute msg))
 ))
 ;//! \htmlinclude SetTargetPose-response.msg.html
 
 (cl:defclass <SetTargetPose-response> (roslisp-msg-protocol:ros-message)
-  ((ok
-    :reader ok
-    :initarg :ok
+  ((success
+    :reader success
+    :initarg :success
     :type cl:boolean
     :initform cl:nil)
    (message
@@ -99,10 +99,10 @@
   (cl:unless (cl:typep m 'SetTargetPose-response)
     (roslisp-msg-protocol:msg-deprecation-warning "using old message class name alicia_flexible_grasp_supervisor-srv:<SetTargetPose-response> is deprecated: use alicia_flexible_grasp_supervisor-srv:SetTargetPose-response instead.")))
 
-(cl:ensure-generic-function 'ok-val :lambda-list '(m))
-(cl:defmethod ok-val ((m <SetTargetPose-response>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-srv:ok-val is deprecated.  Use alicia_flexible_grasp_supervisor-srv:ok instead.")
-  (ok m))
+(cl:ensure-generic-function 'success-val :lambda-list '(m))
+(cl:defmethod success-val ((m <SetTargetPose-response>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-srv:success-val is deprecated.  Use alicia_flexible_grasp_supervisor-srv:success instead.")
+  (success m))
 
 (cl:ensure-generic-function 'message-val :lambda-list '(m))
 (cl:defmethod message-val ((m <SetTargetPose-response>))
@@ -110,7 +110,7 @@
   (message m))
 (cl:defmethod roslisp-msg-protocol:serialize ((msg <SetTargetPose-response>) ostream)
   "Serializes a message object of type '<SetTargetPose-response>"
-  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'ok) 1 0)) ostream)
+  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'success) 1 0)) ostream)
   (cl:let ((__ros_str_len (cl:length (cl:slot-value msg 'message))))
     (cl:write-byte (cl:ldb (cl:byte 8 0) __ros_str_len) ostream)
     (cl:write-byte (cl:ldb (cl:byte 8 8) __ros_str_len) ostream)
@@ -120,7 +120,7 @@
 )
 (cl:defmethod roslisp-msg-protocol:deserialize ((msg <SetTargetPose-response>) istream)
   "Deserializes a message object of type '<SetTargetPose-response>"
-    (cl:setf (cl:slot-value msg 'ok) (cl:not (cl:zerop (cl:read-byte istream))))
+    (cl:setf (cl:slot-value msg 'success) (cl:not (cl:zerop (cl:read-byte istream))))
     (cl:let ((__ros_str_len 0))
       (cl:setf (cl:ldb (cl:byte 8 0) __ros_str_len) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 8) __ros_str_len) (cl:read-byte istream))
@@ -139,16 +139,16 @@
   "alicia_flexible_grasp_supervisor/SetTargetPoseResponse")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql '<SetTargetPose-response>)))
   "Returns md5sum for a message object of type '<SetTargetPose-response>"
-  "00e64715c2cedd5add3400704911c3af")
+  "2cf3c52fcc5b5b6cce00c68f65c0b916")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql 'SetTargetPose-response)))
   "Returns md5sum for a message object of type 'SetTargetPose-response"
-  "00e64715c2cedd5add3400704911c3af")
+  "2cf3c52fcc5b5b6cce00c68f65c0b916")
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql '<SetTargetPose-response>)))
   "Returns full string definition for message of type '<SetTargetPose-response>"
-  (cl:format cl:nil "bool ok~%string message~%~%~%~%"))
+  (cl:format cl:nil "bool success~%string message~%~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql 'SetTargetPose-response)))
   "Returns full string definition for message of type 'SetTargetPose-response"
-  (cl:format cl:nil "bool ok~%string message~%~%~%~%"))
+  (cl:format cl:nil "bool success~%string message~%~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:serialization-length ((msg <SetTargetPose-response>))
   (cl:+ 0
      1
@@ -157,7 +157,7 @@
 (cl:defmethod roslisp-msg-protocol:ros-message-to-list ((msg <SetTargetPose-response>))
   "Converts a ROS message object to a list"
   (cl:list 'SetTargetPose-response
-    (cl:cons ':ok (ok msg))
+    (cl:cons ':success (success msg))
     (cl:cons ':message (message msg))
 ))
 (cl:defmethod roslisp-msg-protocol:service-request-type ((msg (cl:eql 'SetTargetPose)))

@@ -20,18 +20,17 @@ class TactileFrame {
     if (initObj === null) {
       // initObj === null is a special case for deserialization where we don't initialize fields
       this.header = null;
-      this.skin_id = null;
+      this.skin_name = null;
+      this.values = null;
       this.rows = null;
       this.cols = null;
-      this.values = null;
-      this.total_force = null;
-      this.max_force = null;
+      this.total_force_mn = null;
+      this.max_force_mn = null;
       this.max_index = null;
       this.center_x = null;
       this.center_y = null;
       this.contact = null;
       this.valid = null;
-      this.status = null;
     }
     else {
       if (initObj.hasOwnProperty('header')) {
@@ -40,11 +39,17 @@ class TactileFrame {
       else {
         this.header = new std_msgs.msg.Header();
       }
-      if (initObj.hasOwnProperty('skin_id')) {
-        this.skin_id = initObj.skin_id
+      if (initObj.hasOwnProperty('skin_name')) {
+        this.skin_name = initObj.skin_name
       }
       else {
-        this.skin_id = 0;
+        this.skin_name = '';
+      }
+      if (initObj.hasOwnProperty('values')) {
+        this.values = initObj.values
+      }
+      else {
+        this.values = [];
       }
       if (initObj.hasOwnProperty('rows')) {
         this.rows = initObj.rows
@@ -58,23 +63,17 @@ class TactileFrame {
       else {
         this.cols = 0;
       }
-      if (initObj.hasOwnProperty('values')) {
-        this.values = initObj.values
+      if (initObj.hasOwnProperty('total_force_mn')) {
+        this.total_force_mn = initObj.total_force_mn
       }
       else {
-        this.values = [];
+        this.total_force_mn = 0.0;
       }
-      if (initObj.hasOwnProperty('total_force')) {
-        this.total_force = initObj.total_force
-      }
-      else {
-        this.total_force = 0.0;
-      }
-      if (initObj.hasOwnProperty('max_force')) {
-        this.max_force = initObj.max_force
+      if (initObj.hasOwnProperty('max_force_mn')) {
+        this.max_force_mn = initObj.max_force_mn
       }
       else {
-        this.max_force = 0.0;
+        this.max_force_mn = 0.0;
       }
       if (initObj.hasOwnProperty('max_index')) {
         this.max_index = initObj.max_index
@@ -106,12 +105,6 @@ class TactileFrame {
       else {
         this.valid = false;
       }
-      if (initObj.hasOwnProperty('status')) {
-        this.status = initObj.status
-      }
-      else {
-        this.status = '';
-      }
     }
   }
 
@@ -119,20 +112,20 @@ class TactileFrame {
     // Serializes a message object of type TactileFrame
     // Serialize message field [header]
     bufferOffset = std_msgs.msg.Header.serialize(obj.header, buffer, bufferOffset);
-    // Serialize message field [skin_id]
-    bufferOffset = _serializer.uint8(obj.skin_id, buffer, bufferOffset);
-    // Serialize message field [rows]
-    bufferOffset = _serializer.uint16(obj.rows, buffer, bufferOffset);
-    // Serialize message field [cols]
-    bufferOffset = _serializer.uint16(obj.cols, buffer, bufferOffset);
+    // Serialize message field [skin_name]
+    bufferOffset = _serializer.string(obj.skin_name, buffer, bufferOffset);
     // Serialize message field [values]
     bufferOffset = _arraySerializer.float32(obj.values, buffer, bufferOffset, null);
-    // Serialize message field [total_force]
-    bufferOffset = _serializer.float32(obj.total_force, buffer, bufferOffset);
-    // Serialize message field [max_force]
-    bufferOffset = _serializer.float32(obj.max_force, buffer, bufferOffset);
+    // Serialize message field [rows]
+    bufferOffset = _serializer.uint32(obj.rows, buffer, bufferOffset);
+    // Serialize message field [cols]
+    bufferOffset = _serializer.uint32(obj.cols, buffer, bufferOffset);
+    // Serialize message field [total_force_mn]
+    bufferOffset = _serializer.float32(obj.total_force_mn, buffer, bufferOffset);
+    // Serialize message field [max_force_mn]
+    bufferOffset = _serializer.float32(obj.max_force_mn, buffer, bufferOffset);
     // Serialize message field [max_index]
-    bufferOffset = _serializer.uint16(obj.max_index, buffer, bufferOffset);
+    bufferOffset = _serializer.uint32(obj.max_index, buffer, bufferOffset);
     // Serialize message field [center_x]
     bufferOffset = _serializer.float32(obj.center_x, buffer, bufferOffset);
     // Serialize message field [center_y]
@@ -141,8 +134,6 @@ class TactileFrame {
     bufferOffset = _serializer.bool(obj.contact, buffer, bufferOffset);
     // Serialize message field [valid]
     bufferOffset = _serializer.bool(obj.valid, buffer, bufferOffset);
-    // Serialize message field [status]
-    bufferOffset = _serializer.string(obj.status, buffer, bufferOffset);
     return bufferOffset;
   }
 
@@ -152,20 +143,20 @@ class TactileFrame {
     let data = new TactileFrame(null);
     // Deserialize message field [header]
     data.header = std_msgs.msg.Header.deserialize(buffer, bufferOffset);
-    // Deserialize message field [skin_id]
-    data.skin_id = _deserializer.uint8(buffer, bufferOffset);
-    // Deserialize message field [rows]
-    data.rows = _deserializer.uint16(buffer, bufferOffset);
-    // Deserialize message field [cols]
-    data.cols = _deserializer.uint16(buffer, bufferOffset);
+    // Deserialize message field [skin_name]
+    data.skin_name = _deserializer.string(buffer, bufferOffset);
     // Deserialize message field [values]
     data.values = _arrayDeserializer.float32(buffer, bufferOffset, null)
-    // Deserialize message field [total_force]
-    data.total_force = _deserializer.float32(buffer, bufferOffset);
-    // Deserialize message field [max_force]
-    data.max_force = _deserializer.float32(buffer, bufferOffset);
+    // Deserialize message field [rows]
+    data.rows = _deserializer.uint32(buffer, bufferOffset);
+    // Deserialize message field [cols]
+    data.cols = _deserializer.uint32(buffer, bufferOffset);
+    // Deserialize message field [total_force_mn]
+    data.total_force_mn = _deserializer.float32(buffer, bufferOffset);
+    // Deserialize message field [max_force_mn]
+    data.max_force_mn = _deserializer.float32(buffer, bufferOffset);
     // Deserialize message field [max_index]
-    data.max_index = _deserializer.uint16(buffer, bufferOffset);
+    data.max_index = _deserializer.uint32(buffer, bufferOffset);
     // Deserialize message field [center_x]
     data.center_x = _deserializer.float32(buffer, bufferOffset);
     // Deserialize message field [center_y]
@@ -174,17 +165,15 @@ class TactileFrame {
     data.contact = _deserializer.bool(buffer, bufferOffset);
     // Deserialize message field [valid]
     data.valid = _deserializer.bool(buffer, bufferOffset);
-    // Deserialize message field [status]
-    data.status = _deserializer.string(buffer, bufferOffset);
     return data;
   }
 
   static getMessageSize(object) {
     let length = 0;
     length += std_msgs.msg.Header.getMessageSize(object.header);
+    length += _getByteLength(object.skin_name);
     length += 4 * object.values.length;
-    length += _getByteLength(object.status);
-    return length + 33;
+    return length + 38;
   }
 
   static datatype() {
@@ -194,25 +183,24 @@ class TactileFrame {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return '02ca98ed2c6b94321c339531010cfc87';
+    return 'a144ff6b8561cbba1f903254a0728a98';
   }
 
   static messageDefinition() {
     // Returns full string definition for message
     return `
     std_msgs/Header header
-    uint8 skin_id
-    uint16 rows
-    uint16 cols
+    string skin_name
     float32[] values
-    float32 total_force
-    float32 max_force
-    uint16 max_index
+    uint32 rows
+    uint32 cols
+    float32 total_force_mn
+    float32 max_force_mn
+    uint32 max_index
     float32 center_x
     float32 center_y
     bool contact
     bool valid
-    string status
     
     ================================================================================
     MSG: std_msgs/Header
@@ -246,11 +234,18 @@ class TactileFrame {
       resolved.header = new std_msgs.msg.Header()
     }
 
-    if (msg.skin_id !== undefined) {
-      resolved.skin_id = msg.skin_id;
+    if (msg.skin_name !== undefined) {
+      resolved.skin_name = msg.skin_name;
     }
     else {
-      resolved.skin_id = 0
+      resolved.skin_name = ''
+    }
+
+    if (msg.values !== undefined) {
+      resolved.values = msg.values;
+    }
+    else {
+      resolved.values = []
     }
 
     if (msg.rows !== undefined) {
@@ -267,25 +262,18 @@ class TactileFrame {
       resolved.cols = 0
     }
 
-    if (msg.values !== undefined) {
-      resolved.values = msg.values;
+    if (msg.total_force_mn !== undefined) {
+      resolved.total_force_mn = msg.total_force_mn;
     }
     else {
-      resolved.values = []
+      resolved.total_force_mn = 0.0
     }
 
-    if (msg.total_force !== undefined) {
-      resolved.total_force = msg.total_force;
+    if (msg.max_force_mn !== undefined) {
+      resolved.max_force_mn = msg.max_force_mn;
     }
     else {
-      resolved.total_force = 0.0
-    }
-
-    if (msg.max_force !== undefined) {
-      resolved.max_force = msg.max_force;
-    }
-    else {
-      resolved.max_force = 0.0
+      resolved.max_force_mn = 0.0
     }
 
     if (msg.max_index !== undefined) {
@@ -321,13 +309,6 @@ class TactileFrame {
     }
     else {
       resolved.valid = false
-    }
-
-    if (msg.status !== undefined) {
-      resolved.status = msg.status;
-    }
-    else {
-      resolved.status = ''
     }
 
     return resolved;

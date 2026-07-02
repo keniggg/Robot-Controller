@@ -4,9 +4,11 @@
   |      Main Bringup Launch File for the Alicia-D Robot with MoveIt!              |
   ===================================================================================
   -->
-  <arg name="moveit_controller_manager" default="moveit_simple_controller_manager/MoveItSimpleControllerManager"/>
-  <arg name="port" default="/dev/ttyUSB0" />
+  <arg name="moveit_controller_manager" default="simple"/>
+  <arg name="port" default="/dev/alicia_arm" />
   <arg name="baudrate" default="1000000" />
+  <arg name="start_rviz" default="false" />
+  <arg name="ros_control_publish_only_on_change" default="true" />
   <!-- Load the URDF, SRDF and other .yaml configuration files on the param server -->
   <include file="$(find alicia_d_moveit)/launch/planning_context.launch">
     <arg name="load_robot_description" value="true"/>
@@ -27,12 +29,20 @@
       <!-- Serial Port Configuration -->
       <param name="port"           type="string" value="$(arg port)"/>
       <param name="baud_rate"      type="int"    value="$(arg baudrate)"/>
+      <param name="baudrate"       type="int"    value="$(arg baudrate)"/>
       
       <!-- Driver Behavior Configuration -->
       <param name="debug_mode"     type="bool"   value="false"/>
       <param name="rate_limit_sec" type="double" value="0.01"/>
         <!-- Command streaming and smoothing -->
-        <param name="command_rate_hz"           type="double" value="300.0"/>
+        <param name="command_rate_hz"           type="double" value="50.0"/>
+        <param name="state_poll_rate_hz"        type="double" value="10.0"/>
+        <param name="mirror_commanded_state_when_feedback_stale" type="bool" value="false"/>
+        <param name="log_command_flow"          type="bool"   value="true"/>
+        <param name="suppress_redundant_commands" type="bool" value="true"/>
+        <param name="pause_commands_when_feedback_stale" type="bool" value="true"/>
+        <param name="feedback_stale_timeout_sec" type="double" value="1.0"/>
+        <param name="command_keepalive_rate_hz" type="double" value="0.0"/>
         <param name="use_trajectory_smoothing"  type="bool"   value="true"/>
         <param name="max_joint_velocity_rad_s"  type="double" value="1.5"/>
         <param name="max_joint_accel_rad_s2"    type="double" value="12.0"/>
@@ -49,7 +59,11 @@
   <rosparam file="$(find alicia_d_driver)/config/joint_names.yaml" command="load" />
   
   <!-- Start the ros_control hardware interface node -->
-  <node name="bessica_d_hw_interface" pkg="alicia_d_driver" type="alicia_d_hw_interface_node" output="screen"/>
+  <node name="bessica_d_hw_interface" pkg="alicia_d_driver" type="alicia_d_hw_interface_node" output="screen">
+    <param name="publish_only_on_change" type="bool" value="$(arg ros_control_publish_only_on_change)"/>
+    <param name="publish_initial_command" type="bool" value="false"/>
+    <param name="command_publish_epsilon" type="double" value="0.00001"/>
+  </node>
 
   <!-- Load the robot state publisher. No remapping needed now. -->
   <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" respawn="true" output="screen" />
@@ -69,16 +83,15 @@
   <!-- Run the main MoveIt! planning execution context -->
   <include file="$(find alicia_d_moveit)/launch/move_group.launch">
     <arg name="load_robot_description" value="false"/>
-    <!-- This param tells move_group to load the ros_control plugin -->
-    <param name="moveit_controller_manager" value="$(arg moveit_controller_manager)" />
+    <arg name="moveit_controller_manager" value="$(arg moveit_controller_manager)" />
   </include>
 
   <!-- =================================================================================== -->
   <!-- |                                 START VISUALIZATION                             | -->
   <!-- =================================================================================== -->
 
-  <!-- Run RViz and load the default config to see the state of the move_group node -->
-  <include file="$(find alicia_d_moveit)/launch/moveit_rviz.launch">
+  <!-- RViz is optional. The supervisor GUI owns normal manual control/planning. -->
+  <include if="$(arg start_rviz)" file="$(find alicia_d_moveit)/launch/moveit_rviz.launch">
     <arg name="rviz_config" value="$(find alicia_d_moveit)/launch/moveit.rviz"/>
   </include>
 

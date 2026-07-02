@@ -24,19 +24,19 @@ struct StopGraspResponse_
   typedef StopGraspResponse_<ContainerAllocator> Type;
 
   StopGraspResponse_()
-    : stopped(false)
+    : success(false)
     , message()  {
     }
   StopGraspResponse_(const ContainerAllocator& _alloc)
-    : stopped(false)
+    : success(false)
     , message(_alloc)  {
   (void)_alloc;
     }
 
 
 
-   typedef uint8_t _stopped_type;
-  _stopped_type stopped;
+   typedef uint8_t _success_type;
+  _success_type success;
 
    typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _message_type;
   _message_type message;
@@ -70,7 +70,7 @@ return s;
 template<typename ContainerAllocator1, typename ContainerAllocator2>
 bool operator==(const ::alicia_flexible_grasp_supervisor::StopGraspResponse_<ContainerAllocator1> & lhs, const ::alicia_flexible_grasp_supervisor::StopGraspResponse_<ContainerAllocator2> & rhs)
 {
-  return lhs.stopped == rhs.stopped &&
+  return lhs.success == rhs.success &&
     lhs.message == rhs.message;
 }
 
@@ -128,12 +128,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::StopGraspResponse_<ContainerA
 {
   static const char* value()
   {
-    return "0d863f2a8f61769977be628494e48654";
+    return "937c9679a518e3a18d831e57125ea522";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::StopGraspResponse_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x0d863f2a8f617699ULL;
-  static const uint64_t static_value2 = 0x77be628494e48654ULL;
+  static const uint64_t static_value1 = 0x937c9679a518e3a1ULL;
+  static const uint64_t static_value2 = 0x8d831e57125ea522ULL;
 };
 
 template<class ContainerAllocator>
@@ -152,7 +152,7 @@ struct Definition< ::alicia_flexible_grasp_supervisor::StopGraspResponse_<Contai
 {
   static const char* value()
   {
-    return "bool stopped\n"
+    return "bool success\n"
 "string message\n"
 "\n"
 ;
@@ -173,7 +173,7 @@ namespace serialization
   {
     template<typename Stream, typename T> inline static void allInOne(Stream& stream, T m)
     {
-      stream.next(m.stopped);
+      stream.next(m.success);
       stream.next(m.message);
     }
 
@@ -195,8 +195,8 @@ struct Printer< ::alicia_flexible_grasp_supervisor::StopGraspResponse_<Container
   {
     if (false || !indent.empty())
       s << std::endl;
-    s << indent << "stopped: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.stopped);
+    s << indent << "success: ";
+    Printer<uint8_t>::stream(s, indent + "  ", v.success);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "message: ";

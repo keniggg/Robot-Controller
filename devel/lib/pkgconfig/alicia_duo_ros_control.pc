@@ -1,8 +1,0 @@
-prefix=/home/zhuyupei/alicia_wa_full/devel
-
-Name: alicia_duo_ros_control
-Description: Description of alicia_duo_ros_control
-Version: 0.0.0
-Cflags: 
-Libs: -L${prefix}/lib 
-Requires: roscpp std_msgs message_runtime alicia_duo_driver

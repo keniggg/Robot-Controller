@@ -16,8 +16,8 @@
 #include <ros/message_operations.h>
 
 #include <std_msgs/Header.h>
-#include <geometry_msgs/Point.h>
-#include <geometry_msgs/Pose.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/PoseStamped.h>
 
 namespace alicia_flexible_grasp_supervisor
 {
@@ -33,10 +33,13 @@ struct ObjectPose_
     , confidence(0.0)
     , u(0)
     , v(0)
-    , depth(0.0)
-    , position_camera()
-    , pose_base()
-    , status()  {
+    , bbox_x(0)
+    , bbox_y(0)
+    , bbox_width(0)
+    , bbox_height(0)
+    , depth_m(0.0)
+    , pose_camera()
+    , pose_base()  {
     }
   ObjectPose_(const ContainerAllocator& _alloc)
     : header(_alloc)
@@ -45,10 +48,13 @@ struct ObjectPose_
     , confidence(0.0)
     , u(0)
     , v(0)
-    , depth(0.0)
-    , position_camera(_alloc)
-    , pose_base(_alloc)
-    , status(_alloc)  {
+    , bbox_x(0)
+    , bbox_y(0)
+    , bbox_width(0)
+    , bbox_height(0)
+    , depth_m(0.0)
+    , pose_camera(_alloc)
+    , pose_base(_alloc)  {
   (void)_alloc;
     }
 
@@ -72,17 +78,26 @@ struct ObjectPose_
    typedef uint32_t _v_type;
   _v_type v;
 
-   typedef float _depth_type;
-  _depth_type depth;
+   typedef uint32_t _bbox_x_type;
+  _bbox_x_type bbox_x;
 
-   typedef  ::geometry_msgs::Point_<ContainerAllocator>  _position_camera_type;
-  _position_camera_type position_camera;
+   typedef uint32_t _bbox_y_type;
+  _bbox_y_type bbox_y;
 
-   typedef  ::geometry_msgs::Pose_<ContainerAllocator>  _pose_base_type;
+   typedef uint32_t _bbox_width_type;
+  _bbox_width_type bbox_width;
+
+   typedef uint32_t _bbox_height_type;
+  _bbox_height_type bbox_height;
+
+   typedef float _depth_m_type;
+  _depth_m_type depth_m;
+
+   typedef  ::geometry_msgs::PoseStamped_<ContainerAllocator>  _pose_camera_type;
+  _pose_camera_type pose_camera;
+
+   typedef  ::geometry_msgs::PoseStamped_<ContainerAllocator>  _pose_base_type;
   _pose_base_type pose_base;
-
-   typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _status_type;
-  _status_type status;
 
 
 
@@ -119,10 +134,13 @@ bool operator==(const ::alicia_flexible_grasp_supervisor::ObjectPose_<ContainerA
     lhs.confidence == rhs.confidence &&
     lhs.u == rhs.u &&
     lhs.v == rhs.v &&
-    lhs.depth == rhs.depth &&
-    lhs.position_camera == rhs.position_camera &&
-    lhs.pose_base == rhs.pose_base &&
-    lhs.status == rhs.status;
+    lhs.bbox_x == rhs.bbox_x &&
+    lhs.bbox_y == rhs.bbox_y &&
+    lhs.bbox_width == rhs.bbox_width &&
+    lhs.bbox_height == rhs.bbox_height &&
+    lhs.depth_m == rhs.depth_m &&
+    lhs.pose_camera == rhs.pose_camera &&
+    lhs.pose_base == rhs.pose_base;
 }
 
 template<typename ContainerAllocator1, typename ContainerAllocator2>
@@ -179,12 +197,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::ObjectPose_<ContainerAllocato
 {
   static const char* value()
   {
-    return "613afc19135cb8f109a247ba2e6628c9";
+    return "2d3731316703d38acb9f83ae0dd46e90";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::ObjectPose_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x613afc19135cb8f1ULL;
-  static const uint64_t static_value2 = 0x09a247ba2e6628c9ULL;
+  static const uint64_t static_value1 = 0x2d3731316703d38aULL;
+  static const uint64_t static_value2 = 0xcb9f83ae0dd46e90ULL;
 };
 
 template<class ContainerAllocator>
@@ -209,10 +227,13 @@ struct Definition< ::alicia_flexible_grasp_supervisor::ObjectPose_<ContainerAllo
 "float32 confidence\n"
 "uint32 u\n"
 "uint32 v\n"
-"float32 depth\n"
-"geometry_msgs/Point position_camera\n"
-"geometry_msgs/Pose pose_base\n"
-"string status\n"
+"uint32 bbox_x\n"
+"uint32 bbox_y\n"
+"uint32 bbox_width\n"
+"uint32 bbox_height\n"
+"float32 depth_m\n"
+"geometry_msgs/PoseStamped pose_camera\n"
+"geometry_msgs/PoseStamped pose_base\n"
 "\n"
 "================================================================================\n"
 "MSG: std_msgs/Header\n"
@@ -231,17 +252,23 @@ struct Definition< ::alicia_flexible_grasp_supervisor::ObjectPose_<ContainerAllo
 "string frame_id\n"
 "\n"
 "================================================================================\n"
-"MSG: geometry_msgs/Point\n"
-"# This contains the position of a point in free space\n"
-"float64 x\n"
-"float64 y\n"
-"float64 z\n"
+"MSG: geometry_msgs/PoseStamped\n"
+"# A Pose with reference coordinate frame and timestamp\n"
+"Header header\n"
+"Pose pose\n"
 "\n"
 "================================================================================\n"
 "MSG: geometry_msgs/Pose\n"
 "# A representation of pose in free space, composed of position and orientation. \n"
 "Point position\n"
 "Quaternion orientation\n"
+"\n"
+"================================================================================\n"
+"MSG: geometry_msgs/Point\n"
+"# This contains the position of a point in free space\n"
+"float64 x\n"
+"float64 y\n"
+"float64 z\n"
 "\n"
 "================================================================================\n"
 "MSG: geometry_msgs/Quaternion\n"
@@ -275,10 +302,13 @@ namespace serialization
       stream.next(m.confidence);
       stream.next(m.u);
       stream.next(m.v);
-      stream.next(m.depth);
-      stream.next(m.position_camera);
+      stream.next(m.bbox_x);
+      stream.next(m.bbox_y);
+      stream.next(m.bbox_width);
+      stream.next(m.bbox_height);
+      stream.next(m.depth_m);
+      stream.next(m.pose_camera);
       stream.next(m.pose_base);
-      stream.next(m.status);
     }
 
     ROS_DECLARE_ALLINONE_SERIALIZER
@@ -323,20 +353,32 @@ struct Printer< ::alicia_flexible_grasp_supervisor::ObjectPose_<ContainerAllocat
     Printer<uint32_t>::stream(s, indent + "  ", v.v);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "depth: ";
-    Printer<float>::stream(s, indent + "  ", v.depth);
+    s << indent << "bbox_x: ";
+    Printer<uint32_t>::stream(s, indent + "  ", v.bbox_x);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "position_camera: ";
-    Printer< ::geometry_msgs::Point_<ContainerAllocator> >::stream(s, indent + "  ", v.position_camera);
+    s << indent << "bbox_y: ";
+    Printer<uint32_t>::stream(s, indent + "  ", v.bbox_y);
+    if (true || !indent.empty())
+      s << std::endl;
+    s << indent << "bbox_width: ";
+    Printer<uint32_t>::stream(s, indent + "  ", v.bbox_width);
+    if (true || !indent.empty())
+      s << std::endl;
+    s << indent << "bbox_height: ";
+    Printer<uint32_t>::stream(s, indent + "  ", v.bbox_height);
+    if (true || !indent.empty())
+      s << std::endl;
+    s << indent << "depth_m: ";
+    Printer<float>::stream(s, indent + "  ", v.depth_m);
+    if (true || !indent.empty())
+      s << std::endl;
+    s << indent << "pose_camera: ";
+    Printer< ::geometry_msgs::PoseStamped_<ContainerAllocator> >::stream(s, indent + "  ", v.pose_camera);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "pose_base: ";
-    Printer< ::geometry_msgs::Pose_<ContainerAllocator> >::stream(s, indent + "  ", v.pose_base);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "status: ";
-    Printer<std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>>>::stream(s, indent + "  ", v.status);
+    Printer< ::geometry_msgs::PoseStamped_<ContainerAllocator> >::stream(s, indent + "  ", v.pose_base);
   }
 };
 

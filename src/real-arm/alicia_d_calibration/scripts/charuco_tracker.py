@@ -50,14 +50,24 @@ class CharucoTracker:
         self.dictionary_id = rospy.get_param('~dictionary_id', 'DICT_4X4_100')
         self.camera_frame = rospy.get_param('~camera_frame', 'camera_link')
         self.board_frame = rospy.get_param('~board_frame', 'charuco_board')
+        self.image_topic = rospy.get_param('~image_topic', '/usb_cam/image_raw')
+        self.camera_info_topic = rospy.get_param('~camera_info_topic', '/usb_cam/camera_info')
         
         # Camera calibration parameters (should be loaded from camera_info)
         self.camera_matrix = None
         self.dist_coeffs = None
+        self.last_marker_count = 0
+        self.last_charuco_count = 0
         
         # ChArUco board setup
         self.dictionary = aruco.getPredefinedDictionary(getattr(aruco, self.dictionary_id))
-        self.board = aruco.CharucoBoard(self.board_size, self.square_length, self.marker_length, self.dictionary)
+        if hasattr(aruco, 'CharucoBoard'):
+            self.board = aruco.CharucoBoard(self.board_size, self.square_length, self.marker_length, self.dictionary)
+        else:
+            self.board = aruco.CharucoBoard_create(
+                self.board_size[0], self.board_size[1],
+                self.square_length, self.marker_length, self.dictionary
+            )
         
         # Set legacy pattern for OpenCV 4.x compatibility
         if hasattr(self.board, 'setLegacyPattern'):
@@ -74,8 +84,8 @@ class CharucoTracker:
         self.result_pub = rospy.Publisher('/charuco/result', Image, queue_size=1)
         
         # Subscribers
-        self.image_sub = message_filters.Subscriber('/usb_cam/image_raw', Image)
-        self.camera_info_sub = message_filters.Subscriber('/usb_cam/camera_info', CameraInfo)
+        self.image_sub = message_filters.Subscriber(self.image_topic, Image)
+        self.camera_info_sub = message_filters.Subscriber(self.camera_info_topic, CameraInfo)
         
         # Synchronize image and camera info
         self.ts = message_filters.TimeSynchronizer([self.image_sub, self.camera_info_sub], 10)
@@ -85,6 +95,8 @@ class CharucoTracker:
         rospy.loginfo(f"Board size: {self.board_size[0]}x{self.board_size[1]}")
         rospy.loginfo(f"Square length: {self.square_length*1000:.1f}mm")
         rospy.loginfo(f"Marker length: {self.marker_length*1000:.1f}mm")
+        rospy.loginfo(f"Image topic: {self.image_topic}")
+        rospy.loginfo(f"Camera info topic: {self.camera_info_topic}")
     
     def callback(self, image_msg, camera_info_msg):
         """Process synchronized image and camera info messages."""
@@ -104,13 +116,24 @@ class CharucoTracker:
         
         # Detect ChArUco board
         charuco_corners, charuco_ids = self.detect_charuco_board(cv_image)
+        pose_ok = False
         
         if charuco_corners is not None and charuco_ids is not None:
             # Estimate pose
             pose, rvec, tvec = self.estimate_pose(charuco_corners, charuco_ids)
             if pose is not None:
+                pose_ok = True
                 # Publish TF transform
                 self.publish_tf(pose, image_msg.header.stamp)
+                rospy.loginfo_throttle(
+                    2.0,
+                    "ChArUco pose OK: markers=%d corners=%d t=[%.3f, %.3f, %.3f] m",
+                    self.last_marker_count,
+                    self.last_charuco_count,
+                    tvec[0][0],
+                    tvec[1][0],
+                    tvec[2][0],
+                )
                 
                 # Draw the pose axis on the image for visualization
                 try:
@@ -137,6 +160,27 @@ class CharucoTracker:
                         origin_2d = tuple(map(int, origin_2d[0, 0]))
                         cv2.circle(cv_image, origin_2d, 5, (0, 255, 0), -1)
 
+        if not pose_ok:
+            if self.last_marker_count == 0:
+                rospy.logwarn_throttle(
+                    2.0,
+                    "No ArUco markers detected; keep the ChArUco board fully visible and well lit.",
+                )
+            elif self.last_charuco_count < 4:
+                rospy.logwarn_throttle(
+                    2.0,
+                    "Detected %d ArUco markers but only %d ChArUco corners; need at least 4 stable corners.",
+                    self.last_marker_count,
+                    self.last_charuco_count,
+                )
+            else:
+                rospy.logwarn_throttle(
+                    2.0,
+                    "Detected markers=%d corners=%d but pose estimation failed.",
+                    self.last_marker_count,
+                    self.last_charuco_count,
+                )
+
         # Publish the final image with annotations (if any)
         try:
             result_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
@@ -152,19 +196,35 @@ class CharucoTracker:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             
             # Detect ArUco markers first
-            detector_params = aruco.DetectorParameters()
+            if hasattr(aruco, 'DetectorParameters'):
+                detector_params = aruco.DetectorParameters()
+            else:
+                detector_params = aruco.DetectorParameters_create()
             detector_params.cornerRefinementMethod = aruco.CORNER_REFINE_NONE  # Important for ChArUco
-            
-            detector = aruco.ArucoDetector(self.dictionary, detector_params)
-            marker_corners, marker_ids, _ = detector.detectMarkers(gray)
+
+            if hasattr(aruco, 'ArucoDetector'):
+                detector = aruco.ArucoDetector(self.dictionary, detector_params)
+                marker_corners, marker_ids, _ = detector.detectMarkers(gray)
+            else:
+                marker_corners, marker_ids, _ = aruco.detectMarkers(
+                    gray, self.dictionary, parameters=detector_params
+                )
             
             if marker_ids is None or len(marker_ids) == 0:
+                self.last_marker_count = 0
+                self.last_charuco_count = 0
                 return None, None
+            self.last_marker_count = len(marker_ids)
             
             # Detect ChArUco corners
-            charuco_detector = cv2.aruco.CharucoDetector(self.board, detectorParams=detector_params)
-            # --- SOLUTION CHANGE 2: Use the grayscale image for detection for consistency ---
-            charuco_corners, charuco_ids, _, _ = charuco_detector.detectBoard(gray)
+            if hasattr(aruco, 'CharucoDetector'):
+                charuco_detector = cv2.aruco.CharucoDetector(self.board, detectorParams=detector_params)
+                charuco_corners, charuco_ids, _, _ = charuco_detector.detectBoard(gray)
+            else:
+                _, charuco_corners, charuco_ids = aruco.interpolateCornersCharuco(
+                    marker_corners, marker_ids, gray, self.board
+                )
+            self.last_charuco_count = 0 if charuco_ids is None else len(charuco_ids)
             
             return charuco_corners, charuco_ids
             
@@ -201,50 +261,7 @@ class CharucoTracker:
 
     def publish_tf(self, pose_matrix, timestamp):
         """Publish the board pose as a TF transform."""
-        try:
-            # Extract rotation and translation
-            R = pose_matrix[:3, :3]
-            t = pose_matrix[:3, 3]
-            
-            # Use scipy for more reliable rotation matrix to quaternion conversion
-            from scipy.spatial.transform import Rotation
-            
-            # Apply coordinate system transformation
-            T_cv_to_ros = np.array([
-                [0, 0, 1],    # OpenCV Z -> ROS X
-                [-1, 0, 0],   # OpenCV -X -> ROS Y  
-                [0, -1, 0]    # OpenCV -Y -> ROS Z
-            ])
-            
-            R_ros = T_cv_to_ros @ R
-            t_ros = T_cv_to_ros @ t
-            
-            # Convert rotation matrix to quaternion
-            rotation = Rotation.from_matrix(R_ros)
-            quat = rotation.as_quat()  # Returns [x, y, z, w]
-            
-            # Create transform message
-            transform = TransformStamped()
-            transform.header.stamp = timestamp
-            transform.header.frame_id = self.camera_frame
-            transform.child_frame_id = self.board_frame
-            
-            transform.transform.translation.x = t_ros[0]
-            transform.transform.translation.y = t_ros[1]
-            transform.transform.translation.z = t_ros[2]
-            
-            transform.transform.rotation.x = quat[0]
-            transform.transform.rotation.y = quat[1]
-            transform.transform.rotation.z = quat[2]
-            transform.transform.rotation.w = quat[3]
-            
-            self.tf_broadcaster.sendTransform(transform)
-            
-        except ImportError:
-            rospy.logwarn_once("scipy not available, falling back to manual quaternion conversion")
-            self._publish_tf_manual(pose_matrix, timestamp)
-        except Exception as e:
-            rospy.logwarn(f"Failed to publish TF: {e}")
+        self._publish_tf_manual(pose_matrix, timestamp)
     
     def _publish_tf_manual(self, pose_matrix, timestamp):
         """Fallback manual TF publishing without scipy."""

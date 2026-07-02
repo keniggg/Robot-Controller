@@ -18,7 +18,7 @@ class SerialCommunicator
 {
 public:
     explicit SerialCommunicator(
-        std::string port_name = "/dev/ttyUSB0",
+        std::string port_name = "/dev/alicia_arm",
         uint32_t baud_rate = 921600,
         bool debug_mode = false);
 
@@ -36,9 +36,8 @@ public:
 
 private:
     void read_thread_loop();
-    uint8_t sumElements(const std::vector<uint8_t>& data, size_t from, size_t to) const;
-    bool validate_checksum(const std::vector<uint8_t>& frame, uint8_t payload_len) const;
-    uint8_t calculate_checksum(const std::vector<uint8_t>& frame) const;
+    bool validate_checksum(const std::vector<uint8_t>& frame) const;
+    uint8_t calculate_checksum(const std::vector<uint8_t>& payload) const;
     std::string current_port_path_;
 
     // Configuration

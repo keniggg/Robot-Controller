@@ -16,39 +16,37 @@
 
 (defclass alicia_flexible_grasp_supervisor::TactileFrame
   :super ros::object
-  :slots (_header _skin_id _rows _cols _values _total_force _max_force _max_index _center_x _center_y _contact _valid _status ))
+  :slots (_header _skin_name _values _rows _cols _total_force_mn _max_force_mn _max_index _center_x _center_y _contact _valid ))
 
 (defmethod alicia_flexible_grasp_supervisor::TactileFrame
   (:init
    (&key
     ((:header __header) (instance std_msgs::Header :init))
-    ((:skin_id __skin_id) 0)
+    ((:skin_name __skin_name) "")
+    ((:values __values) (make-array 0 :initial-element 0.0 :element-type :float))
     ((:rows __rows) 0)
     ((:cols __cols) 0)
-    ((:values __values) (make-array 0 :initial-element 0.0 :element-type :float))
-    ((:total_force __total_force) 0.0)
-    ((:max_force __max_force) 0.0)
+    ((:total_force_mn __total_force_mn) 0.0)
+    ((:max_force_mn __max_force_mn) 0.0)
     ((:max_index __max_index) 0)
     ((:center_x __center_x) 0.0)
     ((:center_y __center_y) 0.0)
     ((:contact __contact) nil)
     ((:valid __valid) nil)
-    ((:status __status) "")
     )
    (send-super :init)
    (setq _header __header)
-   (setq _skin_id (round __skin_id))
+   (setq _skin_name (string __skin_name))
+   (setq _values __values)
    (setq _rows (round __rows))
    (setq _cols (round __cols))
-   (setq _values __values)
-   (setq _total_force (float __total_force))
-   (setq _max_force (float __max_force))
+   (setq _total_force_mn (float __total_force_mn))
+   (setq _max_force_mn (float __max_force_mn))
    (setq _max_index (round __max_index))
    (setq _center_x (float __center_x))
    (setq _center_y (float __center_y))
    (setq _contact __contact)
    (setq _valid __valid)
-   (setq _status (string __status))
    self)
   (:header
    (&rest __header)
@@ -57,24 +55,24 @@
      (progn
        (if __header (setq _header (car __header)))
        _header)))
-  (:skin_id
-   (&optional __skin_id)
-   (if __skin_id (setq _skin_id __skin_id)) _skin_id)
+  (:skin_name
+   (&optional __skin_name)
+   (if __skin_name (setq _skin_name __skin_name)) _skin_name)
+  (:values
+   (&optional __values)
+   (if __values (setq _values __values)) _values)
   (:rows
    (&optional __rows)
    (if __rows (setq _rows __rows)) _rows)
   (:cols
    (&optional __cols)
    (if __cols (setq _cols __cols)) _cols)
-  (:values
-   (&optional __values)
-   (if __values (setq _values __values)) _values)
-  (:total_force
-   (&optional __total_force)
-   (if __total_force (setq _total_force __total_force)) _total_force)
-  (:max_force
-   (&optional __max_force)
-   (if __max_force (setq _max_force __max_force)) _max_force)
+  (:total_force_mn
+   (&optional __total_force_mn)
+   (if __total_force_mn (setq _total_force_mn __total_force_mn)) _total_force_mn)
+  (:max_force_mn
+   (&optional __max_force_mn)
+   (if __max_force_mn (setq _max_force_mn __max_force_mn)) _max_force_mn)
   (:max_index
    (&optional __max_index)
    (if __max_index (setq _max_index __max_index)) _max_index)
@@ -90,28 +88,25 @@
   (:valid
    (&optional (__valid :null))
    (if (not (eq __valid :null)) (setq _valid __valid)) _valid)
-  (:status
-   (&optional __status)
-   (if __status (setq _status __status)) _status)
   (:serialization-length
    ()
    (+
     ;; std_msgs/Header _header
     (send _header :serialization-length)
-    ;; uint8 _skin_id
-    1
-    ;; uint16 _rows
-    2
-    ;; uint16 _cols
-    2
+    ;; string _skin_name
+    4 (length _skin_name)
     ;; float32[] _values
     (* 4    (length _values)) 4
-    ;; float32 _total_force
+    ;; uint32 _rows
     4
-    ;; float32 _max_force
+    ;; uint32 _cols
     4
-    ;; uint16 _max_index
-    2
+    ;; float32 _total_force_mn
+    4
+    ;; float32 _max_force_mn
+    4
+    ;; uint32 _max_index
+    4
     ;; float32 _center_x
     4
     ;; float32 _center_y
@@ -120,8 +115,6 @@
     1
     ;; bool _valid
     1
-    ;; string _status
-    4 (length _status)
     ))
   (:serialize
    (&optional strm)
@@ -129,23 +122,23 @@
               (make-string-output-stream (send self :serialization-length)))))
      ;; std_msgs/Header _header
        (send _header :serialize s)
-     ;; uint8 _skin_id
-       (write-byte _skin_id s)
-     ;; uint16 _rows
-       (write-word _rows s)
-     ;; uint16 _cols
-       (write-word _cols s)
+     ;; string _skin_name
+       (write-long (length _skin_name) s) (princ _skin_name s)
      ;; float32[] _values
      (write-long (length _values) s)
      (dotimes (i (length _values))
        (sys::poke (elt _values i) (send s :buffer) (send s :count) :float) (incf (stream-count s) 4)
        )
-     ;; float32 _total_force
-       (sys::poke _total_force (send s :buffer) (send s :count) :float) (incf (stream-count s) 4)
-     ;; float32 _max_force
-       (sys::poke _max_force (send s :buffer) (send s :count) :float) (incf (stream-count s) 4)
-     ;; uint16 _max_index
-       (write-word _max_index s)
+     ;; uint32 _rows
+       (write-long _rows s)
+     ;; uint32 _cols
+       (write-long _cols s)
+     ;; float32 _total_force_mn
+       (sys::poke _total_force_mn (send s :buffer) (send s :count) :float) (incf (stream-count s) 4)
+     ;; float32 _max_force_mn
+       (sys::poke _max_force_mn (send s :buffer) (send s :count) :float) (incf (stream-count s) 4)
+     ;; uint32 _max_index
+       (write-long _max_index s)
      ;; float32 _center_x
        (sys::poke _center_x (send s :buffer) (send s :count) :float) (incf (stream-count s) 4)
      ;; float32 _center_y
@@ -154,20 +147,14 @@
        (if _contact (write-byte -1 s) (write-byte 0 s))
      ;; bool _valid
        (if _valid (write-byte -1 s) (write-byte 0 s))
-     ;; string _status
-       (write-long (length _status) s) (princ _status s)
      ;;
      (if (null strm) (get-output-stream-string s))))
   (:deserialize
    (buf &optional (ptr- 0))
    ;; std_msgs/Header _header
      (send _header :deserialize buf ptr-) (incf ptr- (send _header :serialization-length))
-   ;; uint8 _skin_id
-     (setq _skin_id (sys::peek buf ptr- :char)) (incf ptr- 1)
-   ;; uint16 _rows
-     (setq _rows (sys::peek buf ptr- :short)) (incf ptr- 2)
-   ;; uint16 _cols
-     (setq _cols (sys::peek buf ptr- :short)) (incf ptr- 2)
+   ;; string _skin_name
+     (let (n) (setq n (sys::peek buf ptr- :integer)) (incf ptr- 4) (setq _skin_name (subseq buf ptr- (+ ptr- n))) (incf ptr- n))
    ;; float32[] _values
    (let (n)
      (setq n (sys::peek buf ptr- :integer)) (incf ptr- 4)
@@ -175,12 +162,16 @@
      (dotimes (i n)
      (setf (elt _values i) (sys::peek buf ptr- :float)) (incf ptr- 4)
      ))
-   ;; float32 _total_force
-     (setq _total_force (sys::peek buf ptr- :float)) (incf ptr- 4)
-   ;; float32 _max_force
-     (setq _max_force (sys::peek buf ptr- :float)) (incf ptr- 4)
-   ;; uint16 _max_index
-     (setq _max_index (sys::peek buf ptr- :short)) (incf ptr- 2)
+   ;; uint32 _rows
+     (setq _rows (sys::peek buf ptr- :integer)) (incf ptr- 4)
+   ;; uint32 _cols
+     (setq _cols (sys::peek buf ptr- :integer)) (incf ptr- 4)
+   ;; float32 _total_force_mn
+     (setq _total_force_mn (sys::peek buf ptr- :float)) (incf ptr- 4)
+   ;; float32 _max_force_mn
+     (setq _max_force_mn (sys::peek buf ptr- :float)) (incf ptr- 4)
+   ;; uint32 _max_index
+     (setq _max_index (sys::peek buf ptr- :integer)) (incf ptr- 4)
    ;; float32 _center_x
      (setq _center_x (sys::peek buf ptr- :float)) (incf ptr- 4)
    ;; float32 _center_y
@@ -189,28 +180,25 @@
      (setq _contact (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
    ;; bool _valid
      (setq _valid (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
-   ;; string _status
-     (let (n) (setq n (sys::peek buf ptr- :integer)) (incf ptr- 4) (setq _status (subseq buf ptr- (+ ptr- n))) (incf ptr- n))
    ;;
    self)
   )
 
-(setf (get alicia_flexible_grasp_supervisor::TactileFrame :md5sum-) "02ca98ed2c6b94321c339531010cfc87")
+(setf (get alicia_flexible_grasp_supervisor::TactileFrame :md5sum-) "a144ff6b8561cbba1f903254a0728a98")
 (setf (get alicia_flexible_grasp_supervisor::TactileFrame :datatype-) "alicia_flexible_grasp_supervisor/TactileFrame")
 (setf (get alicia_flexible_grasp_supervisor::TactileFrame :definition-)
       "std_msgs/Header header
-uint8 skin_id
-uint16 rows
-uint16 cols
+string skin_name
 float32[] values
-float32 total_force
-float32 max_force
-uint16 max_index
+uint32 rows
+uint32 cols
+float32 total_force_mn
+float32 max_force_mn
+uint32 max_index
 float32 center_x
 float32 center_y
 bool contact
 bool valid
-string status
 
 ================================================================================
 MSG: std_msgs/Header
@@ -232,6 +220,6 @@ string frame_id
 
 
 
-(provide :alicia_flexible_grasp_supervisor/TactileFrame "02ca98ed2c6b94321c339531010cfc87")
+(provide :alicia_flexible_grasp_supervisor/TactileFrame "a144ff6b8561cbba1f903254a0728a98")
 
 

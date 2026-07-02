@@ -8,13 +8,13 @@ import struct
 
 
 class TriggerZeroRequest(genpy.Message):
-  _md5sum = "7618ff84be9a52700a05bf68771d2fa5"
+  _md5sum = "f6d1152a533bdef9ec687318c8e489b0"
   _type = "alicia_flexible_grasp_supervisor/TriggerZeroRequest"
   _has_header = False  # flag to mark the presence of a Header object
-  _full_text = """uint8 skin_id
+  _full_text = """bool trigger
 """
-  __slots__ = ['skin_id']
-  _slot_types = ['uint8']
+  __slots__ = ['trigger']
+  _slot_types = ['bool']
 
   def __init__(self, *args, **kwds):
     """
@@ -24,7 +24,7 @@ class TriggerZeroRequest(genpy.Message):
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       skin_id
+       trigger
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -33,10 +33,10 @@ class TriggerZeroRequest(genpy.Message):
     if args or kwds:
       super(TriggerZeroRequest, self).__init__(*args, **kwds)
       # message fields cannot be None, assign default values for those that are
-      if self.skin_id is None:
-        self.skin_id = 0
+      if self.trigger is None:
+        self.trigger = False
     else:
-      self.skin_id = 0
+      self.trigger = False
 
   def _get_types(self):
     """
@@ -50,7 +50,7 @@ class TriggerZeroRequest(genpy.Message):
     :param buff: buffer, ``StringIO``
     """
     try:
-      _x = self.skin_id
+      _x = self.trigger
       buff.write(_get_struct_B().pack(_x))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
@@ -66,7 +66,8 @@ class TriggerZeroRequest(genpy.Message):
       end = 0
       start = end
       end += 1
-      (self.skin_id,) = _get_struct_B().unpack(str[start:end])
+      (self.trigger,) = _get_struct_B().unpack(str[start:end])
+      self.trigger = bool(self.trigger)
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -79,7 +80,7 @@ class TriggerZeroRequest(genpy.Message):
     :param numpy: numpy python module
     """
     try:
-      _x = self.skin_id
+      _x = self.trigger
       buff.write(_get_struct_B().pack(_x))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
@@ -96,7 +97,8 @@ class TriggerZeroRequest(genpy.Message):
       end = 0
       start = end
       end += 1
-      (self.skin_id,) = _get_struct_B().unpack(str[start:end])
+      (self.trigger,) = _get_struct_B().unpack(str[start:end])
+      self.trigger = bool(self.trigger)
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -121,14 +123,14 @@ import struct
 
 
 class TriggerZeroResponse(genpy.Message):
-  _md5sum = "f6fcb3b1ed8c7743c7fb7d5bcca28513"
+  _md5sum = "937c9679a518e3a18d831e57125ea522"
   _type = "alicia_flexible_grasp_supervisor/TriggerZeroResponse"
   _has_header = False  # flag to mark the presence of a Header object
-  _full_text = """bool ok
+  _full_text = """bool success
 string message
 
 """
-  __slots__ = ['ok','message']
+  __slots__ = ['success','message']
   _slot_types = ['bool','string']
 
   def __init__(self, *args, **kwds):
@@ -139,7 +141,7 @@ string message
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       ok,message
+       success,message
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -148,12 +150,12 @@ string message
     if args or kwds:
       super(TriggerZeroResponse, self).__init__(*args, **kwds)
       # message fields cannot be None, assign default values for those that are
-      if self.ok is None:
-        self.ok = False
+      if self.success is None:
+        self.success = False
       if self.message is None:
         self.message = ''
     else:
-      self.ok = False
+      self.success = False
       self.message = ''
 
   def _get_types(self):
@@ -168,7 +170,7 @@ string message
     :param buff: buffer, ``StringIO``
     """
     try:
-      _x = self.ok
+      _x = self.success
       buff.write(_get_struct_B().pack(_x))
       _x = self.message
       length = len(_x)
@@ -190,8 +192,8 @@ string message
       end = 0
       start = end
       end += 1
-      (self.ok,) = _get_struct_B().unpack(str[start:end])
-      self.ok = bool(self.ok)
+      (self.success,) = _get_struct_B().unpack(str[start:end])
+      self.success = bool(self.success)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -213,7 +215,7 @@ string message
     :param numpy: numpy python module
     """
     try:
-      _x = self.ok
+      _x = self.success
       buff.write(_get_struct_B().pack(_x))
       _x = self.message
       length = len(_x)
@@ -236,8 +238,8 @@ string message
       end = 0
       start = end
       end += 1
-      (self.ok,) = _get_struct_B().unpack(str[start:end])
-      self.ok = bool(self.ok)
+      (self.success,) = _get_struct_B().unpack(str[start:end])
+      self.success = bool(self.success)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -263,6 +265,6 @@ def _get_struct_B():
     return _struct_B
 class TriggerZero(object):
   _type          = 'alicia_flexible_grasp_supervisor/TriggerZero'
-  _md5sum = 'f7d6a6f40853bc7ccc545a177690ba20'
+  _md5sum = '1531357144714babf83a2def976015d9'
   _request_class  = TriggerZeroRequest
   _response_class = TriggerZeroResponse

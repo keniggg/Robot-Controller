@@ -24,27 +24,27 @@ struct SetForceParamsRequest_
   typedef SetForceParamsRequest_<ContainerAllocator> Type;
 
   SetForceParamsRequest_()
-    : contact_threshold(0.0)
-    , target_force(0.0)
-    , max_force(0.0)  {
+    : contact_threshold_mn(0.0)
+    , target_force_mn(0.0)
+    , max_force_mn(0.0)  {
     }
   SetForceParamsRequest_(const ContainerAllocator& _alloc)
-    : contact_threshold(0.0)
-    , target_force(0.0)
-    , max_force(0.0)  {
+    : contact_threshold_mn(0.0)
+    , target_force_mn(0.0)
+    , max_force_mn(0.0)  {
   (void)_alloc;
     }
 
 
 
-   typedef float _contact_threshold_type;
-  _contact_threshold_type contact_threshold;
+   typedef float _contact_threshold_mn_type;
+  _contact_threshold_mn_type contact_threshold_mn;
 
-   typedef float _target_force_type;
-  _target_force_type target_force;
+   typedef float _target_force_mn_type;
+  _target_force_mn_type target_force_mn;
 
-   typedef float _max_force_type;
-  _max_force_type max_force;
+   typedef float _max_force_mn_type;
+  _max_force_mn_type max_force_mn;
 
 
 
@@ -75,9 +75,9 @@ return s;
 template<typename ContainerAllocator1, typename ContainerAllocator2>
 bool operator==(const ::alicia_flexible_grasp_supervisor::SetForceParamsRequest_<ContainerAllocator1> & lhs, const ::alicia_flexible_grasp_supervisor::SetForceParamsRequest_<ContainerAllocator2> & rhs)
 {
-  return lhs.contact_threshold == rhs.contact_threshold &&
-    lhs.target_force == rhs.target_force &&
-    lhs.max_force == rhs.max_force;
+  return lhs.contact_threshold_mn == rhs.contact_threshold_mn &&
+    lhs.target_force_mn == rhs.target_force_mn &&
+    lhs.max_force_mn == rhs.max_force_mn;
 }
 
 template<typename ContainerAllocator1, typename ContainerAllocator2>
@@ -134,12 +134,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::SetForceParamsRequest_<Contai
 {
   static const char* value()
   {
-    return "53d772afe2b788b2798fa44d853c5379";
+    return "f34f576fe7386891eff19b8117ea851c";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::SetForceParamsRequest_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x53d772afe2b788b2ULL;
-  static const uint64_t static_value2 = 0x798fa44d853c5379ULL;
+  static const uint64_t static_value1 = 0xf34f576fe7386891ULL;
+  static const uint64_t static_value2 = 0xeff19b8117ea851cULL;
 };
 
 template<class ContainerAllocator>
@@ -158,9 +158,9 @@ struct Definition< ::alicia_flexible_grasp_supervisor::SetForceParamsRequest_<Co
 {
   static const char* value()
   {
-    return "float32 contact_threshold\n"
-"float32 target_force\n"
-"float32 max_force\n"
+    return "float32 contact_threshold_mn\n"
+"float32 target_force_mn\n"
+"float32 max_force_mn\n"
 ;
   }
 
@@ -179,9 +179,9 @@ namespace serialization
   {
     template<typename Stream, typename T> inline static void allInOne(Stream& stream, T m)
     {
-      stream.next(m.contact_threshold);
-      stream.next(m.target_force);
-      stream.next(m.max_force);
+      stream.next(m.contact_threshold_mn);
+      stream.next(m.target_force_mn);
+      stream.next(m.max_force_mn);
     }
 
     ROS_DECLARE_ALLINONE_SERIALIZER
@@ -202,16 +202,16 @@ struct Printer< ::alicia_flexible_grasp_supervisor::SetForceParamsRequest_<Conta
   {
     if (false || !indent.empty())
       s << std::endl;
-    s << indent << "contact_threshold: ";
-    Printer<float>::stream(s, indent + "  ", v.contact_threshold);
+    s << indent << "contact_threshold_mn: ";
+    Printer<float>::stream(s, indent + "  ", v.contact_threshold_mn);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "target_force: ";
-    Printer<float>::stream(s, indent + "  ", v.target_force);
+    s << indent << "target_force_mn: ";
+    Printer<float>::stream(s, indent + "  ", v.target_force_mn);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "max_force: ";
-    Printer<float>::stream(s, indent + "  ", v.max_force);
+    s << indent << "max_force_mn: ";
+    Printer<float>::stream(s, indent + "  ", v.max_force_mn);
   }
 };
 

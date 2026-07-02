@@ -24,17 +24,17 @@ struct TriggerZeroRequest_
   typedef TriggerZeroRequest_<ContainerAllocator> Type;
 
   TriggerZeroRequest_()
-    : skin_id(0)  {
+    : trigger(false)  {
     }
   TriggerZeroRequest_(const ContainerAllocator& _alloc)
-    : skin_id(0)  {
+    : trigger(false)  {
   (void)_alloc;
     }
 
 
 
-   typedef uint8_t _skin_id_type;
-  _skin_id_type skin_id;
+   typedef uint8_t _trigger_type;
+  _trigger_type trigger;
 
 
 
@@ -65,7 +65,7 @@ return s;
 template<typename ContainerAllocator1, typename ContainerAllocator2>
 bool operator==(const ::alicia_flexible_grasp_supervisor::TriggerZeroRequest_<ContainerAllocator1> & lhs, const ::alicia_flexible_grasp_supervisor::TriggerZeroRequest_<ContainerAllocator2> & rhs)
 {
-  return lhs.skin_id == rhs.skin_id;
+  return lhs.trigger == rhs.trigger;
 }
 
 template<typename ContainerAllocator1, typename ContainerAllocator2>
@@ -122,12 +122,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::TriggerZeroRequest_<Container
 {
   static const char* value()
   {
-    return "7618ff84be9a52700a05bf68771d2fa5";
+    return "f6d1152a533bdef9ec687318c8e489b0";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::TriggerZeroRequest_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x7618ff84be9a5270ULL;
-  static const uint64_t static_value2 = 0x0a05bf68771d2fa5ULL;
+  static const uint64_t static_value1 = 0xf6d1152a533bdef9ULL;
+  static const uint64_t static_value2 = 0xec687318c8e489b0ULL;
 };
 
 template<class ContainerAllocator>
@@ -146,7 +146,7 @@ struct Definition< ::alicia_flexible_grasp_supervisor::TriggerZeroRequest_<Conta
 {
   static const char* value()
   {
-    return "uint8 skin_id\n"
+    return "bool trigger\n"
 ;
   }
 
@@ -165,7 +165,7 @@ namespace serialization
   {
     template<typename Stream, typename T> inline static void allInOne(Stream& stream, T m)
     {
-      stream.next(m.skin_id);
+      stream.next(m.trigger);
     }
 
     ROS_DECLARE_ALLINONE_SERIALIZER
@@ -186,8 +186,8 @@ struct Printer< ::alicia_flexible_grasp_supervisor::TriggerZeroRequest_<Containe
   {
     if (false || !indent.empty())
       s << std::endl;
-    s << indent << "skin_id: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.skin_id);
+    s << indent << "trigger: ";
+    Printer<uint8_t>::stream(s, indent + "  ", v.trigger);
   }
 };
 

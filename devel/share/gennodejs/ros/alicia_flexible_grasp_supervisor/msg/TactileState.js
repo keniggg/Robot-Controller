@@ -21,15 +21,15 @@ class TactileState {
     if (initObj === null) {
       // initObj === null is a special case for deserialization where we don't initialize fields
       this.header = null;
-      this.skin1 = null;
-      this.skin2 = null;
-      this.total_grip_force = null;
-      this.force_diff = null;
+      this.left = null;
+      this.right = null;
+      this.total_grip_force_mn = null;
+      this.force_diff_mn = null;
       this.left_contact = null;
       this.right_contact = null;
       this.object_grasped = null;
       this.slip_detected = null;
-      this.status = null;
+      this.valid = null;
     }
     else {
       if (initObj.hasOwnProperty('header')) {
@@ -38,29 +38,29 @@ class TactileState {
       else {
         this.header = new std_msgs.msg.Header();
       }
-      if (initObj.hasOwnProperty('skin1')) {
-        this.skin1 = initObj.skin1
+      if (initObj.hasOwnProperty('left')) {
+        this.left = initObj.left
       }
       else {
-        this.skin1 = new TactileFrame();
+        this.left = new TactileFrame();
       }
-      if (initObj.hasOwnProperty('skin2')) {
-        this.skin2 = initObj.skin2
-      }
-      else {
-        this.skin2 = new TactileFrame();
-      }
-      if (initObj.hasOwnProperty('total_grip_force')) {
-        this.total_grip_force = initObj.total_grip_force
+      if (initObj.hasOwnProperty('right')) {
+        this.right = initObj.right
       }
       else {
-        this.total_grip_force = 0.0;
+        this.right = new TactileFrame();
       }
-      if (initObj.hasOwnProperty('force_diff')) {
-        this.force_diff = initObj.force_diff
+      if (initObj.hasOwnProperty('total_grip_force_mn')) {
+        this.total_grip_force_mn = initObj.total_grip_force_mn
       }
       else {
-        this.force_diff = 0.0;
+        this.total_grip_force_mn = 0.0;
+      }
+      if (initObj.hasOwnProperty('force_diff_mn')) {
+        this.force_diff_mn = initObj.force_diff_mn
+      }
+      else {
+        this.force_diff_mn = 0.0;
       }
       if (initObj.hasOwnProperty('left_contact')) {
         this.left_contact = initObj.left_contact
@@ -86,11 +86,11 @@ class TactileState {
       else {
         this.slip_detected = false;
       }
-      if (initObj.hasOwnProperty('status')) {
-        this.status = initObj.status
+      if (initObj.hasOwnProperty('valid')) {
+        this.valid = initObj.valid
       }
       else {
-        this.status = '';
+        this.valid = false;
       }
     }
   }
@@ -99,14 +99,14 @@ class TactileState {
     // Serializes a message object of type TactileState
     // Serialize message field [header]
     bufferOffset = std_msgs.msg.Header.serialize(obj.header, buffer, bufferOffset);
-    // Serialize message field [skin1]
-    bufferOffset = TactileFrame.serialize(obj.skin1, buffer, bufferOffset);
-    // Serialize message field [skin2]
-    bufferOffset = TactileFrame.serialize(obj.skin2, buffer, bufferOffset);
-    // Serialize message field [total_grip_force]
-    bufferOffset = _serializer.float32(obj.total_grip_force, buffer, bufferOffset);
-    // Serialize message field [force_diff]
-    bufferOffset = _serializer.float32(obj.force_diff, buffer, bufferOffset);
+    // Serialize message field [left]
+    bufferOffset = TactileFrame.serialize(obj.left, buffer, bufferOffset);
+    // Serialize message field [right]
+    bufferOffset = TactileFrame.serialize(obj.right, buffer, bufferOffset);
+    // Serialize message field [total_grip_force_mn]
+    bufferOffset = _serializer.float32(obj.total_grip_force_mn, buffer, bufferOffset);
+    // Serialize message field [force_diff_mn]
+    bufferOffset = _serializer.float32(obj.force_diff_mn, buffer, bufferOffset);
     // Serialize message field [left_contact]
     bufferOffset = _serializer.bool(obj.left_contact, buffer, bufferOffset);
     // Serialize message field [right_contact]
@@ -115,8 +115,8 @@ class TactileState {
     bufferOffset = _serializer.bool(obj.object_grasped, buffer, bufferOffset);
     // Serialize message field [slip_detected]
     bufferOffset = _serializer.bool(obj.slip_detected, buffer, bufferOffset);
-    // Serialize message field [status]
-    bufferOffset = _serializer.string(obj.status, buffer, bufferOffset);
+    // Serialize message field [valid]
+    bufferOffset = _serializer.bool(obj.valid, buffer, bufferOffset);
     return bufferOffset;
   }
 
@@ -126,14 +126,14 @@ class TactileState {
     let data = new TactileState(null);
     // Deserialize message field [header]
     data.header = std_msgs.msg.Header.deserialize(buffer, bufferOffset);
-    // Deserialize message field [skin1]
-    data.skin1 = TactileFrame.deserialize(buffer, bufferOffset);
-    // Deserialize message field [skin2]
-    data.skin2 = TactileFrame.deserialize(buffer, bufferOffset);
-    // Deserialize message field [total_grip_force]
-    data.total_grip_force = _deserializer.float32(buffer, bufferOffset);
-    // Deserialize message field [force_diff]
-    data.force_diff = _deserializer.float32(buffer, bufferOffset);
+    // Deserialize message field [left]
+    data.left = TactileFrame.deserialize(buffer, bufferOffset);
+    // Deserialize message field [right]
+    data.right = TactileFrame.deserialize(buffer, bufferOffset);
+    // Deserialize message field [total_grip_force_mn]
+    data.total_grip_force_mn = _deserializer.float32(buffer, bufferOffset);
+    // Deserialize message field [force_diff_mn]
+    data.force_diff_mn = _deserializer.float32(buffer, bufferOffset);
     // Deserialize message field [left_contact]
     data.left_contact = _deserializer.bool(buffer, bufferOffset);
     // Deserialize message field [right_contact]
@@ -142,18 +142,17 @@ class TactileState {
     data.object_grasped = _deserializer.bool(buffer, bufferOffset);
     // Deserialize message field [slip_detected]
     data.slip_detected = _deserializer.bool(buffer, bufferOffset);
-    // Deserialize message field [status]
-    data.status = _deserializer.string(buffer, bufferOffset);
+    // Deserialize message field [valid]
+    data.valid = _deserializer.bool(buffer, bufferOffset);
     return data;
   }
 
   static getMessageSize(object) {
     let length = 0;
     length += std_msgs.msg.Header.getMessageSize(object.header);
-    length += TactileFrame.getMessageSize(object.skin1);
-    length += TactileFrame.getMessageSize(object.skin2);
-    length += _getByteLength(object.status);
-    return length + 16;
+    length += TactileFrame.getMessageSize(object.left);
+    length += TactileFrame.getMessageSize(object.right);
+    return length + 13;
   }
 
   static datatype() {
@@ -163,22 +162,22 @@ class TactileState {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return '9b76704935dbe875f8fc5a941f64277a';
+    return '5df6a8c43bd865ec0ec8d2f74fe1aa66';
   }
 
   static messageDefinition() {
     // Returns full string definition for message
     return `
     std_msgs/Header header
-    alicia_flexible_grasp_supervisor/TactileFrame skin1
-    alicia_flexible_grasp_supervisor/TactileFrame skin2
-    float32 total_grip_force
-    float32 force_diff
+    alicia_flexible_grasp_supervisor/TactileFrame left
+    alicia_flexible_grasp_supervisor/TactileFrame right
+    float32 total_grip_force_mn
+    float32 force_diff_mn
     bool left_contact
     bool right_contact
     bool object_grasped
     bool slip_detected
-    string status
+    bool valid
     
     ================================================================================
     MSG: std_msgs/Header
@@ -199,18 +198,17 @@ class TactileState {
     ================================================================================
     MSG: alicia_flexible_grasp_supervisor/TactileFrame
     std_msgs/Header header
-    uint8 skin_id
-    uint16 rows
-    uint16 cols
+    string skin_name
     float32[] values
-    float32 total_force
-    float32 max_force
-    uint16 max_index
+    uint32 rows
+    uint32 cols
+    float32 total_force_mn
+    float32 max_force_mn
+    uint32 max_index
     float32 center_x
     float32 center_y
     bool contact
     bool valid
-    string status
     
     `;
   }
@@ -228,32 +226,32 @@ class TactileState {
       resolved.header = new std_msgs.msg.Header()
     }
 
-    if (msg.skin1 !== undefined) {
-      resolved.skin1 = TactileFrame.Resolve(msg.skin1)
+    if (msg.left !== undefined) {
+      resolved.left = TactileFrame.Resolve(msg.left)
     }
     else {
-      resolved.skin1 = new TactileFrame()
+      resolved.left = new TactileFrame()
     }
 
-    if (msg.skin2 !== undefined) {
-      resolved.skin2 = TactileFrame.Resolve(msg.skin2)
+    if (msg.right !== undefined) {
+      resolved.right = TactileFrame.Resolve(msg.right)
     }
     else {
-      resolved.skin2 = new TactileFrame()
+      resolved.right = new TactileFrame()
     }
 
-    if (msg.total_grip_force !== undefined) {
-      resolved.total_grip_force = msg.total_grip_force;
+    if (msg.total_grip_force_mn !== undefined) {
+      resolved.total_grip_force_mn = msg.total_grip_force_mn;
     }
     else {
-      resolved.total_grip_force = 0.0
+      resolved.total_grip_force_mn = 0.0
     }
 
-    if (msg.force_diff !== undefined) {
-      resolved.force_diff = msg.force_diff;
+    if (msg.force_diff_mn !== undefined) {
+      resolved.force_diff_mn = msg.force_diff_mn;
     }
     else {
-      resolved.force_diff = 0.0
+      resolved.force_diff_mn = 0.0
     }
 
     if (msg.left_contact !== undefined) {
@@ -284,11 +282,11 @@ class TactileState {
       resolved.slip_detected = false
     }
 
-    if (msg.status !== undefined) {
-      resolved.status = msg.status;
+    if (msg.valid !== undefined) {
+      resolved.valid = msg.valid;
     }
     else {
-      resolved.status = ''
+      resolved.valid = false
     }
 
     return resolved;

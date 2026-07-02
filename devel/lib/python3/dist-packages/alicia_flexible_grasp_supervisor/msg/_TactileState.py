@@ -10,19 +10,19 @@ import alicia_flexible_grasp_supervisor.msg
 import std_msgs.msg
 
 class TactileState(genpy.Message):
-  _md5sum = "9b76704935dbe875f8fc5a941f64277a"
+  _md5sum = "5df6a8c43bd865ec0ec8d2f74fe1aa66"
   _type = "alicia_flexible_grasp_supervisor/TactileState"
   _has_header = True  # flag to mark the presence of a Header object
   _full_text = """std_msgs/Header header
-alicia_flexible_grasp_supervisor/TactileFrame skin1
-alicia_flexible_grasp_supervisor/TactileFrame skin2
-float32 total_grip_force
-float32 force_diff
+alicia_flexible_grasp_supervisor/TactileFrame left
+alicia_flexible_grasp_supervisor/TactileFrame right
+float32 total_grip_force_mn
+float32 force_diff_mn
 bool left_contact
 bool right_contact
 bool object_grasped
 bool slip_detected
-string status
+bool valid
 
 ================================================================================
 MSG: std_msgs/Header
@@ -43,21 +43,20 @@ string frame_id
 ================================================================================
 MSG: alicia_flexible_grasp_supervisor/TactileFrame
 std_msgs/Header header
-uint8 skin_id
-uint16 rows
-uint16 cols
+string skin_name
 float32[] values
-float32 total_force
-float32 max_force
-uint16 max_index
+uint32 rows
+uint32 cols
+float32 total_force_mn
+float32 max_force_mn
+uint32 max_index
 float32 center_x
 float32 center_y
 bool contact
 bool valid
-string status
 """
-  __slots__ = ['header','skin1','skin2','total_grip_force','force_diff','left_contact','right_contact','object_grasped','slip_detected','status']
-  _slot_types = ['std_msgs/Header','alicia_flexible_grasp_supervisor/TactileFrame','alicia_flexible_grasp_supervisor/TactileFrame','float32','float32','bool','bool','bool','bool','string']
+  __slots__ = ['header','left','right','total_grip_force_mn','force_diff_mn','left_contact','right_contact','object_grasped','slip_detected','valid']
+  _slot_types = ['std_msgs/Header','alicia_flexible_grasp_supervisor/TactileFrame','alicia_flexible_grasp_supervisor/TactileFrame','float32','float32','bool','bool','bool','bool','bool']
 
   def __init__(self, *args, **kwds):
     """
@@ -67,7 +66,7 @@ string status
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       header,skin1,skin2,total_grip_force,force_diff,left_contact,right_contact,object_grasped,slip_detected,status
+       header,left,right,total_grip_force_mn,force_diff_mn,left_contact,right_contact,object_grasped,slip_detected,valid
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -78,14 +77,14 @@ string status
       # message fields cannot be None, assign default values for those that are
       if self.header is None:
         self.header = std_msgs.msg.Header()
-      if self.skin1 is None:
-        self.skin1 = alicia_flexible_grasp_supervisor.msg.TactileFrame()
-      if self.skin2 is None:
-        self.skin2 = alicia_flexible_grasp_supervisor.msg.TactileFrame()
-      if self.total_grip_force is None:
-        self.total_grip_force = 0.
-      if self.force_diff is None:
-        self.force_diff = 0.
+      if self.left is None:
+        self.left = alicia_flexible_grasp_supervisor.msg.TactileFrame()
+      if self.right is None:
+        self.right = alicia_flexible_grasp_supervisor.msg.TactileFrame()
+      if self.total_grip_force_mn is None:
+        self.total_grip_force_mn = 0.
+      if self.force_diff_mn is None:
+        self.force_diff_mn = 0.
       if self.left_contact is None:
         self.left_contact = False
       if self.right_contact is None:
@@ -94,19 +93,19 @@ string status
         self.object_grasped = False
       if self.slip_detected is None:
         self.slip_detected = False
-      if self.status is None:
-        self.status = ''
+      if self.valid is None:
+        self.valid = False
     else:
       self.header = std_msgs.msg.Header()
-      self.skin1 = alicia_flexible_grasp_supervisor.msg.TactileFrame()
-      self.skin2 = alicia_flexible_grasp_supervisor.msg.TactileFrame()
-      self.total_grip_force = 0.
-      self.force_diff = 0.
+      self.left = alicia_flexible_grasp_supervisor.msg.TactileFrame()
+      self.right = alicia_flexible_grasp_supervisor.msg.TactileFrame()
+      self.total_grip_force_mn = 0.
+      self.force_diff_mn = 0.
       self.left_contact = False
       self.right_contact = False
       self.object_grasped = False
       self.slip_detected = False
-      self.status = ''
+      self.valid = False
 
   def _get_types(self):
     """
@@ -129,57 +128,43 @@ string status
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self
-      buff.write(_get_struct_3I().pack(_x.skin1.header.seq, _x.skin1.header.stamp.secs, _x.skin1.header.stamp.nsecs))
-      _x = self.skin1.header.frame_id
+      buff.write(_get_struct_3I().pack(_x.left.header.seq, _x.left.header.stamp.secs, _x.left.header.stamp.nsecs))
+      _x = self.left.header.frame_id
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_B2H().pack(_x.skin1.skin_id, _x.skin1.rows, _x.skin1.cols))
-      length = len(self.skin1.values)
+      _x = self.left.skin_name
+      length = len(_x)
+      if python3 or type(_x) == unicode:
+        _x = _x.encode('utf-8')
+        length = len(_x)
+      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      length = len(self.left.values)
       buff.write(_struct_I.pack(length))
       pattern = '<%sf'%length
-      buff.write(struct.Struct(pattern).pack(*self.skin1.values))
+      buff.write(struct.Struct(pattern).pack(*self.left.values))
       _x = self
-      buff.write(_get_struct_2fH2f2B().pack(_x.skin1.total_force, _x.skin1.max_force, _x.skin1.max_index, _x.skin1.center_x, _x.skin1.center_y, _x.skin1.contact, _x.skin1.valid))
-      _x = self.skin1.status
+      buff.write(_get_struct_2I2fI2f2B3I().pack(_x.left.rows, _x.left.cols, _x.left.total_force_mn, _x.left.max_force_mn, _x.left.max_index, _x.left.center_x, _x.left.center_y, _x.left.contact, _x.left.valid, _x.right.header.seq, _x.right.header.stamp.secs, _x.right.header.stamp.nsecs))
+      _x = self.right.header.frame_id
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_3I().pack(_x.skin2.header.seq, _x.skin2.header.stamp.secs, _x.skin2.header.stamp.nsecs))
-      _x = self.skin2.header.frame_id
+      _x = self.right.skin_name
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_B2H().pack(_x.skin2.skin_id, _x.skin2.rows, _x.skin2.cols))
-      length = len(self.skin2.values)
+      length = len(self.right.values)
       buff.write(_struct_I.pack(length))
       pattern = '<%sf'%length
-      buff.write(struct.Struct(pattern).pack(*self.skin2.values))
+      buff.write(struct.Struct(pattern).pack(*self.right.values))
       _x = self
-      buff.write(_get_struct_2fH2f2B().pack(_x.skin2.total_force, _x.skin2.max_force, _x.skin2.max_index, _x.skin2.center_x, _x.skin2.center_y, _x.skin2.contact, _x.skin2.valid))
-      _x = self.skin2.status
-      length = len(_x)
-      if python3 or type(_x) == unicode:
-        _x = _x.encode('utf-8')
-        length = len(_x)
-      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_2f4B().pack(_x.total_grip_force, _x.force_diff, _x.left_contact, _x.right_contact, _x.object_grasped, _x.slip_detected))
-      _x = self.status
-      length = len(_x)
-      if python3 or type(_x) == unicode:
-        _x = _x.encode('utf-8')
-        length = len(_x)
-      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      buff.write(_get_struct_2I2fI2f2B2f5B().pack(_x.right.rows, _x.right.cols, _x.right.total_force_mn, _x.right.max_force_mn, _x.right.max_index, _x.right.center_x, _x.right.center_y, _x.right.contact, _x.right.valid, _x.total_grip_force_mn, _x.force_diff_mn, _x.left_contact, _x.right_contact, _x.object_grasped, _x.slip_detected, _x.valid))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -193,10 +178,10 @@ string status
     try:
       if self.header is None:
         self.header = std_msgs.msg.Header()
-      if self.skin1 is None:
-        self.skin1 = alicia_flexible_grasp_supervisor.msg.TactileFrame()
-      if self.skin2 is None:
-        self.skin2 = alicia_flexible_grasp_supervisor.msg.TactileFrame()
+      if self.left is None:
+        self.left = alicia_flexible_grasp_supervisor.msg.TactileFrame()
+      if self.right is None:
+        self.right = alicia_flexible_grasp_supervisor.msg.TactileFrame()
       end = 0
       _x = self
       start = end
@@ -214,20 +199,25 @@ string status
       _x = self
       start = end
       end += 12
-      (_x.skin1.header.seq, _x.skin1.header.stamp.secs, _x.skin1.header.stamp.nsecs,) = _get_struct_3I().unpack(str[start:end])
+      (_x.left.header.seq, _x.left.header.stamp.secs, _x.left.header.stamp.nsecs,) = _get_struct_3I().unpack(str[start:end])
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.skin1.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
+        self.left.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.skin1.header.frame_id = str[start:end]
-      _x = self
+        self.left.header.frame_id = str[start:end]
       start = end
-      end += 5
-      (_x.skin1.skin_id, _x.skin1.rows, _x.skin1.cols,) = _get_struct_B2H().unpack(str[start:end])
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      start = end
+      end += length
+      if python3:
+        self.left.skin_name = str[start:end].decode('utf-8', 'rosmsg')
+      else:
+        self.left.skin_name = str[start:end]
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -235,39 +225,31 @@ string status
       start = end
       s = struct.Struct(pattern)
       end += s.size
-      self.skin1.values = s.unpack(str[start:end])
+      self.left.values = s.unpack(str[start:end])
       _x = self
       start = end
-      end += 20
-      (_x.skin1.total_force, _x.skin1.max_force, _x.skin1.max_index, _x.skin1.center_x, _x.skin1.center_y, _x.skin1.contact, _x.skin1.valid,) = _get_struct_2fH2f2B().unpack(str[start:end])
-      self.skin1.contact = bool(self.skin1.contact)
-      self.skin1.valid = bool(self.skin1.valid)
+      end += 42
+      (_x.left.rows, _x.left.cols, _x.left.total_force_mn, _x.left.max_force_mn, _x.left.max_index, _x.left.center_x, _x.left.center_y, _x.left.contact, _x.left.valid, _x.right.header.seq, _x.right.header.stamp.secs, _x.right.header.stamp.nsecs,) = _get_struct_2I2fI2f2B3I().unpack(str[start:end])
+      self.left.contact = bool(self.left.contact)
+      self.left.valid = bool(self.left.valid)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.skin1.status = str[start:end].decode('utf-8', 'rosmsg')
+        self.right.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.skin1.status = str[start:end]
-      _x = self
-      start = end
-      end += 12
-      (_x.skin2.header.seq, _x.skin2.header.stamp.secs, _x.skin2.header.stamp.nsecs,) = _get_struct_3I().unpack(str[start:end])
+        self.right.header.frame_id = str[start:end]
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.skin2.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
+        self.right.skin_name = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.skin2.header.frame_id = str[start:end]
-      _x = self
-      start = end
-      end += 5
-      (_x.skin2.skin_id, _x.skin2.rows, _x.skin2.cols,) = _get_struct_B2H().unpack(str[start:end])
+        self.right.skin_name = str[start:end]
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -275,39 +257,18 @@ string status
       start = end
       s = struct.Struct(pattern)
       end += s.size
-      self.skin2.values = s.unpack(str[start:end])
+      self.right.values = s.unpack(str[start:end])
       _x = self
       start = end
-      end += 20
-      (_x.skin2.total_force, _x.skin2.max_force, _x.skin2.max_index, _x.skin2.center_x, _x.skin2.center_y, _x.skin2.contact, _x.skin2.valid,) = _get_struct_2fH2f2B().unpack(str[start:end])
-      self.skin2.contact = bool(self.skin2.contact)
-      self.skin2.valid = bool(self.skin2.valid)
-      start = end
-      end += 4
-      (length,) = _struct_I.unpack(str[start:end])
-      start = end
-      end += length
-      if python3:
-        self.skin2.status = str[start:end].decode('utf-8', 'rosmsg')
-      else:
-        self.skin2.status = str[start:end]
-      _x = self
-      start = end
-      end += 12
-      (_x.total_grip_force, _x.force_diff, _x.left_contact, _x.right_contact, _x.object_grasped, _x.slip_detected,) = _get_struct_2f4B().unpack(str[start:end])
+      end += 43
+      (_x.right.rows, _x.right.cols, _x.right.total_force_mn, _x.right.max_force_mn, _x.right.max_index, _x.right.center_x, _x.right.center_y, _x.right.contact, _x.right.valid, _x.total_grip_force_mn, _x.force_diff_mn, _x.left_contact, _x.right_contact, _x.object_grasped, _x.slip_detected, _x.valid,) = _get_struct_2I2fI2f2B2f5B().unpack(str[start:end])
+      self.right.contact = bool(self.right.contact)
+      self.right.valid = bool(self.right.valid)
       self.left_contact = bool(self.left_contact)
       self.right_contact = bool(self.right_contact)
       self.object_grasped = bool(self.object_grasped)
       self.slip_detected = bool(self.slip_detected)
-      start = end
-      end += 4
-      (length,) = _struct_I.unpack(str[start:end])
-      start = end
-      end += length
-      if python3:
-        self.status = str[start:end].decode('utf-8', 'rosmsg')
-      else:
-        self.status = str[start:end]
+      self.valid = bool(self.valid)
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -329,57 +290,43 @@ string status
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self
-      buff.write(_get_struct_3I().pack(_x.skin1.header.seq, _x.skin1.header.stamp.secs, _x.skin1.header.stamp.nsecs))
-      _x = self.skin1.header.frame_id
+      buff.write(_get_struct_3I().pack(_x.left.header.seq, _x.left.header.stamp.secs, _x.left.header.stamp.nsecs))
+      _x = self.left.header.frame_id
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_B2H().pack(_x.skin1.skin_id, _x.skin1.rows, _x.skin1.cols))
-      length = len(self.skin1.values)
+      _x = self.left.skin_name
+      length = len(_x)
+      if python3 or type(_x) == unicode:
+        _x = _x.encode('utf-8')
+        length = len(_x)
+      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      length = len(self.left.values)
       buff.write(_struct_I.pack(length))
       pattern = '<%sf'%length
-      buff.write(self.skin1.values.tostring())
+      buff.write(self.left.values.tostring())
       _x = self
-      buff.write(_get_struct_2fH2f2B().pack(_x.skin1.total_force, _x.skin1.max_force, _x.skin1.max_index, _x.skin1.center_x, _x.skin1.center_y, _x.skin1.contact, _x.skin1.valid))
-      _x = self.skin1.status
+      buff.write(_get_struct_2I2fI2f2B3I().pack(_x.left.rows, _x.left.cols, _x.left.total_force_mn, _x.left.max_force_mn, _x.left.max_index, _x.left.center_x, _x.left.center_y, _x.left.contact, _x.left.valid, _x.right.header.seq, _x.right.header.stamp.secs, _x.right.header.stamp.nsecs))
+      _x = self.right.header.frame_id
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_3I().pack(_x.skin2.header.seq, _x.skin2.header.stamp.secs, _x.skin2.header.stamp.nsecs))
-      _x = self.skin2.header.frame_id
+      _x = self.right.skin_name
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_B2H().pack(_x.skin2.skin_id, _x.skin2.rows, _x.skin2.cols))
-      length = len(self.skin2.values)
+      length = len(self.right.values)
       buff.write(_struct_I.pack(length))
       pattern = '<%sf'%length
-      buff.write(self.skin2.values.tostring())
+      buff.write(self.right.values.tostring())
       _x = self
-      buff.write(_get_struct_2fH2f2B().pack(_x.skin2.total_force, _x.skin2.max_force, _x.skin2.max_index, _x.skin2.center_x, _x.skin2.center_y, _x.skin2.contact, _x.skin2.valid))
-      _x = self.skin2.status
-      length = len(_x)
-      if python3 or type(_x) == unicode:
-        _x = _x.encode('utf-8')
-        length = len(_x)
-      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_2f4B().pack(_x.total_grip_force, _x.force_diff, _x.left_contact, _x.right_contact, _x.object_grasped, _x.slip_detected))
-      _x = self.status
-      length = len(_x)
-      if python3 or type(_x) == unicode:
-        _x = _x.encode('utf-8')
-        length = len(_x)
-      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      buff.write(_get_struct_2I2fI2f2B2f5B().pack(_x.right.rows, _x.right.cols, _x.right.total_force_mn, _x.right.max_force_mn, _x.right.max_index, _x.right.center_x, _x.right.center_y, _x.right.contact, _x.right.valid, _x.total_grip_force_mn, _x.force_diff_mn, _x.left_contact, _x.right_contact, _x.object_grasped, _x.slip_detected, _x.valid))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -394,10 +341,10 @@ string status
     try:
       if self.header is None:
         self.header = std_msgs.msg.Header()
-      if self.skin1 is None:
-        self.skin1 = alicia_flexible_grasp_supervisor.msg.TactileFrame()
-      if self.skin2 is None:
-        self.skin2 = alicia_flexible_grasp_supervisor.msg.TactileFrame()
+      if self.left is None:
+        self.left = alicia_flexible_grasp_supervisor.msg.TactileFrame()
+      if self.right is None:
+        self.right = alicia_flexible_grasp_supervisor.msg.TactileFrame()
       end = 0
       _x = self
       start = end
@@ -415,20 +362,25 @@ string status
       _x = self
       start = end
       end += 12
-      (_x.skin1.header.seq, _x.skin1.header.stamp.secs, _x.skin1.header.stamp.nsecs,) = _get_struct_3I().unpack(str[start:end])
+      (_x.left.header.seq, _x.left.header.stamp.secs, _x.left.header.stamp.nsecs,) = _get_struct_3I().unpack(str[start:end])
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.skin1.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
+        self.left.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.skin1.header.frame_id = str[start:end]
-      _x = self
+        self.left.header.frame_id = str[start:end]
       start = end
-      end += 5
-      (_x.skin1.skin_id, _x.skin1.rows, _x.skin1.cols,) = _get_struct_B2H().unpack(str[start:end])
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      start = end
+      end += length
+      if python3:
+        self.left.skin_name = str[start:end].decode('utf-8', 'rosmsg')
+      else:
+        self.left.skin_name = str[start:end]
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -436,39 +388,31 @@ string status
       start = end
       s = struct.Struct(pattern)
       end += s.size
-      self.skin1.values = numpy.frombuffer(str[start:end], dtype=numpy.float32, count=length)
+      self.left.values = numpy.frombuffer(str[start:end], dtype=numpy.float32, count=length)
       _x = self
       start = end
-      end += 20
-      (_x.skin1.total_force, _x.skin1.max_force, _x.skin1.max_index, _x.skin1.center_x, _x.skin1.center_y, _x.skin1.contact, _x.skin1.valid,) = _get_struct_2fH2f2B().unpack(str[start:end])
-      self.skin1.contact = bool(self.skin1.contact)
-      self.skin1.valid = bool(self.skin1.valid)
+      end += 42
+      (_x.left.rows, _x.left.cols, _x.left.total_force_mn, _x.left.max_force_mn, _x.left.max_index, _x.left.center_x, _x.left.center_y, _x.left.contact, _x.left.valid, _x.right.header.seq, _x.right.header.stamp.secs, _x.right.header.stamp.nsecs,) = _get_struct_2I2fI2f2B3I().unpack(str[start:end])
+      self.left.contact = bool(self.left.contact)
+      self.left.valid = bool(self.left.valid)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.skin1.status = str[start:end].decode('utf-8', 'rosmsg')
+        self.right.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.skin1.status = str[start:end]
-      _x = self
-      start = end
-      end += 12
-      (_x.skin2.header.seq, _x.skin2.header.stamp.secs, _x.skin2.header.stamp.nsecs,) = _get_struct_3I().unpack(str[start:end])
+        self.right.header.frame_id = str[start:end]
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.skin2.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
+        self.right.skin_name = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.skin2.header.frame_id = str[start:end]
-      _x = self
-      start = end
-      end += 5
-      (_x.skin2.skin_id, _x.skin2.rows, _x.skin2.cols,) = _get_struct_B2H().unpack(str[start:end])
+        self.right.skin_name = str[start:end]
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -476,39 +420,18 @@ string status
       start = end
       s = struct.Struct(pattern)
       end += s.size
-      self.skin2.values = numpy.frombuffer(str[start:end], dtype=numpy.float32, count=length)
+      self.right.values = numpy.frombuffer(str[start:end], dtype=numpy.float32, count=length)
       _x = self
       start = end
-      end += 20
-      (_x.skin2.total_force, _x.skin2.max_force, _x.skin2.max_index, _x.skin2.center_x, _x.skin2.center_y, _x.skin2.contact, _x.skin2.valid,) = _get_struct_2fH2f2B().unpack(str[start:end])
-      self.skin2.contact = bool(self.skin2.contact)
-      self.skin2.valid = bool(self.skin2.valid)
-      start = end
-      end += 4
-      (length,) = _struct_I.unpack(str[start:end])
-      start = end
-      end += length
-      if python3:
-        self.skin2.status = str[start:end].decode('utf-8', 'rosmsg')
-      else:
-        self.skin2.status = str[start:end]
-      _x = self
-      start = end
-      end += 12
-      (_x.total_grip_force, _x.force_diff, _x.left_contact, _x.right_contact, _x.object_grasped, _x.slip_detected,) = _get_struct_2f4B().unpack(str[start:end])
+      end += 43
+      (_x.right.rows, _x.right.cols, _x.right.total_force_mn, _x.right.max_force_mn, _x.right.max_index, _x.right.center_x, _x.right.center_y, _x.right.contact, _x.right.valid, _x.total_grip_force_mn, _x.force_diff_mn, _x.left_contact, _x.right_contact, _x.object_grasped, _x.slip_detected, _x.valid,) = _get_struct_2I2fI2f2B2f5B().unpack(str[start:end])
+      self.right.contact = bool(self.right.contact)
+      self.right.valid = bool(self.right.valid)
       self.left_contact = bool(self.left_contact)
       self.right_contact = bool(self.right_contact)
       self.object_grasped = bool(self.object_grasped)
       self.slip_detected = bool(self.slip_detected)
-      start = end
-      end += 4
-      (length,) = _struct_I.unpack(str[start:end])
-      start = end
-      end += length
-      if python3:
-        self.status = str[start:end].decode('utf-8', 'rosmsg')
-      else:
-        self.status = str[start:end]
+      self.valid = bool(self.valid)
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -517,27 +440,21 @@ _struct_I = genpy.struct_I
 def _get_struct_I():
     global _struct_I
     return _struct_I
-_struct_2f4B = None
-def _get_struct_2f4B():
-    global _struct_2f4B
-    if _struct_2f4B is None:
-        _struct_2f4B = struct.Struct("<2f4B")
-    return _struct_2f4B
-_struct_2fH2f2B = None
-def _get_struct_2fH2f2B():
-    global _struct_2fH2f2B
-    if _struct_2fH2f2B is None:
-        _struct_2fH2f2B = struct.Struct("<2fH2f2B")
-    return _struct_2fH2f2B
+_struct_2I2fI2f2B2f5B = None
+def _get_struct_2I2fI2f2B2f5B():
+    global _struct_2I2fI2f2B2f5B
+    if _struct_2I2fI2f2B2f5B is None:
+        _struct_2I2fI2f2B2f5B = struct.Struct("<2I2fI2f2B2f5B")
+    return _struct_2I2fI2f2B2f5B
+_struct_2I2fI2f2B3I = None
+def _get_struct_2I2fI2f2B3I():
+    global _struct_2I2fI2f2B3I
+    if _struct_2I2fI2f2B3I is None:
+        _struct_2I2fI2f2B3I = struct.Struct("<2I2fI2f2B3I")
+    return _struct_2I2fI2f2B3I
 _struct_3I = None
 def _get_struct_3I():
     global _struct_3I
     if _struct_3I is None:
         _struct_3I = struct.Struct("<3I")
     return _struct_3I
-_struct_B2H = None
-def _get_struct_B2H():
-    global _struct_B2H
-    if _struct_B2H is None:
-        _struct_B2H = struct.Struct("<B2H")
-    return _struct_B2H

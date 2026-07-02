@@ -28,11 +28,6 @@ struct SafetyState_
     : header()
     , ok(false)
     , emergency_stop(false)
-    , force_over_limit(false)
-    , robot_timeout(false)
-    , tactile_timeout(false)
-    , camera_timeout(false)
-    , planning_failed(false)
     , level()
     , message()  {
     }
@@ -40,11 +35,6 @@ struct SafetyState_
     : header(_alloc)
     , ok(false)
     , emergency_stop(false)
-    , force_over_limit(false)
-    , robot_timeout(false)
-    , tactile_timeout(false)
-    , camera_timeout(false)
-    , planning_failed(false)
     , level(_alloc)
     , message(_alloc)  {
   (void)_alloc;
@@ -60,21 +50,6 @@ struct SafetyState_
 
    typedef uint8_t _emergency_stop_type;
   _emergency_stop_type emergency_stop;
-
-   typedef uint8_t _force_over_limit_type;
-  _force_over_limit_type force_over_limit;
-
-   typedef uint8_t _robot_timeout_type;
-  _robot_timeout_type robot_timeout;
-
-   typedef uint8_t _tactile_timeout_type;
-  _tactile_timeout_type tactile_timeout;
-
-   typedef uint8_t _camera_timeout_type;
-  _camera_timeout_type camera_timeout;
-
-   typedef uint8_t _planning_failed_type;
-  _planning_failed_type planning_failed;
 
    typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _level_type;
   _level_type level;
@@ -114,11 +89,6 @@ bool operator==(const ::alicia_flexible_grasp_supervisor::SafetyState_<Container
   return lhs.header == rhs.header &&
     lhs.ok == rhs.ok &&
     lhs.emergency_stop == rhs.emergency_stop &&
-    lhs.force_over_limit == rhs.force_over_limit &&
-    lhs.robot_timeout == rhs.robot_timeout &&
-    lhs.tactile_timeout == rhs.tactile_timeout &&
-    lhs.camera_timeout == rhs.camera_timeout &&
-    lhs.planning_failed == rhs.planning_failed &&
     lhs.level == rhs.level &&
     lhs.message == rhs.message;
 }
@@ -177,12 +147,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::SafetyState_<ContainerAllocat
 {
   static const char* value()
   {
-    return "d422c2c3e9933ef7c15274804ca0c2f7";
+    return "b5ace411f24918274b9d45871c146d30";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::SafetyState_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0xd422c2c3e9933ef7ULL;
-  static const uint64_t static_value2 = 0xc15274804ca0c2f7ULL;
+  static const uint64_t static_value1 = 0xb5ace411f2491827ULL;
+  static const uint64_t static_value2 = 0x4b9d45871c146d30ULL;
 };
 
 template<class ContainerAllocator>
@@ -204,11 +174,6 @@ struct Definition< ::alicia_flexible_grasp_supervisor::SafetyState_<ContainerAll
     return "std_msgs/Header header\n"
 "bool ok\n"
 "bool emergency_stop\n"
-"bool force_over_limit\n"
-"bool robot_timeout\n"
-"bool tactile_timeout\n"
-"bool camera_timeout\n"
-"bool planning_failed\n"
 "string level\n"
 "string message\n"
 "\n"
@@ -248,11 +213,6 @@ namespace serialization
       stream.next(m.header);
       stream.next(m.ok);
       stream.next(m.emergency_stop);
-      stream.next(m.force_over_limit);
-      stream.next(m.robot_timeout);
-      stream.next(m.tactile_timeout);
-      stream.next(m.camera_timeout);
-      stream.next(m.planning_failed);
       stream.next(m.level);
       stream.next(m.message);
     }
@@ -285,26 +245,6 @@ struct Printer< ::alicia_flexible_grasp_supervisor::SafetyState_<ContainerAlloca
       s << std::endl;
     s << indent << "emergency_stop: ";
     Printer<uint8_t>::stream(s, indent + "  ", v.emergency_stop);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "force_over_limit: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.force_over_limit);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "robot_timeout: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.robot_timeout);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "tactile_timeout: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.tactile_timeout);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "camera_timeout: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.camera_timeout);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "planning_failed: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.planning_failed);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "level: ";

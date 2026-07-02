@@ -1,10 +1,10 @@
 (cl:in-package alicia_flexible_grasp_supervisor-srv)
-(cl:export '(POSE-VAL
-          POSE
+(cl:export '(TARGET-VAL
+          TARGET
           EXECUTE-VAL
           EXECUTE
-          OK-VAL
-          OK
+          SUCCESS-VAL
+          SUCCESS
           MESSAGE-VAL
           MESSAGE
 ))

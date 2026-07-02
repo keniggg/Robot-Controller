@@ -9,22 +9,21 @@ import struct
 import std_msgs.msg
 
 class TactileFrame(genpy.Message):
-  _md5sum = "02ca98ed2c6b94321c339531010cfc87"
+  _md5sum = "a144ff6b8561cbba1f903254a0728a98"
   _type = "alicia_flexible_grasp_supervisor/TactileFrame"
   _has_header = True  # flag to mark the presence of a Header object
   _full_text = """std_msgs/Header header
-uint8 skin_id
-uint16 rows
-uint16 cols
+string skin_name
 float32[] values
-float32 total_force
-float32 max_force
-uint16 max_index
+uint32 rows
+uint32 cols
+float32 total_force_mn
+float32 max_force_mn
+uint32 max_index
 float32 center_x
 float32 center_y
 bool contact
 bool valid
-string status
 
 ================================================================================
 MSG: std_msgs/Header
@@ -42,8 +41,8 @@ time stamp
 #Frame this data is associated with
 string frame_id
 """
-  __slots__ = ['header','skin_id','rows','cols','values','total_force','max_force','max_index','center_x','center_y','contact','valid','status']
-  _slot_types = ['std_msgs/Header','uint8','uint16','uint16','float32[]','float32','float32','uint16','float32','float32','bool','bool','string']
+  __slots__ = ['header','skin_name','values','rows','cols','total_force_mn','max_force_mn','max_index','center_x','center_y','contact','valid']
+  _slot_types = ['std_msgs/Header','string','float32[]','uint32','uint32','float32','float32','uint32','float32','float32','bool','bool']
 
   def __init__(self, *args, **kwds):
     """
@@ -53,7 +52,7 @@ string frame_id
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       header,skin_id,rows,cols,values,total_force,max_force,max_index,center_x,center_y,contact,valid,status
+       header,skin_name,values,rows,cols,total_force_mn,max_force_mn,max_index,center_x,center_y,contact,valid
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -64,18 +63,18 @@ string frame_id
       # message fields cannot be None, assign default values for those that are
       if self.header is None:
         self.header = std_msgs.msg.Header()
-      if self.skin_id is None:
-        self.skin_id = 0
+      if self.skin_name is None:
+        self.skin_name = ''
+      if self.values is None:
+        self.values = []
       if self.rows is None:
         self.rows = 0
       if self.cols is None:
         self.cols = 0
-      if self.values is None:
-        self.values = []
-      if self.total_force is None:
-        self.total_force = 0.
-      if self.max_force is None:
-        self.max_force = 0.
+      if self.total_force_mn is None:
+        self.total_force_mn = 0.
+      if self.max_force_mn is None:
+        self.max_force_mn = 0.
       if self.max_index is None:
         self.max_index = 0
       if self.center_x is None:
@@ -86,22 +85,19 @@ string frame_id
         self.contact = False
       if self.valid is None:
         self.valid = False
-      if self.status is None:
-        self.status = ''
     else:
       self.header = std_msgs.msg.Header()
-      self.skin_id = 0
+      self.skin_name = ''
+      self.values = []
       self.rows = 0
       self.cols = 0
-      self.values = []
-      self.total_force = 0.
-      self.max_force = 0.
+      self.total_force_mn = 0.
+      self.max_force_mn = 0.
       self.max_index = 0
       self.center_x = 0.
       self.center_y = 0.
       self.contact = False
       self.valid = False
-      self.status = ''
 
   def _get_types(self):
     """
@@ -123,20 +119,18 @@ string frame_id
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_B2H().pack(_x.skin_id, _x.rows, _x.cols))
-      length = len(self.values)
-      buff.write(_struct_I.pack(length))
-      pattern = '<%sf'%length
-      buff.write(struct.Struct(pattern).pack(*self.values))
-      _x = self
-      buff.write(_get_struct_2fH2f2B().pack(_x.total_force, _x.max_force, _x.max_index, _x.center_x, _x.center_y, _x.contact, _x.valid))
-      _x = self.status
+      _x = self.skin_name
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      length = len(self.values)
+      buff.write(_struct_I.pack(length))
+      pattern = '<%sf'%length
+      buff.write(struct.Struct(pattern).pack(*self.values))
+      _x = self
+      buff.write(_get_struct_2I2fI2f2B().pack(_x.rows, _x.cols, _x.total_force_mn, _x.max_force_mn, _x.max_index, _x.center_x, _x.center_y, _x.contact, _x.valid))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -164,10 +158,15 @@ string frame_id
         self.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
       else:
         self.header.frame_id = str[start:end]
-      _x = self
       start = end
-      end += 5
-      (_x.skin_id, _x.rows, _x.cols,) = _get_struct_B2H().unpack(str[start:end])
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      start = end
+      end += length
+      if python3:
+        self.skin_name = str[start:end].decode('utf-8', 'rosmsg')
+      else:
+        self.skin_name = str[start:end]
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -178,19 +177,10 @@ string frame_id
       self.values = s.unpack(str[start:end])
       _x = self
       start = end
-      end += 20
-      (_x.total_force, _x.max_force, _x.max_index, _x.center_x, _x.center_y, _x.contact, _x.valid,) = _get_struct_2fH2f2B().unpack(str[start:end])
+      end += 30
+      (_x.rows, _x.cols, _x.total_force_mn, _x.max_force_mn, _x.max_index, _x.center_x, _x.center_y, _x.contact, _x.valid,) = _get_struct_2I2fI2f2B().unpack(str[start:end])
       self.contact = bool(self.contact)
       self.valid = bool(self.valid)
-      start = end
-      end += 4
-      (length,) = _struct_I.unpack(str[start:end])
-      start = end
-      end += length
-      if python3:
-        self.status = str[start:end].decode('utf-8', 'rosmsg')
-      else:
-        self.status = str[start:end]
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -211,20 +201,18 @@ string frame_id
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_B2H().pack(_x.skin_id, _x.rows, _x.cols))
-      length = len(self.values)
-      buff.write(_struct_I.pack(length))
-      pattern = '<%sf'%length
-      buff.write(self.values.tostring())
-      _x = self
-      buff.write(_get_struct_2fH2f2B().pack(_x.total_force, _x.max_force, _x.max_index, _x.center_x, _x.center_y, _x.contact, _x.valid))
-      _x = self.status
+      _x = self.skin_name
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      length = len(self.values)
+      buff.write(_struct_I.pack(length))
+      pattern = '<%sf'%length
+      buff.write(self.values.tostring())
+      _x = self
+      buff.write(_get_struct_2I2fI2f2B().pack(_x.rows, _x.cols, _x.total_force_mn, _x.max_force_mn, _x.max_index, _x.center_x, _x.center_y, _x.contact, _x.valid))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -253,10 +241,15 @@ string frame_id
         self.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
       else:
         self.header.frame_id = str[start:end]
-      _x = self
       start = end
-      end += 5
-      (_x.skin_id, _x.rows, _x.cols,) = _get_struct_B2H().unpack(str[start:end])
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      start = end
+      end += length
+      if python3:
+        self.skin_name = str[start:end].decode('utf-8', 'rosmsg')
+      else:
+        self.skin_name = str[start:end]
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -267,19 +260,10 @@ string frame_id
       self.values = numpy.frombuffer(str[start:end], dtype=numpy.float32, count=length)
       _x = self
       start = end
-      end += 20
-      (_x.total_force, _x.max_force, _x.max_index, _x.center_x, _x.center_y, _x.contact, _x.valid,) = _get_struct_2fH2f2B().unpack(str[start:end])
+      end += 30
+      (_x.rows, _x.cols, _x.total_force_mn, _x.max_force_mn, _x.max_index, _x.center_x, _x.center_y, _x.contact, _x.valid,) = _get_struct_2I2fI2f2B().unpack(str[start:end])
       self.contact = bool(self.contact)
       self.valid = bool(self.valid)
-      start = end
-      end += 4
-      (length,) = _struct_I.unpack(str[start:end])
-      start = end
-      end += length
-      if python3:
-        self.status = str[start:end].decode('utf-8', 'rosmsg')
-      else:
-        self.status = str[start:end]
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -288,21 +272,15 @@ _struct_I = genpy.struct_I
 def _get_struct_I():
     global _struct_I
     return _struct_I
-_struct_2fH2f2B = None
-def _get_struct_2fH2f2B():
-    global _struct_2fH2f2B
-    if _struct_2fH2f2B is None:
-        _struct_2fH2f2B = struct.Struct("<2fH2f2B")
-    return _struct_2fH2f2B
+_struct_2I2fI2f2B = None
+def _get_struct_2I2fI2f2B():
+    global _struct_2I2fI2f2B
+    if _struct_2I2fI2f2B is None:
+        _struct_2I2fI2f2B = struct.Struct("<2I2fI2f2B")
+    return _struct_2I2fI2f2B
 _struct_3I = None
 def _get_struct_3I():
     global _struct_3I
     if _struct_3I is None:
         _struct_3I = struct.Struct("<3I")
     return _struct_3I
-_struct_B2H = None
-def _get_struct_B2H():
-    global _struct_B2H
-    if _struct_B2H is None:
-        _struct_B2H = struct.Struct("<B2H")
-    return _struct_B2H

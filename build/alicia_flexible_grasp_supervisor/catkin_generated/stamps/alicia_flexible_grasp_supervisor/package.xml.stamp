@@ -1,36 +1,26 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>alicia_flexible_grasp_supervisor</name>
-  <version>0.1.0</version>
-  <description>Supervisor GUI and ROS task layer for Alicia/Synria manipulator autonomous compliant grasping with RealSense and smart skin tactile feedback.</description>
-
-  <maintainer email="user@example.com">Alicia Flexible Grasp Developer</maintainer>
+  <version>0.2.0</version>
+  <description>Supervisor GUI, tactile sensing, RealSense vision and compliant grasping for Synria Alicia-D robot arm.</description>
+  <maintainer email="user@example.com">user</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>catkin</buildtool_depend>
-
   <build_depend>message_generation</build_depend>
-  <build_depend>std_msgs</build_depend>
-  <build_depend>geometry_msgs</build_depend>
-  <build_depend>sensor_msgs</build_depend>
-  <build_depend>alicia_duo_driver</build_depend>
-  <build_depend>rospy</build_depend>
-  <build_export_depend>rospy</build_export_depend>
-  <exec_depend>rospy</exec_depend>
 
-  <exec_depend>message_runtime</exec_depend>
-  <exec_depend>rospy</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>tf</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
-  <exec_depend>image_transport</exec_depend>
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>control_msgs</depend>
+  <depend>controller_manager_msgs</depend>
+  <depend>message_runtime</depend>
+  <depend>tf</depend>
+  <depend>tf2_ros</depend>
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+
   <exec_depend>moveit_commander</exec_depend>
-  <exec_depend>alicia_duo_driver</exec_depend>
-  <exec_depend>alicia_duo_moveit</exec_depend>
-
-  <export>
-  </export>
 </package>

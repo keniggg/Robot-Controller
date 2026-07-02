@@ -16,7 +16,7 @@
 
 (defclass alicia_flexible_grasp_supervisor::SafetyState
   :super ros::object
-  :slots (_header _ok _emergency_stop _force_over_limit _robot_timeout _tactile_timeout _camera_timeout _planning_failed _level _message ))
+  :slots (_header _ok _emergency_stop _level _message ))
 
 (defmethod alicia_flexible_grasp_supervisor::SafetyState
   (:init
@@ -24,11 +24,6 @@
     ((:header __header) (instance std_msgs::Header :init))
     ((:ok __ok) nil)
     ((:emergency_stop __emergency_stop) nil)
-    ((:force_over_limit __force_over_limit) nil)
-    ((:robot_timeout __robot_timeout) nil)
-    ((:tactile_timeout __tactile_timeout) nil)
-    ((:camera_timeout __camera_timeout) nil)
-    ((:planning_failed __planning_failed) nil)
     ((:level __level) "")
     ((:message __message) "")
     )
@@ -36,11 +31,6 @@
    (setq _header __header)
    (setq _ok __ok)
    (setq _emergency_stop __emergency_stop)
-   (setq _force_over_limit __force_over_limit)
-   (setq _robot_timeout __robot_timeout)
-   (setq _tactile_timeout __tactile_timeout)
-   (setq _camera_timeout __camera_timeout)
-   (setq _planning_failed __planning_failed)
    (setq _level (string __level))
    (setq _message (string __message))
    self)
@@ -57,21 +47,6 @@
   (:emergency_stop
    (&optional (__emergency_stop :null))
    (if (not (eq __emergency_stop :null)) (setq _emergency_stop __emergency_stop)) _emergency_stop)
-  (:force_over_limit
-   (&optional (__force_over_limit :null))
-   (if (not (eq __force_over_limit :null)) (setq _force_over_limit __force_over_limit)) _force_over_limit)
-  (:robot_timeout
-   (&optional (__robot_timeout :null))
-   (if (not (eq __robot_timeout :null)) (setq _robot_timeout __robot_timeout)) _robot_timeout)
-  (:tactile_timeout
-   (&optional (__tactile_timeout :null))
-   (if (not (eq __tactile_timeout :null)) (setq _tactile_timeout __tactile_timeout)) _tactile_timeout)
-  (:camera_timeout
-   (&optional (__camera_timeout :null))
-   (if (not (eq __camera_timeout :null)) (setq _camera_timeout __camera_timeout)) _camera_timeout)
-  (:planning_failed
-   (&optional (__planning_failed :null))
-   (if (not (eq __planning_failed :null)) (setq _planning_failed __planning_failed)) _planning_failed)
   (:level
    (&optional __level)
    (if __level (setq _level __level)) _level)
@@ -86,16 +61,6 @@
     ;; bool _ok
     1
     ;; bool _emergency_stop
-    1
-    ;; bool _force_over_limit
-    1
-    ;; bool _robot_timeout
-    1
-    ;; bool _tactile_timeout
-    1
-    ;; bool _camera_timeout
-    1
-    ;; bool _planning_failed
     1
     ;; string _level
     4 (length _level)
@@ -112,16 +77,6 @@
        (if _ok (write-byte -1 s) (write-byte 0 s))
      ;; bool _emergency_stop
        (if _emergency_stop (write-byte -1 s) (write-byte 0 s))
-     ;; bool _force_over_limit
-       (if _force_over_limit (write-byte -1 s) (write-byte 0 s))
-     ;; bool _robot_timeout
-       (if _robot_timeout (write-byte -1 s) (write-byte 0 s))
-     ;; bool _tactile_timeout
-       (if _tactile_timeout (write-byte -1 s) (write-byte 0 s))
-     ;; bool _camera_timeout
-       (if _camera_timeout (write-byte -1 s) (write-byte 0 s))
-     ;; bool _planning_failed
-       (if _planning_failed (write-byte -1 s) (write-byte 0 s))
      ;; string _level
        (write-long (length _level) s) (princ _level s)
      ;; string _message
@@ -136,16 +91,6 @@
      (setq _ok (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
    ;; bool _emergency_stop
      (setq _emergency_stop (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
-   ;; bool _force_over_limit
-     (setq _force_over_limit (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
-   ;; bool _robot_timeout
-     (setq _robot_timeout (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
-   ;; bool _tactile_timeout
-     (setq _tactile_timeout (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
-   ;; bool _camera_timeout
-     (setq _camera_timeout (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
-   ;; bool _planning_failed
-     (setq _planning_failed (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
    ;; string _level
      (let (n) (setq n (sys::peek buf ptr- :integer)) (incf ptr- 4) (setq _level (subseq buf ptr- (+ ptr- n))) (incf ptr- n))
    ;; string _message
@@ -154,17 +99,12 @@
    self)
   )
 
-(setf (get alicia_flexible_grasp_supervisor::SafetyState :md5sum-) "d422c2c3e9933ef7c15274804ca0c2f7")
+(setf (get alicia_flexible_grasp_supervisor::SafetyState :md5sum-) "b5ace411f24918274b9d45871c146d30")
 (setf (get alicia_flexible_grasp_supervisor::SafetyState :datatype-) "alicia_flexible_grasp_supervisor/SafetyState")
 (setf (get alicia_flexible_grasp_supervisor::SafetyState :definition-)
       "std_msgs/Header header
 bool ok
 bool emergency_stop
-bool force_over_limit
-bool robot_timeout
-bool tactile_timeout
-bool camera_timeout
-bool planning_failed
 string level
 string message
 
@@ -188,6 +128,6 @@ string frame_id
 
 
 
-(provide :alicia_flexible_grasp_supervisor/SafetyState "d422c2c3e9933ef7c15274804ca0c2f7")
+(provide :alicia_flexible_grasp_supervisor/SafetyState "b5ace411f24918274b9d45871c146d30")
 
 

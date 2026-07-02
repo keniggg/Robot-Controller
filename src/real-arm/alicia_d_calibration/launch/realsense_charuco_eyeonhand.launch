@@ -1,0 +1,64 @@
+<launch>
+    <arg name="namespace_prefix" default="realsense_charuco_handeyecalibration" />
+    <arg name="start_robot" default="true" />
+    <arg name="start_camera" default="true" />
+    <arg name="start_rviz" default="true" />
+    <arg name="port" default="/dev/alicia_arm" />
+    <arg name="baudrate" default="1000000" />
+
+    <!-- ChArUco board parameters. These must match the printed board exactly. -->
+    <arg name="board_width" default="11" />
+    <arg name="board_height" default="8" />
+    <arg name="square_length" default="0.015" />
+    <arg name="marker_length" default="0.011" />
+
+    <!-- RealSense ROS1 wrapper default topics. -->
+    <arg name="camera_frame" default="camera_link" />
+    <arg name="image_topic" default="/camera/color/image_raw" />
+    <arg name="camera_info_topic" default="/camera/color/camera_info" />
+    <arg name="board_frame" default="charuco_board" />
+
+    <!-- Robot + MoveIt bringup. -->
+    <include if="$(arg start_robot)" file="$(find alicia_d_driver)/launch/alicia_d_bringup.launch">
+        <arg name="port" value="$(arg port)" />
+        <arg name="baudrate" value="$(arg baudrate)" />
+    </include>
+
+    <!-- RealSense color stream. Depth is not required for hand-eye calibration. -->
+    <include if="$(arg start_camera)" file="$(find realsense2_camera)/launch/rs_camera.launch">
+        <arg name="enable_color" value="true" />
+        <arg name="enable_depth" value="false" />
+        <arg name="align_depth" value="false" />
+    </include>
+
+    <!-- ChArUco board detector: publishes camera_link -> charuco_board TF. -->
+    <node name="charuco_tracker" pkg="alicia_d_calibration" type="charuco_tracker.py" output="screen">
+        <param name="board_size" value="[$(arg board_width), $(arg board_height)]" />
+        <param name="square_length" value="$(arg square_length)" />
+        <param name="marker_length" value="$(arg marker_length)" />
+        <param name="dictionary_id" value="DICT_4X4_100" />
+        <param name="camera_frame" value="$(arg camera_frame)" />
+        <param name="board_frame" value="$(arg board_frame)" />
+        <param name="image_topic" value="$(arg image_topic)" />
+        <param name="camera_info_topic" value="$(arg camera_info_topic)" />
+    </node>
+
+    <!-- easy_handeye solves tool0 -> camera_link because eye_on_hand is true. -->
+    <include file="$(find easy_handeye)/launch/calibrate.launch">
+        <arg name="namespace_prefix" value="$(arg namespace_prefix)" />
+        <arg name="eye_on_hand" value="true" />
+        <arg name="move_group" value="alicia" />
+        <arg name="tracking_base_frame" value="$(arg camera_frame)" />
+        <arg name="tracking_marker_frame" value="$(arg board_frame)" />
+        <arg name="robot_base_frame" value="base_link" />
+        <arg name="robot_effector_frame" value="tool0" />
+        <arg name="freehand_robot_movement" value="false" />
+        <arg name="robot_velocity_scaling" value="0.3" />
+        <arg name="robot_acceleration_scaling" value="0.2" />
+        <arg name="translation_delta_meters" value="0.08" />
+        <arg name="rotation_delta_degrees" value="18" />
+    </include>
+
+    <node if="$(arg start_rviz)" name="rviz" pkg="rviz" type="rviz"
+          args="-d $(find alicia_d_calibration)/launch/charuco_calibration.rviz" />
+</launch>

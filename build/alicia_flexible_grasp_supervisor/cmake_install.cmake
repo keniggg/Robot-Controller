@@ -57,6 +57,9 @@ if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/StopGrasp.srv"
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetForceParams.srv"
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv"
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv"
     )
 endif()
@@ -150,5 +153,15 @@ endif()
 
 if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_COMPONENT)
   file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/alicia_flexible_grasp_supervisor" TYPE PROGRAM FILES "/home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor/catkin_generated/installspace/main_gui.py")
+endif()
+
+if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_COMPONENT)
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/share/alicia_flexible_grasp_supervisor" TYPE DIRECTORY FILES
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/launch"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/config"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/docs"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/gui"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/rviz"
+    )
 endif()
 

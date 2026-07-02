@@ -15,7 +15,7 @@
 #include <ros/builtin_message_traits.h>
 #include <ros/message_operations.h>
 
-#include <geometry_msgs/Pose.h>
+#include <geometry_msgs/PoseStamped.h>
 
 namespace alicia_flexible_grasp_supervisor
 {
@@ -25,19 +25,19 @@ struct SetTargetPoseRequest_
   typedef SetTargetPoseRequest_<ContainerAllocator> Type;
 
   SetTargetPoseRequest_()
-    : pose()
+    : target()
     , execute(false)  {
     }
   SetTargetPoseRequest_(const ContainerAllocator& _alloc)
-    : pose(_alloc)
+    : target(_alloc)
     , execute(false)  {
   (void)_alloc;
     }
 
 
 
-   typedef  ::geometry_msgs::Pose_<ContainerAllocator>  _pose_type;
-  _pose_type pose;
+   typedef  ::geometry_msgs::PoseStamped_<ContainerAllocator>  _target_type;
+  _target_type target;
 
    typedef uint8_t _execute_type;
   _execute_type execute;
@@ -71,7 +71,7 @@ return s;
 template<typename ContainerAllocator1, typename ContainerAllocator2>
 bool operator==(const ::alicia_flexible_grasp_supervisor::SetTargetPoseRequest_<ContainerAllocator1> & lhs, const ::alicia_flexible_grasp_supervisor::SetTargetPoseRequest_<ContainerAllocator2> & rhs)
 {
-  return lhs.pose == rhs.pose &&
+  return lhs.target == rhs.target &&
     lhs.execute == rhs.execute;
 }
 
@@ -105,12 +105,12 @@ struct IsMessage< ::alicia_flexible_grasp_supervisor::SetTargetPoseRequest_<Cont
 
 template <class ContainerAllocator>
 struct IsFixedSize< ::alicia_flexible_grasp_supervisor::SetTargetPoseRequest_<ContainerAllocator> >
-  : TrueType
+  : FalseType
   { };
 
 template <class ContainerAllocator>
 struct IsFixedSize< ::alicia_flexible_grasp_supervisor::SetTargetPoseRequest_<ContainerAllocator> const>
-  : TrueType
+  : FalseType
   { };
 
 template <class ContainerAllocator>
@@ -129,12 +129,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::SetTargetPoseRequest_<Contain
 {
   static const char* value()
   {
-    return "6fc4fbc3eff3db2ecc3f08fd3533ebf8";
+    return "fe85c31a0fb84e4f56010ba33f6304a6";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::SetTargetPoseRequest_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x6fc4fbc3eff3db2eULL;
-  static const uint64_t static_value2 = 0xcc3f08fd3533ebf8ULL;
+  static const uint64_t static_value1 = 0xfe85c31a0fb84e4fULL;
+  static const uint64_t static_value2 = 0x56010ba33f6304a6ULL;
 };
 
 template<class ContainerAllocator>
@@ -153,8 +153,30 @@ struct Definition< ::alicia_flexible_grasp_supervisor::SetTargetPoseRequest_<Con
 {
   static const char* value()
   {
-    return "geometry_msgs/Pose pose\n"
+    return "geometry_msgs/PoseStamped target\n"
 "bool execute\n"
+"\n"
+"================================================================================\n"
+"MSG: geometry_msgs/PoseStamped\n"
+"# A Pose with reference coordinate frame and timestamp\n"
+"Header header\n"
+"Pose pose\n"
+"\n"
+"================================================================================\n"
+"MSG: std_msgs/Header\n"
+"# Standard metadata for higher-level stamped data types.\n"
+"# This is generally used to communicate timestamped data \n"
+"# in a particular coordinate frame.\n"
+"# \n"
+"# sequence ID: consecutively increasing ID \n"
+"uint32 seq\n"
+"#Two-integer timestamp that is expressed as:\n"
+"# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')\n"
+"# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')\n"
+"# time-handling sugar is provided by the client library\n"
+"time stamp\n"
+"#Frame this data is associated with\n"
+"string frame_id\n"
 "\n"
 "================================================================================\n"
 "MSG: geometry_msgs/Pose\n"
@@ -195,7 +217,7 @@ namespace serialization
   {
     template<typename Stream, typename T> inline static void allInOne(Stream& stream, T m)
     {
-      stream.next(m.pose);
+      stream.next(m.target);
       stream.next(m.execute);
     }
 
@@ -217,8 +239,8 @@ struct Printer< ::alicia_flexible_grasp_supervisor::SetTargetPoseRequest_<Contai
   {
     if (false || !indent.empty())
       s << std::endl;
-    s << indent << "pose: ";
-    Printer< ::geometry_msgs::Pose_<ContainerAllocator> >::stream(s, indent + "  ", v.pose);
+    s << indent << "target: ";
+    Printer< ::geometry_msgs::PoseStamped_<ContainerAllocator> >::stream(s, indent + "  ", v.target);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "execute: ";

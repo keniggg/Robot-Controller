@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <mutex> 
+#include <map>
 
 namespace alicia_d_driver
 {
@@ -43,11 +44,17 @@ private:
     std::vector<double> joint_efforts_;
     std::vector<double> joint_position_commands_;
     std::vector<double> last_commanded_positions_;
+    std::vector<double> last_published_positions_;
 
     // This vector stores the data from the callback for thread-safe access
     std::vector<double> raw_joint_positions_;
     std::mutex command_mutex_;
+    bool has_received_joint_state_ = false;
     bool is_initialized_ = false;
+    bool publish_only_on_change_ = true;
+    bool publish_initial_command_ = false;
+    bool have_published_command_ = false;
+    double command_publish_epsilon_ = 1e-5;
 
 };
 

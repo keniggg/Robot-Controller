@@ -5,12 +5,68 @@
 #include <set>   // For std::set
 #include <thread> // for std::this_thread
 #include <chrono> // for std::chrono
+#include <algorithm>
+#include <sstream>
+#include <iomanip>
 
 // --- Command IDs, Data Identifiers, etc. remain the same ---
 constexpr uint8_t CMD_SERVO_CONTROL = 0x04;
 constexpr uint8_t CMD_GRIPPER_CONTROL = 0x02;
 constexpr uint8_t CMD_ZERO_CAL = 0x03;
 constexpr uint8_t CMD_DEMO_CONTROL = 0x13;
+
+// SDK v6 joint+gripper control protocol:
+// AA 06 03 1C [6*(pos_lo pos_hi speed_lo speed_hi)] [gripper_pos_lo gripper_pos_hi gripper_speed_lo gripper_speed_hi] CRC FF
+constexpr uint8_t SDK_CMD_JOINT = 0x06;
+constexpr uint8_t SDK_FUNC_QUERY_JOINT_GRIPPER = 0x00;
+constexpr uint8_t SDK_FUNC_SET_JOINT_GRIPPER = 0x03;
+constexpr uint8_t SDK_DATA_LEN_JOINT_GRIPPER = 0x1C;
+
+static uint8_t sdk_crc32_low8(const std::vector<uint8_t>& data)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint8_t b : data)
+    {
+        crc ^= static_cast<uint32_t>(b);
+        for (int i = 0; i < 8; ++i)
+        {
+            if (crc & 1u)
+                crc = (crc >> 1) ^ 0xEDB88320u;
+            else
+                crc >>= 1;
+        }
+    }
+    crc ^= 0xFFFFFFFFu;
+    return static_cast<uint8_t>(crc & 0xFFu);
+}
+
+static uint16_t speed_deg_s_to_hw(double speed_deg_s)
+{
+    // SDK mapping: 360 deg/s = 4096 ticks/s, hardware range 50~5000, step 50
+    const double deg_per_tick = 360.0 / 4096.0;
+    double hw = speed_deg_s / deg_per_tick;
+
+    if (hw < 50.0) hw = 50.0;
+    if (hw > 5000.0) hw = 5000.0;
+
+    int rounded = static_cast<int>(std::round(hw / 50.0) * 50.0);
+    if (rounded < 50) rounded = 50;
+    if (rounded > 5000) rounded = 5000;
+    return static_cast<uint16_t>(rounded);
+}
+
+static std::string format_radians_as_degrees(const std::vector<double>& values)
+{
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(1) << "[";
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        if (i > 0) ss << ", ";
+        ss << values[i] * 180.0 / M_PI;
+    }
+    ss << "]";
+    return ss.str();
+}
 // Protocol Constants for feedback frames
 constexpr uint8_t FEEDBACK_GRIPPER_STATE = 0x02;
 constexpr uint8_t FEEDBACK_SERVO_STATE = 0x04;
@@ -32,6 +88,8 @@ AliciaDDriverNode::AliciaDDriverNode() : pnh_("~"), last_process_time_(0.0)
     // Attempt initial connection
     if (communicator_->connect()) {
         ROS_INFO("Initial connection successful. Enabling full torque mode.");
+        std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
+        communicator_->write_raw_frame(torque_on_frame);
     } else {
         ROS_ERROR("Initial connection failed. Starting reconnect timer.");
         reconnect_timer_ = nh_.createTimer(ros::Duration(5.0), &AliciaDDriverNode::reconnect_callback, this);
@@ -55,12 +113,22 @@ void AliciaDDriverNode::load_parameters()
     std::string port;
     int baud_rate;
     
-    pnh_.param<std::string>("port", port, "/dev/ttyUSB0");
+    pnh_.param<std::string>("port", port, "/dev/alicia_arm");
+    // Compatible with both parameter names used by different launch files:
+    // baud_rate and baudrate. Prefer baudrate if provided.
     pnh_.param<int>("baud_rate", baud_rate, 921600);
+    pnh_.param<int>("baudrate", baud_rate, baud_rate);
     pnh_.param<int>("servo_count", servo_count_, 9);
     pnh_.param<bool>("debug_mode", debug_mode_, false);
     pnh_.param<double>("rate_limit_sec", rate_limit_sec_, 0.01);
     pnh_.param<double>("command_rate_hz", command_rate_hz_, 200.0);
+    pnh_.param<double>("state_poll_rate_hz", state_poll_rate_hz_, 20.0);
+    pnh_.param<bool>("mirror_commanded_state_when_feedback_stale", mirror_commanded_state_when_feedback_stale_, false);
+    pnh_.param<bool>("log_command_flow", log_command_flow_, true);
+    pnh_.param<bool>("suppress_redundant_commands", suppress_redundant_commands_, true);
+    pnh_.param<bool>("pause_commands_when_feedback_stale", pause_commands_when_feedback_stale_, true);
+    pnh_.param<double>("feedback_stale_timeout_sec", feedback_stale_timeout_sec_, 1.0);
+    pnh_.param<double>("command_keepalive_rate_hz", command_keepalive_rate_hz_, 0.0);
     // Smoothing & input interpretation
     pnh_.param<bool>("use_trajectory_smoothing", use_trajectory_smoothing_, true);
     pnh_.param<double>("max_joint_velocity_rad_s", max_joint_velocity_rad_s_, 2.5);
@@ -98,9 +166,26 @@ void AliciaDDriverNode::setup_ros_communications()
     processing_timer_ = nh_.createTimer(ros::Duration(0.01), &AliciaDDriverNode::process_serial_data_callback, this);
     // Heartbeat to ensure fresh /joint_states even when hardware frames are sparse
     heartbeat_timer_ = nh_.createTimer(ros::Duration(0.02), &AliciaDDriverNode::heartbeat_publish_callback, this);
+    if (state_poll_rate_hz_ > 0.0) {
+        const double state_poll_period = 1.0 / std::max(1.0, state_poll_rate_hz_);
+        state_poll_timer_ = nh_.createTimer(ros::Duration(state_poll_period), &AliciaDDriverNode::state_poll_timer_callback, this);
+    }
     // Timer to send serialized commands at fixed rate, decoupled from subscriber callback
     const double command_period = 1.0 / std::max(1.0, command_rate_hz_);
     command_timer_ = nh_.createTimer(ros::Duration(command_period), &AliciaDDriverNode::send_command_timer_callback, this);
+}
+
+void AliciaDDriverNode::state_poll_timer_callback(const ros::TimerEvent& event)
+{
+    if (!communicator_ || !communicator_->is_connected()) return;
+
+    // SDK joint+gripper query:
+    // AA 06 00 01 FE 9A FF
+    static const std::vector<uint8_t> joint_state_query_frame = {
+        FRAME_START_BYTE, SDK_CMD_JOINT, SDK_FUNC_QUERY_JOINT_GRIPPER,
+        0x01, 0xFE, 0x9A, FRAME_END_BYTE
+    };
+    communicator_->write_raw_frame(joint_state_query_frame);
 }
 
 
@@ -110,6 +195,8 @@ void AliciaDDriverNode::reconnect_callback(const ros::TimerEvent& event)
         ROS_INFO("Attempting to reconnect...");
         if (communicator_->connect()) {
             ROS_INFO("Reconnect successful! Enabling full torque mode.");
+            std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
+            communicator_->write_raw_frame(torque_on_frame);
             reconnect_timer_.stop(); // Stop the timer upon success
         }
     } else {
@@ -186,12 +273,22 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         latest_gripper_rad_ = gripper_value;
         has_latest_command_ = true;
     }
+
+    if (log_command_flow_) {
+        ROS_INFO_THROTTLE(1.0, "Received /joint_commands target: joints_deg=%s gripper_rad=%.3f",
+                          format_radians_as_degrees(joint_angles).c_str(), gripper_value);
+    }
 }
 
 void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event)
 {
     if (!communicator_ || !communicator_->is_connected()) return;
     if (!has_latest_command_) return;
+
+    std::unique_lock<std::mutex> send_lock(send_mutex_, std::try_to_lock);
+    if (!send_lock.owns_lock()) return;
+
+    const ros::Time now = ros::Time::now();
 
     std::vector<double> joint_angles;
     double gripper_value = 0.0; // radians for gripper once normalized
@@ -200,6 +297,23 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         if (!has_latest_command_) return;
         joint_angles = latest_joint_angles_;
         gripper_value = latest_gripper_rad_;
+    }
+
+    bool feedback_ready = false;
+    bool feedback_stale = true;
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        feedback_ready = has_real_feedback_;
+        feedback_stale = !has_real_feedback_ ||
+                         (now - last_feedback_time_).toSec() > feedback_stale_timeout_sec_;
+    }
+
+    if (pause_commands_when_feedback_stale_ && (!feedback_ready || feedback_stale)) {
+        ROS_WARN_THROTTLE(1.0,
+                          "Pausing SDK command stream: hardware feedback is %s (timeout %.2fs).",
+                          feedback_ready ? "stale" : "not ready",
+                          feedback_stale_timeout_sec_);
+        return;
     }
 
     // Interpolate toward latest command (slew limiting)
@@ -282,45 +396,69 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         cmd_gripper_vel_rad_s_ = 0.0;
     }
 
-    // Build and send servo frame
-    size_t frame_size = servo_count_ * 2 + 5;
-    std::vector<uint8_t> servo_frame(frame_size);
-    servo_frame[0] = FRAME_START_BYTE;
-    servo_frame[1] = CMD_SERVO_CONTROL;
-    servo_frame[2] = servo_count_ * 2;
+    // Build and send SDK-style joint + gripper frame:
+    // [AA] [06] [03] [1C] [J1 pos lo hi speed lo hi] ... [J6] [gripper pos lo hi speed lo hi] [CRC] [FF]
+    const size_t frame_size = 34;
+    std::vector<uint8_t> servo_frame(frame_size, 0);
 
-    for (int i = 0; i < servo_count_; ++i) {
-        uint16_t hw_val = 2048;
-        if (static_cast<size_t>(i) < joint_to_servo_map_index_.size()) {
-            int joint_idx = joint_to_servo_map_index_[i];
-            double direction = joint_to_servo_map_direction_[i];
-            if (static_cast<size_t>(joint_idx) < cmd_joint_angles_.size()) {
-                hw_val = rad_to_hardware_value(cmd_joint_angles_[joint_idx] * direction);
-            }
-        }
-        size_t frame_idx = 3 + i * 2;
-        servo_frame[frame_idx] = hw_val & 0xFF;
-        servo_frame[frame_idx + 1] = (hw_val >> 8) & 0xFF;
+    servo_frame[0] = FRAME_START_BYTE;                // 0xAA
+    servo_frame[1] = SDK_CMD_JOINT;                   // 0x06
+    servo_frame[2] = SDK_FUNC_SET_JOINT_GRIPPER;      // 0x03
+    servo_frame[3] = SDK_DATA_LEN_JOINT_GRIPPER;      // 0x1C
+    servo_frame[frame_size - 1] = FRAME_END_BYTE;     // 0xFF
+
+    const size_t data_start = 4;
+    const uint16_t joint_speed_hw = speed_deg_s_to_hw(10.0);  // safe slow speed
+
+    for (int joint_idx = 0; joint_idx < 6; ++joint_idx)
+    {
+        uint16_t hw_val = rad_to_hardware_value(cmd_joint_angles_[joint_idx]);
+
+        size_t offset = data_start + joint_idx * 4;
+        servo_frame[offset]     = hw_val & 0xFF;
+        servo_frame[offset + 1] = (hw_val >> 8) & 0xFF;
+        servo_frame[offset + 2] = joint_speed_hw & 0xFF;
+        servo_frame[offset + 3] = (joint_speed_hw >> 8) & 0xFF;
     }
-    servo_frame[frame_size - 1] = FRAME_END_BYTE;
-    servo_frame[frame_size - 2] = calculate_checksum(servo_frame);
-    communicator_->write_raw_frame(servo_frame);
 
-    // Build and send gripper frame (throttled)
-    if (std::abs(current_gripper_position_ - cmd_gripper_rad_) > 0.01) {
-    
-        std::vector<uint8_t> gripper_frame(8);
-        gripper_frame[0] = FRAME_START_BYTE;
-        gripper_frame[1] = CMD_GRIPPER_CONTROL;
-        gripper_frame[2] = 3;
-        gripper_frame[3] = 1;
+    // SDK gripper value range: 0~1000
+    size_t gripper_offset = data_start + 6 * 4;
+    double gripper_deg = std::max(0.0, std::min(100.0, cmd_gripper_rad_ * 180.0 / M_PI));
+    uint16_t gripper_hw_val = static_cast<uint16_t>((gripper_deg / 100.0) * 1000.0);
+    uint16_t gripper_speed_hw = 5500;
 
-        uint16_t gripper_hw_val = rad_to_hardware_value_grip(cmd_gripper_rad_);
-        gripper_frame[4] = gripper_hw_val & 0xFF;
-        gripper_frame[5] = (gripper_hw_val >> 8) & 0xFF;
-        gripper_frame[7] = FRAME_END_BYTE;
-        gripper_frame[6] = calculate_checksum(gripper_frame);
-        communicator_->write_raw_frame(gripper_frame);
+    servo_frame[gripper_offset]     = gripper_hw_val & 0xFF;
+    servo_frame[gripper_offset + 1] = (gripper_hw_val >> 8) & 0xFF;
+    servo_frame[gripper_offset + 2] = gripper_speed_hw & 0xFF;
+    servo_frame[gripper_offset + 3] = (gripper_speed_hw >> 8) & 0xFF;
+
+    std::vector<uint8_t> crc_payload(servo_frame.begin() + 1, servo_frame.end() - 2);
+    servo_frame[frame_size - 2] = sdk_crc32_low8(crc_payload);
+
+    if (suppress_redundant_commands_ && servo_frame == last_sent_sdk_command_frame_) {
+        bool keepalive_due = false;
+        if (command_keepalive_rate_hz_ > 0.0) {
+            const double keepalive_period = 1.0 / command_keepalive_rate_hz_;
+            keepalive_due = last_sent_sdk_command_time_.isZero() ||
+                            (now - last_sent_sdk_command_time_).toSec() >= keepalive_period;
+        }
+        if (!keepalive_due) {
+            ROS_DEBUG_THROTTLE(5.0, "Skipping redundant SDK command frame while holding target.");
+            return;
+        }
+    }
+
+    const bool wrote = communicator_->write_raw_frame(servo_frame);
+    if (wrote) {
+        last_sent_sdk_command_frame_ = servo_frame;
+        last_sent_sdk_command_time_ = now;
+    }
+    if (log_command_flow_) {
+        ROS_INFO_THROTTLE(1.0, "Streaming SDK command (%s): joints_deg=%s gripper_raw=%u crc=0x%02X",
+                          wrote ? "ok" : "write_failed",
+                          format_radians_as_degrees(cmd_joint_angles_).c_str(),
+                          static_cast<unsigned>(gripper_hw_val),
+                          servo_frame[frame_size - 2]);
     }
 }
 
@@ -334,11 +472,12 @@ void AliciaDDriverNode::heartbeat_publish_callback(const ros::TimerEvent& event)
     // Republish the latest known state with a current timestamp to keep MoveIt happy
     const ros::Time now = ros::Time::now();
 
-    // If feedback has not arrived recently, mirror commanded state into
-    // the "current" state so RViz/MoveIt does not stall with old joint values.
-    // This does not affect hardware; it only keeps visualization/monitoring fresh.
+    // Optional compatibility mode: mirror commanded state when feedback is
+    // stale. Keep disabled on real hardware so MoveIt does not report success
+    // just because a command was sent.
     const double feedback_timeout = 0.1; // seconds
-    if ((now - last_feedback_time_).toSec() > feedback_timeout) {
+    if (mirror_commanded_state_when_feedback_stale_ &&
+        (now - last_feedback_time_).toSec() > feedback_timeout) {
         std::lock_guard<std::mutex> lock(data_mutex_);
         for (size_t i = 0; i < current_joint_positions_.size() && i < cmd_joint_angles_.size(); ++i) {
             current_joint_positions_[i] = cmd_joint_angles_[i];
@@ -360,29 +499,91 @@ void AliciaDDriverNode::process_serial_data()
     // Process all packets currently in the queue.
     while (communicator_->get_packet(packet))
     {
-        if (packet.empty()) continue; // Skip if for some reason an empty packet was queued
+        if (packet.size() < 3) {
+            ROS_WARN("Received short SDK packet (%zu bytes).", packet.size());
+            continue;
+        }
         uint8_t command_id = packet[0];
-        std::vector<uint8_t> data_payload(packet.begin() + 1, packet.end());
+        uint8_t function_id = packet[1];
+        uint8_t data_len = packet[2];
+        if (packet.size() < static_cast<size_t>(data_len) + 3) {
+            ROS_WARN("SDK packet size mismatch: cmd=0x%02X func=0x%02X len=%u packet=%zu",
+                     command_id, function_id, data_len, packet.size());
+            continue;
+        }
+
+        std::vector<uint8_t> data_payload(packet.begin() + 3, packet.begin() + 3 + data_len);
         switch (command_id) {
-            case FEEDBACK_GRIPPER_STATE:
-            parse_gripper_state_frame(data_payload);
-            break;
-        case FEEDBACK_SERVO_STATE:
-            parse_servo_states_frame(data_payload);
-            break;
-        case FEEDBACK_SERVO_STATE_EXT:
-                if (debug_mode_) {
-                    ROS_INFO("Received unhandled Extended Servo State frame (0x06)");
+            case SDK_CMD_JOINT:
+                if (function_id == SDK_FUNC_QUERY_JOINT_GRIPPER) {
+                    parse_sdk_joint_state_frame(data_payload);
+                } else if (debug_mode_) {
+                    ROS_INFO("Received unhandled SDK joint frame func=0x%02X len=%u",
+                             function_id, data_len);
                 }
                 break;
-        case FEEDBACK_ERROR:
-            parse_error_frame(data_payload);
-            break;
-        default:
-            ROS_WARN("Unknown command ID: 0x%02X", command_id);
-            break;
+            case FEEDBACK_ERROR:
+                parse_error_frame(data_payload);
+                break;
+            default:
+                if (debug_mode_) {
+                    ROS_INFO("Received unhandled SDK frame cmd=0x%02X func=0x%02X len=%u",
+                             command_id, function_id, data_len);
+                }
+                break;
         }
     }
+}
+
+void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& data_payload)
+{
+    // SDK joint+gripper feedback DATA:
+    // 6 joint positions (2 bytes each) + gripper raw 0..1000 (2 bytes) + run status (1 byte)
+    if (data_payload.size() < 15) {
+        ROS_WARN("SDK joint state DATA too short: expected >=15 bytes, got %zu", data_payload.size());
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    last_feedback_time_ = ros::Time::now();
+    has_real_feedback_ = true;
+
+    for (size_t i = 0; i < 6 && i < current_joint_positions_.size(); ++i) {
+        const size_t idx = i * 2;
+        uint16_t hw_val = data_payload[idx] | (data_payload[idx + 1] << 8);
+        current_joint_positions_[i] = hardware_value_to_rad(hw_val);
+    }
+
+    uint16_t gripper_raw = data_payload[12] | (data_payload[13] << 8);
+    gripper_raw = std::max<uint16_t>(0, std::min<uint16_t>(1000, gripper_raw));
+    current_gripper_position_ = (static_cast<double>(gripper_raw) / 1000.0) * GRIPPER_DEG_MAX * M_PI / 180.0;
+    last_run_status_ = data_payload[14];
+
+    if (last_run_status_ == 0xE1 || last_run_status_ == 0xE2) {
+        ROS_WARN_THROTTLE(2.0, "Hardware reports heat protection status=0x%02X. Reduce load or torque off for cooling.",
+                          last_run_status_);
+    }
+
+    bool should_seed_command_state = false;
+    {
+        std::lock_guard<std::mutex> latest_lock(latest_cmd_mutex_);
+        should_seed_command_state = !has_latest_command_;
+    }
+    if (should_seed_command_state) {
+        cmd_joint_angles_ = current_joint_positions_;
+        cmd_gripper_rad_ = current_gripper_position_;
+        cmd_joint_velocities_.assign(6, 0.0);
+        cmd_gripper_vel_rad_s_ = 0.0;
+    }
+
+    if (log_command_flow_) {
+        ROS_INFO_THROTTLE(1.0, "Real SDK feedback: joints_deg=%s gripper_raw=%u status=0x%02X",
+                          format_radians_as_degrees(current_joint_positions_).c_str(),
+                          static_cast<unsigned>(gripper_raw),
+                          data_payload[14]);
+    }
+
+    publish_joint_state();
 }
 
 
@@ -566,13 +767,13 @@ void AliciaDDriverNode::zero_calibrate_callback(const std_msgs::Bool::ConstPtr& 
 void AliciaDDriverNode::demonstration_mode_callback(const std_msgs::Bool::ConstPtr& msg)
 {
     if (msg->data) {
-        ROS_INFO("Enabling Demonstration Mode (Zero Torque).");
-        auto frame = generate_simple_frame(CMD_DEMO_CONTROL, 0x00, false);
-        communicator_->write_raw_frame(frame);
+        ROS_INFO("Enabling zero-torque mode with SDK torque_off frame.");
+        const std::vector<uint8_t> torque_off_frame = {0xAA, 0x05, 0x00, 0x01, 0x00, 0x6F, 0xFF};
+        communicator_->write_raw_frame(torque_off_frame);
     } else {
-        ROS_INFO("Disabling Demonstration Mode (Full Torque).");
-        auto frame = generate_simple_frame(CMD_DEMO_CONTROL, 0x01, true);
-        communicator_->write_raw_frame(frame);
+        ROS_INFO("Disabling zero-torque mode with SDK torque_on frame.");
+        const std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
+        communicator_->write_raw_frame(torque_on_frame);
     }
 
 }
@@ -600,7 +801,7 @@ uint16_t AliciaDDriverNode::rad_to_hardware_value_grip(double angle_rad)
 
 double AliciaDDriverNode::hardware_value_to_rad(uint16_t hw_value) {
     hw_value = std::max(0, std::min(4095, (int)hw_value));
-    double angle_deg = -180.0 + (static_cast<double>(hw_value) / 4095.0) * 360.0;
+    double angle_deg = -180.0 + (static_cast<double>(hw_value) / 4096.0) * 360.0;
     return angle_deg * M_PI / 180.0;
 }
 double AliciaDDriverNode::hardware_value_to_rad_grip(uint16_t hw_value)

@@ -43,10 +43,10 @@
   "alicia_flexible_grasp_supervisor/StopGraspRequest")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql '<StopGrasp-request>)))
   "Returns md5sum for a message object of type '<StopGrasp-request>"
-  "82bc3459aaf52f4d9d44d2af0299d950")
+  "5e6527b0f131fa5341cb29f70ba6b894")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql 'StopGrasp-request)))
   "Returns md5sum for a message object of type 'StopGrasp-request"
-  "82bc3459aaf52f4d9d44d2af0299d950")
+  "5e6527b0f131fa5341cb29f70ba6b894")
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql '<StopGrasp-request>)))
   "Returns full string definition for message of type '<StopGrasp-request>"
   (cl:format cl:nil "bool emergency~%~%~%"))
@@ -65,9 +65,9 @@
 ;//! \htmlinclude StopGrasp-response.msg.html
 
 (cl:defclass <StopGrasp-response> (roslisp-msg-protocol:ros-message)
-  ((stopped
-    :reader stopped
-    :initarg :stopped
+  ((success
+    :reader success
+    :initarg :success
     :type cl:boolean
     :initform cl:nil)
    (message
@@ -85,10 +85,10 @@
   (cl:unless (cl:typep m 'StopGrasp-response)
     (roslisp-msg-protocol:msg-deprecation-warning "using old message class name alicia_flexible_grasp_supervisor-srv:<StopGrasp-response> is deprecated: use alicia_flexible_grasp_supervisor-srv:StopGrasp-response instead.")))
 
-(cl:ensure-generic-function 'stopped-val :lambda-list '(m))
-(cl:defmethod stopped-val ((m <StopGrasp-response>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-srv:stopped-val is deprecated.  Use alicia_flexible_grasp_supervisor-srv:stopped instead.")
-  (stopped m))
+(cl:ensure-generic-function 'success-val :lambda-list '(m))
+(cl:defmethod success-val ((m <StopGrasp-response>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-srv:success-val is deprecated.  Use alicia_flexible_grasp_supervisor-srv:success instead.")
+  (success m))
 
 (cl:ensure-generic-function 'message-val :lambda-list '(m))
 (cl:defmethod message-val ((m <StopGrasp-response>))
@@ -96,7 +96,7 @@
   (message m))
 (cl:defmethod roslisp-msg-protocol:serialize ((msg <StopGrasp-response>) ostream)
   "Serializes a message object of type '<StopGrasp-response>"
-  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'stopped) 1 0)) ostream)
+  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'success) 1 0)) ostream)
   (cl:let ((__ros_str_len (cl:length (cl:slot-value msg 'message))))
     (cl:write-byte (cl:ldb (cl:byte 8 0) __ros_str_len) ostream)
     (cl:write-byte (cl:ldb (cl:byte 8 8) __ros_str_len) ostream)
@@ -106,7 +106,7 @@
 )
 (cl:defmethod roslisp-msg-protocol:deserialize ((msg <StopGrasp-response>) istream)
   "Deserializes a message object of type '<StopGrasp-response>"
-    (cl:setf (cl:slot-value msg 'stopped) (cl:not (cl:zerop (cl:read-byte istream))))
+    (cl:setf (cl:slot-value msg 'success) (cl:not (cl:zerop (cl:read-byte istream))))
     (cl:let ((__ros_str_len 0))
       (cl:setf (cl:ldb (cl:byte 8 0) __ros_str_len) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 8) __ros_str_len) (cl:read-byte istream))
@@ -125,16 +125,16 @@
   "alicia_flexible_grasp_supervisor/StopGraspResponse")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql '<StopGrasp-response>)))
   "Returns md5sum for a message object of type '<StopGrasp-response>"
-  "82bc3459aaf52f4d9d44d2af0299d950")
+  "5e6527b0f131fa5341cb29f70ba6b894")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql 'StopGrasp-response)))
   "Returns md5sum for a message object of type 'StopGrasp-response"
-  "82bc3459aaf52f4d9d44d2af0299d950")
+  "5e6527b0f131fa5341cb29f70ba6b894")
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql '<StopGrasp-response>)))
   "Returns full string definition for message of type '<StopGrasp-response>"
-  (cl:format cl:nil "bool stopped~%string message~%~%~%~%"))
+  (cl:format cl:nil "bool success~%string message~%~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql 'StopGrasp-response)))
   "Returns full string definition for message of type 'StopGrasp-response"
-  (cl:format cl:nil "bool stopped~%string message~%~%~%~%"))
+  (cl:format cl:nil "bool success~%string message~%~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:serialization-length ((msg <StopGrasp-response>))
   (cl:+ 0
      1
@@ -143,7 +143,7 @@
 (cl:defmethod roslisp-msg-protocol:ros-message-to-list ((msg <StopGrasp-response>))
   "Converts a ROS message object to a list"
   (cl:list 'StopGrasp-response
-    (cl:cons ':stopped (stopped msg))
+    (cl:cons ':success (success msg))
     (cl:cons ':message (message msg))
 ))
 (cl:defmethod roslisp-msg-protocol:service-request-type ((msg (cl:eql 'StopGrasp)))

@@ -1,12 +1,12 @@
 (cl:in-package alicia_flexible_grasp_supervisor-srv)
-(cl:export '(CONTACT_THRESHOLD-VAL
-          CONTACT_THRESHOLD
-          TARGET_FORCE-VAL
-          TARGET_FORCE
-          MAX_FORCE-VAL
-          MAX_FORCE
-          OK-VAL
-          OK
+(cl:export '(CONTACT_THRESHOLD_MN-VAL
+          CONTACT_THRESHOLD_MN
+          TARGET_FORCE_MN-VAL
+          TARGET_FORCE_MN
+          MAX_FORCE_MN-VAL
+          MAX_FORCE_MN
+          SUCCESS-VAL
+          SUCCESS
           MESSAGE-VAL
           MESSAGE
 ))

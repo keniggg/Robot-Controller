@@ -401,49 +401,43 @@ actionlib_DIR:PATH=/opt/ros/noetic/share/actionlib/cmake
 actionlib_msgs_DIR:PATH=/opt/ros/noetic/share/actionlib_msgs/cmake
 
 //Value Computed by CMake
-alicia_duo_descriptions_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_duo_descriptions
+alicia_d_calibration_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_d_calibration
 
 //Value Computed by CMake
-alicia_duo_descriptions_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_descriptions
+alicia_d_calibration_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_d_calibration
 
 //Value Computed by CMake
-alicia_duo_drag_teaching_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_duo_drag_teaching
+alicia_d_descriptions_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_d_descriptions
 
 //Value Computed by CMake
-alicia_duo_drag_teaching_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_drag_teaching
+alicia_d_descriptions_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_d_descriptions
 
 //Value Computed by CMake
-alicia_duo_driver_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_duo_driver
+alicia_d_drag_teaching_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_d_drag_teaching
 
-//The directory containing a CMake configuration file for alicia_duo_driver.
-alicia_duo_driver_DIR:PATH=/home/zhuyupei/alicia_wa_full/devel/share/alicia_duo_driver/cmake
+//Value Computed by CMake
+alicia_d_drag_teaching_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_d_drag_teaching
+
+//Value Computed by CMake
+alicia_d_driver_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_d_driver
+
+//Value Computed by CMake
+alicia_d_driver_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_d_driver
 
 //Dependencies for the target
-alicia_duo_driver_LIB_DEPENDS:STATIC=general;/opt/ros/noetic/lib/libroscpp.so;general;/usr/lib/x86_64-linux-gnu/libpthread.so;general;/usr/lib/x86_64-linux-gnu/libboost_chrono.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libboost_filesystem.so.1.71.0;general;/opt/ros/noetic/lib/librosconsole.so;general;/opt/ros/noetic/lib/librosconsole_log4cxx.so;general;/opt/ros/noetic/lib/librosconsole_backend_interface.so;general;/usr/lib/x86_64-linux-gnu/liblog4cxx.so;general;/usr/lib/x86_64-linux-gnu/libboost_regex.so.1.71.0;general;/opt/ros/noetic/lib/libxmlrpcpp.so;general;/opt/ros/noetic/lib/libroscpp_serialization.so;general;/opt/ros/noetic/lib/librostime.so;general;/usr/lib/x86_64-linux-gnu/libboost_date_time.so.1.71.0;general;/opt/ros/noetic/lib/libcpp_common.so;general;/usr/lib/x86_64-linux-gnu/libboost_system.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libboost_thread.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libconsole_bridge.so.0.4;general;/opt/ros/noetic/lib/libserial.so;
+alicia_d_hw_interface_LIB_DEPENDS:STATIC=general;/opt/ros/noetic/lib/libcontroller_manager.so;general;/opt/ros/noetic/lib/libclass_loader.so;general;/usr/lib/x86_64-linux-gnu/libPocoFoundation.so;general;/usr/lib/x86_64-linux-gnu/libdl.so;general;/opt/ros/noetic/lib/libroslib.so;general;/opt/ros/noetic/lib/librospack.so;general;/usr/lib/x86_64-linux-gnu/libpython3.8.so;general;/usr/lib/x86_64-linux-gnu/libboost_program_options.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libtinyxml2.so;general;/opt/ros/noetic/lib/libroscpp.so;general;/usr/lib/x86_64-linux-gnu/libpthread.so;general;/usr/lib/x86_64-linux-gnu/libboost_chrono.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libboost_filesystem.so.1.71.0;general;/opt/ros/noetic/lib/librosconsole.so;general;/opt/ros/noetic/lib/librosconsole_log4cxx.so;general;/opt/ros/noetic/lib/librosconsole_backend_interface.so;general;/usr/lib/x86_64-linux-gnu/liblog4cxx.so;general;/usr/lib/x86_64-linux-gnu/libboost_regex.so.1.71.0;general;/opt/ros/noetic/lib/libroscpp_serialization.so;general;/opt/ros/noetic/lib/libxmlrpcpp.so;general;/opt/ros/noetic/lib/librostime.so;general;/usr/lib/x86_64-linux-gnu/libboost_date_time.so.1.71.0;general;/opt/ros/noetic/lib/libcpp_common.so;general;/usr/lib/x86_64-linux-gnu/libboost_system.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libboost_thread.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libconsole_bridge.so.0.4;general;/opt/ros/noetic/lib/libserial.so;
 
 //Value Computed by CMake
-alicia_duo_driver_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_driver
+alicia_d_moveit_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_d_moveit
 
 //Value Computed by CMake
-alicia_duo_grasp_2d_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_duo_grasp_2d
+alicia_d_moveit_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_d_moveit
 
 //Value Computed by CMake
-alicia_duo_grasp_2d_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_grasp_2d
+alicia_d_object_sort_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_d_object_sort
 
 //Value Computed by CMake
-alicia_duo_moveit_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_duo_moveit
-
-//Value Computed by CMake
-alicia_duo_moveit_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_moveit
-
-//Value Computed by CMake
-alicia_duo_ros_control_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_duo_ros_control
-
-//Value Computed by CMake
-alicia_duo_ros_control_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_ros_control
-
-//Dependencies for the target
-alicia_duo_ros_control_serial_comm_helper_LIB_DEPENDS:STATIC=general;/opt/ros/noetic/lib/libcontroller_manager.so;general;/opt/ros/noetic/lib/libclass_loader.so;general;/usr/lib/x86_64-linux-gnu/libPocoFoundation.so;general;/usr/lib/x86_64-linux-gnu/libdl.so;general;/opt/ros/noetic/lib/libroslib.so;general;/opt/ros/noetic/lib/librospack.so;general;/usr/lib/x86_64-linux-gnu/libpython3.8.so;general;/usr/lib/x86_64-linux-gnu/libboost_program_options.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libtinyxml2.so;general;/opt/ros/noetic/lib/libtf.so;general;/opt/ros/noetic/lib/libtf2_ros.so;general;/opt/ros/noetic/lib/libactionlib.so;general;/opt/ros/noetic/lib/libmessage_filters.so;general;/opt/ros/noetic/lib/libtf2.so;general;alicia_duo_driver;general;/opt/ros/noetic/lib/libroscpp.so;general;/usr/lib/x86_64-linux-gnu/libpthread.so;general;/usr/lib/x86_64-linux-gnu/libboost_chrono.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libboost_filesystem.so.1.71.0;general;/opt/ros/noetic/lib/librosconsole.so;general;/opt/ros/noetic/lib/librosconsole_log4cxx.so;general;/opt/ros/noetic/lib/librosconsole_backend_interface.so;general;/usr/lib/x86_64-linux-gnu/liblog4cxx.so;general;/usr/lib/x86_64-linux-gnu/libboost_regex.so.1.71.0;general;/opt/ros/noetic/lib/libxmlrpcpp.so;general;/opt/ros/noetic/lib/libserial.so;general;/opt/ros/noetic/lib/libroscpp_serialization.so;general;/opt/ros/noetic/lib/librostime.so;general;/usr/lib/x86_64-linux-gnu/libboost_date_time.so.1.71.0;general;/opt/ros/noetic/lib/libcpp_common.so;general;/usr/lib/x86_64-linux-gnu/libboost_system.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libboost_thread.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libconsole_bridge.so.0.4;
+alicia_d_object_sort_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_d_object_sort
 
 //Value Computed by CMake
 alicia_flexible_grasp_supervisor_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor
@@ -451,14 +445,14 @@ alicia_flexible_grasp_supervisor_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full
 //Value Computed by CMake
 alicia_flexible_grasp_supervisor_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor
 
-//Dependencies for the target
-alicia_hw_LIB_DEPENDS:STATIC=general;/opt/ros/noetic/lib/libcontroller_manager.so;general;/opt/ros/noetic/lib/libclass_loader.so;general;/usr/lib/x86_64-linux-gnu/libPocoFoundation.so;general;/usr/lib/x86_64-linux-gnu/libdl.so;general;/opt/ros/noetic/lib/libroslib.so;general;/opt/ros/noetic/lib/librospack.so;general;/usr/lib/x86_64-linux-gnu/libpython3.8.so;general;/usr/lib/x86_64-linux-gnu/libboost_program_options.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libtinyxml2.so;general;/opt/ros/noetic/lib/libtf.so;general;/opt/ros/noetic/lib/libtf2_ros.so;general;/opt/ros/noetic/lib/libactionlib.so;general;/opt/ros/noetic/lib/libmessage_filters.so;general;/opt/ros/noetic/lib/libtf2.so;general;alicia_duo_driver;general;/opt/ros/noetic/lib/libroscpp.so;general;/usr/lib/x86_64-linux-gnu/libpthread.so;general;/usr/lib/x86_64-linux-gnu/libboost_chrono.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libboost_filesystem.so.1.71.0;general;/opt/ros/noetic/lib/librosconsole.so;general;/opt/ros/noetic/lib/librosconsole_log4cxx.so;general;/opt/ros/noetic/lib/librosconsole_backend_interface.so;general;/usr/lib/x86_64-linux-gnu/liblog4cxx.so;general;/usr/lib/x86_64-linux-gnu/libboost_regex.so.1.71.0;general;/opt/ros/noetic/lib/libxmlrpcpp.so;general;/opt/ros/noetic/lib/libserial.so;general;/opt/ros/noetic/lib/libroscpp_serialization.so;general;/opt/ros/noetic/lib/librostime.so;general;/usr/lib/x86_64-linux-gnu/libboost_date_time.so.1.71.0;general;/opt/ros/noetic/lib/libcpp_common.so;general;/usr/lib/x86_64-linux-gnu/libboost_system.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libboost_thread.so.1.71.0;general;/usr/lib/x86_64-linux-gnu/libconsole_bridge.so.0.4;
-
 //The directory containing a CMake configuration file for catkin.
 catkin_DIR:PATH=/opt/ros/noetic/share/catkin/cmake
 
 //The directory containing a CMake configuration file for class_loader.
 class_loader_DIR:PATH=/opt/ros/noetic/share/class_loader/cmake
+
+//The directory containing a CMake configuration file for control_msgs.
+control_msgs_DIR:PATH=/opt/ros/noetic/share/control_msgs/cmake
 
 //The directory containing a CMake configuration file for controller_interface.
 controller_interface_DIR:PATH=/opt/ros/noetic/share/controller_interface/cmake
@@ -472,17 +466,20 @@ controller_manager_msgs_DIR:PATH=/opt/ros/noetic/share/controller_manager_msgs/c
 //The directory containing a CMake configuration file for cpp_common.
 cpp_common_DIR:PATH=/opt/ros/noetic/share/cpp_common/cmake
 
-//Value Computed by CMake
-easy_handeye_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_duo_calibration/easy_handeye
+//The directory containing a CMake configuration file for cv_bridge.
+cv_bridge_DIR:PATH=/opt/ros/noetic/share/cv_bridge/cmake
 
 //Value Computed by CMake
-easy_handeye_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_calibration/easy_handeye
+easy_handeye_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/easy_handeye/easy_handeye
 
 //Value Computed by CMake
-easy_handeye_msgs_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_duo_calibration/easy_handeye_msgs
+easy_handeye_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/easy_handeye/easy_handeye
 
 //Value Computed by CMake
-easy_handeye_msgs_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_calibration/easy_handeye_msgs
+easy_handeye_msgs_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/easy_handeye/easy_handeye_msgs
+
+//Value Computed by CMake
+easy_handeye_msgs_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/easy_handeye/easy_handeye_msgs
 
 //The directory containing a CMake configuration file for gencpp.
 gencpp_DIR:PATH=/opt/ros/noetic/share/gencpp/cmake
@@ -554,6 +551,9 @@ gtest_main_LIB_DEPENDS:STATIC=general;gtest;
 //The directory containing a CMake configuration file for hardware_interface.
 hardware_interface_DIR:PATH=/opt/ros/noetic/share/hardware_interface/cmake
 
+//The directory containing a CMake configuration file for image_transport.
+image_transport_DIR:PATH=/opt/ros/noetic/share/image_transport/cmake
+
 //Path to a library.
 lib:FILEPATH=/opt/ros/noetic/lib/librostime.so
 
@@ -606,10 +606,10 @@ rospy_DIR:PATH=/opt/ros/noetic/share/rospy/cmake
 rostime_DIR:PATH=/opt/ros/noetic/share/rostime/cmake
 
 //Value Computed by CMake
-rqt_easy_handeye_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/real-arm/alicia_duo_calibration/rqt_easy_handeye
+rqt_easy_handeye_BINARY_DIR:STATIC=/home/zhuyupei/alicia_wa_full/build/easy_handeye/rqt_easy_handeye
 
 //Value Computed by CMake
-rqt_easy_handeye_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_duo_calibration/rqt_easy_handeye
+rqt_easy_handeye_SOURCE_DIR:STATIC=/home/zhuyupei/alicia_wa_full/src/easy_handeye/rqt_easy_handeye
 
 //The directory containing a CMake configuration file for sensor_msgs.
 sensor_msgs_DIR:PATH=/opt/ros/noetic/share/sensor_msgs/cmake
@@ -634,6 +634,9 @@ tf2_ros_DIR:PATH=/opt/ros/noetic/share/tf2_ros/cmake
 
 //The directory containing a CMake configuration file for tf.
 tf_DIR:PATH=/opt/ros/noetic/share/tf/cmake
+
+//The directory containing a CMake configuration file for trajectory_msgs.
+trajectory_msgs_DIR:PATH=/opt/ros/noetic/share/trajectory_msgs/cmake
 
 //The directory containing a CMake configuration file for xmlrpcpp.
 xmlrpcpp_DIR:PATH=/opt/ros/noetic/share/xmlrpcpp/cmake

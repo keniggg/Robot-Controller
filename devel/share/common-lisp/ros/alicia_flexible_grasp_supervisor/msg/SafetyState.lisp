@@ -22,31 +22,6 @@
     :initarg :emergency_stop
     :type cl:boolean
     :initform cl:nil)
-   (force_over_limit
-    :reader force_over_limit
-    :initarg :force_over_limit
-    :type cl:boolean
-    :initform cl:nil)
-   (robot_timeout
-    :reader robot_timeout
-    :initarg :robot_timeout
-    :type cl:boolean
-    :initform cl:nil)
-   (tactile_timeout
-    :reader tactile_timeout
-    :initarg :tactile_timeout
-    :type cl:boolean
-    :initform cl:nil)
-   (camera_timeout
-    :reader camera_timeout
-    :initarg :camera_timeout
-    :type cl:boolean
-    :initform cl:nil)
-   (planning_failed
-    :reader planning_failed
-    :initarg :planning_failed
-    :type cl:boolean
-    :initform cl:nil)
    (level
     :reader level
     :initarg :level
@@ -82,31 +57,6 @@
   (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:emergency_stop-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:emergency_stop instead.")
   (emergency_stop m))
 
-(cl:ensure-generic-function 'force_over_limit-val :lambda-list '(m))
-(cl:defmethod force_over_limit-val ((m <SafetyState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:force_over_limit-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:force_over_limit instead.")
-  (force_over_limit m))
-
-(cl:ensure-generic-function 'robot_timeout-val :lambda-list '(m))
-(cl:defmethod robot_timeout-val ((m <SafetyState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:robot_timeout-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:robot_timeout instead.")
-  (robot_timeout m))
-
-(cl:ensure-generic-function 'tactile_timeout-val :lambda-list '(m))
-(cl:defmethod tactile_timeout-val ((m <SafetyState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:tactile_timeout-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:tactile_timeout instead.")
-  (tactile_timeout m))
-
-(cl:ensure-generic-function 'camera_timeout-val :lambda-list '(m))
-(cl:defmethod camera_timeout-val ((m <SafetyState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:camera_timeout-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:camera_timeout instead.")
-  (camera_timeout m))
-
-(cl:ensure-generic-function 'planning_failed-val :lambda-list '(m))
-(cl:defmethod planning_failed-val ((m <SafetyState>))
-  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:planning_failed-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:planning_failed instead.")
-  (planning_failed m))
-
 (cl:ensure-generic-function 'level-val :lambda-list '(m))
 (cl:defmethod level-val ((m <SafetyState>))
   (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-msg:level-val is deprecated.  Use alicia_flexible_grasp_supervisor-msg:level instead.")
@@ -121,11 +71,6 @@
   (roslisp-msg-protocol:serialize (cl:slot-value msg 'header) ostream)
   (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'ok) 1 0)) ostream)
   (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'emergency_stop) 1 0)) ostream)
-  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'force_over_limit) 1 0)) ostream)
-  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'robot_timeout) 1 0)) ostream)
-  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'tactile_timeout) 1 0)) ostream)
-  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'camera_timeout) 1 0)) ostream)
-  (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'planning_failed) 1 0)) ostream)
   (cl:let ((__ros_str_len (cl:length (cl:slot-value msg 'level))))
     (cl:write-byte (cl:ldb (cl:byte 8 0) __ros_str_len) ostream)
     (cl:write-byte (cl:ldb (cl:byte 8 8) __ros_str_len) ostream)
@@ -144,11 +89,6 @@
   (roslisp-msg-protocol:deserialize (cl:slot-value msg 'header) istream)
     (cl:setf (cl:slot-value msg 'ok) (cl:not (cl:zerop (cl:read-byte istream))))
     (cl:setf (cl:slot-value msg 'emergency_stop) (cl:not (cl:zerop (cl:read-byte istream))))
-    (cl:setf (cl:slot-value msg 'force_over_limit) (cl:not (cl:zerop (cl:read-byte istream))))
-    (cl:setf (cl:slot-value msg 'robot_timeout) (cl:not (cl:zerop (cl:read-byte istream))))
-    (cl:setf (cl:slot-value msg 'tactile_timeout) (cl:not (cl:zerop (cl:read-byte istream))))
-    (cl:setf (cl:slot-value msg 'camera_timeout) (cl:not (cl:zerop (cl:read-byte istream))))
-    (cl:setf (cl:slot-value msg 'planning_failed) (cl:not (cl:zerop (cl:read-byte istream))))
     (cl:let ((__ros_str_len 0))
       (cl:setf (cl:ldb (cl:byte 8 0) __ros_str_len) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 8) __ros_str_len) (cl:read-byte istream))
@@ -175,24 +115,19 @@
   "alicia_flexible_grasp_supervisor/SafetyState")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql '<SafetyState>)))
   "Returns md5sum for a message object of type '<SafetyState>"
-  "d422c2c3e9933ef7c15274804ca0c2f7")
+  "b5ace411f24918274b9d45871c146d30")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql 'SafetyState)))
   "Returns md5sum for a message object of type 'SafetyState"
-  "d422c2c3e9933ef7c15274804ca0c2f7")
+  "b5ace411f24918274b9d45871c146d30")
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql '<SafetyState>)))
   "Returns full string definition for message of type '<SafetyState>"
-  (cl:format cl:nil "std_msgs/Header header~%bool ok~%bool emergency_stop~%bool force_over_limit~%bool robot_timeout~%bool tactile_timeout~%bool camera_timeout~%bool planning_failed~%string level~%string message~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%~%"))
+  (cl:format cl:nil "std_msgs/Header header~%bool ok~%bool emergency_stop~%string level~%string message~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql 'SafetyState)))
   "Returns full string definition for message of type 'SafetyState"
-  (cl:format cl:nil "std_msgs/Header header~%bool ok~%bool emergency_stop~%bool force_over_limit~%bool robot_timeout~%bool tactile_timeout~%bool camera_timeout~%bool planning_failed~%string level~%string message~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%~%"))
+  (cl:format cl:nil "std_msgs/Header header~%bool ok~%bool emergency_stop~%string level~%string message~%~%================================================================================~%MSG: std_msgs/Header~%# Standard metadata for higher-level stamped data types.~%# This is generally used to communicate timestamped data ~%# in a particular coordinate frame.~%# ~%# sequence ID: consecutively increasing ID ~%uint32 seq~%#Two-integer timestamp that is expressed as:~%# * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')~%# * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')~%# time-handling sugar is provided by the client library~%time stamp~%#Frame this data is associated with~%string frame_id~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:serialization-length ((msg <SafetyState>))
   (cl:+ 0
      (roslisp-msg-protocol:serialization-length (cl:slot-value msg 'header))
-     1
-     1
-     1
-     1
-     1
      1
      1
      4 (cl:length (cl:slot-value msg 'level))
@@ -204,11 +139,6 @@
     (cl:cons ':header (header msg))
     (cl:cons ':ok (ok msg))
     (cl:cons ':emergency_stop (emergency_stop msg))
-    (cl:cons ':force_over_limit (force_over_limit msg))
-    (cl:cons ':robot_timeout (robot_timeout msg))
-    (cl:cons ':tactile_timeout (tactile_timeout msg))
-    (cl:cons ':camera_timeout (camera_timeout msg))
-    (cl:cons ':planning_failed (planning_failed msg))
     (cl:cons ':level (level msg))
     (cl:cons ':message (message msg))
 ))

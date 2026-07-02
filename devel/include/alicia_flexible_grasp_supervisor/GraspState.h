@@ -16,8 +16,6 @@
 #include <ros/message_operations.h>
 
 #include <std_msgs/Header.h>
-#include <geometry_msgs/Pose.h>
-#include <geometry_msgs/Pose.h>
 
 namespace alicia_flexible_grasp_supervisor
 {
@@ -28,27 +26,19 @@ struct GraspState_
 
   GraspState_()
     : header()
-    , state(0)
-    , state_name()
-    , running(false)
+    , state()
+    , stage(0)
+    , active(false)
     , success(false)
-    , message()
-    , current_force(0.0)
-    , target_force(0.0)
-    , object_pose_base()
-    , target_pose()  {
+    , message()  {
     }
   GraspState_(const ContainerAllocator& _alloc)
     : header(_alloc)
-    , state(0)
-    , state_name(_alloc)
-    , running(false)
+    , state(_alloc)
+    , stage(0)
+    , active(false)
     , success(false)
-    , message(_alloc)
-    , current_force(0.0)
-    , target_force(0.0)
-    , object_pose_base(_alloc)
-    , target_pose(_alloc)  {
+    , message(_alloc)  {
   (void)_alloc;
     }
 
@@ -57,14 +47,14 @@ struct GraspState_
    typedef  ::std_msgs::Header_<ContainerAllocator>  _header_type;
   _header_type header;
 
-   typedef uint8_t _state_type;
+   typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _state_type;
   _state_type state;
 
-   typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _state_name_type;
-  _state_name_type state_name;
+   typedef int32_t _stage_type;
+  _stage_type stage;
 
-   typedef uint8_t _running_type;
-  _running_type running;
+   typedef uint8_t _active_type;
+  _active_type active;
 
    typedef uint8_t _success_type;
   _success_type success;
@@ -72,80 +62,8 @@ struct GraspState_
    typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _message_type;
   _message_type message;
 
-   typedef float _current_force_type;
-  _current_force_type current_force;
-
-   typedef float _target_force_type;
-  _target_force_type target_force;
-
-   typedef  ::geometry_msgs::Pose_<ContainerAllocator>  _object_pose_base_type;
-  _object_pose_base_type object_pose_base;
-
-   typedef  ::geometry_msgs::Pose_<ContainerAllocator>  _target_pose_type;
-  _target_pose_type target_pose;
 
 
-
-// reducing the odds to have name collisions with Windows.h 
-#if defined(_WIN32) && defined(IDLE)
-  #undef IDLE
-#endif
-#if defined(_WIN32) && defined(SEARCH_OBJECT)
-  #undef SEARCH_OBJECT
-#endif
-#if defined(_WIN32) && defined(ESTIMATE_POSE)
-  #undef ESTIMATE_POSE
-#endif
-#if defined(_WIN32) && defined(PLAN_PREGRASP)
-  #undef PLAN_PREGRASP
-#endif
-#if defined(_WIN32) && defined(MOVE_PREGRASP)
-  #undef MOVE_PREGRASP
-#endif
-#if defined(_WIN32) && defined(APPROACH_OBJECT)
-  #undef APPROACH_OBJECT
-#endif
-#if defined(_WIN32) && defined(COMPLIANT_CLOSE)
-  #undef COMPLIANT_CLOSE
-#endif
-#if defined(_WIN32) && defined(GRASP_VERIFY)
-  #undef GRASP_VERIFY
-#endif
-#if defined(_WIN32) && defined(LIFT_OBJECT)
-  #undef LIFT_OBJECT
-#endif
-#if defined(_WIN32) && defined(PLACE_OBJECT)
-  #undef PLACE_OBJECT
-#endif
-#if defined(_WIN32) && defined(RELEASE_OBJECT)
-  #undef RELEASE_OBJECT
-#endif
-#if defined(_WIN32) && defined(SUCCESS)
-  #undef SUCCESS
-#endif
-#if defined(_WIN32) && defined(FAILED)
-  #undef FAILED
-#endif
-#if defined(_WIN32) && defined(EMERGENCY_STOP)
-  #undef EMERGENCY_STOP
-#endif
-
-  enum {
-    IDLE = 0u,
-    SEARCH_OBJECT = 1u,
-    ESTIMATE_POSE = 2u,
-    PLAN_PREGRASP = 3u,
-    MOVE_PREGRASP = 4u,
-    APPROACH_OBJECT = 5u,
-    COMPLIANT_CLOSE = 6u,
-    GRASP_VERIFY = 7u,
-    LIFT_OBJECT = 8u,
-    PLACE_OBJECT = 9u,
-    RELEASE_OBJECT = 10u,
-    SUCCESS = 11u,
-    FAILED = 12u,
-    EMERGENCY_STOP = 13u,
-  };
 
 
   typedef boost::shared_ptr< ::alicia_flexible_grasp_supervisor::GraspState_<ContainerAllocator> > Ptr;
@@ -159,34 +77,6 @@ typedef boost::shared_ptr< ::alicia_flexible_grasp_supervisor::GraspState > Gras
 typedef boost::shared_ptr< ::alicia_flexible_grasp_supervisor::GraspState const> GraspStateConstPtr;
 
 // constants requiring out of line definition
-
-   
-
-   
-
-   
-
-   
-
-   
-
-   
-
-   
-
-   
-
-   
-
-   
-
-   
-
-   
-
-   
-
-   
 
 
 
@@ -203,14 +93,10 @@ bool operator==(const ::alicia_flexible_grasp_supervisor::GraspState_<ContainerA
 {
   return lhs.header == rhs.header &&
     lhs.state == rhs.state &&
-    lhs.state_name == rhs.state_name &&
-    lhs.running == rhs.running &&
+    lhs.stage == rhs.stage &&
+    lhs.active == rhs.active &&
     lhs.success == rhs.success &&
-    lhs.message == rhs.message &&
-    lhs.current_force == rhs.current_force &&
-    lhs.target_force == rhs.target_force &&
-    lhs.object_pose_base == rhs.object_pose_base &&
-    lhs.target_pose == rhs.target_pose;
+    lhs.message == rhs.message;
 }
 
 template<typename ContainerAllocator1, typename ContainerAllocator2>
@@ -267,12 +153,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::GraspState_<ContainerAllocato
 {
   static const char* value()
   {
-    return "75215c45032076e51dbd82164d6951cb";
+    return "c85c0a7de717463c53d5cec2b43693e8";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::GraspState_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x75215c45032076e5ULL;
-  static const uint64_t static_value2 = 0x1dbd82164d6951cbULL;
+  static const uint64_t static_value1 = 0xc85c0a7de717463cULL;
+  static const uint64_t static_value2 = 0x53d5cec2b43693e8ULL;
 };
 
 template<class ContainerAllocator>
@@ -292,29 +178,11 @@ struct Definition< ::alicia_flexible_grasp_supervisor::GraspState_<ContainerAllo
   static const char* value()
   {
     return "std_msgs/Header header\n"
-"uint8 IDLE=0\n"
-"uint8 SEARCH_OBJECT=1\n"
-"uint8 ESTIMATE_POSE=2\n"
-"uint8 PLAN_PREGRASP=3\n"
-"uint8 MOVE_PREGRASP=4\n"
-"uint8 APPROACH_OBJECT=5\n"
-"uint8 COMPLIANT_CLOSE=6\n"
-"uint8 GRASP_VERIFY=7\n"
-"uint8 LIFT_OBJECT=8\n"
-"uint8 PLACE_OBJECT=9\n"
-"uint8 RELEASE_OBJECT=10\n"
-"uint8 SUCCESS=11\n"
-"uint8 FAILED=12\n"
-"uint8 EMERGENCY_STOP=13\n"
-"uint8 state\n"
-"string state_name\n"
-"bool running\n"
+"string state\n"
+"int32 stage\n"
+"bool active\n"
 "bool success\n"
 "string message\n"
-"float32 current_force\n"
-"float32 target_force\n"
-"geometry_msgs/Pose object_pose_base\n"
-"geometry_msgs/Pose target_pose\n"
 "\n"
 "================================================================================\n"
 "MSG: std_msgs/Header\n"
@@ -331,28 +199,6 @@ struct Definition< ::alicia_flexible_grasp_supervisor::GraspState_<ContainerAllo
 "time stamp\n"
 "#Frame this data is associated with\n"
 "string frame_id\n"
-"\n"
-"================================================================================\n"
-"MSG: geometry_msgs/Pose\n"
-"# A representation of pose in free space, composed of position and orientation. \n"
-"Point position\n"
-"Quaternion orientation\n"
-"\n"
-"================================================================================\n"
-"MSG: geometry_msgs/Point\n"
-"# This contains the position of a point in free space\n"
-"float64 x\n"
-"float64 y\n"
-"float64 z\n"
-"\n"
-"================================================================================\n"
-"MSG: geometry_msgs/Quaternion\n"
-"# This represents an orientation in free space in quaternion form.\n"
-"\n"
-"float64 x\n"
-"float64 y\n"
-"float64 z\n"
-"float64 w\n"
 ;
   }
 
@@ -373,14 +219,10 @@ namespace serialization
     {
       stream.next(m.header);
       stream.next(m.state);
-      stream.next(m.state_name);
-      stream.next(m.running);
+      stream.next(m.stage);
+      stream.next(m.active);
       stream.next(m.success);
       stream.next(m.message);
-      stream.next(m.current_force);
-      stream.next(m.target_force);
-      stream.next(m.object_pose_base);
-      stream.next(m.target_pose);
     }
 
     ROS_DECLARE_ALLINONE_SERIALIZER
@@ -406,15 +248,15 @@ struct Printer< ::alicia_flexible_grasp_supervisor::GraspState_<ContainerAllocat
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "state: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.state);
+    Printer<std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>>>::stream(s, indent + "  ", v.state);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "state_name: ";
-    Printer<std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>>>::stream(s, indent + "  ", v.state_name);
+    s << indent << "stage: ";
+    Printer<int32_t>::stream(s, indent + "  ", v.stage);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "running: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.running);
+    s << indent << "active: ";
+    Printer<uint8_t>::stream(s, indent + "  ", v.active);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "success: ";
@@ -423,22 +265,6 @@ struct Printer< ::alicia_flexible_grasp_supervisor::GraspState_<ContainerAllocat
       s << std::endl;
     s << indent << "message: ";
     Printer<std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>>>::stream(s, indent + "  ", v.message);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "current_force: ";
-    Printer<float>::stream(s, indent + "  ", v.current_force);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "target_force: ";
-    Printer<float>::stream(s, indent + "  ", v.target_force);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "object_pose_base: ";
-    Printer< ::geometry_msgs::Pose_<ContainerAllocator> >::stream(s, indent + "  ", v.object_pose_base);
-    if (true || !indent.empty())
-      s << std::endl;
-    s << indent << "target_pose: ";
-    Printer< ::geometry_msgs::Pose_<ContainerAllocator> >::stream(s, indent + "  ", v.target_pose);
   }
 };
 

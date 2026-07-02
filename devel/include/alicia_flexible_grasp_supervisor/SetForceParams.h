@@ -40,7 +40,7 @@ template<>
 struct MD5Sum< ::alicia_flexible_grasp_supervisor::SetForceParams > {
   static const char* value()
   {
-    return "5ef41667b487a681d2b7b91f8a1e0b10";
+    return "b8d5117a765e68a9f9eef7b1389ac605";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::SetForceParams&) { return value(); }

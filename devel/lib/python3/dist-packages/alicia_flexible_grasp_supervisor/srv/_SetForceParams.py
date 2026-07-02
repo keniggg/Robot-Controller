@@ -8,14 +8,14 @@ import struct
 
 
 class SetForceParamsRequest(genpy.Message):
-  _md5sum = "53d772afe2b788b2798fa44d853c5379"
+  _md5sum = "f34f576fe7386891eff19b8117ea851c"
   _type = "alicia_flexible_grasp_supervisor/SetForceParamsRequest"
   _has_header = False  # flag to mark the presence of a Header object
-  _full_text = """float32 contact_threshold
-float32 target_force
-float32 max_force
+  _full_text = """float32 contact_threshold_mn
+float32 target_force_mn
+float32 max_force_mn
 """
-  __slots__ = ['contact_threshold','target_force','max_force']
+  __slots__ = ['contact_threshold_mn','target_force_mn','max_force_mn']
   _slot_types = ['float32','float32','float32']
 
   def __init__(self, *args, **kwds):
@@ -26,7 +26,7 @@ float32 max_force
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       contact_threshold,target_force,max_force
+       contact_threshold_mn,target_force_mn,max_force_mn
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -35,16 +35,16 @@ float32 max_force
     if args or kwds:
       super(SetForceParamsRequest, self).__init__(*args, **kwds)
       # message fields cannot be None, assign default values for those that are
-      if self.contact_threshold is None:
-        self.contact_threshold = 0.
-      if self.target_force is None:
-        self.target_force = 0.
-      if self.max_force is None:
-        self.max_force = 0.
+      if self.contact_threshold_mn is None:
+        self.contact_threshold_mn = 0.
+      if self.target_force_mn is None:
+        self.target_force_mn = 0.
+      if self.max_force_mn is None:
+        self.max_force_mn = 0.
     else:
-      self.contact_threshold = 0.
-      self.target_force = 0.
-      self.max_force = 0.
+      self.contact_threshold_mn = 0.
+      self.target_force_mn = 0.
+      self.max_force_mn = 0.
 
   def _get_types(self):
     """
@@ -59,7 +59,7 @@ float32 max_force
     """
     try:
       _x = self
-      buff.write(_get_struct_3f().pack(_x.contact_threshold, _x.target_force, _x.max_force))
+      buff.write(_get_struct_3f().pack(_x.contact_threshold_mn, _x.target_force_mn, _x.max_force_mn))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -75,7 +75,7 @@ float32 max_force
       _x = self
       start = end
       end += 12
-      (_x.contact_threshold, _x.target_force, _x.max_force,) = _get_struct_3f().unpack(str[start:end])
+      (_x.contact_threshold_mn, _x.target_force_mn, _x.max_force_mn,) = _get_struct_3f().unpack(str[start:end])
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -89,7 +89,7 @@ float32 max_force
     """
     try:
       _x = self
-      buff.write(_get_struct_3f().pack(_x.contact_threshold, _x.target_force, _x.max_force))
+      buff.write(_get_struct_3f().pack(_x.contact_threshold_mn, _x.target_force_mn, _x.max_force_mn))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -106,7 +106,7 @@ float32 max_force
       _x = self
       start = end
       end += 12
-      (_x.contact_threshold, _x.target_force, _x.max_force,) = _get_struct_3f().unpack(str[start:end])
+      (_x.contact_threshold_mn, _x.target_force_mn, _x.max_force_mn,) = _get_struct_3f().unpack(str[start:end])
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -131,14 +131,14 @@ import struct
 
 
 class SetForceParamsResponse(genpy.Message):
-  _md5sum = "f6fcb3b1ed8c7743c7fb7d5bcca28513"
+  _md5sum = "937c9679a518e3a18d831e57125ea522"
   _type = "alicia_flexible_grasp_supervisor/SetForceParamsResponse"
   _has_header = False  # flag to mark the presence of a Header object
-  _full_text = """bool ok
+  _full_text = """bool success
 string message
 
 """
-  __slots__ = ['ok','message']
+  __slots__ = ['success','message']
   _slot_types = ['bool','string']
 
   def __init__(self, *args, **kwds):
@@ -149,7 +149,7 @@ string message
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       ok,message
+       success,message
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -158,12 +158,12 @@ string message
     if args or kwds:
       super(SetForceParamsResponse, self).__init__(*args, **kwds)
       # message fields cannot be None, assign default values for those that are
-      if self.ok is None:
-        self.ok = False
+      if self.success is None:
+        self.success = False
       if self.message is None:
         self.message = ''
     else:
-      self.ok = False
+      self.success = False
       self.message = ''
 
   def _get_types(self):
@@ -178,7 +178,7 @@ string message
     :param buff: buffer, ``StringIO``
     """
     try:
-      _x = self.ok
+      _x = self.success
       buff.write(_get_struct_B().pack(_x))
       _x = self.message
       length = len(_x)
@@ -200,8 +200,8 @@ string message
       end = 0
       start = end
       end += 1
-      (self.ok,) = _get_struct_B().unpack(str[start:end])
-      self.ok = bool(self.ok)
+      (self.success,) = _get_struct_B().unpack(str[start:end])
+      self.success = bool(self.success)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -223,7 +223,7 @@ string message
     :param numpy: numpy python module
     """
     try:
-      _x = self.ok
+      _x = self.success
       buff.write(_get_struct_B().pack(_x))
       _x = self.message
       length = len(_x)
@@ -246,8 +246,8 @@ string message
       end = 0
       start = end
       end += 1
-      (self.ok,) = _get_struct_B().unpack(str[start:end])
-      self.ok = bool(self.ok)
+      (self.success,) = _get_struct_B().unpack(str[start:end])
+      self.success = bool(self.success)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -273,6 +273,6 @@ def _get_struct_B():
     return _struct_B
 class SetForceParams(object):
   _type          = 'alicia_flexible_grasp_supervisor/SetForceParams'
-  _md5sum = '5ef41667b487a681d2b7b91f8a1e0b10'
+  _md5sum = 'b8d5117a765e68a9f9eef7b1389ac605'
   _request_class  = SetForceParamsRequest
   _response_class = SetForceParamsResponse

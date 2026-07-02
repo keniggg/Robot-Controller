@@ -1,4 +1,5 @@
 #include "alicia_d_driver/alicia_d_hw_interface.h"
+#include <cmath>
 #include <vector>
 
 namespace alicia_d_driver
@@ -22,6 +23,12 @@ bool AliciaDHardwareInterface::init()
     joint_positions_.resize(num_joints_, 0.0);
     joint_position_commands_.resize(num_joints_, 0.0);
     raw_joint_positions_.resize(num_joints_, 0.0);
+    last_published_positions_.resize(num_joints_, 0.0);
+
+    ros::NodeHandle pnh("~");
+    pnh.param<bool>("publish_only_on_change", publish_only_on_change_, true);
+    pnh.param<bool>("publish_initial_command", publish_initial_command_, false);
+    pnh.param<double>("command_publish_epsilon", command_publish_epsilon_, 1e-5);
 
     // Create a map for efficient name-to-index lookup
     for (size_t i = 0; i < num_joints_; ++i)
@@ -59,6 +66,7 @@ void AliciaDHardwareInterface::jointStateCallback(const sensor_msgs::JointState:
     std::lock_guard<std::mutex> lock(command_mutex_); // Lock to ensure thread safety
 
     // Update joint positions from the received message
+    bool matched_joint = false;
     for (size_t i = 0; i < msg->name.size() && i < msg->position.size(); ++i)
     {
         auto it = joint_name_to_index_map_.find(msg->name[i]);
@@ -69,8 +77,13 @@ void AliciaDHardwareInterface::jointStateCallback(const sensor_msgs::JointState:
             if (index < joint_positions_.size())
             {
                 raw_joint_positions_[index] = msg->position[i];
+                matched_joint = true;
             }
         }
+    }
+    if (matched_joint)
+    {
+        has_received_joint_state_ = true;
     }
 }
 
@@ -80,6 +93,12 @@ void AliciaDHardwareInterface::read(const ros::Time& time, const ros::Duration& 
     std::lock_guard<std::mutex> lock(command_mutex_);
     // Copy raw joint positions to the main positions vector
     joint_positions_ = raw_joint_positions_;
+    if (!is_initialized_ && has_received_joint_state_)
+    {
+        joint_position_commands_ = joint_positions_;
+        last_published_positions_ = joint_position_commands_;
+        is_initialized_ = true;
+    }
 
 }
 
@@ -87,6 +106,34 @@ void AliciaDHardwareInterface::read(const ros::Time& time, const ros::Duration& 
 
 void AliciaDHardwareInterface::write(const ros::Time& time, const ros::Duration& period)
 {
+    if (!is_initialized_ && publish_only_on_change_ && !publish_initial_command_)
+    {
+        return;
+    }
+
+    bool changed = !have_published_command_;
+    for (size_t i = 0; i < joint_position_commands_.size() && i < last_published_positions_.size(); ++i)
+    {
+        if (std::fabs(joint_position_commands_[i] - last_published_positions_[i]) > command_publish_epsilon_)
+        {
+            changed = true;
+            break;
+        }
+    }
+
+    if (publish_only_on_change_ && !changed)
+    {
+        return;
+    }
+
+    if (!publish_initial_command_ && !have_published_command_)
+    {
+        last_published_positions_ = joint_position_commands_;
+        have_published_command_ = true;
+        ROS_INFO("Skipping initial ros_control /joint_commands publish to avoid overriding GUI/direct control.");
+        return;
+    }
+
     sensor_msgs::JointState command_msg;
     command_msg.header.stamp = ros::Time::now();
     command_msg.name = joint_names_;
@@ -94,8 +141,8 @@ void AliciaDHardwareInterface::write(const ros::Time& time, const ros::Duration&
 
     // Publish the joint command message
     joint_command_pub_.publish(command_msg);
+    last_published_positions_ = joint_position_commands_;
+    have_published_command_ = true;
 }
 
 }
-
-

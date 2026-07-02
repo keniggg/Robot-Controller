@@ -1,8 +1,11 @@
 file(REMOVE_RECURSE
+  "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/CartesianJog.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/GraspState.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/ObjectPose.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/SafetyState.h"
+  "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/SetFloat.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/SetForceParams.h"
+  "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/SetJointCommand.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/SetTargetPose.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/StartGrasp.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/StopGrasp.h"

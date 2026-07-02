@@ -26,10 +26,13 @@ class ObjectPose {
       this.confidence = null;
       this.u = null;
       this.v = null;
-      this.depth = null;
-      this.position_camera = null;
+      this.bbox_x = null;
+      this.bbox_y = null;
+      this.bbox_width = null;
+      this.bbox_height = null;
+      this.depth_m = null;
+      this.pose_camera = null;
       this.pose_base = null;
-      this.status = null;
     }
     else {
       if (initObj.hasOwnProperty('header')) {
@@ -68,29 +71,47 @@ class ObjectPose {
       else {
         this.v = 0;
       }
-      if (initObj.hasOwnProperty('depth')) {
-        this.depth = initObj.depth
+      if (initObj.hasOwnProperty('bbox_x')) {
+        this.bbox_x = initObj.bbox_x
       }
       else {
-        this.depth = 0.0;
+        this.bbox_x = 0;
       }
-      if (initObj.hasOwnProperty('position_camera')) {
-        this.position_camera = initObj.position_camera
+      if (initObj.hasOwnProperty('bbox_y')) {
+        this.bbox_y = initObj.bbox_y
       }
       else {
-        this.position_camera = new geometry_msgs.msg.Point();
+        this.bbox_y = 0;
+      }
+      if (initObj.hasOwnProperty('bbox_width')) {
+        this.bbox_width = initObj.bbox_width
+      }
+      else {
+        this.bbox_width = 0;
+      }
+      if (initObj.hasOwnProperty('bbox_height')) {
+        this.bbox_height = initObj.bbox_height
+      }
+      else {
+        this.bbox_height = 0;
+      }
+      if (initObj.hasOwnProperty('depth_m')) {
+        this.depth_m = initObj.depth_m
+      }
+      else {
+        this.depth_m = 0.0;
+      }
+      if (initObj.hasOwnProperty('pose_camera')) {
+        this.pose_camera = initObj.pose_camera
+      }
+      else {
+        this.pose_camera = new geometry_msgs.msg.PoseStamped();
       }
       if (initObj.hasOwnProperty('pose_base')) {
         this.pose_base = initObj.pose_base
       }
       else {
-        this.pose_base = new geometry_msgs.msg.Pose();
-      }
-      if (initObj.hasOwnProperty('status')) {
-        this.status = initObj.status
-      }
-      else {
-        this.status = '';
+        this.pose_base = new geometry_msgs.msg.PoseStamped();
       }
     }
   }
@@ -109,14 +130,20 @@ class ObjectPose {
     bufferOffset = _serializer.uint32(obj.u, buffer, bufferOffset);
     // Serialize message field [v]
     bufferOffset = _serializer.uint32(obj.v, buffer, bufferOffset);
-    // Serialize message field [depth]
-    bufferOffset = _serializer.float32(obj.depth, buffer, bufferOffset);
-    // Serialize message field [position_camera]
-    bufferOffset = geometry_msgs.msg.Point.serialize(obj.position_camera, buffer, bufferOffset);
+    // Serialize message field [bbox_x]
+    bufferOffset = _serializer.uint32(obj.bbox_x, buffer, bufferOffset);
+    // Serialize message field [bbox_y]
+    bufferOffset = _serializer.uint32(obj.bbox_y, buffer, bufferOffset);
+    // Serialize message field [bbox_width]
+    bufferOffset = _serializer.uint32(obj.bbox_width, buffer, bufferOffset);
+    // Serialize message field [bbox_height]
+    bufferOffset = _serializer.uint32(obj.bbox_height, buffer, bufferOffset);
+    // Serialize message field [depth_m]
+    bufferOffset = _serializer.float32(obj.depth_m, buffer, bufferOffset);
+    // Serialize message field [pose_camera]
+    bufferOffset = geometry_msgs.msg.PoseStamped.serialize(obj.pose_camera, buffer, bufferOffset);
     // Serialize message field [pose_base]
-    bufferOffset = geometry_msgs.msg.Pose.serialize(obj.pose_base, buffer, bufferOffset);
-    // Serialize message field [status]
-    bufferOffset = _serializer.string(obj.status, buffer, bufferOffset);
+    bufferOffset = geometry_msgs.msg.PoseStamped.serialize(obj.pose_base, buffer, bufferOffset);
     return bufferOffset;
   }
 
@@ -136,14 +163,20 @@ class ObjectPose {
     data.u = _deserializer.uint32(buffer, bufferOffset);
     // Deserialize message field [v]
     data.v = _deserializer.uint32(buffer, bufferOffset);
-    // Deserialize message field [depth]
-    data.depth = _deserializer.float32(buffer, bufferOffset);
-    // Deserialize message field [position_camera]
-    data.position_camera = geometry_msgs.msg.Point.deserialize(buffer, bufferOffset);
+    // Deserialize message field [bbox_x]
+    data.bbox_x = _deserializer.uint32(buffer, bufferOffset);
+    // Deserialize message field [bbox_y]
+    data.bbox_y = _deserializer.uint32(buffer, bufferOffset);
+    // Deserialize message field [bbox_width]
+    data.bbox_width = _deserializer.uint32(buffer, bufferOffset);
+    // Deserialize message field [bbox_height]
+    data.bbox_height = _deserializer.uint32(buffer, bufferOffset);
+    // Deserialize message field [depth_m]
+    data.depth_m = _deserializer.float32(buffer, bufferOffset);
+    // Deserialize message field [pose_camera]
+    data.pose_camera = geometry_msgs.msg.PoseStamped.deserialize(buffer, bufferOffset);
     // Deserialize message field [pose_base]
-    data.pose_base = geometry_msgs.msg.Pose.deserialize(buffer, bufferOffset);
-    // Deserialize message field [status]
-    data.status = _deserializer.string(buffer, bufferOffset);
+    data.pose_base = geometry_msgs.msg.PoseStamped.deserialize(buffer, bufferOffset);
     return data;
   }
 
@@ -151,8 +184,9 @@ class ObjectPose {
     let length = 0;
     length += std_msgs.msg.Header.getMessageSize(object.header);
     length += _getByteLength(object.label);
-    length += _getByteLength(object.status);
-    return length + 105;
+    length += geometry_msgs.msg.PoseStamped.getMessageSize(object.pose_camera);
+    length += geometry_msgs.msg.PoseStamped.getMessageSize(object.pose_base);
+    return length + 37;
   }
 
   static datatype() {
@@ -162,7 +196,7 @@ class ObjectPose {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return '613afc19135cb8f109a247ba2e6628c9';
+    return '2d3731316703d38acb9f83ae0dd46e90';
   }
 
   static messageDefinition() {
@@ -174,10 +208,13 @@ class ObjectPose {
     float32 confidence
     uint32 u
     uint32 v
-    float32 depth
-    geometry_msgs/Point position_camera
-    geometry_msgs/Pose pose_base
-    string status
+    uint32 bbox_x
+    uint32 bbox_y
+    uint32 bbox_width
+    uint32 bbox_height
+    float32 depth_m
+    geometry_msgs/PoseStamped pose_camera
+    geometry_msgs/PoseStamped pose_base
     
     ================================================================================
     MSG: std_msgs/Header
@@ -196,17 +233,23 @@ class ObjectPose {
     string frame_id
     
     ================================================================================
-    MSG: geometry_msgs/Point
-    # This contains the position of a point in free space
-    float64 x
-    float64 y
-    float64 z
+    MSG: geometry_msgs/PoseStamped
+    # A Pose with reference coordinate frame and timestamp
+    Header header
+    Pose pose
     
     ================================================================================
     MSG: geometry_msgs/Pose
     # A representation of pose in free space, composed of position and orientation. 
     Point position
     Quaternion orientation
+    
+    ================================================================================
+    MSG: geometry_msgs/Point
+    # This contains the position of a point in free space
+    float64 x
+    float64 y
+    float64 z
     
     ================================================================================
     MSG: geometry_msgs/Quaternion
@@ -268,32 +311,53 @@ class ObjectPose {
       resolved.v = 0
     }
 
-    if (msg.depth !== undefined) {
-      resolved.depth = msg.depth;
+    if (msg.bbox_x !== undefined) {
+      resolved.bbox_x = msg.bbox_x;
     }
     else {
-      resolved.depth = 0.0
+      resolved.bbox_x = 0
     }
 
-    if (msg.position_camera !== undefined) {
-      resolved.position_camera = geometry_msgs.msg.Point.Resolve(msg.position_camera)
+    if (msg.bbox_y !== undefined) {
+      resolved.bbox_y = msg.bbox_y;
     }
     else {
-      resolved.position_camera = new geometry_msgs.msg.Point()
+      resolved.bbox_y = 0
+    }
+
+    if (msg.bbox_width !== undefined) {
+      resolved.bbox_width = msg.bbox_width;
+    }
+    else {
+      resolved.bbox_width = 0
+    }
+
+    if (msg.bbox_height !== undefined) {
+      resolved.bbox_height = msg.bbox_height;
+    }
+    else {
+      resolved.bbox_height = 0
+    }
+
+    if (msg.depth_m !== undefined) {
+      resolved.depth_m = msg.depth_m;
+    }
+    else {
+      resolved.depth_m = 0.0
+    }
+
+    if (msg.pose_camera !== undefined) {
+      resolved.pose_camera = geometry_msgs.msg.PoseStamped.Resolve(msg.pose_camera)
+    }
+    else {
+      resolved.pose_camera = new geometry_msgs.msg.PoseStamped()
     }
 
     if (msg.pose_base !== undefined) {
-      resolved.pose_base = geometry_msgs.msg.Pose.Resolve(msg.pose_base)
+      resolved.pose_base = geometry_msgs.msg.PoseStamped.Resolve(msg.pose_base)
     }
     else {
-      resolved.pose_base = new geometry_msgs.msg.Pose()
-    }
-
-    if (msg.status !== undefined) {
-      resolved.status = msg.status;
-    }
-    else {
-      resolved.status = ''
+      resolved.pose_base = new geometry_msgs.msg.PoseStamped()
     }
 
     return resolved;

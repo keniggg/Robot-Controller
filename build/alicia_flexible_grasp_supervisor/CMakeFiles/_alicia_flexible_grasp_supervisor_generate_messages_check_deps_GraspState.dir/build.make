@@ -54,7 +54,7 @@ CMAKE_BINARY_DIR = /home/zhuyupei/alicia_wa_full/build
 include alicia_flexible_grasp_supervisor/CMakeFiles/_alicia_flexible_grasp_supervisor_generate_messages_check_deps_GraspState.dir/progress.make
 
 alicia_flexible_grasp_supervisor/CMakeFiles/_alicia_flexible_grasp_supervisor_generate_messages_check_deps_GraspState:
-	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/genmsg/cmake/../../../lib/genmsg/genmsg_check_deps.py alicia_flexible_grasp_supervisor /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg std_msgs/Header:geometry_msgs/Quaternion:geometry_msgs/Point:geometry_msgs/Pose
+	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/genmsg/cmake/../../../lib/genmsg/genmsg_check_deps.py alicia_flexible_grasp_supervisor /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg std_msgs/Header
 
 _alicia_flexible_grasp_supervisor_generate_messages_check_deps_GraspState: alicia_flexible_grasp_supervisor/CMakeFiles/_alicia_flexible_grasp_supervisor_generate_messages_check_deps_GraspState
 _alicia_flexible_grasp_supervisor_generate_messages_check_deps_GraspState: alicia_flexible_grasp_supervisor/CMakeFiles/_alicia_flexible_grasp_supervisor_generate_messages_check_deps_GraspState.dir/build.make

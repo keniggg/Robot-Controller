@@ -8,14 +8,13 @@ import struct
 
 
 class StartGraspRequest(genpy.Message):
-  _md5sum = "a8ddc0b68e4582dfda5c94d85249f9a8"
+  _md5sum = "371e747b927788fd0b8812d474ff9a56"
   _type = "alicia_flexible_grasp_supervisor/StartGraspRequest"
   _has_header = False  # flag to mark the presence of a Header object
-  _full_text = """bool use_latest_object
-string object_label
+  _full_text = """bool execute
 """
-  __slots__ = ['use_latest_object','object_label']
-  _slot_types = ['bool','string']
+  __slots__ = ['execute']
+  _slot_types = ['bool']
 
   def __init__(self, *args, **kwds):
     """
@@ -25,7 +24,7 @@ string object_label
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       use_latest_object,object_label
+       execute
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -34,13 +33,10 @@ string object_label
     if args or kwds:
       super(StartGraspRequest, self).__init__(*args, **kwds)
       # message fields cannot be None, assign default values for those that are
-      if self.use_latest_object is None:
-        self.use_latest_object = False
-      if self.object_label is None:
-        self.object_label = ''
+      if self.execute is None:
+        self.execute = False
     else:
-      self.use_latest_object = False
-      self.object_label = ''
+      self.execute = False
 
   def _get_types(self):
     """
@@ -54,14 +50,8 @@ string object_label
     :param buff: buffer, ``StringIO``
     """
     try:
-      _x = self.use_latest_object
+      _x = self.execute
       buff.write(_get_struct_B().pack(_x))
-      _x = self.object_label
-      length = len(_x)
-      if python3 or type(_x) == unicode:
-        _x = _x.encode('utf-8')
-        length = len(_x)
-      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -76,17 +66,8 @@ string object_label
       end = 0
       start = end
       end += 1
-      (self.use_latest_object,) = _get_struct_B().unpack(str[start:end])
-      self.use_latest_object = bool(self.use_latest_object)
-      start = end
-      end += 4
-      (length,) = _struct_I.unpack(str[start:end])
-      start = end
-      end += length
-      if python3:
-        self.object_label = str[start:end].decode('utf-8', 'rosmsg')
-      else:
-        self.object_label = str[start:end]
+      (self.execute,) = _get_struct_B().unpack(str[start:end])
+      self.execute = bool(self.execute)
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -99,14 +80,8 @@ string object_label
     :param numpy: numpy python module
     """
     try:
-      _x = self.use_latest_object
+      _x = self.execute
       buff.write(_get_struct_B().pack(_x))
-      _x = self.object_label
-      length = len(_x)
-      if python3 or type(_x) == unicode:
-        _x = _x.encode('utf-8')
-        length = len(_x)
-      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -122,17 +97,8 @@ string object_label
       end = 0
       start = end
       end += 1
-      (self.use_latest_object,) = _get_struct_B().unpack(str[start:end])
-      self.use_latest_object = bool(self.use_latest_object)
-      start = end
-      end += 4
-      (length,) = _struct_I.unpack(str[start:end])
-      start = end
-      end += length
-      if python3:
-        self.object_label = str[start:end].decode('utf-8', 'rosmsg')
-      else:
-        self.object_label = str[start:end]
+      (self.execute,) = _get_struct_B().unpack(str[start:end])
+      self.execute = bool(self.execute)
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -157,14 +123,14 @@ import struct
 
 
 class StartGraspResponse(genpy.Message):
-  _md5sum = "5273b27f74d9c0fd6d8a58d787fc7be7"
+  _md5sum = "937c9679a518e3a18d831e57125ea522"
   _type = "alicia_flexible_grasp_supervisor/StartGraspResponse"
   _has_header = False  # flag to mark the presence of a Header object
-  _full_text = """bool accepted
+  _full_text = """bool success
 string message
 
 """
-  __slots__ = ['accepted','message']
+  __slots__ = ['success','message']
   _slot_types = ['bool','string']
 
   def __init__(self, *args, **kwds):
@@ -175,7 +141,7 @@ string message
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       accepted,message
+       success,message
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -184,12 +150,12 @@ string message
     if args or kwds:
       super(StartGraspResponse, self).__init__(*args, **kwds)
       # message fields cannot be None, assign default values for those that are
-      if self.accepted is None:
-        self.accepted = False
+      if self.success is None:
+        self.success = False
       if self.message is None:
         self.message = ''
     else:
-      self.accepted = False
+      self.success = False
       self.message = ''
 
   def _get_types(self):
@@ -204,7 +170,7 @@ string message
     :param buff: buffer, ``StringIO``
     """
     try:
-      _x = self.accepted
+      _x = self.success
       buff.write(_get_struct_B().pack(_x))
       _x = self.message
       length = len(_x)
@@ -226,8 +192,8 @@ string message
       end = 0
       start = end
       end += 1
-      (self.accepted,) = _get_struct_B().unpack(str[start:end])
-      self.accepted = bool(self.accepted)
+      (self.success,) = _get_struct_B().unpack(str[start:end])
+      self.success = bool(self.success)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -249,7 +215,7 @@ string message
     :param numpy: numpy python module
     """
     try:
-      _x = self.accepted
+      _x = self.success
       buff.write(_get_struct_B().pack(_x))
       _x = self.message
       length = len(_x)
@@ -272,8 +238,8 @@ string message
       end = 0
       start = end
       end += 1
-      (self.accepted,) = _get_struct_B().unpack(str[start:end])
-      self.accepted = bool(self.accepted)
+      (self.success,) = _get_struct_B().unpack(str[start:end])
+      self.success = bool(self.success)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -299,6 +265,6 @@ def _get_struct_B():
     return _struct_B
 class StartGrasp(object):
   _type          = 'alicia_flexible_grasp_supervisor/StartGrasp'
-  _md5sum = '444b03b3725d049d9ce9ac0a3dfa2c54'
+  _md5sum = 'c1e3198b68b143183a952c85cd9f744a'
   _request_class  = StartGraspRequest
   _response_class = StartGraspResponse

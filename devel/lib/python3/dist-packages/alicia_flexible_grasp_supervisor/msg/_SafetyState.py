@@ -9,17 +9,12 @@ import struct
 import std_msgs.msg
 
 class SafetyState(genpy.Message):
-  _md5sum = "d422c2c3e9933ef7c15274804ca0c2f7"
+  _md5sum = "b5ace411f24918274b9d45871c146d30"
   _type = "alicia_flexible_grasp_supervisor/SafetyState"
   _has_header = True  # flag to mark the presence of a Header object
   _full_text = """std_msgs/Header header
 bool ok
 bool emergency_stop
-bool force_over_limit
-bool robot_timeout
-bool tactile_timeout
-bool camera_timeout
-bool planning_failed
 string level
 string message
 
@@ -39,8 +34,8 @@ time stamp
 #Frame this data is associated with
 string frame_id
 """
-  __slots__ = ['header','ok','emergency_stop','force_over_limit','robot_timeout','tactile_timeout','camera_timeout','planning_failed','level','message']
-  _slot_types = ['std_msgs/Header','bool','bool','bool','bool','bool','bool','bool','string','string']
+  __slots__ = ['header','ok','emergency_stop','level','message']
+  _slot_types = ['std_msgs/Header','bool','bool','string','string']
 
   def __init__(self, *args, **kwds):
     """
@@ -50,7 +45,7 @@ string frame_id
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       header,ok,emergency_stop,force_over_limit,robot_timeout,tactile_timeout,camera_timeout,planning_failed,level,message
+       header,ok,emergency_stop,level,message
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -65,16 +60,6 @@ string frame_id
         self.ok = False
       if self.emergency_stop is None:
         self.emergency_stop = False
-      if self.force_over_limit is None:
-        self.force_over_limit = False
-      if self.robot_timeout is None:
-        self.robot_timeout = False
-      if self.tactile_timeout is None:
-        self.tactile_timeout = False
-      if self.camera_timeout is None:
-        self.camera_timeout = False
-      if self.planning_failed is None:
-        self.planning_failed = False
       if self.level is None:
         self.level = ''
       if self.message is None:
@@ -83,11 +68,6 @@ string frame_id
       self.header = std_msgs.msg.Header()
       self.ok = False
       self.emergency_stop = False
-      self.force_over_limit = False
-      self.robot_timeout = False
-      self.tactile_timeout = False
-      self.camera_timeout = False
-      self.planning_failed = False
       self.level = ''
       self.message = ''
 
@@ -112,7 +92,7 @@ string frame_id
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self
-      buff.write(_get_struct_7B().pack(_x.ok, _x.emergency_stop, _x.force_over_limit, _x.robot_timeout, _x.tactile_timeout, _x.camera_timeout, _x.planning_failed))
+      buff.write(_get_struct_2B().pack(_x.ok, _x.emergency_stop))
       _x = self.level
       length = len(_x)
       if python3 or type(_x) == unicode:
@@ -154,15 +134,10 @@ string frame_id
         self.header.frame_id = str[start:end]
       _x = self
       start = end
-      end += 7
-      (_x.ok, _x.emergency_stop, _x.force_over_limit, _x.robot_timeout, _x.tactile_timeout, _x.camera_timeout, _x.planning_failed,) = _get_struct_7B().unpack(str[start:end])
+      end += 2
+      (_x.ok, _x.emergency_stop,) = _get_struct_2B().unpack(str[start:end])
       self.ok = bool(self.ok)
       self.emergency_stop = bool(self.emergency_stop)
-      self.force_over_limit = bool(self.force_over_limit)
-      self.robot_timeout = bool(self.robot_timeout)
-      self.tactile_timeout = bool(self.tactile_timeout)
-      self.camera_timeout = bool(self.camera_timeout)
-      self.planning_failed = bool(self.planning_failed)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -202,7 +177,7 @@ string frame_id
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self
-      buff.write(_get_struct_7B().pack(_x.ok, _x.emergency_stop, _x.force_over_limit, _x.robot_timeout, _x.tactile_timeout, _x.camera_timeout, _x.planning_failed))
+      buff.write(_get_struct_2B().pack(_x.ok, _x.emergency_stop))
       _x = self.level
       length = len(_x)
       if python3 or type(_x) == unicode:
@@ -245,15 +220,10 @@ string frame_id
         self.header.frame_id = str[start:end]
       _x = self
       start = end
-      end += 7
-      (_x.ok, _x.emergency_stop, _x.force_over_limit, _x.robot_timeout, _x.tactile_timeout, _x.camera_timeout, _x.planning_failed,) = _get_struct_7B().unpack(str[start:end])
+      end += 2
+      (_x.ok, _x.emergency_stop,) = _get_struct_2B().unpack(str[start:end])
       self.ok = bool(self.ok)
       self.emergency_stop = bool(self.emergency_stop)
-      self.force_over_limit = bool(self.force_over_limit)
-      self.robot_timeout = bool(self.robot_timeout)
-      self.tactile_timeout = bool(self.tactile_timeout)
-      self.camera_timeout = bool(self.camera_timeout)
-      self.planning_failed = bool(self.planning_failed)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -280,15 +250,15 @@ _struct_I = genpy.struct_I
 def _get_struct_I():
     global _struct_I
     return _struct_I
+_struct_2B = None
+def _get_struct_2B():
+    global _struct_2B
+    if _struct_2B is None:
+        _struct_2B = struct.Struct("<2B")
+    return _struct_2B
 _struct_3I = None
 def _get_struct_3I():
     global _struct_3I
     if _struct_3I is None:
         _struct_3I = struct.Struct("<3I")
     return _struct_3I
-_struct_7B = None
-def _get_struct_7B():
-    global _struct_7B
-    if _struct_7B is None:
-        _struct_7B = struct.Struct("<7B")
-    return _struct_7B

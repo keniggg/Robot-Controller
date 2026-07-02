@@ -28,27 +28,27 @@ struct TactileState_
 
   TactileState_()
     : header()
-    , skin1()
-    , skin2()
-    , total_grip_force(0.0)
-    , force_diff(0.0)
+    , left()
+    , right()
+    , total_grip_force_mn(0.0)
+    , force_diff_mn(0.0)
     , left_contact(false)
     , right_contact(false)
     , object_grasped(false)
     , slip_detected(false)
-    , status()  {
+    , valid(false)  {
     }
   TactileState_(const ContainerAllocator& _alloc)
     : header(_alloc)
-    , skin1(_alloc)
-    , skin2(_alloc)
-    , total_grip_force(0.0)
-    , force_diff(0.0)
+    , left(_alloc)
+    , right(_alloc)
+    , total_grip_force_mn(0.0)
+    , force_diff_mn(0.0)
     , left_contact(false)
     , right_contact(false)
     , object_grasped(false)
     , slip_detected(false)
-    , status(_alloc)  {
+    , valid(false)  {
   (void)_alloc;
     }
 
@@ -57,17 +57,17 @@ struct TactileState_
    typedef  ::std_msgs::Header_<ContainerAllocator>  _header_type;
   _header_type header;
 
-   typedef  ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator>  _skin1_type;
-  _skin1_type skin1;
+   typedef  ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator>  _left_type;
+  _left_type left;
 
-   typedef  ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator>  _skin2_type;
-  _skin2_type skin2;
+   typedef  ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator>  _right_type;
+  _right_type right;
 
-   typedef float _total_grip_force_type;
-  _total_grip_force_type total_grip_force;
+   typedef float _total_grip_force_mn_type;
+  _total_grip_force_mn_type total_grip_force_mn;
 
-   typedef float _force_diff_type;
-  _force_diff_type force_diff;
+   typedef float _force_diff_mn_type;
+  _force_diff_mn_type force_diff_mn;
 
    typedef uint8_t _left_contact_type;
   _left_contact_type left_contact;
@@ -81,8 +81,8 @@ struct TactileState_
    typedef uint8_t _slip_detected_type;
   _slip_detected_type slip_detected;
 
-   typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _status_type;
-  _status_type status;
+   typedef uint8_t _valid_type;
+  _valid_type valid;
 
 
 
@@ -114,15 +114,15 @@ template<typename ContainerAllocator1, typename ContainerAllocator2>
 bool operator==(const ::alicia_flexible_grasp_supervisor::TactileState_<ContainerAllocator1> & lhs, const ::alicia_flexible_grasp_supervisor::TactileState_<ContainerAllocator2> & rhs)
 {
   return lhs.header == rhs.header &&
-    lhs.skin1 == rhs.skin1 &&
-    lhs.skin2 == rhs.skin2 &&
-    lhs.total_grip_force == rhs.total_grip_force &&
-    lhs.force_diff == rhs.force_diff &&
+    lhs.left == rhs.left &&
+    lhs.right == rhs.right &&
+    lhs.total_grip_force_mn == rhs.total_grip_force_mn &&
+    lhs.force_diff_mn == rhs.force_diff_mn &&
     lhs.left_contact == rhs.left_contact &&
     lhs.right_contact == rhs.right_contact &&
     lhs.object_grasped == rhs.object_grasped &&
     lhs.slip_detected == rhs.slip_detected &&
-    lhs.status == rhs.status;
+    lhs.valid == rhs.valid;
 }
 
 template<typename ContainerAllocator1, typename ContainerAllocator2>
@@ -179,12 +179,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::TactileState_<ContainerAlloca
 {
   static const char* value()
   {
-    return "9b76704935dbe875f8fc5a941f64277a";
+    return "5df6a8c43bd865ec0ec8d2f74fe1aa66";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::TactileState_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x9b76704935dbe875ULL;
-  static const uint64_t static_value2 = 0xf8fc5a941f64277aULL;
+  static const uint64_t static_value1 = 0x5df6a8c43bd865ecULL;
+  static const uint64_t static_value2 = 0x0ec8d2f74fe1aa66ULL;
 };
 
 template<class ContainerAllocator>
@@ -204,15 +204,15 @@ struct Definition< ::alicia_flexible_grasp_supervisor::TactileState_<ContainerAl
   static const char* value()
   {
     return "std_msgs/Header header\n"
-"alicia_flexible_grasp_supervisor/TactileFrame skin1\n"
-"alicia_flexible_grasp_supervisor/TactileFrame skin2\n"
-"float32 total_grip_force\n"
-"float32 force_diff\n"
+"alicia_flexible_grasp_supervisor/TactileFrame left\n"
+"alicia_flexible_grasp_supervisor/TactileFrame right\n"
+"float32 total_grip_force_mn\n"
+"float32 force_diff_mn\n"
 "bool left_contact\n"
 "bool right_contact\n"
 "bool object_grasped\n"
 "bool slip_detected\n"
-"string status\n"
+"bool valid\n"
 "\n"
 "================================================================================\n"
 "MSG: std_msgs/Header\n"
@@ -233,18 +233,17 @@ struct Definition< ::alicia_flexible_grasp_supervisor::TactileState_<ContainerAl
 "================================================================================\n"
 "MSG: alicia_flexible_grasp_supervisor/TactileFrame\n"
 "std_msgs/Header header\n"
-"uint8 skin_id\n"
-"uint16 rows\n"
-"uint16 cols\n"
+"string skin_name\n"
 "float32[] values\n"
-"float32 total_force\n"
-"float32 max_force\n"
-"uint16 max_index\n"
+"uint32 rows\n"
+"uint32 cols\n"
+"float32 total_force_mn\n"
+"float32 max_force_mn\n"
+"uint32 max_index\n"
 "float32 center_x\n"
 "float32 center_y\n"
 "bool contact\n"
 "bool valid\n"
-"string status\n"
 ;
   }
 
@@ -264,15 +263,15 @@ namespace serialization
     template<typename Stream, typename T> inline static void allInOne(Stream& stream, T m)
     {
       stream.next(m.header);
-      stream.next(m.skin1);
-      stream.next(m.skin2);
-      stream.next(m.total_grip_force);
-      stream.next(m.force_diff);
+      stream.next(m.left);
+      stream.next(m.right);
+      stream.next(m.total_grip_force_mn);
+      stream.next(m.force_diff_mn);
       stream.next(m.left_contact);
       stream.next(m.right_contact);
       stream.next(m.object_grasped);
       stream.next(m.slip_detected);
-      stream.next(m.status);
+      stream.next(m.valid);
     }
 
     ROS_DECLARE_ALLINONE_SERIALIZER
@@ -297,20 +296,20 @@ struct Printer< ::alicia_flexible_grasp_supervisor::TactileState_<ContainerAlloc
     Printer< ::std_msgs::Header_<ContainerAllocator> >::stream(s, indent + "  ", v.header);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "skin1: ";
-    Printer< ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator> >::stream(s, indent + "  ", v.skin1);
+    s << indent << "left: ";
+    Printer< ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator> >::stream(s, indent + "  ", v.left);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "skin2: ";
-    Printer< ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator> >::stream(s, indent + "  ", v.skin2);
+    s << indent << "right: ";
+    Printer< ::alicia_flexible_grasp_supervisor::TactileFrame_<ContainerAllocator> >::stream(s, indent + "  ", v.right);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "total_grip_force: ";
-    Printer<float>::stream(s, indent + "  ", v.total_grip_force);
+    s << indent << "total_grip_force_mn: ";
+    Printer<float>::stream(s, indent + "  ", v.total_grip_force_mn);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "force_diff: ";
-    Printer<float>::stream(s, indent + "  ", v.force_diff);
+    s << indent << "force_diff_mn: ";
+    Printer<float>::stream(s, indent + "  ", v.force_diff_mn);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "left_contact: ";
@@ -329,8 +328,8 @@ struct Printer< ::alicia_flexible_grasp_supervisor::TactileState_<ContainerAlloc
     Printer<uint8_t>::stream(s, indent + "  ", v.slip_detected);
     if (true || !indent.empty())
       s << std::endl;
-    s << indent << "status: ";
-    Printer<std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>>>::stream(s, indent + "  ", v.status);
+    s << indent << "valid: ";
+    Printer<uint8_t>::stream(s, indent + "  ", v.valid);
   }
 };
 

@@ -21,31 +21,22 @@ class StartGraspRequest {
   constructor(initObj={}) {
     if (initObj === null) {
       // initObj === null is a special case for deserialization where we don't initialize fields
-      this.use_latest_object = null;
-      this.object_label = null;
+      this.execute = null;
     }
     else {
-      if (initObj.hasOwnProperty('use_latest_object')) {
-        this.use_latest_object = initObj.use_latest_object
+      if (initObj.hasOwnProperty('execute')) {
+        this.execute = initObj.execute
       }
       else {
-        this.use_latest_object = false;
-      }
-      if (initObj.hasOwnProperty('object_label')) {
-        this.object_label = initObj.object_label
-      }
-      else {
-        this.object_label = '';
+        this.execute = false;
       }
     }
   }
 
   static serialize(obj, buffer, bufferOffset) {
     // Serializes a message object of type StartGraspRequest
-    // Serialize message field [use_latest_object]
-    bufferOffset = _serializer.bool(obj.use_latest_object, buffer, bufferOffset);
-    // Serialize message field [object_label]
-    bufferOffset = _serializer.string(obj.object_label, buffer, bufferOffset);
+    // Serialize message field [execute]
+    bufferOffset = _serializer.bool(obj.execute, buffer, bufferOffset);
     return bufferOffset;
   }
 
@@ -53,17 +44,13 @@ class StartGraspRequest {
     //deserializes a message object of type StartGraspRequest
     let len;
     let data = new StartGraspRequest(null);
-    // Deserialize message field [use_latest_object]
-    data.use_latest_object = _deserializer.bool(buffer, bufferOffset);
-    // Deserialize message field [object_label]
-    data.object_label = _deserializer.string(buffer, bufferOffset);
+    // Deserialize message field [execute]
+    data.execute = _deserializer.bool(buffer, bufferOffset);
     return data;
   }
 
   static getMessageSize(object) {
-    let length = 0;
-    length += _getByteLength(object.object_label);
-    return length + 5;
+    return 1;
   }
 
   static datatype() {
@@ -73,14 +60,13 @@ class StartGraspRequest {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return 'a8ddc0b68e4582dfda5c94d85249f9a8';
+    return '371e747b927788fd0b8812d474ff9a56';
   }
 
   static messageDefinition() {
     // Returns full string definition for message
     return `
-    bool use_latest_object
-    string object_label
+    bool execute
     
     `;
   }
@@ -91,18 +77,11 @@ class StartGraspRequest {
       msg = {};
     }
     const resolved = new StartGraspRequest(null);
-    if (msg.use_latest_object !== undefined) {
-      resolved.use_latest_object = msg.use_latest_object;
+    if (msg.execute !== undefined) {
+      resolved.execute = msg.execute;
     }
     else {
-      resolved.use_latest_object = false
-    }
-
-    if (msg.object_label !== undefined) {
-      resolved.object_label = msg.object_label;
-    }
-    else {
-      resolved.object_label = ''
+      resolved.execute = false
     }
 
     return resolved;
@@ -113,15 +92,15 @@ class StartGraspResponse {
   constructor(initObj={}) {
     if (initObj === null) {
       // initObj === null is a special case for deserialization where we don't initialize fields
-      this.accepted = null;
+      this.success = null;
       this.message = null;
     }
     else {
-      if (initObj.hasOwnProperty('accepted')) {
-        this.accepted = initObj.accepted
+      if (initObj.hasOwnProperty('success')) {
+        this.success = initObj.success
       }
       else {
-        this.accepted = false;
+        this.success = false;
       }
       if (initObj.hasOwnProperty('message')) {
         this.message = initObj.message
@@ -134,8 +113,8 @@ class StartGraspResponse {
 
   static serialize(obj, buffer, bufferOffset) {
     // Serializes a message object of type StartGraspResponse
-    // Serialize message field [accepted]
-    bufferOffset = _serializer.bool(obj.accepted, buffer, bufferOffset);
+    // Serialize message field [success]
+    bufferOffset = _serializer.bool(obj.success, buffer, bufferOffset);
     // Serialize message field [message]
     bufferOffset = _serializer.string(obj.message, buffer, bufferOffset);
     return bufferOffset;
@@ -145,8 +124,8 @@ class StartGraspResponse {
     //deserializes a message object of type StartGraspResponse
     let len;
     let data = new StartGraspResponse(null);
-    // Deserialize message field [accepted]
-    data.accepted = _deserializer.bool(buffer, bufferOffset);
+    // Deserialize message field [success]
+    data.success = _deserializer.bool(buffer, bufferOffset);
     // Deserialize message field [message]
     data.message = _deserializer.string(buffer, bufferOffset);
     return data;
@@ -165,13 +144,13 @@ class StartGraspResponse {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return '5273b27f74d9c0fd6d8a58d787fc7be7';
+    return '937c9679a518e3a18d831e57125ea522';
   }
 
   static messageDefinition() {
     // Returns full string definition for message
     return `
-    bool accepted
+    bool success
     string message
     
     
@@ -184,11 +163,11 @@ class StartGraspResponse {
       msg = {};
     }
     const resolved = new StartGraspResponse(null);
-    if (msg.accepted !== undefined) {
-      resolved.accepted = msg.accepted;
+    if (msg.success !== undefined) {
+      resolved.success = msg.success;
     }
     else {
-      resolved.accepted = false
+      resolved.success = false
     }
 
     if (msg.message !== undefined) {
@@ -205,6 +184,6 @@ class StartGraspResponse {
 module.exports = {
   Request: StartGraspRequest,
   Response: StartGraspResponse,
-  md5sum() { return '444b03b3725d049d9ce9ac0a3dfa2c54'; },
+  md5sum() { return 'c1e3198b68b143183a952c85cd9f744a'; },
   datatype() { return 'alicia_flexible_grasp_supervisor/StartGrasp'; }
 };

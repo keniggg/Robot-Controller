@@ -24,19 +24,19 @@ struct TriggerZeroResponse_
   typedef TriggerZeroResponse_<ContainerAllocator> Type;
 
   TriggerZeroResponse_()
-    : ok(false)
+    : success(false)
     , message()  {
     }
   TriggerZeroResponse_(const ContainerAllocator& _alloc)
-    : ok(false)
+    : success(false)
     , message(_alloc)  {
   (void)_alloc;
     }
 
 
 
-   typedef uint8_t _ok_type;
-  _ok_type ok;
+   typedef uint8_t _success_type;
+  _success_type success;
 
    typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _message_type;
   _message_type message;
@@ -70,7 +70,7 @@ return s;
 template<typename ContainerAllocator1, typename ContainerAllocator2>
 bool operator==(const ::alicia_flexible_grasp_supervisor::TriggerZeroResponse_<ContainerAllocator1> & lhs, const ::alicia_flexible_grasp_supervisor::TriggerZeroResponse_<ContainerAllocator2> & rhs)
 {
-  return lhs.ok == rhs.ok &&
+  return lhs.success == rhs.success &&
     lhs.message == rhs.message;
 }
 
@@ -128,12 +128,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::TriggerZeroResponse_<Containe
 {
   static const char* value()
   {
-    return "f6fcb3b1ed8c7743c7fb7d5bcca28513";
+    return "937c9679a518e3a18d831e57125ea522";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::TriggerZeroResponse_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0xf6fcb3b1ed8c7743ULL;
-  static const uint64_t static_value2 = 0xc7fb7d5bcca28513ULL;
+  static const uint64_t static_value1 = 0x937c9679a518e3a1ULL;
+  static const uint64_t static_value2 = 0x8d831e57125ea522ULL;
 };
 
 template<class ContainerAllocator>
@@ -152,7 +152,7 @@ struct Definition< ::alicia_flexible_grasp_supervisor::TriggerZeroResponse_<Cont
 {
   static const char* value()
   {
-    return "bool ok\n"
+    return "bool success\n"
 "string message\n"
 "\n"
 ;
@@ -173,7 +173,7 @@ namespace serialization
   {
     template<typename Stream, typename T> inline static void allInOne(Stream& stream, T m)
     {
-      stream.next(m.ok);
+      stream.next(m.success);
       stream.next(m.message);
     }
 
@@ -195,8 +195,8 @@ struct Printer< ::alicia_flexible_grasp_supervisor::TriggerZeroResponse_<Contain
   {
     if (false || !indent.empty())
       s << std::endl;
-    s << indent << "ok: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.ok);
+    s << indent << "success: ";
+    Printer<uint8_t>::stream(s, indent + "  ", v.success);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "message: ";

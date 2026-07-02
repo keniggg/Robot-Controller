@@ -42,9 +42,11 @@ private:
    void reconnect_callback(const ros::TimerEvent& event);
    void send_command_timer_callback(const ros::TimerEvent& event);
    void heartbeat_publish_callback(const ros::TimerEvent& event);
+   void state_poll_timer_callback(const ros::TimerEvent& event);
 
    // Main processing loop
    void process_serial_data();
+   void parse_sdk_joint_state_frame(const std::vector<uint8_t>& data_payload);
    void parse_servo_states_frame(const std::vector<uint8_t>& payload);
    void parse_gripper_state_frame(const std::vector<uint8_t>& payload); // Add this
    void parse_error_frame(const std::vector<uint8_t>& payload);
@@ -63,6 +65,7 @@ private:
    ros::Timer reconnect_timer_;
    ros::Timer command_timer_;
    ros::Timer heartbeat_timer_;
+   ros::Timer state_poll_timer_;
 
    // Publishers & Subscribers
    ros::Publisher joint_state_pub_std_;
@@ -74,8 +77,15 @@ private:
    int servo_count_;
    bool debug_mode_;
    double rate_limit_sec_;
-   double command_rate_hz_;
-   ros::Time last_process_time_;
+	   double command_rate_hz_;
+	   double state_poll_rate_hz_;
+	   bool mirror_commanded_state_when_feedback_stale_;
+	   bool log_command_flow_;
+	   bool suppress_redundant_commands_ = true;
+	   bool pause_commands_when_feedback_stale_ = true;
+	   double feedback_stale_timeout_sec_ = 1.0;
+	   double command_keepalive_rate_hz_ = 0.0;
+	   ros::Time last_process_time_;
     // Trajectory smoothing parameters
     bool use_trajectory_smoothing_ = true;
     double max_joint_velocity_rad_s_ = 2.5;     // per-joint max command slew rate (rad/s)
@@ -85,9 +95,10 @@ private:
     bool gripper_input_is_percent_ = true;      // interpret /joint_commands right_finger as [0..1] percent
 
    // Mutex for thread safety
-   std::mutex data_mutex_;
-   std::mutex topic_mutex_;
-   std::mutex latest_cmd_mutex_;
+	   std::mutex data_mutex_;
+	   std::mutex topic_mutex_;
+	   std::mutex latest_cmd_mutex_;
+	   std::mutex send_mutex_;
    std::vector<double> servo_to_joint_map_index_;
    std::vector<double> servo_to_joint_map_direction_;
    std::vector<double> joint_to_servo_map_index_;
@@ -106,7 +117,9 @@ private:
    std::vector<double> latest_joint_angles_; // size 6
    double latest_gripper_rad_ = 0.0;          // radians
    bool has_latest_command_ = false;
-   ros::Time last_command_sent_time_;
+	   ros::Time last_command_sent_time_;
+	   std::vector<uint8_t> last_sent_sdk_command_frame_;
+	   ros::Time last_sent_sdk_command_time_;
 
    // Throttling/gripper smooth send
    double gripper_send_rate_hz_ = 50.0;        // default gripper send rate
@@ -122,6 +135,8 @@ private:
 
     // Timestamp of the last feedback received from hardware. When stale, we
     // fall back to publishing the commanded state so visualizers remain in sync.
-    ros::Time last_feedback_time_;
+	   ros::Time last_feedback_time_;
+	   bool has_real_feedback_ = false;
+	   uint8_t last_run_status_ = 0x00;
 };
 #endif // ALICiA_D_DRIVER_NODE_H

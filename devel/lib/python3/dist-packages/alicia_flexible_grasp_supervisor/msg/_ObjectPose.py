@@ -10,7 +10,7 @@ import geometry_msgs.msg
 import std_msgs.msg
 
 class ObjectPose(genpy.Message):
-  _md5sum = "613afc19135cb8f109a247ba2e6628c9"
+  _md5sum = "2d3731316703d38acb9f83ae0dd46e90"
   _type = "alicia_flexible_grasp_supervisor/ObjectPose"
   _has_header = True  # flag to mark the presence of a Header object
   _full_text = """std_msgs/Header header
@@ -19,10 +19,13 @@ string label
 float32 confidence
 uint32 u
 uint32 v
-float32 depth
-geometry_msgs/Point position_camera
-geometry_msgs/Pose pose_base
-string status
+uint32 bbox_x
+uint32 bbox_y
+uint32 bbox_width
+uint32 bbox_height
+float32 depth_m
+geometry_msgs/PoseStamped pose_camera
+geometry_msgs/PoseStamped pose_base
 
 ================================================================================
 MSG: std_msgs/Header
@@ -41,17 +44,23 @@ time stamp
 string frame_id
 
 ================================================================================
-MSG: geometry_msgs/Point
-# This contains the position of a point in free space
-float64 x
-float64 y
-float64 z
+MSG: geometry_msgs/PoseStamped
+# A Pose with reference coordinate frame and timestamp
+Header header
+Pose pose
 
 ================================================================================
 MSG: geometry_msgs/Pose
 # A representation of pose in free space, composed of position and orientation. 
 Point position
 Quaternion orientation
+
+================================================================================
+MSG: geometry_msgs/Point
+# This contains the position of a point in free space
+float64 x
+float64 y
+float64 z
 
 ================================================================================
 MSG: geometry_msgs/Quaternion
@@ -62,8 +71,8 @@ float64 y
 float64 z
 float64 w
 """
-  __slots__ = ['header','detected','label','confidence','u','v','depth','position_camera','pose_base','status']
-  _slot_types = ['std_msgs/Header','bool','string','float32','uint32','uint32','float32','geometry_msgs/Point','geometry_msgs/Pose','string']
+  __slots__ = ['header','detected','label','confidence','u','v','bbox_x','bbox_y','bbox_width','bbox_height','depth_m','pose_camera','pose_base']
+  _slot_types = ['std_msgs/Header','bool','string','float32','uint32','uint32','uint32','uint32','uint32','uint32','float32','geometry_msgs/PoseStamped','geometry_msgs/PoseStamped']
 
   def __init__(self, *args, **kwds):
     """
@@ -73,7 +82,7 @@ float64 w
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       header,detected,label,confidence,u,v,depth,position_camera,pose_base,status
+       header,detected,label,confidence,u,v,bbox_x,bbox_y,bbox_width,bbox_height,depth_m,pose_camera,pose_base
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -94,14 +103,20 @@ float64 w
         self.u = 0
       if self.v is None:
         self.v = 0
-      if self.depth is None:
-        self.depth = 0.
-      if self.position_camera is None:
-        self.position_camera = geometry_msgs.msg.Point()
+      if self.bbox_x is None:
+        self.bbox_x = 0
+      if self.bbox_y is None:
+        self.bbox_y = 0
+      if self.bbox_width is None:
+        self.bbox_width = 0
+      if self.bbox_height is None:
+        self.bbox_height = 0
+      if self.depth_m is None:
+        self.depth_m = 0.
+      if self.pose_camera is None:
+        self.pose_camera = geometry_msgs.msg.PoseStamped()
       if self.pose_base is None:
-        self.pose_base = geometry_msgs.msg.Pose()
-      if self.status is None:
-        self.status = ''
+        self.pose_base = geometry_msgs.msg.PoseStamped()
     else:
       self.header = std_msgs.msg.Header()
       self.detected = False
@@ -109,10 +124,13 @@ float64 w
       self.confidence = 0.
       self.u = 0
       self.v = 0
-      self.depth = 0.
-      self.position_camera = geometry_msgs.msg.Point()
-      self.pose_base = geometry_msgs.msg.Pose()
-      self.status = ''
+      self.bbox_x = 0
+      self.bbox_y = 0
+      self.bbox_width = 0
+      self.bbox_height = 0
+      self.depth_m = 0.
+      self.pose_camera = geometry_msgs.msg.PoseStamped()
+      self.pose_base = geometry_msgs.msg.PoseStamped()
 
   def _get_types(self):
     """
@@ -143,13 +161,23 @@ float64 w
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self
-      buff.write(_get_struct_f2If10d().pack(_x.confidence, _x.u, _x.v, _x.depth, _x.position_camera.x, _x.position_camera.y, _x.position_camera.z, _x.pose_base.position.x, _x.pose_base.position.y, _x.pose_base.position.z, _x.pose_base.orientation.x, _x.pose_base.orientation.y, _x.pose_base.orientation.z, _x.pose_base.orientation.w))
-      _x = self.status
+      buff.write(_get_struct_f6If3I().pack(_x.confidence, _x.u, _x.v, _x.bbox_x, _x.bbox_y, _x.bbox_width, _x.bbox_height, _x.depth_m, _x.pose_camera.header.seq, _x.pose_camera.header.stamp.secs, _x.pose_camera.header.stamp.nsecs))
+      _x = self.pose_camera.header.frame_id
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      _x = self
+      buff.write(_get_struct_7d3I().pack(_x.pose_camera.pose.position.x, _x.pose_camera.pose.position.y, _x.pose_camera.pose.position.z, _x.pose_camera.pose.orientation.x, _x.pose_camera.pose.orientation.y, _x.pose_camera.pose.orientation.z, _x.pose_camera.pose.orientation.w, _x.pose_base.header.seq, _x.pose_base.header.stamp.secs, _x.pose_base.header.stamp.nsecs))
+      _x = self.pose_base.header.frame_id
+      length = len(_x)
+      if python3 or type(_x) == unicode:
+        _x = _x.encode('utf-8')
+        length = len(_x)
+      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      _x = self
+      buff.write(_get_struct_7d().pack(_x.pose_base.pose.position.x, _x.pose_base.pose.position.y, _x.pose_base.pose.position.z, _x.pose_base.pose.orientation.x, _x.pose_base.pose.orientation.y, _x.pose_base.pose.orientation.z, _x.pose_base.pose.orientation.w))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -163,10 +191,10 @@ float64 w
     try:
       if self.header is None:
         self.header = std_msgs.msg.Header()
-      if self.position_camera is None:
-        self.position_camera = geometry_msgs.msg.Point()
+      if self.pose_camera is None:
+        self.pose_camera = geometry_msgs.msg.PoseStamped()
       if self.pose_base is None:
-        self.pose_base = geometry_msgs.msg.Pose()
+        self.pose_base = geometry_msgs.msg.PoseStamped()
       end = 0
       _x = self
       start = end
@@ -196,17 +224,34 @@ float64 w
         self.label = str[start:end]
       _x = self
       start = end
-      end += 96
-      (_x.confidence, _x.u, _x.v, _x.depth, _x.position_camera.x, _x.position_camera.y, _x.position_camera.z, _x.pose_base.position.x, _x.pose_base.position.y, _x.pose_base.position.z, _x.pose_base.orientation.x, _x.pose_base.orientation.y, _x.pose_base.orientation.z, _x.pose_base.orientation.w,) = _get_struct_f2If10d().unpack(str[start:end])
+      end += 44
+      (_x.confidence, _x.u, _x.v, _x.bbox_x, _x.bbox_y, _x.bbox_width, _x.bbox_height, _x.depth_m, _x.pose_camera.header.seq, _x.pose_camera.header.stamp.secs, _x.pose_camera.header.stamp.nsecs,) = _get_struct_f6If3I().unpack(str[start:end])
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.status = str[start:end].decode('utf-8', 'rosmsg')
+        self.pose_camera.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.status = str[start:end]
+        self.pose_camera.header.frame_id = str[start:end]
+      _x = self
+      start = end
+      end += 68
+      (_x.pose_camera.pose.position.x, _x.pose_camera.pose.position.y, _x.pose_camera.pose.position.z, _x.pose_camera.pose.orientation.x, _x.pose_camera.pose.orientation.y, _x.pose_camera.pose.orientation.z, _x.pose_camera.pose.orientation.w, _x.pose_base.header.seq, _x.pose_base.header.stamp.secs, _x.pose_base.header.stamp.nsecs,) = _get_struct_7d3I().unpack(str[start:end])
+      start = end
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      start = end
+      end += length
+      if python3:
+        self.pose_base.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
+      else:
+        self.pose_base.header.frame_id = str[start:end]
+      _x = self
+      start = end
+      end += 56
+      (_x.pose_base.pose.position.x, _x.pose_base.pose.position.y, _x.pose_base.pose.position.z, _x.pose_base.pose.orientation.x, _x.pose_base.pose.orientation.y, _x.pose_base.pose.orientation.z, _x.pose_base.pose.orientation.w,) = _get_struct_7d().unpack(str[start:end])
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -236,13 +281,23 @@ float64 w
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self
-      buff.write(_get_struct_f2If10d().pack(_x.confidence, _x.u, _x.v, _x.depth, _x.position_camera.x, _x.position_camera.y, _x.position_camera.z, _x.pose_base.position.x, _x.pose_base.position.y, _x.pose_base.position.z, _x.pose_base.orientation.x, _x.pose_base.orientation.y, _x.pose_base.orientation.z, _x.pose_base.orientation.w))
-      _x = self.status
+      buff.write(_get_struct_f6If3I().pack(_x.confidence, _x.u, _x.v, _x.bbox_x, _x.bbox_y, _x.bbox_width, _x.bbox_height, _x.depth_m, _x.pose_camera.header.seq, _x.pose_camera.header.stamp.secs, _x.pose_camera.header.stamp.nsecs))
+      _x = self.pose_camera.header.frame_id
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      _x = self
+      buff.write(_get_struct_7d3I().pack(_x.pose_camera.pose.position.x, _x.pose_camera.pose.position.y, _x.pose_camera.pose.position.z, _x.pose_camera.pose.orientation.x, _x.pose_camera.pose.orientation.y, _x.pose_camera.pose.orientation.z, _x.pose_camera.pose.orientation.w, _x.pose_base.header.seq, _x.pose_base.header.stamp.secs, _x.pose_base.header.stamp.nsecs))
+      _x = self.pose_base.header.frame_id
+      length = len(_x)
+      if python3 or type(_x) == unicode:
+        _x = _x.encode('utf-8')
+        length = len(_x)
+      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
+      _x = self
+      buff.write(_get_struct_7d().pack(_x.pose_base.pose.position.x, _x.pose_base.pose.position.y, _x.pose_base.pose.position.z, _x.pose_base.pose.orientation.x, _x.pose_base.pose.orientation.y, _x.pose_base.pose.orientation.z, _x.pose_base.pose.orientation.w))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -257,10 +312,10 @@ float64 w
     try:
       if self.header is None:
         self.header = std_msgs.msg.Header()
-      if self.position_camera is None:
-        self.position_camera = geometry_msgs.msg.Point()
+      if self.pose_camera is None:
+        self.pose_camera = geometry_msgs.msg.PoseStamped()
       if self.pose_base is None:
-        self.pose_base = geometry_msgs.msg.Pose()
+        self.pose_base = geometry_msgs.msg.PoseStamped()
       end = 0
       _x = self
       start = end
@@ -290,17 +345,34 @@ float64 w
         self.label = str[start:end]
       _x = self
       start = end
-      end += 96
-      (_x.confidence, _x.u, _x.v, _x.depth, _x.position_camera.x, _x.position_camera.y, _x.position_camera.z, _x.pose_base.position.x, _x.pose_base.position.y, _x.pose_base.position.z, _x.pose_base.orientation.x, _x.pose_base.orientation.y, _x.pose_base.orientation.z, _x.pose_base.orientation.w,) = _get_struct_f2If10d().unpack(str[start:end])
+      end += 44
+      (_x.confidence, _x.u, _x.v, _x.bbox_x, _x.bbox_y, _x.bbox_width, _x.bbox_height, _x.depth_m, _x.pose_camera.header.seq, _x.pose_camera.header.stamp.secs, _x.pose_camera.header.stamp.nsecs,) = _get_struct_f6If3I().unpack(str[start:end])
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.status = str[start:end].decode('utf-8', 'rosmsg')
+        self.pose_camera.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.status = str[start:end]
+        self.pose_camera.header.frame_id = str[start:end]
+      _x = self
+      start = end
+      end += 68
+      (_x.pose_camera.pose.position.x, _x.pose_camera.pose.position.y, _x.pose_camera.pose.position.z, _x.pose_camera.pose.orientation.x, _x.pose_camera.pose.orientation.y, _x.pose_camera.pose.orientation.z, _x.pose_camera.pose.orientation.w, _x.pose_base.header.seq, _x.pose_base.header.stamp.secs, _x.pose_base.header.stamp.nsecs,) = _get_struct_7d3I().unpack(str[start:end])
+      start = end
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      start = end
+      end += length
+      if python3:
+        self.pose_base.header.frame_id = str[start:end].decode('utf-8', 'rosmsg')
+      else:
+        self.pose_base.header.frame_id = str[start:end]
+      _x = self
+      start = end
+      end += 56
+      (_x.pose_base.pose.position.x, _x.pose_base.pose.position.y, _x.pose_base.pose.position.z, _x.pose_base.pose.orientation.x, _x.pose_base.pose.orientation.y, _x.pose_base.pose.orientation.z, _x.pose_base.pose.orientation.w,) = _get_struct_7d().unpack(str[start:end])
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -315,15 +387,27 @@ def _get_struct_3I():
     if _struct_3I is None:
         _struct_3I = struct.Struct("<3I")
     return _struct_3I
+_struct_7d = None
+def _get_struct_7d():
+    global _struct_7d
+    if _struct_7d is None:
+        _struct_7d = struct.Struct("<7d")
+    return _struct_7d
+_struct_7d3I = None
+def _get_struct_7d3I():
+    global _struct_7d3I
+    if _struct_7d3I is None:
+        _struct_7d3I = struct.Struct("<7d3I")
+    return _struct_7d3I
 _struct_B = None
 def _get_struct_B():
     global _struct_B
     if _struct_B is None:
         _struct_B = struct.Struct("<B")
     return _struct_B
-_struct_f2If10d = None
-def _get_struct_f2If10d():
-    global _struct_f2If10d
-    if _struct_f2If10d is None:
-        _struct_f2If10d = struct.Struct("<f2If10d")
-    return _struct_f2If10d
+_struct_f6If3I = None
+def _get_struct_f6If3I():
+    global _struct_f6If3I
+    if _struct_f6If3I is None:
+        _struct_f6If3I = struct.Struct("<f6If3I")
+    return _struct_f6If3I

@@ -1,128 +1,97 @@
 #!/usr/bin/env python3
-import threading
 import rospy
-from std_msgs.msg import Bool
-from alicia_flexible_grasp_supervisor.msg import ObjectPose, TactileState, GraspState
-from alicia_flexible_grasp_supervisor.srv import StartGrasp, StartGraspResponse, StopGrasp, StopGraspResponse
-from alicia_flexible_grasp.robot.moveit_planner import MoveItPlanner
-from alicia_flexible_grasp.robot.gripper_commander import GripperCommander
-from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStates
-from alicia_flexible_grasp.grasp.grasp_pose_generator import GraspPoseGenerator
-from alicia_flexible_grasp.grasp.compliant_grasp import CompliantGraspController
-from alicia_flexible_grasp.grasp.grasp_verifier import GraspVerifier
-
+from alicia_flexible_grasp_supervisor.msg import ObjectPose, GraspState
+from alicia_flexible_grasp_supervisor.srv import StartGrasp, StartGraspResponse, StopGrasp, StopGraspResponse, SetTargetPose, SetFloat
+from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages, STATE_NAMES
+from alicia_flexible_grasp.grasp.grasp_pose_generator import make_pregrasp_pose, make_lift_pose
 
 class GraspTaskNode:
     def __init__(self):
-        self.object_pose = None
-        self.tactile = None
-        self.running = False
-        self.stop_flag = False
-        self.state = GraspStates.IDLE
-        self.message = 'idle'
-        self.planner = MoveItPlanner(rospy.get_param('~move_group', 'alicia'))
-        self.gripper = GripperCommander('/gripper_control')
-        self.pose_gen = GraspPoseGenerator(rospy.get_param('~pregrasp_distance_m', 0.08), rospy.get_param('~lift_height_m', 0.05))
-        self.verifier = GraspVerifier(rospy.get_param('~hold_force_min_mn', 800.0))
-        self.force_target = rospy.get_param('~target_force_mn', 1500.0)
-        self.comp = CompliantGraspController(
-            self.gripper, self.get_force,
-            open_position=rospy.get_param('~open_position', 0.12),
-            contact_threshold=rospy.get_param('~contact_threshold_mn', 200.0),
-            target_force=self.force_target,
-            max_force=rospy.get_param('~max_force_mn', 4000.0),
-            close_step_fast=rospy.get_param('~close_step_fast', 0.003),
-            close_step_slow=rospy.get_param('~close_step_slow', 0.001),
-            open_step_safe=rospy.get_param('~open_step_safe', 0.005),
-        )
-        self.pub_state = rospy.Publisher('/grasp/state', GraspState, queue_size=10)
-        rospy.Subscriber('/perception/object_pose_base', ObjectPose, self.object_cb, queue_size=1)
-        rospy.Subscriber('/tactile/state', TactileState, self.tactile_cb, queue_size=10)
-        rospy.Service('/grasp/start', StartGrasp, self.start_srv)
-        rospy.Service('/grasp/stop', StopGrasp, self.stop_srv)
-        rospy.Timer(rospy.Duration(0.1), self.timer_pub)
+        self.latest_obj = None
+        self.active = False
+        self.stage = GraspStages.IDLE
+        self.pub = rospy.Publisher('/grasp/state', GraspState, queue_size=10)
+        rospy.Subscriber('/perception/object', ObjectPose, self.obj_cb, queue_size=1)
+        rospy.Service('/grasp/start', StartGrasp, self.start_cb)
+        rospy.Service('/grasp/stop', StopGrasp, self.stop_cb)
+        rospy.loginfo('GraspTaskNode ready')
 
-    def object_cb(self, msg):
+    def obj_cb(self, msg):
         if msg.detected:
-            self.object_pose = msg
+            self.latest_obj = msg
 
-    def tactile_cb(self, msg):
-        self.tactile = msg
+    def set_state(self, stage, message='', success=False):
+        self.stage = stage
+        msg = GraspState()
+        msg.header.stamp = rospy.Time.now()
+        msg.stage = int(stage)
+        msg.state = STATE_NAMES.get(stage, 'UNKNOWN')
+        msg.active = self.active
+        msg.success = success
+        msg.message = message
+        self.pub.publish(msg)
+        rospy.loginfo('[Grasp] %s %s', msg.state, message)
 
-    def get_force(self):
-        return 0.0 if self.tactile is None else self.tactile.total_grip_force
+    def start_cb(self, req):
+        if self.active:
+            return StartGraspResponse(False, 'already active')
+        self.active = True
+        try:
+            result = self.execute()
+            self.active = False
+            return StartGraspResponse(result, 'success' if result else 'failed')
+        except Exception as exc:
+            self.active = False
+            self.set_state(GraspStages.FAILED, str(exc), False)
+            return StartGraspResponse(False, str(exc))
 
-    def set_state(self, state, msg=''):
-        self.state = state
-        self.message = msg or GraspStates.NAMES.get(state, str(state))
-        rospy.loginfo('grasp state: %s - %s', GraspStates.NAMES.get(state, state), self.message)
-
-    def start_srv(self, req):
-        if self.running:
-            return StartGraspResponse(False, 'grasp task already running')
-        self.stop_flag = False
-        self.running = True
-        threading.Thread(target=self.execute, daemon=True).start()
-        return StartGraspResponse(True, 'grasp task started')
-
-    def stop_srv(self, req):
-        self.stop_flag = True
-        if req.emergency:
-            self.set_state(GraspStates.EMERGENCY_STOP, 'emergency stop requested')
+    def stop_cb(self, req):
+        self.active = False
+        self.set_state(GraspStages.EMERGENCY_STOP if req.emergency else GraspStages.IDLE, 'stop requested')
         return StopGraspResponse(True, 'stop requested')
 
     def execute(self):
-        try:
-            self.set_state(GraspStates.SEARCH_OBJECT, 'waiting for detected object')
-            t0 = rospy.Time.now().to_sec()
-            while not rospy.is_shutdown() and not self.object_pose and rospy.Time.now().to_sec() - t0 < 5.0:
-                if self.stop_flag: return
-                rospy.sleep(0.05)
-            if self.object_pose is None:
-                self.set_state(GraspStates.FAILED, 'no object detected'); return
-            obj_pose = self.object_pose.pose_base
-            self.set_state(GraspStates.PLAN_PREGRASP, 'generate pregrasp pose')
-            pre = self.pose_gen.pregrasp_from_object_pose(obj_pose)
-            self.gripper.command(rospy.get_param('~open_position', 0.12))
-            self.set_state(GraspStates.MOVE_PREGRASP, 'move to pregrasp')
-            ok, msg = self.planner.move_to_pose(pre, execute=True)
-            if not ok:
-                self.set_state(GraspStates.FAILED, 'pregrasp planning failed: ' + msg); return
-            self.set_state(GraspStates.APPROACH_OBJECT, 'move to grasp pose')
-            grasp = self.pose_gen.grasp_pose_from_object_pose(obj_pose)
-            ok, msg = self.planner.move_to_pose(grasp, execute=True)
-            if not ok:
-                self.set_state(GraspStates.FAILED, 'approach planning failed: ' + msg); return
-            self.set_state(GraspStates.COMPLIANT_CLOSE, 'close gripper until target force')
-            ok, msg, force, pos = self.comp.close_until_force(timeout=8.0)
-            if not ok:
-                self.set_state(GraspStates.FAILED, msg); return
-            self.set_state(GraspStates.LIFT_OBJECT, 'lift object')
-            lift = self.pose_gen.lift_pose_from_grasp_pose(grasp)
-            ok, msg = self.planner.move_to_pose(lift, execute=True)
-            if not ok:
-                self.set_state(GraspStates.FAILED, 'lift failed: ' + msg); return
-            self.set_state(GraspStates.GRASP_VERIFY, 'verify tactile hold')
-            slip = self.tactile.slip_detected if self.tactile else False
-            ok, msg = self.verifier.verify(self.get_force(), slip)
-            self.set_state(GraspStates.SUCCESS if ok else GraspStates.FAILED, msg)
-        finally:
-            self.running = False
+        rospy.wait_for_service('/supervisor/move_to_pose', timeout=10)
+        rospy.wait_for_service('/supervisor/set_gripper', timeout=10)
+        rospy.wait_for_service('/supervisor/compliant_close', timeout=10)
+        move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
+        set_gripper = rospy.ServiceProxy('/supervisor/set_gripper', SetFloat)
+        close = rospy.ServiceProxy('/supervisor/compliant_close', StartGrasp)
+        gcfg = rospy.get_param('/grasp', {})
+        gripper_cfg = rospy.get_param('/gripper', {})
 
-    def timer_pub(self, _):
-        msg = GraspState()
-        msg.header.stamp = rospy.Time.now()
-        msg.state = self.state
-        msg.state_name = GraspStates.NAMES.get(self.state, str(self.state))
-        msg.running = self.running
-        msg.success = self.state == GraspStates.SUCCESS
-        msg.message = self.message
-        msg.current_force = self.get_force()
-        msg.target_force = self.force_target
-        if self.object_pose:
-            msg.object_pose_base = self.object_pose.pose_base
-        self.pub_state.publish(msg)
+        self.set_state(GraspStages.SEARCH_OBJECT, 'waiting for object')
+        t0 = rospy.Time.now()
+        while self.latest_obj is None and (rospy.Time.now()-t0).to_sec() < 5.0 and self.active:
+            rospy.sleep(0.05)
+        if self.latest_obj is None:
+            self.set_state(GraspStages.FAILED, 'no object')
+            return False
 
+        self.set_state(GraspStages.PLAN_PREGRASP, 'compute pregrasp')
+        pre = make_pregrasp_pose(self.latest_obj.pose_base, gcfg.get('pregrasp_distance_m',0.08))
+        self.set_state(GraspStages.MOVE_PREGRASP, 'moving')
+        resp = move_pose(pre, True)
+        if not resp.success:
+            self.set_state(GraspStages.FAILED, resp.message)
+            return False
+
+        set_gripper(gripper_cfg.get('open_position_m',0.0))
+        rospy.sleep(0.5)
+        self.set_state(GraspStages.COMPLIANT_CLOSE, 'force-guided close')
+        resp = close(True)
+        if not resp.success:
+            self.set_state(GraspStages.FAILED, resp.message)
+            return False
+
+        self.set_state(GraspStages.LIFT_OBJECT, 'lifting')
+        lift = make_lift_pose(pre, gcfg.get('lift_height_m',0.05))
+        resp = move_pose(lift, True)
+        if not resp.success:
+            self.set_state(GraspStages.FAILED, 'lift failed: '+resp.message)
+            return False
+        self.set_state(GraspStages.SUCCESS, 'grasp done', True)
+        return True
 
 if __name__ == '__main__':
     rospy.init_node('grasp_task_node')

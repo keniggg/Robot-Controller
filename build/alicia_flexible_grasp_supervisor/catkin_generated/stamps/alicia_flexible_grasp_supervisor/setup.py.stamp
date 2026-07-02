@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
-from distutils.core import setup
+from setuptools import setup, find_packages
 from catkin_pkg.python_setup import generate_distutils_setup
 
-setup_args = generate_distutils_setup(
-    packages=[
-        'alicia_flexible_grasp',
-        'alicia_flexible_grasp.tactile',
-        'alicia_flexible_grasp.vision',
-        'alicia_flexible_grasp.robot',
-        'alicia_flexible_grasp.grasp',
-        'alicia_flexible_grasp.utils',
-    ],
+d = generate_distutils_setup(
+    packages=find_packages('src'),
     package_dir={'': 'src'},
 )
-setup(**setup_args)
+setup(**d)

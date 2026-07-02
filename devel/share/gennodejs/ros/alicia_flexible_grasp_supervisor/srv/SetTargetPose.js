@@ -22,15 +22,15 @@ class SetTargetPoseRequest {
   constructor(initObj={}) {
     if (initObj === null) {
       // initObj === null is a special case for deserialization where we don't initialize fields
-      this.pose = null;
+      this.target = null;
       this.execute = null;
     }
     else {
-      if (initObj.hasOwnProperty('pose')) {
-        this.pose = initObj.pose
+      if (initObj.hasOwnProperty('target')) {
+        this.target = initObj.target
       }
       else {
-        this.pose = new geometry_msgs.msg.Pose();
+        this.target = new geometry_msgs.msg.PoseStamped();
       }
       if (initObj.hasOwnProperty('execute')) {
         this.execute = initObj.execute
@@ -43,8 +43,8 @@ class SetTargetPoseRequest {
 
   static serialize(obj, buffer, bufferOffset) {
     // Serializes a message object of type SetTargetPoseRequest
-    // Serialize message field [pose]
-    bufferOffset = geometry_msgs.msg.Pose.serialize(obj.pose, buffer, bufferOffset);
+    // Serialize message field [target]
+    bufferOffset = geometry_msgs.msg.PoseStamped.serialize(obj.target, buffer, bufferOffset);
     // Serialize message field [execute]
     bufferOffset = _serializer.bool(obj.execute, buffer, bufferOffset);
     return bufferOffset;
@@ -54,15 +54,17 @@ class SetTargetPoseRequest {
     //deserializes a message object of type SetTargetPoseRequest
     let len;
     let data = new SetTargetPoseRequest(null);
-    // Deserialize message field [pose]
-    data.pose = geometry_msgs.msg.Pose.deserialize(buffer, bufferOffset);
+    // Deserialize message field [target]
+    data.target = geometry_msgs.msg.PoseStamped.deserialize(buffer, bufferOffset);
     // Deserialize message field [execute]
     data.execute = _deserializer.bool(buffer, bufferOffset);
     return data;
   }
 
   static getMessageSize(object) {
-    return 57;
+    let length = 0;
+    length += geometry_msgs.msg.PoseStamped.getMessageSize(object.target);
+    return length + 1;
   }
 
   static datatype() {
@@ -72,14 +74,36 @@ class SetTargetPoseRequest {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return '6fc4fbc3eff3db2ecc3f08fd3533ebf8';
+    return 'fe85c31a0fb84e4f56010ba33f6304a6';
   }
 
   static messageDefinition() {
     // Returns full string definition for message
     return `
-    geometry_msgs/Pose pose
+    geometry_msgs/PoseStamped target
     bool execute
+    
+    ================================================================================
+    MSG: geometry_msgs/PoseStamped
+    # A Pose with reference coordinate frame and timestamp
+    Header header
+    Pose pose
+    
+    ================================================================================
+    MSG: std_msgs/Header
+    # Standard metadata for higher-level stamped data types.
+    # This is generally used to communicate timestamped data 
+    # in a particular coordinate frame.
+    # 
+    # sequence ID: consecutively increasing ID 
+    uint32 seq
+    #Two-integer timestamp that is expressed as:
+    # * stamp.sec: seconds (stamp_secs) since epoch (in Python the variable is called 'secs')
+    # * stamp.nsec: nanoseconds since stamp_secs (in Python the variable is called 'nsecs')
+    # time-handling sugar is provided by the client library
+    time stamp
+    #Frame this data is associated with
+    string frame_id
     
     ================================================================================
     MSG: geometry_msgs/Pose
@@ -112,11 +136,11 @@ class SetTargetPoseRequest {
       msg = {};
     }
     const resolved = new SetTargetPoseRequest(null);
-    if (msg.pose !== undefined) {
-      resolved.pose = geometry_msgs.msg.Pose.Resolve(msg.pose)
+    if (msg.target !== undefined) {
+      resolved.target = geometry_msgs.msg.PoseStamped.Resolve(msg.target)
     }
     else {
-      resolved.pose = new geometry_msgs.msg.Pose()
+      resolved.target = new geometry_msgs.msg.PoseStamped()
     }
 
     if (msg.execute !== undefined) {
@@ -134,15 +158,15 @@ class SetTargetPoseResponse {
   constructor(initObj={}) {
     if (initObj === null) {
       // initObj === null is a special case for deserialization where we don't initialize fields
-      this.ok = null;
+      this.success = null;
       this.message = null;
     }
     else {
-      if (initObj.hasOwnProperty('ok')) {
-        this.ok = initObj.ok
+      if (initObj.hasOwnProperty('success')) {
+        this.success = initObj.success
       }
       else {
-        this.ok = false;
+        this.success = false;
       }
       if (initObj.hasOwnProperty('message')) {
         this.message = initObj.message
@@ -155,8 +179,8 @@ class SetTargetPoseResponse {
 
   static serialize(obj, buffer, bufferOffset) {
     // Serializes a message object of type SetTargetPoseResponse
-    // Serialize message field [ok]
-    bufferOffset = _serializer.bool(obj.ok, buffer, bufferOffset);
+    // Serialize message field [success]
+    bufferOffset = _serializer.bool(obj.success, buffer, bufferOffset);
     // Serialize message field [message]
     bufferOffset = _serializer.string(obj.message, buffer, bufferOffset);
     return bufferOffset;
@@ -166,8 +190,8 @@ class SetTargetPoseResponse {
     //deserializes a message object of type SetTargetPoseResponse
     let len;
     let data = new SetTargetPoseResponse(null);
-    // Deserialize message field [ok]
-    data.ok = _deserializer.bool(buffer, bufferOffset);
+    // Deserialize message field [success]
+    data.success = _deserializer.bool(buffer, bufferOffset);
     // Deserialize message field [message]
     data.message = _deserializer.string(buffer, bufferOffset);
     return data;
@@ -186,13 +210,13 @@ class SetTargetPoseResponse {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return 'f6fcb3b1ed8c7743c7fb7d5bcca28513';
+    return '937c9679a518e3a18d831e57125ea522';
   }
 
   static messageDefinition() {
     // Returns full string definition for message
     return `
-    bool ok
+    bool success
     string message
     
     
@@ -205,11 +229,11 @@ class SetTargetPoseResponse {
       msg = {};
     }
     const resolved = new SetTargetPoseResponse(null);
-    if (msg.ok !== undefined) {
-      resolved.ok = msg.ok;
+    if (msg.success !== undefined) {
+      resolved.success = msg.success;
     }
     else {
-      resolved.ok = false
+      resolved.success = false
     }
 
     if (msg.message !== undefined) {
@@ -226,6 +250,6 @@ class SetTargetPoseResponse {
 module.exports = {
   Request: SetTargetPoseRequest,
   Response: SetTargetPoseResponse,
-  md5sum() { return '00e64715c2cedd5add3400704911c3af'; },
+  md5sum() { return '2cf3c52fcc5b5b6cce00c68f65c0b916'; },
   datatype() { return 'alicia_flexible_grasp_supervisor/SetTargetPose'; }
 };

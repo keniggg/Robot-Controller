@@ -22,11 +22,6 @@ class SafetyState {
       this.header = null;
       this.ok = null;
       this.emergency_stop = null;
-      this.force_over_limit = null;
-      this.robot_timeout = null;
-      this.tactile_timeout = null;
-      this.camera_timeout = null;
-      this.planning_failed = null;
       this.level = null;
       this.message = null;
     }
@@ -48,36 +43,6 @@ class SafetyState {
       }
       else {
         this.emergency_stop = false;
-      }
-      if (initObj.hasOwnProperty('force_over_limit')) {
-        this.force_over_limit = initObj.force_over_limit
-      }
-      else {
-        this.force_over_limit = false;
-      }
-      if (initObj.hasOwnProperty('robot_timeout')) {
-        this.robot_timeout = initObj.robot_timeout
-      }
-      else {
-        this.robot_timeout = false;
-      }
-      if (initObj.hasOwnProperty('tactile_timeout')) {
-        this.tactile_timeout = initObj.tactile_timeout
-      }
-      else {
-        this.tactile_timeout = false;
-      }
-      if (initObj.hasOwnProperty('camera_timeout')) {
-        this.camera_timeout = initObj.camera_timeout
-      }
-      else {
-        this.camera_timeout = false;
-      }
-      if (initObj.hasOwnProperty('planning_failed')) {
-        this.planning_failed = initObj.planning_failed
-      }
-      else {
-        this.planning_failed = false;
       }
       if (initObj.hasOwnProperty('level')) {
         this.level = initObj.level
@@ -102,16 +67,6 @@ class SafetyState {
     bufferOffset = _serializer.bool(obj.ok, buffer, bufferOffset);
     // Serialize message field [emergency_stop]
     bufferOffset = _serializer.bool(obj.emergency_stop, buffer, bufferOffset);
-    // Serialize message field [force_over_limit]
-    bufferOffset = _serializer.bool(obj.force_over_limit, buffer, bufferOffset);
-    // Serialize message field [robot_timeout]
-    bufferOffset = _serializer.bool(obj.robot_timeout, buffer, bufferOffset);
-    // Serialize message field [tactile_timeout]
-    bufferOffset = _serializer.bool(obj.tactile_timeout, buffer, bufferOffset);
-    // Serialize message field [camera_timeout]
-    bufferOffset = _serializer.bool(obj.camera_timeout, buffer, bufferOffset);
-    // Serialize message field [planning_failed]
-    bufferOffset = _serializer.bool(obj.planning_failed, buffer, bufferOffset);
     // Serialize message field [level]
     bufferOffset = _serializer.string(obj.level, buffer, bufferOffset);
     // Serialize message field [message]
@@ -129,16 +84,6 @@ class SafetyState {
     data.ok = _deserializer.bool(buffer, bufferOffset);
     // Deserialize message field [emergency_stop]
     data.emergency_stop = _deserializer.bool(buffer, bufferOffset);
-    // Deserialize message field [force_over_limit]
-    data.force_over_limit = _deserializer.bool(buffer, bufferOffset);
-    // Deserialize message field [robot_timeout]
-    data.robot_timeout = _deserializer.bool(buffer, bufferOffset);
-    // Deserialize message field [tactile_timeout]
-    data.tactile_timeout = _deserializer.bool(buffer, bufferOffset);
-    // Deserialize message field [camera_timeout]
-    data.camera_timeout = _deserializer.bool(buffer, bufferOffset);
-    // Deserialize message field [planning_failed]
-    data.planning_failed = _deserializer.bool(buffer, bufferOffset);
     // Deserialize message field [level]
     data.level = _deserializer.string(buffer, bufferOffset);
     // Deserialize message field [message]
@@ -151,7 +96,7 @@ class SafetyState {
     length += std_msgs.msg.Header.getMessageSize(object.header);
     length += _getByteLength(object.level);
     length += _getByteLength(object.message);
-    return length + 15;
+    return length + 10;
   }
 
   static datatype() {
@@ -161,7 +106,7 @@ class SafetyState {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return 'd422c2c3e9933ef7c15274804ca0c2f7';
+    return 'b5ace411f24918274b9d45871c146d30';
   }
 
   static messageDefinition() {
@@ -170,11 +115,6 @@ class SafetyState {
     std_msgs/Header header
     bool ok
     bool emergency_stop
-    bool force_over_limit
-    bool robot_timeout
-    bool tactile_timeout
-    bool camera_timeout
-    bool planning_failed
     string level
     string message
     
@@ -222,41 +162,6 @@ class SafetyState {
     }
     else {
       resolved.emergency_stop = false
-    }
-
-    if (msg.force_over_limit !== undefined) {
-      resolved.force_over_limit = msg.force_over_limit;
-    }
-    else {
-      resolved.force_over_limit = false
-    }
-
-    if (msg.robot_timeout !== undefined) {
-      resolved.robot_timeout = msg.robot_timeout;
-    }
-    else {
-      resolved.robot_timeout = false
-    }
-
-    if (msg.tactile_timeout !== undefined) {
-      resolved.tactile_timeout = msg.tactile_timeout;
-    }
-    else {
-      resolved.tactile_timeout = false
-    }
-
-    if (msg.camera_timeout !== undefined) {
-      resolved.camera_timeout = msg.camera_timeout;
-    }
-    else {
-      resolved.camera_timeout = false
-    }
-
-    if (msg.planning_failed !== undefined) {
-      resolved.planning_failed = msg.planning_failed;
-    }
-    else {
-      resolved.planning_failed = false
     }
 
     if (msg.level !== undefined) {

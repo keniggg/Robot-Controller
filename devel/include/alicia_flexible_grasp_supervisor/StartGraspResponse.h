@@ -24,19 +24,19 @@ struct StartGraspResponse_
   typedef StartGraspResponse_<ContainerAllocator> Type;
 
   StartGraspResponse_()
-    : accepted(false)
+    : success(false)
     , message()  {
     }
   StartGraspResponse_(const ContainerAllocator& _alloc)
-    : accepted(false)
+    : success(false)
     , message(_alloc)  {
   (void)_alloc;
     }
 
 
 
-   typedef uint8_t _accepted_type;
-  _accepted_type accepted;
+   typedef uint8_t _success_type;
+  _success_type success;
 
    typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _message_type;
   _message_type message;
@@ -70,7 +70,7 @@ return s;
 template<typename ContainerAllocator1, typename ContainerAllocator2>
 bool operator==(const ::alicia_flexible_grasp_supervisor::StartGraspResponse_<ContainerAllocator1> & lhs, const ::alicia_flexible_grasp_supervisor::StartGraspResponse_<ContainerAllocator2> & rhs)
 {
-  return lhs.accepted == rhs.accepted &&
+  return lhs.success == rhs.success &&
     lhs.message == rhs.message;
 }
 
@@ -128,12 +128,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::StartGraspResponse_<Container
 {
   static const char* value()
   {
-    return "5273b27f74d9c0fd6d8a58d787fc7be7";
+    return "937c9679a518e3a18d831e57125ea522";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::StartGraspResponse_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x5273b27f74d9c0fdULL;
-  static const uint64_t static_value2 = 0x6d8a58d787fc7be7ULL;
+  static const uint64_t static_value1 = 0x937c9679a518e3a1ULL;
+  static const uint64_t static_value2 = 0x8d831e57125ea522ULL;
 };
 
 template<class ContainerAllocator>
@@ -152,7 +152,7 @@ struct Definition< ::alicia_flexible_grasp_supervisor::StartGraspResponse_<Conta
 {
   static const char* value()
   {
-    return "bool accepted\n"
+    return "bool success\n"
 "string message\n"
 "\n"
 ;
@@ -173,7 +173,7 @@ namespace serialization
   {
     template<typename Stream, typename T> inline static void allInOne(Stream& stream, T m)
     {
-      stream.next(m.accepted);
+      stream.next(m.success);
       stream.next(m.message);
     }
 
@@ -195,8 +195,8 @@ struct Printer< ::alicia_flexible_grasp_supervisor::StartGraspResponse_<Containe
   {
     if (false || !indent.empty())
       s << std::endl;
-    s << indent << "accepted: ";
-    Printer<uint8_t>::stream(s, indent + "  ", v.accepted);
+    s << indent << "success: ";
+    Printer<uint8_t>::stream(s, indent + "  ", v.success);
     if (true || !indent.empty())
       s << std::endl;
     s << indent << "message: ";

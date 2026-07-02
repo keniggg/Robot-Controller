@@ -21,22 +21,22 @@ class TriggerZeroRequest {
   constructor(initObj={}) {
     if (initObj === null) {
       // initObj === null is a special case for deserialization where we don't initialize fields
-      this.skin_id = null;
+      this.trigger = null;
     }
     else {
-      if (initObj.hasOwnProperty('skin_id')) {
-        this.skin_id = initObj.skin_id
+      if (initObj.hasOwnProperty('trigger')) {
+        this.trigger = initObj.trigger
       }
       else {
-        this.skin_id = 0;
+        this.trigger = false;
       }
     }
   }
 
   static serialize(obj, buffer, bufferOffset) {
     // Serializes a message object of type TriggerZeroRequest
-    // Serialize message field [skin_id]
-    bufferOffset = _serializer.uint8(obj.skin_id, buffer, bufferOffset);
+    // Serialize message field [trigger]
+    bufferOffset = _serializer.bool(obj.trigger, buffer, bufferOffset);
     return bufferOffset;
   }
 
@@ -44,8 +44,8 @@ class TriggerZeroRequest {
     //deserializes a message object of type TriggerZeroRequest
     let len;
     let data = new TriggerZeroRequest(null);
-    // Deserialize message field [skin_id]
-    data.skin_id = _deserializer.uint8(buffer, bufferOffset);
+    // Deserialize message field [trigger]
+    data.trigger = _deserializer.bool(buffer, bufferOffset);
     return data;
   }
 
@@ -60,13 +60,13 @@ class TriggerZeroRequest {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return '7618ff84be9a52700a05bf68771d2fa5';
+    return 'f6d1152a533bdef9ec687318c8e489b0';
   }
 
   static messageDefinition() {
     // Returns full string definition for message
     return `
-    uint8 skin_id
+    bool trigger
     
     `;
   }
@@ -77,11 +77,11 @@ class TriggerZeroRequest {
       msg = {};
     }
     const resolved = new TriggerZeroRequest(null);
-    if (msg.skin_id !== undefined) {
-      resolved.skin_id = msg.skin_id;
+    if (msg.trigger !== undefined) {
+      resolved.trigger = msg.trigger;
     }
     else {
-      resolved.skin_id = 0
+      resolved.trigger = false
     }
 
     return resolved;
@@ -92,15 +92,15 @@ class TriggerZeroResponse {
   constructor(initObj={}) {
     if (initObj === null) {
       // initObj === null is a special case for deserialization where we don't initialize fields
-      this.ok = null;
+      this.success = null;
       this.message = null;
     }
     else {
-      if (initObj.hasOwnProperty('ok')) {
-        this.ok = initObj.ok
+      if (initObj.hasOwnProperty('success')) {
+        this.success = initObj.success
       }
       else {
-        this.ok = false;
+        this.success = false;
       }
       if (initObj.hasOwnProperty('message')) {
         this.message = initObj.message
@@ -113,8 +113,8 @@ class TriggerZeroResponse {
 
   static serialize(obj, buffer, bufferOffset) {
     // Serializes a message object of type TriggerZeroResponse
-    // Serialize message field [ok]
-    bufferOffset = _serializer.bool(obj.ok, buffer, bufferOffset);
+    // Serialize message field [success]
+    bufferOffset = _serializer.bool(obj.success, buffer, bufferOffset);
     // Serialize message field [message]
     bufferOffset = _serializer.string(obj.message, buffer, bufferOffset);
     return bufferOffset;
@@ -124,8 +124,8 @@ class TriggerZeroResponse {
     //deserializes a message object of type TriggerZeroResponse
     let len;
     let data = new TriggerZeroResponse(null);
-    // Deserialize message field [ok]
-    data.ok = _deserializer.bool(buffer, bufferOffset);
+    // Deserialize message field [success]
+    data.success = _deserializer.bool(buffer, bufferOffset);
     // Deserialize message field [message]
     data.message = _deserializer.string(buffer, bufferOffset);
     return data;
@@ -144,13 +144,13 @@ class TriggerZeroResponse {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return 'f6fcb3b1ed8c7743c7fb7d5bcca28513';
+    return '937c9679a518e3a18d831e57125ea522';
   }
 
   static messageDefinition() {
     // Returns full string definition for message
     return `
-    bool ok
+    bool success
     string message
     
     
@@ -163,11 +163,11 @@ class TriggerZeroResponse {
       msg = {};
     }
     const resolved = new TriggerZeroResponse(null);
-    if (msg.ok !== undefined) {
-      resolved.ok = msg.ok;
+    if (msg.success !== undefined) {
+      resolved.success = msg.success;
     }
     else {
-      resolved.ok = false
+      resolved.success = false
     }
 
     if (msg.message !== undefined) {
@@ -184,6 +184,6 @@ class TriggerZeroResponse {
 module.exports = {
   Request: TriggerZeroRequest,
   Response: TriggerZeroResponse,
-  md5sum() { return 'f7d6a6f40853bc7ccc545a177690ba20'; },
+  md5sum() { return '1531357144714babf83a2def976015d9'; },
   datatype() { return 'alicia_flexible_grasp_supervisor/TriggerZero'; }
 };

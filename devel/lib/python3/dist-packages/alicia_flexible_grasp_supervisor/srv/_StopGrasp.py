@@ -123,14 +123,14 @@ import struct
 
 
 class StopGraspResponse(genpy.Message):
-  _md5sum = "0d863f2a8f61769977be628494e48654"
+  _md5sum = "937c9679a518e3a18d831e57125ea522"
   _type = "alicia_flexible_grasp_supervisor/StopGraspResponse"
   _has_header = False  # flag to mark the presence of a Header object
-  _full_text = """bool stopped
+  _full_text = """bool success
 string message
 
 """
-  __slots__ = ['stopped','message']
+  __slots__ = ['success','message']
   _slot_types = ['bool','string']
 
   def __init__(self, *args, **kwds):
@@ -141,7 +141,7 @@ string message
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       stopped,message
+       success,message
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -150,12 +150,12 @@ string message
     if args or kwds:
       super(StopGraspResponse, self).__init__(*args, **kwds)
       # message fields cannot be None, assign default values for those that are
-      if self.stopped is None:
-        self.stopped = False
+      if self.success is None:
+        self.success = False
       if self.message is None:
         self.message = ''
     else:
-      self.stopped = False
+      self.success = False
       self.message = ''
 
   def _get_types(self):
@@ -170,7 +170,7 @@ string message
     :param buff: buffer, ``StringIO``
     """
     try:
-      _x = self.stopped
+      _x = self.success
       buff.write(_get_struct_B().pack(_x))
       _x = self.message
       length = len(_x)
@@ -192,8 +192,8 @@ string message
       end = 0
       start = end
       end += 1
-      (self.stopped,) = _get_struct_B().unpack(str[start:end])
-      self.stopped = bool(self.stopped)
+      (self.success,) = _get_struct_B().unpack(str[start:end])
+      self.success = bool(self.success)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -215,7 +215,7 @@ string message
     :param numpy: numpy python module
     """
     try:
-      _x = self.stopped
+      _x = self.success
       buff.write(_get_struct_B().pack(_x))
       _x = self.message
       length = len(_x)
@@ -238,8 +238,8 @@ string message
       end = 0
       start = end
       end += 1
-      (self.stopped,) = _get_struct_B().unpack(str[start:end])
-      self.stopped = bool(self.stopped)
+      (self.success,) = _get_struct_B().unpack(str[start:end])
+      self.success = bool(self.success)
       start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
@@ -265,6 +265,6 @@ def _get_struct_B():
     return _struct_B
 class StopGrasp(object):
   _type          = 'alicia_flexible_grasp_supervisor/StopGrasp'
-  _md5sum = '82bc3459aaf52f4d9d44d2af0299d950'
+  _md5sum = '5e6527b0f131fa5341cb29f70ba6b894'
   _request_class  = StopGraspRequest
   _response_class = StopGraspResponse

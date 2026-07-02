@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <sstream>
 #include <ros/ros.h>
+#include <algorithm>
 
 SerialCommunicator::SerialCommunicator(std::string port_name, uint32_t baud_rate, bool debug_mode)
     : port_name_(std::move(port_name)),
@@ -37,6 +38,10 @@ bool SerialCommunicator::connect()
         serial::Timeout timeout = serial::Timeout::simpleTimeout(1000); // 1-second timeout
         serial_port_.setTimeout(timeout);
         serial_port_.open();
+        serial_port_.flushInput();
+        serial_port_.flushOutput();
+        serial_port_.setDTR(true);
+        serial_port_.setRTS(false);
     }
     catch (const serial::IOException& e) {
         ROS_ERROR("Failed to open serial port %s: %s", port_name_.c_str(), e.what());
@@ -55,7 +60,7 @@ bool SerialCommunicator::connect()
 void SerialCommunicator::disconnect()
 {
     is_running_ = false;
-    if (read_thread_.joinable()) {
+    if (read_thread_.joinable() && std::this_thread::get_id() != read_thread_.get_id()) {
         read_thread_.join();
     }
     if (serial_port_.isOpen()) {
@@ -86,7 +91,7 @@ bool SerialCommunicator::write_raw_frame(const std::vector<uint8_t>& frame)
         ROS_WARN("Write raw frame failed: port is not open.");
         return false;
     }
-    static int s_write_sleep_ms = 6;
+    static int s_write_sleep_ms = 1;
     std::lock_guard<std::mutex> lock(serial_mutex_);
     try {
         if (debug_mode_) {
@@ -138,10 +143,10 @@ bool SerialCommunicator::write_raw_frame(const std::vector<uint8_t>& frame)
 
 void SerialCommunicator::read_thread_loop()
 {
-    ROS_INFO("Starting robust (state machine) read thread for port %s.", port_name_.c_str());
+    ROS_INFO("Starting SDK v6 read thread for port %s.", port_name_.c_str());
     std::vector<uint8_t> frame_buffer;
     bool wait_for_start = true;
-    const size_t MAX_FRAME_LENGTH = 64; // Safety limit
+    const size_t MAX_FRAME_LENGTH = 80; // Safety limit
 
     while (is_running_)
     {
@@ -153,6 +158,9 @@ void SerialCommunicator::read_thread_loop()
         try
         {
             size_t bytes_read = serial_port_.read(&byte_buffer, 1);
+            if (bytes_read == 0) {
+                continue;
+            }
 
             if (wait_for_start) {
                 if (byte_buffer == FRAME_START_BYTE) {
@@ -163,26 +171,24 @@ void SerialCommunicator::read_thread_loop()
             }
             else {
                 frame_buffer.push_back(byte_buffer);
-                if (frame_buffer.size() >= 5) {
-                    if (byte_buffer == FRAME_END_BYTE) {
-                        uint8_t payload_len = frame_buffer[2];
-                        size_t expected_total_len = static_cast<size_t>(payload_len) + 5;
+                if (frame_buffer.size() >= 4) {
+                    // SDK v6 frame format:
+                    // [AA] [CMD] [FUNC] [LEN] [DATA...] [CRC32-low8] [FF]
+                    const uint8_t data_len = frame_buffer[3];
+                    const size_t expected_total_len = static_cast<size_t>(data_len) + 6;
 
-                        if (frame_buffer.size() == expected_total_len) {
-                            if (validate_checksum(frame_buffer, payload_len)) {
-                                std::lock_guard<std::mutex> lock(queue_mutex_);
-
-                                received_packets_queue_.push_back(std::vector<uint8_t>(frame_buffer.begin() + 1, frame_buffer.end() - 2));
-
-                            } else {
-                                print_hex_frame("Received Invalid Frame (Bad Checksum): ", frame_buffer);
-                            }
-                            wait_for_start = true; // Reset for the next frame
-                        } else if (frame_buffer.size() > expected_total_len) {
-                            print_hex_frame("Received Invalid Frame (Length Mismatch): ", frame_buffer);
-                            wait_for_start = true; // Reset for the next frame
+                    if (frame_buffer.size() == expected_total_len) {
+                        if (frame_buffer.back() == FRAME_END_BYTE && validate_checksum(frame_buffer)) {
+                            std::lock_guard<std::mutex> lock(queue_mutex_);
+                            received_packets_queue_.push_back(
+                                std::vector<uint8_t>(frame_buffer.begin() + 1, frame_buffer.end() - 2));
+                        } else {
+                            print_hex_frame("Received Invalid SDK Frame: ", frame_buffer);
                         }
-                        // wait_for_start = true; 
+                        wait_for_start = true;
+                    } else if (frame_buffer.size() > expected_total_len) {
+                        print_hex_frame("Received Invalid Frame (Length Mismatch): ", frame_buffer);
+                        wait_for_start = true;
                     }
                 }
                 // Safety break for corrupted frames
@@ -204,35 +210,36 @@ void SerialCommunicator::read_thread_loop()
 }
 
 
-bool SerialCommunicator::validate_checksum(const std::vector<uint8_t>& frame, uint8_t payload_len) const
+bool SerialCommunicator::validate_checksum(const std::vector<uint8_t>& frame) const
 {
-    // The frame must have the exact expected length
-    if (frame.size() != static_cast<size_t>(payload_len) + 5) return false;
-    
-    uint8_t calculated_checksum = sumElements(frame, 3, 3 + payload_len);
+    if (frame.size() < 6) return false;
+
+    const uint8_t data_len = frame[3];
+    if (frame.size() != static_cast<size_t>(data_len) + 6) return false;
+
+    std::vector<uint8_t> payload(frame.begin() + 1, frame.end() - 2);
+    uint8_t calculated_checksum = calculate_checksum(payload);
     uint8_t received_checksum = frame[frame.size() - 2];
 
     return received_checksum == calculated_checksum;
 }
 
-uint8_t SerialCommunicator::sumElements(const std::vector<uint8_t>& data, size_t from, size_t to) const
+uint8_t SerialCommunicator::calculate_checksum(const std::vector<uint8_t>& payload) const
 {
-    uint32_t sum = 0;
-    // Ensure 'to' does not go out of bounds
-    size_t end = std::min(to, data.size());
-    for (size_t i = from; i < end; ++i) {
-        sum += data[i];
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint8_t b : payload)
+    {
+        crc ^= static_cast<uint32_t>(b);
+        for (int i = 0; i < 8; ++i)
+        {
+            if (crc & 1u)
+                crc = (crc >> 1) ^ 0xEDB88320u;
+            else
+                crc >>= 1;
+        }
     }
-    return sum % 2; // Assuming checksum is sum modulo 2
-}
-
-uint8_t SerialCommunicator::calculate_checksum(const std::vector<uint8_t>& frame_data) const
-{
-    if (frame_data.size() < 5) {
-        return 0;
-    }
-    int sum = std::accumulate(frame_data.begin() + 3, frame_data.end() - 2, 0);
-    return static_cast<uint8_t>(sum % 2);
+    crc ^= 0xFFFFFFFFu;
+    return static_cast<uint8_t>(crc & 0xFFu);
 }
 
 void SerialCommunicator::print_hex_frame(const std::string& prefix, const std::vector<uint8_t>& data) const

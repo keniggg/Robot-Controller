@@ -1,118 +1,91 @@
 #!/usr/bin/env python3
 import rospy
-from std_msgs.msg import Float32, Float32MultiArray, Bool
 from alicia_flexible_grasp_supervisor.msg import TactileFrame, TactileState
-from alicia_flexible_grasp_supervisor.srv import TriggerZero, TriggerZeroResponse
-from alicia_flexible_grasp.tactile.tactile_sdk_wrapper import TactileSdkWrapper
-from alicia_flexible_grasp.tactile.tactile_filter import LowPassFilter, split_values, summarize_pressure
-from alicia_flexible_grasp.tactile.slip_detector import SlipDetector
-
+from alicia_flexible_grasp.tactile.tactile_sdk_wrapper import TactileSDKWrapper
+from alicia_flexible_grasp.tactile.tactile_filter import LowPassArray, split_values, contact_center, SlipDetector
 
 class TactileSkinNode:
     def __init__(self):
-        def gp(name, default):
-            return rospy.get_param('~' + name, rospy.get_param('/tactile/' + name, default))
-        self.port = gp('port', '/dev/ttyACM0')
-        self.baudrate = int(gp('baudrate', 4000000))
-        self.slave_address = int(gp('slave_address', 1))
-        self.timeout = float(gp('timeout', 1.0))
-        self.send_wait_secs = float(gp('send_wait_secs', 0.005))
-        self.sample_hz = float(gp('sample_hz', 100.0))
-        self.use_fast_read = bool(gp('use_fast_read', True))
-        self.value_type = int(gp('pressure_value_type', 1))
-        self.zero_on_start = bool(gp('trigger_dynamic_zero_on_start', False))
-        self.skin1_indices = gp('skin1_indices', list(range(30)))
-        self.skin2_indices = gp('skin2_indices', list(range(30, 60)))
-        self.rows = int(gp('skin_rows', 5))
-        self.cols = int(gp('skin_cols', 6))
-        self.contact_threshold = float(gp('contact_threshold_mn', 200.0))
-        self.filter1 = LowPassFilter(float(gp('filter_alpha', 0.35)))
-        self.filter2 = LowPassFilter(float(gp('filter_alpha', 0.35)))
-        self.slip = SlipDetector(float(gp('slip_window_sec', 0.2)), float(gp('slip_drop_ratio', 0.3)))
-        self.sdk = None
-        self.pub_skin1 = rospy.Publisher('/tactile/skin1/frame', TactileFrame, queue_size=10)
-        self.pub_skin2 = rospy.Publisher('/tactile/skin2/frame', TactileFrame, queue_size=10)
+        cfg = rospy.get_param('/tactile', {})
+        self.rows = int(cfg.get('rows', 5))
+        self.cols = int(cfg.get('cols', 12))
+        self.split_mode = cfg.get('split_mode', 'half')
+        self.threshold = float(cfg.get('contact_threshold_mn', 200.0))
+        self.filter = LowPassArray(cfg.get('lowpass_alpha', 0.35))
+        self.slip = SlipDetector(cfg.get('slip_window_sec', 0.25), cfg.get('slip_drop_ratio', 0.30))
+        self.wrapper = TactileSDKWrapper(
+            port=cfg.get('port', '/dev/ttyACM0'),
+            slave_address=cfg.get('slave_address', 1),
+            baudrate=cfg.get('baudrate', 4000000),
+            sdk_path=cfg.get('sdk_path', None),
+            pressure_value_type=cfg.get('pressure_value_type', 1),
+            dynamic_zero_on_start=cfg.get('dynamic_zero_on_start', True),
+            simulate=cfg.get('simulate', False),
+        )
         self.pub_state = rospy.Publisher('/tactile/state', TactileState, queue_size=10)
-        self.pub_total = rospy.Publisher('/tactile/total_grip_force', Float32, queue_size=10)
-        self.pub_diff = rospy.Publisher('/tactile/force_diff', Float32, queue_size=10)
-        self.pub_slip = rospy.Publisher('/tactile/slip_state', Bool, queue_size=10)
-        self.pub_values = rospy.Publisher('/tactile/raw_values', Float32MultiArray, queue_size=10)
-        rospy.Service('/tactile/trigger_zero', TriggerZero, self.handle_zero)
-
-    def handle_zero(self, req):
+        self.pub_left = rospy.Publisher('/tactile/skin1/frame', TactileFrame, queue_size=10)
+        self.pub_right = rospy.Publisher('/tactile/skin2/frame', TactileFrame, queue_size=10)
+        self.connected = False
         try:
-            if self.sdk is None:
-                return TriggerZeroResponse(False, 'tactile sdk not connected')
-            if req.skin_id == 0 or req.skin_id in (1, 2):
-                self.sdk.trigger_dynamic_zero()
-                self.filter1.reset(); self.filter2.reset(); self.slip.reset()
-                return TriggerZeroResponse(True, 'dynamic zero triggered')
-            return TriggerZeroResponse(False, 'unsupported skin_id; use 0 for all')
+            self.wrapper.connect()
+            self.connected = True
+            rospy.loginfo('Tactile SDK connected')
         except Exception as exc:
-            return TriggerZeroResponse(False, str(exc))
+            rospy.logerr('Tactile connect failed: %s. Continue in invalid mode.', exc)
+        self.rate_hz = float(cfg.get('read_hz', 120))
 
-    def connect(self):
-        self.sdk = TactileSdkWrapper(self.port, self.slave_address, self.baudrate, self.timeout, self.send_wait_secs)
-        self.sdk.connect()
-        self.sdk.set_pressure_value_type(self.value_type)
-        if self.zero_on_start:
-            self.sdk.trigger_dynamic_zero()
-        rospy.loginfo('Tactile skin connected on %s addr=%s', self.port, self.slave_address)
-
-    def make_frame(self, skin_id, values, summary, stamp):
-        msg = TactileFrame()
-        msg.header.stamp = stamp
-        msg.skin_id = skin_id
-        msg.rows = self.rows
-        msg.cols = self.cols
-        msg.values = [float(v) for v in values]
-        msg.total_force = summary['total']
-        msg.max_force = summary['max_force']
-        msg.max_index = summary['max_index']
-        msg.center_x = summary['center_x']
-        msg.center_y = summary['center_y']
-        msg.contact = summary['contact']
-        msg.valid = True
-        msg.status = 'ok'
-        return msg
+    def make_frame(self, name, values, stamp):
+        f = TactileFrame()
+        f.header.stamp = stamp
+        f.header.frame_id = name
+        f.skin_name = name
+        f.values = [float(v) for v in values]
+        f.rows = self.rows
+        f.cols = self.cols if len(values) == self.rows*self.cols else max(1, int(len(values)/max(1,self.rows)))
+        f.total_force_mn = float(sum(values))
+        cx, cy, max_idx, max_val = contact_center(list(values), self.rows, self.cols)
+        f.max_force_mn = float(max_val)
+        f.max_index = int(max_idx)
+        f.center_x = float(cx)
+        f.center_y = float(cy)
+        f.contact = f.total_force_mn >= self.threshold
+        f.valid = self.connected
+        return f
 
     def spin(self):
-        self.connect()
-        rate = rospy.Rate(self.sample_hz)
+        rate = rospy.Rate(self.rate_hz)
         while not rospy.is_shutdown():
-            try:
-                data = self.sdk.read_values(fast=self.use_fast_read)
-                if data is None:
-                    rate.sleep(); continue
-                values, _ = data
-                stamp = rospy.Time.now()
-                v1 = self.filter1.update(split_values(values, self.skin1_indices))
-                v2 = self.filter2.update(split_values(values, self.skin2_indices))
-                s1 = summarize_pressure(v1, self.rows, self.cols, self.contact_threshold)
-                s2 = summarize_pressure(v2, self.rows, self.cols, self.contact_threshold)
-                f1 = self.make_frame(1, v1, s1, stamp)
-                f2 = self.make_frame(2, v2, s2, stamp)
-                total = s1['total'] + s2['total']
-                diff = s1['total'] - s2['total']
-                slip = self.slip.update(stamp.to_sec(), total)
-                st = TactileState()
-                st.header.stamp = stamp
-                st.skin1 = f1; st.skin2 = f2
-                st.total_grip_force = total
-                st.force_diff = diff
-                st.left_contact = s1['contact']
-                st.right_contact = s2['contact']
-                st.object_grasped = s1['contact'] and s2['contact']
-                st.slip_detected = slip
-                st.status = 'ok'
-                self.pub_skin1.publish(f1); self.pub_skin2.publish(f2); self.pub_state.publish(st)
-                self.pub_total.publish(Float32(data=total)); self.pub_diff.publish(Float32(data=diff)); self.pub_slip.publish(Bool(data=slip))
-                self.pub_values.publish(Float32MultiArray(data=[float(v) for v in values]))
-            except Exception as exc:
-                rospy.logwarn_throttle(1.0, 'tactile read error: %s', exc)
+            raw = self.wrapper.read_values()
+            if raw is None:
+                rate.sleep(); continue
+            values = self.filter.update(raw)
+            left_vals, right_vals = split_values(values, self.split_mode)
+            if self.split_mode == 'single':
+                right_vals = []
+            stamp = rospy.Time.now()
+            left = self.make_frame('skin1', left_vals, stamp)
+            right = self.make_frame('skin2', right_vals, stamp) if right_vals else TactileFrame()
+            if not right_vals:
+                right.header.stamp = stamp; right.skin_name='skin2'; right.valid=False
+            st = TactileState()
+            st.header.stamp = stamp
+            st.left = left
+            st.right = right
+            st.total_grip_force_mn = left.total_force_mn + right.total_force_mn
+            st.force_diff_mn = left.total_force_mn - right.total_force_mn
+            st.left_contact = left.contact
+            st.right_contact = right.contact
+            st.object_grasped = st.total_grip_force_mn >= self.threshold
+            st.slip_detected = self.slip.update(st.total_grip_force_mn)
+            st.valid = self.connected
+            self.pub_left.publish(left)
+            if right_vals:
+                self.pub_right.publish(right)
+            self.pub_state.publish(st)
             rate.sleep()
-
 
 if __name__ == '__main__':
     rospy.init_node('tactile_skin_node')
-    TactileSkinNode().spin()
+    node = TactileSkinNode()
+    rospy.on_shutdown(node.wrapper.close)
+    node.spin()

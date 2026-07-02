@@ -1,38 +1,127 @@
 #!/usr/bin/env python3
 import rospy
-import cv2
-import numpy as np
 from sensor_msgs.msg import Image
-from cv_bridge import CvBridge
+try:
+    from cv_bridge import CvBridge
+except Exception:
+    CvBridge = None
 from alicia_flexible_grasp.vision.realsense_manager import RealSenseManager
-
 
 class CameraNode:
     def __init__(self):
-        self.bridge = CvBridge()
-        self.width = rospy.get_param('~color_width', 640)
-        self.height = rospy.get_param('~color_height', 480)
-        self.fps = rospy.get_param('~fps', 30)
-        self.align = rospy.get_param('~align_depth_to_color', True)
-        self.pub_color = rospy.Publisher('/camera/color/image', Image, queue_size=2)
-        self.pub_depth = rospy.Publisher('/camera/depth/image', Image, queue_size=2)
-        self.cam = RealSenseManager(self.width, self.height, self.fps, self.align)
+        self.cfg = rospy.get_param('/camera', {})
+        self.color_topic = self.cfg.get('color_topic', '/supervisor/camera/color/image_raw')
+        self.depth_topic = self.cfg.get('depth_topic', '/supervisor/camera/depth/image_raw')
+        self.frame_id = self.cfg.get('frame_id', 'camera_color_optical_frame')
+        self.width = self.cfg.get('width', 640)
+        self.height = self.cfg.get('height', 480)
+        self.fps = self.cfg.get('fps', 30)
+        self.align_depth_to_color = self.cfg.get('align_depth_to_color', True)
+        self.fallback_to_simulation = bool(self.cfg.get('fallback_to_simulation', False))
+        self.read_failure_limit = max(1, int(self.cfg.get('read_failure_limit', 3)))
+        self._read_failures = 0
+        self.bridge = CvBridge() if CvBridge else None
+        self.pub_color = rospy.Publisher(self.color_topic, Image, queue_size=2)
+        self.pub_depth = rospy.Publisher(self.depth_topic, Image, queue_size=2)
+        simulate = bool(self.cfg.get('simulate', False))
+        self.cam = self._make_camera(simulate)
+        try:
+            self.cam.start()
+            self._publish_runtime_camera_params()
+            rospy.loginfo('Camera started: color=%s depth=%s', self.color_topic, self.depth_topic)
+        except Exception as exc:
+            if not self.fallback_to_simulation:
+                raise
+            rospy.logerr('Camera start failed: %s. Falling back to simulated camera.', exc)
+            self.cam = self._make_camera(True)
+            self.cam.start()
+            self._publish_runtime_camera_params()
+        self.rate = rospy.Rate(float(self.fps))
+
+    def _make_camera(self, simulate):
+        return RealSenseManager(
+            self.width,
+            self.height,
+            self.fps,
+            self.align_depth_to_color,
+            simulate=simulate
+        )
+
+    def _stop_camera(self):
+        try:
+            self.cam.stop()
+        except Exception as exc:
+            rospy.logwarn('Camera stop failed during recovery: %s', exc)
+
+    def shutdown(self):
+        self._stop_camera()
+
+    def _recover_from_read_error(self, exc):
+        self._read_failures += 1
+        rospy.logwarn_throttle(
+            2.0,
+            'Camera read failed (%d/%d): %s',
+            self._read_failures,
+            self.read_failure_limit,
+            exc
+        )
+        if self._read_failures < self.read_failure_limit:
+            return False
+        self._stop_camera()
+        if self.fallback_to_simulation:
+            self.cam = self._make_camera(True)
+            self.cam.start()
+            self._publish_runtime_camera_params()
+            self._read_failures = 0
+            rospy.logwarn('Camera stream switched to simulated fallback after read failures.')
+            return True
+        try:
+            self.cam = self._make_camera(False)
+            self.cam.start()
+            self._publish_runtime_camera_params()
+            self._read_failures = 0
+            rospy.logwarn('Camera stream restarted after read failures.')
+            return True
+        except Exception as restart_exc:
+            rospy.logerr(
+                'Camera restart failed after read error: %s. Keeping real camera mode; no simulated frames will be published.',
+                restart_exc
+            )
+            self._read_failures = self.read_failure_limit
+            return False
+
+    def publish_image(self, pub, cv_img, encoding):
+        if self.bridge is None:
+            return
+        msg = self.bridge.cv2_to_imgmsg(cv_img, encoding=encoding)
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = self.frame_id
+        pub.publish(msg)
+
+    def _publish_runtime_camera_params(self):
+        if hasattr(self.cam, 'depth_scale'):
+            depth_scale = float(self.cam.depth_scale)
+            rospy.set_param('/camera/depth_scale', depth_scale)
+            rospy.loginfo('Camera depth scale set to %.7f m/unit', depth_scale)
 
     def spin(self):
-        self.cam.start()
-        rate = rospy.Rate(self.fps)
-        try:
-            while not rospy.is_shutdown():
-                color, depth, _ = self.cam.frames()
-                if color is not None:
-                    self.pub_color.publish(self.bridge.cv2_to_imgmsg(color, encoding='bgr8'))
-                if depth is not None:
-                    self.pub_depth.publish(self.bridge.cv2_to_imgmsg(depth, encoding='16UC1'))
-                rate.sleep()
-        finally:
-            self.cam.stop()
-
+        while not rospy.is_shutdown():
+            try:
+                color, depth = self.cam.read()
+                self._read_failures = 0
+            except Exception as exc:
+                recovered = self._recover_from_read_error(exc)
+                if not recovered:
+                    self.rate.sleep()
+                continue
+            if color is not None:
+                self.publish_image(self.pub_color, color, 'bgr8')
+            if depth is not None:
+                self.publish_image(self.pub_depth, depth, '16UC1')
+            self.rate.sleep()
 
 if __name__ == '__main__':
     rospy.init_node('camera_node')
-    CameraNode().spin()
+    node = CameraNode()
+    rospy.on_shutdown(node.shutdown)
+    node.spin()

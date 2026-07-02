@@ -1,0 +1,8 @@
+prefix=/home/zhuyupei/alicia_wa_full/devel
+
+Name: alicia_d_moveit
+Description: Description of alicia_d_moveit
+Version: 0.3.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

@@ -1,8 +1,8 @@
 # generated from genmsg/cmake/pkg-genmsg.cmake.em
 
-message(STATUS "alicia_flexible_grasp_supervisor: 5 messages, 5 services")
+message(STATUS "alicia_flexible_grasp_supervisor: 5 messages, 8 services")
 
-set(MSG_I_FLAGS "-Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg;-Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg;-Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg;-Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg")
+set(MSG_I_FLAGS "-Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg;-Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg;-Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg;-Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg")
 
 # Find all generators
 find_package(gencpp REQUIRED)
@@ -29,12 +29,12 @@ add_custom_target(_alicia_flexible_grasp_supervisor_generate_messages_check_deps
 
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg" NAME_WE)
 add_custom_target(_alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename}
-  COMMAND ${CATKIN_ENV} ${PYTHON_EXECUTABLE} ${GENMSG_CHECK_DEPS_SCRIPT} "alicia_flexible_grasp_supervisor" "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg" "std_msgs/Header:geometry_msgs/Quaternion:geometry_msgs/Point:geometry_msgs/Pose"
+  COMMAND ${CATKIN_ENV} ${PYTHON_EXECUTABLE} ${GENMSG_CHECK_DEPS_SCRIPT} "alicia_flexible_grasp_supervisor" "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg" "std_msgs/Header:geometry_msgs/Pose:geometry_msgs/PoseStamped:geometry_msgs/Point:geometry_msgs/Quaternion"
 )
 
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg" NAME_WE)
 add_custom_target(_alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename}
-  COMMAND ${CATKIN_ENV} ${PYTHON_EXECUTABLE} ${GENMSG_CHECK_DEPS_SCRIPT} "alicia_flexible_grasp_supervisor" "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg" "std_msgs/Header:geometry_msgs/Quaternion:geometry_msgs/Point:geometry_msgs/Pose"
+  COMMAND ${CATKIN_ENV} ${PYTHON_EXECUTABLE} ${GENMSG_CHECK_DEPS_SCRIPT} "alicia_flexible_grasp_supervisor" "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg" "std_msgs/Header"
 )
 
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/SafetyState.msg" NAME_WE)
@@ -59,7 +59,22 @@ add_custom_target(_alicia_flexible_grasp_supervisor_generate_messages_check_deps
 
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv" NAME_WE)
 add_custom_target(_alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename}
-  COMMAND ${CATKIN_ENV} ${PYTHON_EXECUTABLE} ${GENMSG_CHECK_DEPS_SCRIPT} "alicia_flexible_grasp_supervisor" "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv" "geometry_msgs/Quaternion:geometry_msgs/Point:geometry_msgs/Pose"
+  COMMAND ${CATKIN_ENV} ${PYTHON_EXECUTABLE} ${GENMSG_CHECK_DEPS_SCRIPT} "alicia_flexible_grasp_supervisor" "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv" "std_msgs/Header:geometry_msgs/Pose:geometry_msgs/PoseStamped:geometry_msgs/Point:geometry_msgs/Quaternion"
+)
+
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv" NAME_WE)
+add_custom_target(_alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename}
+  COMMAND ${CATKIN_ENV} ${PYTHON_EXECUTABLE} ${GENMSG_CHECK_DEPS_SCRIPT} "alicia_flexible_grasp_supervisor" "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv" ""
+)
+
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv" NAME_WE)
+add_custom_target(_alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename}
+  COMMAND ${CATKIN_ENV} ${PYTHON_EXECUTABLE} ${GENMSG_CHECK_DEPS_SCRIPT} "alicia_flexible_grasp_supervisor" "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv" ""
+)
+
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv" NAME_WE)
+add_custom_target(_alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename}
+  COMMAND ${CATKIN_ENV} ${PYTHON_EXECUTABLE} ${GENMSG_CHECK_DEPS_SCRIPT} "alicia_flexible_grasp_supervisor" "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv" ""
 )
 
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv" NAME_WE)
@@ -88,13 +103,13 @@ _generate_msg_cpp(alicia_flexible_grasp_supervisor
 _generate_msg_cpp(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
   ${CATKIN_DEVEL_PREFIX}/${gencpp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_cpp(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg"
   ${CATKIN_DEVEL_PREFIX}/${gencpp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_cpp(alicia_flexible_grasp_supervisor
@@ -126,7 +141,25 @@ _generate_srv_cpp(alicia_flexible_grasp_supervisor
 _generate_srv_cpp(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
+  ${CATKIN_DEVEL_PREFIX}/${gencpp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_cpp(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${gencpp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_cpp(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${gencpp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_cpp(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv"
+  "${MSG_I_FLAGS}"
+  ""
   ${CATKIN_DEVEL_PREFIX}/${gencpp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_srv_cpp(alicia_flexible_grasp_supervisor
@@ -166,6 +199,12 @@ get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexi
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 
@@ -193,13 +232,13 @@ _generate_msg_eus(alicia_flexible_grasp_supervisor
 _generate_msg_eus(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
   ${CATKIN_DEVEL_PREFIX}/${geneus_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_eus(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg"
   ${CATKIN_DEVEL_PREFIX}/${geneus_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_eus(alicia_flexible_grasp_supervisor
@@ -231,7 +270,25 @@ _generate_srv_eus(alicia_flexible_grasp_supervisor
 _generate_srv_eus(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
+  ${CATKIN_DEVEL_PREFIX}/${geneus_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_eus(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${geneus_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_eus(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${geneus_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_eus(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv"
+  "${MSG_I_FLAGS}"
+  ""
   ${CATKIN_DEVEL_PREFIX}/${geneus_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_srv_eus(alicia_flexible_grasp_supervisor
@@ -271,6 +328,12 @@ get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexi
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 
@@ -298,13 +361,13 @@ _generate_msg_lisp(alicia_flexible_grasp_supervisor
 _generate_msg_lisp(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
   ${CATKIN_DEVEL_PREFIX}/${genlisp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_lisp(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg"
   ${CATKIN_DEVEL_PREFIX}/${genlisp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_lisp(alicia_flexible_grasp_supervisor
@@ -336,7 +399,25 @@ _generate_srv_lisp(alicia_flexible_grasp_supervisor
 _generate_srv_lisp(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
+  ${CATKIN_DEVEL_PREFIX}/${genlisp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_lisp(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${genlisp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_lisp(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${genlisp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_lisp(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv"
+  "${MSG_I_FLAGS}"
+  ""
   ${CATKIN_DEVEL_PREFIX}/${genlisp_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_srv_lisp(alicia_flexible_grasp_supervisor
@@ -376,6 +457,12 @@ get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexi
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 
@@ -403,13 +490,13 @@ _generate_msg_nodejs(alicia_flexible_grasp_supervisor
 _generate_msg_nodejs(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
   ${CATKIN_DEVEL_PREFIX}/${gennodejs_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_nodejs(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg"
   ${CATKIN_DEVEL_PREFIX}/${gennodejs_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_nodejs(alicia_flexible_grasp_supervisor
@@ -441,7 +528,25 @@ _generate_srv_nodejs(alicia_flexible_grasp_supervisor
 _generate_srv_nodejs(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
+  ${CATKIN_DEVEL_PREFIX}/${gennodejs_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_nodejs(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${gennodejs_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_nodejs(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${gennodejs_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_nodejs(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv"
+  "${MSG_I_FLAGS}"
+  ""
   ${CATKIN_DEVEL_PREFIX}/${gennodejs_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_srv_nodejs(alicia_flexible_grasp_supervisor
@@ -481,6 +586,12 @@ get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexi
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 
@@ -508,13 +619,13 @@ _generate_msg_py(alicia_flexible_grasp_supervisor
 _generate_msg_py(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
   ${CATKIN_DEVEL_PREFIX}/${genpy_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_py(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg"
   ${CATKIN_DEVEL_PREFIX}/${genpy_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_msg_py(alicia_flexible_grasp_supervisor
@@ -546,7 +657,25 @@ _generate_srv_py(alicia_flexible_grasp_supervisor
 _generate_srv_py(alicia_flexible_grasp_supervisor
   "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv"
   "${MSG_I_FLAGS}"
-  "/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg"
+  "/opt/ros/noetic/share/std_msgs/cmake/../msg/Header.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Pose.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/PoseStamped.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Point.msg;/opt/ros/noetic/share/geometry_msgs/cmake/../msg/Quaternion.msg"
+  ${CATKIN_DEVEL_PREFIX}/${genpy_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_py(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${genpy_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_py(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv"
+  "${MSG_I_FLAGS}"
+  ""
+  ${CATKIN_DEVEL_PREFIX}/${genpy_INSTALL_DIR}/alicia_flexible_grasp_supervisor
+)
+_generate_srv_py(alicia_flexible_grasp_supervisor
+  "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv"
+  "${MSG_I_FLAGS}"
+  ""
   ${CATKIN_DEVEL_PREFIX}/${genpy_INSTALL_DIR}/alicia_flexible_grasp_supervisor
 )
 _generate_srv_py(alicia_flexible_grasp_supervisor
@@ -586,6 +715,12 @@ get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexi
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetJointCommand.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
+get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv" NAME_WE)
+add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 get_filename_component(_filename "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv" NAME_WE)
 add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py _alicia_flexible_grasp_supervisor_generate_messages_check_deps_${_filename})
 
@@ -608,11 +743,11 @@ endif()
 if(TARGET std_msgs_generate_messages_cpp)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp std_msgs_generate_messages_cpp)
 endif()
-if(TARGET geometry_msgs_generate_messages_cpp)
-  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp geometry_msgs_generate_messages_cpp)
-endif()
 if(TARGET sensor_msgs_generate_messages_cpp)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp sensor_msgs_generate_messages_cpp)
+endif()
+if(TARGET geometry_msgs_generate_messages_cpp)
+  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_cpp geometry_msgs_generate_messages_cpp)
 endif()
 
 if(geneus_INSTALL_DIR AND EXISTS ${CATKIN_DEVEL_PREFIX}/${geneus_INSTALL_DIR}/alicia_flexible_grasp_supervisor)
@@ -625,11 +760,11 @@ endif()
 if(TARGET std_msgs_generate_messages_eus)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus std_msgs_generate_messages_eus)
 endif()
-if(TARGET geometry_msgs_generate_messages_eus)
-  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus geometry_msgs_generate_messages_eus)
-endif()
 if(TARGET sensor_msgs_generate_messages_eus)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus sensor_msgs_generate_messages_eus)
+endif()
+if(TARGET geometry_msgs_generate_messages_eus)
+  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_eus geometry_msgs_generate_messages_eus)
 endif()
 
 if(genlisp_INSTALL_DIR AND EXISTS ${CATKIN_DEVEL_PREFIX}/${genlisp_INSTALL_DIR}/alicia_flexible_grasp_supervisor)
@@ -642,11 +777,11 @@ endif()
 if(TARGET std_msgs_generate_messages_lisp)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp std_msgs_generate_messages_lisp)
 endif()
-if(TARGET geometry_msgs_generate_messages_lisp)
-  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp geometry_msgs_generate_messages_lisp)
-endif()
 if(TARGET sensor_msgs_generate_messages_lisp)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp sensor_msgs_generate_messages_lisp)
+endif()
+if(TARGET geometry_msgs_generate_messages_lisp)
+  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_lisp geometry_msgs_generate_messages_lisp)
 endif()
 
 if(gennodejs_INSTALL_DIR AND EXISTS ${CATKIN_DEVEL_PREFIX}/${gennodejs_INSTALL_DIR}/alicia_flexible_grasp_supervisor)
@@ -659,11 +794,11 @@ endif()
 if(TARGET std_msgs_generate_messages_nodejs)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs std_msgs_generate_messages_nodejs)
 endif()
-if(TARGET geometry_msgs_generate_messages_nodejs)
-  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs geometry_msgs_generate_messages_nodejs)
-endif()
 if(TARGET sensor_msgs_generate_messages_nodejs)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs sensor_msgs_generate_messages_nodejs)
+endif()
+if(TARGET geometry_msgs_generate_messages_nodejs)
+  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_nodejs geometry_msgs_generate_messages_nodejs)
 endif()
 
 if(genpy_INSTALL_DIR AND EXISTS ${CATKIN_DEVEL_PREFIX}/${genpy_INSTALL_DIR}/alicia_flexible_grasp_supervisor)
@@ -677,9 +812,9 @@ endif()
 if(TARGET std_msgs_generate_messages_py)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py std_msgs_generate_messages_py)
 endif()
-if(TARGET geometry_msgs_generate_messages_py)
-  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py geometry_msgs_generate_messages_py)
-endif()
 if(TARGET sensor_msgs_generate_messages_py)
   add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py sensor_msgs_generate_messages_py)
+endif()
+if(TARGET geometry_msgs_generate_messages_py)
+  add_dependencies(alicia_flexible_grasp_supervisor_generate_messages_py geometry_msgs_generate_messages_py)
 endif()

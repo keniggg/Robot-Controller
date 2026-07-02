@@ -6,37 +6,18 @@ python3 = True if sys.hexversion > 0x03000000 else False
 import genpy
 import struct
 
-import geometry_msgs.msg
 import std_msgs.msg
 
 class GraspState(genpy.Message):
-  _md5sum = "75215c45032076e51dbd82164d6951cb"
+  _md5sum = "c85c0a7de717463c53d5cec2b43693e8"
   _type = "alicia_flexible_grasp_supervisor/GraspState"
   _has_header = True  # flag to mark the presence of a Header object
   _full_text = """std_msgs/Header header
-uint8 IDLE=0
-uint8 SEARCH_OBJECT=1
-uint8 ESTIMATE_POSE=2
-uint8 PLAN_PREGRASP=3
-uint8 MOVE_PREGRASP=4
-uint8 APPROACH_OBJECT=5
-uint8 COMPLIANT_CLOSE=6
-uint8 GRASP_VERIFY=7
-uint8 LIFT_OBJECT=8
-uint8 PLACE_OBJECT=9
-uint8 RELEASE_OBJECT=10
-uint8 SUCCESS=11
-uint8 FAILED=12
-uint8 EMERGENCY_STOP=13
-uint8 state
-string state_name
-bool running
+string state
+int32 stage
+bool active
 bool success
 string message
-float32 current_force
-float32 target_force
-geometry_msgs/Pose object_pose_base
-geometry_msgs/Pose target_pose
 
 ================================================================================
 MSG: std_msgs/Header
@@ -53,47 +34,9 @@ uint32 seq
 time stamp
 #Frame this data is associated with
 string frame_id
-
-================================================================================
-MSG: geometry_msgs/Pose
-# A representation of pose in free space, composed of position and orientation. 
-Point position
-Quaternion orientation
-
-================================================================================
-MSG: geometry_msgs/Point
-# This contains the position of a point in free space
-float64 x
-float64 y
-float64 z
-
-================================================================================
-MSG: geometry_msgs/Quaternion
-# This represents an orientation in free space in quaternion form.
-
-float64 x
-float64 y
-float64 z
-float64 w
 """
-  # Pseudo-constants
-  IDLE = 0
-  SEARCH_OBJECT = 1
-  ESTIMATE_POSE = 2
-  PLAN_PREGRASP = 3
-  MOVE_PREGRASP = 4
-  APPROACH_OBJECT = 5
-  COMPLIANT_CLOSE = 6
-  GRASP_VERIFY = 7
-  LIFT_OBJECT = 8
-  PLACE_OBJECT = 9
-  RELEASE_OBJECT = 10
-  SUCCESS = 11
-  FAILED = 12
-  EMERGENCY_STOP = 13
-
-  __slots__ = ['header','state','state_name','running','success','message','current_force','target_force','object_pose_base','target_pose']
-  _slot_types = ['std_msgs/Header','uint8','string','bool','bool','string','float32','float32','geometry_msgs/Pose','geometry_msgs/Pose']
+  __slots__ = ['header','state','stage','active','success','message']
+  _slot_types = ['std_msgs/Header','string','int32','bool','bool','string']
 
   def __init__(self, *args, **kwds):
     """
@@ -103,7 +46,7 @@ float64 w
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       header,state,state_name,running,success,message,current_force,target_force,object_pose_base,target_pose
+       header,state,stage,active,success,message
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -115,34 +58,22 @@ float64 w
       if self.header is None:
         self.header = std_msgs.msg.Header()
       if self.state is None:
-        self.state = 0
-      if self.state_name is None:
-        self.state_name = ''
-      if self.running is None:
-        self.running = False
+        self.state = ''
+      if self.stage is None:
+        self.stage = 0
+      if self.active is None:
+        self.active = False
       if self.success is None:
         self.success = False
       if self.message is None:
         self.message = ''
-      if self.current_force is None:
-        self.current_force = 0.
-      if self.target_force is None:
-        self.target_force = 0.
-      if self.object_pose_base is None:
-        self.object_pose_base = geometry_msgs.msg.Pose()
-      if self.target_pose is None:
-        self.target_pose = geometry_msgs.msg.Pose()
     else:
       self.header = std_msgs.msg.Header()
-      self.state = 0
-      self.state_name = ''
-      self.running = False
+      self.state = ''
+      self.stage = 0
+      self.active = False
       self.success = False
       self.message = ''
-      self.current_force = 0.
-      self.target_force = 0.
-      self.object_pose_base = geometry_msgs.msg.Pose()
-      self.target_pose = geometry_msgs.msg.Pose()
 
   def _get_types(self):
     """
@@ -165,23 +96,19 @@ float64 w
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self.state
-      buff.write(_get_struct_B().pack(_x))
-      _x = self.state_name
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self
-      buff.write(_get_struct_2B().pack(_x.running, _x.success))
+      buff.write(_get_struct_i2B().pack(_x.stage, _x.active, _x.success))
       _x = self.message
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_2f14d().pack(_x.current_force, _x.target_force, _x.object_pose_base.position.x, _x.object_pose_base.position.y, _x.object_pose_base.position.z, _x.object_pose_base.orientation.x, _x.object_pose_base.orientation.y, _x.object_pose_base.orientation.z, _x.object_pose_base.orientation.w, _x.target_pose.position.x, _x.target_pose.position.y, _x.target_pose.position.z, _x.target_pose.orientation.x, _x.target_pose.orientation.y, _x.target_pose.orientation.z, _x.target_pose.orientation.w))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -195,10 +122,6 @@ float64 w
     try:
       if self.header is None:
         self.header = std_msgs.msg.Header()
-      if self.object_pose_base is None:
-        self.object_pose_base = geometry_msgs.msg.Pose()
-      if self.target_pose is None:
-        self.target_pose = geometry_msgs.msg.Pose()
       end = 0
       _x = self
       start = end
@@ -214,22 +137,19 @@ float64 w
       else:
         self.header.frame_id = str[start:end]
       start = end
-      end += 1
-      (self.state,) = _get_struct_B().unpack(str[start:end])
-      start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.state_name = str[start:end].decode('utf-8', 'rosmsg')
+        self.state = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.state_name = str[start:end]
+        self.state = str[start:end]
       _x = self
       start = end
-      end += 2
-      (_x.running, _x.success,) = _get_struct_2B().unpack(str[start:end])
-      self.running = bool(self.running)
+      end += 6
+      (_x.stage, _x.active, _x.success,) = _get_struct_i2B().unpack(str[start:end])
+      self.active = bool(self.active)
       self.success = bool(self.success)
       start = end
       end += 4
@@ -240,10 +160,6 @@ float64 w
         self.message = str[start:end].decode('utf-8', 'rosmsg')
       else:
         self.message = str[start:end]
-      _x = self
-      start = end
-      end += 120
-      (_x.current_force, _x.target_force, _x.object_pose_base.position.x, _x.object_pose_base.position.y, _x.object_pose_base.position.z, _x.object_pose_base.orientation.x, _x.object_pose_base.orientation.y, _x.object_pose_base.orientation.z, _x.object_pose_base.orientation.w, _x.target_pose.position.x, _x.target_pose.position.y, _x.target_pose.position.z, _x.target_pose.orientation.x, _x.target_pose.orientation.y, _x.target_pose.orientation.z, _x.target_pose.orientation.w,) = _get_struct_2f14d().unpack(str[start:end])
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -265,23 +181,19 @@ float64 w
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self.state
-      buff.write(_get_struct_B().pack(_x))
-      _x = self.state_name
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
       _x = self
-      buff.write(_get_struct_2B().pack(_x.running, _x.success))
+      buff.write(_get_struct_i2B().pack(_x.stage, _x.active, _x.success))
       _x = self.message
       length = len(_x)
       if python3 or type(_x) == unicode:
         _x = _x.encode('utf-8')
         length = len(_x)
       buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
-      _x = self
-      buff.write(_get_struct_2f14d().pack(_x.current_force, _x.target_force, _x.object_pose_base.position.x, _x.object_pose_base.position.y, _x.object_pose_base.position.z, _x.object_pose_base.orientation.x, _x.object_pose_base.orientation.y, _x.object_pose_base.orientation.z, _x.object_pose_base.orientation.w, _x.target_pose.position.x, _x.target_pose.position.y, _x.target_pose.position.z, _x.target_pose.orientation.x, _x.target_pose.orientation.y, _x.target_pose.orientation.z, _x.target_pose.orientation.w))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -296,10 +208,6 @@ float64 w
     try:
       if self.header is None:
         self.header = std_msgs.msg.Header()
-      if self.object_pose_base is None:
-        self.object_pose_base = geometry_msgs.msg.Pose()
-      if self.target_pose is None:
-        self.target_pose = geometry_msgs.msg.Pose()
       end = 0
       _x = self
       start = end
@@ -315,22 +223,19 @@ float64 w
       else:
         self.header.frame_id = str[start:end]
       start = end
-      end += 1
-      (self.state,) = _get_struct_B().unpack(str[start:end])
-      start = end
       end += 4
       (length,) = _struct_I.unpack(str[start:end])
       start = end
       end += length
       if python3:
-        self.state_name = str[start:end].decode('utf-8', 'rosmsg')
+        self.state = str[start:end].decode('utf-8', 'rosmsg')
       else:
-        self.state_name = str[start:end]
+        self.state = str[start:end]
       _x = self
       start = end
-      end += 2
-      (_x.running, _x.success,) = _get_struct_2B().unpack(str[start:end])
-      self.running = bool(self.running)
+      end += 6
+      (_x.stage, _x.active, _x.success,) = _get_struct_i2B().unpack(str[start:end])
+      self.active = bool(self.active)
       self.success = bool(self.success)
       start = end
       end += 4
@@ -341,10 +246,6 @@ float64 w
         self.message = str[start:end].decode('utf-8', 'rosmsg')
       else:
         self.message = str[start:end]
-      _x = self
-      start = end
-      end += 120
-      (_x.current_force, _x.target_force, _x.object_pose_base.position.x, _x.object_pose_base.position.y, _x.object_pose_base.position.z, _x.object_pose_base.orientation.x, _x.object_pose_base.orientation.y, _x.object_pose_base.orientation.z, _x.object_pose_base.orientation.w, _x.target_pose.position.x, _x.target_pose.position.y, _x.target_pose.position.z, _x.target_pose.orientation.x, _x.target_pose.orientation.y, _x.target_pose.orientation.z, _x.target_pose.orientation.w,) = _get_struct_2f14d().unpack(str[start:end])
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -353,27 +254,15 @@ _struct_I = genpy.struct_I
 def _get_struct_I():
     global _struct_I
     return _struct_I
-_struct_2B = None
-def _get_struct_2B():
-    global _struct_2B
-    if _struct_2B is None:
-        _struct_2B = struct.Struct("<2B")
-    return _struct_2B
-_struct_2f14d = None
-def _get_struct_2f14d():
-    global _struct_2f14d
-    if _struct_2f14d is None:
-        _struct_2f14d = struct.Struct("<2f14d")
-    return _struct_2f14d
 _struct_3I = None
 def _get_struct_3I():
     global _struct_3I
     if _struct_3I is None:
         _struct_3I = struct.Struct("<3I")
     return _struct_3I
-_struct_B = None
-def _get_struct_B():
-    global _struct_B
-    if _struct_B is None:
-        _struct_B = struct.Struct("<B")
-    return _struct_B
+_struct_i2B = None
+def _get_struct_i2B():
+    global _struct_i2B
+    if _struct_i2B is None:
+        _struct_i2B = struct.Struct("<i2B")
+    return _struct_i2B
