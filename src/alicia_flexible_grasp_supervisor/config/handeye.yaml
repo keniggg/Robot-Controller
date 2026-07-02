@@ -1,0 +1,15 @@
+handeye:
+  # eye-on-hand: easy_handeye 标定的是 T_tool0_camera_link。
+  # 位姿估计优先走 TF 链 camera_link -> tool0 -> base_link；下面的 xyz/q 仅作为 TF 查询失败时的兜底。
+  mode: "eye_on_hand"
+  base_frame: "base_link"
+  parent_frame: "tool0"
+  camera_frame: "camera_link"
+  child_frame: "camera_link"
+  calibration_file: "~/.ros/easy_handeye/d405_v4l2_charuco_handeyecalibration_eye_on_hand.yaml"
+  translation_xyz: [-0.08449419177141224, 0.010050634195174785, -0.12336734659548196]
+  rotation_xyzw: [0.004411081891470849, -0.6852704741316863, 0.00005497500519710642, 0.7282753027651219]
+  publish_static_tf: true
+  use_tf: true
+  tf_lookup_latest: true
+  tf_timeout_sec: 0.2

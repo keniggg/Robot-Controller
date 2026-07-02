@@ -1,0 +1,10 @@
+<launch>
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/grasp_params.yaml" />
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/safety_limits.yaml" />
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/joint_limits.yaml" />
+
+  <node pkg="alicia_flexible_grasp_supervisor" type="compliant_gripper_controller.py" name="compliant_gripper_controller" output="screen" />
+  <node pkg="alicia_flexible_grasp_supervisor" type="grasp_task_node.py" name="grasp_task_node" output="screen" />
+  <node pkg="alicia_flexible_grasp_supervisor" type="safety_monitor_node.py" name="safety_monitor_node" output="screen" />
+  <node pkg="alicia_flexible_grasp_supervisor" type="data_logger_node.py" name="data_logger_node" output="screen" />
+</launch>

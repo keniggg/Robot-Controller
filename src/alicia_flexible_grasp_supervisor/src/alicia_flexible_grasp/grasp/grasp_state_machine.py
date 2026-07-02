@@ -1,0 +1,24 @@
+class GraspStages:
+    IDLE = 0
+    SEARCH_OBJECT = 1
+    PLAN_PREGRASP = 2
+    MOVE_PREGRASP = 3
+    APPROACH_TARGET = 9
+    COMPLIANT_CLOSE = 4
+    LIFT_OBJECT = 5
+    SUCCESS = 6
+    FAILED = 7
+    EMERGENCY_STOP = 8
+
+STATE_NAMES = {
+    GraspStages.IDLE: 'IDLE',
+    GraspStages.SEARCH_OBJECT: 'SEARCH_OBJECT',
+    GraspStages.PLAN_PREGRASP: 'PLAN_PREGRASP',
+    GraspStages.MOVE_PREGRASP: 'MOVE_PREGRASP',
+    GraspStages.APPROACH_TARGET: 'APPROACH_TARGET',
+    GraspStages.COMPLIANT_CLOSE: 'COMPLIANT_CLOSE',
+    GraspStages.LIFT_OBJECT: 'LIFT_OBJECT',
+    GraspStages.SUCCESS: 'SUCCESS',
+    GraspStages.FAILED: 'FAILED',
+    GraspStages.EMERGENCY_STOP: 'EMERGENCY_STOP',
+}

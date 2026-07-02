@@ -1,0 +1,19 @@
+tactile:
+  enabled: true
+  simulate: false
+  sdk_path: "$(env HOME)/catkin_ws/src/Electronic-Skin-ML"
+  port: "/dev/alicia_skin"
+  baudrate: 4000000
+  slave_address: 1
+  pressure_value_type: 1      # 1=mN calibrated, 0=raw ADC
+  dynamic_zero_on_start: true
+  read_hz: 120
+  rows: 5
+  cols: 12
+  # 如果只有一块 60 点电子皮肤，可把 split_mode 设为 single。
+  # 如果左右指各占一半，则设为 half: left=0..29, right=30..59。
+  split_mode: "half"          # single | half
+  contact_threshold_mn: 200.0
+  lowpass_alpha: 0.35
+  slip_drop_ratio: 0.30
+  slip_window_sec: 0.25

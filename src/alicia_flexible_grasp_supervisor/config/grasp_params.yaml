@@ -1,0 +1,24 @@
+grasp:
+  pregrasp_distance_m: 0.08
+  pregrasp_offset_mode: "camera_ray"
+  final_approach_offset_m: 0.015
+  approach_step_m: 0.002
+  approach_rate_hz: 10
+  lift_height_m: 0.05
+  timeout_sec: 25.0
+  default_orientation_xyzw: [0.0, 0.7071, 0.0, 0.7071]
+
+force:
+  contact_threshold_mn: 200.0
+  target_force_mn: 1500.0
+  max_force_mn: 4000.0
+  hold_force_min_mn: 800.0
+  slip_drop_ratio: 0.30
+
+gripper:
+  open_position_m: 0.0
+  close_limit_m: 0.05
+  close_step_fast_m: 0.002
+  close_step_slow_m: 0.0007
+  open_step_safe_m: 0.003
+  command_rate_hz: 25

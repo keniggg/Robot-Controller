@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+import pathlib
+import sys
+import time
+import types
+import unittest
+
+from PyQt5 import QtCore
+from geometry_msgs.msg import PoseStamped
+import rospy
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+for path in (ROOT, ROOT / 'src'):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from gui.widgets.perception_widget import PerceptionWidget
+from alicia_flexible_grasp.grasp.grasp_pose_generator import make_pregrasp_pose
+
+APP = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+
+
+class FakeLabel:
+    def __init__(self):
+        self.text = ''
+
+    def setText(self, text):
+        self.text = text
+
+
+class FakeButton:
+    def __init__(self):
+        self.enabled = True
+
+    def setEnabled(self, enabled):
+        self.enabled = bool(enabled)
+
+
+class FakeSpin:
+    def __init__(self, value):
+        self._value = value
+
+    def value(self):
+        return self._value
+
+
+class PregraspAsyncTest(unittest.TestCase):
+    def _pose(self, x):
+        pose = PoseStamped()
+        pose.pose.position.x = float(x)
+        pose.pose.orientation.w = 1.0
+        return pose
+
+    def _object_msg(self, label='mouse', u=320, v=240, depth=0.5, base_xyz=(0.1, 0.2, 0.3)):
+        pose_base = PoseStamped()
+        pose_base.pose.position.x = float(base_xyz[0])
+        pose_base.pose.position.y = float(base_xyz[1])
+        pose_base.pose.position.z = float(base_xyz[2])
+        pose_base.pose.orientation.w = 1.0
+        return types.SimpleNamespace(
+            detected=True,
+            label=label,
+            u=int(u),
+            v=int(v),
+            depth_m=float(depth),
+            bbox_x=int(u) - 20,
+            bbox_y=int(v) - 20,
+            bbox_width=40,
+            bbox_height=40,
+            pose_base=pose_base,
+        )
+
+    def test_plan_pregrasp_starts_worker_instead_of_sync_service_call(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = types.SimpleNamespace(value=1)
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._planning_active = False
+        widget._plan_token = 0
+        widget._pregrasp_target_is_stable = lambda: True
+        started = []
+
+        widget._start_pregrasp_worker = lambda pose, execute, token: started.append((pose, execute, token))
+
+        PerceptionWidget.plan_pregrasp(widget, False)
+
+        self.assertEqual(len(started), 1)
+        self.assertFalse(started[0][1])
+        self.assertTrue(widget._planning_active)
+        self.assertFalse(widget.plan_pregrasp_btn.enabled)
+        self.assertIn('后台规划', widget.status.text)
+
+    def test_execute_pregrasp_uses_last_successful_plan_pose(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget._planned_pregrasp_pose = self._pose(1.0)
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._planning_active = False
+        widget._plan_token = 0
+        widget._localization_ok = True
+        widget._planned_pregrasp_executable = True
+        started = []
+
+        widget._start_pregrasp_worker = lambda pose, execute, token: started.append((pose, execute, token))
+
+        PerceptionWidget.plan_pregrasp(widget, True)
+
+        self.assertEqual(len(started), 1)
+        self.assertTrue(started[0][1])
+        self.assertAlmostEqual(started[0][0].pose.position.x, 1.0)
+        self.assertIn('后台执行', widget.status.text)
+
+    def test_execute_pregrasp_requires_a_successful_plan_first(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget._planned_pregrasp_pose = None
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._planning_active = False
+        widget._plan_token = 0
+        widget._localization_ok = True
+        started = []
+
+        widget._start_pregrasp_worker = lambda pose, execute, token: started.append((pose, execute, token))
+
+        PerceptionWidget.plan_pregrasp(widget, True)
+
+        self.assertEqual(started, [])
+        self.assertIn('先点击规划预抓取', widget.status.text)
+
+    def test_stale_live_pose_blocks_non_executing_plan(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._planning_active = False
+        widget._plan_token = 0
+        widget._pregrasp_pose_is_stale = lambda: True
+        widget._pregrasp_target_is_stable = lambda: True
+        started = []
+
+        widget._start_pregrasp_worker = lambda pose, execute, token: started.append((pose, execute, token))
+
+        PerceptionWidget.plan_pregrasp(widget, False)
+
+        self.assertEqual(started, [])
+        self.assertFalse(widget._planning_active)
+        self.assertIn('过期', widget.status.text)
+
+    def test_pregrasp_pose_is_stale_uses_pose_stamp(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget.pregrasp_pose.header.stamp = rospy.Time.from_sec(98.0)
+        widget._max_object_age_sec = 1.5
+        widget._last_object_receive_time = None
+        original_now = rospy.Time.now
+        rospy.Time.now = staticmethod(lambda: rospy.Time.from_sec(100.0))
+        try:
+            self.assertTrue(PerceptionWidget._pregrasp_pose_is_stale(widget))
+        finally:
+            rospy.Time.now = original_now
+
+    def test_pregrasp_pose_uses_receive_time_for_slow_yolo_stamp(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget.pregrasp_pose.header.stamp = rospy.Time.from_sec(98.0)
+        widget._max_object_age_sec = 1.5
+        original_now = rospy.Time.now
+        original_monotonic = time.monotonic
+        rospy.Time.now = staticmethod(lambda: rospy.Time.from_sec(101.0))
+        time.monotonic = lambda: 50.0
+        widget._last_object_receive_time = 49.7
+        try:
+            self.assertFalse(PerceptionWidget._pregrasp_pose_is_stale(widget))
+        finally:
+            rospy.Time.now = original_now
+            time.monotonic = original_monotonic
+
+    def test_unstable_live_pose_blocks_non_executing_plan(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._planning_active = False
+        widget._plan_token = 0
+        widget._pregrasp_pose_is_stale = lambda: False
+        widget._pregrasp_target_is_stable = lambda: False
+        started = []
+
+        widget._start_pregrasp_worker = lambda pose, execute, token: started.append((pose, execute, token))
+
+        PerceptionWidget.plan_pregrasp(widget, False)
+
+        self.assertEqual(started, [])
+        self.assertFalse(widget._planning_active)
+        self.assertIn('不稳定', widget.status.text)
+
+    def test_target_stability_accepts_depth_noise_when_pixel_target_stays_locked(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget._object_stable_count = 0
+        widget._last_object_base_xyz = None
+        widget._last_target_signature = None
+        widget._required_stable_detections = 3
+        widget._object_stability_radius_m = 0.03
+        widget._object_stability_pixel_radius_px = 45.0
+        widget._object_stability_depth_radius_m = 0.15
+
+        for depth, z in ((0.54, 0.30), (0.62, 0.38), (0.50, 0.26)):
+            PerceptionWidget._update_target_stability(
+                widget,
+                self._object_msg(u=318, v=242, depth=depth, base_xyz=(0.1, 0.2, z)),
+            )
+
+        self.assertTrue(PerceptionWidget._pregrasp_target_is_stable(widget))
+        self.assertEqual(widget._object_stable_count, 3)
+
+    def test_target_stability_resets_on_large_pixel_jump(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget._object_stable_count = 0
+        widget._last_object_base_xyz = None
+        widget._last_target_signature = None
+        widget._required_stable_detections = 3
+        widget._object_stability_radius_m = 0.08
+        widget._object_stability_pixel_radius_px = 45.0
+        widget._object_stability_depth_radius_m = 0.15
+
+        PerceptionWidget._update_target_stability(widget, self._object_msg(u=318, v=242, depth=0.54))
+        PerceptionWidget._update_target_stability(widget, self._object_msg(u=430, v=242, depth=0.55))
+
+        self.assertEqual(widget._object_stable_count, 1)
+        self.assertFalse(PerceptionWidget._pregrasp_target_is_stable(widget))
+
+    def test_successful_plan_result_saves_pose_for_execution(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget._pending_plan_pose = self._pose(1.0)
+        widget._pending_plan_token = 4
+        widget._planned_pregrasp_pose = None
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._alive = True
+        widget._planning_active = True
+        widget._plan_token = 4
+
+        PerceptionWidget._finish_pregrasp_worker(
+            widget,
+            4,
+            False,
+            True,
+            '规划成功：planned with candidate orientation current',
+        )
+
+        self.assertIsNotNone(widget._planned_pregrasp_pose)
+        self.assertAlmostEqual(widget._planned_pregrasp_pose.pose.position.x, 1.0)
+        self.assertTrue(widget._planned_pregrasp_executable)
+        self.assertTrue(widget.execute_pregrasp_btn.enabled)
+        self.assertIn('执行已规划预抓取', widget.status.text)
+
+    def test_position_only_plan_result_does_not_enable_execution(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget._pending_plan_pose = self._pose(1.0)
+        widget._pending_plan_token = 4
+        widget._planned_pregrasp_pose = None
+        widget._planned_pregrasp_executable = False
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._alive = True
+        widget._planning_active = True
+        widget._plan_token = 4
+
+        PerceptionWidget._finish_pregrasp_worker(
+            widget,
+            4,
+            False,
+            True,
+            '规划成功：planned with position-only fallback: target xyz=(0.1, 0.2, 0.3)',
+        )
+
+        self.assertIsNone(widget._planned_pregrasp_pose)
+        self.assertFalse(widget._planned_pregrasp_executable)
+        self.assertFalse(widget.execute_pregrasp_btn.enabled)
+        self.assertIn('仅位置', widget.status.text)
+        self.assertIn('禁止执行', widget.status.text)
+
+    def test_execute_pregrasp_blocks_non_executable_plan(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget._planned_pregrasp_pose = self._pose(1.0)
+        widget._planned_pregrasp_executable = False
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._planning_active = False
+        widget._plan_token = 0
+        widget._localization_ok = True
+        started = []
+
+        widget._start_pregrasp_worker = lambda pose, execute, token: started.append((pose, execute, token))
+
+        PerceptionWidget.plan_pregrasp(widget, True)
+
+        self.assertEqual(started, [])
+        self.assertIn('仅位置', widget.status.text)
+
+    def test_detection_refresh_does_not_immediately_hide_successful_plan_status(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget._pending_plan_pose = self._pose(1.0)
+        widget._pending_plan_token = 4
+        widget._planned_pregrasp_pose = None
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._alive = True
+        widget._planning_active = True
+        widget._plan_token = 4
+        widget.pregrasp = FakeSpin(0.08)
+        widget._pregrasp_mode = 'camera_ray'
+        widget._localization_ok = True
+        widget._localization_error_m = None
+        widget._planned_pregrasp_executable = False
+        widget._object_stable_count = 3
+        widget._required_stable_detections = 3
+        widget._last_object_base_xyz = (0.3, 0.0, 0.0)
+        widget._object_stability_radius_m = 0.03
+        widget._pregrasp_pose_is_stale = lambda: False
+        widget._lookup_camera_pose_base = lambda: None
+        widget.detected_chip = FakeLabel()
+        widget.pixel_chip = FakeLabel()
+        widget.depth_chip = FakeLabel()
+        widget.conf_chip = FakeLabel()
+        widget.camera_chip = FakeLabel()
+        widget.base_chip = FakeLabel()
+        widget.pregrasp_chip = FakeLabel()
+
+        PerceptionWidget._finish_pregrasp_worker(widget, 4, False, True, '规划成功：planned')
+        msg = types.SimpleNamespace(
+            detected=True,
+            label='mouse',
+            u=320,
+            v=240,
+            depth_m=0.2,
+            confidence=0.9,
+            pose_camera=self._pose(0.2),
+            pose_base=self._pose(0.3),
+        )
+        PerceptionWidget.update_object(widget, msg)
+
+        self.assertIn('规划成功', widget.status.text)
+        self.assertIn('执行已规划预抓取', widget.status.text)
+
+    def test_pregrasp_status_text_names_failed_plan_and_execute(self):
+        plan_text = PerceptionWidget._pregrasp_status_text(False, False, 'plan failed')
+        execute_text = PerceptionWidget._pregrasp_status_text(True, False, 'failed')
+
+        self.assertIn('规划失败', plan_text)
+        self.assertIn('plan failed', plan_text)
+        self.assertIn('执行失败', execute_text)
+        self.assertIn('failed', execute_text)
+
+    def test_pregrasp_status_text_explains_unreachable_detected_target(self):
+        text = PerceptionWidget._pregrasp_status_text(
+            False,
+            False,
+            'plan failed: target unreachable or pose orientation invalid',
+        )
+
+        self.assertIn('识别成功但目标不可达/姿态不可达', text)
+        self.assertIn('target unreachable', text)
+
+    def test_pregrasp_status_text_names_successful_plan_and_execute(self):
+        plan_text = PerceptionWidget._pregrasp_status_text(False, True, 'planned')
+        execute_text = PerceptionWidget._pregrasp_status_text(True, True, 'executed')
+
+        self.assertIn('规划成功', plan_text)
+        self.assertIn('planned', plan_text)
+        self.assertIn('执行成功', execute_text)
+        self.assertIn('executed', execute_text)
+
+    def test_pregrasp_pose_uses_camera_ray_standoff(self):
+        obj = PoseStamped()
+        obj.pose.position.x = 0.40
+        obj.pose.position.y = 0.00
+        obj.pose.position.z = 0.20
+        camera = PoseStamped()
+        camera.pose.position.x = 0.10
+        camera.pose.position.y = 0.00
+        camera.pose.position.z = 0.20
+
+        pre = make_pregrasp_pose(obj, 0.08, camera_pose=camera, mode='camera_ray')
+
+        self.assertAlmostEqual(pre.pose.position.x, 0.32)
+        self.assertAlmostEqual(pre.pose.position.y, 0.00)
+        self.assertAlmostEqual(pre.pose.position.z, 0.20)
+
+    def test_execute_pregrasp_is_blocked_when_localization_untrusted(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = PoseStamped()
+        widget.status = FakeLabel()
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget._planning_active = False
+        widget._plan_token = 0
+        widget._localization_ok = False
+        widget._planned_pregrasp_pose = PoseStamped()
+        widget._planned_pregrasp_executable = True
+        started = []
+
+        widget._start_pregrasp_worker = lambda pose, execute, token: started.append((pose, execute, token))
+
+        PerceptionWidget.plan_pregrasp(widget, True)
+
+        self.assertEqual(started, [])
+        self.assertIn('定位不可信', widget.status.text)
+
+    def test_grasp_flow_requires_detected_object(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.status = FakeLabel()
+        widget.last_object = None
+        widget._grasp_active = False
+
+        PerceptionWidget.start_grasp_flow(widget)
+
+        self.assertFalse(widget._grasp_active)
+        self.assertIn('没有可用目标', widget.status.text)
+
+
+if __name__ == '__main__':
+    unittest.main()

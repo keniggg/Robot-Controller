@@ -1,0 +1,13 @@
+<launch>
+  <arg name="start_camera" default="true" />
+  <arg name="start_tactile" default="true" />
+
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/camera.yaml" />
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/tactile.yaml" />
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/handeye.yaml" />
+
+  <node if="$(arg start_camera)" pkg="alicia_flexible_grasp_supervisor" type="camera_node.py" name="supervisor_camera" output="screen" />
+  <node if="$(arg start_tactile)" pkg="alicia_flexible_grasp_supervisor" type="tactile_skin_node.py" name="tactile_skin" output="screen" />
+  <node pkg="alicia_flexible_grasp_supervisor" type="perception_node.py" name="perception_node" output="screen" />
+  <node pkg="alicia_flexible_grasp_supervisor" type="handeye_transform_node.py" name="handeye_transform" output="screen" />
+</launch>

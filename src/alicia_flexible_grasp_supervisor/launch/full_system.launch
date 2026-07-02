@@ -1,0 +1,25 @@
+<launch>
+  <arg name="start_real_arm" default="false" />
+  <arg name="driver_port" default="/dev/alicia_arm" />
+  <arg name="driver_baudrate" default="1000000" />
+  <arg name="start_camera" default="true" />
+  <arg name="start_tactile" default="true" />
+  <arg name="start_gui" default="true" />
+
+  <include file="$(find alicia_flexible_grasp_supervisor)/launch/bringup.launch">
+    <arg name="start_real_arm" value="$(arg start_real_arm)" />
+    <arg name="driver_port" value="$(arg driver_port)" />
+    <arg name="driver_baudrate" value="$(arg driver_baudrate)" />
+  </include>
+
+  <include file="$(find alicia_flexible_grasp_supervisor)/launch/sensors.launch">
+    <arg name="start_camera" value="$(arg start_camera)" />
+    <arg name="start_tactile" value="$(arg start_tactile)" />
+  </include>
+
+  <include file="$(find alicia_flexible_grasp_supervisor)/launch/grasp_system.launch" />
+
+  <group if="$(arg start_gui)">
+    <include file="$(find alicia_flexible_grasp_supervisor)/launch/gui.launch" />
+  </group>
+</launch>

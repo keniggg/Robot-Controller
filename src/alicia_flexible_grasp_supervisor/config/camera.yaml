@@ -1,0 +1,56 @@
+camera:
+  enabled: true
+  simulate: false
+  use_realsense: true
+  width: 640
+  height: 480
+  fps: 30
+  fallback_to_simulation: false
+  read_failure_limit: 3
+  color_topic: "/supervisor/camera/color/image_raw"
+  depth_topic: "/supervisor/camera/depth/image_raw"
+  camera_info_topic: "/supervisor/camera/color/camera_info"
+  align_depth_to_color: true
+  frame_id: "camera_link"
+  # Intel RealSense D405 当前硬件查询 depth_units≈0.0001 m/unit。
+  # 如果换相机，camera_node.py 会在启动后用硬件值覆盖 /camera/depth_scale。
+  depth_scale: 0.0001
+  fx: 438.60040283203125
+  fy: 438.4169616699219
+  cx: 317.7792663574219
+  cy: 245.35714721679688
+
+perception:
+  enabled: true
+  # yolov8 / simple_hsv。默认使用 YOLOv8，HSV 仅作为无模型时的备用调试模式。
+  detector: "yolov8"
+  target_description: "鼠标"
+  yolo_model: "yolov8n.pt"
+  yolo_target_class: "mouse"
+  yolo_conf: 0.35
+  yolo_iou: 0.45
+  yolo_device: "cpu"
+  hsv_lower: [28, 35, 35]
+  hsv_upper: [95, 255, 255]
+  hsv_ranges: []
+  shape: "any"
+  min_area: 300
+  detection_hold_sec: 0.8
+  tracking_max_jump_px: 90.0
+  tracking_switch_confirmations: 3
+  # project_pixel_to_3d 输出的是 OpenCV 光学坐标；当前手眼标定的 camera_link
+  # 已由 charuco_tracker 转成 ROS 相机坐标，所以这里需要转换成 [z, -x, -y]。
+  # 如果以后 TF 直接使用 camera_color_optical_frame，改成 "opencv_optical"。
+  projection_frame_convention: "ros_camera_link"
+  # 三维定位不再使用单个中心像素深度，优先取检测框中心区域的鲁棒统计值。
+  depth_roi_center_fraction: 0.55
+  depth_roi_percentile: 50.0
+  depth_min_m: 0.03
+  depth_max_m: 2.0
+  depth_min_valid_px: 24
+  localization_warn_error_m: 0.08
+  max_object_age_sec: 1.5
+  object_label: "鼠标"
+  output_pose_camera_topic: "/perception/object_pose_camera"
+  output_pose_base_topic: "/perception/object_pose_base"
+  output_object_topic: "/perception/object"

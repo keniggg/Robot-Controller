@@ -1,0 +1,22 @@
+robot:
+  joint_names: ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6", "right_finger"]
+  arm_joint_names: ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"]
+  gripper_joint_name: "right_finger"
+  joint_command_topic: "/joint_commands"
+  joint_state_topic: "/joint_states"
+  zero_calibrate_topic: "/zero_calibrate"
+  demonstration_topic: "/demonstration"
+  gripper_min_m: 0.0
+  gripper_max_m: 0.05
+  joint_min_rad: [-3.14, -2.5, -2.5, -3.14, -2.5, -3.14]
+  joint_max_rad: [ 3.14,  2.5,  2.5,  3.14,  2.5,  3.14]
+  pose_fallback_enabled: true
+  position_only_fallback_enabled: true
+  orientation_fallback_enabled: true
+  cached_plan_position_tolerance_m: 0.01
+  pregrasp_candidate_orientations_xyzw:
+    - [0.0, 0.0, 0.0, 1.0]
+    - [0.0, 0.7071, 0.0, 0.7071]
+    - [0.0, -0.7071, 0.0, 0.7071]
+    - [0.7071, 0.0, 0.0, 0.7071]
+    - [-0.7071, 0.0, 0.0, 0.7071]

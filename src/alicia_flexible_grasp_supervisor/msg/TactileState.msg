@@ -1,0 +1,10 @@
+std_msgs/Header header
+alicia_flexible_grasp_supervisor/TactileFrame left
+alicia_flexible_grasp_supervisor/TactileFrame right
+float32 total_grip_force_mn
+float32 force_diff_mn
+bool left_contact
+bool right_contact
+bool object_grasped
+bool slip_detected
+bool valid

@@ -1,0 +1,8 @@
+<launch>
+  <!-- 当前 real-arm 的 alicia_d_bringup.launch 已经包含 MoveIt。若你只想单独启动 MoveIt，可使用此文件。 -->
+  <arg name="moveit_controller_manager" default="simple"/>
+  <include file="$(find alicia_d_moveit)/launch/move_group.launch">
+    <arg name="load_robot_description" value="true"/>
+    <arg name="moveit_controller_manager" value="$(arg moveit_controller_manager)" />
+  </include>
+</launch>
