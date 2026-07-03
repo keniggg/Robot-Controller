@@ -17,6 +17,15 @@ class DependencyStatus:
 
 
 @dataclass
+class RuntimeReport:
+    ready: bool
+    present: dict
+    missing: list
+    versions: dict
+    message: str
+
+
+@dataclass
 class CameraIntrinsics:
     width: int
     height: int
@@ -50,6 +59,65 @@ def check_grasp6d_dependencies(importer=None):
         available=not missing,
         missing=missing,
         message='ok' if not missing else 'missing 6D grasp dependencies: %s' % ', '.join(missing),
+    )
+
+
+def inspect_grasp6d_runtime(root=None, checkpoint_path='', importer=None):
+    root = Path(root).expanduser() if root else default_grasp6d_root()
+    importer = importer or __import__
+    missing = []
+    present = {}
+    versions = {}
+
+    for module_name in ('numpy', 'scipy', 'torch', 'open3d', 'MinkowskiEngine', 'graspnetAPI', 'tqdm', 'tensorboard'):
+        try:
+            module = importer(module_name)
+            present[module_name] = True
+            versions[module_name] = str(getattr(module, '__version__', 'unknown'))
+        except Exception:
+            present[module_name] = False
+            missing.append('missing python module: %s' % module_name)
+
+    for rel_path in (
+        'models/graspnet.py',
+        'utils/data_utils.py',
+        'utils/collision_detector.py',
+    ):
+        exists = (root / rel_path).exists()
+        present[rel_path] = exists
+        if not exists:
+            missing.append('missing source file: %s' % rel_path)
+
+    for rel_path in ('dataset', 'pointnet2'):
+        exists = (root / rel_path).is_dir()
+        present[rel_path] = exists
+        if not exists:
+            missing.append('missing source dir: %s' % rel_path)
+
+    checkpoint = Path(checkpoint_path).expanduser() if checkpoint_path else None
+    if checkpoint is None:
+        present['checkpoint'] = False
+        missing.append('missing checkpoint_path')
+    else:
+        present['checkpoint'] = checkpoint.exists()
+        if not checkpoint.exists():
+            missing.append('checkpoint not found: %s' % checkpoint)
+
+    try:
+        torch = importer('torch')
+        cuda_available = bool(torch.cuda.is_available())
+        versions['torch_cuda_available'] = str(cuda_available)
+        versions['torch_cuda_version'] = str(getattr(torch.version, 'cuda', None))
+    except Exception:
+        versions['torch_cuda_available'] = 'unknown'
+        versions['torch_cuda_version'] = 'unknown'
+
+    return RuntimeReport(
+        ready=not missing,
+        present=present,
+        missing=missing,
+        versions=versions,
+        message='6D grasp runtime ready' if not missing else '; '.join(missing),
     )
 
 

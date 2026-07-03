@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import pathlib
 import sys
+import tempfile
 import unittest
 
 import numpy as np
@@ -15,6 +16,7 @@ from alicia_flexible_grasp.vision.grasp6d_adapter import (
     CameraIntrinsics,
     build_graspnet_input_from_rgbd,
     check_grasp6d_dependencies,
+    inspect_grasp6d_runtime,
 )
 
 
@@ -31,6 +33,20 @@ class Grasp6DAdapterTest(unittest.TestCase):
         self.assertIn('open3d', status.missing)
         self.assertIn('MinkowskiEngine', status.missing)
         self.assertIn('graspnetAPI', status.missing)
+
+    def test_runtime_inspection_reports_missing_source_dirs_and_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / 'utils').mkdir()
+            (root / 'models').mkdir()
+            (root / 'utils' / 'data_utils.py').write_text('', encoding='utf-8')
+
+            report = inspect_grasp6d_runtime(root=root, checkpoint_path=str(root / 'missing.tar'), importer=lambda _name: object())
+
+        self.assertFalse(report.ready)
+        self.assertIn('missing source dir: dataset', report.missing)
+        self.assertIn('missing source dir: pointnet2', report.missing)
+        self.assertIn('checkpoint not found', ' '.join(report.missing))
 
     def test_build_graspnet_input_reuses_grasp6d_point_cloud_projection(self):
         color_bgr = np.array(

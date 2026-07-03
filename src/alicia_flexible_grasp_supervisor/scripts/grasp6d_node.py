@@ -16,6 +16,7 @@ from alicia_flexible_grasp.vision.grasp6d_adapter import (
     Grasp6DBackendUnavailable,
     build_graspnet_input_from_rgbd,
     check_grasp6d_dependencies,
+    inspect_grasp6d_runtime,
 )
 from alicia_flexible_grasp.vision.pose_estimator import PoseEstimator
 from alicia_flexible_grasp_supervisor.msg import TactileState
@@ -136,8 +137,12 @@ class Grasp6DNode:
         if self.backend is not None:
             return self.backend
         status = check_grasp6d_dependencies()
-        if not status.available:
-            self._publish_backend_error(status.message)
+        runtime = inspect_grasp6d_runtime(
+            root=rospy.get_param('/grasp_6d/root', ''),
+            checkpoint_path=rospy.get_param('/grasp_6d/checkpoint_path', ''),
+        )
+        if not status.available or not runtime.ready:
+            self._publish_backend_error(runtime.message)
             return None
         try:
             self.backend = AliciaGrasp6DBackend(
@@ -168,8 +173,11 @@ class Grasp6DNode:
         if not self.enabled:
             self.status_pub.publish(String('6D grasp disabled'))
             return
-        status = check_grasp6d_dependencies()
-        self.status_pub.publish(String('6D grasp waiting for RGB-D' if status.available else status.message))
+        report = inspect_grasp6d_runtime(
+            root=rospy.get_param('/grasp_6d/root', ''),
+            checkpoint_path=rospy.get_param('/grasp_6d/checkpoint_path', ''),
+        )
+        self.status_pub.publish(String('6D grasp waiting for RGB-D' if report.ready else report.message))
 
     def _camera_intrinsics(self):
         cam_cfg = rospy.get_param('/camera', {})

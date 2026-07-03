@@ -8,5 +8,6 @@
     "python.analysis.extraPaths": [
         "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages",
         "/opt/ros/noetic/lib/python3/dist-packages"
-    ]
+    ],
+    "cmake.sourceDirectory": "/home/zhuyupei/alicia_wa_full/src/easy_handeye/easy_handeye"
 }
