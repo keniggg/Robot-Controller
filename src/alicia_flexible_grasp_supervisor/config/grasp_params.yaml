@@ -42,7 +42,7 @@ gripper:
 
 grasp_6d:
   enabled: true
-  backend: "alicia_d_grasp_6d"
+  backend: "remote_graspnet_baseline"
   root: ""
   checkpoint_path: ""
   device: "cpu"
@@ -53,3 +53,8 @@ grasp_6d:
   collision_thresh: 0.05
   collision_voxel_size: 0.01
   tactile_weight: 0.2
+  remote:
+    server_url: "http://127.0.0.1:8000"
+    timeout_sec: 3.0
+    request_hz: 2.0
+    max_candidates: 20

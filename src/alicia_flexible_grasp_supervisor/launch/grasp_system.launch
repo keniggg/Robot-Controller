@@ -1,9 +1,19 @@
 <launch>
+  <arg name="use_remote_grasp6d" default="true" />
+  <arg name="remote_grasp6d_url" default="http://127.0.0.1:8000" />
+
   <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/grasp_params.yaml" />
   <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/safety_limits.yaml" />
   <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/joint_limits.yaml" />
 
-  <node pkg="alicia_flexible_grasp_supervisor" type="grasp6d_node.py" name="grasp6d_node" output="screen" />
+  <param name="/grasp_6d/remote/server_url" value="$(arg remote_grasp6d_url)" />
+
+  <group if="$(arg use_remote_grasp6d)">
+    <node pkg="alicia_flexible_grasp_supervisor" type="remote_grasp6d_node.py" name="remote_grasp6d_node" output="screen" />
+  </group>
+  <group unless="$(arg use_remote_grasp6d)">
+    <node pkg="alicia_flexible_grasp_supervisor" type="grasp6d_node.py" name="grasp6d_node" output="screen" />
+  </group>
   <node pkg="alicia_flexible_grasp_supervisor" type="compliant_gripper_controller.py" name="compliant_gripper_controller" output="screen" />
   <node pkg="alicia_flexible_grasp_supervisor" type="grasp_task_node.py" name="grasp_task_node" output="screen" />
   <node pkg="alicia_flexible_grasp_supervisor" type="safety_monitor_node.py" name="safety_monitor_node" output="screen" />

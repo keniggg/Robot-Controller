@@ -69,6 +69,7 @@ catkin_install_python(PROGRAMS
   scripts/handeye_transform_node.py
   scripts/motion_gateway_node.py
   scripts/grasp6d_node.py
+  scripts/remote_grasp6d_node.py
   scripts/compliant_gripper_controller.py
   scripts/grasp_task_node.py
   scripts/safety_monitor_node.py

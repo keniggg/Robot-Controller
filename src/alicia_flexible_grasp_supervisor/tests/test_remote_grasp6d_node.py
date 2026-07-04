@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+import importlib.util
+import pathlib
+import sys
+import unittest
+
+import numpy as np
+from geometry_msgs.msg import PoseStamped
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+for path in (ROOT, ROOT / 'src'):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGraspCandidate
+
+
+SCRIPT = ROOT / 'scripts' / 'remote_grasp6d_node.py'
+spec = importlib.util.spec_from_file_location('remote_grasp6d_node', str(SCRIPT))
+remote_node = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(remote_node)
+
+
+class FakePoseEstimator:
+    def make_base_pose_from_camera_pose(self, xyz, quat, stamp=None, camera_frame=None):
+        pose = PoseStamped()
+        pose.header.frame_id = 'base_link'
+        pose.header.stamp = stamp
+        pose.pose.position.x = float(xyz[0]) + 1.0
+        pose.pose.position.y = float(xyz[1])
+        pose.pose.position.z = float(xyz[2])
+        pose.pose.orientation.x = float(quat[0])
+        pose.pose.orientation.y = float(quat[1])
+        pose.pose.orientation.z = float(quat[2])
+        pose.pose.orientation.w = float(quat[3])
+        return pose
+
+
+class RemoteGrasp6DNodeTest(unittest.TestCase):
+    def test_selects_first_reachable_candidate_after_camera_to_base_transform(self):
+        candidates = [
+            RemoteGraspCandidate(0.99, np.array([0.10, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04),
+            RemoteGraspCandidate(0.80, np.array([0.65, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04),
+        ]
+
+        selected, pose = remote_node.select_first_reachable_candidate(
+            candidates,
+            FakePoseEstimator(),
+            lambda pose: pose.pose.position.x > 1.5,
+            stamp=None,
+            camera_frame='camera_link',
+        )
+
+        self.assertIs(selected, candidates[1])
+        self.assertAlmostEqual(pose.pose.position.x, 1.65)
+
+    def test_pose_array_contains_pregrasp_approach_grasp_and_lift(self):
+        pose = PoseStamped()
+        pose.header.frame_id = 'base_link'
+        pose.pose.position.x = 0.4
+        pose.pose.position.y = 0.1
+        pose.pose.position.z = 0.2
+        pose.pose.orientation.w = 1.0
+
+        array = remote_node.make_grasp_plan_pose_array(
+            pose,
+            stamp=None,
+            grasp_config={
+                'pregrasp_distance_m': 0.08,
+                'final_approach_offset_m': 0.015,
+                'lift_height_m': 0.05,
+            },
+        )
+
+        self.assertEqual(array.header.frame_id, 'base_link')
+        self.assertEqual(len(array.poses), 4)
+        self.assertAlmostEqual(array.poses[0].position.x, 0.32)
+        self.assertAlmostEqual(array.poses[1].position.x, 0.385)
+        self.assertAlmostEqual(array.poses[2].position.x, 0.4)
+        self.assertAlmostEqual(array.poses[3].position.z, 0.25)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -5,6 +5,8 @@
   <arg name="start_camera" default="true" />
   <arg name="start_tactile" default="true" />
   <arg name="start_gui" default="true" />
+  <arg name="use_remote_grasp6d" default="true" />
+  <arg name="remote_grasp6d_url" default="http://127.0.0.1:8000" />
 
   <include file="$(find alicia_flexible_grasp_supervisor)/launch/bringup.launch">
     <arg name="start_real_arm" value="$(arg start_real_arm)" />
@@ -17,7 +19,10 @@
     <arg name="start_tactile" value="$(arg start_tactile)" />
   </include>
 
-  <include file="$(find alicia_flexible_grasp_supervisor)/launch/grasp_system.launch" />
+  <include file="$(find alicia_flexible_grasp_supervisor)/launch/grasp_system.launch">
+    <arg name="use_remote_grasp6d" value="$(arg use_remote_grasp6d)" />
+    <arg name="remote_grasp6d_url" value="$(arg remote_grasp6d_url)" />
+  </include>
 
   <group if="$(arg start_gui)">
     <include file="$(find alicia_flexible_grasp_supervisor)/launch/gui.launch" />
