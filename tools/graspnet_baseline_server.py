@@ -107,18 +107,16 @@ class GraspNetBaselineBackend:
         baseline_root,
         checkpoint,
         device='cuda:0',
-        seed_feat_dim=512,
+        num_view=300,
         num_points=20000,
-        voxel_size=0.005,
         collision_thresh=0.01,
         collision_voxel_size=0.01,
     ):
         self.baseline_root = Path(baseline_root).expanduser()
         self.checkpoint = Path(checkpoint).expanduser()
         self.device_name = str(device or 'cuda:0')
-        self.seed_feat_dim = int(seed_feat_dim)
+        self.num_view = int(num_view)
         self.num_points = int(num_points)
-        self.voxel_size = float(voxel_size)
         self.collision_thresh = float(collision_thresh)
         self.collision_voxel_size = float(collision_voxel_size)
         self.loaded = False
@@ -160,7 +158,7 @@ class GraspNetBaselineBackend:
         self._install_paths()
         try:
             import torch
-            from dataset.graspnet_dataset import minkowski_collate_fn
+            from dataset.graspnet_dataset import collate_fn
             from models.graspnet import GraspNet, pred_decode
             from utils.collision_detector import ModelFreeCollisionDetector
             from utils.data_utils import CameraInfo, create_point_cloud_from_depth_image
@@ -168,7 +166,7 @@ class GraspNetBaselineBackend:
             raise RuntimeError('failed to import graspnet-baseline runtime: %s' % exc) from exc
 
         self.torch = torch
-        self.minkowski_collate_fn = minkowski_collate_fn
+        self.collate_fn = collate_fn
         self.pred_decode = pred_decode
         self.ModelFreeCollisionDetector = ModelFreeCollisionDetector
         self.CameraInfo = CameraInfo
@@ -176,7 +174,7 @@ class GraspNetBaselineBackend:
         self.GraspGroup = _import_grasp_group()
         use_cuda = self.device_name.startswith('cuda') and torch.cuda.is_available()
         self.device = torch.device(self.device_name if use_cuda else 'cpu')
-        self.net = GraspNet(seed_feat_dim=self.seed_feat_dim, is_training=False)
+        self.net = GraspNet(input_feature_dim=0, num_view=self.num_view, is_training=False)
         self.net.to(self.device)
         ckpt = torch.load(str(self.checkpoint), map_location=self.device)
         state_dict = ckpt['model_state_dict'] if isinstance(ckpt, dict) and 'model_state_dict' in ckpt else ckpt
@@ -189,7 +187,7 @@ class GraspNetBaselineBackend:
         self.load()
         decoded = decode_rgbd_payload(payload)
         model_input, scene_points = self._build_model_input(decoded)
-        batch_data = self.minkowski_collate_fn([model_input])
+        batch_data = self.collate_fn([model_input])
         batch_data = _to_device(batch_data, self.device)
         with self.torch.no_grad():
             end_points = self.net(batch_data)
@@ -236,8 +234,6 @@ class GraspNetBaselineBackend:
             {
                 'point_clouds': sampled_points,
                 'cloud_colors': sampled_colors,
-                'coors': (sampled_points / self.voxel_size).astype(np.float32),
-                'feats': np.ones_like(sampled_points).astype(np.float32),
             },
             points,
         )
@@ -318,9 +314,8 @@ def parse_args(argv=None):
     parser.add_argument('--baseline-root', default=str(Path.home() / 'grasp6d_ws' / 'graspnet-baseline'))
     parser.add_argument('--checkpoint', default=str(Path.home() / 'grasp6d_ws' / 'checkpoints' / 'checkpoint-rs.tar'))
     parser.add_argument('--device', default='cuda:0')
-    parser.add_argument('--seed-feat-dim', type=int, default=512)
+    parser.add_argument('--num-view', type=int, default=300)
     parser.add_argument('--num-points', type=int, default=20000)
-    parser.add_argument('--voxel-size', type=float, default=0.005)
     parser.add_argument('--collision-thresh', type=float, default=0.01)
     parser.add_argument('--collision-voxel-size', type=float, default=0.01)
     parser.add_argument('--mock', action='store_true', help='Serve deterministic fake grasps for network testing')
@@ -337,9 +332,8 @@ def main(argv=None):
             baseline_root=args.baseline_root,
             checkpoint=args.checkpoint,
             device=args.device,
-            seed_feat_dim=args.seed_feat_dim,
+            num_view=args.num_view,
             num_points=args.num_points,
-            voxel_size=args.voxel_size,
             collision_thresh=args.collision_thresh,
             collision_voxel_size=args.collision_voxel_size,
         )
