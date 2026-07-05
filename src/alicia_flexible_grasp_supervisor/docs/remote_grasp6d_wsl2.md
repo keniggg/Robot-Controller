@@ -38,6 +38,8 @@ If the terminal shows `^Mpython` or `python' not found`, the command was pasted 
 sed -i 's/\r$//' tools/start_graspnet_baseline_server_wsl.sh tools/graspnet_baseline_server.py
 ```
 
+`graspnetAPI` is optional for this server. If it is not installed, the server uses an internal inference-only `FallbackGraspGroup` that still supports sorting, collision filtering, and HTTP response conversion.
+
 For network-only testing without loading the model:
 
 ```bash

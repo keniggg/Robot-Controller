@@ -309,6 +309,104 @@ def _to_device(value, device):
     return value
 
 
+class FallbackGrasp:
+    def __init__(self, grasp_array):
+        self.grasp_array = np.asarray(grasp_array, dtype=np.float32).reshape(-1)
+        if self.grasp_array.size < 16:
+            raise ValueError('grasp prediction must contain at least 16 values')
+
+    @property
+    def score(self):
+        return float(self.grasp_array[0])
+
+    @property
+    def width(self):
+        return float(self.grasp_array[1])
+
+    @property
+    def height(self):
+        return float(self.grasp_array[2])
+
+    @property
+    def depth(self):
+        return float(self.grasp_array[3])
+
+    @property
+    def rotation_matrix(self):
+        return self.grasp_array[4:13].reshape(3, 3)
+
+    @property
+    def translation(self):
+        return self.grasp_array[13:16]
+
+
+class FallbackGraspGroup:
+    """Minimal GraspNetAPI-compatible container for inference-only postprocessing."""
+
+    def __init__(self, grasp_group_array=None):
+        if grasp_group_array is None:
+            array = np.zeros((0, 17), dtype=np.float32)
+        elif isinstance(grasp_group_array, FallbackGraspGroup):
+            array = grasp_group_array.grasp_group_array.copy()
+        elif isinstance(grasp_group_array, (list, tuple)) and grasp_group_array and isinstance(grasp_group_array[0], FallbackGrasp):
+            array = np.vstack([grasp.grasp_array for grasp in grasp_group_array]).astype(np.float32)
+        else:
+            array = np.asarray(grasp_group_array, dtype=np.float32)
+            if array.size == 0:
+                array = np.zeros((0, 17), dtype=np.float32)
+            if array.ndim == 1:
+                array = array.reshape(1, -1)
+        if array.size and array.shape[1] < 16:
+            raise ValueError('grasp group array must have at least 16 columns')
+        self.grasp_group_array = array.astype(np.float32, copy=False)
+
+    def __len__(self):
+        return int(self.grasp_group_array.shape[0])
+
+    def __iter__(self):
+        for row in self.grasp_group_array:
+            yield FallbackGrasp(row)
+
+    def __getitem__(self, index):
+        selected = self.grasp_group_array[index]
+        if isinstance(index, (int, np.integer)):
+            return FallbackGrasp(selected)
+        return FallbackGraspGroup(selected)
+
+    @property
+    def scores(self):
+        return self.grasp_group_array[:, 0]
+
+    @property
+    def widths(self):
+        return self.grasp_group_array[:, 1]
+
+    @property
+    def heights(self):
+        return self.grasp_group_array[:, 2]
+
+    @property
+    def depths(self):
+        return self.grasp_group_array[:, 3]
+
+    @property
+    def rotation_matrices(self):
+        return self.grasp_group_array[:, 4:13].reshape((-1, 3, 3))
+
+    @property
+    def translations(self):
+        return self.grasp_group_array[:, 13:16]
+
+    def nms(self, *args, **kwargs):
+        return self
+
+    def sort_by_score(self):
+        if len(self) > 1:
+            order = np.argsort(-self.scores)
+            self.grasp_group_array = self.grasp_group_array[order]
+        return self
+
+
 def _import_grasp_group():
     candidates = (
         ('graspnetAPI', 'GraspGroup'),
@@ -321,7 +419,8 @@ def _import_grasp_group():
             return getattr(module, attr)
         except Exception:
             pass
-    raise RuntimeError('failed to import GraspGroup from graspnetAPI')
+    sys.stderr.write('WARNING: graspnetAPI not found; using internal inference-only FallbackGraspGroup\n')
+    return FallbackGraspGroup
 
 
 def _grasp_to_response(grasp):

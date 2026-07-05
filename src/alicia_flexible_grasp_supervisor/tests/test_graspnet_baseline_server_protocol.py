@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import builtins
 import collections.abc
 import importlib.util
 import json
@@ -94,6 +95,54 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
                 self.assertIn(str(root / 'knn'), installed)
         finally:
             sys.path[:] = original_path
+
+    def test_fallback_grasp_group_supports_baseline_postprocessing_without_graspnetapi(self):
+        original_import = builtins.__import__
+
+        def blocked_import(name, *args, **kwargs):
+            if name.startswith('graspnetAPI'):
+                raise ImportError('blocked graspnetAPI for fallback test')
+            return original_import(name, *args, **kwargs)
+
+        rows = np.array(
+            [
+                [0.2, 0.04, 0.02, 0.03, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.10, 0.20, 0.30, -1.0],
+                [0.9, 0.05, 0.03, 0.04, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.40, 0.50, 0.60, -1.0],
+            ],
+            dtype=np.float32,
+        )
+        try:
+            builtins.__import__ = blocked_import
+            GraspGroup = server_module._import_grasp_group()
+        finally:
+            builtins.__import__ = original_import
+
+        group = GraspGroup(rows)
+        self.assertEqual(len(group), 2)
+        self.assertEqual(group.translations.shape, (2, 3))
+        self.assertEqual(group.rotation_matrices.shape, (2, 3, 3))
+        self.assertEqual(group.widths.shape, (2,))
+        self.assertEqual(group.heights.shape, (2,))
+        self.assertEqual(group.depths.shape, (2,))
+
+        group.nms()
+        group.sort_by_score()
+        self.assertAlmostEqual(group[0].score, 0.9, places=5)
+        filtered = group[np.array([True, False])]
+        self.assertEqual(len(filtered), 1)
+        response = server_module._grasp_to_response(group[0])
+        np.testing.assert_allclose(response['translation_m'], [0.4, 0.5, 0.6], rtol=1e-6, atol=1e-6)
+        self.assertEqual(len(response['rotation_matrix']), 3)
+
+    def test_fallback_grasp_group_handles_empty_predictions(self):
+        group = server_module.FallbackGraspGroup([])
+
+        self.assertEqual(len(group), 0)
+        self.assertEqual(group.translations.shape, (0, 3))
+        self.assertEqual(group.rotation_matrices.shape, (0, 3, 3))
+        self.assertEqual(group.widths.shape, (0,))
+        self.assertIs(group.nms(), group)
+        self.assertIs(group.sort_by_score(), group)
 
     def test_baseline_backend_load_uses_official_collate_fn_and_constructor(self):
         created = {}
