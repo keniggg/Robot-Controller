@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import collections.abc
 import importlib.util
 import json
 import pathlib
@@ -29,6 +30,24 @@ spec.loader.exec_module(server_module)
 
 
 class GraspNetBaselineServerProtocolTest(unittest.TestCase):
+    def test_installs_torch_six_compat_for_pytorch_2_baseline_imports(self):
+        previous = sys.modules.pop('torch._six', None)
+        try:
+            compat = server_module.install_torch_six_compat()
+            imported = sys.modules['torch._six']
+
+            self.assertIs(compat, imported)
+            self.assertIs(imported.container_abcs, collections.abc)
+            self.assertEqual(imported.string_classes, (str, bytes))
+            self.assertIs(imported.int_classes, int)
+            self.assertEqual(imported.inf, float('inf'))
+            self.assertTrue(imported.nan != imported.nan)
+        finally:
+            if previous is None:
+                sys.modules.pop('torch._six', None)
+            else:
+                sys.modules['torch._six'] = previous
+
     def test_mock_server_serves_health_and_predict(self):
         server = server_module.make_server('127.0.0.1', 0, server_module.MockGraspNetBackend())
         thread = threading.Thread(target=server.serve_forever, daemon=True)

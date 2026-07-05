@@ -11,13 +11,32 @@ Run this in the WSL2 conda environment, not inside the ROS VM:
 """
 import argparse
 import base64
+import collections.abc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
+import math
 from pathlib import Path
 import sys
+import types
 
 import numpy as np
+
+
+def install_torch_six_compat():
+    """Provide the private torch._six module expected by old GraspNet baseline code."""
+    if 'torch._six' in sys.modules:
+        return sys.modules['torch._six']
+    module = types.ModuleType('torch._six')
+    module.container_abcs = collections.abc
+    module.string_classes = (str, bytes)
+    module.int_classes = int
+    module.inf = math.inf
+    module.nan = math.nan
+    module.FileNotFoundError = FileNotFoundError
+    module.PY3 = True
+    sys.modules['torch._six'] = module
+    return module
 
 
 def make_server(host, port, backend):
@@ -158,6 +177,7 @@ class GraspNetBaselineBackend:
         self._install_paths()
         try:
             import torch
+            install_torch_six_compat()
             from dataset.graspnet_dataset import collate_fn
             from models.graspnet import GraspNet, pred_decode
             from utils.collision_detector import ModelFreeCollisionDetector

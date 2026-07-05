@@ -16,7 +16,7 @@ from gui.widgets.tactile_widget import TactileWidget
 from gui.widgets.robot_state_widget import RobotStateWidget
 from gui.widgets.joint_control_widget import JointControlWidget
 from gui.widgets.cartesian_control_widget import CartesianControlWidget
-from gui.widgets.grasp_task_widget import GraspTaskWidget
+from gui.widgets.grasp6d_control_widget import Grasp6DControlWidget
 from gui.widgets.perception_widget import PerceptionWidget
 from gui.widgets.log_widget import LogWidget
 from gui.theme import HudFrame, HudRoot, apply_app_theme
@@ -63,7 +63,12 @@ class MainWindow(QtWidgets.QMainWindow):
         right.setSpacing(14)
         self.robot = RobotStateWidget(rospy.get_param('/gui/joint_state_topic','/joint_states'))
         self.tactile = TactileWidget(rospy.get_param('/gui/tactile_topic','/tactile/state'))
-        self.grasp = GraspTaskWidget(rospy.get_param('/gui/grasp_state_topic','/grasp/state'))
+        self.grasp = Grasp6DControlWidget(
+            rospy.get_param('/gui/grasp6d_status_topic', '/grasp_6d/status'),
+            rospy.get_param('/gui/grasp6d_plan_topic', rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan')),
+            rospy.get_param('/gui/grasp_state_topic','/grasp/state'),
+            compact=True,
+        )
         right.addWidget(self.robot); right.addWidget(self.tactile); right.addWidget(self.grasp)
         h.addWidget(self.camera, 7); h.addLayout(right, 4)
         tabs.addTab(home, '总览监控')
@@ -71,8 +76,12 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(JointControlWidget(color_topic, depth_topic), '关节控制')
         tabs.addTab(CartesianControlWidget(color_topic, depth_topic), '笛卡尔控制')
         tabs.addTab(PerceptionWidget(rospy.get_param('/gui/object_topic', '/perception/object'), color_topic, depth_topic), '目标识别')
+        tabs.addTab(Grasp6DControlWidget(
+            rospy.get_param('/gui/grasp6d_status_topic', '/grasp_6d/status'),
+            rospy.get_param('/gui/grasp6d_plan_topic', rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan')),
+            rospy.get_param('/gui/grasp_state_topic','/grasp/state'),
+        ), '6D抓取')
         tabs.addTab(TactileWidget(rospy.get_param('/gui/tactile_topic','/tactile/state')), '电子皮肤')
-        tabs.addTab(GraspTaskWidget(rospy.get_param('/gui/grasp_state_topic','/grasp/state')), '柔顺抓取')
         tabs.addTab(LogWidget(), '日志')
 
     def _build_top_bar(self, title):

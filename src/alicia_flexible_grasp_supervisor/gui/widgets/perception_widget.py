@@ -17,6 +17,20 @@ from gui.widgets.camera_widget import CameraWidget
 from gui.theme import metric_chip, panel
 
 
+def perception_grasp_action_mode(use_grasp6d_plan):
+    if bool(use_grasp6d_plan):
+        return {
+            'observation_only': True,
+            'show_legacy_pregrasp': False,
+            'note': '当前为 6D 抓取模式：本页仅用于视觉观察/旧目标识别，抓取请使用“6D 抓取”页。',
+        }
+    return {
+        'observation_only': False,
+        'show_legacy_pregrasp': True,
+        'note': '当前为传统目标点模式：可在本页规划预抓取、执行预抓取和启动抓取流程。',
+    }
+
+
 class PerceptionWidget(QtWidgets.QWidget):
     object_signal = QtCore.pyqtSignal(object)
     plan_result_signal = QtCore.pyqtSignal(int, bool, bool, str)
@@ -115,6 +129,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._pregrasp_status_hold_sec = float(rospy.get_param('/gui/pregrasp_status_hold_sec', 8.0))
         self._status_hold_until = 0.0
         self._pregrasp_mode = str(rospy.get_param('/grasp/pregrasp_offset_mode', 'camera_ray'))
+        self._use_grasp6d_plan = bool(rospy.get_param('/grasp/use_grasp6d_plan', False))
         self._base_frame = str(rospy.get_param('/handeye/base_frame', 'base_link'))
         self._camera_frame = str(rospy.get_param('/handeye/camera_frame', rospy.get_param('/camera/frame_id', 'camera_link')))
         self._localization_warn_error_m = float(rospy.get_param('/perception/localization_warn_error_m', 0.08))
@@ -257,6 +272,12 @@ class PerceptionWidget(QtWidgets.QWidget):
             metrics.addWidget(chip, index // 2, index % 2)
         body.addLayout(metrics)
 
+        action_mode = perception_grasp_action_mode(self._use_grasp6d_plan)
+        self.grasp_mode_note = QtWidgets.QLabel(action_mode['note'])
+        self.grasp_mode_note.setObjectName('StateBanner')
+        self.grasp_mode_note.setWordWrap(True)
+        body.addWidget(self.grasp_mode_note)
+
         actions = QtWidgets.QHBoxLayout()
         self.plan_pregrasp_btn = QtWidgets.QPushButton('规划预抓取')
         self.execute_pregrasp_btn = QtWidgets.QPushButton('执行已规划预抓取')
@@ -274,6 +295,10 @@ class PerceptionWidget(QtWidgets.QWidget):
         actions.addWidget(self.execute_pregrasp_btn)
         actions.addWidget(self.start_grasp_btn)
         body.addLayout(actions)
+        if not action_mode['show_legacy_pregrasp']:
+            self.plan_pregrasp_btn.hide()
+            self.execute_pregrasp_btn.hide()
+            self.start_grasp_btn.hide()
 
         self.status = QtWidgets.QLabel('等待目标识别数据')
         self.status.setObjectName('StateBanner')
