@@ -259,7 +259,13 @@ class GraspNetBaselineBackend:
         )
 
     def _install_paths(self):
-        for path in (self.baseline_root, self.baseline_root / 'utils'):
+        for path in (
+            self.baseline_root,
+            self.baseline_root / 'models',
+            self.baseline_root / 'utils',
+            self.baseline_root / 'pointnet2',
+            self.baseline_root / 'knn',
+        ):
             text = str(path)
             if text not in sys.path:
                 sys.path.insert(0, text)

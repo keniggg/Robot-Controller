@@ -75,6 +75,26 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
         self.assertIn('translation_m', response['candidates'][0])
         self.assertIn('rotation_matrix', response['candidates'][0])
 
+    def test_baseline_backend_installs_legacy_baseline_import_paths(self):
+        original_path = list(sys.path)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp) / 'graspnet-baseline'
+                for relative in ('models', 'utils', 'pointnet2', 'knn'):
+                    (root / relative).mkdir(parents=True)
+
+                backend = server_module.GraspNetBaselineBackend(root, pathlib.Path(tmp) / 'checkpoint-rs.tar')
+                backend._install_paths()
+
+                installed = set(sys.path)
+                self.assertIn(str(root), installed)
+                self.assertIn(str(root / 'models'), installed)
+                self.assertIn(str(root / 'utils'), installed)
+                self.assertIn(str(root / 'pointnet2'), installed)
+                self.assertIn(str(root / 'knn'), installed)
+        finally:
+            sys.path[:] = original_path
+
     def test_baseline_backend_load_uses_official_collate_fn_and_constructor(self):
         created = {}
 
