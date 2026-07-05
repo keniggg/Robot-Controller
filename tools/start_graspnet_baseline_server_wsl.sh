@@ -10,6 +10,8 @@ HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
 DEVICE="${DEVICE:-cuda:0}"
 CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-11.8}"
+NUM_POINTS="${NUM_POINTS:-12000}"
+COLLISION_THRESH="${COLLISION_THRESH:-0.01}"
 
 if [[ -d "${CUDA_HOME}" ]]; then
   export CUDA_HOME
@@ -43,4 +45,6 @@ exec "${PYTHON_BIN}" tools/graspnet_baseline_server.py \
   --host "${HOST}" \
   --port "${PORT}" \
   --device "${DEVICE}" \
+  --num-points "${NUM_POINTS}" \
+  --collision-thresh "${COLLISION_THRESH}" \
   --warmup

@@ -9,7 +9,7 @@ from std_msgs.msg import String
 
 from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient
 from alicia_flexible_grasp_supervisor.msg import GraspState
-from alicia_flexible_grasp_supervisor.srv import StartGrasp, StopGrasp
+from alicia_flexible_grasp_supervisor.srv import StartGrasp, StopGrasp, TriggerZero
 from gui.theme import metric_chip, panel
 
 
@@ -23,6 +23,7 @@ class Grasp6DPlanState:
 @dataclass
 class Grasp6DButtonLabels:
     check_remote: str
+    request_plan: str
     execute_grasp: str
     stop: str
 
@@ -53,6 +54,7 @@ class Grasp6DGuiState:
 def grasp6d_button_labels():
     return Grasp6DButtonLabels(
         check_remote='检查远程推理端',
+        request_plan='生成 6D 候选',
         execute_grasp='执行 6D 抓取流程',
         stop='停止抓取',
     )
@@ -92,6 +94,7 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         self._grasp_state = 'IDLE'
         self._grasp_message = ''
         self._checking = False
+        self._requesting_plan = False
         self._command_active = False
         self._plan_max_age_sec = float(rospy.get_param('/grasp/grasp6d_plan_max_age_sec', 2.0))
         self._server_url = str(rospy.get_param('/grasp_6d/remote/server_url', 'http://127.0.0.1:8000'))
@@ -129,14 +132,18 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         actions.setSpacing(10)
         self.check_btn = QtWidgets.QPushButton(labels.check_remote)
         self.check_btn.setObjectName('PrimaryButton')
+        self.request_plan_btn = QtWidgets.QPushButton(labels.request_plan)
+        self.request_plan_btn.setObjectName('PrimaryButton')
         self.execute_btn = QtWidgets.QPushButton(labels.execute_grasp)
         self.execute_btn.setObjectName('DangerButton')
         self.stop_btn = QtWidgets.QPushButton(labels.stop)
         self.stop_btn.setObjectName('DangerButton')
         self.check_btn.clicked.connect(self.check_remote)
+        self.request_plan_btn.clicked.connect(self.request_plan)
         self.execute_btn.clicked.connect(self.execute_grasp)
         self.stop_btn.clicked.connect(self.stop_grasp)
         actions.addWidget(self.check_btn, 2)
+        actions.addWidget(self.request_plan_btn, 2)
         actions.addWidget(self.execute_btn, 2)
         actions.addWidget(self.stop_btn, 1)
         body.addLayout(actions)
@@ -208,6 +215,25 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
             message = '远程推理端连接失败：%s' % exc
         self._emit_check_result_if_alive(ok, message)
 
+    def request_plan(self):
+        if self._requesting_plan:
+            return
+        self._requesting_plan = True
+        self.request_plan_btn.setEnabled(False)
+        self.execute_btn.setEnabled(False)
+        self._remote_status = '正在请求远程 6D 候选...'
+        self._refresh_view()
+        thread = threading.Thread(target=self._run_request_plan, daemon=True)
+        thread.start()
+
+    def _run_request_plan(self):
+        try:
+            rospy.wait_for_service('/grasp_6d/request_plan', timeout=1.5)
+            res = rospy.ServiceProxy('/grasp_6d/request_plan', TriggerZero)(True)
+            self._emit_check_result_if_alive(bool(res.success), str(res.message))
+        except Exception as exc:
+            self._emit_check_result_if_alive(False, '请求 6D 候选失败：%s' % exc)
+
     def execute_grasp(self):
         if self._command_active:
             return
@@ -252,13 +278,16 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
 
     def _finish_remote_check(self, ok, message):
         self._checking = False
+        self._requesting_plan = False
         self.check_btn.setEnabled(True)
+        self.request_plan_btn.setEnabled(True)
         self._remote_status = message
         self._refresh_view()
 
     def _finish_command(self, ok, message):
         self._command_active = False
         self.check_btn.setEnabled(True)
+        self.request_plan_btn.setEnabled(True)
         self.execute_btn.setEnabled(True)
         self._set_command_status(ok, message)
 
@@ -284,7 +313,8 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
             self.pose_chip.setText('路径 %d / 4' % int(self._last_plan_pose_count))
         if self.grasp_chip is not None:
             self.grasp_chip.setText('抓取 %s' % _short_text(self._grasp_state, 18))
-        self.execute_btn.setEnabled((not self._command_active) and plan_state.fresh)
+        self.request_plan_btn.setEnabled(not self._requesting_plan)
+        self.execute_btn.setEnabled((not self._command_active) and (not self._requesting_plan) and plan_state.fresh)
 
     def _shutdown_ros(self):
         self._alive = False

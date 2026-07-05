@@ -21,6 +21,8 @@ HOST=0.0.0.0
 PORT=8000
 DEVICE=cuda:0
 CUDA_HOME=/usr/local/cuda-11.8
+NUM_POINTS=12000
+COLLISION_THRESH=0.01
 ```
 
 You can override them inline if needed:
@@ -107,3 +109,5 @@ roslaunch alicia_flexible_grasp_supervisor full_system.launch use_remote_grasp6d
 ```
 
 The ROS side publishes the returned 6D grasp sequence on `/grasp_6d/plan`, which is consumed by `grasp_task_node.py`.
+
+The ROS node is manual-trigger by default to protect the WSL2 GPU process. In the GUI, use `生成 6D 候选` once the object is visible, then use `执行 6D 抓取流程` after the candidate plan is ready. Continuous background inference can be re-enabled only for debugging with `/grasp_6d/remote/auto_request:=true`.

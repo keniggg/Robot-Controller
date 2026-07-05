@@ -1,7 +1,7 @@
 grasp:
   use_grasp6d_plan: true
   grasp6d_plan_topic: "/grasp_6d/plan"
-  grasp6d_plan_max_age_sec: 2.0
+  grasp6d_plan_max_age_sec: 30.0
   pregrasp_distance_m: 0.08
   pregrasp_offset_mode: "camera_ray"
   final_approach_offset_m: 0.015
@@ -55,6 +55,8 @@ grasp_6d:
   tactile_weight: 0.2
   remote:
     server_url: "http://127.0.0.1:8000"
-    timeout_sec: 3.0
-    request_hz: 2.0
-    max_candidates: 20
+    timeout_sec: 30.0
+    auto_request: false
+    request_hz: 0.05
+    max_candidates: 6
+    failure_backoff_sec: 10.0

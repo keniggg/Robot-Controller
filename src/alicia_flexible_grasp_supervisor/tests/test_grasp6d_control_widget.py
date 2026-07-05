@@ -33,6 +33,7 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         labels = grasp6d_button_labels()
 
         self.assertEqual(labels.check_remote, '检查远程推理端')
+        self.assertEqual(labels.request_plan, '生成 6D 候选')
         self.assertEqual(labels.execute_grasp, '执行 6D 抓取流程')
         self.assertEqual(labels.stop, '停止抓取')
 

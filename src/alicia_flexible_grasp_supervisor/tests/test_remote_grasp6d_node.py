@@ -38,6 +38,26 @@ class FakePoseEstimator:
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
+    def test_latest_rgbd_buffer_supports_manual_snapshot_after_auto_consumption(self):
+        buffer = remote_node.LatestRgbdBuffer()
+        color = np.zeros((2, 2, 3), dtype=np.uint8)
+        depth = np.ones((2, 2), dtype=np.uint16)
+
+        buffer.update_color(color, stamp='stamp', frame_id='camera_link')
+        buffer.update_depth(depth)
+
+        first = buffer.take_latest()
+        second = buffer.take_latest()
+        manual = buffer.snapshot_latest()
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        self.assertIsNotNone(manual)
+        np.testing.assert_array_equal(manual[0], color)
+        np.testing.assert_array_equal(manual[1], depth)
+        self.assertEqual(manual[2], 'stamp')
+        self.assertEqual(manual[3], 'camera_link')
+
     def test_selects_first_reachable_candidate_after_camera_to_base_transform(self):
         candidates = [
             RemoteGraspCandidate(0.99, np.array([0.10, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04),

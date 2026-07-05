@@ -18,6 +18,7 @@ import json
 import math
 from pathlib import Path
 import sys
+import threading
 import types
 
 import numpy as np
@@ -139,6 +140,7 @@ class GraspNetBaselineBackend:
         self.collision_thresh = float(collision_thresh)
         self.collision_voxel_size = float(collision_voxel_size)
         self.loaded = False
+        self._predict_lock = threading.Lock()
 
     def health(self):
         missing = []
@@ -196,7 +198,10 @@ class GraspNetBaselineBackend:
         self.device = torch.device(self.device_name if use_cuda else 'cpu')
         self.net = GraspNet(input_feature_dim=0, num_view=self.num_view, is_training=False)
         self.net.to(self.device)
-        ckpt = torch.load(str(self.checkpoint), map_location=self.device)
+        try:
+            ckpt = torch.load(str(self.checkpoint), map_location=self.device, weights_only=True)
+        except TypeError:
+            ckpt = torch.load(str(self.checkpoint), map_location=self.device)
         state_dict = ckpt['model_state_dict'] if isinstance(ckpt, dict) and 'model_state_dict' in ckpt else ckpt
         self.net.load_state_dict(state_dict)
         self.net.eval()
@@ -204,29 +209,35 @@ class GraspNetBaselineBackend:
         return self
 
     def predict(self, payload):
-        self.load()
-        decoded = decode_rgbd_payload(payload)
-        model_input, scene_points = self._build_model_input(decoded)
-        batch_data = self.collate_fn([model_input])
-        batch_data = _to_device(batch_data, self.device)
-        with self.torch.no_grad():
-            end_points = self.net(batch_data)
-            grasp_preds = self.pred_decode(end_points)
-        preds = grasp_preds[0].detach().cpu().numpy()
-        grasp_group = self.GraspGroup(preds)
-        if len(grasp_group) == 0:
-            return []
-        grasp_group.nms()
-        if self.collision_thresh >= 0.0:
-            detector = self.ModelFreeCollisionDetector(scene_points, voxel_size=self.collision_voxel_size)
-            collision_mask = detector.detect(grasp_group, collision_thresh=self.collision_thresh)
-            grasp_group = grasp_group[~collision_mask]
-        if len(grasp_group) == 0:
-            return []
-        grasp_group.sort_by_score()
-        max_candidates = max(1, int(decoded['max_candidates']))
-        count = min(max_candidates, len(grasp_group))
-        return [_grasp_to_response(grasp_group[i]) for i in range(count)]
+        if not self._predict_lock.acquire(False):
+            raise RuntimeError('graspnet baseline inference busy; retry after current request')
+        try:
+            self.load()
+            decoded = decode_rgbd_payload(payload)
+            model_input, scene_points = self._build_model_input(decoded)
+            batch_data = self.collate_fn([model_input])
+            batch_data = _to_device(batch_data, self.device)
+            with self.torch.no_grad():
+                end_points = self.net(batch_data)
+                grasp_preds = self.pred_decode(end_points)
+            preds = grasp_preds[0].detach().cpu().numpy()
+            grasp_group = self.GraspGroup(preds)
+            if len(grasp_group) == 0:
+                return []
+            grasp_group.nms()
+            if self.collision_thresh >= 0.0:
+                detector = self.ModelFreeCollisionDetector(scene_points, voxel_size=self.collision_voxel_size)
+                collision_mask = detector.detect(grasp_group, collision_thresh=self.collision_thresh)
+                grasp_group = grasp_group[~collision_mask]
+            if len(grasp_group) == 0:
+                return []
+            grasp_group.sort_by_score()
+            max_candidates = max(1, int(decoded['max_candidates']))
+            count = min(max_candidates, len(grasp_group))
+            return [_grasp_to_response(grasp_group[i]) for i in range(count)]
+        finally:
+            _empty_cuda_cache(getattr(self, 'torch', None))
+            self._predict_lock.release()
 
     def _build_model_input(self, decoded):
         intr = decoded['intrinsics']
@@ -307,6 +318,16 @@ def _to_device(value, device):
     if isinstance(value, tuple):
         return tuple(_to_device(item, device) for item in value)
     return value
+
+
+def _empty_cuda_cache(torch_module):
+    try:
+        cuda = getattr(torch_module, 'cuda', None)
+        empty_cache = getattr(cuda, 'empty_cache', None)
+        if callable(empty_cache):
+            empty_cache()
+    except Exception:
+        pass
 
 
 class FallbackGrasp:
