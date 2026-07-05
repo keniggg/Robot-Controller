@@ -37,6 +37,25 @@ class FakePoseEstimator:
         return pose
 
 
+class RecordingPoseEstimator:
+    def __init__(self):
+        self.calls = []
+
+    def make_base_pose_from_camera_pose(self, xyz, quat, stamp=None, camera_frame=None):
+        self.calls.append((np.asarray(xyz, dtype=float), np.asarray(quat, dtype=float), camera_frame))
+        pose = PoseStamped()
+        pose.header.frame_id = 'base_link'
+        pose.header.stamp = stamp
+        pose.pose.position.x = float(xyz[0])
+        pose.pose.position.y = float(xyz[1])
+        pose.pose.position.z = float(xyz[2])
+        pose.pose.orientation.x = float(quat[0])
+        pose.pose.orientation.y = float(quat[1])
+        pose.pose.orientation.z = float(quat[2])
+        pose.pose.orientation.w = float(quat[3])
+        return pose
+
+
 class RemoteGrasp6DNodeTest(unittest.TestCase):
     def test_latest_rgbd_buffer_supports_manual_snapshot_after_auto_consumption(self):
         buffer = remote_node.LatestRgbdBuffer()
@@ -70,10 +89,50 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             lambda pose: pose.pose.position.x > 1.5,
             stamp=None,
             camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
         )
 
         self.assertIs(selected, candidates[1])
         self.assertAlmostEqual(pose.pose.position.x, 1.65)
+
+    def test_converts_opencv_optical_candidate_to_ros_camera_link(self):
+        candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=np.array([0.01, 0.02, 0.30]),
+            quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.05,
+        )
+
+        converted = remote_node.convert_candidate_to_camera_link(candidate, 'opencv_optical')
+        converted_rotation = remote_node.quaternion_matrix(converted.quaternion_xyzw)[:3, :3]
+
+        np.testing.assert_allclose(converted.translation_m, np.array([0.30, -0.01, -0.02]))
+        np.testing.assert_allclose(converted_rotation, remote_node.OPTICAL_TO_ROS_CAMERA, atol=1e-7)
+        self.assertAlmostEqual(converted.score, candidate.score)
+        self.assertAlmostEqual(converted.width_m, candidate.width_m)
+
+    def test_reachability_receives_converted_opencv_optical_candidate(self):
+        candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=np.array([0.01, 0.02, 0.30]),
+            quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.05,
+        )
+        estimator = RecordingPoseEstimator()
+
+        selected, pose = remote_node.select_first_reachable_candidate(
+            [candidate],
+            estimator,
+            lambda pose: pose.pose.position.x > 0.29 and pose.pose.position.z < 0.0,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='opencv_optical',
+        )
+
+        self.assertIsNotNone(selected)
+        np.testing.assert_allclose(estimator.calls[0][0], np.array([0.30, -0.01, -0.02]))
+        self.assertAlmostEqual(pose.pose.position.x, 0.30)
+        self.assertAlmostEqual(pose.pose.position.z, -0.02)
 
     def test_pose_array_contains_pregrasp_approach_grasp_and_lift(self):
         pose = PoseStamped()

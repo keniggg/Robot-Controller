@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
 import threading
 
+import numpy as np
 import rospy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseArray
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
+from tf.transformations import quaternion_from_matrix, quaternion_matrix
 
 from alicia_flexible_grasp.grasp.grasp6d_sequence import make_grasp_sequence_from_grasp_pose
 from alicia_flexible_grasp.vision.grasp6d_adapter import CameraIntrinsics
 from alicia_flexible_grasp.vision.pose_estimator import PoseEstimator
-from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient
+from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient, RemoteGraspCandidate
 from alicia_flexible_grasp_supervisor.srv import SetTargetPose, TriggerZero, TriggerZeroResponse
+
+
+OPTICAL_TO_ROS_CAMERA = np.asarray(
+    [
+        [0.0, 0.0, 1.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+    ],
+    dtype=float,
+)
 
 
 class LatestRgbdBuffer:
@@ -52,16 +64,69 @@ class LatestRgbdBuffer:
         return self.color.copy(), self.depth.copy(), self.stamp, self.frame_id
 
 
-def select_first_reachable_candidate(candidates, pose_estimator, reachability_fn, stamp, camera_frame):
+def normalize_candidate_frame_convention(convention):
+    value = str(convention or 'opencv_optical').strip().lower()
+    aliases = {
+        'ros': 'ros_camera_link',
+        'camera_link': 'ros_camera_link',
+        'ros_link': 'ros_camera_link',
+        'ros_camera': 'ros_camera_link',
+        'opencv': 'opencv_optical',
+        'optical': 'opencv_optical',
+        'camera_optical': 'opencv_optical',
+        'color_optical': 'opencv_optical',
+    }
+    return aliases.get(value, value)
+
+
+def convert_candidate_to_camera_link(candidate, convention='opencv_optical'):
+    convention = normalize_candidate_frame_convention(convention)
+    if convention == 'ros_camera_link':
+        return candidate
+    if convention != 'opencv_optical':
+        raise ValueError('unknown remote grasp candidate frame convention: %s' % convention)
+
+    translation = OPTICAL_TO_ROS_CAMERA.dot(np.asarray(candidate.translation_m, dtype=float))
+    optical_from_grasp = quaternion_matrix(np.asarray(candidate.quaternion_xyzw, dtype=float))
+    camera_from_grasp = np.eye(4, dtype=float)
+    camera_from_grasp[:3, :3] = OPTICAL_TO_ROS_CAMERA.dot(optical_from_grasp[:3, :3])
+    quaternion = _normalize_quaternion(np.asarray(quaternion_from_matrix(camera_from_grasp), dtype=float))
+    return RemoteGraspCandidate(
+        score=float(candidate.score),
+        translation_m=translation,
+        quaternion_xyzw=quaternion,
+        width_m=float(candidate.width_m),
+    )
+
+
+def _normalize_quaternion(quaternion):
+    norm = float(np.linalg.norm(quaternion))
+    if norm <= 1e-12:
+        raise ValueError('remote grasp candidate quaternion has zero norm')
+    quaternion = quaternion / norm
+    if quaternion[3] < 0.0:
+        quaternion = -quaternion
+    return quaternion
+
+
+def select_first_reachable_candidate(
+    candidates,
+    pose_estimator,
+    reachability_fn,
+    stamp,
+    camera_frame,
+    candidate_frame_convention='opencv_optical',
+):
     for candidate in candidates:
+        camera_candidate = convert_candidate_to_camera_link(candidate, candidate_frame_convention)
         pose = pose_estimator.make_base_pose_from_camera_pose(
-            candidate.translation_m,
-            candidate.quaternion_xyzw,
+            camera_candidate.translation_m,
+            camera_candidate.quaternion_xyzw,
             stamp=stamp,
             camera_frame=camera_frame,
         )
         if bool(reachability_fn(pose)):
-            return candidate, pose
+            return camera_candidate, pose
     return None, None
 
 
@@ -99,6 +164,9 @@ class RemoteGrasp6DNode:
         self.max_candidates = int(rospy.get_param('/grasp_6d/remote/max_candidates', remote_cfg.get('max_candidates', 20)))
         self.auto_request = bool(rospy.get_param('/grasp_6d/remote/auto_request', remote_cfg.get('auto_request', False)))
         self.failure_backoff_sec = max(0.0, float(rospy.get_param('/grasp_6d/remote/failure_backoff_sec', remote_cfg.get('failure_backoff_sec', 8.0))))
+        self.candidate_frame_convention = normalize_candidate_frame_convention(
+            rospy.get_param('/grasp_6d/remote/candidate_frame_convention', remote_cfg.get('candidate_frame_convention', 'opencv_optical'))
+        )
         try:
             self.client = RemoteGrasp6DClient(server_url, timeout_sec=timeout_sec)
         except ValueError as exc:
@@ -179,6 +247,7 @@ class RemoteGrasp6DNode:
                 self._plan_reachable,
                 stamp=stamp,
                 camera_frame=frame_id or self.pose_estimator.camera_frame,
+                candidate_frame_convention=self.candidate_frame_convention,
             )
             if selected is None:
                 message = 'remote 6D returned %d candidates, none reachable' % len(candidates)
