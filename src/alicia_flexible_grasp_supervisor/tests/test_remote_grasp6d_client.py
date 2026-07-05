@@ -13,9 +13,11 @@ for path in (ROOT, ROOT / 'src'):
 
 from alicia_flexible_grasp.vision.grasp6d_adapter import CameraIntrinsics
 from alicia_flexible_grasp.vision.remote_grasp6d_client import (
+    RemoteGrasp6DClient,
     decode_remote_grasp_response,
     decode_rgbd_payload,
     encode_rgbd_payload,
+    validate_remote_grasp6d_url,
 )
 
 
@@ -70,6 +72,17 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
     def test_response_rejects_backend_error(self):
         with self.assertRaisesRegex(RuntimeError, 'checkpoint missing'):
             decode_remote_grasp_response({'ok': False, 'error': 'checkpoint missing'})
+
+    def test_remote_url_validation_rejects_placeholder_angle_brackets(self):
+        with self.assertRaisesRegex(ValueError, 'placeholder'):
+            validate_remote_grasp6d_url('http://<WSL或Windows可访问IP>:8000')
+
+    def test_remote_url_validation_rejects_missing_http_scheme(self):
+        with self.assertRaisesRegex(ValueError, 'http'):
+            RemoteGrasp6DClient('192.168.26.1:8000')
+
+    def test_remote_url_validation_normalizes_trailing_slash(self):
+        self.assertEqual(validate_remote_grasp6d_url('http://192.168.26.1:8000/'), 'http://192.168.26.1:8000')
 
 
 if __name__ == '__main__':

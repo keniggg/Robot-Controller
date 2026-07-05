@@ -76,6 +76,7 @@ catkin_install_python(PROGRAMS
   scripts/data_logger_node.py
   scripts/system_bringup_check.py
   scripts/check_grasp6d_runtime.py
+  scripts/check_remote_grasp6d_server.py
   gui/main_gui.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

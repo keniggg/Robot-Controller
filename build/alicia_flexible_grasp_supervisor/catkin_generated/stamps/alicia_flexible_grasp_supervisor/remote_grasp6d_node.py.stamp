@@ -88,7 +88,11 @@ class RemoteGrasp6DNode:
         server_url = rospy.get_param('/grasp_6d/remote/server_url', remote_cfg.get('server_url', 'http://127.0.0.1:8000'))
         timeout_sec = float(rospy.get_param('/grasp_6d/remote/timeout_sec', remote_cfg.get('timeout_sec', 3.0)))
         self.max_candidates = int(rospy.get_param('/grasp_6d/remote/max_candidates', remote_cfg.get('max_candidates', 20)))
-        self.client = RemoteGrasp6DClient(server_url, timeout_sec=timeout_sec)
+        try:
+            self.client = RemoteGrasp6DClient(server_url, timeout_sec=timeout_sec)
+        except ValueError as exc:
+            rospy.logfatal('invalid remote 6D grasp server URL: %s', exc)
+            raise
         self.pose_estimator = PoseEstimator(
             hcfg.get('camera_frame', cam_cfg.get('frame_id', 'camera_link')),
             hcfg.get('base_frame', 'base_link'),
@@ -102,6 +106,7 @@ class RemoteGrasp6DNode:
         rospy.Subscriber(cam_cfg.get('color_topic', '/supervisor/camera/color/image_raw'), Image, self.color_cb, queue_size=1, buff_size=2**24, tcp_nodelay=True)
         rospy.Subscriber(cam_cfg.get('depth_topic', '/supervisor/camera/depth/image_raw'), Image, self.depth_cb, queue_size=1, buff_size=2**24, tcp_nodelay=True)
         self.rate_hz = max(0.1, float(rospy.get_param('/grasp_6d/remote/request_hz', remote_cfg.get('request_hz', rospy.get_param('/grasp_6d/plan_hz', 1.0)))))
+        self._check_remote_health()
         self.status_pub.publish(String('remote 6D grasp waiting for RGB-D: %s' % server_url))
 
     def color_cb(self, msg):
@@ -168,6 +173,24 @@ class RemoteGrasp6DNode:
             return bool(response.success)
         except Exception:
             return False
+
+    def _check_remote_health(self):
+        try:
+            health = self.client.health()
+        except Exception as exc:
+            rospy.logwarn('remote 6D health check failed: %s', exc)
+            self.status_pub.publish(String('remote 6D health check failed: %s' % exc))
+            return
+        if bool(health.get('ok', False)):
+            rospy.loginfo(
+                'remote 6D server online: backend=%s loaded=%s url=%s',
+                health.get('backend', 'unknown'),
+                health.get('loaded', 'unknown'),
+                self.client.server_url,
+            )
+        else:
+            rospy.logwarn('remote 6D server unhealthy: %s', health)
+            self.status_pub.publish(String('remote 6D server unhealthy: %s' % health))
 
     def _publish_error(self, message):
         if message != self.last_error:

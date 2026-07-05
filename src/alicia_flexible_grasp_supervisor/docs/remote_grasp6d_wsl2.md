@@ -63,7 +63,8 @@ hostname -I
 From the Ubuntu VM:
 
 ```bash
-curl http://<WSL2_IP>:8000/health
+GRASP6D_URL=http://REPLACE_WITH_WSL2_IP:8000
+curl "$GRASP6D_URL/health"
 ```
 
 If the VM cannot reach WSL2 directly, expose the port through Windows PowerShell as Administrator:
@@ -76,8 +77,11 @@ netsh advfirewall firewall add rule name="Alicia Grasp6D 8000" dir=in action=all
 Then use the Windows host IP from the Ubuntu VM:
 
 ```bash
-curl http://<WINDOWS_HOST_IP>:8000/health
+GRASP6D_URL=http://REPLACE_WITH_WINDOWS_HOST_IP:8000
+curl "$GRASP6D_URL/health"
 ```
+
+Do not type angle brackets like `<WSL2_IP>` into Bash. They are placeholders in prose, and Bash treats `<...>` as file redirection.
 
 ## Ubuntu VM ROS Side
 
@@ -85,13 +89,15 @@ The remote node is the default 6D path. Start the full system with the WSL2/Wind
 
 ```bash
 source devel/setup.bash
+export GRASP6D_URL=http://REPLACE_WITH_WINDOWS_HOST_OR_WSL2_IP:8000
+rosrun alicia_flexible_grasp_supervisor check_remote_grasp6d_server.py "$GRASP6D_URL"
+
 roslaunch alicia_flexible_grasp_supervisor full_system.launch \
   start_real_arm:=false \
   start_camera:=true \
   start_tactile:=true \
   start_gui:=true \
-  use_remote_grasp6d:=true \
-  remote_grasp6d_url:=http://<WINDOWS_HOST_IP_OR_WSL2_IP>:8000
+  use_remote_grasp6d:=true
 ```
 
 To fall back to the older local `alicia_d_grasp_6d` backend:

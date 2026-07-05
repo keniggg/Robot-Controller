@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import io
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import numpy as np
@@ -15,6 +16,21 @@ class RemoteGraspCandidate:
     translation_m: np.ndarray
     quaternion_xyzw: np.ndarray
     width_m: float = 0.0
+
+
+def validate_remote_grasp6d_url(server_url):
+    normalized = str(server_url or '').strip().rstrip('/')
+    if not normalized:
+        raise ValueError('remote grasp6d server_url is empty')
+    if '<' in normalized or '>' in normalized:
+        raise ValueError(
+            'remote grasp6d server_url contains placeholder angle brackets; '
+            'replace it with a real URL such as http://192.168.26.1:8000'
+        )
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        raise ValueError('remote grasp6d server_url must start with http:// or https:// and include host:port')
+    return normalized
 
 
 def encode_rgbd_payload(
@@ -87,10 +103,8 @@ def decode_remote_grasp_response(response):
 
 class RemoteGrasp6DClient:
     def __init__(self, server_url, timeout_sec=3.0):
-        self.server_url = str(server_url or '').rstrip('/')
+        self.server_url = validate_remote_grasp6d_url(server_url)
         self.timeout_sec = float(timeout_sec)
-        if not self.server_url:
-            raise ValueError('remote grasp6d server_url is empty')
 
     def health(self):
         return self._request_json('/health', None)
