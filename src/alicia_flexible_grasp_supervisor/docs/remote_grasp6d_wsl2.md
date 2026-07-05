@@ -9,14 +9,33 @@ Start the server from the same Robot-Controller checkout that contains `tools/gr
 ```bash
 conda activate grasp6d118
 cd ~/grasp6d_ws/Robot-Controller
+./tools/start_graspnet_baseline_server_wsl.sh
+```
 
-python tools/graspnet_baseline_server.py \
-  --baseline-root /home/lv/grasp6d_ws/graspnet-baseline \
-  --checkpoint /home/lv/grasp6d_ws/checkpoints/checkpoint-rs.tar \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --device cuda:0 \
-  --warmup
+The launcher uses these defaults:
+
+```bash
+BASELINE_ROOT=/home/lv/grasp6d_ws/graspnet-baseline
+CHECKPOINT=/home/lv/grasp6d_ws/checkpoints/checkpoint-rs.tar
+HOST=0.0.0.0
+PORT=8000
+DEVICE=cuda:0
+CUDA_HOME=/usr/local/cuda-11.8
+```
+
+You can override them inline if needed:
+
+```bash
+BASELINE_ROOT=/home/lv/grasp6d_ws/graspnet-baseline \
+CHECKPOINT=/home/lv/grasp6d_ws/checkpoints/checkpoint-rs.tar \
+DEVICE=cuda:0 \
+./tools/start_graspnet_baseline_server_wsl.sh
+```
+
+If the terminal shows `^Mpython` or `python' not found`, the command was pasted with a Windows carriage return. Re-type the first word manually or run:
+
+```bash
+sed -i 's/\r$//' tools/start_graspnet_baseline_server_wsl.sh tools/graspnet_baseline_server.py
 ```
 
 For network-only testing without loading the model:
