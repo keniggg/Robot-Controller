@@ -135,6 +135,42 @@ class GraspTaskSequenceTest(unittest.TestCase):
         )
         self.assertIn(('close', True), calls)
 
+    def test_6d_plan_rejects_position_only_fallback_before_execute(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        states = []
+        calls = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
+
+        def move_pose(_pose, execute):
+            calls.append(('move', bool(execute)))
+            return FakeServiceResponse(
+                True,
+                'planned with position-only fallback: target xyz=(0.1, 0.2, 0.3)',
+            )
+
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/robot/position_only_execute_enabled': False,
+        }.get(name, default)
+        try:
+            result = grasp_task_node.GraspTaskNode._plan_and_execute_pose(
+                node,
+                grasp_task_node.GraspStages.MOVE_PREGRASP,
+                '6D pregrasp',
+                self._pose(0.10),
+                move_pose,
+                '6D pregrasp',
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+
+        self.assertFalse(result)
+        self.assertEqual(calls, [('move', False)])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('position-only fallback', states[-1][1])
+
     def test_full_grasp_approaches_target_after_pregrasp_before_closing(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = self._object()

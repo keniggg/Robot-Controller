@@ -56,6 +56,12 @@ class RecordingPoseEstimator:
         return pose
 
 
+class FakeServiceResponse:
+    def __init__(self, success=True, message='ok'):
+        self.success = bool(success)
+        self.message = message
+
+
 class RemoteGrasp6DNodeTest(unittest.TestCase):
     def test_latest_rgbd_buffer_supports_manual_snapshot_after_auto_consumption(self):
         buffer = remote_node.LatestRgbdBuffer()
@@ -158,6 +164,53 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertAlmostEqual(array.poses[1].position.x, 0.385)
         self.assertAlmostEqual(array.poses[2].position.x, 0.4)
         self.assertAlmostEqual(array.poses[3].position.z, 0.25)
+
+    def test_plan_reachable_rejects_position_only_fallback_when_execute_disallows_it(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.allow_position_only_fallback = False
+        node._position_only_rejected_count = 0
+
+        original_wait_for_service = remote_node.rospy.wait_for_service
+        original_service_proxy = remote_node.rospy.ServiceProxy
+        original_logwarn_throttle = remote_node.rospy.logwarn_throttle
+        remote_node.rospy.wait_for_service = lambda *args, **kwargs: None
+        remote_node.rospy.ServiceProxy = lambda *_args, **_kwargs: (
+            lambda _pose, _execute: FakeServiceResponse(
+                True,
+                'planned with position-only fallback: target xyz=(0.1, 0.2, 0.3)',
+            )
+        )
+        remote_node.rospy.logwarn_throttle = lambda *args, **kwargs: None
+        try:
+            self.assertFalse(node._plan_reachable(PoseStamped()))
+        finally:
+            remote_node.rospy.wait_for_service = original_wait_for_service
+            remote_node.rospy.ServiceProxy = original_service_proxy
+            remote_node.rospy.logwarn_throttle = original_logwarn_throttle
+
+        self.assertEqual(node._position_only_rejected_count, 1)
+
+    def test_plan_reachable_accepts_strict_pose_plan(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.allow_position_only_fallback = False
+        node._position_only_rejected_count = 0
+
+        original_wait_for_service = remote_node.rospy.wait_for_service
+        original_service_proxy = remote_node.rospy.ServiceProxy
+        remote_node.rospy.wait_for_service = lambda *args, **kwargs: None
+        remote_node.rospy.ServiceProxy = lambda *_args, **_kwargs: (
+            lambda _pose, _execute: FakeServiceResponse(
+                True,
+                'planned with candidate orientation current: target xyz=(0.1, 0.2, 0.3)',
+            )
+        )
+        try:
+            self.assertTrue(node._plan_reachable(PoseStamped()))
+        finally:
+            remote_node.rospy.wait_for_service = original_wait_for_service
+            remote_node.rospy.ServiceProxy = original_service_proxy
+
+        self.assertEqual(node._position_only_rejected_count, 0)
 
 
 if __name__ == '__main__':

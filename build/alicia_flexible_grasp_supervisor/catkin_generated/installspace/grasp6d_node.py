@@ -10,6 +10,7 @@ from std_msgs.msg import String
 
 from alicia_flexible_grasp.grasp.grasp6d_candidate_selector import select_best_grasp6d_candidate
 from alicia_flexible_grasp.grasp.grasp6d_sequence import make_grasp_sequence_from_grasp_pose
+from alicia_flexible_grasp.robot.planning_feedback import is_position_only_fallback_message
 from alicia_flexible_grasp.vision.grasp6d_adapter import (
     AliciaGrasp6DBackend,
     CameraIntrinsics,
@@ -62,6 +63,12 @@ class Grasp6DNode:
         self.latest_tactile = None
         self.backend = None
         self.last_backend_error = ''
+        self.allow_position_only_fallback = bool(
+            rospy.get_param(
+                '/grasp_6d/accept_position_only_fallback',
+                rospy.get_param('/robot/position_only_execute_enabled', False),
+            )
+        )
         self.plan_pub = rospy.Publisher(rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'), PoseArray, queue_size=1)
         self.status_pub = rospy.Publisher('/grasp_6d/status', String, queue_size=1, latch=True)
         cam_cfg = rospy.get_param('/camera', {})
@@ -205,7 +212,16 @@ class Grasp6DNode:
             rospy.wait_for_service('/supervisor/move_to_pose', timeout=0.25)
             move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
             response = move_pose(grasp_pose, False)
-            return bool(response.success)
+            if not bool(response.success):
+                return False
+            if is_position_only_fallback_message(getattr(response, 'message', '')) and not self.allow_position_only_fallback:
+                rospy.logwarn_throttle(
+                    2.0,
+                    '6D candidate rejected: position-only fallback is not executable: %s',
+                    getattr(response, 'message', ''),
+                )
+                return False
+            return True
         except Exception:
             return False
 

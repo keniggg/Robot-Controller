@@ -10,6 +10,7 @@ from std_msgs.msg import String
 from tf.transformations import quaternion_from_matrix, quaternion_matrix
 
 from alicia_flexible_grasp.grasp.grasp6d_sequence import make_grasp_sequence_from_grasp_pose
+from alicia_flexible_grasp.robot.planning_feedback import is_position_only_fallback_message
 from alicia_flexible_grasp.vision.grasp6d_adapter import CameraIntrinsics
 from alicia_flexible_grasp.vision.pose_estimator import PoseEstimator
 from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient, RemoteGraspCandidate
@@ -167,6 +168,16 @@ class RemoteGrasp6DNode:
         self.candidate_frame_convention = normalize_candidate_frame_convention(
             rospy.get_param('/grasp_6d/remote/candidate_frame_convention', remote_cfg.get('candidate_frame_convention', 'opencv_optical'))
         )
+        self.allow_position_only_fallback = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/accept_position_only_fallback',
+                remote_cfg.get(
+                    'accept_position_only_fallback',
+                    rospy.get_param('/robot/position_only_execute_enabled', False),
+                ),
+            )
+        )
+        self._position_only_rejected_count = 0
         try:
             self.client = RemoteGrasp6DClient(server_url, timeout_sec=timeout_sec)
         except ValueError as exc:
@@ -241,6 +252,7 @@ class RemoteGrasp6DNode:
                 stamp_sec=stamp.to_sec() if stamp is not None else 0.0,
                 max_candidates=self.max_candidates,
             )
+            self._position_only_rejected_count = 0
             selected, grasp_pose = select_first_reachable_candidate(
                 candidates,
                 self.pose_estimator,
@@ -250,7 +262,14 @@ class RemoteGrasp6DNode:
                 candidate_frame_convention=self.candidate_frame_convention,
             )
             if selected is None:
-                message = 'remote 6D returned %d candidates, none reachable' % len(candidates)
+                if self._position_only_rejected_count > 0:
+                    message = (
+                        'remote 6D returned %d candidates; %d only reached by position-only fallback '
+                        'and were rejected because they are not executable'
+                        % (len(candidates), self._position_only_rejected_count)
+                    )
+                else:
+                    message = 'remote 6D returned %d candidates, none reachable' % len(candidates)
                 self._publish_error(message)
                 return False, message
             plan_msg = make_grasp_plan_pose_array(grasp_pose, stamp, rospy.get_param('/grasp', {}))
@@ -286,7 +305,17 @@ class RemoteGrasp6DNode:
             rospy.wait_for_service('/supervisor/move_to_pose', timeout=0.25)
             move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
             response = move_pose(grasp_pose, False)
-            return bool(response.success)
+            if not bool(response.success):
+                return False
+            if is_position_only_fallback_message(getattr(response, 'message', '')) and not self.allow_position_only_fallback:
+                self._position_only_rejected_count += 1
+                rospy.logwarn_throttle(
+                    2.0,
+                    'remote 6D candidate rejected: position-only fallback is not executable: %s',
+                    getattr(response, 'message', ''),
+                )
+                return False
+            return True
         except Exception:
             return False
 

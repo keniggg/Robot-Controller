@@ -9,6 +9,10 @@ from alicia_flexible_grasp_supervisor.msg import ObjectPose, GraspState
 from alicia_flexible_grasp_supervisor.srv import StartGrasp, StartGraspResponse, StopGrasp, StopGraspResponse, SetTargetPose, SetFloat
 from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages, STATE_NAMES
 from alicia_flexible_grasp.grasp.grasp_pose_generator import make_pregrasp_pose, make_lift_pose
+from alicia_flexible_grasp.robot.planning_feedback import (
+    is_position_only_fallback_message,
+    position_only_rejection_message,
+)
 try:
     import tf2_ros
 except Exception:
@@ -246,6 +250,15 @@ class GraspTaskNode:
         if not resp.success:
             self.set_state(GraspStages.FAILED, '%s planning failed: %s' % (label, resp.message))
             return False
+        if (
+            is_position_only_fallback_message(getattr(resp, 'message', ''))
+            and not self._position_only_execute_allowed()
+        ):
+            self.set_state(
+                GraspStages.FAILED,
+                position_only_rejection_message(label, getattr(resp, 'message', '')),
+            )
+            return False
         self.set_state(stage, 'moving ' + label)
         resp = move_pose(pose, True)
         if not resp.success:
@@ -403,6 +416,10 @@ class GraspTaskNode:
 
         rospy.logwarn('Grasp motion settle timeout after %.2fs for %s', time.monotonic() - start, reason)
         return False
+
+    @staticmethod
+    def _position_only_execute_allowed():
+        return bool(rospy.get_param('/robot/position_only_execute_enabled', False))
 
     def _joint_positions_tuple(self):
         msg = getattr(self, 'latest_joint_state', None)
