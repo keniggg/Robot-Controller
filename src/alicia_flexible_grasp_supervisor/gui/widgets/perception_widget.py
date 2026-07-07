@@ -383,6 +383,14 @@ class PerceptionWidget(QtWidgets.QWidget):
         if not self.__dict__.get('_alive', False):
             return
         self._last_object_receive_time = time.monotonic()
+        if (
+            not getattr(msg, 'detected', False)
+            and self.__dict__.get('_grasp_active', False)
+            and self._has_recent_locked_grasp_target()
+        ):
+            self.detected_chip.setText('目标已锁定 %s' % (msg.label or self.label_edit.text()))
+            self._set_perception_status('目标已锁定，运动中临时丢帧不打断抓取流程')
+            return
         self.last_object = msg
         if not msg.detected:
             self.pregrasp_pose = None

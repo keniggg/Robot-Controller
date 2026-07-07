@@ -20,6 +20,9 @@ grasp:
   max_object_jump_m: 0.12
   object_jump_filter_window_sec: 4.0
   max_locked_target_refine_m: 0.06
+  # 6D 抓取必须执行模型给出的姿态；若 MoveIt 只能通过“当前姿态/候选姿态”
+  # 兜底规划成功，则认为该 6D 抓取姿态不可执行，避免到达目标但夹爪姿态错误。
+  accept_orientation_fallback: false
 
 force:
   contact_threshold_mn: 200.0
@@ -29,12 +32,19 @@ force:
   slip_drop_ratio: 0.30
 
 gripper:
-  open_position_m: 0.0
-  close_limit_m: 0.05
+  # Alicia-D real gripper reports 0.05 m at the physically open posture and
+  # 0.0 m at the closed posture.
+  open_position_m: 0.05
+  close_limit_m: 0.0
   close_step_fast_m: 0.002
   close_step_slow_m: 0.0007
   open_step_safe_m: 0.003
   command_rate_hz: 25
+  # 夹爪未完成力/位置标定前，先使用固定开合，不走电子皮肤柔顺闭合。
+  use_compliant_close: false
+  simple_close_position_m: 0.0
+  simple_close_wait_sec: 0.8
+  open_wait_sec: 1.0
   hold_arm_during_gripper_commands: true
   arm_hold_timeout_sec: 0.5
   require_tactile_feedback: true
@@ -63,3 +73,19 @@ grasp_6d:
     # GraspNet baseline predicts in OpenCV optical camera coordinates:
     # x right, y down, z forward. ROS-side planning uses camera_link.
     candidate_frame_convention: "opencv_optical"
+    # 远程 6D 候选的可达性检查也必须坚持原始 6D 姿态。
+    accept_orientation_fallback: false
+    # Use the current perception target bbox to mask RGB-D before remote 6D
+    # inference; otherwise GraspNet may propose grasps on the table/background.
+    use_perception_roi: true
+    require_perception_roi: true
+    perception_roi_margin_px: 20
+    perception_roi_max_age_sec: 1.0
+    perception_roi_min_valid_depth_px: 250
+    # Reject remote 6D grasps that are reachable but do not land near the
+    # current YOLO/perception target. This prevents table/background candidates
+    # from being executed when the mouse bbox is large or includes clutter.
+    candidate_target_gate_enabled: true
+    candidate_max_target_distance_m: 0.025
+    candidate_min_relative_z_m: -0.015
+    candidate_max_relative_z_m: 0.08

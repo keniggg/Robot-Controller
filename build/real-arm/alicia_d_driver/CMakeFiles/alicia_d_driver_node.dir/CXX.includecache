@@ -64,24 +64,6 @@ sstream
 iomanip
 -
 
-/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_d_driver/src/serial_communicator.cpp
-alicia_d_driver/serial_communicator.hpp
-/home/zhuyupei/alicia_wa_full/src/real-arm/alicia_d_driver/src/alicia_d_driver/serial_communicator.hpp
-ros/console.h
--
-chrono
--
-numeric
--
-iomanip
--
-sstream
--
-ros/ros.h
--
-algorithm
--
-
 /opt/ros/noetic/include/ros/advertise_options.h
 ros/forwards.h
 /opt/ros/noetic/include/ros/ros/forwards.h

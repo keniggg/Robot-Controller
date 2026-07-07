@@ -9,6 +9,7 @@
   <arg name="baudrate" default="1000000" />
   <arg name="start_rviz" default="false" />
   <arg name="ros_control_publish_only_on_change" default="true" />
+  <arg name="ros_control_publish_gripper_command" default="false" />
   <!-- Load the URDF, SRDF and other .yaml configuration files on the param server -->
   <include file="$(find alicia_d_moveit)/launch/planning_context.launch">
     <arg name="load_robot_description" value="true"/>
@@ -63,6 +64,8 @@
     <param name="publish_only_on_change" type="bool" value="$(arg ros_control_publish_only_on_change)"/>
     <param name="publish_initial_command" type="bool" value="false"/>
     <param name="command_publish_epsilon" type="double" value="0.00001"/>
+    <param name="publish_gripper_command" type="bool" value="$(arg ros_control_publish_gripper_command)"/>
+    <param name="gripper_joint_name" type="string" value="right_finger"/>
   </node>
 
   <!-- Load the robot state publisher. No remapping needed now. -->

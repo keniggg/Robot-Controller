@@ -239,13 +239,23 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
     };
 
     std::vector<double> joint_angles;
-    joint_angles.reserve(6);
-    for (const auto& joint_name : hardware_joint_names) {
-        auto it = joint_map.find(joint_name);
-        joint_angles.push_back(it != joint_map.end() ? it->second : 0.0);
+    double gripper_value = 0.0; // incoming normalized value -> radians for gripper
+    {
+        std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
+        joint_angles = latest_joint_angles_;
+        gripper_value = latest_gripper_rad_;
+    }
+    if (joint_angles.size() != hardware_joint_names.size()) {
+        joint_angles.assign(hardware_joint_names.size(), 0.0);
     }
 
-    double gripper_value = 0.0; // incoming normalized value -> radians for gripper
+    for (size_t i = 0; i < hardware_joint_names.size(); ++i) {
+        auto it = joint_map.find(hardware_joint_names[i]);
+        if (it != joint_map.end()) {
+            joint_angles[i] = it->second;
+        }
+    }
+
     auto it_grip = joint_map.find("right_finger");
     if (it_grip != joint_map.end()) {
         if (gripper_input_is_percent_) {

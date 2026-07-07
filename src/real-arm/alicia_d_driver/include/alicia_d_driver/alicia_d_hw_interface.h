@@ -55,6 +55,8 @@ private:
     bool publish_initial_command_ = false;
     bool have_published_command_ = false;
     double command_publish_epsilon_ = 1e-5;
+    bool publish_gripper_command_ = false;
+    std::string gripper_joint_name_ = "right_finger";
 
 };
 

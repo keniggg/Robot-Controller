@@ -10,7 +10,9 @@ from alicia_flexible_grasp_supervisor.srv import StartGrasp, StartGraspResponse,
 from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages, STATE_NAMES
 from alicia_flexible_grasp.grasp.grasp_pose_generator import make_pregrasp_pose, make_lift_pose
 from alicia_flexible_grasp.robot.planning_feedback import (
+    is_orientation_fallback_message,
     is_position_only_fallback_message,
+    orientation_fallback_rejection_message,
     position_only_rejection_message,
 )
 try:
@@ -119,12 +121,14 @@ class GraspTaskNode:
     def execute(self):
         rospy.wait_for_service('/supervisor/move_to_pose', timeout=10)
         rospy.wait_for_service('/supervisor/set_gripper', timeout=10)
-        rospy.wait_for_service('/supervisor/compliant_close', timeout=10)
         move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
         set_gripper = rospy.ServiceProxy('/supervisor/set_gripper', SetFloat)
-        close = rospy.ServiceProxy('/supervisor/compliant_close', StartGrasp)
         gcfg = rospy.get_param('/grasp', {})
         gripper_cfg = rospy.get_param('/gripper', {})
+        close = None
+        if bool(gripper_cfg.get('use_compliant_close', True)):
+            rospy.wait_for_service('/supervisor/compliant_close', timeout=10)
+            close = rospy.ServiceProxy('/supervisor/compliant_close', StartGrasp)
         pregrasp_distance = float(gcfg.get('pregrasp_distance', gcfg.get('pregrasp_distance_m', 0.08)))
         final_offset = max(0.0, float(gcfg.get('final_approach_offset_m', 0.015)))
         pregrasp_mode = str(gcfg.get('pregrasp_offset_mode', 'base_z'))
@@ -133,7 +137,7 @@ class GraspTaskNode:
         open_position = float(gripper_cfg.get('open_position_m', 0.0))
 
         if bool(gcfg.get('use_grasp6d_plan', False)):
-            return self._execute_grasp6d_plan(gcfg, open_position, move_pose, set_gripper, close)
+            return self._execute_grasp6d_plan(gcfg, gripper_cfg, open_position, move_pose, set_gripper, close)
 
         self.set_state(GraspStages.SEARCH_OBJECT, 'waiting for object')
         t0 = rospy.Time.now()
@@ -168,8 +172,13 @@ class GraspTaskNode:
                 return False
             self._wait_for_motion_settle('pregrasp')
 
-        set_gripper(open_position)
-        rospy.sleep(0.5)
+        if not self._command_gripper_position(
+            set_gripper,
+            open_position,
+            'open gripper',
+            self._cfg_float(gripper_cfg, 'open_wait_sec', 0.5),
+        ):
+            return False
         self._wait_for_motion_settle('before approach')
 
         if not self.active:
@@ -198,10 +207,11 @@ class GraspTaskNode:
             return False
         self._wait_for_motion_settle('approach')
 
-        self.set_state(GraspStages.COMPLIANT_CLOSE, 'force-guided close')
-        resp = close(True)
-        if not resp.success:
-            self.set_state(GraspStages.FAILED, resp.message)
+        close_label = 'force-guided close' if bool(gripper_cfg.get('use_compliant_close', True)) else 'fixed gripper close'
+        self.set_state(GraspStages.COMPLIANT_CLOSE, close_label)
+        ok, message = self._close_gripper(gripper_cfg, set_gripper, close)
+        if not ok:
+            self.set_state(GraspStages.FAILED, message)
             return False
 
         self.set_state(GraspStages.LIFT_OBJECT, 'lifting')
@@ -213,7 +223,7 @@ class GraspTaskNode:
         self.set_state(GraspStages.SUCCESS, 'grasp done', True)
         return True
 
-    def _execute_grasp6d_plan(self, gcfg, open_position, move_pose, set_gripper, close):
+    def _execute_grasp6d_plan(self, gcfg, gripper_cfg, open_position, move_pose, set_gripper, close):
         plan = self._fresh_grasp6d_plan(gcfg)
         if plan is None:
             self.set_state(GraspStages.FAILED, 'no fresh 6D grasp plan')
@@ -225,7 +235,13 @@ class GraspTaskNode:
         lift = self._pose_array_item_as_stamped(plan, 3)
 
         self.set_state(GraspStages.PLAN_PREGRASP, 'using 6D grasp plan')
-        set_gripper(open_position)
+        if not self._command_gripper_position(
+            set_gripper,
+            open_position,
+            'open gripper before 6D motion',
+            self._cfg_float(gripper_cfg, 'open_wait_sec', 0.5),
+        ):
+            return False
         if not self._plan_and_execute_pose(GraspStages.MOVE_PREGRASP, '6D pregrasp', pregrasp, move_pose, '6D pregrasp'):
             return False
         if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D approach', approach, move_pose, '6D approach'):
@@ -233,10 +249,11 @@ class GraspTaskNode:
         if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D grasp pose', grasp, move_pose, '6D grasp pose'):
             return False
 
-        self.set_state(GraspStages.COMPLIANT_CLOSE, 'force-guided close')
-        resp = close(True)
-        if not resp.success:
-            self.set_state(GraspStages.FAILED, resp.message)
+        close_label = 'force-guided close' if bool(gripper_cfg.get('use_compliant_close', True)) else 'fixed gripper close'
+        self.set_state(GraspStages.COMPLIANT_CLOSE, close_label)
+        ok, message = self._close_gripper(gripper_cfg, set_gripper, close)
+        if not ok:
+            self.set_state(GraspStages.FAILED, message)
             return False
 
         if not self._plan_and_execute_pose(GraspStages.LIFT_OBJECT, '6D lift', lift, move_pose, '6D lift'):
@@ -257,6 +274,15 @@ class GraspTaskNode:
             self.set_state(
                 GraspStages.FAILED,
                 position_only_rejection_message(label, getattr(resp, 'message', '')),
+            )
+            return False
+        if (
+            is_orientation_fallback_message(getattr(resp, 'message', ''))
+            and not self._orientation_fallback_execute_allowed()
+        ):
+            self.set_state(
+                GraspStages.FAILED,
+                orientation_fallback_rejection_message(label, getattr(resp, 'message', '')),
             )
             return False
         self.set_state(stage, 'moving ' + label)
@@ -420,6 +446,40 @@ class GraspTaskNode:
     @staticmethod
     def _position_only_execute_allowed():
         return bool(rospy.get_param('/robot/position_only_execute_enabled', False))
+
+    @staticmethod
+    def _orientation_fallback_execute_allowed():
+        return bool(rospy.get_param('/grasp/accept_orientation_fallback', False))
+
+    def _command_gripper_position(self, set_gripper, position, label, wait_sec):
+        try:
+            resp = set_gripper(float(position))
+        except Exception as exc:
+            self.set_state(GraspStages.FAILED, '%s failed: %s' % (label, exc))
+            return False
+        if not bool(getattr(resp, 'success', True)):
+            self.set_state(GraspStages.FAILED, '%s failed: %s' % (label, getattr(resp, 'message', '')))
+            return False
+        delay = max(0.0, float(wait_sec))
+        if delay > 0.0:
+            rospy.sleep(delay)
+        return True
+
+    def _close_gripper(self, gripper_cfg, set_gripper, close):
+        if bool(gripper_cfg.get('use_compliant_close', True)):
+            if close is None:
+                return False, 'compliant close service is unavailable'
+            resp = close(True)
+            return bool(resp.success), getattr(resp, 'message', '')
+
+        close_position = self._cfg_float(
+            gripper_cfg,
+            'simple_close_position_m',
+            self._cfg_float(gripper_cfg, 'close_limit_m', 0.05),
+        )
+        wait_sec = self._cfg_float(gripper_cfg, 'simple_close_wait_sec', 0.8)
+        ok = self._command_gripper_position(set_gripper, close_position, 'fixed gripper close', wait_sec)
+        return ok, 'fixed gripper close command published' if ok else 'fixed gripper close failed'
 
     def _joint_positions_tuple(self):
         msg = getattr(self, 'latest_joint_state', None)

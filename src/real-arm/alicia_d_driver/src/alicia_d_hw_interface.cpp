@@ -29,6 +29,8 @@ bool AliciaDHardwareInterface::init()
     pnh.param<bool>("publish_only_on_change", publish_only_on_change_, true);
     pnh.param<bool>("publish_initial_command", publish_initial_command_, false);
     pnh.param<double>("command_publish_epsilon", command_publish_epsilon_, 1e-5);
+    pnh.param<bool>("publish_gripper_command", publish_gripper_command_, false);
+    pnh.param<std::string>("gripper_joint_name", gripper_joint_name_, "right_finger");
 
     // Create a map for efficient name-to-index lookup
     for (size_t i = 0; i < num_joints_; ++i)
@@ -136,8 +138,17 @@ void AliciaDHardwareInterface::write(const ros::Time& time, const ros::Duration&
 
     sensor_msgs::JointState command_msg;
     command_msg.header.stamp = ros::Time::now();
-    command_msg.name = joint_names_;
-    command_msg.position = joint_position_commands_;
+    command_msg.name.reserve(joint_names_.size());
+    command_msg.position.reserve(joint_position_commands_.size());
+    for (size_t i = 0; i < joint_names_.size() && i < joint_position_commands_.size(); ++i)
+    {
+        if (!publish_gripper_command_ && joint_names_[i] == gripper_joint_name_)
+        {
+            continue;
+        }
+        command_msg.name.push_back(joint_names_[i]);
+        command_msg.position.push_back(joint_position_commands_[i]);
+    }
 
     // Publish the joint command message
     joint_command_pub_.publish(command_msg);

@@ -135,6 +135,71 @@ class GraspTaskSequenceTest(unittest.TestCase):
         )
         self.assertIn(('close', True), calls)
 
+    def test_6d_plan_honors_configured_simple_open_and_close_positions(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_obj = None
+        node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
+        node.latest_grasp6d_plan_time = FakeTime(1.0)
+        node.active = True
+        node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
+        node.set_state = lambda *args, **kwargs: None
+
+        calls = []
+
+        def fake_service_proxy(name, _srv_type):
+            if name == '/supervisor/move_to_pose':
+                def move_pose(pose, execute):
+                    calls.append(('move', pose.pose.position.x, bool(execute)))
+                    return FakeServiceResponse(True, 'planned')
+                return move_pose
+            if name == '/supervisor/set_gripper':
+                def set_gripper(value):
+                    calls.append(('set_gripper', float(value)))
+                    return FakeServiceResponse(True, 'ok')
+                return set_gripper
+            if name == '/supervisor/compliant_close':
+                def close(execute):
+                    calls.append(('close', bool(execute)))
+                    return FakeServiceResponse(True, 'closed')
+                return close
+            raise AssertionError('unexpected service %s' % name)
+
+        original_wait_for_service = grasp_task_node.rospy.wait_for_service
+        original_service_proxy = grasp_task_node.rospy.ServiceProxy
+        original_get_param = grasp_task_node.rospy.get_param
+        original_sleep = grasp_task_node.rospy.sleep
+        original_time_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.wait_for_service = lambda *args, **kwargs: None
+        grasp_task_node.rospy.ServiceProxy = fake_service_proxy
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp': {
+                'use_grasp6d_plan': True,
+                'grasp6d_plan_max_age_sec': 5.0,
+            },
+            '/gripper': {
+                'open_position_m': 0.05,
+                'close_limit_m': 0.0,
+                'use_compliant_close': False,
+                'simple_close_position_m': 0.0,
+                'simple_close_wait_sec': 0.0,
+                'open_wait_sec': 0.0,
+            },
+        }.get(name, default)
+        grasp_task_node.rospy.sleep = lambda *_args, **_kwargs: None
+        grasp_task_node.rospy.Time.now = staticmethod(lambda: FakeTime(1.0))
+        try:
+            self.assertTrue(grasp_task_node.GraspTaskNode.execute(node))
+        finally:
+            grasp_task_node.rospy.wait_for_service = original_wait_for_service
+            grasp_task_node.rospy.ServiceProxy = original_service_proxy
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.sleep = original_sleep
+            grasp_task_node.rospy.Time.now = original_time_now
+
+        self.assertEqual(calls[0], ('set_gripper', 0.05))
+        self.assertIn(('set_gripper', 0.0), calls)
+        self.assertNotIn(('close', True), calls)
+
     def test_6d_plan_rejects_position_only_fallback_before_execute(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True
@@ -170,6 +235,42 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(calls, [('move', False)])
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('position-only fallback', states[-1][1])
+
+    def test_6d_plan_rejects_orientation_fallback_before_execute(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        states = []
+        calls = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
+
+        def move_pose(_pose, execute):
+            calls.append(('move', bool(execute)))
+            return FakeServiceResponse(
+                True,
+                'planned with candidate orientation current: target xyz=(0.1, 0.2, 0.3)',
+            )
+
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp/accept_orientation_fallback': False,
+        }.get(name, default)
+        try:
+            result = grasp_task_node.GraspTaskNode._plan_and_execute_pose(
+                node,
+                grasp_task_node.GraspStages.MOVE_PREGRASP,
+                '6D pregrasp',
+                self._pose(0.10),
+                move_pose,
+                '6D pregrasp',
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+
+        self.assertFalse(result)
+        self.assertEqual(calls, [('move', False)])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('candidate orientation', states[-1][1])
 
     def test_full_grasp_approaches_target_after_pregrasp_before_closing(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)

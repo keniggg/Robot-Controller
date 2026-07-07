@@ -531,6 +531,30 @@ class PregraspAsyncTest(unittest.TestCase):
         self.assertEqual(started, [True])
         self.assertIn('锁定目标', widget.status.text)
 
+    def test_active_grasp_keeps_locked_target_when_detection_temporarily_lost(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        previous = self._object_msg(label='mouse')
+        widget.last_object = previous
+        widget.pregrasp_pose = self._pose(1.0)
+        widget.status = FakeLabel()
+        widget.detected_chip = FakeLabel()
+        widget.label_edit = FakeText('mouse')
+        widget.camera_preview = FakeCamera()
+        widget._grasp_active = True
+        widget._locked_grasp_target_base_xyz = (0.1, 0.2, 0.3)
+        widget._locked_grasp_target_time = time.monotonic()
+        widget._grasp_flow_lock_max_age_sec = 60.0
+        widget._alive = True
+        widget._reset_target_stability = lambda: None
+        widget._set_perception_status = lambda text: widget.status.setText(text)
+
+        PerceptionWidget.update_object(widget, types.SimpleNamespace(detected=False, label='mouse'))
+
+        self.assertIs(widget.last_object, previous)
+        self.assertIsNotNone(widget.pregrasp_pose)
+        self.assertEqual(widget.camera_preview.overlay, 'initial')
+        self.assertIn('目标已锁定', widget.status.text)
+
 
 if __name__ == '__main__':
     unittest.main()
