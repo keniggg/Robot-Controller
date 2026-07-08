@@ -99,13 +99,13 @@ export ROS_IP=<WSL_IP>
 服务默认监听：
 
 ```text
-http://0.0.0.0:9000
+http://0.0.0.0:8000
 ```
 
 健康检查：
 
 ```bash
-curl http://127.0.0.1:9000/health
+curl http://127.0.0.1:8000/health
 ```
 
 ## 4. ROS 端启动
@@ -115,7 +115,7 @@ curl http://127.0.0.1:9000/health
 ```bash
 cd ~/alicia_wa_full
 source devel/setup.bash
-export GRASP6D_URL=http://<WSL_IP>:9000
+export GRASP6D_URL=http://<WSL_IP>:8000
 roslaunch alicia_flexible_grasp_supervisor full_system.launch \
   start_real_arm:=true \
   driver_port:=/dev/alicia_arm \
@@ -129,7 +129,7 @@ roslaunch alicia_flexible_grasp_supervisor full_system.launch \
 当前默认配置中：
 
 ```yaml
-grasp_6d.remote.server_url: "http://127.0.0.1:9000"
+grasp_6d.remote.server_url: "http://127.0.0.1:8000"
 mujoco_digital_twin.enabled: true
 mujoco_digital_twin.execution_gate_enabled: true
 mujoco_digital_twin.send_joint_state_in_request: false
@@ -205,7 +205,7 @@ rosparam set /mujoco_digital_twin/send_joint_state_in_request true
 只测试网络协议，不加载模型和 checkpoint：
 
 ```bash
-python tools/mujoco_digital_twin_server.py --mock --host 0.0.0.0 --port 9000
+python tools/mujoco_digital_twin_server.py --mock --host 0.0.0.0 --port 8000
 ```
 
 真机执行前建议保持：

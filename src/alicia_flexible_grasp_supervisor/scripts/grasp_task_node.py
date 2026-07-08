@@ -349,7 +349,7 @@ class GraspTaskNode:
 
         try:
             client = MujocoDigitalTwinClient(
-                twin_cfg.get('server_url', 'http://127.0.0.1:9000'),
+                twin_cfg.get('server_url', 'http://127.0.0.1:8000'),
                 timeout_sec=self._cfg_float(twin_cfg, 'timeout_sec', 20.0),
             )
             response = client.simulate_grasp(payload)

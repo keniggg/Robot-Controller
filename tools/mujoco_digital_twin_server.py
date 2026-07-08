@@ -737,7 +737,7 @@ def _vector3(value, default):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description='Alicia WSL GraspNet + MuJoCo digital twin server')
     parser.add_argument('--host', default='0.0.0.0')
-    parser.add_argument('--port', type=int, default=9000)
+    parser.add_argument('--port', type=int, default=8000)
     parser.add_argument('--baseline-root', default=str(Path.home() / 'grasp6d_ws' / 'graspnet-baseline'))
     parser.add_argument('--checkpoint', default=str(Path.home() / 'grasp6d_ws' / 'checkpoints' / 'checkpoint-rs.tar'))
     parser.add_argument('--device', default='cuda:0')

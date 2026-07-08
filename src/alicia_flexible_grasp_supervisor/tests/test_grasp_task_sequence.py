@@ -259,7 +259,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             '/mujoco_digital_twin': {
                 'enabled': True,
                 'execution_gate_enabled': True,
-                'server_url': 'http://127.0.0.1:9000',
+                'server_url': 'http://127.0.0.1:8000',
                 'min_score': 80,
                 'require_object_pose': True,
                 'send_joint_state_in_request': False,

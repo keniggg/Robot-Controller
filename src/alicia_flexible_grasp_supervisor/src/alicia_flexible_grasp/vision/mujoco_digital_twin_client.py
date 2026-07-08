@@ -11,7 +11,7 @@ def validate_mujoco_digital_twin_url(server_url):
     if '<' in normalized or '>' in normalized:
         raise ValueError(
             'mujoco digital twin server_url contains placeholder angle brackets; '
-            'replace it with a real URL such as http://192.168.26.1:9000'
+            'replace it with a real URL such as http://192.168.26.1:8000'
         )
     parsed = urllib.parse.urlparse(normalized)
     if parsed.scheme not in ('http', 'https') or not parsed.netloc:

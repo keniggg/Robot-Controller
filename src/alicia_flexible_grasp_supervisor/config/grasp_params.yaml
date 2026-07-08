@@ -64,7 +64,7 @@ grasp_6d:
   collision_voxel_size: 0.01
   tactile_weight: 0.2
   remote:
-    server_url: "http://127.0.0.1:9000"
+    server_url: "http://127.0.0.1:8000"
     timeout_sec: 30.0
     auto_request: false
     request_hz: 0.05
@@ -93,7 +93,7 @@ grasp_6d:
 mujoco_digital_twin:
   enabled: true
   execution_gate_enabled: true
-  server_url: "http://127.0.0.1:9000"
+  server_url: "http://127.0.0.1:8000"
   timeout_sec: 20.0
   min_score: 80
   allow_execution_on_error: false

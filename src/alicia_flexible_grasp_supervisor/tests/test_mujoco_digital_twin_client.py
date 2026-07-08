@@ -31,7 +31,7 @@ class MujocoDigitalTwinClientTest(unittest.TestCase):
 
     def test_rejects_placeholder_url(self):
         with self.assertRaises(ValueError):
-            validate_mujoco_digital_twin_url('http://<WSL_IP>:9000')
+            validate_mujoco_digital_twin_url('http://<WSL_IP>:8000')
 
     def test_builds_simulation_payload_from_ros_messages(self):
         joints = JointState()
