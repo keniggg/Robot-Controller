@@ -15,6 +15,10 @@ from alicia_flexible_grasp.robot.planning_feedback import (
     orientation_fallback_rejection_message,
     position_only_rejection_message,
 )
+from alicia_flexible_grasp.vision.mujoco_digital_twin_client import (
+    MujocoDigitalTwinClient,
+    build_simulation_payload,
+)
 try:
     import tf2_ros
 except Exception:
@@ -234,6 +238,9 @@ class GraspTaskNode:
         grasp = self._pose_array_item_as_stamped(plan, 2)
         lift = self._pose_array_item_as_stamped(plan, 3)
 
+        if not self._simulate_grasp6d_plan_if_required(gcfg, gripper_cfg, plan):
+            return False
+
         self.set_state(GraspStages.PLAN_PREGRASP, 'using 6D grasp plan')
         if not self._command_gripper_position(
             set_gripper,
@@ -309,6 +316,60 @@ class GraspTaskNode:
             rospy.logwarn('Rejected stale 6D grasp plan age %.2fs > %.2fs', age, max_age)
             return None
         return plan
+
+    def _simulate_grasp6d_plan_if_required(self, gcfg, gripper_cfg, plan):
+        twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        if not bool(twin_cfg.get('enabled', False)) or not bool(twin_cfg.get('execution_gate_enabled', False)):
+            return True
+
+        self.set_state(GraspStages.PLAN_PREGRASP, 'MuJoCo digital twin checking 6D plan')
+        require_object = bool(twin_cfg.get('require_object_pose', True))
+        object_pose = getattr(self, 'latest_obj', None)
+        if require_object and (object_pose is None or not bool(getattr(object_pose, 'detected', False))):
+            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked: no detected object pose')
+            return False
+
+        send_joint_state = bool(twin_cfg.get('send_joint_state_in_request', False))
+        joint_state = getattr(self, 'latest_joint_state', None) if send_joint_state else None
+        object_model = dict(twin_cfg.get('object_model', {}) or {})
+        open_width = self._cfg_float(twin_cfg, 'open_width_m', self._cfg_float(gripper_cfg, 'open_position_m', 0.05))
+        payload = build_simulation_payload(
+            joint_state=joint_state,
+            object_pose=object_pose if object_pose is not None else None,
+            grasp_plan=plan,
+            gripper_width_m=open_width,
+            object_model=object_model,
+        )
+        payload['close_width_m'] = self._cfg_float(
+            twin_cfg,
+            'close_width_m',
+            self._cfg_float(gripper_cfg, 'simple_close_position_m', self._cfg_float(gripper_cfg, 'close_limit_m', 0.0)),
+        )
+        payload['min_lift_success_m'] = self._cfg_float(twin_cfg, 'min_lift_success_m', 0.015)
+
+        try:
+            client = MujocoDigitalTwinClient(
+                twin_cfg.get('server_url', 'http://127.0.0.1:9000'),
+                timeout_sec=self._cfg_float(twin_cfg, 'timeout_sec', 20.0),
+            )
+            response = client.simulate_grasp(payload)
+        except Exception as exc:
+            message = 'MuJoCo simulation request failed: %s' % exc
+            if bool(twin_cfg.get('allow_execution_on_error', False)):
+                rospy.logwarn('%s; execution allowed by config', message)
+                return True
+            self.set_state(GraspStages.FAILED, message)
+            return False
+
+        score = int(response.get('score', 0) or 0)
+        min_score = int(twin_cfg.get('min_score', 80) or 80)
+        simulation_ok = bool(response.get('simulation_ok', False)) and score >= min_score
+        if not simulation_ok:
+            reason = str(response.get('failure_reason') or 'score %d < %d' % (score, min_score))
+            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked execution: %s' % reason)
+            return False
+        self.set_state(GraspStages.PLAN_PREGRASP, 'MuJoCo simulation passed score=%d' % score)
+        return True
 
     @staticmethod
     def _pose_array_item_as_stamped(plan, index):

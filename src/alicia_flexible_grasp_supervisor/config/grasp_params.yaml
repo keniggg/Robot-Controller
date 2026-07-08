@@ -64,7 +64,7 @@ grasp_6d:
   collision_voxel_size: 0.01
   tactile_weight: 0.2
   remote:
-    server_url: "http://127.0.0.1:8000"
+    server_url: "http://127.0.0.1:9000"
     timeout_sec: 30.0
     auto_request: false
     request_hz: 0.05
@@ -89,3 +89,26 @@ grasp_6d:
     candidate_max_target_distance_m: 0.025
     candidate_min_relative_z_m: -0.015
     candidate_max_relative_z_m: 0.08
+
+mujoco_digital_twin:
+  enabled: true
+  execution_gate_enabled: true
+  server_url: "http://127.0.0.1:9000"
+  timeout_sec: 20.0
+  min_score: 80
+  allow_execution_on_error: false
+  require_object_pose: true
+  # Route A: WSL 自己推理、自己仿真；ROS 端把执行前的计划发给
+  # WSL /simulate_grasp，WSL 可通过 --ros-sync-joint-states 自己订阅 /joint_states。
+  send_joint_state_in_request: false
+  open_width_m: 0.05
+  close_width_m: 0.0
+  object_model:
+    type: "mouse_compound"
+    label: "mouse"
+    size_xyz_m: [0.10, 0.06, 0.035]
+    mass_kg: 0.08
+    # 如果你有低面数鼠标 mesh，可改成：
+    # type: "mouse_mesh"
+    # mesh_path: "/home/lv/grasp6d_ws/assets/mouse_collision.obj"
+    # mesh_scale: [1.0, 1.0, 1.0]

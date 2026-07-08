@@ -200,6 +200,89 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertIn(('set_gripper', 0.0), calls)
         self.assertNotIn(('close', True), calls)
 
+    def test_6d_plan_blocks_execution_when_mujoco_digital_twin_rejects(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_obj = self._object()
+        node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
+        node.latest_grasp6d_plan_time = FakeTime(1.0)
+        node.latest_joint_state = None
+        node.active = True
+        states = []
+        calls = []
+        node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
+        node.set_state = lambda *args, **kwargs: states.append(args)
+
+        class RejectingTwinClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def simulate_grasp(self, payload):
+                calls.append(('simulate', len(payload.get('grasp_sequence_base') or [])))
+                return {
+                    'simulation_ok': False,
+                    'score': 42,
+                    'failure_reason': 'gripper would collide with table',
+                }
+
+        def fake_service_proxy(name, _srv_type):
+            if name == '/supervisor/move_to_pose':
+                def move_pose(pose, execute):
+                    calls.append(('move', pose.pose.position.x, bool(execute)))
+                    return FakeServiceResponse(True, 'planned')
+                return move_pose
+            if name == '/supervisor/set_gripper':
+                def set_gripper(value):
+                    calls.append(('set_gripper', float(value)))
+                    return FakeServiceResponse(True, 'ok')
+                return set_gripper
+            if name == '/supervisor/compliant_close':
+                return lambda execute: FakeServiceResponse(True, 'closed')
+            raise AssertionError('unexpected service %s' % name)
+
+        original_wait_for_service = grasp_task_node.rospy.wait_for_service
+        original_service_proxy = grasp_task_node.rospy.ServiceProxy
+        original_get_param = grasp_task_node.rospy.get_param
+        original_sleep = grasp_task_node.rospy.sleep
+        original_time_now = grasp_task_node.rospy.Time.now
+        original_client = grasp_task_node.MujocoDigitalTwinClient
+        grasp_task_node.rospy.wait_for_service = lambda *args, **kwargs: None
+        grasp_task_node.rospy.ServiceProxy = fake_service_proxy
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp': {
+                'use_grasp6d_plan': True,
+                'grasp6d_plan_max_age_sec': 5.0,
+            },
+            '/gripper': {
+                'open_position_m': 0.05,
+                'use_compliant_close': False,
+            },
+            '/mujoco_digital_twin': {
+                'enabled': True,
+                'execution_gate_enabled': True,
+                'server_url': 'http://127.0.0.1:9000',
+                'min_score': 80,
+                'require_object_pose': True,
+                'send_joint_state_in_request': False,
+            },
+        }.get(name, default)
+        grasp_task_node.rospy.sleep = lambda *_args, **_kwargs: None
+        grasp_task_node.rospy.Time.now = staticmethod(lambda: FakeTime(1.0))
+        grasp_task_node.MujocoDigitalTwinClient = RejectingTwinClient
+        try:
+            self.assertFalse(grasp_task_node.GraspTaskNode.execute(node))
+        finally:
+            grasp_task_node.rospy.wait_for_service = original_wait_for_service
+            grasp_task_node.rospy.ServiceProxy = original_service_proxy
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.sleep = original_sleep
+            grasp_task_node.rospy.Time.now = original_time_now
+            grasp_task_node.MujocoDigitalTwinClient = original_client
+
+        self.assertIn(('simulate', 4), calls)
+        self.assertEqual([call for call in calls if call[0] == 'move'], [])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('gripper would collide with table', states[-1][1])
+
     def test_6d_plan_rejects_position_only_fallback_before_execute(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True
