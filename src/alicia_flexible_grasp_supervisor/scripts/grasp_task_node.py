@@ -30,6 +30,7 @@ class GraspTaskNode:
         self.latest_obj_time = None
         self.latest_grasp6d_plan = None
         self.latest_grasp6d_plan_time = None
+        self.latest_grasp6d_plan_object = None
         self.latest_joint_state = None
         self.active = False
         self.stage = GraspStages.IDLE
@@ -91,6 +92,8 @@ class GraspTaskNode:
     def grasp6d_plan_cb(self, msg):
         self.latest_grasp6d_plan = msg
         self.latest_grasp6d_plan_time = rospy.Time.now()
+        obj = getattr(self, 'latest_obj', None)
+        self.latest_grasp6d_plan_object = deepcopy(obj) if obj is not None and bool(getattr(obj, 'detected', False)) else None
 
     def set_state(self, stage, message='', success=False):
         self.stage = stage
@@ -315,6 +318,23 @@ class GraspTaskNode:
         if age > max_age:
             rospy.logwarn('Rejected stale 6D grasp plan age %.2fs > %.2fs', age, max_age)
             return None
+        max_drift = max(0.0, self._cfg_float(gcfg, 'grasp6d_plan_max_object_drift_m', 0.0))
+        if max_drift > 0.0:
+            locked_obj = getattr(self, 'latest_grasp6d_plan_object', None)
+            latest_obj = getattr(self, 'latest_obj', None)
+            if (
+                locked_obj is not None
+                and latest_obj is not None
+                and bool(getattr(latest_obj, 'detected', False))
+            ):
+                drift = self._object_distance(locked_obj, latest_obj)
+                if drift > max_drift:
+                    rospy.logwarn(
+                        'Rejected 6D grasp plan: object drift %.3fm > %.3fm since plan generation',
+                        drift,
+                        max_drift,
+                    )
+                    return None
         return plan
 
     def _simulate_grasp6d_plan_if_required(self, gcfg, gripper_cfg, plan):

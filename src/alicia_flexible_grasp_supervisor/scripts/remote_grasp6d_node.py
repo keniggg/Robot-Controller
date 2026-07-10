@@ -8,7 +8,7 @@ from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseArray
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
-from tf.transformations import quaternion_from_matrix, quaternion_matrix
+from tf.transformations import quaternion_from_euler, quaternion_from_matrix, quaternion_matrix, quaternion_multiply
 
 try:
     import tf2_ros
@@ -179,29 +179,43 @@ def select_first_reachable_candidate(
     candidate_frame_convention='opencv_optical',
     candidate_filter_fn=None,
     candidate_rank_fn=None,
+    orientation_variant_quaternions=None,
 ):
+    variants = list(orientation_variant_quaternions or [])
+    if not variants:
+        variants = [np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)]
     ranked = []
     for candidate in candidates:
         camera_candidate = convert_candidate_to_camera_link(candidate, candidate_frame_convention)
-        pose = pose_estimator.make_base_pose_from_camera_pose(
-            camera_candidate.translation_m,
-            camera_candidate.quaternion_xyzw,
-            stamp=stamp,
-            camera_frame=camera_frame,
-        )
-        if candidate_filter_fn is not None and not bool(candidate_filter_fn(candidate, camera_candidate, pose)):
-            continue
-        if bool(reachability_fn(pose)):
-            if candidate_rank_fn is None:
-                return camera_candidate, pose
-            try:
-                rank = float(candidate_rank_fn(candidate, camera_candidate, pose))
-            except Exception:
-                rank = float('inf')
-            ranked.append((rank, -float(getattr(camera_candidate, 'score', 0.0)), camera_candidate, pose))
+        for variant_index, correction in enumerate(variants):
+            variant_quat = _normalize_quaternion(
+                np.asarray(quaternion_multiply(camera_candidate.quaternion_xyzw, correction), dtype=float)
+            )
+            variant_candidate = RemoteGraspCandidate(
+                score=float(camera_candidate.score),
+                translation_m=np.asarray(camera_candidate.translation_m, dtype=float),
+                quaternion_xyzw=variant_quat,
+                width_m=float(camera_candidate.width_m),
+            )
+            pose = pose_estimator.make_base_pose_from_camera_pose(
+                variant_candidate.translation_m,
+                variant_candidate.quaternion_xyzw,
+                stamp=stamp,
+                camera_frame=camera_frame,
+            )
+            if candidate_filter_fn is not None and not bool(candidate_filter_fn(candidate, variant_candidate, pose)):
+                continue
+            if bool(reachability_fn(pose)):
+                if candidate_rank_fn is None:
+                    return variant_candidate, pose
+                try:
+                    rank = float(candidate_rank_fn(candidate, variant_candidate, pose))
+                except Exception:
+                    rank = float('inf')
+                ranked.append((rank, variant_index, -float(getattr(variant_candidate, 'score', 0.0)), variant_candidate, pose))
     if ranked:
-        ranked.sort(key=lambda item: (item[0], item[1]))
-        return ranked[0][2], ranked[0][3]
+        ranked.sort(key=lambda item: (item[0], item[1], item[2]))
+        return ranked[0][3], ranked[0][4]
     return None, None
 
 
@@ -244,6 +258,9 @@ class RemoteGrasp6DNode:
         self.failure_backoff_sec = max(0.0, float(rospy.get_param('/grasp_6d/remote/failure_backoff_sec', remote_cfg.get('failure_backoff_sec', 8.0))))
         self.candidate_frame_convention = normalize_candidate_frame_convention(
             rospy.get_param('/grasp_6d/remote/candidate_frame_convention', remote_cfg.get('candidate_frame_convention', 'opencv_optical'))
+        )
+        self.orientation_variant_quaternions = self._parse_orientation_variant_quaternions(
+            rospy.get_param('/grasp_6d/remote/orientation_variants_rpy_deg', remote_cfg.get('orientation_variants_rpy_deg', [[0.0, 0.0, 0.0]]))
         )
         self.allow_position_only_fallback = bool(
             rospy.get_param(
@@ -306,7 +323,25 @@ class RemoteGrasp6DNode:
                 remote_cfg.get('candidate_max_relative_z_m', 0.08),
             )
         )
+        gripper_cfg = rospy.get_param('/gripper', {})
+        twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        default_max_width = float(
+            twin_cfg.get(
+                'open_width_m',
+                gripper_cfg.get('open_position_m', remote_cfg.get('max_gripper_width_m', 0.05)),
+            )
+        )
+        self.max_gripper_width_m = max(
+            0.0,
+            float(rospy.get_param('/grasp_6d/remote/max_gripper_width_m', remote_cfg.get('max_gripper_width_m', default_max_width))),
+        )
+        self.candidate_width_tolerance_m = max(
+            0.0,
+            float(rospy.get_param('/grasp_6d/remote/candidate_width_tolerance_m', remote_cfg.get('candidate_width_tolerance_m', 0.003))),
+        )
         self._target_gate_rejected_count = 0
+        self._width_gate_rejected_count = 0
+        self._width_gate_rejected_keys = set()
         try:
             self.client = RemoteGrasp6DClient(server_url, timeout_sec=timeout_sec)
         except ValueError as exc:
@@ -420,6 +455,7 @@ class RemoteGrasp6DNode:
             return False, message
         color, depth, stamp, frame_id = frame
         try:
+            self._refresh_runtime_params()
             depth_for_remote, roi_message = self._depth_for_remote(depth)
             status = 'remote 6D requesting candidates...'
             if roi_message:
@@ -432,10 +468,15 @@ class RemoteGrasp6DNode:
                 frame_id=frame_id or self.pose_estimator.camera_frame,
                 stamp_sec=stamp.to_sec() if stamp is not None else 0.0,
                 max_candidates=self.max_candidates,
+                max_gripper_width_m=self.max_gripper_width_m,
+                candidate_width_tolerance_m=self.candidate_width_tolerance_m,
             )
+            remote_diagnostics = dict(getattr(self.client, 'last_diagnostics', {}) or {})
             self._position_only_rejected_count = 0
             self._orientation_fallback_rejected_count = 0
             self._target_gate_rejected_count = 0
+            self._width_gate_rejected_count = 0
+            self._width_gate_rejected_keys = set()
             selected, grasp_pose = select_first_reachable_candidate(
                 candidates,
                 self.pose_estimator,
@@ -445,25 +486,41 @@ class RemoteGrasp6DNode:
                 candidate_frame_convention=self.candidate_frame_convention,
                 candidate_filter_fn=self._candidate_matches_target,
                 candidate_rank_fn=self._candidate_target_distance,
+                orientation_variant_quaternions=self.orientation_variant_quaternions,
             )
             if selected is None:
-                if self._target_gate_rejected_count > 0:
+                if (
+                    not candidates
+                    and int(remote_diagnostics.get('width_rejected', 0) or 0) > 0
+                    and int(remote_diagnostics.get('after_width', 0) or 0) == 0
+                ):
                     message = (
-                        'remote 6D returned %d candidates; %d rejected because they were not close '
-                        'to the locked detection target'
-                        % (len(candidates), self._target_gate_rejected_count)
+                        'remote 6D WSL filtered all candidates by gripper width '
+                        '(raw=%d, after_collision=%d, width>%0.3fm rejected=%d)'
+                        % (
+                            int(remote_diagnostics.get('raw_candidates', 0) or 0),
+                            int(remote_diagnostics.get('after_collision', 0) or 0),
+                            float(remote_diagnostics.get('width_limit_m', self.max_gripper_width_m) or self.max_gripper_width_m),
+                            int(remote_diagnostics.get('width_rejected', 0) or 0),
+                        )
                     )
-                elif self._position_only_rejected_count > 0:
+                elif (
+                    self._width_gate_rejected_count > 0
+                    or self._target_gate_rejected_count > 0
+                    or self._position_only_rejected_count > 0
+                    or self._orientation_fallback_rejected_count > 0
+                ):
                     message = (
-                        'remote 6D returned %d candidates; %d only reached by position-only fallback '
-                        'and were rejected because they are not executable'
-                        % (len(candidates), self._position_only_rejected_count)
-                    )
-                elif self._orientation_fallback_rejected_count > 0:
-                    message = (
-                        'remote 6D returned %d candidates; %d only reached by candidate orientation '
-                        'fallback and were rejected because the 6D grasp orientation is not executable'
-                        % (len(candidates), self._orientation_fallback_rejected_count)
+                        'remote 6D returned %d candidates, none executable '
+                        '(width>%0.3fm: %d, off-target: %d, position-only: %d, orientation-fallback: %d)'
+                        % (
+                            len(candidates),
+                            self.max_gripper_width_m,
+                            self._width_gate_rejected_count,
+                            self._target_gate_rejected_count,
+                            self._position_only_rejected_count,
+                            self._orientation_fallback_rejected_count,
+                        )
                     )
                 else:
                     message = 'remote 6D returned %d candidates, none reachable' % len(candidates)
@@ -522,6 +579,105 @@ class RemoteGrasp6DNode:
             pass
         return float(default)
 
+    def _refresh_runtime_params(self):
+        remote_cfg = rospy.get_param('/grasp_6d/remote', {})
+        self.candidate_frame_convention = normalize_candidate_frame_convention(
+            rospy.get_param(
+                '/grasp_6d/remote/candidate_frame_convention',
+                remote_cfg.get('candidate_frame_convention', self.candidate_frame_convention),
+            )
+        )
+        self.orientation_variant_quaternions = self._parse_orientation_variant_quaternions(
+            rospy.get_param(
+                '/grasp_6d/remote/orientation_variants_rpy_deg',
+                remote_cfg.get('orientation_variants_rpy_deg', [[0.0, 0.0, 0.0]]),
+            )
+        )
+        self.max_candidates = int(
+            rospy.get_param('/grasp_6d/remote/max_candidates', remote_cfg.get('max_candidates', self.max_candidates))
+        )
+        self.allow_position_only_fallback = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/accept_position_only_fallback',
+                remote_cfg.get('accept_position_only_fallback', self.allow_position_only_fallback),
+            )
+        )
+        self.allow_orientation_fallback = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/accept_orientation_fallback',
+                remote_cfg.get('accept_orientation_fallback', self.allow_orientation_fallback),
+            )
+        )
+        self.candidate_target_gate_enabled = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/candidate_target_gate_enabled',
+                remote_cfg.get('candidate_target_gate_enabled', self.candidate_target_gate_enabled),
+            )
+        )
+        self.candidate_max_target_distance_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/candidate_max_target_distance_m',
+                    remote_cfg.get('candidate_max_target_distance_m', self.candidate_max_target_distance_m),
+                )
+            ),
+        )
+        self.candidate_min_relative_z_m = float(
+            rospy.get_param(
+                '/grasp_6d/remote/candidate_min_relative_z_m',
+                remote_cfg.get('candidate_min_relative_z_m', self.candidate_min_relative_z_m),
+            )
+        )
+        self.candidate_max_relative_z_m = float(
+            rospy.get_param(
+                '/grasp_6d/remote/candidate_max_relative_z_m',
+                remote_cfg.get('candidate_max_relative_z_m', self.candidate_max_relative_z_m),
+            )
+        )
+        gripper_cfg = rospy.get_param('/gripper', {})
+        twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        default_max_width = float(
+            twin_cfg.get(
+                'open_width_m',
+                gripper_cfg.get('open_position_m', getattr(self, 'max_gripper_width_m', 0.05)),
+            )
+        )
+        self.max_gripper_width_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/max_gripper_width_m',
+                    remote_cfg.get('max_gripper_width_m', default_max_width),
+                )
+            ),
+        )
+        self.candidate_width_tolerance_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/candidate_width_tolerance_m',
+                    remote_cfg.get('candidate_width_tolerance_m', getattr(self, 'candidate_width_tolerance_m', 0.003)),
+                )
+            ),
+        )
+
+    @staticmethod
+    def _parse_orientation_variant_quaternions(value):
+        variants = []
+        for item in list(value or []):
+            if isinstance(item, str):
+                parts = [float(part.strip()) for part in item.replace(',', ' ').split() if part.strip()]
+            else:
+                parts = [float(part) for part in item]
+            if len(parts) != 3:
+                raise ValueError('orientation variant must be [roll_deg, pitch_deg, yaw_deg]')
+            roll, pitch, yaw = [math.radians(part) for part in parts]
+            variants.append(_normalize_quaternion(np.asarray(quaternion_from_euler(roll, pitch, yaw), dtype=float)))
+        if not variants:
+            variants.append(np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float))
+        return variants
+
     @staticmethod
     def _object_pose_distance(first, second):
         try:
@@ -558,6 +714,26 @@ class RemoteGrasp6DNode:
         return masked, roi, valid
 
     def _candidate_matches_target(self, _candidate, _camera_candidate, grasp_pose):
+        width = float(getattr(_camera_candidate, 'width_m', 0.0) or 0.0)
+        width_limit = float(getattr(self, 'max_gripper_width_m', 0.0) or 0.0)
+        width_tol = float(getattr(self, 'candidate_width_tolerance_m', 0.0) or 0.0)
+        if width_limit > 0.0 and width > width_limit + width_tol:
+            key = (
+                round(float(width), 4),
+                tuple(round(float(v), 4) for v in getattr(_camera_candidate, 'translation_m', [])[:3]),
+            )
+            if key not in self._width_gate_rejected_keys:
+                self._width_gate_rejected_keys.add(key)
+                self._width_gate_rejected_count += 1
+            rospy.logwarn_throttle(
+                1.0,
+                'remote 6D candidate rejected by width gate: width=%.3fm limit=%.3fm tolerance=%.3fm score=%.3f',
+                width,
+                width_limit,
+                width_tol,
+                float(getattr(_camera_candidate, 'score', 0.0) or 0.0),
+            )
+            return False
         if not getattr(self, 'candidate_target_gate_enabled', True):
             return True
         obj, _obj_time = self._latest_object_snapshot()

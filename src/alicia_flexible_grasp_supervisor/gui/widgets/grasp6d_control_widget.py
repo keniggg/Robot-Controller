@@ -297,6 +297,7 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         self._refresh_view()
 
     def _refresh_view(self):
+        self._plan_max_age_sec = float(rospy.get_param('/grasp/grasp6d_plan_max_age_sec', self._plan_max_age_sec))
         plan_state = format_grasp6d_plan_state(self._last_plan_time, max_age_sec=self._plan_max_age_sec)
         state = Grasp6DGuiState(
             remote_status=self._remote_status,

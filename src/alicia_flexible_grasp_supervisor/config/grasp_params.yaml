@@ -1,10 +1,13 @@
 grasp:
   use_grasp6d_plan: true
   grasp6d_plan_topic: "/grasp_6d/plan"
-  grasp6d_plan_max_age_sec: 30.0
+  # Manual 6D debugging needs time for operator/log confirmation. Execution
+  # still rejects the plan if the tracked object drifts too far.
+  grasp6d_plan_max_age_sec: 180.0
+  grasp6d_plan_max_object_drift_m: 0.03
   pregrasp_distance_m: 0.08
   pregrasp_offset_mode: "camera_ray"
-  final_approach_offset_m: 0.015
+  final_approach_offset_m: 0.045
   approach_step_m: 0.002
   approach_rate_hz: 10
   lift_height_m: 0.05
@@ -68,7 +71,7 @@ grasp_6d:
     timeout_sec: 30.0
     auto_request: false
     request_hz: 0.05
-    max_candidates: 6
+    max_candidates: 20
     failure_backoff_sec: 10.0
     # GraspNet baseline predicts in OpenCV optical camera coordinates:
     # x right, y down, z forward. ROS-side planning uses camera_link.
@@ -89,6 +92,10 @@ grasp_6d:
     candidate_max_target_distance_m: 0.025
     candidate_min_relative_z_m: -0.015
     candidate_max_relative_z_m: 0.08
+    # GraspNet width is the requested gripper opening. Reject candidates that
+    # require more opening than the real Alicia-D gripper can provide.
+    max_gripper_width_m: 0.05
+    candidate_width_tolerance_m: 0.003
 
 mujoco_digital_twin:
   enabled: true

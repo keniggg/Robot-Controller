@@ -355,6 +355,57 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('no /joint_states', states[-1][1])
 
+    def test_6d_plan_rejects_execution_when_locked_object_drifted(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
+        node.latest_grasp6d_plan_time = FakeTime(1.0)
+        node.latest_grasp6d_plan_object = self._object_at(0.40, 0.0, 0.20)
+        node.latest_obj = self._object_at(0.46, 0.0, 0.20)
+
+        original_get_param = grasp_task_node.rospy.get_param
+        original_time_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.get_param = lambda name, default=None: default
+        grasp_task_node.rospy.Time.now = staticmethod(lambda: FakeTime(2.0))
+        try:
+            result = grasp_task_node.GraspTaskNode._fresh_grasp6d_plan(
+                node,
+                {
+                    'grasp6d_plan_max_age_sec': 180.0,
+                    'grasp6d_plan_max_object_drift_m': 0.03,
+                },
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_time_now
+
+        self.assertIsNone(result)
+
+    def test_6d_plan_remains_fresh_with_longer_manual_confirmation_window(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
+        node.latest_grasp6d_plan = plan
+        node.latest_grasp6d_plan_time = FakeTime(1.0)
+        node.latest_grasp6d_plan_object = self._object_at(0.40, 0.0, 0.20)
+        node.latest_obj = self._object_at(0.41, 0.0, 0.20)
+
+        original_get_param = grasp_task_node.rospy.get_param
+        original_time_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.get_param = lambda name, default=None: default
+        grasp_task_node.rospy.Time.now = staticmethod(lambda: FakeTime(121.0))
+        try:
+            result = grasp_task_node.GraspTaskNode._fresh_grasp6d_plan(
+                node,
+                {
+                    'grasp6d_plan_max_age_sec': 180.0,
+                    'grasp6d_plan_max_object_drift_m': 0.03,
+                },
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_time_now
+
+        self.assertIs(result, plan)
+
     def test_6d_plan_rejects_position_only_fallback_before_execute(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True

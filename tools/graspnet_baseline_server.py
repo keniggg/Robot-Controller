@@ -72,6 +72,7 @@ class GraspNetBaselineHTTPHandler(BaseHTTPRequestHandler):
                     'frame_id': decoded['frame_id'],
                     'stamp_sec': decoded['stamp_sec'],
                     'candidates': candidates,
+                    'diagnostics': getattr(self.server.backend, 'last_diagnostics', {}),
                 },
             )
         except Exception as exc:
@@ -141,6 +142,7 @@ class GraspNetBaselineBackend:
         self.collision_voxel_size = float(collision_voxel_size)
         self.loaded = False
         self._predict_lock = threading.Lock()
+        self.last_diagnostics = {}
 
     def health(self):
         missing = []
@@ -222,18 +224,38 @@ class GraspNetBaselineBackend:
                 grasp_preds = self.pred_decode(end_points)
             preds = grasp_preds[0].detach().cpu().numpy()
             grasp_group = self.GraspGroup(preds)
+            diagnostics = {'raw_candidates': int(len(grasp_group))}
             if len(grasp_group) == 0:
+                self.last_diagnostics = diagnostics
                 return []
             grasp_group.nms()
+            diagnostics['after_nms'] = int(len(grasp_group))
             if self.collision_thresh >= 0.0:
                 detector = self.ModelFreeCollisionDetector(scene_points, voxel_size=self.collision_voxel_size)
                 collision_mask = detector.detect(grasp_group, collision_thresh=self.collision_thresh)
                 grasp_group = grasp_group[~collision_mask]
+            diagnostics['after_collision'] = int(len(grasp_group))
             if len(grasp_group) == 0:
+                self.last_diagnostics = diagnostics
                 return []
+            max_width = float(decoded.get('max_gripper_width_m') or 0.0)
+            width_tolerance = max(0.0, float(decoded.get('candidate_width_tolerance_m') or 0.0))
+            if max_width > 0.0:
+                widths = _grasp_group_widths(grasp_group)
+                keep = widths <= (max_width + width_tolerance)
+                diagnostics['width_limit_m'] = max_width
+                diagnostics['width_tolerance_m'] = width_tolerance
+                diagnostics['width_rejected'] = int(np.count_nonzero(~keep))
+                grasp_group = grasp_group[keep]
+                diagnostics['after_width'] = int(len(grasp_group))
+                if len(grasp_group) == 0:
+                    self.last_diagnostics = diagnostics
+                    return []
             grasp_group.sort_by_score()
             max_candidates = max(1, int(decoded['max_candidates']))
             count = min(max_candidates, len(grasp_group))
+            diagnostics['returned'] = int(count)
+            self.last_diagnostics = diagnostics
             return [_grasp_to_response(grasp_group[i]) for i in range(count)]
         finally:
             _empty_cuda_cache(getattr(self, 'torch', None))
@@ -296,6 +318,8 @@ def decode_rgbd_payload(payload):
         'frame_id': str(payload.get('frame_id') or 'camera_link'),
         'stamp_sec': float(payload.get('stamp_sec') or 0.0),
         'max_candidates': int(payload.get('max_candidates') or 20),
+        'max_gripper_width_m': float(payload.get('max_gripper_width_m') or 0.0),
+        'candidate_width_tolerance_m': float(payload.get('candidate_width_tolerance_m') or 0.0),
     }
 
 
@@ -328,6 +352,13 @@ def _empty_cuda_cache(torch_module):
             empty_cache()
     except Exception:
         pass
+
+
+def _grasp_group_widths(grasp_group):
+    try:
+        return np.asarray(grasp_group.widths, dtype=np.float32).reshape(-1)
+    except Exception:
+        return np.asarray([float(getattr(grasp, 'width', 0.0) or 0.0) for grasp in grasp_group], dtype=np.float32)
 
 
 class FallbackGrasp:

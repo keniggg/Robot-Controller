@@ -40,6 +40,8 @@ def encode_rgbd_payload(
     frame_id='camera_link',
     stamp_sec=0.0,
     max_candidates=20,
+    max_gripper_width_m=0.0,
+    candidate_width_tolerance_m=0.0,
 ):
     buffer = io.BytesIO()
     np.savez_compressed(
@@ -63,6 +65,8 @@ def encode_rgbd_payload(
         'frame_id': str(frame_id or 'camera_link'),
         'stamp_sec': float(stamp_sec or 0.0),
         'max_candidates': int(max_candidates),
+        'max_gripper_width_m': float(max_gripper_width_m or 0.0),
+        'candidate_width_tolerance_m': float(candidate_width_tolerance_m or 0.0),
     }
 
 
@@ -80,6 +84,8 @@ def decode_rgbd_payload(payload):
         'frame_id': str(payload.get('frame_id') or 'camera_link'),
         'stamp_sec': float(payload.get('stamp_sec') or 0.0),
         'max_candidates': int(payload.get('max_candidates') or 20),
+        'max_gripper_width_m': float(payload.get('max_gripper_width_m') or 0.0),
+        'candidate_width_tolerance_m': float(payload.get('candidate_width_tolerance_m') or 0.0),
     }
 
 
@@ -105,11 +111,22 @@ class RemoteGrasp6DClient:
     def __init__(self, server_url, timeout_sec=3.0):
         self.server_url = validate_remote_grasp6d_url(server_url)
         self.timeout_sec = float(timeout_sec)
+        self.last_diagnostics = {}
 
     def health(self):
         return self._request_json('/health', None)
 
-    def predict(self, color_bgr, depth_raw, intrinsics, frame_id='camera_link', stamp_sec=0.0, max_candidates=20):
+    def predict(
+        self,
+        color_bgr,
+        depth_raw,
+        intrinsics,
+        frame_id='camera_link',
+        stamp_sec=0.0,
+        max_candidates=20,
+        max_gripper_width_m=0.0,
+        candidate_width_tolerance_m=0.0,
+    ):
         payload = encode_rgbd_payload(
             color_bgr,
             depth_raw,
@@ -117,8 +134,12 @@ class RemoteGrasp6DClient:
             frame_id=frame_id,
             stamp_sec=stamp_sec,
             max_candidates=max_candidates,
+            max_gripper_width_m=max_gripper_width_m,
+            candidate_width_tolerance_m=candidate_width_tolerance_m,
         )
-        return decode_remote_grasp_response(self._request_json('/predict', payload))
+        response = self._request_json('/predict', payload)
+        self.last_diagnostics = dict(response.get('diagnostics') or {})
+        return decode_remote_grasp_response(response)
 
     def _request_json(self, path, payload):
         url = self.server_url + path
