@@ -6,7 +6,7 @@
   <arg name="start_tactile" default="true" />
   <arg name="start_gui" default="true" />
   <arg name="use_remote_grasp6d" default="true" />
-  <arg name="remote_grasp6d_url" default="$(optenv GRASP6D_URL http://127.0.0.1:8000)" />
+  <arg name="remote_grasp6d_url" default="$(optenv GRASP6D_URL http://172.23.132.97:8000)" />
 
   <include file="$(find alicia_flexible_grasp_supervisor)/launch/bringup.launch">
     <arg name="start_real_arm" value="$(arg start_real_arm)" />

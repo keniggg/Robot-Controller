@@ -237,7 +237,7 @@ class RemoteGrasp6DNode:
         hcfg = rospy.get_param('/handeye', {})
         gcfg = rospy.get_param('/grasp', {})
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
-        server_url = rospy.get_param('/grasp_6d/remote/server_url', remote_cfg.get('server_url', 'http://127.0.0.1:8000'))
+        server_url = rospy.get_param('/grasp_6d/remote/server_url', remote_cfg.get('server_url', 'http://172.23.132.97:8000'))
         timeout_sec = float(rospy.get_param('/grasp_6d/remote/timeout_sec', remote_cfg.get('timeout_sec', 3.0)))
         self.max_candidates = int(rospy.get_param('/grasp_6d/remote/max_candidates', remote_cfg.get('max_candidates', 20)))
         self.auto_request = bool(rospy.get_param('/grasp_6d/remote/auto_request', remote_cfg.get('auto_request', False)))

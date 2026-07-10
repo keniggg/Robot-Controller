@@ -115,7 +115,7 @@ curl http://127.0.0.1:8000/health
 ```bash
 cd ~/alicia_wa_full
 source devel/setup.bash
-export GRASP6D_URL=http://<WSL_IP>:8000
+export GRASP6D_URL=http://172.23.132.97:8000
 roslaunch alicia_flexible_grasp_supervisor full_system.launch \
   start_real_arm:=true \
   driver_port:=/dev/alicia_arm \
@@ -129,7 +129,7 @@ roslaunch alicia_flexible_grasp_supervisor full_system.launch \
 当前默认配置中：
 
 ```yaml
-grasp_6d.remote.server_url: "http://127.0.0.1:8000"
+grasp_6d.remote.server_url: "http://172.23.132.97:8000"
 mujoco_digital_twin.enabled: true
 mujoco_digital_twin.execution_gate_enabled: true
 mujoco_digital_twin.send_joint_state_in_request: false

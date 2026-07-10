@@ -97,7 +97,7 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         self._requesting_plan = False
         self._command_active = False
         self._plan_max_age_sec = float(rospy.get_param('/grasp/grasp6d_plan_max_age_sec', 2.0))
-        self._server_url = str(rospy.get_param('/grasp_6d/remote/server_url', 'http://127.0.0.1:8000'))
+        self._server_url = str(rospy.get_param('/grasp_6d/remote/server_url', 'http://172.23.132.97:8000'))
         labels = grasp6d_button_labels()
 
         layout = QtWidgets.QVBoxLayout(self)
