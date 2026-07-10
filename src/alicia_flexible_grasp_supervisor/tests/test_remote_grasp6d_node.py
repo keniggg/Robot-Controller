@@ -57,6 +57,23 @@ class RecordingPoseEstimator:
         return pose
 
 
+class IdentityPointPoseEstimator:
+    camera_frame = 'camera_link'
+
+    def make_poses(self, xyz, stamp=None, camera_frame=None):
+        pose_cam = PoseStamped()
+        pose_base = PoseStamped()
+        pose_cam.header.frame_id = camera_frame or self.camera_frame
+        pose_base.header.frame_id = 'base_link'
+        for pose in (pose_cam, pose_base):
+            pose.header.stamp = stamp
+            pose.pose.position.x = float(xyz[0])
+            pose.pose.position.y = float(xyz[1])
+            pose.pose.position.z = float(xyz[2])
+            pose.pose.orientation.w = 1.0
+        return pose_cam, pose_base
+
+
 class FakeServiceResponse:
     def __init__(self, success=True, message='ok'):
         self.success = bool(success)
@@ -333,6 +350,106 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, 'waiting for target ROI'):
             node._depth_for_remote(np.ones((3, 3), dtype=np.uint16))
+
+    def test_depth_for_remote_segments_foreground_cloud_from_bbox_depth(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.use_perception_roi = True
+        node.require_perception_roi = True
+        node.roi_margin_px = 0
+        node.roi_max_age_sec = 1.0
+        node.roi_min_valid_depth_px = 4
+        node.target_cloud_enabled = True
+        node.target_cloud_roi_margin_px = 0
+        node.target_cloud_foreground_percentile = 35.0
+        node.target_cloud_depth_window_m = 0.02
+        node.target_cloud_min_points = 4
+        node.target_cloud_max_points_for_gate = 100
+        node.target_projection_frame_convention = 'ros_camera_link'
+        node.pose_estimator = IdentityPointPoseEstimator()
+        node._object_lock = DummyLock()
+        node.latest_object = types.SimpleNamespace(
+            detected=True,
+            bbox_x=2,
+            bbox_y=2,
+            bbox_width=4,
+            bbox_height=2,
+        )
+        depth = np.zeros((6, 6), dtype=np.uint16)
+        depth[2:4, 2:4] = 1000
+        depth[2:4, 4:6] = 2000
+
+        original_get_param = remote_node.rospy.get_param
+        original_time_now = remote_node.rospy.Time.now
+        remote_node.rospy.Time.now = staticmethod(lambda: remote_node.rospy.Time.from_sec(10.0))
+        node.latest_object_time = remote_node.rospy.Time.from_sec(10.0)
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/camera': {
+                'width': 6,
+                'height': 6,
+                'fx': 100.0,
+                'fy': 100.0,
+                'cx': 2.0,
+                'cy': 2.0,
+                'depth_scale': 0.001,
+            },
+            '/perception': {
+                'depth_min_m': 0.03,
+                'depth_max_m': 3.0,
+            },
+        }.get(name, default)
+        try:
+            masked, message = node._depth_for_remote(depth, frame_id='camera_link')
+        finally:
+            remote_node.rospy.get_param = original_get_param
+            remote_node.rospy.Time.now = original_time_now
+
+        self.assertEqual(remote_node.valid_depth_count(masked), 4)
+        self.assertEqual(int(masked[2, 2]), 1000)
+        self.assertEqual(int(masked[2, 4]), 0)
+        self.assertIn('target_cloud=4', message)
+        np.testing.assert_allclose(
+            node.latest_target_cloud_base_xyz,
+            np.array([1.0, -0.005, -0.005]),
+            atol=1e-6,
+        )
+
+    def test_candidate_gate_prefers_depth_cloud_target_over_stale_object_center(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.candidate_target_gate_enabled = True
+        node.candidate_max_target_distance_m = 0.04
+        node.candidate_min_relative_z_m = -0.015
+        node.candidate_max_relative_z_m = 0.08
+        node.target_cloud_enabled = True
+        node.target_cloud_max_age_sec = 10.0
+        node.target_cloud_candidate_max_point_distance_m = 0.055
+        node.latest_target_cloud_time = remote_node.rospy.Time.from_sec(10.0)
+        node.latest_target_cloud_source = 'roi_depth_foreground'
+        node.latest_target_cloud_base_xyz = np.array([1.0, 0.0, 0.10])
+        node.latest_target_cloud_camera_points = np.array([[0.3, 0.0, 0.0]], dtype=np.float32)
+        node._target_gate_rejected_count = 0
+        node._object_lock = DummyLock()
+
+        stale_object_pose = PoseStamped()
+        stale_object_pose.pose.position.x = 0.0
+        stale_object_pose.pose.position.y = 0.0
+        stale_object_pose.pose.position.z = 0.10
+        node.latest_object = types.SimpleNamespace(detected=True, pose_base=stale_object_pose)
+        node.latest_object_time = object()
+
+        near_cloud = PoseStamped()
+        near_cloud.pose.position.x = 1.01
+        near_cloud.pose.position.y = 0.0
+        near_cloud.pose.position.z = 0.105
+        camera_candidate = types.SimpleNamespace(score=0.9, translation_m=np.array([0.3, 0.0, 0.0]))
+        original_logwarn_throttle = remote_node.rospy.logwarn_throttle
+        original_time_now = remote_node.rospy.Time.now
+        remote_node.rospy.logwarn_throttle = lambda *args, **kwargs: None
+        remote_node.rospy.Time.now = staticmethod(lambda: remote_node.rospy.Time.from_sec(10.0))
+        try:
+            self.assertTrue(node._candidate_matches_target(None, camera_candidate, near_cloud))
+        finally:
+            remote_node.rospy.logwarn_throttle = original_logwarn_throttle
+            remote_node.rospy.Time.now = original_time_now
 
     def test_candidate_target_gate_rejects_far_or_low_grasp_pose(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)

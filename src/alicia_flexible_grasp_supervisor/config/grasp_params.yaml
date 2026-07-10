@@ -23,8 +23,8 @@ grasp:
   max_object_jump_m: 0.12
   object_jump_filter_window_sec: 4.0
   max_locked_target_refine_m: 0.06
-  # 6D 抓取必须执行模型给出的姿态；若 MoveIt 只能通过“当前姿态/候选姿态”
-  # 兜底规划成功，则认为该 6D 抓取姿态不可执行，避免到达目标但夹爪姿态错误。
+  # Strict 6D mode: do not let MoveIt replace the model-predicted wrist
+  # orientation with the current wrist orientation.
   accept_orientation_fallback: false
 
 force:
@@ -71,35 +71,61 @@ grasp_6d:
     timeout_sec: 30.0
     auto_request: false
     request_hz: 0.05
-    max_candidates: 20
+    max_candidates: 120
     failure_backoff_sec: 10.0
     # GraspNet baseline predicts in OpenCV optical camera coordinates:
     # x right, y down, z forward. ROS-side planning uses camera_link.
     candidate_frame_convention: "opencv_optical"
-    # 远程 6D 候选的可达性检查也必须坚持原始 6D 姿态。
+    # Strict 6D mode: reject candidates that are only reachable after replacing
+    # the model-predicted orientation.
     accept_orientation_fallback: false
     # Use the current perception target bbox to mask RGB-D before remote 6D
     # inference; otherwise GraspNet may propose grasps on the table/background.
     use_perception_roi: true
     require_perception_roi: true
-    perception_roi_margin_px: 20
+    perception_roi_margin_px: 12
     perception_roi_max_age_sec: 1.0
-    perception_roi_min_valid_depth_px: 250
+    perception_roi_min_valid_depth_px: 80
     # Reject remote 6D grasps that are reachable but do not land near the
     # current YOLO/perception target. This prevents table/background candidates
     # from being executed when the mouse bbox is large or includes clutter.
     candidate_target_gate_enabled: true
-    candidate_max_target_distance_m: 0.025
+    candidate_max_target_distance_m: 0.04
     candidate_min_relative_z_m: -0.015
     candidate_max_relative_z_m: 0.08
-    # GraspNet width is the requested gripper opening. Reject candidates that
-    # require more opening than the real Alicia-D gripper can provide.
-    max_gripper_width_m: 0.05
-    candidate_width_tolerance_m: 0.003
+    # Rank reachable candidates by consistency with the target foreground point
+    # cloud instead of accepting the first IK-valid pose.
+    rank_by_target_distance: true
+    # Keep this disabled in strict evaluation. Target location must come from
+    # RGB-D segmentation/candidate ranking, not from a fixed post-selection
+    # position correction.
+    target_position_refine_enabled: false
+    target_position_refine_blend: 0.0
+    target_position_refine_max_m: 0.04
+    target_position_refine_max_age_sec: 1.0
+    target_position_refine_offset_xyz_m: [0.0, 0.0, 0.0]
+    # Use the YOLO ROI only as an object proposal, then segment the foreground
+    # object from depth and compare 6D candidates against that 3D point cloud.
+    target_cloud_enabled: true
+    target_cloud_roi_margin_px: 0
+    target_cloud_foreground_percentile: 35.0
+    target_cloud_depth_window_m: 0.055
+    target_cloud_min_points: 80
+    target_cloud_max_age_sec: 1.0
+    target_cloud_max_points_for_gate: 2500
+    target_cloud_candidate_max_point_distance_m: 0.055
+    target_projection_frame_convention: "ros_camera_link"
+    # Diagnostic mode: GraspNet predicted width is kept as information only.
+    # Set this >0 later to reject poses wider than the real gripper.
+    # The real gripper opening is still limited by /gripper/open_position_m.
+    max_gripper_width_m: 0.0
+    candidate_width_tolerance_m: 0.0
 
 mujoco_digital_twin:
   enabled: true
-  execution_gate_enabled: true
+  # Diagnostic mode: keep the WSL MuJoCo endpoint available, but do not block
+  # real-arm execution while the digital twin IK is being tuned.
+  execution_gate_enabled: false
   server_url: "http://172.23.132.97:8000"
   timeout_sec: 20.0
   min_score: 80
