@@ -3,9 +3,12 @@ grasp:
   grasp6d_plan_topic: "/grasp_6d/plan"
   # Manual 6D debugging needs time for operator/log confirmation. Execution
   # still rejects the plan if the tracked object drifts too far.
-  grasp6d_plan_max_age_sec: 180.0
-  grasp6d_plan_max_object_drift_m: 0.03
+  grasp6d_plan_max_age_sec: 600.0
+  grasp6d_plan_max_object_drift_m: 0.02
   pregrasp_distance_m: 0.08
+  # The Alicia tool0 frame points through the fingertips along +Z. After the
+  # GraspNet grasp frame is aligned to tool0, all approach offsets must use Z.
+  tool_approach_axis: "z"
   pregrasp_offset_mode: "camera_ray"
   final_approach_offset_m: 0.045
   approach_step_m: 0.002
@@ -15,7 +18,9 @@ grasp:
   default_orientation_xyzw: [0.0, 0.7071, 0.0, 0.7071]
   pregrasp_reached_tolerance_m: 0.04
   motion_settle_min_sec: 0.8
-  motion_settle_timeout_sec: 2.0
+  # The hardware driver continues smoothing after FollowJointTrajectory reports
+  # success. Do not start the next segment until real joint feedback is stable.
+  motion_settle_timeout_sec: 5.0
   motion_settle_sample_sec: 0.05
   motion_settle_position_epsilon_rad: 0.0025
   motion_settle_required_samples: 3
@@ -23,6 +28,27 @@ grasp:
   max_object_jump_m: 0.12
   object_jump_filter_window_sec: 4.0
   max_locked_target_refine_m: 0.06
+  # Eye-in-hand closed loop: reobserve the target at pregrasp, translate the
+  # remaining path from live RGB-D, and preserve the model-predicted 6D rotation.
+  visual_retarget_enabled: true
+  visual_retarget_require_start_detection: true
+  # The current side-mounted camera cannot geometrically retain the object in
+  # view at strict pregrasp. Reobserve there when possible, but do not fabricate
+  # a detection when the gripper/camera layout causes expected occlusion.
+  visual_retarget_require_pregrasp_detection: false
+  visual_retarget_after_approach: true
+  # Near contact the gripper can legitimately occlude the wrist camera. In that
+  # case use the last trusted pregrasp target instead of pretending it is visible.
+  visual_retarget_require_approach_detection: false
+  visual_retarget_timeout_sec: 1.2
+  visual_retarget_sample_sec: 0.05
+  visual_retarget_required_samples: 3
+  visual_retarget_raw_max_age_sec: 0.30
+  visual_retarget_max_jitter_m: 0.012
+  # A stationary target moving by more than 20 mm in base coordinates indicates
+  # a loose camera or invalid hand-eye calibration, not normal tracking noise.
+  visual_retarget_max_correction_m: 0.02
+  visual_retarget_deadband_m: 0.002
   # Strict 6D mode: do not let MoveIt replace the model-predicted wrist
   # orientation with the current wrist orientation.
   accept_orientation_fallback: false
@@ -76,6 +102,12 @@ grasp_6d:
     # GraspNet baseline predicts in OpenCV optical camera coordinates:
     # x right, y down, z forward. ROS-side planning uses camera_link.
     candidate_frame_convention: "opencv_optical"
+    # GraspNet: +X approach, +Y jaw closing. Alicia tool0: +Z approach,
+    # +Y jaw closing. Right-multiplying Ry(+90 deg) maps model axes to tool0.
+    model_grasp_to_tool_rpy_deg: [0.0, 90.0, 0.0]
+    # Baseline predictions contain insertion depth. Refuse an old WSL server
+    # that silently drops it, because that hides an incomplete grasp geometry.
+    require_candidate_depth: true
     # Strict 6D mode: reject candidates that are only reachable after replacing
     # the model-predicted orientation.
     accept_orientation_fallback: false
@@ -115,6 +147,18 @@ grasp_6d:
     target_cloud_max_points_for_gate: 2500
     target_cloud_candidate_max_point_distance_m: 0.055
     target_projection_frame_convention: "ros_camera_link"
+    # Predict eye-in-hand camera view for each strict 6D candidate. The target
+    # must remain in a safe image region at pregrasp and approach.
+    # Current camera optical axis is nearly perpendicular to the gripper
+    # approach axis, so strict gating would reject every valid grasp. Keep the
+    # projection as a diagnostic until the camera is remounted toward the jaws.
+    camera_visibility_gate_enabled: false
+    camera_visibility_diagnostic_enabled: true
+    camera_visibility_require_approach: true
+    camera_visibility_margin_px: 36
+    camera_visibility_min_depth_m: 0.035
+    camera_visibility_max_depth_m: 1.20
+    camera_visibility_rank_weight_m: 0.012
     # Diagnostic mode: GraspNet predicted width is kept as information only.
     # Set this >0 later to reject poses wider than the real gripper.
     # The real gripper opening is still limited by /gripper/open_position_m.

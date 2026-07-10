@@ -478,6 +478,90 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('candidate orientation', states[-1][1])
 
+    def test_6d_motion_stops_when_real_joint_feedback_does_not_settle(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        states = []
+        calls = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._wait_for_motion_settle = lambda _reason='motion': False
+
+        def move_pose(_pose, execute):
+            calls.append(bool(execute))
+            return FakeServiceResponse(True, 'ok')
+
+        self.assertFalse(
+            node._plan_and_execute_pose(
+                grasp_task_node.GraspStages.MOVE_PREGRASP,
+                '6D pregrasp',
+                self._pose(0.10),
+                move_pose,
+                '6D pregrasp',
+            )
+        )
+        self.assertEqual(calls, [False, True])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('did not settle', states[-1][1])
+
+    def test_visual_retarget_translates_remaining_path_and_preserves_6d_rotation(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        node.set_state = lambda *args, **kwargs: None
+        reference = self._object_at(0.40, -0.10, 0.20)
+        live = self._object_at(0.41, -0.08, 0.19)
+        reference.label = 'mouse'
+        live.label = 'mouse'
+        node._wait_for_stable_visual_target = lambda *_args, **_kwargs: live
+        poses = [self._pose(0.20, 0.10, 0.30), self._pose(0.30, 0.20, 0.40)]
+        poses[0].pose.orientation.x = 0.25
+        poses[0].pose.orientation.w = 0.75
+
+        result = node._visual_retarget_6d_poses(
+            reference,
+            poses,
+            {
+                'visual_retarget_enabled': True,
+                'visual_retarget_max_correction_m': 0.04,
+                'visual_retarget_deadband_m': 0.0,
+            },
+            'pregrasp',
+            required=True,
+        )
+
+        self.assertIsNotNone(result)
+        shifted, updated_reference = result
+        self.assertIs(updated_reference, live)
+        self.assertAlmostEqual(shifted[0].pose.position.x, 0.21)
+        self.assertAlmostEqual(shifted[0].pose.position.y, 0.12)
+        self.assertAlmostEqual(shifted[0].pose.position.z, 0.29)
+        self.assertAlmostEqual(shifted[1].pose.position.x, 0.31)
+        self.assertAlmostEqual(shifted[0].pose.orientation.x, 0.25)
+        self.assertAlmostEqual(shifted[0].pose.orientation.w, 0.75)
+
+    def test_visual_retarget_rejects_large_handeye_inconsistency(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        states = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        reference = self._object_at(0.40, 0.0, 0.20)
+        live = self._object_at(0.47, 0.0, 0.20)
+        node._wait_for_stable_visual_target = lambda *_args, **_kwargs: live
+
+        result = node._visual_retarget_6d_poses(
+            reference,
+            [self._pose(0.20)],
+            {
+                'visual_retarget_enabled': True,
+                'visual_retarget_max_correction_m': 0.04,
+            },
+            'pregrasp',
+            required=True,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('hand-eye consistency failed', states[-1][1])
+
     def test_full_grasp_approaches_target_after_pregrasp_before_closing(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = self._object()

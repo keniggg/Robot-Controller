@@ -51,6 +51,7 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
                 {
                     'score': 0.91,
                     'width_m': 0.045,
+                    'depth_m': 0.03,
                     'translation_m': [0.1, 0.2, 0.3],
                     'rotation_matrix': [
                         [1.0, 0.0, 0.0],
@@ -66,8 +67,25 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertAlmostEqual(candidates[0].score, 0.91)
         self.assertAlmostEqual(candidates[0].width_m, 0.045)
+        self.assertAlmostEqual(candidates[0].depth_m, 0.03)
         np.testing.assert_allclose(candidates[0].translation_m, [0.1, 0.2, 0.3])
         np.testing.assert_allclose(candidates[0].quaternion_xyzw, [0.0, 0.0, 0.0, 1.0])
+
+    def test_response_marks_old_server_candidate_depth_as_missing(self):
+        candidates = decode_remote_grasp_response(
+            {
+                'ok': True,
+                'candidates': [
+                    {
+                        'score': 0.8,
+                        'translation_m': [0.1, 0.0, 0.2],
+                        'rotation_matrix': np.eye(3).tolist(),
+                    }
+                ],
+            }
+        )
+
+        self.assertIsNone(candidates[0].depth_m)
 
     def test_response_rejects_backend_error(self):
         with self.assertRaisesRegex(RuntimeError, 'checkpoint missing'):

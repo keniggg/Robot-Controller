@@ -10,9 +10,12 @@
   <param name="moveit_manage_controllers" value="$(arg moveit_manage_controllers)"/>
 
   <!-- When determining the expected duration of a trajectory, this multiplicative factor is applied to get the allowed duration of execution -->
-  <param name="trajectory_execution/allowed_execution_duration_scaling" value="1.2"/> <!-- default 1.2 -->
+  <!-- The SDK executes physical joints at 15 deg/s and can lag MoveIt's nominal
+       timestamps during a multi-joint lift.  This is an execution watchdog only;
+       it does not change the planned grasp pose or joint velocity limits. -->
+  <param name="trajectory_execution/allowed_execution_duration_scaling" value="3.0"/>
   <!-- Allow more than the expected execution time before triggering a trajectory cancel (applied after scaling) -->
-  <param name="trajectory_execution/allowed_goal_duration_margin" value="0.5"/> <!-- default 0.5 -->
+  <param name="trajectory_execution/allowed_goal_duration_margin" value="2.0"/>
   <!-- Allowed joint-value tolerance for validation that trajectory's first point matches current robot state -->
   <param name="trajectory_execution/allowed_start_tolerance" value="0.05"/> <!-- real arm feedback can lag by >0.01 rad -->
 

@@ -229,6 +229,7 @@ class PerceptionNode:
         self.pub_cam = rospy.Publisher(pcfg.get('output_pose_camera_topic','/perception/object_pose_camera'), PoseStamped, queue_size=10)
         self.pub_base = rospy.Publisher(pcfg.get('output_pose_base_topic','/perception/object_pose_base'), PoseStamped, queue_size=10)
         self.pub_detected = rospy.Publisher('/perception/object_detected', Bool, queue_size=10)
+        self.pub_raw_detected = rospy.Publisher('/perception/raw_object_detected', Bool, queue_size=10)
         self.label = pcfg.get('object_label','target')
         self.stabilizer = DetectionStabilizer(pcfg.get('detection_hold_sec', 0.8))
         self.refresh_detector(force=True)
@@ -331,6 +332,9 @@ class PerceptionNode:
         self.pub_cam.publish(pose_cam); self.pub_base.publish(pose_base); self.publish_object(obj)
 
     def publish_object(self, obj):
+        # Keep raw visibility separate from the short detection hold used by the
+        # GUI. Grasp execution must never mistake a held box for a live view.
+        self.pub_raw_detected.publish(Bool(bool(obj.detected)))
         stable_obj = self.stabilizer.update(obj, rospy.get_time())
         self.pub_obj.publish(stable_obj)
         self.pub_detected.publish(Bool(bool(stable_obj.detected)))

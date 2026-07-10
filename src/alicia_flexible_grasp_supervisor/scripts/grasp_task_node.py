@@ -5,6 +5,7 @@ import time
 import rospy
 from geometry_msgs.msg import PoseArray, PoseStamped
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Bool
 from alicia_flexible_grasp_supervisor.msg import ObjectPose, GraspState
 from alicia_flexible_grasp_supervisor.srv import StartGrasp, StartGraspResponse, StopGrasp, StopGraspResponse, SetTargetPose, SetFloat
 from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages, STATE_NAMES
@@ -32,6 +33,8 @@ class GraspTaskNode:
         self.latest_grasp6d_plan_time = None
         self.latest_grasp6d_plan_object = None
         self.latest_joint_state = None
+        self.latest_raw_detection = False
+        self.latest_raw_detection_time = None
         self.active = False
         self.stage = GraspStages.IDLE
         self.tf_buffer = None
@@ -43,6 +46,7 @@ class GraspTaskNode:
         rospy.Subscriber('/perception/object', ObjectPose, self.obj_cb, queue_size=1)
         rospy.Subscriber(rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'), PoseArray, self.grasp6d_plan_cb, queue_size=1)
         rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
+        rospy.Subscriber('/perception/raw_object_detected', Bool, self.raw_detection_cb, queue_size=1)
         rospy.Service('/grasp/start', StartGrasp, self.start_cb)
         rospy.Service('/grasp/stop', StopGrasp, self.stop_cb)
         rospy.loginfo('GraspTaskNode ready')
@@ -88,6 +92,10 @@ class GraspTaskNode:
 
     def joint_cb(self, msg):
         self.latest_joint_state = msg
+
+    def raw_detection_cb(self, msg):
+        self.latest_raw_detection = bool(msg.data)
+        self.latest_raw_detection_time = rospy.Time.now()
 
     def grasp6d_plan_cb(self, msg):
         self.latest_grasp6d_plan = msg
@@ -240,9 +248,21 @@ class GraspTaskNode:
         approach = self._pose_array_item_as_stamped(plan, 1)
         grasp = self._pose_array_item_as_stamped(plan, 2)
         lift = self._pose_array_item_as_stamped(plan, 3)
+        locked_obj = deepcopy(getattr(self, 'latest_grasp6d_plan_object', None))
 
         if not self._simulate_grasp6d_plan_if_required(gcfg, gripper_cfg, plan):
             return False
+
+        retargeted = self._visual_retarget_6d_poses(
+            locked_obj,
+            [pregrasp, approach, grasp, lift],
+            gcfg,
+            'execution start',
+            required=bool(gcfg.get('visual_retarget_require_start_detection', True)),
+        )
+        if retargeted is None:
+            return False
+        (pregrasp, approach, grasp, lift), locked_obj = retargeted
 
         self.set_state(GraspStages.PLAN_PREGRASP, 'using 6D grasp plan')
         if not self._command_gripper_position(
@@ -254,8 +274,33 @@ class GraspTaskNode:
             return False
         if not self._plan_and_execute_pose(GraspStages.MOVE_PREGRASP, '6D pregrasp', pregrasp, move_pose, '6D pregrasp'):
             return False
+
+        retargeted = self._visual_retarget_6d_poses(
+            locked_obj,
+            [approach, grasp, lift],
+            gcfg,
+            'pregrasp',
+            required=bool(gcfg.get('visual_retarget_require_pregrasp_detection', True)),
+        )
+        if retargeted is None:
+            return False
+        (approach, grasp, lift), locked_obj = retargeted
+
         if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D approach', approach, move_pose, '6D approach'):
             return False
+
+        if bool(gcfg.get('visual_retarget_after_approach', True)):
+            retargeted = self._visual_retarget_6d_poses(
+                locked_obj,
+                [grasp, lift],
+                gcfg,
+                'approach',
+                required=bool(gcfg.get('visual_retarget_require_approach_detection', False)),
+            )
+            if retargeted is None:
+                return False
+            (grasp, lift), locked_obj = retargeted
+
         if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D grasp pose', grasp, move_pose, '6D grasp pose'):
             return False
 
@@ -300,8 +345,168 @@ class GraspTaskNode:
         if not resp.success:
             self.set_state(GraspStages.FAILED, '%s failed: %s' % (label, resp.message))
             return False
-        self._wait_for_motion_settle(settle_reason)
+        settled = self._wait_for_motion_settle(settle_reason)
+        if settled is False:
+            self.set_state(
+                GraspStages.FAILED,
+                '%s feedback did not settle; refusing to overlap the next motion' % label,
+            )
+            return False
         return True
+
+    def _visual_retarget_6d_poses(self, reference_obj, poses, gcfg, stage_label, required=False):
+        if not bool(gcfg.get('visual_retarget_enabled', False)):
+            return list(poses), reference_obj
+        if reference_obj is None or not bool(getattr(reference_obj, 'detected', False)):
+            message = 'visual retarget unavailable: no object locked with the 6D plan'
+            if required:
+                self.set_state(GraspStages.FAILED, message)
+                return None
+            rospy.logwarn('%s', message)
+            return list(poses), reference_obj
+
+        live_obj = self._wait_for_stable_visual_target(reference_obj, gcfg, stage_label)
+        if live_obj is None:
+            message = 'target not visible/stable after %s; keeping last trusted 6D pose' % stage_label
+            if required:
+                self.set_state(GraspStages.FAILED, message)
+                return None
+            rospy.logwarn('%s', message)
+            return list(poses), reference_obj
+
+        delta = self._object_delta_xyz(reference_obj, live_obj)
+        distance = math.sqrt(sum(float(value) ** 2 for value in delta))
+        max_correction = max(0.0, self._cfg_float(gcfg, 'visual_retarget_max_correction_m', 0.04))
+        if max_correction > 0.0 and distance > max_correction:
+            self.set_state(
+                GraspStages.FAILED,
+                (
+                    'visual/hand-eye consistency failed after %s: target shifted %.3fm > %.3fm; '
+                    'check rigid camera mounting and hand-eye calibration'
+                ) % (stage_label, distance, max_correction),
+            )
+            return None
+
+        deadband = max(0.0, self._cfg_float(gcfg, 'visual_retarget_deadband_m', 0.002))
+        shifted = [self._translate_pose(pose, delta if distance > deadband else (0.0, 0.0, 0.0)) for pose in poses]
+        rospy.loginfo(
+            'Grasp visual retarget after %s: delta=(%.3f, %.3f, %.3f)m norm=%.3fm orientation_preserved=1',
+            stage_label,
+            float(delta[0]),
+            float(delta[1]),
+            float(delta[2]),
+            distance,
+        )
+        self.set_state(
+            GraspStages.APPROACH_TARGET,
+            'visual target locked after %s; correction %.1f mm' % (stage_label, distance * 1000.0),
+        )
+        return shifted, live_obj
+
+    def _wait_for_stable_visual_target(self, reference_obj, gcfg, stage_label):
+        timeout = max(0.0, self._cfg_float(gcfg, 'visual_retarget_timeout_sec', 1.2))
+        sample_period = max(0.02, self._cfg_float(gcfg, 'visual_retarget_sample_sec', 0.05))
+        required = max(1, int(gcfg.get('visual_retarget_required_samples', 3)))
+        max_jitter = max(0.0, self._cfg_float(gcfg, 'visual_retarget_max_jitter_m', 0.012))
+        raw_max_age = max(0.0, self._cfg_float(gcfg, 'visual_retarget_raw_max_age_sec', 0.30))
+        samples = []
+        last_token = None
+        start = time.monotonic()
+
+        while self.active and time.monotonic() - start < timeout and not rospy.is_shutdown():
+            obj = getattr(self, 'latest_obj', None)
+            obj_time = getattr(self, 'latest_obj_time', None)
+            token = self._time_token(obj_time)
+            if (
+                obj is not None
+                and bool(getattr(obj, 'detected', False))
+                and token is not None
+                and token != last_token
+                and self._raw_detection_is_fresh(raw_max_age)
+                and self._same_target_label(reference_obj, obj)
+            ):
+                last_token = token
+                xyz = self._object_xyz(obj)
+                if xyz is not None:
+                    samples.append((xyz, deepcopy(obj)))
+                    samples = samples[-required:]
+                    if len(samples) >= required:
+                        center = tuple(
+                            sorted(float(item[0][axis]) for item in samples)[len(samples) // 2]
+                            for axis in range(3)
+                        )
+                        spread = max(
+                            math.sqrt(sum((float(item[0][axis]) - center[axis]) ** 2 for axis in range(3)))
+                            for item in samples
+                        )
+                        if spread <= max_jitter:
+                            result = samples[-1][1]
+                            point = result.pose_base.pose.position
+                            point.x, point.y, point.z = center
+                            rospy.loginfo(
+                                'Grasp live target after %s: xyz=(%.3f, %.3f, %.3f) samples=%d spread=%.3fm',
+                                stage_label,
+                                center[0],
+                                center[1],
+                                center[2],
+                                len(samples),
+                                spread,
+                            )
+                            return result
+                        samples = samples[-max(1, required - 1):]
+            rospy.sleep(sample_period)
+        return None
+
+    def _raw_detection_is_fresh(self, max_age_sec):
+        if not bool(getattr(self, 'latest_raw_detection', False)):
+            return False
+        stamp = getattr(self, 'latest_raw_detection_time', None)
+        if stamp is None:
+            return False
+        if max_age_sec <= 0.0:
+            return True
+        try:
+            return (rospy.Time.now() - stamp).to_sec() <= max_age_sec
+        except Exception:
+            return False
+
+    @staticmethod
+    def _time_token(stamp):
+        if stamp is None:
+            return None
+        try:
+            return float(stamp.to_sec())
+        except Exception:
+            return id(stamp)
+
+    @staticmethod
+    def _same_target_label(first, second):
+        first_label = str(getattr(first, 'label', '') or '').strip().lower()
+        second_label = str(getattr(second, 'label', '') or '').strip().lower()
+        return not first_label or not second_label or first_label == second_label
+
+    @staticmethod
+    def _object_xyz(obj):
+        try:
+            p = obj.pose_base.pose.position
+            return float(p.x), float(p.y), float(p.z)
+        except Exception:
+            return None
+
+    def _object_delta_xyz(self, first, second):
+        a = self._object_xyz(first)
+        b = self._object_xyz(second)
+        if a is None or b is None:
+            return 0.0, 0.0, 0.0
+        return tuple(float(b[index]) - float(a[index]) for index in range(3))
+
+    @staticmethod
+    def _translate_pose(pose, delta_xyz):
+        shifted = deepcopy(pose)
+        shifted.pose.position.x += float(delta_xyz[0])
+        shifted.pose.position.y += float(delta_xyz[1])
+        shifted.pose.position.z += float(delta_xyz[2])
+        return shifted
 
     def _fresh_grasp6d_plan(self, gcfg):
         plan = getattr(self, 'latest_grasp6d_plan', None)

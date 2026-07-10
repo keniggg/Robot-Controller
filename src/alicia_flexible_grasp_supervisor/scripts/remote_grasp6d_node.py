@@ -108,6 +108,30 @@ def convert_candidate_to_camera_link(candidate, convention='opencv_optical'):
         translation_m=translation,
         quaternion_xyzw=quaternion,
         width_m=float(candidate.width_m),
+        depth_m=getattr(candidate, 'depth_m', None),
+    )
+
+
+def align_candidate_to_tool_frame(candidate, model_grasp_to_tool_quaternion=None):
+    """Convert GraspNet's grasp-frame orientation into the MoveIt tool frame."""
+    correction = np.asarray(
+        model_grasp_to_tool_quaternion
+        if model_grasp_to_tool_quaternion is not None
+        else [0.0, 0.0, 0.0, 1.0],
+        dtype=float,
+    )
+    correction = _normalize_quaternion(correction)
+    if np.allclose(correction, np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)):
+        return candidate
+    quaternion = _normalize_quaternion(
+        np.asarray(quaternion_multiply(candidate.quaternion_xyzw, correction), dtype=float)
+    )
+    return RemoteGraspCandidate(
+        score=float(candidate.score),
+        translation_m=np.asarray(candidate.translation_m, dtype=float),
+        quaternion_xyzw=quaternion,
+        width_m=float(candidate.width_m),
+        depth_m=getattr(candidate, 'depth_m', None),
     )
 
 
@@ -147,6 +171,38 @@ def valid_depth_count(depth):
     return int(np.count_nonzero(values > 0))
 
 
+def transform_matrix(translation_xyz, quaternion_xyzw):
+    matrix = quaternion_matrix([float(value) for value in quaternion_xyzw])
+    matrix[:3, 3] = np.asarray(translation_xyz, dtype=float).reshape(3)
+    return matrix
+
+
+def pose_matrix(pose_stamped):
+    pose = pose_stamped.pose
+    return transform_matrix(
+        [pose.position.x, pose.position.y, pose.position.z],
+        [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w],
+    )
+
+
+def project_base_target_at_tool_pose(tool_pose, target_base_xyz, tool_from_camera, intrinsics):
+    base_from_camera = pose_matrix(tool_pose).dot(np.asarray(tool_from_camera, dtype=float).reshape(4, 4))
+    camera_from_base = np.linalg.inv(base_from_camera)
+    target_base = np.ones(4, dtype=float)
+    target_base[:3] = np.asarray(target_base_xyz, dtype=float).reshape(3)
+    target_camera = camera_from_base.dot(target_base)[:3]
+
+    # camera_link follows ROS convention: x forward, y left, z up.
+    optical_z = float(target_camera[0])
+    if optical_z <= 1e-9:
+        return float('nan'), float('nan'), optical_z
+    optical_x = -float(target_camera[1])
+    optical_y = -float(target_camera[2])
+    u = float(intrinsics.cx) + float(intrinsics.fx) * optical_x / optical_z
+    v = float(intrinsics.cy) + float(intrinsics.fy) * optical_y / optical_z
+    return u, v, optical_z
+
+
 def make_remote_pose_estimator(cam_cfg, hcfg, gcfg, tf2_module=None):
     tf_module = tf2_module if tf2_module is not None else tf2_ros
     tf_buffer = None
@@ -181,6 +237,7 @@ def select_first_reachable_candidate(
     candidate_filter_fn=None,
     candidate_rank_fn=None,
     orientation_variant_quaternions=None,
+    model_grasp_to_tool_quaternion=None,
 ):
     variants = list(orientation_variant_quaternions or [])
     if not variants:
@@ -188,6 +245,10 @@ def select_first_reachable_candidate(
     ranked = []
     for candidate in candidates:
         camera_candidate = convert_candidate_to_camera_link(candidate, candidate_frame_convention)
+        camera_candidate = align_candidate_to_tool_frame(
+            camera_candidate,
+            model_grasp_to_tool_quaternion,
+        )
         for variant_index, correction in enumerate(variants):
             if np.allclose(np.asarray(correction, dtype=float), np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)):
                 variant_candidate = camera_candidate
@@ -200,6 +261,7 @@ def select_first_reachable_candidate(
                     translation_m=np.asarray(camera_candidate.translation_m, dtype=float),
                     quaternion_xyzw=variant_quat,
                     width_m=float(camera_candidate.width_m),
+                    depth_m=getattr(camera_candidate, 'depth_m', None),
                 )
             pose = pose_estimator.make_base_pose_from_camera_pose(
                 variant_candidate.translation_m,
@@ -229,6 +291,7 @@ def make_grasp_plan_pose_array(grasp_pose, stamp, grasp_config):
         pregrasp_distance_m=float(grasp_config.get('pregrasp_distance_m', 0.08)),
         approach_offset_m=float(grasp_config.get('final_approach_offset_m', 0.015)),
         lift_height_m=float(grasp_config.get('lift_height_m', 0.05)),
+        tool_approach_axis=str(grasp_config.get('tool_approach_axis', 'x')),
     )
     msg = PoseArray()
     msg.header.frame_id = grasp_pose.header.frame_id
@@ -255,6 +318,12 @@ class RemoteGrasp6DNode:
         hcfg = rospy.get_param('/handeye', {})
         gcfg = rospy.get_param('/grasp', {})
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
+        self.grasp_config = dict(gcfg or {})
+        self.handeye_parent_frame = str(hcfg.get('parent_frame', 'tool0'))
+        self.handeye_camera_frame = str(hcfg.get('camera_frame', cam_cfg.get('frame_id', 'camera_link')))
+        self.handeye_translation_xyz = list(hcfg.get('translation_xyz', [0.0, 0.0, 0.0]))
+        self.handeye_rotation_xyzw = list(hcfg.get('rotation_xyzw', [0.0, 0.0, 0.0, 1.0]))
+        self._cached_tool_from_camera = None
         server_url = rospy.get_param('/grasp_6d/remote/server_url', remote_cfg.get('server_url', 'http://172.23.132.97:8000'))
         timeout_sec = float(rospy.get_param('/grasp_6d/remote/timeout_sec', remote_cfg.get('timeout_sec', 3.0)))
         self.max_candidates = int(rospy.get_param('/grasp_6d/remote/max_candidates', remote_cfg.get('max_candidates', 20)))
@@ -265,6 +334,18 @@ class RemoteGrasp6DNode:
         )
         self.orientation_variant_quaternions = self._parse_orientation_variant_quaternions(
             rospy.get_param('/grasp_6d/remote/orientation_variants_rpy_deg', remote_cfg.get('orientation_variants_rpy_deg', [[0.0, 0.0, 0.0]]))
+        )
+        self.model_grasp_to_tool_quaternion = self._parse_orientation_variant_quaternions(
+            [rospy.get_param(
+                '/grasp_6d/remote/model_grasp_to_tool_rpy_deg',
+                remote_cfg.get('model_grasp_to_tool_rpy_deg', [0.0, 0.0, 0.0]),
+            )]
+        )[0]
+        self.require_candidate_depth = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/require_candidate_depth',
+                remote_cfg.get('require_candidate_depth', False),
+            )
         )
         self.allow_position_only_fallback = bool(
             rospy.get_param(
@@ -305,6 +386,60 @@ class RemoteGrasp6DNode:
                 '/grasp_6d/remote/candidate_target_gate_enabled',
                 remote_cfg.get('candidate_target_gate_enabled', True),
             )
+        )
+        self.camera_visibility_gate_enabled = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/camera_visibility_gate_enabled',
+                remote_cfg.get('camera_visibility_gate_enabled', True),
+            )
+        )
+        self.camera_visibility_diagnostic_enabled = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/camera_visibility_diagnostic_enabled',
+                remote_cfg.get('camera_visibility_diagnostic_enabled', True),
+            )
+        )
+        self.camera_visibility_require_approach = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/camera_visibility_require_approach',
+                remote_cfg.get('camera_visibility_require_approach', True),
+            )
+        )
+        self.camera_visibility_margin_px = max(
+            0,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_margin_px',
+                    remote_cfg.get('camera_visibility_margin_px', 36),
+                )
+            ),
+        )
+        self.camera_visibility_min_depth_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_min_depth_m',
+                    remote_cfg.get('camera_visibility_min_depth_m', 0.035),
+                )
+            ),
+        )
+        self.camera_visibility_max_depth_m = max(
+            self.camera_visibility_min_depth_m,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_max_depth_m',
+                    remote_cfg.get('camera_visibility_max_depth_m', 1.20),
+                )
+            ),
+        )
+        self.camera_visibility_rank_weight_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_rank_weight_m',
+                    remote_cfg.get('camera_visibility_rank_weight_m', 0.012),
+                )
+            ),
         )
         self.rank_by_target_distance = bool(
             rospy.get_param(
@@ -452,7 +587,9 @@ class RemoteGrasp6DNode:
             float(rospy.get_param('/grasp_6d/remote/candidate_width_tolerance_m', remote_cfg.get('candidate_width_tolerance_m', 0.003))),
         )
         self._target_gate_rejected_count = 0
+        self._visibility_gate_rejected_count = 0
         self._width_gate_rejected_count = 0
+        self._depth_gate_rejected_count = 0
         self._width_gate_rejected_keys = set()
         try:
             self.client = RemoteGrasp6DClient(server_url, timeout_sec=timeout_sec)
@@ -568,6 +705,7 @@ class RemoteGrasp6DNode:
         color, depth, stamp, frame_id = frame
         try:
             self._refresh_runtime_params()
+            self._cached_tool_from_camera = None
             depth_for_remote, roi_message = self._depth_for_remote(depth, stamp=stamp, frame_id=frame_id)
             status = 'remote 6D requesting candidates...'
             if roi_message:
@@ -587,7 +725,9 @@ class RemoteGrasp6DNode:
             self._position_only_rejected_count = 0
             self._orientation_fallback_rejected_count = 0
             self._target_gate_rejected_count = 0
+            self._visibility_gate_rejected_count = 0
             self._width_gate_rejected_count = 0
+            self._depth_gate_rejected_count = 0
             self._width_gate_rejected_keys = set()
             selected, grasp_pose = select_first_reachable_candidate(
                 candidates,
@@ -597,8 +737,9 @@ class RemoteGrasp6DNode:
                 camera_frame=frame_id or self.pose_estimator.camera_frame,
                 candidate_frame_convention=self.candidate_frame_convention,
                 candidate_filter_fn=self._candidate_matches_target,
-                candidate_rank_fn=self._candidate_target_distance if self.rank_by_target_distance else None,
+                candidate_rank_fn=self._candidate_rank if self.rank_by_target_distance else None,
                 orientation_variant_quaternions=self.orientation_variant_quaternions,
+                model_grasp_to_tool_quaternion=self.model_grasp_to_tool_quaternion,
             )
             if selected is None:
                 if (
@@ -618,18 +759,22 @@ class RemoteGrasp6DNode:
                     )
                 elif (
                     self._width_gate_rejected_count > 0
+                    or self._depth_gate_rejected_count > 0
                     or self._target_gate_rejected_count > 0
+                    or self._visibility_gate_rejected_count > 0
                     or self._position_only_rejected_count > 0
                     or self._orientation_fallback_rejected_count > 0
                 ):
                     message = (
                         'remote 6D returned %d candidates, none executable '
-                        '(width>%0.3fm: %d, off-target: %d, position-only: %d, orientation-fallback: %d)'
+                        '(width>%0.3fm: %d, missing-depth: %d, off-target: %d, target-out-of-view: %d, position-only: %d, orientation-fallback: %d)'
                         % (
                             len(candidates),
                             self.max_gripper_width_m,
                             self._width_gate_rejected_count,
+                            self._depth_gate_rejected_count,
                             self._target_gate_rejected_count,
+                            self._visibility_gate_rejected_count,
                             self._position_only_rejected_count,
                             self._orientation_fallback_rejected_count,
                         )
@@ -641,13 +786,27 @@ class RemoteGrasp6DNode:
             final_target_delta = self._candidate_target_distance(None, None, grasp_pose)
             plan_msg = make_grasp_plan_pose_array(grasp_pose, stamp, rospy.get_param('/grasp', {}))
             self.plan_pub.publish(plan_msg)
-            _target_xyz, target_source = self._target_base_xyz()
-            message = 'remote 6D plan ready score=%.3f width=%.3f target_delta=%.3fm target=%s strict_orientation=1' % (
+            selected_target_xyz, target_source = self._target_base_xyz()
+            visibility_message = ''
+            if bool(getattr(self, 'camera_visibility_diagnostic_enabled', True)) and selected_target_xyz is not None:
+                visible, metrics, reason = self._candidate_visibility_metrics(grasp_pose, selected_target_xyz)
+                if metrics:
+                    stage_text = ','.join(
+                        '%s:u%.0f/v%.0f/z%.3f'
+                        % (item['stage'], item['u'], item['v'], item['depth_m'])
+                        for item in metrics
+                    )
+                    visibility_message = ' predicted_view=%s(%s)' % ('visible' if visible else 'lost', stage_text)
+                elif not visible:
+                    visibility_message = ' predicted_view=unknown(%s)' % reason
+            depth_text = 'missing' if selected.depth_m is None else '%.3f' % float(selected.depth_m)
+            message = 'remote 6D plan ready score=%.3f width=%.3f depth=%s target_delta=%.3fm target=%s strict_orientation=1 tool_aligned=1' % (
                 selected.score,
                 selected.width_m,
+                depth_text,
                 final_target_delta,
                 target_source,
-            )
+            ) + visibility_message
             self.status_pub.publish(String(message))
             self.last_error = ''
             self._backoff_until = rospy.Time(0)
@@ -700,6 +859,7 @@ class RemoteGrasp6DNode:
 
     def _refresh_runtime_params(self):
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
+        self.grasp_config = dict(rospy.get_param('/grasp', getattr(self, 'grasp_config', {})) or {})
         self.candidate_frame_convention = normalize_candidate_frame_convention(
             rospy.get_param(
                 '/grasp_6d/remote/candidate_frame_convention',
@@ -710,6 +870,18 @@ class RemoteGrasp6DNode:
             rospy.get_param(
                 '/grasp_6d/remote/orientation_variants_rpy_deg',
                 remote_cfg.get('orientation_variants_rpy_deg', [[0.0, 0.0, 0.0]]),
+            )
+        )
+        self.model_grasp_to_tool_quaternion = self._parse_orientation_variant_quaternions(
+            [rospy.get_param(
+                '/grasp_6d/remote/model_grasp_to_tool_rpy_deg',
+                remote_cfg.get('model_grasp_to_tool_rpy_deg', [0.0, 0.0, 0.0]),
+            )]
+        )[0]
+        self.require_candidate_depth = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/require_candidate_depth',
+                remote_cfg.get('require_candidate_depth', getattr(self, 'require_candidate_depth', False)),
             )
         )
         self.max_candidates = int(
@@ -732,6 +904,81 @@ class RemoteGrasp6DNode:
                 '/grasp_6d/remote/candidate_target_gate_enabled',
                 remote_cfg.get('candidate_target_gate_enabled', self.candidate_target_gate_enabled),
             )
+        )
+        self.camera_visibility_gate_enabled = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/camera_visibility_gate_enabled',
+                remote_cfg.get(
+                    'camera_visibility_gate_enabled',
+                    getattr(self, 'camera_visibility_gate_enabled', True),
+                ),
+            )
+        )
+        self.camera_visibility_diagnostic_enabled = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/camera_visibility_diagnostic_enabled',
+                remote_cfg.get(
+                    'camera_visibility_diagnostic_enabled',
+                    getattr(self, 'camera_visibility_diagnostic_enabled', True),
+                ),
+            )
+        )
+        self.camera_visibility_require_approach = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/camera_visibility_require_approach',
+                remote_cfg.get(
+                    'camera_visibility_require_approach',
+                    getattr(self, 'camera_visibility_require_approach', True),
+                ),
+            )
+        )
+        self.camera_visibility_margin_px = max(
+            0,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_margin_px',
+                    remote_cfg.get(
+                        'camera_visibility_margin_px',
+                        getattr(self, 'camera_visibility_margin_px', 36),
+                    ),
+                )
+            ),
+        )
+        self.camera_visibility_min_depth_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_min_depth_m',
+                    remote_cfg.get(
+                        'camera_visibility_min_depth_m',
+                        getattr(self, 'camera_visibility_min_depth_m', 0.035),
+                    ),
+                )
+            ),
+        )
+        self.camera_visibility_max_depth_m = max(
+            self.camera_visibility_min_depth_m,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_max_depth_m',
+                    remote_cfg.get(
+                        'camera_visibility_max_depth_m',
+                        getattr(self, 'camera_visibility_max_depth_m', 1.20),
+                    ),
+                )
+            ),
+        )
+        self.camera_visibility_rank_weight_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_rank_weight_m',
+                    remote_cfg.get(
+                        'camera_visibility_rank_weight_m',
+                        getattr(self, 'camera_visibility_rank_weight_m', 0.012),
+                    ),
+                )
+            ),
         )
         self.rank_by_target_distance = bool(
             rospy.get_param(
@@ -1063,6 +1310,19 @@ class RemoteGrasp6DNode:
         return values.astype(np.float32) * float(self._camera_intrinsics().depth_scale)
 
     def _candidate_matches_target(self, _candidate, _camera_candidate, grasp_pose):
+        depth = getattr(_camera_candidate, 'depth_m', None)
+        if bool(getattr(self, 'require_candidate_depth', False)):
+            try:
+                depth_valid = depth is not None and np.isfinite(float(depth)) and float(depth) > 0.0
+            except Exception:
+                depth_valid = False
+            if not depth_valid:
+                self._depth_gate_rejected_count += 1
+                rospy.logwarn_throttle(
+                    1.0,
+                    'remote 6D candidate rejected: WSL response has no valid GraspNet depth_m; sync and restart graspnet_baseline_server.py',
+                )
+                return False
         width = float(getattr(_camera_candidate, 'width_m', 0.0) or 0.0)
         width_limit = float(getattr(self, 'max_gripper_width_m', 0.0) or 0.0)
         width_tol = float(getattr(self, 'candidate_width_tolerance_m', 0.0) or 0.0)
@@ -1144,7 +1404,131 @@ class RemoteGrasp6DNode:
                 target_source,
             )
             return False
+        if bool(getattr(self, 'camera_visibility_gate_enabled', False)):
+            visible, _metrics, reason = self._candidate_visibility_metrics(grasp_pose, target_xyz)
+            if not visible:
+                self._visibility_gate_rejected_count += 1
+                rospy.logwarn_throttle(
+                    1.0,
+                    'remote 6D candidate rejected by eye-in-hand visibility gate: %s score=%.3f',
+                    reason,
+                    float(getattr(_camera_candidate, 'score', 0.0) or 0.0),
+                )
+                return False
         return True
+
+    def _candidate_rank(self, candidate, camera_candidate, grasp_pose):
+        rank = self._candidate_target_distance(candidate, camera_candidate, grasp_pose)
+        weight = max(0.0, float(getattr(self, 'camera_visibility_rank_weight_m', 0.0) or 0.0))
+        if weight <= 0.0 or not bool(getattr(self, 'camera_visibility_gate_enabled', False)):
+            return rank
+        target_xyz, _source = self._target_base_xyz()
+        if target_xyz is None:
+            return float('inf')
+        visible, metrics, _reason = self._candidate_visibility_metrics(grasp_pose, target_xyz)
+        if not visible or not metrics:
+            return float('inf')
+        center_cost = max(float(item['center_cost']) for item in metrics)
+        return float(rank) + weight * center_cost
+
+    def _candidate_visibility_metrics(self, grasp_pose, target_base_xyz):
+        try:
+            tool_from_camera = self._tool_from_camera_matrix()
+            plan = make_grasp_sequence_from_grasp_pose(
+                grasp_pose,
+                pregrasp_distance_m=float(self.grasp_config.get('pregrasp_distance_m', 0.08)),
+                approach_offset_m=float(self.grasp_config.get('final_approach_offset_m', 0.015)),
+                lift_height_m=float(self.grasp_config.get('lift_height_m', 0.05)),
+                tool_approach_axis=str(self.grasp_config.get('tool_approach_axis', 'x')),
+            )
+            stages = [('pregrasp', plan.pregrasp)]
+            if bool(getattr(self, 'camera_visibility_require_approach', True)):
+                stages.append(('approach', plan.approach))
+            intrinsics = self._camera_intrinsics()
+            margin = max(0, int(getattr(self, 'camera_visibility_margin_px', 36)))
+            min_depth = max(0.0, float(getattr(self, 'camera_visibility_min_depth_m', 0.035)))
+            max_depth = max(min_depth, float(getattr(self, 'camera_visibility_max_depth_m', 1.20)))
+            x_limit = max(1.0, float(intrinsics.width) * 0.5 - margin)
+            y_limit = max(1.0, float(intrinsics.height) * 0.5 - margin)
+            metrics = []
+            for stage_name, tool_pose in stages:
+                u, v, depth = project_base_target_at_tool_pose(
+                    tool_pose,
+                    target_base_xyz,
+                    tool_from_camera,
+                    intrinsics,
+                )
+                center_cost = math.sqrt(
+                    ((float(u) - float(intrinsics.cx)) / x_limit) ** 2
+                    + ((float(v) - float(intrinsics.cy)) / y_limit) ** 2
+                ) if np.isfinite(u) and np.isfinite(v) else float('inf')
+                metric = {
+                    'stage': stage_name,
+                    'u': float(u),
+                    'v': float(v),
+                    'depth_m': float(depth),
+                    'center_cost': float(center_cost),
+                }
+                metrics.append(metric)
+                inside = (
+                    np.isfinite(u)
+                    and np.isfinite(v)
+                    and float(depth) >= min_depth
+                    and float(depth) <= max_depth
+                    and float(u) >= margin
+                    and float(u) < float(intrinsics.width) - margin
+                    and float(v) >= margin
+                    and float(v) < float(intrinsics.height) - margin
+                )
+                if not inside:
+                    return False, metrics, (
+                        '%s predicts uv=(%.1f,%.1f) depth=%.3fm outside margin=%d image=%dx%d'
+                        % (
+                            stage_name,
+                            float(u),
+                            float(v),
+                            float(depth),
+                            margin,
+                            int(intrinsics.width),
+                            int(intrinsics.height),
+                        )
+                    )
+            return True, metrics, 'visible'
+        except Exception as exc:
+            return False, [], 'visibility transform failed: %s' % exc
+
+    def _tool_from_camera_matrix(self):
+        cached = getattr(self, '_cached_tool_from_camera', None)
+        if cached is not None:
+            return cached
+        matrix = None
+        tf_buffer = getattr(self, 'tf_buffer', None)
+        if tf_buffer is not None:
+            try:
+                transform = tf_buffer.lookup_transform(
+                    self.handeye_parent_frame,
+                    self.handeye_camera_frame,
+                    rospy.Time(0),
+                    rospy.Duration(0.1),
+                )
+                translation = transform.transform.translation
+                rotation = transform.transform.rotation
+                matrix = transform_matrix(
+                    [translation.x, translation.y, translation.z],
+                    [rotation.x, rotation.y, rotation.z, rotation.w],
+                )
+            except Exception as exc:
+                rospy.logwarn_throttle(
+                    2.0,
+                    'eye-in-hand visibility TF %s <- %s unavailable; using calibrated fallback: %s',
+                    self.handeye_parent_frame,
+                    self.handeye_camera_frame,
+                    exc,
+                )
+        if matrix is None:
+            matrix = transform_matrix(self.handeye_translation_xyz, self.handeye_rotation_xyzw)
+        self._cached_tool_from_camera = matrix
+        return matrix
 
     def _candidate_target_distance(self, _candidate, _camera_candidate, grasp_pose):
         target_xyz, _target_source = self._target_base_xyz()
@@ -1317,8 +1701,13 @@ class RemoteGrasp6DNode:
 
     def _plan_reachable(self, grasp_pose):
         try:
-            rospy.wait_for_service('/supervisor/move_to_pose', timeout=0.25)
-            move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
+            strict_pose = (
+                not bool(getattr(self, 'allow_position_only_fallback', False))
+                and not bool(getattr(self, 'allow_orientation_fallback', False))
+            )
+            service_name = '/supervisor/check_pose_strict' if strict_pose else '/supervisor/move_to_pose'
+            rospy.wait_for_service(service_name, timeout=0.25)
+            move_pose = rospy.ServiceProxy(service_name, SetTargetPose)
             response = move_pose(grasp_pose, False)
             if not bool(response.success):
                 return False
@@ -1350,10 +1739,20 @@ class RemoteGrasp6DNode:
             self.status_pub.publish(String('remote 6D health check failed: %s' % exc))
             return
         if bool(health.get('ok', False)):
+            candidate_fields = set(str(item) for item in (health.get('candidate_fields') or []))
+            if bool(getattr(self, 'require_candidate_depth', False)) and 'depth_m' not in candidate_fields:
+                message = (
+                    'remote 6D server protocol is outdated: depth_m is missing; '
+                    'sync tools/graspnet_baseline_server.py to WSL and restart port 8000'
+                )
+                rospy.logwarn('%s', message)
+                self.status_pub.publish(String(message))
+                return
             rospy.loginfo(
-                'remote 6D server online: backend=%s loaded=%s url=%s',
+                'remote 6D server online: backend=%s loaded=%s protocol=%s url=%s',
                 health.get('backend', 'unknown'),
                 health.get('loaded', 'unknown'),
+                health.get('protocol_version', 'unknown'),
                 self.client.server_url,
             )
         else:

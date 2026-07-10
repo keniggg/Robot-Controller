@@ -44,6 +44,15 @@ class MoveItPlanner:
             self.manipulator.set_max_velocity_scaling_factor(float(velocity))
             self.manipulator.set_max_acceleration_scaling_factor(0.5)
             planning_time = float(rospy.get_param('~planning_time', rospy.get_param('/robot/planning_time', 2.0)))
+            self.strict_pose_planning_time = max(
+                0.05,
+                float(
+                    rospy.get_param(
+                        '~strict_pose_planning_time',
+                        rospy.get_param('/robot/strict_pose_planning_time', 0.25),
+                    )
+                ),
+            )
             planning_attempts = int(rospy.get_param('~planning_attempts', rospy.get_param('/robot/planning_attempts', 1)))
             self.manipulator.set_planning_time(max(0.5, planning_time))
             self.manipulator.set_num_planning_attempts(max(1, planning_attempts))
@@ -52,7 +61,7 @@ class MoveItPlanner:
             self.error = str(exc)
             rospy.logwarn('MoveItPlanner not ready: %s', self.error)
 
-    def move_to_pose(self, pose_stamped_or_pose, execute=True):
+    def move_to_pose(self, pose_stamped_or_pose, execute=True, allow_fallbacks=True):
         if not self.ready:
             return False, self.error or 'MoveIt not ready'
         pose = getattr(pose_stamped_or_pose, 'pose', pose_stamped_or_pose)
@@ -65,7 +74,11 @@ class MoveItPlanner:
                 cached_ok, cached_message = self._execute_cached_pose_plan(pose, target_text)
                 if cached_message:
                     return cached_ok, cached_message
-                plan_ok, plan_message = self.move_to_pose(pose, execute=False)
+                plan_ok, plan_message = self.move_to_pose(
+                    pose,
+                    execute=False,
+                    allow_fallbacks=allow_fallbacks,
+                )
                 if not plan_ok:
                     return False, 'execute planning failed before motion: %s' % plan_message
                 cached_ok, cached_message = self._execute_cached_pose_plan(pose, target_text)
@@ -73,11 +86,18 @@ class MoveItPlanner:
                     return cached_ok, cached_message
                 return False, 'execute failed: no executable cached plan after planning; %s' % target_text
 
-            if self._attempt_pose_target(pose, execute):
+            strict_planning_time = None
+            if not execute and not allow_fallbacks:
+                strict_planning_time = float(getattr(self, 'strict_pose_planning_time', 0.25))
+            if self._attempt_pose_target(pose, execute, planning_time=strict_planning_time):
                 return True, '%s: %s' % (action_done, target_text)
             failed_attempts.append('strict pose')
 
-            if self._pose_fallbacks_enabled() and getattr(self, 'orientation_fallback_enabled', True):
+            if (
+                allow_fallbacks
+                and self._pose_fallbacks_enabled()
+                and getattr(self, 'orientation_fallback_enabled', True)
+            ):
                 labels = []
                 for label, orientation in self._candidate_orientations(pose):
                     labels.append(label)
@@ -87,11 +107,11 @@ class MoveItPlanner:
                 if labels:
                     failed_attempts.append('candidate orientations %s' % ','.join(labels))
 
-            if self._position_only_fallback_allowed(execute):
+            if allow_fallbacks and self._position_only_fallback_allowed(execute):
                 if self._attempt_position_target(pose, execute):
                     return True, '%s with position-only fallback: %s' % (action_done, target_text)
                 failed_attempts.append('position-only')
-            elif execute and getattr(self, 'position_only_fallback_enabled', True):
+            elif allow_fallbacks and execute and getattr(self, 'position_only_fallback_enabled', True):
                 failed_attempts.append('position-only disabled for execute')
 
             attempts_text = ', '.join(failed_attempts) if failed_attempts else 'strict pose'
@@ -134,12 +154,19 @@ class MoveItPlanner:
             return None
         return self.manipulator.get_current_pose()
 
-    def _attempt_pose_target(self, pose, execute):
+    def _attempt_pose_target(self, pose, execute, planning_time=None):
+        previous_planning_time = None
+        if planning_time is not None and hasattr(self.manipulator, 'set_planning_time'):
+            if hasattr(self.manipulator, 'get_planning_time'):
+                previous_planning_time = self.manipulator.get_planning_time()
+            self.manipulator.set_planning_time(max(0.05, float(planning_time)))
         self.manipulator.set_pose_target(pose)
         try:
             return self._run_current_target(execute, pose, 'strict pose')
         finally:
             self._clear_targets()
+            if previous_planning_time is not None:
+                self.manipulator.set_planning_time(previous_planning_time)
 
     def _attempt_position_target(self, pose, execute):
         if not hasattr(self.manipulator, 'set_position_target'):

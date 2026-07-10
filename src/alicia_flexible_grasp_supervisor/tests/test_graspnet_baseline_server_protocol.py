@@ -58,6 +58,8 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
             health = self._json_get(base_url + '/health')
             self.assertTrue(health['ok'])
             self.assertEqual(health['backend'], 'mock')
+            self.assertEqual(health['protocol_version'], 2)
+            self.assertIn('depth_m', health['candidate_fields'])
 
             payload = encode_rgbd_payload(
                 np.zeros((4, 4, 3), dtype=np.uint8),
@@ -72,7 +74,9 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
             thread.join(timeout=2.0)
 
         self.assertTrue(response['ok'])
+        self.assertEqual(response['protocol_version'], 2)
         self.assertEqual(len(response['candidates']), 1)
+        self.assertIn('depth_m', response['candidates'][0])
         self.assertIn('translation_m', response['candidates'][0])
         self.assertIn('rotation_matrix', response['candidates'][0])
 
@@ -132,6 +136,7 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
         self.assertEqual(len(filtered), 1)
         response = server_module._grasp_to_response(group[0])
         np.testing.assert_allclose(response['translation_m'], [0.4, 0.5, 0.6], rtol=1e-6, atol=1e-6)
+        self.assertAlmostEqual(response['depth_m'], 0.04, places=6)
         self.assertEqual(len(response['rotation_matrix']), 3)
 
     def test_fallback_grasp_group_handles_empty_predictions(self):

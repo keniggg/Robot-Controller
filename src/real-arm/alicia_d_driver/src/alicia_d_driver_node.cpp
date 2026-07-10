@@ -6,6 +6,7 @@
 #include <thread> // for std::this_thread
 #include <chrono> // for std::chrono
 #include <algorithm>
+#include <array>
 #include <sstream>
 #include <iomanip>
 
@@ -136,6 +137,7 @@ void AliciaDDriverNode::load_parameters()
     pnh_.param<bool>("gripper_input_is_percent", gripper_input_is_percent_, true);
     pnh_.param<double>("max_joint_accel_rad_s2", max_joint_accel_rad_s2_, 8.0);
     pnh_.param<double>("max_gripper_accel_rad_s2", max_gripper_accel_rad_s2_, 10.0);
+    pnh_.param<double>("joint_speed_deg_s", joint_speed_deg_s_, 15.0);
 
     communicator_ = std::make_unique<SerialCommunicator>(port, baud_rate, debug_mode_);
 
@@ -415,7 +417,7 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     servo_frame[frame_size - 1] = FRAME_END_BYTE;     // 0xFF
 
     const size_t data_start = 4;
-    const uint16_t joint_speed_hw = speed_deg_s_to_hw(10.0);  // safe slow speed
+    const uint16_t joint_speed_hw = speed_deg_s_to_hw(joint_speed_deg_s_);
 
     for (int joint_idx = 0; joint_idx < 6; ++joint_idx)
     {
@@ -494,6 +496,15 @@ void AliciaDDriverNode::heartbeat_publish_callback(const ros::TimerEvent& event)
     }
 
     std::lock_guard<std::mutex> lock2(data_mutex_);
+    const double feedback_age = (now - last_feedback_time_).toSec();
+    if (!has_real_feedback_ || feedback_age > feedback_stale_timeout_sec_) {
+        ROS_WARN_THROTTLE(
+            1.0,
+            "Suppressing /joint_states heartbeat: real hardware feedback is %s (age %.2fs).",
+            has_real_feedback_ ? "stale" : "not ready",
+            feedback_age);
+        return;
+    }
     publish_joint_state();
 }
 
@@ -551,14 +562,29 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
         return;
     }
 
+    std::array<uint16_t, 6> raw_joints{};
+    bool all_zero = true;
+    bool all_full_scale = true;
+    for (size_t i = 0; i < raw_joints.size(); ++i) {
+        const size_t idx = i * 2;
+        raw_joints[i] = data_payload[idx] | (data_payload[idx + 1] << 8);
+        all_zero = all_zero && raw_joints[i] == 0;
+        all_full_scale = all_full_scale && raw_joints[i] >= 4095;
+    }
+    if (all_zero || all_full_scale) {
+        ROS_WARN_THROTTLE(
+            1.0,
+            "Rejected invalid SDK joint feedback: all six encoders are %s; waiting for controller power/encoder readiness.",
+            all_zero ? "zero" : "full-scale");
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(data_mutex_);
     last_feedback_time_ = ros::Time::now();
     has_real_feedback_ = true;
 
     for (size_t i = 0; i < 6 && i < current_joint_positions_.size(); ++i) {
-        const size_t idx = i * 2;
-        uint16_t hw_val = data_payload[idx] | (data_payload[idx + 1] << 8);
-        current_joint_positions_[i] = hardware_value_to_rad(hw_val);
+        current_joint_positions_[i] = hardware_value_to_rad(raw_joints[i]);
     }
 
     uint16_t gripper_raw = data_payload[12] | (data_payload[13] << 8);

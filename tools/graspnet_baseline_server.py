@@ -24,6 +24,10 @@ import types
 import numpy as np
 
 
+GRASP6D_PROTOCOL_VERSION = 2
+CANDIDATE_FIELDS = ['score', 'width_m', 'depth_m', 'translation_m', 'rotation_matrix']
+
+
 def install_torch_six_compat():
     """Provide the private torch._six module expected by old GraspNet baseline code."""
     if 'torch._six' in sys.modules:
@@ -69,6 +73,8 @@ class GraspNetBaselineHTTPHandler(BaseHTTPRequestHandler):
                 {
                     'ok': True,
                     'backend': self.server.backend.name,
+                    'protocol_version': GRASP6D_PROTOCOL_VERSION,
+                    'candidate_fields': CANDIDATE_FIELDS,
                     'frame_id': decoded['frame_id'],
                     'stamp_sec': decoded['stamp_sec'],
                     'candidates': candidates,
@@ -94,7 +100,12 @@ class MockGraspNetBackend:
     name = 'mock'
 
     def health(self):
-        return {'ok': True, 'backend': self.name}
+        return {
+            'ok': True,
+            'backend': self.name,
+            'protocol_version': GRASP6D_PROTOCOL_VERSION,
+            'candidate_fields': CANDIDATE_FIELDS,
+        }
 
     def predict(self, payload):
         decoded = decode_rgbd_payload(payload)
@@ -114,6 +125,7 @@ class MockGraspNetBackend:
             {
                 'score': 1.0,
                 'width_m': 0.05,
+                'depth_m': 0.02,
                 'translation_m': [x, y, z],
                 'rotation_matrix': [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             }
@@ -163,6 +175,8 @@ class GraspNetBaselineBackend:
         return {
             'ok': not missing,
             'backend': self.name,
+            'protocol_version': GRASP6D_PROTOCOL_VERSION,
+            'candidate_fields': CANDIDATE_FIELDS,
             'loaded': self.loaded,
             'baseline_root': str(self.baseline_root),
             'checkpoint': str(self.checkpoint),
@@ -479,6 +493,7 @@ def _grasp_to_response(grasp):
     return {
         'score': float(grasp.score),
         'width_m': float(getattr(grasp, 'width', 0.0) or 0.0),
+        'depth_m': float(getattr(grasp, 'depth', 0.0) or 0.0),
         'translation_m': np.asarray(grasp.translation, dtype=float).reshape(3).tolist(),
         'rotation_matrix': np.asarray(grasp.rotation_matrix, dtype=float).reshape(3, 3).tolist(),
     }

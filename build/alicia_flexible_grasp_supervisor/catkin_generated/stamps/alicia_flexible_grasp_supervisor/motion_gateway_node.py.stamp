@@ -36,6 +36,7 @@ class MotionGateway:
         rospy.Service('/supervisor/move_to_joints', SetJointCommand, self.handle_joints)
         rospy.Service('/supervisor/set_gripper', SetFloat, self.handle_gripper)
         rospy.Service('/supervisor/move_to_pose', SetTargetPose, self.handle_pose)
+        rospy.Service('/supervisor/check_pose_strict', SetTargetPose, self.handle_pose_strict)
         rospy.Service('/supervisor/cartesian_jog', CartesianJog, self.handle_jog)
         rospy.Service('/supervisor/trigger_zero', TriggerZero, self.handle_zero)
         rospy.loginfo('MotionGateway ready: commands -> %s', cfg.get('joint_command_topic','/joint_commands'))
@@ -71,6 +72,22 @@ class MotionGateway:
             rospy.loginfo('move_to_pose result success=True message=%s', msg)
         else:
             rospy.logwarn('move_to_pose result success=False message=%s', msg)
+        return SetTargetPoseResponse(ok, msg)
+
+    def handle_pose_strict(self, req):
+        self._log_pose_request(req, operation='check_pose_strict')
+        if req.execute:
+            return SetTargetPoseResponse(False, 'strict pose service is planning-only')
+        planner = self._ensure_planner()
+        if planner is None:
+            msg = self._moveit_not_ready_message()
+            rospy.logwarn('check_pose_strict result success=False message=%s', msg)
+            return SetTargetPoseResponse(False, msg)
+        ok, msg = planner.move_to_pose(req.target, execute=False, allow_fallbacks=False)
+        if ok:
+            rospy.loginfo('check_pose_strict result success=True message=%s', msg)
+        else:
+            rospy.logwarn('check_pose_strict result success=False message=%s', msg)
         return SetTargetPoseResponse(ok, msg)
 
     def handle_jog(self, req):
@@ -185,7 +202,7 @@ class MotionGateway:
             positions += [0.0] * (gripper_index - len(positions))
         return positions[:gripper_index]
 
-    def _log_pose_request(self, req):
+    def _log_pose_request(self, req, operation='move_to_pose'):
         try:
             target = req.target
             frame_id = getattr(getattr(target, 'header', None), 'frame_id', '') or '<empty>'
@@ -193,7 +210,8 @@ class MotionGateway:
             p = pose.position
             q = pose.orientation
             rospy.loginfo(
-                'move_to_pose request execute=%s frame=%s xyz=(%.3f, %.3f, %.3f) q=(%.3f, %.3f, %.3f, %.3f)',
+                '%s request execute=%s frame=%s xyz=(%.3f, %.3f, %.3f) q=(%.3f, %.3f, %.3f, %.3f)',
+                operation,
                 bool(req.execute),
                 frame_id,
                 float(p.x),
@@ -205,7 +223,7 @@ class MotionGateway:
                 float(q.w),
             )
         except Exception as exc:
-            rospy.logwarn('move_to_pose request log failed: %s', exc)
+            rospy.logwarn('%s request log failed: %s', operation, exc)
 
 if __name__ == '__main__':
     rospy.init_node('motion_gateway_node')

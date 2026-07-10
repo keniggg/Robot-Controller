@@ -190,6 +190,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             translation_m=np.array([0.01, 0.02, 0.30]),
             quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
             width_m=0.05,
+            depth_m=0.03,
         )
 
         converted = remote_node.convert_candidate_to_camera_link(candidate, 'opencv_optical')
@@ -199,6 +200,34 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         np.testing.assert_allclose(converted_rotation, remote_node.OPTICAL_TO_ROS_CAMERA, atol=1e-7)
         self.assertAlmostEqual(converted.score, candidate.score)
         self.assertAlmostEqual(converted.width_m, candidate.width_m)
+        self.assertAlmostEqual(converted.depth_m, candidate.depth_m)
+
+    def test_model_grasp_x_axis_is_aligned_to_physical_tool_z_axis(self):
+        candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=np.array([0.30, 0.0, 0.0]),
+            quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.05,
+            depth_m=0.03,
+        )
+        estimator = RecordingPoseEstimator()
+        correction = remote_node.quaternion_from_euler(0.0, np.pi * 0.5, 0.0)
+
+        selected, _pose = remote_node.select_first_reachable_candidate(
+            [candidate],
+            estimator,
+            lambda _pose: True,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            model_grasp_to_tool_quaternion=correction,
+        )
+
+        rotation = remote_node.quaternion_matrix(estimator.calls[0][1])[:3, :3]
+        self.assertIsNotNone(selected)
+        np.testing.assert_allclose(rotation[:, 2], [1.0, 0.0, 0.0], atol=1e-7)
+        np.testing.assert_allclose(rotation[:, 1], [0.0, 1.0, 0.0], atol=1e-7)
+        self.assertAlmostEqual(selected.depth_m, 0.03)
 
     def test_reachability_receives_converted_opencv_optical_candidate(self):
         candidate = RemoteGraspCandidate(
@@ -247,6 +276,90 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertAlmostEqual(array.poses[1].position.x, 0.385)
         self.assertAlmostEqual(array.poses[2].position.x, 0.4)
         self.assertAlmostEqual(array.poses[3].position.z, 0.25)
+
+    def test_eye_in_hand_projection_places_forward_target_at_image_center(self):
+        tool_pose = PoseStamped()
+        tool_pose.pose.orientation.w = 1.0
+        intrinsics = remote_node.CameraIntrinsics(
+            width=640,
+            height=480,
+            fx=440.0,
+            fy=440.0,
+            cx=320.0,
+            cy=240.0,
+            depth_scale=0.001,
+        )
+
+        u, v, depth = remote_node.project_base_target_at_tool_pose(
+            tool_pose,
+            [0.50, 0.0, 0.0],
+            np.eye(4),
+            intrinsics,
+        )
+
+        self.assertAlmostEqual(u, 320.0)
+        self.assertAlmostEqual(v, 240.0)
+        self.assertAlmostEqual(depth, 0.50)
+
+    def test_eye_in_hand_projection_reports_target_behind_camera(self):
+        tool_pose = PoseStamped()
+        tool_pose.pose.orientation.z = 1.0
+        tool_pose.pose.orientation.w = 0.0
+        intrinsics = remote_node.CameraIntrinsics(
+            width=640,
+            height=480,
+            fx=440.0,
+            fy=440.0,
+            cx=320.0,
+            cy=240.0,
+            depth_scale=0.001,
+        )
+
+        u, v, depth = remote_node.project_base_target_at_tool_pose(
+            tool_pose,
+            [0.50, 0.0, 0.0],
+            np.eye(4),
+            intrinsics,
+        )
+
+        self.assertTrue(np.isnan(u))
+        self.assertTrue(np.isnan(v))
+        self.assertLess(depth, 0.0)
+
+    def test_visibility_gate_checks_pregrasp_and_approach(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.tf_buffer = None
+        node.handeye_translation_xyz = [0.0, 0.0, 0.0]
+        node.handeye_rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+        node._cached_tool_from_camera = None
+        node.grasp_config = {
+            'pregrasp_distance_m': 0.08,
+            'final_approach_offset_m': 0.045,
+            'lift_height_m': 0.05,
+        }
+        node.camera_visibility_require_approach = True
+        node.camera_visibility_margin_px = 36
+        node.camera_visibility_min_depth_m = 0.035
+        node.camera_visibility_max_depth_m = 1.20
+        node._camera_intrinsics = lambda: remote_node.CameraIntrinsics(
+            width=640,
+            height=480,
+            fx=440.0,
+            fy=440.0,
+            cx=320.0,
+            cy=240.0,
+            depth_scale=0.001,
+        )
+        grasp_pose = PoseStamped()
+        grasp_pose.pose.position.x = 0.50
+        grasp_pose.pose.orientation.w = 1.0
+
+        visible, metrics, reason = node._candidate_visibility_metrics(grasp_pose, [0.50, 0.0, 0.0])
+
+        self.assertTrue(visible, reason)
+        self.assertEqual([item['stage'] for item in metrics], ['pregrasp', 'approach'])
+        self.assertAlmostEqual(metrics[0]['depth_m'], 0.08)
+        self.assertAlmostEqual(metrics[1]['depth_m'], 0.045)
 
     def test_plan_reachable_rejects_position_only_fallback_when_execute_disallows_it(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)

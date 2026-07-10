@@ -44,9 +44,12 @@
         <param name="pause_commands_when_feedback_stale" type="bool" value="true"/>
         <param name="feedback_stale_timeout_sec" type="double" value="1.0"/>
         <param name="command_keepalive_rate_hz" type="double" value="0.0"/>
-        <param name="use_trajectory_smoothing"  type="bool"   value="true"/>
-        <param name="max_joint_velocity_rad_s"  type="double" value="1.5"/>
-        <param name="max_joint_accel_rad_s2"    type="double" value="12.0"/>
+        <!-- joint_trajectory_controller already interpolates MoveIt paths. A
+             second driver-side profile makes hardware lag behind action success. -->
+        <param name="use_trajectory_smoothing"  type="bool"   value="false"/>
+        <param name="max_joint_velocity_rad_s"  type="double" value="0.30"/>
+        <param name="max_joint_accel_rad_s2"    type="double" value="1.0"/>
+        <param name="joint_speed_deg_s"         type="double" value="15.0"/>
         <param name="max_gripper_velocity_rad_s" type="double" value="2.0"/>
         <param name="max_gripper_accel_rad_s2"   type="double" value="15.0"/>
         <param name="gripper_input_is_percent"  type="bool"   value="false"/>

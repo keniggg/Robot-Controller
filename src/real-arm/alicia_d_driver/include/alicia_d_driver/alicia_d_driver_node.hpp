@@ -92,6 +92,7 @@ private:
     double max_gripper_velocity_rad_s_ = 1.5;   // gripper slew rate (rad/s)
     double max_joint_accel_rad_s2_ = 8.0;       // per-joint max acceleration (rad/s^2)
     double max_gripper_accel_rad_s2_ = 10.0;    // gripper max acceleration (rad/s^2)
+    double joint_speed_deg_s_ = 15.0;           // SDK joint motion speed field (deg/s)
     bool gripper_input_is_percent_ = true;      // interpret /joint_commands right_finger as [0..1] percent
 
    // Mutex for thread safety

@@ -22,8 +22,8 @@ class FakePlanner:
     def __init__(self):
         self.calls = []
 
-    def move_to_pose(self, target, execute=True):
-        self.calls.append((target, execute))
+    def move_to_pose(self, target, execute=True, allow_fallbacks=True):
+        self.calls.append((target, execute, allow_fallbacks))
         return True, 'executed'
 
 
@@ -37,7 +37,7 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
         gateway = MotionGateway.__new__(MotionGateway)
         gateway.planner = FakePlanner()
         gateway._ensure_planner = lambda: gateway.planner
-        gateway._log_pose_request = lambda req: None
+        gateway._log_pose_request = lambda req, *args, **kwargs: None
         gateway._ensure_trajectory_controllers_started = lambda: controller_result
         return gateway
 
@@ -48,7 +48,7 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
         res = MotionGateway.handle_pose(gateway, req)
 
         self.assertTrue(res.success)
-        self.assertEqual(gateway.planner.calls, [('pose', True)])
+        self.assertEqual(gateway.planner.calls, [('pose', True, True)])
 
     def test_execute_pose_stops_before_moveit_when_controllers_do_not_start(self):
         gateway = self.make_gateway((False, 'controllers stopped'))
@@ -67,27 +67,27 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
         res = MotionGateway.handle_pose(gateway, req)
 
         self.assertTrue(res.success)
-        self.assertEqual(gateway.planner.calls, [('pose', False)])
+        self.assertEqual(gateway.planner.calls, [('pose', False, True)])
 
     def test_pose_service_retries_planner_initialization(self):
         gateway = MotionGateway.__new__(MotionGateway)
         gateway.planner = None
         planner = FakePlanner()
         gateway._ensure_planner = lambda: planner
-        gateway._log_pose_request = lambda req: None
+        gateway._log_pose_request = lambda req, *args, **kwargs: None
         gateway._ensure_trajectory_controllers_started = lambda: (True, 'controllers started')
         req = types.SimpleNamespace(target='pose', execute=False)
 
         res = MotionGateway.handle_pose(gateway, req)
 
         self.assertTrue(res.success)
-        self.assertEqual(planner.calls, [('pose', False)])
+        self.assertEqual(planner.calls, [('pose', False, True)])
 
     def test_pose_service_reports_moveit_not_ready_without_crashing(self):
         gateway = MotionGateway.__new__(MotionGateway)
         gateway.planner = None
         gateway._ensure_planner = lambda: None
-        gateway._log_pose_request = lambda req: None
+        gateway._log_pose_request = lambda req, *args, **kwargs: None
         gateway._ensure_trajectory_controllers_started = lambda: (True, 'controllers started')
         req = types.SimpleNamespace(target='pose', execute=False)
 
@@ -95,6 +95,25 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
 
         self.assertFalse(res.success)
         self.assertIn('MoveIt not ready', res.message)
+
+    def test_strict_pose_service_disables_all_fallbacks(self):
+        gateway = self.make_gateway()
+        req = types.SimpleNamespace(target='pose', execute=False)
+
+        res = MotionGateway.handle_pose_strict(gateway, req)
+
+        self.assertTrue(res.success)
+        self.assertEqual(gateway.planner.calls, [('pose', False, False)])
+
+    def test_strict_pose_service_refuses_execution(self):
+        gateway = self.make_gateway()
+        req = types.SimpleNamespace(target='pose', execute=True)
+
+        res = MotionGateway.handle_pose_strict(gateway, req)
+
+        self.assertFalse(res.success)
+        self.assertIn('planning-only', res.message)
+        self.assertEqual(gateway.planner.calls, [])
 
     def test_controller_state_check_reports_stopped_or_missing_controllers(self):
         missing = MotionGateway._non_running_controllers(

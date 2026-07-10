@@ -61,6 +61,21 @@ class Grasp6DSequenceTest(unittest.TestCase):
         self.assertAlmostEqual(plan.approach.pose.position.x, 0.4, places=6)
         self.assertAlmostEqual(plan.approach.pose.position.y, 0.085, places=6)
 
+    def test_sequence_can_use_physical_tool_z_as_approach_axis(self):
+        grasp_pose = self._pose()
+
+        plan = make_grasp_sequence_from_grasp_pose(
+            grasp_pose,
+            pregrasp_distance_m=0.08,
+            approach_offset_m=0.015,
+            lift_height_m=0.05,
+            tool_approach_axis='z',
+        )
+
+        self.assertAlmostEqual(plan.pregrasp.pose.position.x, 0.4)
+        self.assertAlmostEqual(plan.pregrasp.pose.position.z, 0.12)
+        self.assertAlmostEqual(plan.approach.pose.position.z, 0.185)
+
 
 if __name__ == '__main__':
     unittest.main()

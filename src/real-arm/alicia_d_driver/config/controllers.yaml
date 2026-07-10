@@ -13,6 +13,9 @@ joint_state_controller:
 
 alicia_controller:
   type: position_controllers/JointTrajectoryController
+  state_publish_rate: 50
+  action_monitor_rate: 20
+  stop_trajectory_duration: 0.5
   joints:
     - Joint1
     - Joint2
@@ -20,8 +23,19 @@ alicia_controller:
     - Joint4
     - Joint5
     - Joint6
+  constraints:
+    goal_time: 5.0
+    stopped_velocity_tolerance: 0.03
+    Joint1: {trajectory: 0.12, goal: 0.025}
+    Joint2: {trajectory: 0.12, goal: 0.025}
+    Joint3: {trajectory: 0.12, goal: 0.025}
+    Joint4: {trajectory: 0.12, goal: 0.025}
+    Joint5: {trajectory: 0.12, goal: 0.025}
+    Joint6: {trajectory: 0.12, goal: 0.025}
 
 hand_controller:
   type: position_controllers/JointTrajectoryController
+  state_publish_rate: 50
+  action_monitor_rate: 20
   joints:
     - right_finger

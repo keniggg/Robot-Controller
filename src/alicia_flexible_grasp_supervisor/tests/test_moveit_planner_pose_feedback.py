@@ -44,6 +44,8 @@ class FakeManipulator:
         self.go_calls = 0
         self.stopped = False
         self.cleared = False
+        self.planning_time = 2.0
+        self.planning_time_updates = []
 
     def set_pose_target(self, pose):
         self.target = pose
@@ -76,6 +78,13 @@ class FakeManipulator:
     def get_current_pose(self):
         return self.current_pose
 
+    def get_planning_time(self):
+        return self.planning_time
+
+    def set_planning_time(self, value):
+        self.planning_time = float(value)
+        self.planning_time_updates.append(float(value))
+
 
 class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
     def make_planner(self, manipulator):
@@ -83,6 +92,7 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         planner.ready = True
         planner.error = None
         planner.manipulator = manipulator
+        planner.strict_pose_planning_time = 0.25
         return planner
 
     def test_execute_failure_message_includes_target_xyz(self):
@@ -107,6 +117,24 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertIn('plan failed', message)
         self.assertIn('target xyz=(0.123, -0.456, 2.500)', message)
         self.assertTrue(manipulator.cleared)
+
+    def test_strict_plan_does_not_try_orientation_or_position_fallbacks(self):
+        manipulator = FakeManipulator(plan_result=[EmptyPlan(), SuccessfulPlan()])
+        planner = self.make_planner(manipulator)
+        planner.orientation_fallback_enabled = True
+        planner.position_only_fallback_enabled = True
+
+        ok, message = planner.move_to_pose(
+            make_pose(q=(0.0, 0.7071, 0.0, 0.7071)),
+            execute=False,
+            allow_fallbacks=False,
+        )
+
+        self.assertFalse(ok)
+        self.assertIn('strict pose', message)
+        self.assertEqual(len(manipulator.pose_targets), 1)
+        self.assertEqual(manipulator.position_targets, [])
+        self.assertEqual(manipulator.planning_time_updates, [0.25, 2.0])
 
     def test_plan_falls_back_to_position_only_when_pose_orientations_are_unreachable(self):
         manipulator = FakeManipulator(plan_result=[EmptyPlan(), SuccessfulPlan()])
