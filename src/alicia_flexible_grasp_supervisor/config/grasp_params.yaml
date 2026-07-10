@@ -98,9 +98,9 @@ mujoco_digital_twin:
   min_score: 80
   allow_execution_on_error: false
   require_object_pose: true
-  # Route A: WSL 自己推理、自己仿真；ROS 端把执行前的计划发给
-  # WSL /simulate_grasp，WSL 可通过 --ros-sync-joint-states 自己订阅 /joint_states。
-  send_joint_state_in_request: false
+  # Route A: WSL 自己推理、自己仿真；ROS 端在 /simulate_grasp
+  # 请求里携带当前 /joint_states，WSL 不需要加入 ROS 网络。
+  send_joint_state_in_request: true
   open_width_m: 0.05
   close_width_m: 0.0
   object_model:

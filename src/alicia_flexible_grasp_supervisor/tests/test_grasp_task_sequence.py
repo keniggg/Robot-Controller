@@ -7,6 +7,7 @@ import unittest
 
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import PoseArray
+from sensor_msgs.msg import JointState
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -64,6 +65,12 @@ class GraspTaskSequenceTest(unittest.TestCase):
         for x in xs:
             array.poses.append(self._pose(x).pose)
         return array
+
+    def _joint_state(self):
+        msg = JointState()
+        msg.name = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6', 'right_finger']
+        msg.position = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.05]
+        return msg
 
     def test_full_grasp_uses_6d_plan_sequence_when_enabled(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
@@ -205,7 +212,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_obj = self._object()
         node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
         node.latest_grasp6d_plan_time = FakeTime(1.0)
-        node.latest_joint_state = None
+        node.latest_joint_state = self._joint_state()
         node.active = True
         states = []
         calls = []
@@ -218,6 +225,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
 
             def simulate_grasp(self, payload):
                 calls.append(('simulate', len(payload.get('grasp_sequence_base') or [])))
+                calls.append(('joint_payload', len(payload.get('joint_names') or [])))
                 return {
                     'simulation_ok': False,
                     'score': 42,
@@ -262,7 +270,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 'server_url': 'http://172.23.132.97:8000',
                 'min_score': 80,
                 'require_object_pose': True,
-                'send_joint_state_in_request': False,
+                'send_joint_state_in_request': True,
             },
         }.get(name, default)
         grasp_task_node.rospy.sleep = lambda *_args, **_kwargs: None
@@ -279,9 +287,73 @@ class GraspTaskSequenceTest(unittest.TestCase):
             grasp_task_node.MujocoDigitalTwinClient = original_client
 
         self.assertIn(('simulate', 4), calls)
+        self.assertIn(('joint_payload', 7), calls)
         self.assertEqual([call for call in calls if call[0] == 'move'], [])
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('gripper would collide with table', states[-1][1])
+
+    def test_6d_plan_blocks_mujoco_simulation_when_joint_state_payload_required_but_missing(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_obj = self._object()
+        node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
+        node.latest_grasp6d_plan_time = FakeTime(1.0)
+        node.latest_joint_state = None
+        node.active = True
+        states = []
+        calls = []
+        node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
+        node.set_state = lambda *args, **kwargs: states.append(args)
+
+        def fake_service_proxy(name, _srv_type):
+            if name == '/supervisor/move_to_pose':
+                def move_pose(pose, execute):
+                    calls.append(('move', bool(execute)))
+                    return FakeServiceResponse(True, 'planned')
+                return move_pose
+            if name == '/supervisor/set_gripper':
+                return lambda value: FakeServiceResponse(True, 'ok')
+            if name == '/supervisor/compliant_close':
+                return lambda execute: FakeServiceResponse(True, 'closed')
+            raise AssertionError('unexpected service %s' % name)
+
+        original_wait_for_service = grasp_task_node.rospy.wait_for_service
+        original_service_proxy = grasp_task_node.rospy.ServiceProxy
+        original_get_param = grasp_task_node.rospy.get_param
+        original_sleep = grasp_task_node.rospy.sleep
+        original_time_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.wait_for_service = lambda *args, **kwargs: None
+        grasp_task_node.rospy.ServiceProxy = fake_service_proxy
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp': {
+                'use_grasp6d_plan': True,
+                'grasp6d_plan_max_age_sec': 5.0,
+            },
+            '/gripper': {
+                'open_position_m': 0.05,
+                'use_compliant_close': False,
+            },
+            '/mujoco_digital_twin': {
+                'enabled': True,
+                'execution_gate_enabled': True,
+                'server_url': 'http://172.23.132.97:8000',
+                'require_object_pose': True,
+                'send_joint_state_in_request': True,
+            },
+        }.get(name, default)
+        grasp_task_node.rospy.sleep = lambda *_args, **_kwargs: None
+        grasp_task_node.rospy.Time.now = staticmethod(lambda: FakeTime(1.0))
+        try:
+            self.assertFalse(grasp_task_node.GraspTaskNode.execute(node))
+        finally:
+            grasp_task_node.rospy.wait_for_service = original_wait_for_service
+            grasp_task_node.rospy.ServiceProxy = original_service_proxy
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.sleep = original_sleep
+            grasp_task_node.rospy.Time.now = original_time_now
+
+        self.assertEqual([call for call in calls if call[0] == 'move'], [])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('no /joint_states', states[-1][1])
 
     def test_6d_plan_rejects_position_only_fallback_before_execute(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)

@@ -3,7 +3,7 @@
 本文对应 `mujoco_wsl_digital_twin_plan.docx` 中推荐的第一版目标：
 
 - 路线 A：WSL 自己进行 GraspNet baseline 6D 推理，自己进行 MuJoCo 预演。
-- 完整状态同步：WSL 直接订阅 Ubuntu ROS `/joint_states`。
+- 状态同步：ROS 端请求 `/simulate_grasp` 时携带当前 `/joint_states`，WSL 不需要加入 ROS 网络。
 - 物体模型：第一版默认使用鼠标复合几何体，可替换为低面数鼠标 mesh。
 - 执行门控：真实机械臂执行 6D 抓取前，ROS 端先请求 WSL `/simulate_grasp`，低分或失败则阻止真机执行。
 
@@ -45,7 +45,7 @@ PY
 - CUDA Toolkit `11.8`
 - MuJoCo Python `mujoco>=3.2`
 - NumPy `>=1.23`
-- ROS Noetic Python 包，仅在使用 `--ros-sync-joint-states` 时需要。
+- ROS Noetic Python 包不是默认必需项；只有你选择高级备用模式 `--ros-sync-joint-states` 时才需要。
 
 安装 MuJoCo 相关依赖：
 
@@ -54,19 +54,7 @@ conda activate grasp6d118
 pip install "mujoco>=3.2" numpy scipy pyyaml
 ```
 
-如果 WSL 要直接订阅 Ubuntu ROS `/joint_states`，WSL 内还需要能 import `rospy` 和 `sensor_msgs`。如果暂时不想在 WSL 安装 ROS，可以把 ROS 端参数 `/mujoco_digital_twin/send_joint_state_in_request` 改成 `true`，由 ROS 请求主动携带关节状态。
-
-使用 ROS 订阅前建议先验证：
-
-```bash
-source /opt/ros/noetic/setup.bash
-conda activate grasp6d118
-python - <<'PY'
-import rospy
-from sensor_msgs.msg import JointState
-print('rospy and sensor_msgs import ok')
-PY
-```
+默认模式下，WSL 端只需要 HTTP 服务能力；真实关节状态由 ROS 端放进 `/simulate_grasp` 请求体。
 
 ## 3. WSL 启动组合服务
 
@@ -74,25 +62,14 @@ PY
 
 ```bash
 cd ~/grasp6d_ws/Robot-Controller
-source /opt/ros/noetic/setup.bash
 conda activate grasp6d118
 sed -i 's/\r$//' tools/start_mujoco_digital_twin_wsl.sh tools/mujoco_digital_twin_server.py
-```
-
-完整方式：WSL 订阅 Ubuntu ROS。
-
-先设置 ROS 网络变量，示例：
-
-```bash
-export ROS_MASTER_URI=http://<Ubuntu_VM_IP>:11311
-export ROS_IP=<WSL_IP>
 ```
 
 启动服务：
 
 ```bash
 ./tools/start_mujoco_digital_twin_wsl.sh \
-  --ros-sync-joint-states \
   --warmup
 ```
 
@@ -132,10 +109,10 @@ roslaunch alicia_flexible_grasp_supervisor full_system.launch \
 grasp_6d.remote.server_url: "http://172.23.132.97:8000"
 mujoco_digital_twin.enabled: true
 mujoco_digital_twin.execution_gate_enabled: true
-mujoco_digital_twin.send_joint_state_in_request: false
+mujoco_digital_twin.send_joint_state_in_request: true
 ```
 
-也就是说，默认按“WSL 订阅 ROS joint_states”的完整方式运行。
+也就是说，默认按“ROS 请求携带 joint_states”的方式运行，WSL 启动时不需要 `--ros-sync-joint-states`。
 
 ## 5. GUI 操作流程
 
@@ -196,10 +173,19 @@ mujoco_digital_twin:
 rosparam set /mujoco_digital_twin/execution_gate_enabled false
 ```
 
-WSL 不安装 ROS，由 ROS 请求携带 joint_states：
+保持 ROS 请求携带 joint_states：
 
 ```bash
 rosparam set /mujoco_digital_twin/send_joint_state_in_request true
+```
+
+高级备用模式：如果以后想让 WSL 直接订阅 Ubuntu ROS，可在 WSL 设置 `ROS_MASTER_URI/ROS_IP` 后启动：
+
+```bash
+./tools/start_mujoco_digital_twin_wsl.sh \
+  --ros-sync-joint-states \
+  --warmup
+rosparam set /mujoco_digital_twin/send_joint_state_in_request false
 ```
 
 只测试网络协议，不加载模型和 checkpoint：
@@ -219,7 +205,7 @@ rosparam set /mujoco_digital_twin/allow_execution_on_error false
 
 - WSL `/health` 返回 `ok=true`。
 - WSL 能通过 `/predict` 返回 GraspNet 6D 候选。
-- WSL 能通过 ROS 订阅到 `/joint_states`，`joint_state_age_sec` 持续刷新。
+- ROS 端 `/simulate_grasp` 请求中包含 `joint_names` 和 `joint_positions`。
 - ROS 点击“执行 6D 抓取”前会先调用 `/simulate_grasp`。
 - 仿真低分、IK 失败、碰撞或接触失败时，真机不会执行。
 - 仿真通过时，真机按照 pregrasp、approach、grasp、lift 执行。

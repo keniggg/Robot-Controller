@@ -331,6 +331,9 @@ class GraspTaskNode:
 
         send_joint_state = bool(twin_cfg.get('send_joint_state_in_request', False))
         joint_state = getattr(self, 'latest_joint_state', None) if send_joint_state else None
+        if send_joint_state and joint_state is None:
+            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked: no /joint_states for request payload')
+            return False
         object_model = dict(twin_cfg.get('object_model', {}) or {})
         open_width = self._cfg_float(twin_cfg, 'open_width_m', self._cfg_float(gripper_cfg, 'open_position_m', 0.05))
         payload = build_simulation_payload(
