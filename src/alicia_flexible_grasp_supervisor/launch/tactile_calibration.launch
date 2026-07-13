@@ -1,0 +1,19 @@
+<launch>
+  <arg name="driver_port" default="/dev/alicia_arm" />
+  <arg name="driver_baudrate" default="1000000" />
+  <arg name="start_gui" default="true" />
+
+  <include file="$(find alicia_flexible_grasp_supervisor)/launch/bringup.launch">
+    <arg name="start_real_arm" value="true" />
+    <arg name="driver_port" value="$(arg driver_port)" />
+    <arg name="driver_baudrate" value="$(arg driver_baudrate)" />
+  </include>
+
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/tactile.yaml" />
+  <node pkg="alicia_flexible_grasp_supervisor" type="tactile_skin_node.py"
+        name="tactile_skin" output="screen" />
+
+  <group if="$(arg start_gui)">
+    <include file="$(find alicia_flexible_grasp_supervisor)/launch/gui.launch" />
+  </group>
+</launch>

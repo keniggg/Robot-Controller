@@ -16,6 +16,7 @@ class TactileSDKWrapper:
         self.dynamic_zero_on_start = bool(dynamic_zero_on_start)
         self.simulate = bool(simulate)
         self.sdk = None
+        self._zero_offsets_by_address = {}
         self._phase = 0
 
     def connect(self):
@@ -36,6 +37,7 @@ class TactileSDKWrapper:
                 if self.dynamic_zero_on_start:
                     try:
                         self.sdk.config.trigger_dynamic_zero()
+                        self._remember_zero_offsets(address)
                     except Exception:
                         pass
             return True
@@ -58,6 +60,7 @@ class TactileSDKWrapper:
         try:
             if address is not None:
                 self._select_address(address)
+            self._activate_zero_offsets(self.slave_address)
             values = self.sdk.pressure.read_fast()
             if values is not None:
                 return [float(v) for v in values]
@@ -72,6 +75,7 @@ class TactileSDKWrapper:
                 for slave_address in addresses:
                     self._select_address(slave_address)
                     self.sdk.config.trigger_dynamic_zero()
+                    self._remember_zero_offsets(slave_address)
                 return True
             except Exception:
                 return False
@@ -98,6 +102,30 @@ class TactileSDKWrapper:
             api = getattr(self.sdk, api_name, None)
             if api is not None and hasattr(api, '_slave_address'):
                 api._slave_address = address
+
+    def _zero_offsets_ref(self):
+        if self.sdk is None:
+            return None
+        offsets = getattr(self.sdk, '_zero_offsets', None)
+        if isinstance(offsets, list):
+            return offsets
+        for api_name in ('pressure', 'config'):
+            api = getattr(self.sdk, api_name, None)
+            offsets = getattr(api, '_zero_offsets_ref', None)
+            if isinstance(offsets, list):
+                return offsets
+        return None
+
+    def _remember_zero_offsets(self, address):
+        offsets = self._zero_offsets_ref()
+        if offsets is not None:
+            self._zero_offsets_by_address[int(address)] = list(offsets)
+
+    def _activate_zero_offsets(self, address):
+        offsets = self._zero_offsets_ref()
+        saved = self._zero_offsets_by_address.get(int(address))
+        if offsets is not None and saved is not None:
+            offsets[:] = saved
 
     def _simulate_values(self):
         self._phase += 1

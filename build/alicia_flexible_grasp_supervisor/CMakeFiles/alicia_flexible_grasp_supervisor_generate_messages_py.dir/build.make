@@ -66,6 +66,7 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetFloat.py
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_CartesianJog.py
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TriggerZero.py
+alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TcpCalibrationCommand.py
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/__init__.py
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/__init__.py
 
@@ -85,11 +86,11 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/lib/genpy/genmsg_py.py
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg
-/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/share/std_msgs/msg/Header.msg
-/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
-/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
-/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/share/geometry_msgs/msg/PoseStamped.msg
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py: /opt/ros/noetic/share/std_msgs/msg/Header.msg
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Generating Python from MSG alicia_flexible_grasp_supervisor/ObjectPose"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/genpy/cmake/../../../lib/genpy/genmsg_py.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg
 
@@ -122,11 +123,11 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/lib/genpy/gensrv_py.py
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv
-/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/share/std_msgs/msg/Header.msg
-/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
-/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
-/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/share/geometry_msgs/msg/PoseStamped.msg
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py: /opt/ros/noetic/share/std_msgs/msg/Header.msg
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Generating Python code from SRV alicia_flexible_grasp_supervisor/SetTargetPose"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/genpy/cmake/../../../lib/genpy/gensrv_py.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv
 
@@ -150,6 +151,12 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Generating Python code from SRV alicia_flexible_grasp_supervisor/TriggerZero"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/genpy/cmake/../../../lib/genpy/gensrv_py.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv
 
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TcpCalibrationCommand.py: /opt/ros/noetic/lib/genpy/gensrv_py.py
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TcpCalibrationCommand.py: /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.srv
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TcpCalibrationCommand.py: /opt/ros/noetic/share/geometry_msgs/msg/Vector3.msg
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Generating Python code from SRV alicia_flexible_grasp_supervisor/TcpCalibrationCommand"
+	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/genpy/cmake/../../../lib/genpy/gensrv_py.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.srv -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv
+
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/__init__.py: /opt/ros/noetic/lib/genpy/genmsg_py.py
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_TactileFrame.py
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_TactileState.py
@@ -164,7 +171,8 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetFloat.py
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_CartesianJog.py
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TriggerZero.py
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Generating Python msg __init__.py for alicia_flexible_grasp_supervisor"
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TcpCalibrationCommand.py
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Generating Python msg __init__.py for alicia_flexible_grasp_supervisor"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/genpy/cmake/../../../lib/genpy/genmsg_py.py -o /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg --initpy
 
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/__init__.py: /opt/ros/noetic/lib/genpy/genmsg_py.py
@@ -181,7 +189,8 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetFloat.py
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_CartesianJog.py
 /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TriggerZero.py
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Generating Python srv __init__.py for alicia_flexible_grasp_supervisor"
+/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/__init__.py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TcpCalibrationCommand.py
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_16) "Generating Python srv __init__.py for alicia_flexible_grasp_supervisor"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/genpy/cmake/../../../lib/genpy/genmsg_py.py -o /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv --initpy
 
 alicia_flexible_grasp_supervisor_generate_messages_py: alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_py
@@ -198,6 +207,7 @@ alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_
 alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetFloat.py
 alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_CartesianJog.py
 alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TriggerZero.py
+alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TcpCalibrationCommand.py
 alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/__init__.py
 alicia_flexible_grasp_supervisor_generate_messages_py: /home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/__init__.py
 alicia_flexible_grasp_supervisor_generate_messages_py: alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_py.dir/build.make

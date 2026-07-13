@@ -1,0 +1,44 @@
+test:
+  source_bag: slip_calibration_20260712_193558.bag
+  object: rigid_rectangular_cabled_object
+  result_type: qualitative_slip_and_wedge_test
+
+static_hold:
+  left_mean_mn: 607.91
+  left_std_mn: 3.03
+  right_mean_mn: 2176.42
+  right_std_mn: 3.48
+  total_mean_mn: 2784.34
+  total_std_mn: 5.38
+  false_slip_frames: 0
+  center_noise_025s_max_taxels: 0.0202
+
+pull_test:
+  baseline_total_mn: 2757.6
+  peak_total_mn: 7625.2
+  behavior: object_rotated_and_wedged_while_sliding
+  first_center_shift_005_time_from_ready_sec: 8.61
+  first_center_shift_040_time_from_ready_sec: 13.78
+  legacy_force_drop_flag_time_from_ready_sec: 84.11
+  legacy_flag_delay_after_center_shift_040_sec: 70.34
+  force_drop_from_preceding_peak_at_flag: 0.440
+  legacy_slip_flag_frames: 10
+
+calibrated_detection:
+  force_drop_ratio: 0.30
+  window_sec: 0.25
+  center_shift_threshold_taxels: 0.05
+  logic: force_drop_or_dual_contact_center_motion
+  static_false_positives_in_recorded_hold: 0
+
+contact_threshold:
+  previous_mn: 200.0
+  calibrated_mn: 50.0
+  evidence:
+    empty_and_unload_residual_max_mn: 10.0
+    stable_50g_invalid_fixture_response_mn: 93.95
+    light_touch_examples_mn: [75.0, 96.8, 100.4, 150.0]
+
+remaining:
+  - Repeat the pull test after loading the new center-motion detector.
+  - Complete absolute force calibration with a small-foot load-transfer adapter.

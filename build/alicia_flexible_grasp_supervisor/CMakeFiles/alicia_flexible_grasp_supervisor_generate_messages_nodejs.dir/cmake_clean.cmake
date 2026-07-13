@@ -11,6 +11,7 @@ file(REMOVE_RECURSE
   "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js"
   "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/StartGrasp.js"
   "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/StopGrasp.js"
+  "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.js"
   "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/TriggerZero.js"
   "CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_nodejs"
 )

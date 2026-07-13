@@ -16,6 +16,7 @@ from gui.widgets.tactile_widget import TactileWidget
 from gui.widgets.robot_state_widget import RobotStateWidget
 from gui.widgets.joint_control_widget import JointControlWidget
 from gui.widgets.cartesian_control_widget import CartesianControlWidget
+from gui.widgets.tcp_calibration_widget import TcpCalibrationWidget
 from gui.widgets.grasp6d_control_widget import Grasp6DControlWidget
 from gui.widgets.perception_widget import PerceptionWidget
 from gui.widgets.log_widget import LogWidget
@@ -75,6 +76,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         tabs.addTab(JointControlWidget(color_topic, depth_topic), '关节控制')
         tabs.addTab(CartesianControlWidget(color_topic, depth_topic), '笛卡尔控制')
+        tabs.addTab(TcpCalibrationWidget(), 'TCP标定')
         tabs.addTab(PerceptionWidget(rospy.get_param('/gui/object_topic', '/perception/object'), color_topic, depth_topic), '目标识别')
         tabs.addTab(Grasp6DControlWidget(
             rospy.get_param('/gui/grasp6d_status_topic', '/grasp_6d/status'),

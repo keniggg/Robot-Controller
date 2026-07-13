@@ -98,6 +98,22 @@ class FakeTf2Module:
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
+    def test_resolves_protocol_fields_from_unified_wsl_health_payload(self):
+        resolved = remote_node.resolve_grasp_backend_health(
+            {
+                'ok': True,
+                'backend': 'graspnet_baseline',
+                'grasp_backend': {
+                    'backend': 'graspnet_baseline',
+                    'protocol_version': 2,
+                    'candidate_fields': ['score', 'depth_m'],
+                },
+            }
+        )
+
+        self.assertEqual(resolved['protocol_version'], 2)
+        self.assertIn('depth_m', resolved['candidate_fields'])
+
     def test_latest_rgbd_buffer_supports_manual_snapshot_after_auto_consumption(self):
         buffer = remote_node.LatestRgbdBuffer()
         color = np.zeros((2, 2, 3), dtype=np.uint8)

@@ -2,6 +2,7 @@
   <arg name="start_real_arm" default="false" />
   <arg name="driver_port" default="/dev/alicia_arm" />
   <arg name="driver_baudrate" default="1000000" />
+  <arg name="auto_torque_on_startup" default="false" />
   <arg name="start_camera" default="true" />
   <arg name="start_tactile" default="true" />
   <arg name="start_gui" default="true" />
@@ -12,6 +13,7 @@
     <arg name="start_real_arm" value="$(arg start_real_arm)" />
     <arg name="driver_port" value="$(arg driver_port)" />
     <arg name="driver_baudrate" value="$(arg driver_baudrate)" />
+    <arg name="auto_torque_on_startup" value="$(arg auto_torque_on_startup)" />
   </include>
 
   <include file="$(find alicia_flexible_grasp_supervisor)/launch/sensors.launch">

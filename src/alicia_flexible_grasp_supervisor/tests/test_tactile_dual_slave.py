@@ -33,7 +33,9 @@ class FakeConfig:
         self.sdk.configured.append(('type', self.sdk._addr_ref[0], value_type))
 
     def trigger_dynamic_zero(self):
-        self.sdk.configured.append(('zero', self.sdk._addr_ref[0], None))
+        address = self.sdk._addr_ref[0]
+        self.sdk.configured.append(('zero', address, None))
+        self.sdk._zero_offsets[:] = [float(address * 100)] * 60
 
 
 class FakePressure:
@@ -42,7 +44,10 @@ class FakePressure:
 
     def read_fast(self):
         addr = self.sdk._addr_ref[0]
-        return [float(addr)] * 60
+        raw = [float(addr * 100 + addr)] * 60
+        if not self.sdk._zero_offsets:
+            return raw
+        return [max(0.0, value - offset) for value, offset in zip(raw, self.sdk._zero_offsets)]
 
 
 class FakeSDK:
@@ -52,6 +57,7 @@ class FakeSDK:
         self.port = port
         self.baudrate = baudrate
         self._addr_ref = [slave_address]
+        self._zero_offsets = []
         self.configured = []
         self.config = FakeConfig(self)
         self.pressure = FakePressure(self)

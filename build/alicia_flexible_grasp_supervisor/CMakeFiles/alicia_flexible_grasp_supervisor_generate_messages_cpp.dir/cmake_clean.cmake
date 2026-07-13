@@ -11,6 +11,7 @@ file(REMOVE_RECURSE
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/StopGrasp.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/TactileFrame.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/TactileState.h"
+  "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/TcpCalibrationCommand.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/TriggerZero.h"
   "CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_cpp"
 )

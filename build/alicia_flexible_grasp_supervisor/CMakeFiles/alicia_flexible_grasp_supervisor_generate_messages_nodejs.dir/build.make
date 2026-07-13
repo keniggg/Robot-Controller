@@ -66,6 +66,7 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetFloat.js
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/CartesianJog.js
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/TriggerZero.js
+alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.js
 
 
 /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/TactileFrame.js: /opt/ros/noetic/lib/gennodejs/gen_nodejs.py
@@ -83,11 +84,11 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 
 /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/lib/gennodejs/gen_nodejs.py
 /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg
-/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/share/std_msgs/msg/Header.msg
-/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
-/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
-/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
 /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/share/geometry_msgs/msg/PoseStamped.msg
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js: /opt/ros/noetic/share/std_msgs/msg/Header.msg
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Generating Javascript code from alicia_flexible_grasp_supervisor/ObjectPose.msg"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/gennodejs/cmake/../../../lib/gennodejs/gen_nodejs.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg
 
@@ -120,11 +121,11 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 
 /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/lib/gennodejs/gen_nodejs.py
 /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv
-/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/share/std_msgs/msg/Header.msg
-/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
-/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
-/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
 /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/share/geometry_msgs/msg/PoseStamped.msg
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.js: /opt/ros/noetic/share/std_msgs/msg/Header.msg
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Generating Javascript code from alicia_flexible_grasp_supervisor/SetTargetPose.srv"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/gennodejs/cmake/../../../lib/gennodejs/gen_nodejs.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv
 
@@ -148,6 +149,12 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Generating Javascript code from alicia_flexible_grasp_supervisor/TriggerZero.srv"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/gennodejs/cmake/../../../lib/gennodejs/gen_nodejs.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv
 
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.js: /opt/ros/noetic/lib/gennodejs/gen_nodejs.py
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.js: /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.srv
+/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.js: /opt/ros/noetic/share/geometry_msgs/msg/Vector3.msg
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Generating Javascript code from alicia_flexible_grasp_supervisor/TcpCalibrationCommand.srv"
+	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/gennodejs/cmake/../../../lib/gennodejs/gen_nodejs.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.srv -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv
+
 alicia_flexible_grasp_supervisor_generate_messages_nodejs: alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_nodejs
 alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/TactileFrame.js
 alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/TactileState.js
@@ -162,6 +169,7 @@ alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia
 alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/SetFloat.js
 alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/CartesianJog.js
 alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/TriggerZero.js
+alicia_flexible_grasp_supervisor_generate_messages_nodejs: /home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.js
 alicia_flexible_grasp_supervisor_generate_messages_nodejs: alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_nodejs.dir/build.make
 
 .PHONY : alicia_flexible_grasp_supervisor_generate_messages_nodejs

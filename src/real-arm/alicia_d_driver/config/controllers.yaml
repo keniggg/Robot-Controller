@@ -24,7 +24,9 @@ alicia_controller:
     - Joint5
     - Joint6
   constraints:
-    goal_time: 5.0
+    # The serial hardware can need extra settling time after the interpolated
+    # trajectory ends. Preserve the strict joint tolerance and wait for it.
+    goal_time: 8.0
     stopped_velocity_tolerance: 0.03
     Joint1: {trajectory: 0.12, goal: 0.025}
     Joint2: {trajectory: 0.12, goal: 0.025}

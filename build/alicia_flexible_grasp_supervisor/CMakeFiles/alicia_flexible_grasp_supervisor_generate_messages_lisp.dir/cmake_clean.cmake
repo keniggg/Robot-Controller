@@ -11,6 +11,7 @@ file(REMOVE_RECURSE
   "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.lisp"
   "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/srv/StartGrasp.lisp"
   "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/srv/StopGrasp.lisp"
+  "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.lisp"
   "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/srv/TriggerZero.lisp"
   "CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_lisp"
 )

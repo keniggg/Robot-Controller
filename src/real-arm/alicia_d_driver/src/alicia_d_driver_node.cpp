@@ -20,8 +20,11 @@ constexpr uint8_t CMD_DEMO_CONTROL = 0x13;
 // AA 06 03 1C [6*(pos_lo pos_hi speed_lo speed_hi)] [gripper_pos_lo gripper_pos_hi gripper_speed_lo gripper_speed_hi] CRC FF
 constexpr uint8_t SDK_CMD_JOINT = 0x06;
 constexpr uint8_t SDK_FUNC_QUERY_JOINT_GRIPPER = 0x00;
+constexpr uint8_t SDK_FUNC_QUERY_TEMPERATURE = 0x01;
 constexpr uint8_t SDK_FUNC_SET_JOINT_GRIPPER = 0x03;
 constexpr uint8_t SDK_DATA_LEN_JOINT_GRIPPER = 0x1C;
+constexpr uint8_t SDK_CMD_SELF_CHECK = 0xFE;
+constexpr uint8_t SDK_FUNC_SELF_CHECK = 0x00;
 
 static uint8_t sdk_crc32_low8(const std::vector<uint8_t>& data)
 {
@@ -68,6 +71,29 @@ static std::string format_radians_as_degrees(const std::vector<double>& values)
     ss << "]";
     return ss.str();
 }
+
+static std::string format_bytes_as_hex(const std::vector<uint8_t>& values)
+{
+    std::ostringstream ss;
+    ss << std::hex << std::uppercase << std::setfill('0');
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) ss << " ";
+        ss << std::setw(2) << static_cast<unsigned>(values[i]);
+    }
+    return ss.str();
+}
+
+static std::string format_temperatures(const std::vector<float>& values)
+{
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(1) << "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) ss << ", ";
+        ss << values[i];
+    }
+    ss << "]";
+    return ss.str();
+}
 // Protocol Constants for feedback frames
 constexpr uint8_t FEEDBACK_GRIPPER_STATE = 0x02;
 constexpr uint8_t FEEDBACK_SERVO_STATE = 0x04;
@@ -86,11 +112,17 @@ AliciaDDriverNode::AliciaDDriverNode() : pnh_("~"), last_process_time_(0.0)
     load_parameters();
     setup_ros_communications();
 
-    // Attempt initial connection
+    // Open the transport first. Torque is deliberately opt-in so the driver can
+    // monitor controller startup and protection states before loading the arm.
     if (communicator_->connect()) {
-        ROS_INFO("Initial connection successful. Enabling full torque mode.");
-        std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
-        communicator_->write_raw_frame(torque_on_frame);
+        if (auto_torque_on_startup_) {
+            ROS_WARN("Initial connection successful. auto_torque_on_startup is enabled; torque-on will be requested.");
+            const std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
+            communicator_->write_raw_frame(torque_on_frame);
+            motion_commands_enabled_ = true;
+        } else {
+            ROS_INFO("Initial connection successful in monitor-only startup mode; torque remains unchanged.");
+        }
     } else {
         ROS_ERROR("Initial connection failed. Reconnect timer will keep trying.");
     }
@@ -98,6 +130,8 @@ AliciaDDriverNode::AliciaDDriverNode() : pnh_("~"), last_process_time_(0.0)
 
     // Initialize last feedback time to now so we don't immediately consider it stale
     last_feedback_time_ = ros::Time::now();
+    last_temperature_query_time_ = last_feedback_time_;
+    last_self_check_query_time_ = last_feedback_time_;
 }
 
 
@@ -121,15 +155,24 @@ void AliciaDDriverNode::load_parameters()
     pnh_.param<int>("baudrate", baud_rate, baud_rate);
     pnh_.param<int>("servo_count", servo_count_, 9);
     pnh_.param<bool>("debug_mode", debug_mode_, false);
+    pnh_.param<bool>("auto_torque_on_startup", auto_torque_on_startup_, false);
     pnh_.param<double>("rate_limit_sec", rate_limit_sec_, 0.01);
     pnh_.param<double>("command_rate_hz", command_rate_hz_, 200.0);
     pnh_.param<double>("state_poll_rate_hz", state_poll_rate_hz_, 20.0);
+    pnh_.param<double>("temperature_poll_rate_hz", temperature_poll_rate_hz_, 1.0);
+    pnh_.param<double>("self_check_poll_rate_hz", self_check_poll_rate_hz_, 0.5);
     pnh_.param<bool>("mirror_commanded_state_when_feedback_stale", mirror_commanded_state_when_feedback_stale_, false);
     pnh_.param<bool>("log_command_flow", log_command_flow_, true);
     pnh_.param<bool>("suppress_redundant_commands", suppress_redundant_commands_, true);
     pnh_.param<bool>("pause_commands_when_feedback_stale", pause_commands_when_feedback_stale_, true);
     pnh_.param<double>("feedback_stale_timeout_sec", feedback_stale_timeout_sec_, 1.0);
     pnh_.param<double>("command_keepalive_rate_hz", command_keepalive_rate_hz_, 0.0);
+    pnh_.param<double>("protection_clear_stable_sec", protection_clear_stable_sec_, 30.0);
+    pnh_.param<double>("max_enable_temperature_c", max_enable_temperature_c_, 60.0);
+    pnh_.param<int>("e1_confirm_consecutive_frames", e1_confirm_consecutive_frames_, 3);
+    pnh_.param<int>("temperature_over_limit_confirm_samples", temperature_over_limit_confirm_samples_, 3);
+    e1_confirm_consecutive_frames_ = std::max(1, e1_confirm_consecutive_frames_);
+    temperature_over_limit_confirm_samples_ = std::max(1, temperature_over_limit_confirm_samples_);
     // Smoothing & input interpretation
     pnh_.param<bool>("use_trajectory_smoothing", use_trajectory_smoothing_, true);
     pnh_.param<double>("max_joint_velocity_rad_s", max_joint_velocity_rad_s_, 2.5);
@@ -162,6 +205,12 @@ void AliciaDDriverNode::load_parameters()
 void AliciaDDriverNode::setup_ros_communications()
 {
     joint_state_pub_std_ = nh_.advertise<sensor_msgs::JointState>("/joint_states", 10);
+    feedback_ready_pub_ = nh_.advertise<std_msgs::Bool>("/alicia_d/feedback_ready", 1, true);
+    run_status_pub_ = nh_.advertise<std_msgs::UInt8>("/alicia_d/run_status", 1, true);
+    temperature_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/alicia_d/temperatures_c", 1, true);
+    self_check_mask_pub_ = nh_.advertise<std_msgs::UInt16>("/alicia_d/self_check_mask", 1, true);
+    protection_latched_pub_ = nh_.advertise<std_msgs::Bool>("/alicia_d/protection_latched", 1, true);
+    motion_enabled_pub_ = nh_.advertise<std_msgs::Bool>("/alicia_d/motion_enabled", 1, true);
     joint_command_sub_ = nh_.subscribe("/joint_commands", 10, &AliciaDDriverNode::joint_command_callback, this);
     zero_calib_sub_ = nh_.subscribe("/zero_calibrate", 10, &AliciaDDriverNode::zero_calibrate_callback, this);
     demo_mode_sub_ = nh_.subscribe("/demonstration", 10, &AliciaDDriverNode::demonstration_mode_callback, this);
@@ -181,6 +230,40 @@ void AliciaDDriverNode::state_poll_timer_callback(const ros::TimerEvent& event)
 {
     if (!communicator_ || !communicator_->is_connected()) return;
 
+    // The controller can interleave responses when two query timers fire at
+    // once. Schedule every diagnostic query in a dedicated state-poll slot so
+    // only one request is outstanding on the half-duplex transport.
+    const ros::Time now = ros::Time::now();
+    const bool temperature_due = temperature_poll_rate_hz_ > 0.0 &&
+        (last_temperature_query_time_.isZero() ||
+         (now - last_temperature_query_time_).toSec() >= 1.0 / temperature_poll_rate_hz_);
+    const bool self_check_due = self_check_poll_rate_hz_ > 0.0 &&
+        (last_self_check_query_time_.isZero() ||
+         (now - last_self_check_query_time_).toSec() >= 1.0 / self_check_poll_rate_hz_);
+
+    if (self_check_due) {
+        // Exact official SDK self-check query.
+        static const std::vector<uint8_t> self_check_query_frame = {
+            FRAME_START_BYTE, SDK_CMD_SELF_CHECK, SDK_FUNC_SELF_CHECK,
+            0x00, 0xFE, 0x93, FRAME_END_BYTE
+        };
+        if (communicator_->write_raw_frame(self_check_query_frame)) {
+            last_self_check_query_time_ = now;
+        }
+        return;
+    }
+
+    if (temperature_due) {
+        static const std::vector<uint8_t> temperature_query_frame = {
+            FRAME_START_BYTE, SDK_CMD_JOINT, SDK_FUNC_QUERY_TEMPERATURE,
+            0x01, 0xFE, 0xAD, FRAME_END_BYTE
+        };
+        if (communicator_->write_raw_frame(temperature_query_frame)) {
+            last_temperature_query_time_ = now;
+        }
+        return;
+    }
+
     // SDK joint+gripper query:
     // AA 06 00 01 FE 9A FF
     static const std::vector<uint8_t> joint_state_query_frame = {
@@ -196,9 +279,14 @@ void AliciaDDriverNode::reconnect_callback(const ros::TimerEvent& event)
     if (!communicator_->is_connected()) {
         ROS_INFO("Attempting to reconnect...");
         if (communicator_->connect()) {
-            ROS_INFO("Reconnect successful! Enabling full torque mode.");
-            std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
-            communicator_->write_raw_frame(torque_on_frame);
+            if (auto_torque_on_startup_) {
+                ROS_WARN("Reconnect successful. auto_torque_on_startup is enabled; requesting torque-on.");
+                const std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
+                communicator_->write_raw_frame(torque_on_frame);
+                motion_commands_enabled_ = true;
+            } else {
+                ROS_INFO("Reconnect successful in monitor-only mode; torque remains unchanged.");
+            }
         }
     }
 
@@ -310,11 +398,25 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
 
     bool feedback_ready = false;
     bool feedback_stale = true;
+    bool protection_latched = false;
+    bool motion_enabled = false;
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
         feedback_ready = has_real_feedback_;
         feedback_stale = !has_real_feedback_ ||
                          (now - last_feedback_time_).toSec() > feedback_stale_timeout_sec_;
+        protection_latched = protection_fault_latched_;
+        motion_enabled = motion_commands_enabled_;
+    }
+
+    if (!motion_enabled) {
+        ROS_WARN_THROTTLE(1.0, "Blocking SDK command stream: motion has not been explicitly enabled.");
+        return;
+    }
+
+    if (protection_latched) {
+        ROS_ERROR_THROTTLE(1.0, "Blocking SDK command stream: hardware protection fault is latched.");
+        return;
     }
 
     if (pause_commands_when_feedback_stale_ && (!feedback_ready || feedback_stale)) {
@@ -497,7 +599,11 @@ void AliciaDDriverNode::heartbeat_publish_callback(const ros::TimerEvent& event)
 
     std::lock_guard<std::mutex> lock2(data_mutex_);
     const double feedback_age = (now - last_feedback_time_).toSec();
-    if (!has_real_feedback_ || feedback_age > feedback_stale_timeout_sec_) {
+    const bool feedback_ready = has_real_feedback_ && feedback_age <= feedback_stale_timeout_sec_;
+    std_msgs::Bool ready_msg;
+    ready_msg.data = feedback_ready;
+    feedback_ready_pub_.publish(ready_msg);
+    if (!feedback_ready) {
         ROS_WARN_THROTTLE(
             1.0,
             "Suppressing /joint_states heartbeat: real hardware feedback is %s (age %.2fs).",
@@ -535,9 +641,16 @@ void AliciaDDriverNode::process_serial_data()
             case SDK_CMD_JOINT:
                 if (function_id == SDK_FUNC_QUERY_JOINT_GRIPPER) {
                     parse_sdk_joint_state_frame(data_payload);
+                } else if (function_id == SDK_FUNC_QUERY_TEMPERATURE) {
+                    parse_sdk_temperature_frame(data_payload);
                 } else if (debug_mode_) {
                     ROS_INFO("Received unhandled SDK joint frame func=0x%02X len=%u",
                              function_id, data_len);
+                }
+                break;
+            case SDK_CMD_SELF_CHECK:
+                if (function_id == SDK_FUNC_SELF_CHECK) {
+                    parse_sdk_self_check_frame(data_payload);
                 }
                 break;
             case FEEDBACK_ERROR:
@@ -579,6 +692,8 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
         return;
     }
 
+    bool trigger_torque_off = false;
+    {
     std::lock_guard<std::mutex> lock(data_mutex_);
     last_feedback_time_ = ros::Time::now();
     has_real_feedback_ = true;
@@ -592,10 +707,54 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
     current_gripper_position_ = (static_cast<double>(gripper_raw) / 1000.0) * GRIPPER_DEG_MAX * M_PI / 180.0;
     last_run_status_ = data_payload[14];
 
-    if (last_run_status_ == 0xE1 || last_run_status_ == 0xE2) {
-        ROS_WARN_THROTTLE(2.0, "Hardware reports heat protection status=0x%02X. Reduce load or torque off for cooling.",
-                          last_run_status_);
+    std_msgs::UInt8 status_msg;
+    status_msg.data = last_run_status_;
+    run_status_pub_.publish(status_msg);
+
+    const bool temperature_fresh = has_temperature_feedback_ &&
+        (last_feedback_time_ - last_temperature_time_).toSec() <= 3.0;
+    const float max_temperature = latest_temperatures_c_.empty()
+        ? 0.0f
+        : *std::max_element(latest_temperatures_c_.begin(), latest_temperatures_c_.end());
+    const bool measured_overheat = temperature_fresh &&
+        consecutive_high_temperature_samples_ >= temperature_over_limit_confirm_samples_;
+
+    if (last_run_status_ == 0xE1) {
+        ++consecutive_e1_frames_;
+        ROS_WARN_THROTTLE(
+            2.0,
+            "Hardware reports E1 overheat warning (%d/%d consecutive, temperature %s, max %.1f C).",
+            consecutive_e1_frames_, e1_confirm_consecutive_frames_,
+            temperature_fresh ? "fresh" : "unavailable/stale", max_temperature);
+    } else {
+        consecutive_e1_frames_ = 0;
     }
+
+    const bool protection_status_event = last_run_status_ == 0xE1 || last_run_status_ == 0xE2;
+    if (measured_overheat && !protection_fault_latched_) {
+        last_protection_time_ = last_feedback_time_;
+        ROS_ERROR("Protection evidence: status=0x%02X reason=sustained measured over-temperature joint_payload=[%s] temperatures_c=%s self_check_mask=%s0x%04X",
+                  last_run_status_,
+                  format_bytes_as_hex(data_payload).c_str(),
+                  format_temperatures(latest_temperatures_c_).c_str(),
+                  has_self_check_feedback_ ? "" : "unavailable/",
+                  static_cast<unsigned>(latest_self_check_mask_));
+        protection_fault_latched_ = true;
+        motion_commands_enabled_ = false;
+        trigger_torque_off = true;
+    } else if (protection_status_event) {
+        ROS_WARN_THROTTLE(
+            2.0,
+            "Treating hardware status 0x%02X as a status event; no torque_off sent without sustained measured over-temperature.",
+            last_run_status_);
+    }
+
+    std_msgs::Bool protection_msg;
+    protection_msg.data = protection_fault_latched_;
+    protection_latched_pub_.publish(protection_msg);
+    std_msgs::Bool motion_msg;
+    motion_msg.data = motion_commands_enabled_;
+    motion_enabled_pub_.publish(motion_msg);
 
     bool should_seed_command_state = false;
     {
@@ -617,6 +776,84 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
     }
 
     publish_joint_state();
+    }
+
+    if (trigger_torque_off) {
+        ROS_ERROR("Protection status latched; sending torque_off and blocking all motion commands.");
+        const std::vector<uint8_t> torque_off_frame = {0xAA, 0x05, 0x00, 0x01, 0x00, 0x6F, 0xFF};
+        communicator_->write_raw_frame(torque_off_frame);
+    }
+}
+
+void AliciaDDriverNode::parse_sdk_self_check_frame(const std::vector<uint8_t>& data_payload)
+{
+    if (data_payload.size() < 2) {
+        ROS_WARN("SDK self-check DATA too short: expected >=2 bytes, got %zu", data_payload.size());
+        return;
+    }
+
+    const uint16_t raw_mask = static_cast<uint16_t>(data_payload[0]) |
+                              (static_cast<uint16_t>(data_payload[1]) << 8);
+    std_msgs::UInt16 msg;
+    msg.data = raw_mask;
+    self_check_mask_pub_.publish(msg);
+
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        latest_self_check_mask_ = raw_mask;
+        has_self_check_feedback_ = true;
+        last_self_check_time_ = ros::Time::now();
+    }
+
+    std::ostringstream set_bits;
+    bool first = true;
+    for (unsigned i = 0; i < 10; ++i) {
+        if ((raw_mask & (1u << i)) == 0) continue;
+        if (!first) set_bits << ",";
+        set_bits << i;
+        first = false;
+    }
+    ROS_INFO_THROTTLE(2.0, "Official self-check: raw_mask=0x%04X set_bits=[%s]",
+                      static_cast<unsigned>(raw_mask), set_bits.str().c_str());
+}
+
+void AliciaDDriverNode::parse_sdk_temperature_frame(const std::vector<uint8_t>& data_payload)
+{
+    if (data_payload.empty()) {
+        ROS_WARN("Received empty SDK temperature frame.");
+        return;
+    }
+
+    std_msgs::Float32MultiArray msg;
+    msg.data.reserve(data_payload.size());
+    float max_temperature = 0.0f;
+    for (uint8_t raw : data_payload) {
+        const float value = static_cast<float>(raw);
+        msg.data.push_back(value);
+        max_temperature = std::max(max_temperature, value);
+    }
+
+    int high_temperature_sample_count = 0;
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        latest_temperatures_c_ = msg.data;
+        last_temperature_time_ = ros::Time::now();
+        has_temperature_feedback_ = true;
+        if (max_temperature >= static_cast<float>(max_enable_temperature_c_)) {
+            ++consecutive_high_temperature_samples_;
+        } else {
+            consecutive_high_temperature_samples_ = 0;
+        }
+        high_temperature_sample_count = consecutive_high_temperature_samples_;
+    }
+    temperature_pub_.publish(msg);
+    if (max_temperature >= 50.0f) {
+        ROS_WARN("High or anomalous SDK temperature sample (%d/%d over limit): values_c=%s",
+                 high_temperature_sample_count,
+                 temperature_over_limit_confirm_samples_,
+                 format_temperatures(msg.data).c_str());
+    }
+    ROS_INFO_THROTTLE(2.0, "Real SDK temperatures: count=%zu max=%.1f C", msg.data.size(), max_temperature);
 }
 
 
@@ -801,9 +1038,79 @@ void AliciaDDriverNode::demonstration_mode_callback(const std_msgs::Bool::ConstP
 {
     if (msg->data) {
         ROS_INFO("Enabling zero-torque mode with SDK torque_off frame.");
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            motion_commands_enabled_ = false;
+        }
+        std_msgs::Bool motion_msg;
+        motion_msg.data = false;
+        motion_enabled_pub_.publish(motion_msg);
         const std::vector<uint8_t> torque_off_frame = {0xAA, 0x05, 0x00, 0x01, 0x00, 0x6F, 0xFF};
         communicator_->write_raw_frame(torque_off_frame);
     } else {
+        bool feedback_ready = false;
+        bool protection_latched = false;
+        bool temperature_ready = false;
+        uint8_t run_status = 0xFF;
+        double feedback_age = 0.0;
+        double healthy_sec = 0.0;
+        double max_temperature = 0.0;
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            feedback_age = (ros::Time::now() - last_feedback_time_).toSec();
+            feedback_ready = has_real_feedback_ && feedback_age <= feedback_stale_timeout_sec_;
+            run_status = last_run_status_;
+            protection_latched = protection_fault_latched_;
+            healthy_sec = last_protection_time_.isZero()
+                              ? protection_clear_stable_sec_
+                              : (ros::Time::now() - last_protection_time_).toSec();
+            temperature_ready = has_temperature_feedback_ &&
+                                (ros::Time::now() - last_temperature_time_).toSec() <= 3.0;
+            if (!latest_temperatures_c_.empty()) {
+                max_temperature = *std::max_element(latest_temperatures_c_.begin(), latest_temperatures_c_.end());
+            }
+        }
+        if (!feedback_ready) {
+            ROS_ERROR("Rejected torque-on request: real hardware feedback is unavailable or stale (age %.2fs).",
+                      feedback_age);
+            return;
+        }
+        if (run_status == 0xE1 || run_status == 0xE2) {
+            ROS_WARN("Latest hardware status is 0x%02X; treating it as a status event and validating torque-on from measured temperature instead.",
+                     run_status);
+        }
+        if (!temperature_ready || max_temperature > max_enable_temperature_c_) {
+            ROS_ERROR("Rejected torque-on request: temperature feedback is %s (max %.1f C, limit %.1f C).",
+                      temperature_ready ? "too high" : "unavailable/stale",
+                      max_temperature,
+                      max_enable_temperature_c_);
+            return;
+        }
+        if (protection_latched && healthy_sec < protection_clear_stable_sec_) {
+            ROS_ERROR("Rejected torque-on request: protection latch needs %.1f more seconds of healthy feedback.",
+                      protection_clear_stable_sec_ - healthy_sec);
+            return;
+        }
+        if (protection_latched) {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            protection_fault_latched_ = false;
+            std_msgs::Bool protection_msg;
+            protection_msg.data = false;
+            protection_latched_pub_.publish(protection_msg);
+            ROS_WARN("Protection latch cleared after %.1f seconds of healthy feedback.", healthy_sec);
+        }
+        {
+            std::lock_guard<std::mutex> command_lock(latest_cmd_mutex_);
+            has_latest_command_ = false;
+            latest_joint_angles_.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            motion_commands_enabled_ = true;
+        }
+        std_msgs::Bool motion_msg;
+        motion_msg.data = true;
+        motion_enabled_pub_.publish(motion_msg);
         ROS_INFO("Disabling zero-torque mode with SDK torque_on frame.");
         const std::vector<uint8_t> torque_on_frame = {0xAA, 0x05, 0x00, 0x01, 0x01, 0xF9, 0xFF};
         communicator_->write_raw_frame(torque_on_frame);

@@ -2,11 +2,13 @@
   <arg name="start_real_arm" default="false" />
   <arg name="driver_port" default="/dev/alicia_arm" />
   <arg name="driver_baudrate" default="1000000" />
+  <arg name="auto_torque_on_startup" default="false" />
 
   <group if="$(arg start_real_arm)">
     <include file="$(find alicia_d_driver)/launch/alicia_d_bringup.launch">
       <arg name="port" value="$(arg driver_port)"/>
       <arg name="baudrate" value="$(arg driver_baudrate)"/>
+      <arg name="auto_torque_on_startup" value="$(arg auto_torque_on_startup)"/>
       <arg name="start_rviz" value="false"/>
     </include>
   </group>

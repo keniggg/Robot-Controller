@@ -119,6 +119,13 @@ class CharucoTracker:
         pose_ok = False
         
         if charuco_corners is not None and charuco_ids is not None:
+            # Always show detected ChArUco corners.  This keeps the debug image
+            # useful even when camera calibration or pose estimation fails.
+            if hasattr(aruco, 'drawDetectedCornersCharuco'):
+                aruco.drawDetectedCornersCharuco(
+                    cv_image, charuco_corners, charuco_ids, (0, 255, 0)
+                )
+
             # Estimate pose
             pose, rvec, tvec = self.estimate_pose(charuco_corners, charuco_ids)
             if pose is not None:
@@ -235,12 +242,49 @@ class CharucoTracker:
     def estimate_pose(self, charuco_corners, charuco_ids):
         """Estimate pose of the ChArUco board."""
         try:
-            # Estimate pose using ChArUco corners
-            retval, rvec, tvec = aruco.estimatePoseCharucoBoard(
-                charuco_corners, charuco_ids, self.board, 
-                self.camera_matrix, self.dist_coeffs, 
-                None, None, useExtrinsicGuess=False
-            )
+            # OpenCV 4.13 removed estimatePoseCharucoBoard from the Python
+            # bindings.  Keep the old API when available and use the Board
+            # point matcher + solvePnP on newer OpenCV releases.
+            if hasattr(aruco, 'estimatePoseCharucoBoard'):
+                retval, rvec, tvec = aruco.estimatePoseCharucoBoard(
+                    charuco_corners, charuco_ids, self.board,
+                    self.camera_matrix, self.dist_coeffs,
+                    None, None, useExtrinsicGuess=False
+                )
+            else:
+                object_points, image_points = self.board.matchImagePoints(
+                    charuco_corners, charuco_ids
+                )
+                if object_points is None or len(object_points) < 4:
+                    return None, None, None
+
+                # SQPnP is stable for the sparse, planar corner sets that can
+                # occur when the board is small in the D405 image.  ITERATIVE
+                # can converge to the mirrored, behind-camera solution here.
+                pnp_flag = getattr(cv2, 'SOLVEPNP_SQPNP', cv2.SOLVEPNP_EPNP)
+                retval, rvec, tvec = cv2.solvePnP(
+                    object_points,
+                    image_points,
+                    self.camera_matrix,
+                    self.dist_coeffs,
+                    flags=pnp_flag,
+                )
+                if retval and hasattr(cv2, 'solvePnPRefineLM'):
+                    rvec, tvec = cv2.solvePnPRefineLM(
+                        object_points,
+                        image_points,
+                        self.camera_matrix,
+                        self.dist_coeffs,
+                        rvec,
+                        tvec,
+                    )
+
+                # A valid board observed by the camera must lie in front of it.
+                if retval and float(tvec.reshape(-1)[2]) <= 0.0:
+                    rospy.logwarn_throttle(
+                        2.0, "Rejected mirrored ChArUco pose behind the camera."
+                    )
+                    retval = False
             
             if retval:
                 # Convert rotation vector to rotation matrix

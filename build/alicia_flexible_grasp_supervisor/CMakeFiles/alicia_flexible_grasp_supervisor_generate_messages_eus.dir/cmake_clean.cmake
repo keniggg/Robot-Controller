@@ -12,6 +12,7 @@ file(REMOVE_RECURSE
   "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l"
   "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/StartGrasp.l"
   "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/StopGrasp.l"
+  "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.l"
   "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/TriggerZero.l"
   "CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_eus"
 )

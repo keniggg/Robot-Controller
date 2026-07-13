@@ -562,6 +562,44 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('hand-eye consistency failed', states[-1][1])
 
+    def test_visual_retarget_accepts_close_range_detection_below_plan_threshold(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        node.latest_obj = self._object_at(0.40, 0.0, 0.20)
+        node.latest_obj.label = 'mouse'
+        node.latest_obj.confidence = 0.90
+        node.latest_obj_time = FakeTime(0.5)
+        node.latest_visual_obj = self._object_at(0.41, 0.0, 0.20)
+        node.latest_visual_obj.label = 'mouse'
+        node.latest_visual_obj.confidence = 0.40
+        node.latest_visual_obj_time = FakeTime(1.0)
+        node.latest_raw_detection = True
+        node.latest_raw_detection_time = FakeTime(1.0)
+
+        original_time_now = grasp_task_node.rospy.Time.now
+        original_is_shutdown = grasp_task_node.rospy.is_shutdown
+        grasp_task_node.rospy.Time.now = staticmethod(lambda: FakeTime(1.0))
+        grasp_task_node.rospy.is_shutdown = lambda: False
+        try:
+            result = node._wait_for_stable_visual_target(
+                node.latest_obj,
+                {
+                    'min_object_confidence': 0.50,
+                    'visual_retarget_min_object_confidence': 0.35,
+                    'visual_retarget_timeout_sec': 0.2,
+                    'visual_retarget_required_samples': 1,
+                    'visual_retarget_raw_max_age_sec': 0.30,
+                },
+                'pregrasp',
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_time_now
+            grasp_task_node.rospy.is_shutdown = original_is_shutdown
+
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result.confidence, 0.40)
+        self.assertAlmostEqual(result.pose_base.pose.position.x, 0.41)
+
     def test_full_grasp_approaches_target_after_pregrasp_before_closing(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = self._object()

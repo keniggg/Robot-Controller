@@ -4,6 +4,9 @@
 #include "ros/ros.h"
 #include "serial_communicator.hpp" // Assuming this is a non-ROS helper class
 #include "std_msgs/Bool.h"
+#include "std_msgs/Float32MultiArray.h"
+#include "std_msgs/UInt8.h"
+#include "std_msgs/UInt16.h"
 #include "sensor_msgs/JointState.h"
 #include <memory>
 #include <vector>
@@ -41,12 +44,14 @@ private:
    void process_serial_data_callback(const ros::TimerEvent& event);
    void reconnect_callback(const ros::TimerEvent& event);
    void send_command_timer_callback(const ros::TimerEvent& event);
-   void heartbeat_publish_callback(const ros::TimerEvent& event);
-   void state_poll_timer_callback(const ros::TimerEvent& event);
+	   void heartbeat_publish_callback(const ros::TimerEvent& event);
+	   void state_poll_timer_callback(const ros::TimerEvent& event);
 
    // Main processing loop
    void process_serial_data();
-   void parse_sdk_joint_state_frame(const std::vector<uint8_t>& data_payload);
+	   void parse_sdk_joint_state_frame(const std::vector<uint8_t>& data_payload);
+	   void parse_sdk_temperature_frame(const std::vector<uint8_t>& data_payload);
+	   void parse_sdk_self_check_frame(const std::vector<uint8_t>& data_payload);
    void parse_servo_states_frame(const std::vector<uint8_t>& payload);
    void parse_gripper_state_frame(const std::vector<uint8_t>& payload); // Add this
    void parse_error_frame(const std::vector<uint8_t>& payload);
@@ -64,27 +69,40 @@ private:
    ros::Timer processing_timer_;
    ros::Timer reconnect_timer_;
    ros::Timer command_timer_;
-   ros::Timer heartbeat_timer_;
-   ros::Timer state_poll_timer_;
+	   ros::Timer heartbeat_timer_;
+	   ros::Timer state_poll_timer_;
 
    // Publishers & Subscribers
-   ros::Publisher joint_state_pub_std_;
+	   ros::Publisher joint_state_pub_std_;
+	   ros::Publisher feedback_ready_pub_;
+	   ros::Publisher run_status_pub_;
+	   ros::Publisher temperature_pub_;
+	   ros::Publisher self_check_mask_pub_;
+	   ros::Publisher protection_latched_pub_;
+	   ros::Publisher motion_enabled_pub_;
    ros::Subscriber joint_command_sub_;
    ros::Subscriber zero_calib_sub_;
    ros::Subscriber demo_mode_sub_;
 
    // Configuration and State
    int servo_count_;
-   bool debug_mode_;
+	   bool debug_mode_;
+	   bool auto_torque_on_startup_ = false;
    double rate_limit_sec_;
 	   double command_rate_hz_;
 	   double state_poll_rate_hz_;
+	   double temperature_poll_rate_hz_ = 1.0;
+	   double self_check_poll_rate_hz_ = 0.5;
 	   bool mirror_commanded_state_when_feedback_stale_;
 	   bool log_command_flow_;
 	   bool suppress_redundant_commands_ = true;
 	   bool pause_commands_when_feedback_stale_ = true;
 	   double feedback_stale_timeout_sec_ = 1.0;
 	   double command_keepalive_rate_hz_ = 0.0;
+		   double protection_clear_stable_sec_ = 30.0;
+		   double max_enable_temperature_c_ = 60.0;
+		   int e1_confirm_consecutive_frames_ = 3;
+		   int temperature_over_limit_confirm_samples_ = 3;
 	   ros::Time last_process_time_;
     // Trajectory smoothing parameters
     bool use_trajectory_smoothing_ = true;
@@ -138,6 +156,19 @@ private:
     // fall back to publishing the commanded state so visualizers remain in sync.
 	   ros::Time last_feedback_time_;
 	   bool has_real_feedback_ = false;
-	   uint8_t last_run_status_ = 0x00;
+		   uint8_t last_run_status_ = 0x00;
+		   int consecutive_e1_frames_ = 0;
+		   int consecutive_high_temperature_samples_ = 0;
+	   bool protection_fault_latched_ = false;
+	   bool motion_commands_enabled_ = false;
+	   bool has_temperature_feedback_ = false;
+	   bool has_self_check_feedback_ = false;
+	   ros::Time last_protection_time_;
+	   ros::Time last_temperature_time_;
+	   ros::Time last_temperature_query_time_;
+	   ros::Time last_self_check_query_time_;
+	   ros::Time last_self_check_time_;
+	   std::vector<float> latest_temperatures_c_;
+	   uint16_t latest_self_check_mask_ = 0;
 };
 #endif // ALICiA_D_DRIVER_NODE_H

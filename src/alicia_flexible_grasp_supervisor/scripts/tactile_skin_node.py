@@ -37,7 +37,11 @@ class TactileSkinNode:
         self.dual_slave_addresses = resolved['dual_slave_addresses']
         self.left_slave_address = resolved['left_slave_address']
         self.right_slave_address = resolved['right_slave_address']
-        self.slip = SlipDetector(cfg.get('slip_window_sec', 0.25), cfg.get('slip_drop_ratio', 0.30))
+        self.slip = SlipDetector(
+            cfg.get('slip_window_sec', 0.25),
+            cfg.get('slip_drop_ratio', 0.30),
+            cfg.get('slip_center_shift_taxels', 0.0),
+        )
         self.wrapper = TactileSDKWrapper(
             port=cfg.get('port', '/dev/ttyACM0'),
             slave_address=resolved['slave_addresses'][0],
@@ -114,7 +118,10 @@ class TactileSkinNode:
             st.left_contact = left.contact
             st.right_contact = right.contact
             st.object_grasped = st.total_grip_force_mn >= self.threshold
-            st.slip_detected = self.slip.update(st.total_grip_force_mn)
+            centers = None
+            if left.contact and right.contact:
+                centers = (left.center_x, left.center_y, right.center_x, right.center_y)
+            st.slip_detected = self.slip.update(st.total_grip_force_mn, centers)
             st.valid = self.connected
             self.pub_left.publish(left)
             if right_vals:

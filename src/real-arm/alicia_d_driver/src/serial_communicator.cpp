@@ -209,6 +209,18 @@ void SerialCommunicator::read_thread_loop()
                                 std::vector<uint8_t>(frame_buffer.begin() + 1, frame_buffer.end() - 2));
                         } else {
                             print_hex_frame("Received Invalid SDK Frame: ", frame_buffer);
+                            // A second response may begin before a corrupted
+                            // response ends. Preserve its latest AA prefix so
+                            // the following bytes can still form a valid frame.
+                            size_t restart_index = frame_buffer.size();
+                            for (size_t i = 1; i < frame_buffer.size(); ++i) {
+                                if (frame_buffer[i] == FRAME_START_BYTE) restart_index = i;
+                            }
+                            if (restart_index < frame_buffer.size()) {
+                                frame_buffer.assign(frame_buffer.begin() + restart_index, frame_buffer.end());
+                                wait_for_start = false;
+                                continue;
+                            }
                         }
                         wait_for_start = true;
                     } else if (frame_buffer.size() > expected_total_len) {

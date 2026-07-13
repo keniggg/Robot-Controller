@@ -32,15 +32,15 @@ grasp:
   # remaining path from live RGB-D, and preserve the model-predicted 6D rotation.
   visual_retarget_enabled: true
   visual_retarget_require_start_detection: true
-  # The current side-mounted camera cannot geometrically retain the object in
-  # view at strict pregrasp. Reobserve there when possible, but do not fabricate
-  # a detection when the gripper/camera layout causes expected occlusion.
-  visual_retarget_require_pregrasp_detection: false
+  # Close-range YOLO confidence falls as the wrist partially occludes the
+  # object. Keep the initial 0.50 gate for candidate generation, but allow the
+  # closed-loop tracker to use genuine detections down to the detector limit.
+  visual_retarget_min_object_confidence: 0.35
+  visual_retarget_require_pregrasp_detection: true
   visual_retarget_after_approach: true
-  # Near contact the gripper can legitimately occlude the wrist camera. In that
-  # case use the last trusted pregrasp target instead of pretending it is visible.
-  visual_retarget_require_approach_detection: false
-  visual_retarget_timeout_sec: 1.2
+  # Never continue the final contact motion from a stale target pose.
+  visual_retarget_require_approach_detection: true
+  visual_retarget_timeout_sec: 2.0
   visual_retarget_sample_sec: 0.05
   visual_retarget_required_samples: 3
   visual_retarget_raw_max_age_sec: 0.30
@@ -152,7 +152,7 @@ grasp_6d:
     # Current camera optical axis is nearly perpendicular to the gripper
     # approach axis, so strict gating would reject every valid grasp. Keep the
     # projection as a diagnostic until the camera is remounted toward the jaws.
-    camera_visibility_gate_enabled: false
+    camera_visibility_gate_enabled: true
     camera_visibility_diagnostic_enabled: true
     camera_visibility_require_approach: true
     camera_visibility_margin_px: 36

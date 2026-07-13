@@ -38,6 +38,13 @@ OPTICAL_TO_ROS_CAMERA = np.asarray(
 )
 
 
+def resolve_grasp_backend_health(health):
+    """Return GraspNet capabilities from direct or unified WSL health payloads."""
+    payload = health if isinstance(health, dict) else {}
+    nested = payload.get('grasp_backend')
+    return nested if isinstance(nested, dict) else payload
+
+
 class LatestRgbdBuffer:
     def __init__(self):
         self._lock = threading.Lock()
@@ -1739,7 +1746,8 @@ class RemoteGrasp6DNode:
             self.status_pub.publish(String('remote 6D health check failed: %s' % exc))
             return
         if bool(health.get('ok', False)):
-            candidate_fields = set(str(item) for item in (health.get('candidate_fields') or []))
+            backend_health = resolve_grasp_backend_health(health)
+            candidate_fields = set(str(item) for item in (backend_health.get('candidate_fields') or []))
             if bool(getattr(self, 'require_candidate_depth', False)) and 'depth_m' not in candidate_fields:
                 message = (
                     'remote 6D server protocol is outdated: depth_m is missing; '
@@ -1750,9 +1758,9 @@ class RemoteGrasp6DNode:
                 return
             rospy.loginfo(
                 'remote 6D server online: backend=%s loaded=%s protocol=%s url=%s',
-                health.get('backend', 'unknown'),
-                health.get('loaded', 'unknown'),
-                health.get('protocol_version', 'unknown'),
+                backend_health.get('backend', health.get('backend', 'unknown')),
+                backend_health.get('loaded', health.get('loaded', 'unknown')),
+                backend_health.get('protocol_version', health.get('protocol_version', 'unknown')),
                 self.client.server_url,
             )
         else:

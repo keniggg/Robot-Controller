@@ -1,0 +1,93 @@
+test:
+  mode: raw_adc
+  posture: left_skin_up
+  source_bag: FINAL_raw_adc_drift_left_up_20260710_204649.bag
+  duration_sec: 898.175
+  samples: 107661
+  sample_rate_hz: 119.87
+  notes:
+    - ROS message fields ending in _mn contain raw ADC values during this test.
+    - Left address 2 AD mask was temporarily changed from 100 to 0.
+    - Right address 1 AD mask remained 0.
+    - Normal mN output, masks, and dynamic zero were restored after the test.
+
+left_address_2:
+  first_10s_total_adc: 836.620
+  last_10s_total_adc: 743.110
+  delta_total_adc: -93.510
+  delta_percent: -11.177
+  linear_slope_adc_per_min: -6.017
+  detrended_noise_rss_adc: 8.684
+  observed_total_min_adc: 711.848
+  observed_total_max_adc: 855.940
+  observed_peak_to_peak_adc: 144.091
+  dominant_taxel:
+    index: 56
+    first_to_last_delta_adc: -88.43
+    max_abs_slope_adc_per_min: 5.628
+
+right_address_1:
+  first_10s_total_adc: 1540.385
+  last_10s_total_adc: 1565.851
+  delta_total_adc: 25.466
+  delta_percent: 1.653
+  linear_slope_adc_per_min: 0.644
+  detrended_noise_rss_adc: 18.964
+  observed_total_min_adc: 1476.041
+  observed_total_max_adc: 1637.585
+  observed_peak_to_peak_adc: 161.544
+  dominant_taxels:
+    - {index: 9, first_to_last_delta_adc: 21.48}
+    - {index: 51, first_to_last_delta_adc: 14.63}
+    - {index: 59, first_to_last_delta_adc: -8.30}
+
+robot:
+  max_joint_delta_rad: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+recommendations:
+  warmup_before_zero_min: 15
+  inspect_left_taxel_indices: [56]
+  inspect_right_taxel_indices: [9, 51, 59]
+
+spatial_mapping_left_address_2:
+  physical_shape: [12, 5]
+  index_order: row_major
+  anchors:
+    fingertip_center: {max_index: 1, row: 0, col: 1, peak_mn: 96.8}
+    geometric_center: {max_index: 26, row: 5, col: 1, peak_mn: 100.4}
+    gripper_root_center: {max_index: 52, row: 10, col: 2, peak_mn: 75.0}
+  conclusion: row index increases from fingertip toward gripper root
+  transverse_check:
+    near_observer_edge: no_response_in_normal_mn_mode
+    far_observer_edge: no_response_in_normal_mn_mode
+    center_control:
+      peak_mn: 3913.5
+      max_index: 22
+      row: 4
+      col: 2
+      center_col: 1.98
+      center_row: 3.25
+    opposite_skin_peak_mn: 0.0
+    conclusion: both long-edge margins are insensitive; response is concentrated in center columns
+
+spatial_mapping_right_address_1:
+  physical_shape: [12, 5]
+  index_order: row_major
+  anchors:
+    fingertip_center: {max_index: 1, row: 0, col: 1, peak_mn: 150.0}
+    geometric_center:
+      max_index: 31
+      row: 6
+      col: 1
+      peak_mn: 3637.4
+      center_col: 1.57
+      center_row: 4.82
+    gripper_root_center:
+      max_index: 53
+      row: 10
+      col: 3
+      peak_mn: 1159.7
+      center_col: 2.14
+      center_row: 8.91
+  opposite_skin_peak_mn: 0.0
+  conclusion: row index increases from fingertip toward gripper root; no measured cross-talk to left skin

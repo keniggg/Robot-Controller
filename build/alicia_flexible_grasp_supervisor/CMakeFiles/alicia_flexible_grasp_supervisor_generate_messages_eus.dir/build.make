@@ -66,6 +66,7 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetFloat.l
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/CartesianJog.l
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/TriggerZero.l
+alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.l
 alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/manifest.l
 
 
@@ -84,11 +85,11 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 
 /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/lib/geneus/gen_eus.py
 /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg
-/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/share/std_msgs/msg/Header.msg
-/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
-/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
-/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
 /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/share/geometry_msgs/msg/PoseStamped.msg
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l: /opt/ros/noetic/share/std_msgs/msg/Header.msg
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Generating EusLisp code from alicia_flexible_grasp_supervisor/ObjectPose.msg"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/geneus/cmake/../../../lib/geneus/gen_eus.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg
 
@@ -121,11 +122,11 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 
 /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/lib/geneus/gen_eus.py
 /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv
-/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/share/std_msgs/msg/Header.msg
-/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
-/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
-/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
 /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/share/geometry_msgs/msg/PoseStamped.msg
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Pose.msg
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Quaternion.msg
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/share/geometry_msgs/msg/Point.msg
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetTargetPose.l: /opt/ros/noetic/share/std_msgs/msg/Header.msg
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Generating EusLisp code from alicia_flexible_grasp_supervisor/SetTargetPose.srv"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/geneus/cmake/../../../lib/geneus/gen_eus.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetTargetPose.srv -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv
 
@@ -149,8 +150,14 @@ alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_gen
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Generating EusLisp code from alicia_flexible_grasp_supervisor/TriggerZero.srv"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/geneus/cmake/../../../lib/geneus/gen_eus.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv
 
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.l: /opt/ros/noetic/lib/geneus/gen_eus.py
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.l: /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.srv
+/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.l: /opt/ros/noetic/share/geometry_msgs/msg/Vector3.msg
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Generating EusLisp code from alicia_flexible_grasp_supervisor/TcpCalibrationCommand.srv"
+	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/geneus/cmake/../../../lib/geneus/gen_eus.py /home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.srv -Ialicia_flexible_grasp_supervisor:/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg -Istd_msgs:/opt/ros/noetic/share/std_msgs/cmake/../msg -Isensor_msgs:/opt/ros/noetic/share/sensor_msgs/cmake/../msg -Igeometry_msgs:/opt/ros/noetic/share/geometry_msgs/cmake/../msg -p alicia_flexible_grasp_supervisor -o /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv
+
 /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/manifest.l: /opt/ros/noetic/lib/geneus/gen_eus.py
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Generating EusLisp manifest code for alicia_flexible_grasp_supervisor"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --blue --bold --progress-dir=/home/zhuyupei/alicia_wa_full/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Generating EusLisp manifest code for alicia_flexible_grasp_supervisor"
 	cd /home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor && ../catkin_generated/env_cached.sh /usr/bin/python3 /opt/ros/noetic/share/geneus/cmake/../../../lib/geneus/gen_eus.py -m -o /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor alicia_flexible_grasp_supervisor std_msgs sensor_msgs geometry_msgs
 
 alicia_flexible_grasp_supervisor_generate_messages_eus: alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_eus
@@ -167,6 +174,7 @@ alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa
 alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/SetFloat.l
 alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/CartesianJog.l
 alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/TriggerZero.l
+alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.l
 alicia_flexible_grasp_supervisor_generate_messages_eus: /home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/manifest.l
 alicia_flexible_grasp_supervisor_generate_messages_eus: alicia_flexible_grasp_supervisor/CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_eus.dir/build.make
 

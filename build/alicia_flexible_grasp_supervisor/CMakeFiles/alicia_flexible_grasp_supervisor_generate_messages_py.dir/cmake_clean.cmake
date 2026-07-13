@@ -12,6 +12,7 @@ file(REMOVE_RECURSE
   "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_SetTargetPose.py"
   "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_StartGrasp.py"
   "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_StopGrasp.py"
+  "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TcpCalibrationCommand.py"
   "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/_TriggerZero.py"
   "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/srv/__init__.py"
   "CMakeFiles/alicia_flexible_grasp_supervisor_generate_messages_py"

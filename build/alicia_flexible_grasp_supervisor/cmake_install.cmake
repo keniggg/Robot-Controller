@@ -61,6 +61,7 @@ if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/SetFloat.srv"
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/CartesianJog.srv"
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TriggerZero.srv"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/srv/TcpCalibrationCommand.srv"
     )
 endif()
 
@@ -165,6 +166,10 @@ endif()
 
 if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_COMPONENT)
   file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/alicia_flexible_grasp_supervisor" TYPE PROGRAM FILES "/home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor/catkin_generated/installspace/check_remote_grasp6d_server.py")
+endif()
+
+if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_COMPONENT)
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/alicia_flexible_grasp_supervisor" TYPE PROGRAM FILES "/home/zhuyupei/alicia_wa_full/build/alicia_flexible_grasp_supervisor/catkin_generated/installspace/tcp_calibration_node.py")
 endif()
 
 if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_COMPONENT)

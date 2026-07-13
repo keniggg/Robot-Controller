@@ -65,7 +65,12 @@ real-arm/alicia_d_driver/CMakeFiles/alicia_d_driver_node.dir/src/alicia_d_driver
  /opt/ros/noetic/include/serial/serial.h
  /opt/ros/noetic/include/serial/v8stdint.h
  /opt/ros/noetic/include/std_msgs/Bool.h
+ /opt/ros/noetic/include/std_msgs/Float32MultiArray.h
  /opt/ros/noetic/include/std_msgs/Header.h
+ /opt/ros/noetic/include/std_msgs/MultiArrayDimension.h
+ /opt/ros/noetic/include/std_msgs/MultiArrayLayout.h
+ /opt/ros/noetic/include/std_msgs/UInt16.h
+ /opt/ros/noetic/include/std_msgs/UInt8.h
  /opt/ros/noetic/include/xmlrpcpp/XmlRpcDecl.h
  /opt/ros/noetic/include/xmlrpcpp/XmlRpcValue.h
 real-arm/alicia_d_driver/CMakeFiles/alicia_d_driver_node.dir/src/serial_communicator.cpp.o

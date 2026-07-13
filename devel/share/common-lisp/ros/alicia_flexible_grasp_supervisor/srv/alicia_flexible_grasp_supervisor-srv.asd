@@ -19,6 +19,8 @@
     (:file "_package_StartGrasp" :depends-on ("_package"))
     (:file "StopGrasp" :depends-on ("_package_StopGrasp"))
     (:file "_package_StopGrasp" :depends-on ("_package"))
+    (:file "TcpCalibrationCommand" :depends-on ("_package_TcpCalibrationCommand"))
+    (:file "_package_TcpCalibrationCommand" :depends-on ("_package"))
     (:file "TriggerZero" :depends-on ("_package_TriggerZero"))
     (:file "_package_TriggerZero" :depends-on ("_package"))
   ))

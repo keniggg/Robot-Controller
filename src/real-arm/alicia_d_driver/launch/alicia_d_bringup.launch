@@ -10,6 +10,7 @@
   <arg name="start_rviz" default="false" />
   <arg name="ros_control_publish_only_on_change" default="true" />
   <arg name="ros_control_publish_gripper_command" default="false" />
+  <arg name="auto_torque_on_startup" default="false" />
   <!-- Load the URDF, SRDF and other .yaml configuration files on the param server -->
   <include file="$(find alicia_d_moveit)/launch/planning_context.launch">
     <arg name="load_robot_description" value="true"/>
@@ -34,15 +35,22 @@
       
       <!-- Driver Behavior Configuration -->
       <param name="debug_mode"     type="bool"   value="false"/>
+      <param name="auto_torque_on_startup" type="bool" value="$(arg auto_torque_on_startup)"/>
       <param name="rate_limit_sec" type="double" value="0.01"/>
         <!-- Command streaming and smoothing -->
         <param name="command_rate_hz"           type="double" value="50.0"/>
         <param name="state_poll_rate_hz"        type="double" value="10.0"/>
+        <param name="temperature_poll_rate_hz"  type="double" value="1.0"/>
+        <param name="self_check_poll_rate_hz"   type="double" value="0.5"/>
         <param name="mirror_commanded_state_when_feedback_stale" type="bool" value="false"/>
         <param name="log_command_flow"          type="bool"   value="true"/>
         <param name="suppress_redundant_commands" type="bool" value="true"/>
         <param name="pause_commands_when_feedback_stale" type="bool" value="true"/>
         <param name="feedback_stale_timeout_sec" type="double" value="1.0"/>
+        <param name="protection_clear_stable_sec" type="double" value="30.0"/>
+        <param name="max_enable_temperature_c" type="double" value="60.0"/>
+        <param name="e1_confirm_consecutive_frames" type="int" value="3"/>
+        <param name="temperature_over_limit_confirm_samples" type="int" value="3"/>
         <param name="command_keepalive_rate_hz" type="double" value="0.0"/>
         <!-- joint_trajectory_controller already interpolates MoveIt paths. A
              second driver-side profile makes hardware lag behind action success. -->

@@ -2,6 +2,7 @@
 "use strict";
 
 let StopGrasp = require('./StopGrasp.js')
+let TcpCalibrationCommand = require('./TcpCalibrationCommand.js')
 let StartGrasp = require('./StartGrasp.js')
 let SetJointCommand = require('./SetJointCommand.js')
 let SetTargetPose = require('./SetTargetPose.js')
@@ -12,6 +13,7 @@ let CartesianJog = require('./CartesianJog.js')
 
 module.exports = {
   StopGrasp: StopGrasp,
+  TcpCalibrationCommand: TcpCalibrationCommand,
   StartGrasp: StartGrasp,
   SetJointCommand: SetJointCommand,
   SetTargetPose: SetTargetPose,

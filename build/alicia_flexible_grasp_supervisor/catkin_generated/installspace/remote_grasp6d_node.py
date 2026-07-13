@@ -38,6 +38,13 @@ OPTICAL_TO_ROS_CAMERA = np.asarray(
 )
 
 
+def resolve_grasp_backend_health(health):
+    """Return GraspNet capabilities from direct or unified WSL health payloads."""
+    payload = health if isinstance(health, dict) else {}
+    nested = payload.get('grasp_backend')
+    return nested if isinstance(nested, dict) else payload
+
+
 class LatestRgbdBuffer:
     def __init__(self):
         self._lock = threading.Lock()
@@ -108,6 +115,30 @@ def convert_candidate_to_camera_link(candidate, convention='opencv_optical'):
         translation_m=translation,
         quaternion_xyzw=quaternion,
         width_m=float(candidate.width_m),
+        depth_m=getattr(candidate, 'depth_m', None),
+    )
+
+
+def align_candidate_to_tool_frame(candidate, model_grasp_to_tool_quaternion=None):
+    """Convert GraspNet's grasp-frame orientation into the MoveIt tool frame."""
+    correction = np.asarray(
+        model_grasp_to_tool_quaternion
+        if model_grasp_to_tool_quaternion is not None
+        else [0.0, 0.0, 0.0, 1.0],
+        dtype=float,
+    )
+    correction = _normalize_quaternion(correction)
+    if np.allclose(correction, np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)):
+        return candidate
+    quaternion = _normalize_quaternion(
+        np.asarray(quaternion_multiply(candidate.quaternion_xyzw, correction), dtype=float)
+    )
+    return RemoteGraspCandidate(
+        score=float(candidate.score),
+        translation_m=np.asarray(candidate.translation_m, dtype=float),
+        quaternion_xyzw=quaternion,
+        width_m=float(candidate.width_m),
+        depth_m=getattr(candidate, 'depth_m', None),
     )
 
 
@@ -213,6 +244,7 @@ def select_first_reachable_candidate(
     candidate_filter_fn=None,
     candidate_rank_fn=None,
     orientation_variant_quaternions=None,
+    model_grasp_to_tool_quaternion=None,
 ):
     variants = list(orientation_variant_quaternions or [])
     if not variants:
@@ -220,6 +252,10 @@ def select_first_reachable_candidate(
     ranked = []
     for candidate in candidates:
         camera_candidate = convert_candidate_to_camera_link(candidate, candidate_frame_convention)
+        camera_candidate = align_candidate_to_tool_frame(
+            camera_candidate,
+            model_grasp_to_tool_quaternion,
+        )
         for variant_index, correction in enumerate(variants):
             if np.allclose(np.asarray(correction, dtype=float), np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)):
                 variant_candidate = camera_candidate
@@ -232,6 +268,7 @@ def select_first_reachable_candidate(
                     translation_m=np.asarray(camera_candidate.translation_m, dtype=float),
                     quaternion_xyzw=variant_quat,
                     width_m=float(camera_candidate.width_m),
+                    depth_m=getattr(camera_candidate, 'depth_m', None),
                 )
             pose = pose_estimator.make_base_pose_from_camera_pose(
                 variant_candidate.translation_m,
@@ -261,6 +298,7 @@ def make_grasp_plan_pose_array(grasp_pose, stamp, grasp_config):
         pregrasp_distance_m=float(grasp_config.get('pregrasp_distance_m', 0.08)),
         approach_offset_m=float(grasp_config.get('final_approach_offset_m', 0.015)),
         lift_height_m=float(grasp_config.get('lift_height_m', 0.05)),
+        tool_approach_axis=str(grasp_config.get('tool_approach_axis', 'x')),
     )
     msg = PoseArray()
     msg.header.frame_id = grasp_pose.header.frame_id
@@ -303,6 +341,18 @@ class RemoteGrasp6DNode:
         )
         self.orientation_variant_quaternions = self._parse_orientation_variant_quaternions(
             rospy.get_param('/grasp_6d/remote/orientation_variants_rpy_deg', remote_cfg.get('orientation_variants_rpy_deg', [[0.0, 0.0, 0.0]]))
+        )
+        self.model_grasp_to_tool_quaternion = self._parse_orientation_variant_quaternions(
+            [rospy.get_param(
+                '/grasp_6d/remote/model_grasp_to_tool_rpy_deg',
+                remote_cfg.get('model_grasp_to_tool_rpy_deg', [0.0, 0.0, 0.0]),
+            )]
+        )[0]
+        self.require_candidate_depth = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/require_candidate_depth',
+                remote_cfg.get('require_candidate_depth', False),
+            )
         )
         self.allow_position_only_fallback = bool(
             rospy.get_param(
@@ -546,6 +596,7 @@ class RemoteGrasp6DNode:
         self._target_gate_rejected_count = 0
         self._visibility_gate_rejected_count = 0
         self._width_gate_rejected_count = 0
+        self._depth_gate_rejected_count = 0
         self._width_gate_rejected_keys = set()
         try:
             self.client = RemoteGrasp6DClient(server_url, timeout_sec=timeout_sec)
@@ -683,6 +734,7 @@ class RemoteGrasp6DNode:
             self._target_gate_rejected_count = 0
             self._visibility_gate_rejected_count = 0
             self._width_gate_rejected_count = 0
+            self._depth_gate_rejected_count = 0
             self._width_gate_rejected_keys = set()
             selected, grasp_pose = select_first_reachable_candidate(
                 candidates,
@@ -694,6 +746,7 @@ class RemoteGrasp6DNode:
                 candidate_filter_fn=self._candidate_matches_target,
                 candidate_rank_fn=self._candidate_rank if self.rank_by_target_distance else None,
                 orientation_variant_quaternions=self.orientation_variant_quaternions,
+                model_grasp_to_tool_quaternion=self.model_grasp_to_tool_quaternion,
             )
             if selected is None:
                 if (
@@ -713,6 +766,7 @@ class RemoteGrasp6DNode:
                     )
                 elif (
                     self._width_gate_rejected_count > 0
+                    or self._depth_gate_rejected_count > 0
                     or self._target_gate_rejected_count > 0
                     or self._visibility_gate_rejected_count > 0
                     or self._position_only_rejected_count > 0
@@ -720,11 +774,12 @@ class RemoteGrasp6DNode:
                 ):
                     message = (
                         'remote 6D returned %d candidates, none executable '
-                        '(width>%0.3fm: %d, off-target: %d, target-out-of-view: %d, position-only: %d, orientation-fallback: %d)'
+                        '(width>%0.3fm: %d, missing-depth: %d, off-target: %d, target-out-of-view: %d, position-only: %d, orientation-fallback: %d)'
                         % (
                             len(candidates),
                             self.max_gripper_width_m,
                             self._width_gate_rejected_count,
+                            self._depth_gate_rejected_count,
                             self._target_gate_rejected_count,
                             self._visibility_gate_rejected_count,
                             self._position_only_rejected_count,
@@ -751,9 +806,11 @@ class RemoteGrasp6DNode:
                     visibility_message = ' predicted_view=%s(%s)' % ('visible' if visible else 'lost', stage_text)
                 elif not visible:
                     visibility_message = ' predicted_view=unknown(%s)' % reason
-            message = 'remote 6D plan ready score=%.3f width=%.3f target_delta=%.3fm target=%s strict_orientation=1' % (
+            depth_text = 'missing' if selected.depth_m is None else '%.3f' % float(selected.depth_m)
+            message = 'remote 6D plan ready score=%.3f width=%.3f depth=%s target_delta=%.3fm target=%s strict_orientation=1 tool_aligned=1' % (
                 selected.score,
                 selected.width_m,
+                depth_text,
                 final_target_delta,
                 target_source,
             ) + visibility_message
@@ -820,6 +877,18 @@ class RemoteGrasp6DNode:
             rospy.get_param(
                 '/grasp_6d/remote/orientation_variants_rpy_deg',
                 remote_cfg.get('orientation_variants_rpy_deg', [[0.0, 0.0, 0.0]]),
+            )
+        )
+        self.model_grasp_to_tool_quaternion = self._parse_orientation_variant_quaternions(
+            [rospy.get_param(
+                '/grasp_6d/remote/model_grasp_to_tool_rpy_deg',
+                remote_cfg.get('model_grasp_to_tool_rpy_deg', [0.0, 0.0, 0.0]),
+            )]
+        )[0]
+        self.require_candidate_depth = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/require_candidate_depth',
+                remote_cfg.get('require_candidate_depth', getattr(self, 'require_candidate_depth', False)),
             )
         )
         self.max_candidates = int(
@@ -1248,6 +1317,19 @@ class RemoteGrasp6DNode:
         return values.astype(np.float32) * float(self._camera_intrinsics().depth_scale)
 
     def _candidate_matches_target(self, _candidate, _camera_candidate, grasp_pose):
+        depth = getattr(_camera_candidate, 'depth_m', None)
+        if bool(getattr(self, 'require_candidate_depth', False)):
+            try:
+                depth_valid = depth is not None and np.isfinite(float(depth)) and float(depth) > 0.0
+            except Exception:
+                depth_valid = False
+            if not depth_valid:
+                self._depth_gate_rejected_count += 1
+                rospy.logwarn_throttle(
+                    1.0,
+                    'remote 6D candidate rejected: WSL response has no valid GraspNet depth_m; sync and restart graspnet_baseline_server.py',
+                )
+                return False
         width = float(getattr(_camera_candidate, 'width_m', 0.0) or 0.0)
         width_limit = float(getattr(self, 'max_gripper_width_m', 0.0) or 0.0)
         width_tol = float(getattr(self, 'candidate_width_tolerance_m', 0.0) or 0.0)
@@ -1364,6 +1446,7 @@ class RemoteGrasp6DNode:
                 pregrasp_distance_m=float(self.grasp_config.get('pregrasp_distance_m', 0.08)),
                 approach_offset_m=float(self.grasp_config.get('final_approach_offset_m', 0.015)),
                 lift_height_m=float(self.grasp_config.get('lift_height_m', 0.05)),
+                tool_approach_axis=str(self.grasp_config.get('tool_approach_axis', 'x')),
             )
             stages = [('pregrasp', plan.pregrasp)]
             if bool(getattr(self, 'camera_visibility_require_approach', True)):
@@ -1663,10 +1746,21 @@ class RemoteGrasp6DNode:
             self.status_pub.publish(String('remote 6D health check failed: %s' % exc))
             return
         if bool(health.get('ok', False)):
+            backend_health = resolve_grasp_backend_health(health)
+            candidate_fields = set(str(item) for item in (backend_health.get('candidate_fields') or []))
+            if bool(getattr(self, 'require_candidate_depth', False)) and 'depth_m' not in candidate_fields:
+                message = (
+                    'remote 6D server protocol is outdated: depth_m is missing; '
+                    'sync tools/graspnet_baseline_server.py to WSL and restart port 8000'
+                )
+                rospy.logwarn('%s', message)
+                self.status_pub.publish(String(message))
+                return
             rospy.loginfo(
-                'remote 6D server online: backend=%s loaded=%s url=%s',
-                health.get('backend', 'unknown'),
-                health.get('loaded', 'unknown'),
+                'remote 6D server online: backend=%s loaded=%s protocol=%s url=%s',
+                backend_health.get('backend', health.get('backend', 'unknown')),
+                backend_health.get('loaded', health.get('loaded', 'unknown')),
+                backend_health.get('protocol_version', health.get('protocol_version', 'unknown')),
                 self.client.server_url,
             )
         else:

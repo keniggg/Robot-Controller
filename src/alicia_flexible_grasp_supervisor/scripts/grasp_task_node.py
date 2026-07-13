@@ -29,6 +29,8 @@ class GraspTaskNode:
     def __init__(self):
         self.latest_obj = None
         self.latest_obj_time = None
+        self.latest_visual_obj = None
+        self.latest_visual_obj_time = None
         self.latest_grasp6d_plan = None
         self.latest_grasp6d_plan_time = None
         self.latest_grasp6d_plan_object = None
@@ -56,6 +58,11 @@ class GraspTaskNode:
             return
         gcfg = rospy.get_param('/grasp', {})
         confidence = float(getattr(msg, 'confidence', 1.0) or 0.0)
+        now = rospy.Time.now()
+        # Preserve low-confidence close-range detections for visual retargeting.
+        # Candidate generation still uses latest_obj and its stricter threshold.
+        self.latest_visual_obj = msg
+        self.latest_visual_obj_time = now
         min_confidence = self._cfg_float(gcfg, 'min_object_confidence', 0.50)
         if confidence < min_confidence:
             rospy.logwarn_throttle(
@@ -66,7 +73,6 @@ class GraspTaskNode:
             )
             return
 
-        now = rospy.Time.now()
         previous = getattr(self, 'latest_obj', None)
         previous_time = getattr(self, 'latest_obj_time', None)
         max_jump = self._cfg_float(gcfg, 'max_object_jump_m', 0.12)
@@ -409,17 +415,25 @@ class GraspTaskNode:
         required = max(1, int(gcfg.get('visual_retarget_required_samples', 3)))
         max_jitter = max(0.0, self._cfg_float(gcfg, 'visual_retarget_max_jitter_m', 0.012))
         raw_max_age = max(0.0, self._cfg_float(gcfg, 'visual_retarget_raw_max_age_sec', 0.30))
+        min_confidence = max(
+            0.0,
+            min(1.0, self._cfg_float(gcfg, 'visual_retarget_min_object_confidence', 0.35)),
+        )
         samples = []
         last_token = None
         start = time.monotonic()
 
         while self.active and time.monotonic() - start < timeout and not rospy.is_shutdown():
-            obj = getattr(self, 'latest_obj', None)
-            obj_time = getattr(self, 'latest_obj_time', None)
+            obj = getattr(self, 'latest_visual_obj', None)
+            obj_time = getattr(self, 'latest_visual_obj_time', None)
+            if obj is None or obj_time is None:
+                obj = getattr(self, 'latest_obj', None)
+                obj_time = getattr(self, 'latest_obj_time', None)
             token = self._time_token(obj_time)
             if (
                 obj is not None
                 and bool(getattr(obj, 'detected', False))
+                and float(getattr(obj, 'confidence', 1.0) or 0.0) >= min_confidence
                 and token is not None
                 and token != last_token
                 and self._raw_detection_is_fresh(raw_max_age)
@@ -444,13 +458,17 @@ class GraspTaskNode:
                             point = result.pose_base.pose.position
                             point.x, point.y, point.z = center
                             rospy.loginfo(
-                                'Grasp live target after %s: xyz=(%.3f, %.3f, %.3f) samples=%d spread=%.3fm',
+                                (
+                                    'Grasp live target after %s: xyz=(%.3f, %.3f, %.3f) '
+                                    'samples=%d spread=%.3fm confidence=%.3f'
+                                ),
                                 stage_label,
                                 center[0],
                                 center[1],
                                 center[2],
                                 len(samples),
                                 spread,
+                                float(getattr(result, 'confidence', 1.0) or 0.0),
                             )
                             return result
                         samples = samples[-max(1, required - 1):]

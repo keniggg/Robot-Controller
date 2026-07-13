@@ -37,6 +37,7 @@ add_service_files(
   SetFloat.srv
   CartesianJog.srv
   TriggerZero.srv
+  TcpCalibrationCommand.srv
 )
 
 generate_messages(
@@ -77,6 +78,7 @@ catkin_install_python(PROGRAMS
   scripts/system_bringup_check.py
   scripts/check_grasp6d_runtime.py
   scripts/check_remote_grasp6d_server.py
+  scripts/tcp_calibration_node.py
   gui/main_gui.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
