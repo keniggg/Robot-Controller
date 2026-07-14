@@ -29,6 +29,8 @@ class GraspTaskNode:
     def __init__(self):
         self.latest_obj = None
         self.latest_obj_time = None
+        self.latest_visual_obj = None
+        self.latest_visual_obj_time = None
         self.latest_grasp6d_plan = None
         self.latest_grasp6d_plan_time = None
         self.latest_grasp6d_plan_object = None
@@ -56,6 +58,11 @@ class GraspTaskNode:
             return
         gcfg = rospy.get_param('/grasp', {})
         confidence = float(getattr(msg, 'confidence', 1.0) or 0.0)
+        now = rospy.Time.now()
+        # Preserve low-confidence close-range detections for visual retargeting.
+        # Candidate generation still uses latest_obj and its stricter threshold.
+        self.latest_visual_obj = msg
+        self.latest_visual_obj_time = now
         min_confidence = self._cfg_float(gcfg, 'min_object_confidence', 0.50)
         if confidence < min_confidence:
             rospy.logwarn_throttle(
@@ -66,7 +73,6 @@ class GraspTaskNode:
             )
             return
 
-        now = rospy.Time.now()
         previous = getattr(self, 'latest_obj', None)
         previous_time = getattr(self, 'latest_obj_time', None)
         max_jump = self._cfg_float(gcfg, 'max_object_jump_m', 0.12)
@@ -135,8 +141,10 @@ class GraspTaskNode:
 
     def execute(self):
         rospy.wait_for_service('/supervisor/move_to_pose', timeout=10)
+        rospy.wait_for_service('/supervisor/move_to_pose_linear', timeout=10)
         rospy.wait_for_service('/supervisor/set_gripper', timeout=10)
         move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
+        move_pose_linear = rospy.ServiceProxy('/supervisor/move_to_pose_linear', SetTargetPose)
         set_gripper = rospy.ServiceProxy('/supervisor/set_gripper', SetFloat)
         gcfg = rospy.get_param('/grasp', {})
         gripper_cfg = rospy.get_param('/gripper', {})
@@ -152,7 +160,15 @@ class GraspTaskNode:
         open_position = float(gripper_cfg.get('open_position_m', 0.0))
 
         if bool(gcfg.get('use_grasp6d_plan', False)):
-            return self._execute_grasp6d_plan(gcfg, gripper_cfg, open_position, move_pose, set_gripper, close)
+            return self._execute_grasp6d_plan(
+                gcfg,
+                gripper_cfg,
+                open_position,
+                move_pose,
+                move_pose_linear,
+                set_gripper,
+                close,
+            )
 
         self.set_state(GraspStages.SEARCH_OBJECT, 'waiting for object')
         t0 = rospy.Time.now()
@@ -210,13 +226,13 @@ class GraspTaskNode:
             mode=pregrasp_mode,
         )
         self.set_state(GraspStages.APPROACH_TARGET, 'planning target approach')
-        resp = move_pose(approach, False)
+        resp = move_pose_linear(approach, False)
         if not resp.success:
             self.set_state(GraspStages.FAILED, 'approach target planning failed: ' + resp.message)
             return False
 
         self.set_state(GraspStages.APPROACH_TARGET, 'moving to target')
-        resp = move_pose(approach, True)
+        resp = move_pose_linear(approach, True)
         if not resp.success:
             self.set_state(GraspStages.FAILED, 'approach target failed: ' + resp.message)
             return False
@@ -231,14 +247,27 @@ class GraspTaskNode:
 
         self.set_state(GraspStages.LIFT_OBJECT, 'lifting')
         lift = make_lift_pose(approach, lift_height)
-        resp = move_pose(lift, True)
-        if not resp.success:
-            self.set_state(GraspStages.FAILED, 'lift failed: '+resp.message)
+        if not self._plan_and_execute_pose(
+            GraspStages.LIFT_OBJECT,
+            'linear lift',
+            lift,
+            move_pose_linear,
+            'lift',
+        ):
             return False
         self.set_state(GraspStages.SUCCESS, 'grasp done', True)
         return True
 
-    def _execute_grasp6d_plan(self, gcfg, gripper_cfg, open_position, move_pose, set_gripper, close):
+    def _execute_grasp6d_plan(
+        self,
+        gcfg,
+        gripper_cfg,
+        open_position,
+        move_pose,
+        move_pose_linear,
+        set_gripper,
+        close,
+    ):
         plan = self._fresh_grasp6d_plan(gcfg)
         if plan is None:
             self.set_state(GraspStages.FAILED, 'no fresh 6D grasp plan')
@@ -286,7 +315,13 @@ class GraspTaskNode:
             return False
         (approach, grasp, lift), locked_obj = retargeted
 
-        if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D approach', approach, move_pose, '6D approach'):
+        if not self._plan_and_execute_pose(
+            GraspStages.APPROACH_TARGET,
+            'linear 6D approach',
+            approach,
+            move_pose_linear,
+            '6D approach',
+        ):
             return False
 
         if bool(gcfg.get('visual_retarget_after_approach', True)):
@@ -301,7 +336,13 @@ class GraspTaskNode:
                 return False
             (grasp, lift), locked_obj = retargeted
 
-        if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D grasp pose', grasp, move_pose, '6D grasp pose'):
+        if not self._plan_and_execute_pose(
+            GraspStages.APPROACH_TARGET,
+            'linear 6D grasp pose',
+            grasp,
+            move_pose_linear,
+            '6D grasp pose',
+        ):
             return False
 
         close_label = 'force-guided close' if bool(gripper_cfg.get('use_compliant_close', True)) else 'fixed gripper close'
@@ -311,7 +352,13 @@ class GraspTaskNode:
             self.set_state(GraspStages.FAILED, message)
             return False
 
-        if not self._plan_and_execute_pose(GraspStages.LIFT_OBJECT, '6D lift', lift, move_pose, '6D lift'):
+        if not self._plan_and_execute_pose(
+            GraspStages.LIFT_OBJECT,
+            'linear 6D lift',
+            lift,
+            move_pose_linear,
+            '6D lift',
+        ):
             return False
         self.set_state(GraspStages.SUCCESS, '6D grasp done', True)
         return True
@@ -409,17 +456,25 @@ class GraspTaskNode:
         required = max(1, int(gcfg.get('visual_retarget_required_samples', 3)))
         max_jitter = max(0.0, self._cfg_float(gcfg, 'visual_retarget_max_jitter_m', 0.012))
         raw_max_age = max(0.0, self._cfg_float(gcfg, 'visual_retarget_raw_max_age_sec', 0.30))
+        min_confidence = max(
+            0.0,
+            min(1.0, self._cfg_float(gcfg, 'visual_retarget_min_object_confidence', 0.35)),
+        )
         samples = []
         last_token = None
         start = time.monotonic()
 
         while self.active and time.monotonic() - start < timeout and not rospy.is_shutdown():
-            obj = getattr(self, 'latest_obj', None)
-            obj_time = getattr(self, 'latest_obj_time', None)
+            obj = getattr(self, 'latest_visual_obj', None)
+            obj_time = getattr(self, 'latest_visual_obj_time', None)
+            if obj is None or obj_time is None:
+                obj = getattr(self, 'latest_obj', None)
+                obj_time = getattr(self, 'latest_obj_time', None)
             token = self._time_token(obj_time)
             if (
                 obj is not None
                 and bool(getattr(obj, 'detected', False))
+                and float(getattr(obj, 'confidence', 1.0) or 0.0) >= min_confidence
                 and token is not None
                 and token != last_token
                 and self._raw_detection_is_fresh(raw_max_age)
@@ -444,13 +499,17 @@ class GraspTaskNode:
                             point = result.pose_base.pose.position
                             point.x, point.y, point.z = center
                             rospy.loginfo(
-                                'Grasp live target after %s: xyz=(%.3f, %.3f, %.3f) samples=%d spread=%.3fm',
+                                (
+                                    'Grasp live target after %s: xyz=(%.3f, %.3f, %.3f) '
+                                    'samples=%d spread=%.3fm confidence=%.3f'
+                                ),
                                 stage_label,
                                 center[0],
                                 center[1],
                                 center[2],
                                 len(samples),
                                 spread,
+                                float(getattr(result, 'confidence', 1.0) or 0.0),
                             )
                             return result
                         samples = samples[-max(1, required - 1):]

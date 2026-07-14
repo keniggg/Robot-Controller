@@ -26,6 +26,10 @@ class FakePlanner:
         self.calls.append((target, execute, allow_fallbacks))
         return True, 'executed'
 
+    def move_to_pose_linear(self, target, execute=True):
+        self.calls.append(('linear', target, execute))
+        return True, 'linear executed'
+
 
 class FakeJogger:
     def __init__(self, planner):
@@ -113,6 +117,25 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
 
         self.assertFalse(res.success)
         self.assertIn('planning-only', res.message)
+        self.assertEqual(gateway.planner.calls, [])
+
+    def test_execute_linear_pose_starts_controllers_and_uses_linear_planner(self):
+        gateway = self.make_gateway()
+        req = types.SimpleNamespace(target='pose', execute=True)
+
+        res = MotionGateway.handle_pose_linear(gateway, req)
+
+        self.assertTrue(res.success)
+        self.assertEqual(gateway.planner.calls, [('linear', 'pose', True)])
+
+    def test_linear_pose_stops_when_controllers_are_unavailable(self):
+        gateway = self.make_gateway((False, 'controllers stopped'))
+        req = types.SimpleNamespace(target='pose', execute=True)
+
+        res = MotionGateway.handle_pose_linear(gateway, req)
+
+        self.assertFalse(res.success)
+        self.assertIn('controllers stopped', res.message)
         self.assertEqual(gateway.planner.calls, [])
 
     def test_controller_state_check_reports_stopped_or_missing_controllers(self):

@@ -18,7 +18,16 @@ robot:
   planning_time: 2.0
   # Candidate reachability preflight only; final planning/execution keeps planning_time.
   strict_pose_planning_time: 0.25
-  cached_plan_position_tolerance_m: 0.01
+  # Plan and execute must refer to the same millimetre-level target.
+  cached_plan_position_tolerance_m: 0.002
+  cached_plan_orientation_tolerance_rad: 0.02
+  # Only short approach/contact/lift segments use Cartesian interpolation.
+  cartesian_eef_step_m: 0.003
+  cartesian_jump_threshold: 0.0
+  cartesian_min_fraction: 0.98
+  cartesian_max_segment_m: 0.08
+  cartesian_velocity_scaling: 0.20
+  cartesian_acceleration_scaling: 0.30
   pregrasp_candidate_orientations_xyzw:
     - [0.0, 0.0, 0.0, 1.0]
     - [0.0, 0.7071, 0.0, 0.7071]

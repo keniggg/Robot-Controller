@@ -1,4 +1,5 @@
 import sys
+import math
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -25,7 +26,30 @@ class MoveItPlanner:
         self.cached_plan_position_tolerance_m = self._float_param(
             '~cached_plan_position_tolerance_m',
             '/robot/cached_plan_position_tolerance_m',
-            0.01,
+            0.002,
+        )
+        self.cached_plan_orientation_tolerance_rad = self._float_param(
+            '~cached_plan_orientation_tolerance_rad',
+            '/robot/cached_plan_orientation_tolerance_rad',
+            0.02,
+        )
+        self.cartesian_eef_step_m = self._float_param(
+            '~cartesian_eef_step_m', '/robot/cartesian_eef_step_m', 0.003
+        )
+        self.cartesian_jump_threshold = self._float_param(
+            '~cartesian_jump_threshold', '/robot/cartesian_jump_threshold', 0.0
+        )
+        self.cartesian_min_fraction = self._float_param(
+            '~cartesian_min_fraction', '/robot/cartesian_min_fraction', 0.98
+        )
+        self.cartesian_max_segment_m = self._float_param(
+            '~cartesian_max_segment_m', '/robot/cartesian_max_segment_m', 0.08
+        )
+        self.cartesian_velocity_scaling = self._float_param(
+            '~cartesian_velocity_scaling', '/robot/cartesian_velocity_scaling', 0.20
+        )
+        self.cartesian_acceleration_scaling = self._float_param(
+            '~cartesian_acceleration_scaling', '/robot/cartesian_acceleration_scaling', 0.30
         )
         self.candidate_orientations = self._orientation_param(
             '~pregrasp_candidate_orientations_xyzw',
@@ -90,7 +114,7 @@ class MoveItPlanner:
             if not execute and not allow_fallbacks:
                 strict_planning_time = float(getattr(self, 'strict_pose_planning_time', 0.25))
             if self._attempt_pose_target(pose, execute, planning_time=strict_planning_time):
-                return True, '%s: %s' % (action_done, target_text)
+                return True, '%s: %s%s' % (action_done, target_text, self._cached_plan_metrics_text())
             failed_attempts.append('strict pose')
 
             if (
@@ -102,14 +126,27 @@ class MoveItPlanner:
                 for label, orientation in self._candidate_orientations(pose):
                     labels.append(label)
                     candidate = self._pose_with_orientation(pose, orientation)
-                    if self._attempt_pose_target(candidate, execute):
-                        return True, '%s with candidate orientation %s: %s' % (action_done, label, target_text)
+                    if self._attempt_pose_target(
+                        candidate,
+                        execute,
+                        plan_kind='candidate orientation %s' % label,
+                    ):
+                        return True, '%s with candidate orientation %s: %s%s' % (
+                            action_done,
+                            label,
+                            target_text,
+                            self._cached_plan_metrics_text(),
+                        )
                 if labels:
                     failed_attempts.append('candidate orientations %s' % ','.join(labels))
 
             if allow_fallbacks and self._position_only_fallback_allowed(execute):
                 if self._attempt_position_target(pose, execute):
-                    return True, '%s with position-only fallback: %s' % (action_done, target_text)
+                    return True, '%s with position-only fallback: %s%s' % (
+                        action_done,
+                        target_text,
+                        self._cached_plan_metrics_text(),
+                    )
                 failed_attempts.append('position-only')
             elif allow_fallbacks and execute and getattr(self, 'position_only_fallback_enabled', True):
                 failed_attempts.append('position-only disabled for execute')
@@ -123,6 +160,88 @@ class MoveItPlanner:
             return False, 'move_to_pose exception: %s; %s' % (exc, target_text)
         finally:
             self._clear_targets()
+
+    def move_to_pose_linear(self, pose_stamped_or_pose, execute=True):
+        if not self.ready:
+            return False, self.error or 'MoveIt not ready'
+        pose = getattr(pose_stamped_or_pose, 'pose', pose_stamped_or_pose)
+        target_text = self._pose_xyz_text(pose)
+        try:
+            if execute:
+                cached_ok, cached_message = self._execute_cached_pose_plan(
+                    pose,
+                    target_text,
+                    required_kind='cartesian',
+                )
+                if cached_message:
+                    return cached_ok, cached_message
+                return False, 'linear execute failed: no matching Cartesian plan; %s' % target_text
+
+            current = self.manipulator.get_current_pose()
+            current_pose = getattr(current, 'pose', current)
+            distance = self._pose_position_distance(current_pose, pose)
+            max_segment = max(0.0, float(getattr(self, 'cartesian_max_segment_m', 0.08)))
+            if max_segment > 0.0 and distance > max_segment:
+                return False, (
+                    'Cartesian segment %.3fm exceeds limit %.3fm; %s'
+                    % (distance, max_segment, target_text)
+                )
+
+            plan, fraction = self._compute_cartesian_plan(pose)
+            min_fraction = min(1.0, max(0.0, float(getattr(self, 'cartesian_min_fraction', 0.98))))
+            if plan is None or not self._plan_success(plan) or fraction < min_fraction:
+                self._last_pose_plan = None
+                return False, (
+                    'Cartesian path incomplete fraction=%.3f < %.3f; %s'
+                    % (fraction, min_fraction, target_text)
+                )
+            plan = self._retime_cartesian_plan(plan)
+            self._remember_pose_plan(pose, plan, 'cartesian')
+            return True, 'planned Cartesian line fraction=%.3f distance=%.3fm: %s%s' % (
+                fraction,
+                distance,
+                target_text,
+                self._cached_plan_metrics_text(),
+            )
+        except Exception as exc:
+            self._last_pose_plan = None
+            return False, 'Cartesian move exception: %s; %s' % (exc, target_text)
+
+    def _compute_cartesian_plan(self, pose):
+        result = self.manipulator.compute_cartesian_path(
+            [deepcopy(pose)],
+            max(0.0005, float(getattr(self, 'cartesian_eef_step_m', 0.003))),
+            max(0.0, float(getattr(self, 'cartesian_jump_threshold', 0.0))),
+            avoid_collisions=True,
+        )
+        if not isinstance(result, tuple) or len(result) < 2:
+            return None, 0.0
+        first, second = result[0], result[1]
+        if isinstance(first, (int, float)):
+            return second, float(first)
+        return first, float(second)
+
+    def _retime_cartesian_plan(self, plan):
+        if not hasattr(self.manipulator, 'retime_trajectory') or not hasattr(self, 'robot'):
+            return plan
+        try:
+            retimed = self.manipulator.retime_trajectory(
+                self.robot.get_current_state(),
+                plan,
+                velocity_scaling_factor=min(
+                    1.0, max(0.01, float(getattr(self, 'cartesian_velocity_scaling', 0.20)))
+                ),
+                acceleration_scaling_factor=min(
+                    1.0, max(0.01, float(getattr(self, 'cartesian_acceleration_scaling', 0.30)))
+                ),
+            )
+            if self._plan_success(retimed):
+                return retimed
+            rospy.logwarn('Cartesian trajectory retiming returned an empty plan; using original timing')
+            return plan
+        except Exception as exc:
+            rospy.logwarn('Cartesian trajectory retiming failed; using original timing: %s', exc)
+            return plan
 
     def move_to_joints(self, joints, execute=True):
         if not self.ready:
@@ -154,7 +273,7 @@ class MoveItPlanner:
             return None
         return self.manipulator.get_current_pose()
 
-    def _attempt_pose_target(self, pose, execute, planning_time=None):
+    def _attempt_pose_target(self, pose, execute, planning_time=None, plan_kind='strict pose'):
         previous_planning_time = None
         if planning_time is not None and hasattr(self.manipulator, 'set_planning_time'):
             if hasattr(self.manipulator, 'get_planning_time'):
@@ -162,7 +281,7 @@ class MoveItPlanner:
             self.manipulator.set_planning_time(max(0.05, float(planning_time)))
         self.manipulator.set_pose_target(pose)
         try:
-            return self._run_current_target(execute, pose, 'strict pose')
+            return self._run_current_target(execute, pose, plan_kind)
         finally:
             self._clear_targets()
             if previous_planning_time is not None:
@@ -191,8 +310,8 @@ class MoveItPlanner:
             self._remember_pose_plan(pose, self._executable_plan(plan), plan_kind)
         return ok
 
-    def _execute_cached_pose_plan(self, pose, target_text):
-        cached = self._matching_cached_pose_plan(pose)
+    def _execute_cached_pose_plan(self, pose, target_text, required_kind=None):
+        cached = self._matching_cached_pose_plan(pose, required_kind=required_kind)
         if cached is None:
             return False, None
         if cached.get('kind') == 'position-only' and not getattr(self, 'position_only_execute_enabled', False):
@@ -203,24 +322,35 @@ class MoveItPlanner:
             ok = self.manipulator.execute(cached['plan'], wait=True)
             self.manipulator.stop()
             if ok:
-                self._last_pose_plan = None
                 return True, 'executed cached plan (%s): %s' % (cached.get('kind', 'target'), target_text)
             return False, (
                 'execute failed from cached plan (%s): %s; check trajectory controllers, hardware state, and heat protection'
             ) % (cached.get('kind', 'target'), target_text)
         except Exception as exc:
             return False, 'execute cached plan exception: %s; %s' % (exc, target_text)
+        finally:
+            # A trajectory is valid only from the state where it was planned.
+            # Never replay it after a partial or failed hardware execution.
+            self._last_pose_plan = None
 
     def _remember_pose_plan(self, pose, plan, plan_kind):
         xyz = self._pose_xyz_tuple(pose)
         if xyz is None:
             self._last_pose_plan = None
             return
-        self._last_pose_plan = {'xyz': xyz, 'plan': plan, 'kind': plan_kind}
+        self._last_pose_plan = {
+            'xyz': xyz,
+            'quaternion': self._pose_quaternion_tuple(pose),
+            'plan': plan,
+            'kind': plan_kind,
+            'metrics': self._plan_joint_path_metrics(plan),
+        }
 
-    def _matching_cached_pose_plan(self, pose):
+    def _matching_cached_pose_plan(self, pose, required_kind=None):
         cached = getattr(self, '_last_pose_plan', None)
         if not cached:
+            return None
+        if required_kind is not None and cached.get('kind') != required_kind:
             return None
         xyz = self._pose_xyz_tuple(pose)
         if xyz is None:
@@ -228,11 +358,78 @@ class MoveItPlanner:
         cached_xyz = cached.get('xyz')
         if cached_xyz is None:
             return None
-        tolerance = max(0.0, float(getattr(self, 'cached_plan_position_tolerance_m', 0.01)))
+        tolerance = max(0.0, float(getattr(self, 'cached_plan_position_tolerance_m', 0.002)))
         deltas = [abs(float(a) - float(b)) for a, b in zip(xyz, cached_xyz)]
-        if all(delta <= tolerance for delta in deltas):
-            return cached
-        return None
+        if not all(delta <= tolerance for delta in deltas):
+            return None
+        cached_quaternion = cached.get('quaternion')
+        target_quaternion = self._pose_quaternion_tuple(pose)
+        if (
+            cached.get('kind') in ('strict pose', 'cartesian')
+            and cached_quaternion is not None
+            and target_quaternion is not None
+        ):
+            angle = self._quaternion_angle(cached_quaternion, target_quaternion)
+            orientation_tolerance = max(
+                0.0,
+                float(getattr(self, 'cached_plan_orientation_tolerance_rad', 0.02)),
+            )
+            if angle > orientation_tolerance:
+                return None
+        return cached
+
+    def _cached_plan_metrics_text(self):
+        cached = getattr(self, '_last_pose_plan', None) or {}
+        metrics = cached.get('metrics') or {}
+        if not metrics:
+            return ''
+        return ' joint_path_cost=%.3f joint_max_delta=%.3f' % (
+            float(metrics.get('path_cost', 0.0)),
+            float(metrics.get('max_delta', 0.0)),
+        )
+
+    @staticmethod
+    def _plan_joint_path_metrics(plan):
+        trajectory = getattr(plan, 'joint_trajectory', None)
+        points = list(getattr(trajectory, 'points', []) or [])
+        positions = [list(getattr(point, 'positions', []) or []) for point in points]
+        positions = [values for values in positions if values]
+        if len(positions) < 2:
+            return {'path_cost': 0.0, 'max_delta': 0.0}
+        path_cost = 0.0
+        for previous, current in zip(positions, positions[1:]):
+            size = min(len(previous), len(current))
+            path_cost += math.sqrt(sum((float(current[i]) - float(previous[i])) ** 2 for i in range(size)))
+        size = min(len(positions[0]), len(positions[-1]))
+        max_delta = max(abs(float(positions[-1][i]) - float(positions[0][i])) for i in range(size))
+        return {'path_cost': float(path_cost), 'max_delta': float(max_delta)}
+
+    @staticmethod
+    def _pose_position_distance(first, second):
+        a = first.position
+        b = second.position
+        return math.sqrt(
+            (float(a.x) - float(b.x)) ** 2
+            + (float(a.y) - float(b.y)) ** 2
+            + (float(a.z) - float(b.z)) ** 2
+        )
+
+    @staticmethod
+    def _pose_quaternion_tuple(pose):
+        try:
+            q = pose.orientation
+            values = [float(q.x), float(q.y), float(q.z), float(q.w)]
+            norm = math.sqrt(sum(value * value for value in values))
+            if norm <= 1e-9:
+                return None
+            return tuple(value / norm for value in values)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _quaternion_angle(first, second):
+        dot = abs(sum(float(a) * float(b) for a, b in zip(first, second)))
+        return 2.0 * math.acos(min(1.0, max(-1.0, dot)))
 
     def _clear_targets(self):
         try:

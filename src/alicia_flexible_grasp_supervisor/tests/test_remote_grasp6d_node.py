@@ -200,6 +200,27 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIs(selected, candidates[1])
         self.assertAlmostEqual(pose.pose.position.x, 1.01)
 
+    def test_nonfinite_ranked_candidate_is_not_selected(self):
+        candidate = RemoteGraspCandidate(
+            0.9,
+            np.array([0.01, 0.0, 0.0]),
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            0.04,
+        )
+
+        selected, pose = remote_node.select_first_reachable_candidate(
+            [candidate],
+            FakePoseEstimator(),
+            lambda _pose: True,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            candidate_rank_fn=lambda *_args: float('inf'),
+        )
+
+        self.assertIsNone(selected)
+        self.assertIsNone(pose)
+
     def test_converts_opencv_optical_candidate_to_ros_camera_link(self):
         candidate = RemoteGraspCandidate(
             score=0.9,
@@ -580,6 +601,30 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             remote_node.rospy.logwarn_throttle = original_logwarn_throttle
             remote_node.rospy.Time.now = original_time_now
 
+    def test_active_request_keeps_its_cloud_after_wall_clock_age_limit(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.target_cloud_enabled = True
+        node.target_cloud_max_age_sec = 1.0
+        node.latest_target_cloud_time = remote_node.rospy.Time.from_sec(1.0)
+        node.latest_target_cloud_source = 'roi_depth_foreground'
+        node.latest_target_cloud_base_xyz = np.array([1.0, 2.0, 3.0])
+        node._target_cloud_request_active = True
+        node._object_lock = DummyLock()
+        stale_pose = PoseStamped()
+        stale_pose.pose.position.x = 9.0
+        node.latest_object = types.SimpleNamespace(detected=True, pose_base=stale_pose)
+        node.latest_object_time = object()
+
+        original_time_now = remote_node.rospy.Time.now
+        remote_node.rospy.Time.now = staticmethod(lambda: remote_node.rospy.Time.from_sec(20.0))
+        try:
+            target, source = node._target_base_xyz()
+        finally:
+            remote_node.rospy.Time.now = original_time_now
+
+        np.testing.assert_allclose(target, [1.0, 2.0, 3.0])
+        self.assertEqual(source, 'roi_depth_foreground')
+
     def test_candidate_target_gate_rejects_far_or_low_grasp_pose(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
         node.candidate_target_gate_enabled = True
@@ -614,6 +659,103 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             self.assertEqual(node._target_gate_rejected_count, 1)
         finally:
             remote_node.rospy.logwarn_throttle = original_logwarn_throttle
+
+    def test_tabletop_gate_rejects_failed_mouse_shallow_approach(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.grasp_config = {'tool_approach_axis': 'z'}
+        node.candidate_target_gate_enabled = True
+        node.candidate_max_target_distance_m = 0.04
+        node.candidate_min_relative_z_m = -0.015
+        node.candidate_max_relative_z_m = 0.08
+        node.candidate_min_downward_approach_cos = 0.45
+        node.target_cloud_enabled = False
+        node.target_cloud_candidate_max_point_distance_m = 0.0
+        node.camera_visibility_gate_enabled = False
+        node.require_candidate_depth = False
+        node._target_gate_rejected_count = 0
+        node._approach_gate_rejected_count = 0
+        node._object_lock = DummyLock()
+
+        target = PoseStamped()
+        target.pose.position.x = -0.172
+        target.pose.position.y = -0.414
+        target.pose.position.z = 0.085
+        node.latest_object = types.SimpleNamespace(detected=True, pose_base=target)
+        node.latest_object_time = object()
+
+        failed_grasp = PoseStamped()
+        failed_grasp.pose.position.x = -0.148
+        failed_grasp.pose.position.y = -0.408
+        failed_grasp.pose.position.z = 0.070
+        failed_grasp.pose.orientation.x = 0.662
+        failed_grasp.pose.orientation.y = 0.489
+        failed_grasp.pose.orientation.z = -0.548
+        failed_grasp.pose.orientation.w = -0.149
+        camera_candidate = types.SimpleNamespace(score=0.517, width_m=0.078, depth_m=0.030)
+
+        original_logwarn_throttle = remote_node.rospy.logwarn_throttle
+        remote_node.rospy.logwarn_throttle = lambda *args, **kwargs: None
+        try:
+            downward = node._tool_approach_downward_cos(failed_grasp)
+            accepted = node._candidate_matches_target(None, camera_candidate, failed_grasp)
+        finally:
+            remote_node.rospy.logwarn_throttle = original_logwarn_throttle
+
+        self.assertAlmostEqual(downward, 0.355, places=3)
+        self.assertFalse(accepted)
+        self.assertEqual(node._approach_gate_rejected_count, 1)
+
+    def test_candidate_rank_includes_model_motion_and_approach_quality(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        pose = PoseStamped()
+        pose.pose.orientation.w = 1.0
+        node._candidate_target_distance = lambda *_args: 0.020
+        node._tool_approach_downward_cos = lambda _pose: 0.75
+        node.candidate_model_score_weight_m = 0.010
+        node.candidate_joint_path_cost_weight_m = 0.004
+        node.candidate_downward_approach_weight_m = 0.020
+        node.camera_visibility_rank_weight_m = 0.0
+        node.camera_visibility_gate_enabled = False
+        node._candidate_plan_metrics = {
+            node._pose_key(pose): {'joint_path_cost': 2.0, 'joint_max_delta': 1.0},
+        }
+        candidate = types.SimpleNamespace(score=0.50)
+
+        rank = node._candidate_rank(candidate, candidate, pose)
+
+        self.assertAlmostEqual(rank, 0.020 - 0.005 + 0.008 + 0.005)
+
+    def test_candidate_rank_rejects_large_single_joint_flip(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        pose = PoseStamped()
+        pose.pose.orientation.w = 1.0
+        node._candidate_target_distance = lambda *_args: 0.010
+        node.candidate_model_score_weight_m = 0.0
+        node.candidate_joint_path_cost_weight_m = 0.0
+        node.candidate_downward_approach_weight_m = 0.0
+        node.candidate_max_joint_delta_rad = 1.8
+        node._joint_motion_gate_rejected_count = 0
+        node._candidate_plan_metrics = {
+            node._pose_key(pose): {'joint_path_cost': 3.194, 'joint_max_delta': 2.588},
+        }
+        candidate = types.SimpleNamespace(score=0.50)
+
+        original_logwarn_throttle = remote_node.rospy.logwarn_throttle
+        remote_node.rospy.logwarn_throttle = lambda *args, **kwargs: None
+        try:
+            rank = node._candidate_rank(candidate, candidate, pose)
+        finally:
+            remote_node.rospy.logwarn_throttle = original_logwarn_throttle
+
+        self.assertTrue(np.isinf(rank))
+        self.assertEqual(node._joint_motion_gate_rejected_count, 1)
+
+    def test_plan_metrics_are_parsed_from_strict_reachability_message(self):
+        metrics = remote_node.RemoteGrasp6DNode._parse_plan_metrics(
+            'planned target joint_path_cost=2.345 joint_max_delta=0.678'
+        )
+
+        self.assertEqual(metrics, {'joint_path_cost': 2.345, 'joint_max_delta': 0.678})
 
     def test_object_callback_ignores_low_confidence_and_jump_outliers(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)

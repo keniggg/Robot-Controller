@@ -28,8 +28,22 @@ class SuccessfulPlan:
     joint_trajectory = types.SimpleNamespace(points=[object()])
 
 
+class JointPlan:
+    def __init__(self, positions):
+        self.joint_trajectory = types.SimpleNamespace(
+            points=[types.SimpleNamespace(positions=list(values)) for values in positions]
+        )
+
+
 class FakeManipulator:
-    def __init__(self, go_result=False, plan_result=None, current_pose=None, execute_result=True):
+    def __init__(
+        self,
+        go_result=False,
+        plan_result=None,
+        current_pose=None,
+        execute_result=True,
+        cartesian_result=None,
+    ):
         self.go_results = list(go_result) if isinstance(go_result, (list, tuple)) else [go_result]
         if isinstance(plan_result, (list, tuple)):
             self.plan_results = list(plan_result)
@@ -37,6 +51,7 @@ class FakeManipulator:
             self.plan_results = [plan_result if plan_result is not None else EmptyPlan()]
         self.current_pose = current_pose
         self.execute_result = execute_result
+        self.cartesian_result = cartesian_result
         self.target = None
         self.pose_targets = []
         self.position_targets = []
@@ -46,6 +61,7 @@ class FakeManipulator:
         self.cleared = False
         self.planning_time = 2.0
         self.planning_time_updates = []
+        self.cartesian_calls = []
 
     def set_pose_target(self, pose):
         self.target = pose
@@ -68,6 +84,12 @@ class FakeManipulator:
     def execute(self, plan, wait=True):
         self.executed_plans.append(plan)
         return self.execute_result
+
+    def compute_cartesian_path(self, waypoints, eef_step, jump_threshold, avoid_collisions=True):
+        self.cartesian_calls.append((list(waypoints), eef_step, jump_threshold, avoid_collisions))
+        if self.cartesian_result is not None:
+            return self.cartesian_result
+        return SuccessfulPlan(), 1.0
 
     def stop(self):
         self.stopped = True
@@ -93,6 +115,12 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         planner.error = None
         planner.manipulator = manipulator
         planner.strict_pose_planning_time = 0.25
+        planner.cached_plan_position_tolerance_m = 0.002
+        planner.cached_plan_orientation_tolerance_rad = 0.02
+        planner.cartesian_eef_step_m = 0.003
+        planner.cartesian_jump_threshold = 0.0
+        planner.cartesian_min_fraction = 0.98
+        planner.cartesian_max_segment_m = 0.08
         return planner
 
     def test_execute_failure_message_includes_target_xyz(self):
@@ -232,6 +260,87 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertTrue(plan_ok, plan_message)
         self.assertTrue(execute_ok, execute_message)
         self.assertEqual(manipulator.executed_plans, [planned])
+
+    def test_cartesian_line_plans_then_executes_same_cached_trajectory(self):
+        current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.20))
+        planned = JointPlan([[0.0, 0.0], [0.1, -0.2]])
+        manipulator = FakeManipulator(
+            current_pose=current,
+            cartesian_result=(planned, 1.0),
+            execute_result=True,
+        )
+        planner = self.make_planner(manipulator)
+        target = make_pose(x=0.04, y=0.0, z=0.20)
+
+        plan_ok, plan_message = planner.move_to_pose_linear(target, execute=False)
+        execute_ok, execute_message = planner.move_to_pose_linear(target, execute=True)
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertIn('fraction=1.000', plan_message)
+        self.assertIn('joint_path_cost=', plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        self.assertEqual(manipulator.executed_plans, [planned])
+        self.assertEqual(len(manipulator.cartesian_calls), 1)
+
+    def test_failed_cartesian_execution_invalidates_cached_trajectory(self):
+        current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.20))
+        planned = JointPlan([[0.0, 0.0], [0.1, -0.2]])
+        manipulator = FakeManipulator(
+            current_pose=current,
+            cartesian_result=(planned, 1.0),
+            execute_result=False,
+        )
+        planner = self.make_planner(manipulator)
+        target = make_pose(x=0.04, y=0.0, z=0.20)
+
+        plan_ok, _plan_message = planner.move_to_pose_linear(target, execute=False)
+        first_ok, first_message = planner.move_to_pose_linear(target, execute=True)
+        second_ok, second_message = planner.move_to_pose_linear(target, execute=True)
+
+        self.assertTrue(plan_ok)
+        self.assertFalse(first_ok)
+        self.assertIn('execute failed from cached plan', first_message)
+        self.assertFalse(second_ok)
+        self.assertIn('no matching Cartesian plan', second_message)
+        self.assertEqual(manipulator.executed_plans, [planned])
+
+    def test_cartesian_line_rejects_incomplete_path(self):
+        current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.20))
+        manipulator = FakeManipulator(
+            current_pose=current,
+            cartesian_result=(SuccessfulPlan(), 0.75),
+        )
+        planner = self.make_planner(manipulator)
+
+        ok, message = planner.move_to_pose_linear(make_pose(x=0.04, y=0.0, z=0.20), execute=False)
+
+        self.assertFalse(ok)
+        self.assertIn('fraction=0.750 < 0.980', message)
+
+    def test_cartesian_line_rejects_segment_over_limit(self):
+        current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.20))
+        manipulator = FakeManipulator(current_pose=current)
+        planner = self.make_planner(manipulator)
+
+        ok, message = planner.move_to_pose_linear(make_pose(x=0.09, y=0.0, z=0.20), execute=False)
+
+        self.assertFalse(ok)
+        self.assertIn('exceeds limit', message)
+        self.assertEqual(manipulator.cartesian_calls, [])
+
+    def test_cartesian_cache_rejects_same_position_with_different_orientation(self):
+        current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.20))
+        manipulator = FakeManipulator(current_pose=current)
+        planner = self.make_planner(manipulator)
+        planned_pose = make_pose(x=0.04, y=0.0, z=0.20, q=(0.0, 0.0, 0.0, 1.0))
+        changed_pose = make_pose(x=0.04, y=0.0, z=0.20, q=(0.0, 0.7071, 0.0, 0.7071))
+
+        plan_ok, _message = planner.move_to_pose_linear(planned_pose, execute=False)
+        execute_ok, execute_message = planner.move_to_pose_linear(changed_pose, execute=True)
+
+        self.assertTrue(plan_ok)
+        self.assertFalse(execute_ok)
+        self.assertIn('no matching Cartesian plan', execute_message)
 
 
 if __name__ == '__main__':

@@ -10,7 +10,9 @@ grasp:
   # GraspNet grasp frame is aligned to tool0, all approach offsets must use Z.
   tool_approach_axis: "z"
   pregrasp_offset_mode: "camera_ray"
-  final_approach_offset_m: 0.045
+  # Waypoint staging only: the 6D model still defines the final grasp pose.
+  # Keep the last visually confirmed Cartesian contact segment short.
+  final_approach_offset_m: 0.020
   approach_step_m: 0.002
   approach_rate_hz: 10
   lift_height_m: 0.05
@@ -125,9 +127,19 @@ grasp_6d:
     candidate_max_target_distance_m: 0.04
     candidate_min_relative_z_m: -0.015
     candidate_max_relative_z_m: 0.08
-    # Rank reachable candidates by consistency with the target foreground point
-    # cloud instead of accepting the first IK-valid pose.
+    # Rank reachable candidates by target-cloud geometry, model confidence,
+    # current-joint motion cost, and a tabletop-compatible approach direction.
     rank_by_target_distance: true
+    candidate_center_distance_weight: 1.0
+    candidate_model_score_weight_m: 0.015
+    candidate_joint_path_cost_weight_m: 0.004
+    # Reject technically reachable poses that require a large base/wrist flip.
+    candidate_max_joint_delta_rad: 1.8
+    candidate_downward_approach_weight_m: 0.020
+    # tool0 +Z is the insertion direction. Require a meaningful downward
+    # component for tabletop objects. The failed grasps measured 0.355 and
+    # 0.477, both too shallow for a reliable top-down mouse grasp.
+    candidate_min_downward_approach_cos: 0.55
     # Keep this disabled in strict evaluation. Target location must come from
     # RGB-D segmentation/candidate ranking, not from a fixed post-selection
     # position correction.
@@ -143,15 +155,16 @@ grasp_6d:
     target_cloud_foreground_percentile: 35.0
     target_cloud_depth_window_m: 0.055
     target_cloud_min_points: 80
+    # This age applies outside inference. During an active remote request the
+    # exact request-frame cloud remains pinned until selection finishes.
     target_cloud_max_age_sec: 1.0
     target_cloud_max_points_for_gate: 2500
     target_cloud_candidate_max_point_distance_m: 0.055
     target_projection_frame_convention: "ros_camera_link"
     # Predict eye-in-hand camera view for each strict 6D candidate. The target
     # must remain in a safe image region at pregrasp and approach.
-    # Current camera optical axis is nearly perpendicular to the gripper
-    # approach axis, so strict gating would reject every valid grasp. Keep the
-    # projection as a diagnostic until the camera is remounted toward the jaws.
+    # Reject a candidate when the calibrated eye-in-hand projection predicts
+    # that the target will leave the safe image region before contact.
     camera_visibility_gate_enabled: true
     camera_visibility_diagnostic_enabled: true
     camera_visibility_require_approach: true

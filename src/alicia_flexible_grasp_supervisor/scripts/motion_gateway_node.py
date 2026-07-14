@@ -36,6 +36,7 @@ class MotionGateway:
         rospy.Service('/supervisor/move_to_joints', SetJointCommand, self.handle_joints)
         rospy.Service('/supervisor/set_gripper', SetFloat, self.handle_gripper)
         rospy.Service('/supervisor/move_to_pose', SetTargetPose, self.handle_pose)
+        rospy.Service('/supervisor/move_to_pose_linear', SetTargetPose, self.handle_pose_linear)
         rospy.Service('/supervisor/check_pose_strict', SetTargetPose, self.handle_pose_strict)
         rospy.Service('/supervisor/cartesian_jog', CartesianJog, self.handle_jog)
         rospy.Service('/supervisor/trigger_zero', TriggerZero, self.handle_zero)
@@ -88,6 +89,27 @@ class MotionGateway:
             rospy.loginfo('check_pose_strict result success=True message=%s', msg)
         else:
             rospy.logwarn('check_pose_strict result success=False message=%s', msg)
+        return SetTargetPoseResponse(ok, msg)
+
+    def handle_pose_linear(self, req):
+        self._log_pose_request(req, operation='move_to_pose_linear')
+        planner = self._ensure_planner()
+        if planner is None:
+            msg = self._moveit_not_ready_message()
+            rospy.logwarn('move_to_pose_linear result success=False message=%s', msg)
+            return SetTargetPoseResponse(False, msg)
+        if req.execute:
+            controllers_ok, controller_msg = self._ensure_trajectory_controllers_started()
+            if not controllers_ok:
+                msg = 'linear execute blocked: %s' % controller_msg
+                rospy.logwarn('move_to_pose_linear result success=False message=%s', msg)
+                return SetTargetPoseResponse(False, msg)
+            rospy.loginfo('linear trajectory controller check passed: %s', controller_msg)
+        ok, msg = planner.move_to_pose_linear(req.target, execute=req.execute)
+        if ok:
+            rospy.loginfo('move_to_pose_linear result success=True message=%s', msg)
+        else:
+            rospy.logwarn('move_to_pose_linear result success=False message=%s', msg)
         return SetTargetPoseResponse(ok, msg)
 
     def handle_jog(self, req):

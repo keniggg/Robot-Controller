@@ -84,9 +84,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
-            if name == '/supervisor/move_to_pose':
+            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
-                    calls.append(('move', pose.pose.position.x, bool(execute)))
+                    mode = 'linear' if name.endswith('_linear') else 'joint'
+                    calls.append((mode, pose.pose.position.x, bool(execute)))
                     return FakeServiceResponse(True, 'moved')
                 return move_pose
             if name == '/supervisor/set_gripper':
@@ -130,14 +131,14 @@ class GraspTaskSequenceTest(unittest.TestCase):
             grasp_task_node.rospy.Time.now = original_time_now
 
         self.assertEqual(calls[0], ('set_gripper', 0.0))
-        move_calls = [call for call in calls if call[0] == 'move']
+        move_calls = [call for call in calls if call[0] in ('joint', 'linear')]
         self.assertEqual(
-            [(round(call[1], 2), call[2]) for call in move_calls],
+            [(call[0], round(call[1], 2), call[2]) for call in move_calls],
             [
-                (0.10, False), (0.10, True),
-                (0.20, False), (0.20, True),
-                (0.30, False), (0.30, True),
-                (0.40, False), (0.40, True),
+                ('joint', 0.10, False), ('joint', 0.10, True),
+                ('linear', 0.20, False), ('linear', 0.20, True),
+                ('linear', 0.30, False), ('linear', 0.30, True),
+                ('linear', 0.40, False), ('linear', 0.40, True),
             ],
         )
         self.assertIn(('close', True), calls)
@@ -154,7 +155,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
-            if name == '/supervisor/move_to_pose':
+            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, bool(execute)))
                     return FakeServiceResponse(True, 'planned')
@@ -233,7 +234,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 }
 
         def fake_service_proxy(name, _srv_type):
-            if name == '/supervisor/move_to_pose':
+            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, bool(execute)))
                     return FakeServiceResponse(True, 'planned')
@@ -305,7 +306,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.set_state = lambda *args, **kwargs: states.append(args)
 
         def fake_service_proxy(name, _srv_type):
-            if name == '/supervisor/move_to_pose':
+            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', bool(execute)))
                     return FakeServiceResponse(True, 'planned')
@@ -612,7 +613,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
-            if name == '/supervisor/move_to_pose':
+            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, bool(execute)))
                     return FakeServiceResponse(True, 'moved')
@@ -692,7 +693,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
-            if name == '/supervisor/move_to_pose':
+            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, bool(execute)))
                     return FakeServiceResponse(True, 'moved')
@@ -748,7 +749,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
-            if name == '/supervisor/move_to_pose':
+            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, bool(execute)))
                     return FakeServiceResponse(True, 'moved')
@@ -812,7 +813,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
-            if name == '/supervisor/move_to_pose':
+            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, bool(execute)))
                     if bool(execute) and abs(pose.pose.position.x - 0.32) < 1e-6:
@@ -864,7 +865,12 @@ class GraspTaskSequenceTest(unittest.TestCase):
 
         approach_moves = [
             call for call in calls
-            if call[0] == 'move' and bool(call[4]) is False and abs(call[1] - 0.39) < 1e-6
+            if (
+                call[0] == 'move'
+                and bool(call[4]) is False
+                and abs(call[1] - 0.39) < 1e-6
+                and abs(call[3] - 0.20) < 1e-6
+            )
         ]
         self.assertEqual(len(approach_moves), 1)
         self.assertAlmostEqual(approach_moves[0][1], 0.39)

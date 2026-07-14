@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import re
 import threading
 from copy import deepcopy
 
@@ -285,6 +286,8 @@ def select_first_reachable_candidate(
                     rank = float(candidate_rank_fn(candidate, variant_candidate, pose))
                 except Exception:
                     rank = float('inf')
+                if not math.isfinite(rank):
+                    continue
                 ranked.append((rank, variant_index, -float(getattr(variant_candidate, 'score', 0.0)), variant_candidate, pose))
     if ranked:
         ranked.sort(key=lambda item: (item[0], item[1], item[2]))
@@ -556,6 +559,7 @@ class RemoteGrasp6DNode:
         self.latest_target_cloud_time = None
         self.latest_target_cloud_count = 0
         self.latest_target_cloud_source = 'none'
+        self._target_cloud_request_active = False
         self.candidate_max_target_distance_m = max(
             0.0,
             float(
@@ -577,6 +581,32 @@ class RemoteGrasp6DNode:
                 remote_cfg.get('candidate_max_relative_z_m', 0.08),
             )
         )
+        self.candidate_center_distance_weight = max(
+            0.0,
+            float(remote_cfg.get('candidate_center_distance_weight', 1.0)),
+        )
+        self.candidate_model_score_weight_m = max(
+            0.0,
+            float(remote_cfg.get('candidate_model_score_weight_m', 0.015)),
+        )
+        self.candidate_joint_path_cost_weight_m = max(
+            0.0,
+            float(remote_cfg.get('candidate_joint_path_cost_weight_m', 0.004)),
+        )
+        self.candidate_downward_approach_weight_m = max(
+            0.0,
+            float(remote_cfg.get('candidate_downward_approach_weight_m', 0.020)),
+        )
+        self.candidate_min_downward_approach_cos = float(
+            remote_cfg.get('candidate_min_downward_approach_cos', 0.55)
+        )
+        self.candidate_max_joint_delta_rad = max(
+            0.0,
+            float(remote_cfg.get('candidate_max_joint_delta_rad', 1.8)),
+        )
+        self._candidate_plan_metrics = {}
+        self._approach_gate_rejected_count = 0
+        self._joint_motion_gate_rejected_count = 0
         gripper_cfg = rospy.get_param('/gripper', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
         default_max_width = float(
@@ -713,6 +743,19 @@ class RemoteGrasp6DNode:
         try:
             self._refresh_runtime_params()
             self._cached_tool_from_camera = None
+            invalid_plan = PoseArray()
+            invalid_plan.header.stamp = stamp if stamp is not None else rospy.Time.now()
+            invalid_plan.header.frame_id = 'base_link'
+            self.plan_pub.publish(invalid_plan)
+            # Every filter below must use geometry from this exact RGB-D
+            # request, even when remote inference takes several seconds.
+            self._target_cloud_request_active = False
+            self.latest_target_cloud_base_xyz = None
+            self.latest_target_cloud_camera_center = None
+            self.latest_target_cloud_camera_points = None
+            self.latest_target_cloud_time = None
+            self.latest_target_cloud_count = 0
+            self.latest_target_cloud_source = 'none'
             depth_for_remote, roi_message = self._depth_for_remote(depth, stamp=stamp, frame_id=frame_id)
             status = 'remote 6D requesting candidates...'
             if roi_message:
@@ -733,9 +776,12 @@ class RemoteGrasp6DNode:
             self._orientation_fallback_rejected_count = 0
             self._target_gate_rejected_count = 0
             self._visibility_gate_rejected_count = 0
+            self._approach_gate_rejected_count = 0
+            self._joint_motion_gate_rejected_count = 0
             self._width_gate_rejected_count = 0
             self._depth_gate_rejected_count = 0
             self._width_gate_rejected_keys = set()
+            self._candidate_plan_metrics = {}
             selected, grasp_pose = select_first_reachable_candidate(
                 candidates,
                 self.pose_estimator,
@@ -769,18 +815,24 @@ class RemoteGrasp6DNode:
                     or self._depth_gate_rejected_count > 0
                     or self._target_gate_rejected_count > 0
                     or self._visibility_gate_rejected_count > 0
+                    or self._approach_gate_rejected_count > 0
+                    or self._joint_motion_gate_rejected_count > 0
                     or self._position_only_rejected_count > 0
                     or self._orientation_fallback_rejected_count > 0
                 ):
                     message = (
                         'remote 6D returned %d candidates, none executable '
-                        '(width>%0.3fm: %d, missing-depth: %d, off-target: %d, target-out-of-view: %d, position-only: %d, orientation-fallback: %d)'
+                        '(width>%0.3fm: %d, missing-depth: %d, off-target: %d, '
+                        'bad-approach: %d, excessive-joint-motion: %d, '
+                        'target-out-of-view: %d, position-only: %d, orientation-fallback: %d)'
                         % (
                             len(candidates),
                             self.max_gripper_width_m,
                             self._width_gate_rejected_count,
                             self._depth_gate_rejected_count,
                             self._target_gate_rejected_count,
+                            self._approach_gate_rejected_count,
+                            self._joint_motion_gate_rejected_count,
                             self._visibility_gate_rejected_count,
                             self._position_only_rejected_count,
                             self._orientation_fallback_rejected_count,
@@ -807,12 +859,17 @@ class RemoteGrasp6DNode:
                 elif not visible:
                     visibility_message = ' predicted_view=unknown(%s)' % reason
             depth_text = 'missing' if selected.depth_m is None else '%.3f' % float(selected.depth_m)
-            message = 'remote 6D plan ready score=%.3f width=%.3f depth=%s target_delta=%.3fm target=%s strict_orientation=1 tool_aligned=1' % (
+            selected_metrics = self._candidate_plan_metrics.get(self._pose_key(grasp_pose), {})
+            approach_down = self._tool_approach_downward_cos(grasp_pose)
+            message = 'remote 6D plan ready score=%.3f width=%.3f depth=%s target_delta=%.3fm target=%s strict_orientation=1 tool_aligned=1 approach_down=%.3f joint_path_cost=%.3f joint_max_delta=%.3f' % (
                 selected.score,
                 selected.width_m,
                 depth_text,
                 final_target_delta,
                 target_source,
+                approach_down,
+                float(selected_metrics.get('joint_path_cost', 0.0)),
+                float(selected_metrics.get('joint_max_delta', 0.0)),
             ) + visibility_message
             self.status_pub.publish(String(message))
             self.last_error = ''
@@ -825,6 +882,7 @@ class RemoteGrasp6DNode:
                 self._backoff_until = rospy.Time.now() + rospy.Duration(self.failure_backoff_sec)
             return False, message
         finally:
+            self._target_cloud_request_active = False
             self._request_lock.release()
 
     def _depth_for_remote(self, depth, stamp=None, frame_id=''):
@@ -1139,6 +1197,75 @@ class RemoteGrasp6DNode:
                 remote_cfg.get('candidate_max_relative_z_m', self.candidate_max_relative_z_m),
             )
         )
+        self.candidate_center_distance_weight = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/candidate_center_distance_weight',
+                    remote_cfg.get(
+                        'candidate_center_distance_weight',
+                        getattr(self, 'candidate_center_distance_weight', 1.0),
+                    ),
+                )
+            ),
+        )
+        self.candidate_model_score_weight_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/candidate_model_score_weight_m',
+                    remote_cfg.get(
+                        'candidate_model_score_weight_m',
+                        getattr(self, 'candidate_model_score_weight_m', 0.015),
+                    ),
+                )
+            ),
+        )
+        self.candidate_joint_path_cost_weight_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/candidate_joint_path_cost_weight_m',
+                    remote_cfg.get(
+                        'candidate_joint_path_cost_weight_m',
+                        getattr(self, 'candidate_joint_path_cost_weight_m', 0.004),
+                    ),
+                )
+            ),
+        )
+        self.candidate_downward_approach_weight_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/candidate_downward_approach_weight_m',
+                    remote_cfg.get(
+                        'candidate_downward_approach_weight_m',
+                        getattr(self, 'candidate_downward_approach_weight_m', 0.020),
+                    ),
+                )
+            ),
+        )
+        self.candidate_min_downward_approach_cos = float(
+            rospy.get_param(
+                '/grasp_6d/remote/candidate_min_downward_approach_cos',
+                remote_cfg.get(
+                        'candidate_min_downward_approach_cos',
+                        getattr(self, 'candidate_min_downward_approach_cos', 0.55),
+                ),
+            )
+        )
+        self.candidate_max_joint_delta_rad = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/candidate_max_joint_delta_rad',
+                    remote_cfg.get(
+                        'candidate_max_joint_delta_rad',
+                        getattr(self, 'candidate_max_joint_delta_rad', 1.8),
+                    ),
+                )
+            ),
+        )
         gripper_cfg = rospy.get_param('/gripper', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
         default_max_width = float(
@@ -1287,6 +1414,7 @@ class RemoteGrasp6DNode:
         self.latest_target_cloud_time = rospy.Time.now()
         self.latest_target_cloud_count = int(len(points_camera))
         self.latest_target_cloud_source = 'roi_depth_foreground'
+        self._target_cloud_request_active = True
         return 'target_cloud=%d center_base=(%.3f,%.3f,%.3f)' % (
             int(len(points_camera)),
             float(position.x),
@@ -1411,6 +1539,21 @@ class RemoteGrasp6DNode:
                 target_source,
             )
             return False
+        downward_cos = self._tool_approach_downward_cos(grasp_pose)
+        min_downward_cos = float(getattr(self, 'candidate_min_downward_approach_cos', -1.0))
+        if downward_cos < min_downward_cos:
+            self._approach_gate_rejected_count += 1
+            rospy.logwarn_throttle(
+                1.0,
+                (
+                    'remote 6D candidate rejected by tabletop approach gate: '
+                    'downward_cos=%.3f < %.3f score=%.3f'
+                ),
+                downward_cos,
+                min_downward_cos,
+                float(getattr(_camera_candidate, 'score', 0.0) or 0.0),
+            )
+            return False
         if bool(getattr(self, 'camera_visibility_gate_enabled', False)):
             visible, _metrics, reason = self._candidate_visibility_metrics(grasp_pose, target_xyz)
             if not visible:
@@ -1426,9 +1569,34 @@ class RemoteGrasp6DNode:
 
     def _candidate_rank(self, candidate, camera_candidate, grasp_pose):
         rank = self._candidate_target_distance(candidate, camera_candidate, grasp_pose)
+        score_weight = max(0.0, float(getattr(self, 'candidate_model_score_weight_m', 0.0) or 0.0))
+        rank -= score_weight * float(getattr(camera_candidate, 'score', 0.0) or 0.0)
+        metrics = getattr(self, '_candidate_plan_metrics', {}).get(self._pose_key(grasp_pose), {})
+        max_joint_delta = max(
+            0.0,
+            float(getattr(self, 'candidate_max_joint_delta_rad', 0.0) or 0.0),
+        )
+        joint_delta = float(metrics.get('joint_max_delta', 0.0) or 0.0)
+        if max_joint_delta > 0.0 and joint_delta > max_joint_delta:
+            self._joint_motion_gate_rejected_count += 1
+            rospy.logwarn_throttle(
+                1.0,
+                'remote 6D candidate rejected by joint-motion gate: joint_max_delta=%.3frad > %.3frad',
+                joint_delta,
+                max_joint_delta,
+            )
+            return float('inf')
+        path_weight = max(0.0, float(getattr(self, 'candidate_joint_path_cost_weight_m', 0.0) or 0.0))
+        rank += path_weight * float(metrics.get('joint_path_cost', 0.0) or 0.0)
+        downward_weight = max(
+            0.0,
+            float(getattr(self, 'candidate_downward_approach_weight_m', 0.0) or 0.0),
+        )
+        downward_cos = min(1.0, max(-1.0, self._tool_approach_downward_cos(grasp_pose)))
+        rank += downward_weight * (1.0 - downward_cos)
         weight = max(0.0, float(getattr(self, 'camera_visibility_rank_weight_m', 0.0) or 0.0))
         if weight <= 0.0 or not bool(getattr(self, 'camera_visibility_gate_enabled', False)):
-            return rank
+            return float(rank)
         target_xyz, _source = self._target_base_xyz()
         if target_xyz is None:
             return float('inf')
@@ -1437,6 +1605,52 @@ class RemoteGrasp6DNode:
             return float('inf')
         center_cost = max(float(item['center_cost']) for item in metrics)
         return float(rank) + weight * center_cost
+
+    def _tool_approach_downward_cos(self, grasp_pose):
+        try:
+            q = grasp_pose.pose.orientation
+            matrix = quaternion_matrix([float(q.x), float(q.y), float(q.z), float(q.w)])
+            name = str(self.grasp_config.get('tool_approach_axis', 'z') or 'z').strip().lower()
+            sign = -1.0 if name.startswith('-') else 1.0
+            name = name.lstrip('+-')
+            axis_index = {'x': 0, 'y': 1, 'z': 2}[name]
+            axis = sign * np.asarray(matrix[:3, axis_index], dtype=float)
+            norm = float(np.linalg.norm(axis))
+            if norm <= 1e-9:
+                return -1.0
+            return float(-axis[2] / norm)
+        except Exception:
+            return -1.0
+
+    @staticmethod
+    def _pose_key(pose_stamped):
+        try:
+            pose = pose_stamped.pose
+            values = (
+                pose.position.x,
+                pose.position.y,
+                pose.position.z,
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            )
+            return tuple(round(float(value), 5) for value in values)
+        except Exception:
+            return ()
+
+    @staticmethod
+    def _parse_plan_metrics(message):
+        text = str(message or '')
+        metrics = {}
+        for key in ('joint_path_cost', 'joint_max_delta'):
+            match = re.search(r'%s=([-+0-9.eE]+)' % key, text)
+            if match:
+                try:
+                    metrics[key] = float(match.group(1))
+                except Exception:
+                    pass
+        return metrics
 
     def _candidate_visibility_metrics(self, grasp_pose, target_base_xyz):
         try:
@@ -1551,7 +1765,11 @@ class RemoteGrasp6DNode:
             return float('inf')
         cloud_distance = self._camera_candidate_cloud_distance(_camera_candidate)
         if np.isfinite(cloud_distance):
-            return float(cloud_distance) + 0.25 * float(base_distance)
+            center_weight = max(
+                0.0,
+                float(getattr(self, 'candidate_center_distance_weight', 1.0) or 0.0),
+            )
+            return float(cloud_distance) + center_weight * float(base_distance)
         return base_distance
 
     def _target_base_xyz(self):
@@ -1559,9 +1777,9 @@ class RemoteGrasp6DNode:
             cloud_xyz = getattr(self, 'latest_target_cloud_base_xyz', None)
             cloud_time = getattr(self, 'latest_target_cloud_time', None)
             if cloud_xyz is not None:
-                fresh = True
+                fresh = bool(getattr(self, '_target_cloud_request_active', False))
                 max_age = float(getattr(self, 'target_cloud_max_age_sec', 1.0) or 0.0)
-                if max_age > 0.0 and cloud_time is not None:
+                if not fresh and max_age > 0.0 and cloud_time is not None:
                     try:
                         fresh = (rospy.Time.now() - cloud_time).to_sec() <= max_age
                     except Exception:
@@ -1718,6 +1936,10 @@ class RemoteGrasp6DNode:
             response = move_pose(grasp_pose, False)
             if not bool(response.success):
                 return False
+            metrics = self._parse_plan_metrics(getattr(response, 'message', ''))
+            if not hasattr(self, '_candidate_plan_metrics'):
+                self._candidate_plan_metrics = {}
+            self._candidate_plan_metrics[self._pose_key(grasp_pose)] = metrics
             if is_position_only_fallback_message(getattr(response, 'message', '')) and not self.allow_position_only_fallback:
                 self._position_only_rejected_count += 1
                 rospy.logwarn_throttle(

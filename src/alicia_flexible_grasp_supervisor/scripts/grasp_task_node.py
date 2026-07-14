@@ -141,8 +141,10 @@ class GraspTaskNode:
 
     def execute(self):
         rospy.wait_for_service('/supervisor/move_to_pose', timeout=10)
+        rospy.wait_for_service('/supervisor/move_to_pose_linear', timeout=10)
         rospy.wait_for_service('/supervisor/set_gripper', timeout=10)
         move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
+        move_pose_linear = rospy.ServiceProxy('/supervisor/move_to_pose_linear', SetTargetPose)
         set_gripper = rospy.ServiceProxy('/supervisor/set_gripper', SetFloat)
         gcfg = rospy.get_param('/grasp', {})
         gripper_cfg = rospy.get_param('/gripper', {})
@@ -158,7 +160,15 @@ class GraspTaskNode:
         open_position = float(gripper_cfg.get('open_position_m', 0.0))
 
         if bool(gcfg.get('use_grasp6d_plan', False)):
-            return self._execute_grasp6d_plan(gcfg, gripper_cfg, open_position, move_pose, set_gripper, close)
+            return self._execute_grasp6d_plan(
+                gcfg,
+                gripper_cfg,
+                open_position,
+                move_pose,
+                move_pose_linear,
+                set_gripper,
+                close,
+            )
 
         self.set_state(GraspStages.SEARCH_OBJECT, 'waiting for object')
         t0 = rospy.Time.now()
@@ -216,13 +226,13 @@ class GraspTaskNode:
             mode=pregrasp_mode,
         )
         self.set_state(GraspStages.APPROACH_TARGET, 'planning target approach')
-        resp = move_pose(approach, False)
+        resp = move_pose_linear(approach, False)
         if not resp.success:
             self.set_state(GraspStages.FAILED, 'approach target planning failed: ' + resp.message)
             return False
 
         self.set_state(GraspStages.APPROACH_TARGET, 'moving to target')
-        resp = move_pose(approach, True)
+        resp = move_pose_linear(approach, True)
         if not resp.success:
             self.set_state(GraspStages.FAILED, 'approach target failed: ' + resp.message)
             return False
@@ -237,14 +247,27 @@ class GraspTaskNode:
 
         self.set_state(GraspStages.LIFT_OBJECT, 'lifting')
         lift = make_lift_pose(approach, lift_height)
-        resp = move_pose(lift, True)
-        if not resp.success:
-            self.set_state(GraspStages.FAILED, 'lift failed: '+resp.message)
+        if not self._plan_and_execute_pose(
+            GraspStages.LIFT_OBJECT,
+            'linear lift',
+            lift,
+            move_pose_linear,
+            'lift',
+        ):
             return False
         self.set_state(GraspStages.SUCCESS, 'grasp done', True)
         return True
 
-    def _execute_grasp6d_plan(self, gcfg, gripper_cfg, open_position, move_pose, set_gripper, close):
+    def _execute_grasp6d_plan(
+        self,
+        gcfg,
+        gripper_cfg,
+        open_position,
+        move_pose,
+        move_pose_linear,
+        set_gripper,
+        close,
+    ):
         plan = self._fresh_grasp6d_plan(gcfg)
         if plan is None:
             self.set_state(GraspStages.FAILED, 'no fresh 6D grasp plan')
@@ -292,7 +315,13 @@ class GraspTaskNode:
             return False
         (approach, grasp, lift), locked_obj = retargeted
 
-        if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D approach', approach, move_pose, '6D approach'):
+        if not self._plan_and_execute_pose(
+            GraspStages.APPROACH_TARGET,
+            'linear 6D approach',
+            approach,
+            move_pose_linear,
+            '6D approach',
+        ):
             return False
 
         if bool(gcfg.get('visual_retarget_after_approach', True)):
@@ -307,7 +336,13 @@ class GraspTaskNode:
                 return False
             (grasp, lift), locked_obj = retargeted
 
-        if not self._plan_and_execute_pose(GraspStages.APPROACH_TARGET, '6D grasp pose', grasp, move_pose, '6D grasp pose'):
+        if not self._plan_and_execute_pose(
+            GraspStages.APPROACH_TARGET,
+            'linear 6D grasp pose',
+            grasp,
+            move_pose_linear,
+            '6D grasp pose',
+        ):
             return False
 
         close_label = 'force-guided close' if bool(gripper_cfg.get('use_compliant_close', True)) else 'fixed gripper close'
@@ -317,7 +352,13 @@ class GraspTaskNode:
             self.set_state(GraspStages.FAILED, message)
             return False
 
-        if not self._plan_and_execute_pose(GraspStages.LIFT_OBJECT, '6D lift', lift, move_pose, '6D lift'):
+        if not self._plan_and_execute_pose(
+            GraspStages.LIFT_OBJECT,
+            'linear 6D lift',
+            lift,
+            move_pose_linear,
+            '6D lift',
+        ):
             return False
         self.set_state(GraspStages.SUCCESS, '6D grasp done', True)
         return True

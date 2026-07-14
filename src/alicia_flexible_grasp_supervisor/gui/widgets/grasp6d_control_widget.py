@@ -183,8 +183,8 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         self._refresh_view()
 
     def _update_plan(self, msg):
-        self._last_plan_time = time.monotonic()
         self._last_plan_pose_count = len(getattr(msg, 'poses', []) or [])
+        self._last_plan_time = time.monotonic() if self._last_plan_pose_count >= 4 else None
         self._refresh_view()
 
     def _update_grasp(self, msg):
@@ -219,6 +219,8 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         if self._requesting_plan:
             return
         self._requesting_plan = True
+        self._last_plan_time = None
+        self._last_plan_pose_count = 0
         self.request_plan_btn.setEnabled(False)
         self.execute_btn.setEnabled(False)
         self._remote_status = '正在请求远程 6D 候选...'
