@@ -129,6 +129,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._pending_plan_token = None
         self._last_object_receive_time = None
         self._planning_active = False
+        self._pregrasp_worker_token = None
         self._grasp_active = False
         self._plan_token = 0
         self._plan_timeout_sec = float(rospy.get_param('/gui/pregrasp_plan_timeout_sec', 12.0))
@@ -621,13 +622,17 @@ class PerceptionWidget(QtWidgets.QWidget):
                 self.__dict__.get('_required_stable_detections', 3),
             )
             return
-        if getattr(self, '_planning_active', False):
+        if (
+            self.__dict__.get('_pregrasp_worker_token', None) is not None
+            or getattr(self, '_planning_active', False)
+        ):
             self.status.setText('已有预抓取规划正在后台执行，请等待结果')
             rospy.logwarn('GUI pregrasp request ignored: previous request still active')
             return
         self._planning_active = True
         self._plan_token += 1
         token = self._plan_token
+        self._pregrasp_worker_token = token
         if execute:
             self._pending_plan_pose = None
             self._pending_plan_token = None
@@ -695,7 +700,14 @@ class PerceptionWidget(QtWidgets.QWidget):
     def _finish_pregrasp_worker(self, token, execute, success, message):
         if not self.__dict__.get('_alive', False):
             return
+        worker_token = self.__dict__.get('_pregrasp_worker_token', None)
+        if worker_token is None and self.__dict__.get('_planning_active', False):
+            worker_token = self._plan_token
+        if token != worker_token:
+            return
+        self._pregrasp_worker_token = None
         if token != self._plan_token or not self._planning_active:
+            self._set_pregrasp_buttons_enabled(True)
             return
         self._planning_active = False
         if execute:
@@ -728,7 +740,14 @@ class PerceptionWidget(QtWidgets.QWidget):
     def _timeout_pregrasp_worker(self, token):
         if not self.__dict__.get('_alive', False):
             return
+        worker_token = self.__dict__.get('_pregrasp_worker_token', None)
+        if worker_token is None and self.__dict__.get('_planning_active', False):
+            worker_token = self._plan_token
+        if token != worker_token:
+            return
+        self._pregrasp_worker_token = None
         if token != self._plan_token or not self._planning_active:
+            self._set_pregrasp_buttons_enabled(True)
             return
         self._planning_active = False
         self._plan_token += 1

@@ -87,6 +87,100 @@ class PregraspAsyncTest(unittest.TestCase):
             pose_base=pose_base,
         )
 
+    def _worker_widget(self, execute):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget.pregrasp_pose = self._pose(2.0)
+        widget._planned_pregrasp_pose = self._pose(1.0) if execute else None
+        widget._planned_pregrasp_executable = bool(execute)
+        widget._planned_pregrasp_time = time.monotonic() if execute else 0.0
+        widget._planned_target_base_xyz = (0.1, 0.2, 0.3) if execute else None
+        widget._locked_grasp_target_base_xyz = None
+        widget._locked_grasp_target_time = 0.0
+        widget._pending_plan_pose = None
+        widget._pending_plan_token = None
+        widget._last_object_receive_time = time.monotonic()
+        widget._planning_active = False
+        widget._grasp_active = False
+        widget._plan_token = 0
+        widget._plan_timeout_sec = 60.0
+        widget._alive = True
+        widget._localization_ok = True
+        widget._localization_error_m = None
+        widget._object_stable_count = 3
+        widget._last_object_base_xyz = (0.1, 0.2, 0.3)
+        widget._last_target_signature = {'label': 'carton'}
+        widget._pregrasp_pose_is_stale = lambda: False
+        widget._planned_pregrasp_is_stale = lambda: False
+        widget._pregrasp_target_is_stable = lambda: True
+        widget.status = FakeLabel()
+        widget.model_status_chip = FakeLabel()
+        widget.model_profiles = {'carton': {'display_name': 'Carton 模型'}}
+        widget.plan_pregrasp_btn = FakeButton()
+        widget.execute_pregrasp_btn = FakeButton()
+        widget.start_grasp_btn = FakeButton()
+        started = []
+        widget._start_pregrasp_worker = lambda pose, do_execute, token: started.append(
+            (pose, bool(do_execute), token)
+        )
+        return widget, started
+
+    def test_switch_during_plan_keeps_worker_busy_then_releases_without_stale_result(self):
+        widget, started = self._worker_widget(execute=False)
+
+        PerceptionWidget.plan_pregrasp(widget, False)
+        canceled_token = started[0][2]
+        PerceptionWidget._update_detector_status(widget, 'loading:carton')
+
+        self.assertEqual(widget.__dict__.get('_pregrasp_worker_token'), canceled_token)
+        self.assertFalse(widget.plan_pregrasp_btn.enabled)
+        self.assertFalse(widget.start_grasp_btn.enabled)
+
+        widget.pregrasp_pose = self._pose(3.0)
+        PerceptionWidget.plan_pregrasp(widget, False)
+
+        self.assertEqual(len(started), 1)
+        status_before_completion = widget.status.text
+        PerceptionWidget._finish_pregrasp_worker(
+            widget,
+            canceled_token,
+            False,
+            True,
+            '规划成功：stale canceled plan',
+        )
+
+        self.assertIsNone(widget.__dict__.get('_pregrasp_worker_token'))
+        self.assertTrue(widget.plan_pregrasp_btn.enabled)
+        self.assertTrue(widget.start_grasp_btn.enabled)
+        self.assertFalse(widget.execute_pregrasp_btn.enabled)
+        self.assertIsNone(widget._planned_pregrasp_pose)
+        self.assertEqual(widget.status.text, status_before_completion)
+        self.assertNotIn('stale canceled plan', widget.status.text)
+
+    def test_switch_during_execute_keeps_worker_busy_then_timeout_releases_controls(self):
+        widget, started = self._worker_widget(execute=True)
+
+        PerceptionWidget.plan_pregrasp(widget, True)
+        canceled_token = started[0][2]
+        PerceptionWidget._update_detector_status(widget, 'loading:carton')
+
+        self.assertEqual(widget.__dict__.get('_pregrasp_worker_token'), canceled_token)
+        self.assertFalse(widget.plan_pregrasp_btn.enabled)
+        self.assertFalse(widget.start_grasp_btn.enabled)
+
+        widget.pregrasp_pose = self._pose(3.0)
+        PerceptionWidget.plan_pregrasp(widget, False)
+
+        self.assertEqual(len(started), 1)
+        status_before_timeout = widget.status.text
+        PerceptionWidget._timeout_pregrasp_worker(widget, canceled_token)
+
+        self.assertIsNone(widget.__dict__.get('_pregrasp_worker_token'))
+        self.assertTrue(widget.plan_pregrasp_btn.enabled)
+        self.assertTrue(widget.start_grasp_btn.enabled)
+        self.assertFalse(widget.execute_pregrasp_btn.enabled)
+        self.assertEqual(widget.status.text, status_before_timeout)
+        self.assertNotIn('超时', widget.status.text)
+
     def test_plan_pregrasp_starts_worker_instead_of_sync_service_call(self):
         widget = PerceptionWidget.__new__(PerceptionWidget)
         widget.pregrasp_pose = types.SimpleNamespace(value=1)

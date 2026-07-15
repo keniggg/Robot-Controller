@@ -256,13 +256,21 @@ class PerceptionNode:
     def detect_loop(self):
         rate = rospy.Rate(self.detect_hz)
         while not rospy.is_shutdown():
-            frame = self.frames.take_latest()
-            if frame is not None:
-                self.color = frame.color
-                self.depth = frame.depth
-                self.color_frame_id = frame.frame_id
-                self.try_detect(frame.stamp, frame.frame_id)
+            self._poll_detector_and_process_latest_frame()
             rate.sleep()
+
+    def _poll_detector_and_process_latest_frame(self):
+        # Detector configuration must be observed even when the camera stops
+        # producing frames, so reload requests can invalidate downstream state.
+        self.refresh_detector()
+        frame = self.frames.take_latest()
+        if frame is None:
+            return False
+        self.color = frame.color
+        self.depth = frame.depth
+        self.color_frame_id = frame.frame_id
+        self.try_detect(frame.stamp, frame.frame_id)
+        return True
 
     def try_detect(self, stamp, camera_frame=None):
         if self.color is None or self.depth is None:

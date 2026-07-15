@@ -69,6 +69,15 @@ class FakeMessagePublisher:
         self.messages.append(msg)
 
 
+class NoFrameBuffer:
+    def __init__(self):
+        self.polls = 0
+
+    def take_latest(self):
+        self.polls += 1
+        return None
+
+
 class PerceptionDetectorSelectionTest(unittest.TestCase):
     def test_yolov8_config_creates_yolo_detector(self):
         module = load_perception_node()
@@ -183,6 +192,53 @@ class PerceptionDetectorSelectionTest(unittest.TestCase):
             [message for message in status_pub.messages if message.startswith('loading:')],
             ['loading:carton', 'loading:carton'],
         )
+
+    def test_no_frame_poll_observes_reload_and_invalidates_old_downstream_target(self):
+        module = load_perception_node()
+        perception_cfg = {
+            'enabled': True,
+            'detector': 'yolov8',
+            'object_label': 'carton',
+            'yolo_model_choice': 'carton',
+            'yolo_model': 'carton_model/best.pt',
+            'yolo_target_class': 'carton',
+            'yolo_reload_generation': 1,
+        }
+        module.rospy = FakeRospy(perception_cfg)
+        node = module.PerceptionNode.__new__(module.PerceptionNode)
+        node.detector = None
+        node.detector_signature = None
+        node.detector_status_pub = FakePublisher()
+        node.pub_obj = FakeMessagePublisher()
+        node.pub_detected = FakeMessagePublisher()
+        node.pub_raw_detected = FakeMessagePublisher()
+        node.stabilizer = module.DetectionStabilizer()
+        node.frames = NoFrameBuffer()
+        FakeYOLODetector.created = []
+        module.YOLOv8ObjectDetector = FakeYOLODetector
+
+        with mock.patch.object(module, 'resolve_yolo_model_path', return_value='/workspace/carton_model/best.pt'):
+            module.PerceptionNode.refresh_detector(node, force=True)
+            node.detector_status_pub.messages = []
+            node.pub_obj.messages = [types.SimpleNamespace(detected=True)]
+            node.pub_detected.messages = [types.SimpleNamespace(data=True)]
+            node.pub_raw_detected.messages = [types.SimpleNamespace(data=True)]
+            node.stabilizer.last_detection = types.SimpleNamespace(detected=True)
+            perception_cfg['yolo_reload_generation'] = 2
+
+            processed_frame = module.PerceptionNode._poll_detector_and_process_latest_frame(node)
+
+        self.assertFalse(processed_frame)
+        self.assertEqual(node.frames.polls, 1)
+        self.assertEqual(len(FakeYOLODetector.created), 2)
+        self.assertEqual(node.detector_status_pub.messages, [
+            'loading:carton',
+            'ready:carton:/workspace/carton_model/best.pt',
+        ])
+        self.assertFalse(node.pub_obj.messages[-1].detected)
+        self.assertFalse(node.pub_detected.messages[-1].data)
+        self.assertFalse(node.pub_raw_detected.messages[-1].data)
+        self.assertIsNone(node.stabilizer.last_detection)
 
     def test_detector_reload_publishes_negative_object_and_visibility_before_loading(self):
         module = load_perception_node()
