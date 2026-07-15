@@ -72,6 +72,30 @@ class PerceptionModelSelectionTest(unittest.TestCase):
 
             self.assertEqual(resolved, str(model.resolve()))
 
+    def test_catkin_workspace_model_wins_over_cwd_and_package_decoys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = pathlib.Path(tmp) / 'catkin_ws'
+            package = workspace / 'src' / 'alicia_flexible_grasp_supervisor'
+            cwd = pathlib.Path(tmp) / 'other'
+            workspace_model = workspace / 'carton_model' / 'best.pt'
+            package_decoy = package / 'carton_model' / 'best.pt'
+            cwd_decoy = cwd / 'carton_model' / 'best.pt'
+            for model, contents in (
+                (workspace_model, b'workspace weights'),
+                (package_decoy, b'package decoy'),
+                (cwd_decoy, b'cwd decoy'),
+            ):
+                model.parent.mkdir(parents=True, exist_ok=True)
+                model.write_bytes(contents)
+
+            resolved = resolve_yolo_model_path(
+                'carton_model/best.pt',
+                package_path=str(package),
+                cwd=str(cwd),
+            )
+
+            self.assertEqual(resolved, str(workspace_model.resolve()))
+
     def test_standard_ultralytics_weight_name_remains_unmodified(self):
         self.assertEqual(resolve_yolo_model_path('yolov8n.pt'), 'yolov8n.pt')
 

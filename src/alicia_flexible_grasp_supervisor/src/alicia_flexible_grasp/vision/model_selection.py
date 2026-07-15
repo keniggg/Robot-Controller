@@ -71,13 +71,15 @@ def resolve_yolo_model_path(model_path, package_path=None, cwd=None):
     if len(expanded.parts) == 1:
         return raw_path
 
-    roots = [Path(cwd).resolve() if cwd is not None else Path.cwd().resolve()]
     package = package_path or _discover_package_path()
     if package:
         package_root = Path(package).resolve()
-        roots.append(package_root)
         if package_root.parent.name == 'src':
-            roots.append(package_root.parent.parent)
+            roots = [package_root.parent.parent, package_root]
+        else:
+            roots = [package_root]
+    else:
+        roots = [Path(cwd).resolve() if cwd is not None else Path.cwd().resolve()]
 
     checked = []
     for root in roots:
