@@ -6,6 +6,7 @@ import time
 from PyQt5 import QtWidgets, QtCore
 from geometry_msgs.msg import PoseStamped
 import rospy
+from std_msgs.msg import String
 try:
     import tf2_ros
 except Exception:
@@ -13,6 +14,11 @@ except Exception:
 from alicia_flexible_grasp_supervisor.msg import ObjectPose
 from alicia_flexible_grasp_supervisor.srv import CartesianJog, SetTargetPose, StartGrasp
 from alicia_flexible_grasp.grasp.grasp_pose_generator import make_pregrasp_pose
+from alicia_flexible_grasp.vision.model_selection import (
+    normalize_model_profiles,
+    resolve_yolo_model_path,
+    select_yolo_model,
+)
 from gui.widgets.camera_widget import CameraWidget
 from gui.theme import metric_chip, panel
 
@@ -33,6 +39,7 @@ def perception_grasp_action_mode(use_grasp6d_plan):
 
 class PerceptionWidget(QtWidgets.QWidget):
     object_signal = QtCore.pyqtSignal(object)
+    detector_status_signal = QtCore.pyqtSignal(str)
     plan_result_signal = QtCore.pyqtSignal(int, bool, bool, str)
     grasp_result_signal = QtCore.pyqtSignal(bool, str)
     VISUAL_JOG_AXES = {
@@ -108,6 +115,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         super().__init__()
         self._alive = True
         self._subscriber = None
+        self._detector_status_subscriber = None
         self.topic = topic
         self.last_object = None
         self.pregrasp_pose = None
@@ -160,6 +168,23 @@ class PerceptionWidget(QtWidgets.QWidget):
         frame, body = panel('目标识别与抓取位姿')
         controls.addWidget(frame)
 
+        perception_cfg = rospy.get_param('/perception', {})
+        self.model_profiles = normalize_model_profiles(perception_cfg)
+        model_row = QtWidgets.QHBoxLayout()
+        model_row.setSpacing(10)
+        model_row.addWidget(QtWidgets.QLabel('检测模型'))
+        self.model_combo = QtWidgets.QComboBox()
+        current_choice = str(perception_cfg.get('yolo_model_choice', 'original'))
+        self._populate_model_choices(self.model_profiles, current_choice)
+        confirm_model_btn = QtWidgets.QPushButton('确定模型')
+        confirm_model_btn.setObjectName('PrimaryButton')
+        confirm_model_btn.clicked.connect(self.confirm_model_selection)
+        model_row.addWidget(self.model_combo, 1)
+        model_row.addWidget(confirm_model_btn)
+        body.addLayout(model_row)
+        self.model_status_chip = metric_chip('等待模型状态', accent=True)
+        body.addWidget(self.model_status_chip)
+
         command_row = QtWidgets.QGridLayout()
         command_row.setHorizontalSpacing(10)
         command_row.setVerticalSpacing(8)
@@ -191,6 +216,12 @@ class PerceptionWidget(QtWidgets.QWidget):
         self.label_edit = QtWidgets.QLineEdit(rospy.get_param('/perception/object_label', 'target'))
         self.yolo_class_edit = QtWidgets.QLineEdit(rospy.get_param('/perception/yolo_target_class', ''))
         self.yolo_class_edit.setPlaceholderText('例如 bottle、cup、sports ball；留空表示检测全部 YOLO 类别')
+        initial_selected = select_yolo_model(
+            perception_cfg,
+            current_choice if current_choice in self.model_profiles else 'original',
+            perception_cfg.get('yolo_target_class', ''),
+        )
+        self._sync_model_class_editor(initial_selected)
         self.lower_edit = QtWidgets.QLineEdit(self._list_text(rospy.get_param('/perception/hsv_lower', [35, 40, 40])))
         self.upper_edit = QtWidgets.QLineEdit(self._list_text(rospy.get_param('/perception/hsv_upper', [85, 255, 255])))
         self.min_area = QtWidgets.QSpinBox()
@@ -311,9 +342,16 @@ class PerceptionWidget(QtWidgets.QWidget):
             layout.addWidget(self.camera_preview, 3)
 
         self.object_signal.connect(self.update_object)
+        self.detector_status_signal.connect(self._update_detector_status)
         self.plan_result_signal.connect(self._finish_pregrasp_worker)
         self.grasp_result_signal.connect(self._finish_grasp_worker)
         self._subscriber = rospy.Subscriber(topic, ObjectPose, self._emit_if_alive, queue_size=1)
+        self._detector_status_subscriber = rospy.Subscriber(
+            '/perception/detector_status',
+            String,
+            self._emit_detector_status_if_alive,
+            queue_size=1,
+        )
         self.destroyed.connect(lambda *_: self._shutdown_ros())
 
     def _emit_if_alive(self, msg):
@@ -321,6 +359,14 @@ class PerceptionWidget(QtWidgets.QWidget):
             return
         try:
             self.object_signal.emit(msg)
+        except RuntimeError:
+            self._shutdown_ros()
+
+    def _emit_detector_status_if_alive(self, msg):
+        if not self.__dict__.get('_alive', False):
+            return
+        try:
+            self.detector_status_signal.emit(str(getattr(msg, 'data', msg)))
         except RuntimeError:
             self._shutdown_ros()
 
@@ -336,17 +382,69 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._alive = False
         self._planning_active = False
         self._plan_token += 1
-        subscriber = self.__dict__.get('_subscriber', None)
-        if subscriber is not None and not self.__dict__.get('_subscriber_unregistered', False):
-            try:
-                subscriber.unregister()
-            except Exception:
-                pass
-            self._subscriber_unregistered = True
+        for attribute in ('_subscriber', '_detector_status_subscriber'):
+            subscriber = self.__dict__.get(attribute, None)
+            flag = attribute + '_unregistered'
+            if subscriber is not None and not self.__dict__.get(flag, False):
+                try:
+                    subscriber.unregister()
+                except Exception:
+                    pass
+                self.__dict__[flag] = True
 
     def closeEvent(self, event):
         self._shutdown_ros()
         super().closeEvent(event)
+
+    def _populate_model_choices(self, profiles, current_choice):
+        for choice, profile in profiles.items():
+            self.model_combo.addItem(profile['display_name'], choice)
+        current_index = self.model_combo.findData(str(current_choice))
+        self.model_combo.setCurrentIndex(current_index if current_index >= 0 else 0)
+
+    def _sync_model_class_editor(self, selected):
+        self.yolo_class_edit.setText(selected['target_class'])
+        self.yolo_class_edit.setEnabled(selected['target_class_mode'] != 'fixed')
+
+    def confirm_model_selection(self):
+        try:
+            description = self.description_edit.text().strip() or '目标物体'
+            parsed = self._parse_description(description)
+            perception_cfg = rospy.get_param('/perception', {})
+            choice = str(self.model_combo.currentData() or 'original')
+            selected = select_yolo_model(
+                perception_cfg,
+                choice,
+                parsed.get('yolo_target_class', ''),
+            )
+            resolve_yolo_model_path(selected['model_path'])
+            perception_cfg.update({
+                'yolo_model_choice': selected['choice'],
+                'yolo_model': selected['model_path'],
+                'yolo_target_class': selected['target_class'],
+            })
+            rospy.set_param('/perception', perception_cfg)
+            self._sync_model_class_editor(selected)
+            self._clear_locked_grasp_target()
+            self.model_status_chip.setText('%s正在加载' % selected['display_name'])
+            self.status.setText('模型选择已提交，视觉节点正在刷新')
+        except Exception as exc:
+            self.status.setText('模型切换失败：%s' % exc)
+
+    def _update_detector_status(self, text):
+        parts = str(text or '').split(':', 2)
+        state = parts[0] if parts else ''
+        choice = parts[1] if len(parts) > 1 else ''
+        detail = parts[2] if len(parts) > 2 else ''
+        profile = self.model_profiles.get(choice, {})
+        display_name = str(profile.get('display_name', choice or '检测模型'))
+        if state == 'loading':
+            self.model_status_chip.setText('%s正在加载' % display_name)
+        elif state == 'ready':
+            self.model_status_chip.setText('%s已就绪' % display_name)
+        elif state == 'error':
+            self.model_status_chip.setText('%s加载失败' % display_name)
+            self.status.setText('模型加载失败：%s' % detail)
 
     def apply_params(self):
         try:
@@ -359,19 +457,29 @@ class PerceptionWidget(QtWidgets.QWidget):
                 lower, upper = hsv_ranges[0]
                 self.lower_edit.setText(self._list_text(lower))
                 self.upper_edit.setText(self._list_text(upper))
-            yolo_target_class = parsed.get('yolo_target_class', '')
-            self.yolo_class_edit.setText(yolo_target_class)
+            perception_cfg = rospy.get_param('/perception', {})
+            active_choice = str(perception_cfg.get('yolo_model_choice', 'original'))
+            selected = select_yolo_model(
+                perception_cfg,
+                active_choice,
+                parsed.get('yolo_target_class', ''),
+            )
+            yolo_target_class = selected['target_class']
+            self._sync_model_class_editor(selected)
             label = description
             self.label_edit.setText(label)
-            rospy.set_param('/perception/enabled', bool(self.enabled.isChecked()))
-            rospy.set_param('/perception/object_label', label)
-            rospy.set_param('/perception/target_description', description)
-            rospy.set_param('/perception/yolo_target_class', yolo_target_class)
-            rospy.set_param('/perception/hsv_lower', lower)
-            rospy.set_param('/perception/hsv_upper', upper)
-            rospy.set_param('/perception/hsv_ranges', hsv_ranges)
-            rospy.set_param('/perception/shape', parsed['shape'])
-            rospy.set_param('/perception/min_area', int(self.min_area.value()))
+            perception_cfg.update({
+                'enabled': bool(self.enabled.isChecked()),
+                'object_label': label,
+                'target_description': description,
+                'yolo_target_class': yolo_target_class,
+                'hsv_lower': lower,
+                'hsv_upper': upper,
+                'hsv_ranges': hsv_ranges,
+                'shape': parsed['shape'],
+                'min_area': int(self.min_area.value()),
+            })
+            rospy.set_param('/perception', perception_cfg)
             rospy.set_param('/grasp/pregrasp_distance', float(self.pregrasp.value()))
             self._clear_locked_grasp_target()
             self.interpret_chip.setText(parsed['summary'])

@@ -5,10 +5,12 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for path in (ROOT, ROOT / 'src'):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from gui.widgets.grasp_task_widget import GraspTaskWidget
+from gui.widgets.perception_widget import PerceptionWidget
 from gui.widgets.robot_state_widget import RobotStateWidget
 from gui.widgets.tactile_widget import TactileWidget
 
@@ -52,6 +54,19 @@ class GuiRosLifecycleTest(unittest.TestCase):
 
     def test_grasp_task_widget_ignores_callbacks_after_shutdown(self):
         self.assert_widget_callback_stops_after_shutdown(GraspTaskWidget)
+
+    def test_perception_widget_unregisters_object_and_detector_status_subscribers(self):
+        widget = PerceptionWidget.__new__(PerceptionWidget)
+        widget._alive = True
+        widget._planning_active = False
+        widget._plan_token = 0
+        widget._subscriber = FakeSubscriber()
+        widget._detector_status_subscriber = FakeSubscriber()
+
+        PerceptionWidget._shutdown_ros(widget)
+
+        self.assertTrue(widget._subscriber.unregistered)
+        self.assertTrue(widget._detector_status_subscriber.unregistered)
 
 
 if __name__ == '__main__':
