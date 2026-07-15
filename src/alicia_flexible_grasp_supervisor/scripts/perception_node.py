@@ -18,7 +18,7 @@ try:
 except Exception:
     tf2_ros = None
 from alicia_flexible_grasp.vision.object_detector import HSVObjectDetector
-from alicia_flexible_grasp.vision.model_selection import resolve_yolo_model_path
+from alicia_flexible_grasp.vision.model_selection import resolve_yolo_model_path, select_yolo_model
 from alicia_flexible_grasp.vision.yolov8_detector import YOLOv8ObjectDetector
 from alicia_flexible_grasp.vision.depth_projector import project_pixel_to_3d
 from alicia_flexible_grasp.vision.pose_estimator import PoseEstimator
@@ -513,14 +513,16 @@ class PerceptionNode:
         switch_confirmations = int(pcfg.get('tracking_switch_confirmations', self.stabilizer.switch_confirmations))
         yolo_choice = str(pcfg.get('yolo_model_choice', 'original'))
         yolo_model = str(pcfg.get('yolo_model', 'yolov8n.pt'))
+        yolo_target_class = str(pcfg.get('yolo_target_class', label if detector_kind in ('yolo', 'yolov8') else ''))
         resolved_yolo_model = yolo_model
         path_error = None
         if detector_kind in ('yolo', 'yolov8'):
             try:
+                selected_model = select_yolo_model(pcfg, yolo_choice, yolo_target_class)
+                yolo_target_class = selected_model['target_class']
                 resolved_yolo_model = resolve_yolo_model_path(yolo_model)
             except Exception as exc:
                 path_error = exc
-        yolo_target_class = str(pcfg.get('yolo_target_class', label if detector_kind in ('yolo', 'yolov8') else ''))
         yolo_conf = float(pcfg.get('yolo_conf', 0.35))
         yolo_iou = float(pcfg.get('yolo_iou', 0.45))
         yolo_device = str(pcfg.get('yolo_device', 'cpu'))

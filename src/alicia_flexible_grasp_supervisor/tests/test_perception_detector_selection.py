@@ -92,7 +92,7 @@ class PerceptionDetectorSelectionTest(unittest.TestCase):
 
         self.assertEqual(node.detector_kind, 'yolov8')
         self.assertEqual(FakeYOLODetector.created[0]['model_path'], '/resolved/models/custom.pt')
-        self.assertEqual(FakeYOLODetector.created[0]['target_class'], 'bottle')
+        self.assertEqual(FakeYOLODetector.created[0]['target_class'], 'carton')
         self.assertAlmostEqual(FakeYOLODetector.created[0]['conf'], 0.42)
         self.assertEqual(FakeYOLODetector.created[0]['imgsz'], 416)
         self.assertEqual(status_pub.messages, [
