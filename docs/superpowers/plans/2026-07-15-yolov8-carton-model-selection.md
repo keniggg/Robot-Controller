@@ -12,12 +12,12 @@
 
 - 默认选择必须保持 `original`，未操作新控件时继续使用 `yolov8n.pt` 和当前描述类别逻辑。
 - Carton 选择必须始终得到 `yolo_target_class: carton`；任何目标描述都不能覆盖它。
-- `carton_model/best.pt` 相对于 catkin 工作空间根目录解析，不依赖启动进程的当前目录。
+- 当 ROS 包标识出 catkin 工作空间时，含目录分隔符的自定义相对路径优先相对于工作空间根目录解析，ROS 包目录次之；仅在无法发现 ROS 包和工作空间时使用当前目录。
 - 模型加载失败时不得继续使用旧检测器或静默回退，ROS 节点必须保持运行。
 - 运行期选择不写回 YAML；完整 ROS 重启后恢复 `camera.yaml` 默认值。
 - 测试不得启动相机、执行推理循环或发送任何机械臂/夹爪运动命令。
 - 不修改或提交用户现有的 `grasp_params.yaml`、`remote_grasp6d_node.py`、对应测试及生成的 `__pycache__` 改动。
-- 不把 `carton_model/best.pt` 二进制权重加入提交；只引用用户已放置的本地文件。
+- 不修改 `carton_model/best.pt` 二进制权重；该文件已存在于功能分支基线，后续功能提交只引用它。
 
 ---
 
@@ -32,6 +32,8 @@
 - Create: `src/alicia_flexible_grasp_supervisor/tests/test_perception_model_selection_widget.py` — GUI 参数写入和状态转换测试。
 - Modify: `src/alicia_flexible_grasp_supervisor/tests/test_gui_ros_lifecycle.py` — 覆盖新增 ROS 订阅者注销。
 - Modify: `src/alicia_flexible_grasp_supervisor/README.md` — 使用方法和错误排查。
+- Modify: `docs/superpowers/specs/2026-07-15-yolov8-carton-model-selection-design.md` — 记录确定性的工作空间根目录路径优先级。
+- Modify: `docs/superpowers/plans/2026-07-15-yolov8-carton-model-selection.md` — 使实现示例、验证范围和文档清单与最终实现一致。
 
 ---
 
@@ -253,13 +255,15 @@ def resolve_yolo_model_path(model_path, package_path=None, cwd=None):
     if len(expanded.parts) == 1:
         return raw_path
 
-    roots = [Path(cwd).resolve() if cwd is not None else Path.cwd().resolve()]
     package = package_path or _discover_package_path()
     if package:
         package_root = Path(package).resolve()
-        roots.append(package_root)
         if package_root.parent.name == 'src':
-            roots.append(package_root.parent.parent)
+            roots = [package_root.parent.parent, package_root]
+        else:
+            roots = [package_root]
+    else:
+        roots = [Path(cwd).resolve() if cwd is not None else Path.cwd().resolve()]
 
     checked = []
     for root in roots:
@@ -1006,6 +1010,8 @@ git commit -m "feat: select perception model from GUI"
 
 **Files:**
 - Modify: `src/alicia_flexible_grasp_supervisor/README.md:101-108`
+- Modify: `docs/superpowers/specs/2026-07-15-yolov8-carton-model-selection-design.md:105-116`
+- Modify: `docs/superpowers/plans/2026-07-15-yolov8-carton-model-selection.md`
 
 **Interfaces:**
 - Consumes: Tasks 1-3 完成后的 GUI、参数和状态主题。
@@ -1021,6 +1027,8 @@ Append these bullets under `## YOLOv8 目标识别说明`:
 - 模型选择只对当前 ROS 运行有效。重新启动整套系统后恢复 `config/camera.yaml` 中的 `yolo_model_choice: original`。
 - GUI 显示“加载失败”时先确认 `carton_model/best.pt` 存在，再查看 `/perception/detector_status` 和感知节点日志中的 Ultralytics/Torch 错误。
 ```
+
+同时更新设计与实现计划中的模型路径规则：发现 `<workspace>/src/<package>` 布局时，含目录分隔符的自定义相对路径先查工作空间根目录，再查 ROS 包目录；只有无法发现 ROS 包和工作空间时才查当前工作目录。
 
 - [ ] **Step 2: 运行语法和针对性测试**
 
@@ -1070,15 +1078,17 @@ Run:
 ```bash
 git diff --check
 git status --short
-git diff --name-only HEAD~3..HEAD
+git diff --name-only 88e122e890175f464d9eefd501d063667bcc8762..HEAD
 ```
 
-Expected: `git diff --check` has no output；功能改动只包含 File Map 中列出的源码、配置、测试和 README；用户原有脏文件仍未进入本功能提交。
+Expected: `git diff --check` has no output；功能改动只包含 File Map 中列出的源码、配置、测试、README 和已授权设计/计划文档；用户原有脏文件仍未进入本功能提交。
 
 - [ ] **Step 6: 提交文档**
 
 ```bash
-git add src/alicia_flexible_grasp_supervisor/README.md
+git add src/alicia_flexible_grasp_supervisor/README.md \
+  docs/superpowers/specs/2026-07-15-yolov8-carton-model-selection-design.md \
+  docs/superpowers/plans/2026-07-15-yolov8-carton-model-selection.md
 git commit -m "docs: explain runtime detector selection"
 ```
 
@@ -1095,4 +1105,4 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest -q \
 git status --short
 ```
 
-Expected: key tests PASS；status output only contains the user’s pre-existing unrelated changes, generated caches, and untracked `carton_model/` directory。
+Expected: key tests PASS；status output only contains the pre-existing generated caches；tracked `carton_model/best.pt` remains unchanged。

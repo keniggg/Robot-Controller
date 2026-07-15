@@ -107,13 +107,13 @@ GUI 订阅该主题，把状态转为中文显示。GUI 关闭时与现有对象
 路径解析规则按以下顺序执行：
 
 1. 绝对路径直接使用。
-2. 当前工作目录下存在的相对路径直接转成绝对路径。
-3. ROS 包目录下存在的相对路径转成绝对路径。
-4. 根据 ROS 包位置推导 catkin 工作空间根目录，并查找该相对路径。
-5. 含目录分隔符的自定义路径仍不存在时，报告文件缺失。
-6. `yolov8n.pt` 这类无目录的 Ultralytics 标准权重名保持原样，允许 Ultralytics 使用缓存或首次下载机制。
+2. `yolov8n.pt` 这类无目录的 Ultralytics 标准权重名保持原样，允许 Ultralytics 使用缓存或首次下载机制。
+3. 对含目录分隔符的自定义相对路径，先查找 ROS 包；若包位于 `<workspace>/src/<package>`，则先查找 catkin 工作空间根目录，再查找 ROS 包目录。
+4. 已找到 ROS 包但无法推导 catkin 工作空间时，只查找 ROS 包目录。
+5. 只有无法发现 ROS 包和工作空间时，才相对于当前工作目录查找。
+6. 含目录分隔符的自定义路径仍不存在时，报告文件缺失。
 
-在当前源码布局中，ROS 包位于 `<workspace>/src/alicia_flexible_grasp_supervisor`，因此 `carton_model/best.pt` 会解析为 `<workspace>/carton_model/best.pt`，不依赖 `roslaunch` 的进程工作目录。
+在当前源码布局中，ROS 包位于 `<workspace>/src/alicia_flexible_grasp_supervisor`，因此即使 ROS 包目录或进程当前工作目录中存在同名文件，`carton_model/best.pt` 也优先解析为 `<workspace>/carton_model/best.pt`，不依赖 `roslaunch` 的进程工作目录。
 
 ## 数据流
 
