@@ -25,7 +25,7 @@ import numpy as np
 
 
 GRASP6D_PROTOCOL_VERSION = 2
-CANDIDATE_FIELDS = ['score', 'width_m', 'depth_m', 'translation_m', 'rotation_matrix']
+CANDIDATE_FIELDS = ['score', 'width_m', 'height_m', 'depth_m', 'translation_m', 'rotation_matrix']
 
 
 def install_torch_six_compat():
@@ -125,6 +125,7 @@ class MockGraspNetBackend:
             {
                 'score': 1.0,
                 'width_m': 0.05,
+                'height_m': 0.02,
                 'depth_m': 0.02,
                 'translation_m': [x, y, z],
                 'rotation_matrix': [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
@@ -144,6 +145,9 @@ class GraspNetBaselineBackend:
         num_points=20000,
         collision_thresh=0.01,
         collision_voxel_size=0.01,
+        sampling_seed=0,
+        nms_translation_thresh_m=0.03,
+        nms_rotation_thresh_deg=30.0,
     ):
         self.baseline_root = Path(baseline_root).expanduser()
         self.checkpoint = Path(checkpoint).expanduser()
@@ -152,6 +156,9 @@ class GraspNetBaselineBackend:
         self.num_points = int(num_points)
         self.collision_thresh = float(collision_thresh)
         self.collision_voxel_size = float(collision_voxel_size)
+        self.sampling_seed = int(sampling_seed)
+        self.nms_translation_thresh_m = max(0.0, float(nms_translation_thresh_m))
+        self.nms_rotation_thresh_deg = max(0.0, float(nms_rotation_thresh_deg))
         self.loaded = False
         self._predict_lock = threading.Lock()
         self.last_diagnostics = {}
@@ -242,8 +249,13 @@ class GraspNetBaselineBackend:
             if len(grasp_group) == 0:
                 self.last_diagnostics = diagnostics
                 return []
-            grasp_group.nms()
+            grasp_group.nms(
+                translation_thresh=self.nms_translation_thresh_m,
+                rotation_thresh=math.radians(self.nms_rotation_thresh_deg),
+            )
             diagnostics['after_nms'] = int(len(grasp_group))
+            diagnostics['nms_translation_thresh_m'] = self.nms_translation_thresh_m
+            diagnostics['nms_rotation_thresh_deg'] = self.nms_rotation_thresh_deg
             if self.collision_thresh >= 0.0:
                 detector = self.ModelFreeCollisionDetector(scene_points, voxel_size=self.collision_voxel_size)
                 collision_mask = detector.detect(grasp_group, collision_thresh=self.collision_thresh)
@@ -294,7 +306,7 @@ class GraspNetBaselineBackend:
         colors = color_rgb[valid_mask].astype(np.float32)
         if points.size == 0:
             raise RuntimeError('no valid depth points')
-        indices = _sample_indices(len(points), self.num_points)
+        indices = _sample_indices(len(points), self.num_points, seed=self.sampling_seed)
         sampled_points = points[indices].astype(np.float32)
         sampled_colors = colors[indices].astype(np.float32)
         return (
@@ -337,8 +349,8 @@ def decode_rgbd_payload(payload):
     }
 
 
-def _sample_indices(point_count, num_points):
-    rng = np.random.default_rng()
+def _sample_indices(point_count, num_points, seed=0):
+    rng = np.random.default_rng(int(seed))
     if point_count >= num_points:
         return rng.choice(point_count, num_points, replace=False)
     base = np.arange(point_count)
@@ -463,7 +475,34 @@ class FallbackGraspGroup:
     def translations(self):
         return self.grasp_group_array[:, 13:16]
 
-    def nms(self, *args, **kwargs):
+    def nms(self, translation_thresh=0.03, rotation_thresh=math.radians(30.0)):
+        """Greedy GraspNet-compatible SE(3) NMS for inference without graspnetAPI."""
+        if len(self) <= 1:
+            return self
+        translation_thresh = max(0.0, float(translation_thresh))
+        rotation_thresh = max(0.0, float(rotation_thresh))
+        order = np.argsort(-self.scores, kind='stable')
+        translations = self.translations
+        rotations = self.rotation_matrices
+        kept = []
+        jaw_symmetry = np.diag([1.0, -1.0, -1.0]).astype(np.float32)
+        for index in order:
+            duplicate = False
+            for kept_index in kept:
+                distance = float(np.linalg.norm(translations[index] - translations[kept_index]))
+                if distance > translation_thresh:
+                    continue
+                angle = _rotation_distance_rad(rotations[index], rotations[kept_index])
+                symmetric_angle = _rotation_distance_rad(
+                    rotations[index],
+                    rotations[kept_index].dot(jaw_symmetry),
+                )
+                if min(angle, symmetric_angle) <= rotation_thresh:
+                    duplicate = True
+                    break
+            if not duplicate:
+                kept.append(int(index))
+        self.grasp_group_array = self.grasp_group_array[np.asarray(kept, dtype=np.int64)]
         return self
 
     def sort_by_score(self):
@@ -493,10 +532,19 @@ def _grasp_to_response(grasp):
     return {
         'score': float(grasp.score),
         'width_m': float(getattr(grasp, 'width', 0.0) or 0.0),
+        'height_m': float(getattr(grasp, 'height', 0.0) or 0.0),
         'depth_m': float(getattr(grasp, 'depth', 0.0) or 0.0),
         'translation_m': np.asarray(grasp.translation, dtype=float).reshape(3).tolist(),
         'rotation_matrix': np.asarray(grasp.rotation_matrix, dtype=float).reshape(3, 3).tolist(),
     }
+
+
+def _rotation_distance_rad(first, second):
+    relative = np.asarray(first, dtype=np.float64).reshape(3, 3).T.dot(
+        np.asarray(second, dtype=np.float64).reshape(3, 3)
+    )
+    cosine = np.clip((float(np.trace(relative)) - 1.0) * 0.5, -1.0, 1.0)
+    return float(math.acos(cosine))
 
 
 def parse_args(argv=None):
@@ -510,6 +558,9 @@ def parse_args(argv=None):
     parser.add_argument('--num-points', type=int, default=20000)
     parser.add_argument('--collision-thresh', type=float, default=0.01)
     parser.add_argument('--collision-voxel-size', type=float, default=0.01)
+    parser.add_argument('--sampling-seed', type=int, default=0)
+    parser.add_argument('--nms-translation-thresh-m', type=float, default=0.03)
+    parser.add_argument('--nms-rotation-thresh-deg', type=float, default=30.0)
     parser.add_argument('--mock', action='store_true', help='Serve deterministic fake grasps for network testing')
     parser.add_argument('--warmup', action='store_true', help='Load model before accepting requests')
     return parser.parse_args(argv)
@@ -528,6 +579,9 @@ def main(argv=None):
             num_points=args.num_points,
             collision_thresh=args.collision_thresh,
             collision_voxel_size=args.collision_voxel_size,
+            sampling_seed=args.sampling_seed,
+            nms_translation_thresh_m=args.nms_translation_thresh_m,
+            nms_rotation_thresh_deg=args.nms_rotation_thresh_deg,
         )
     if args.warmup and hasattr(backend, 'load'):
         backend.load()

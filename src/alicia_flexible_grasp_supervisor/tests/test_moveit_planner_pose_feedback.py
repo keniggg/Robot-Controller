@@ -108,6 +108,22 @@ class FakeManipulator:
         self.planning_time_updates.append(float(value))
 
 
+class FakeNoeticManipulator(FakeManipulator):
+    def compute_cartesian_path(
+        self,
+        waypoints,
+        eef_step,
+        avoid_collisions=True,
+        path_constraints=None,
+    ):
+        self.cartesian_calls.append(
+            (list(waypoints), eef_step, avoid_collisions, path_constraints)
+        )
+        if self.cartesian_result is not None:
+            return self.cartesian_result
+        return SuccessfulPlan(), 1.0
+
+
 class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
     def make_planner(self, manipulator):
         planner = MoveItPlanner.__new__(MoveItPlanner)
@@ -281,6 +297,21 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertTrue(execute_ok, execute_message)
         self.assertEqual(manipulator.executed_plans, [planned])
         self.assertEqual(len(manipulator.cartesian_calls), 1)
+
+    def test_cartesian_line_uses_noetic_signature_without_jump_threshold(self):
+        current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.20))
+        manipulator = FakeNoeticManipulator(current_pose=current)
+        planner = self.make_planner(manipulator)
+
+        ok, message = planner.move_to_pose_linear(
+            make_pose(x=0.04, y=0.0, z=0.20),
+            execute=False,
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(len(manipulator.cartesian_calls), 1)
+        self.assertTrue(manipulator.cartesian_calls[0][2])
+        self.assertIsNone(manipulator.cartesian_calls[0][3])
 
     def test_failed_cartesian_execution_invalidates_cached_trajectory(self):
         current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.20))

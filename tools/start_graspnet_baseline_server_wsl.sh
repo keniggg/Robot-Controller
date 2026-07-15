@@ -12,6 +12,9 @@ DEVICE="${DEVICE:-cuda:0}"
 CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-11.8}"
 NUM_POINTS="${NUM_POINTS:-12000}"
 COLLISION_THRESH="${COLLISION_THRESH:-0.01}"
+SAMPLING_SEED="${SAMPLING_SEED:-0}"
+NMS_TRANSLATION_THRESH_M="${NMS_TRANSLATION_THRESH_M:-0.03}"
+NMS_ROTATION_THRESH_DEG="${NMS_ROTATION_THRESH_DEG:-30.0}"
 
 if [[ -d "${CUDA_HOME}" ]]; then
   export CUDA_HOME
@@ -47,4 +50,7 @@ exec "${PYTHON_BIN}" tools/graspnet_baseline_server.py \
   --device "${DEVICE}" \
   --num-points "${NUM_POINTS}" \
   --collision-thresh "${COLLISION_THRESH}" \
+  --sampling-seed "${SAMPLING_SEED}" \
+  --nms-translation-thresh-m "${NMS_TRANSLATION_THRESH_M}" \
+  --nms-rotation-thresh-deg "${NMS_ROTATION_THRESH_DEG}" \
   --warmup

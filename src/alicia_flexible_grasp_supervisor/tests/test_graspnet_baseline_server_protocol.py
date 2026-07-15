@@ -60,6 +60,7 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
             self.assertEqual(health['backend'], 'mock')
             self.assertEqual(health['protocol_version'], 2)
             self.assertIn('depth_m', health['candidate_fields'])
+            self.assertIn('height_m', health['candidate_fields'])
 
             payload = encode_rgbd_payload(
                 np.zeros((4, 4, 3), dtype=np.uint8),
@@ -76,6 +77,7 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
         self.assertTrue(response['ok'])
         self.assertEqual(response['protocol_version'], 2)
         self.assertEqual(len(response['candidates']), 1)
+        self.assertIn('height_m', response['candidates'][0])
         self.assertIn('depth_m', response['candidates'][0])
         self.assertIn('translation_m', response['candidates'][0])
         self.assertIn('rotation_matrix', response['candidates'][0])
@@ -136,8 +138,49 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
         self.assertEqual(len(filtered), 1)
         response = server_module._grasp_to_response(group[0])
         np.testing.assert_allclose(response['translation_m'], [0.4, 0.5, 0.6], rtol=1e-6, atol=1e-6)
+        self.assertAlmostEqual(response['height_m'], 0.03, places=6)
         self.assertAlmostEqual(response['depth_m'], 0.04, places=6)
         self.assertEqual(len(response['rotation_matrix']), 3)
+
+    def test_fallback_nms_removes_pose_duplicates_but_preserves_orientation_diversity(self):
+        identity = np.eye(3, dtype=np.float32)
+        yaw_90 = np.array(
+            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        )
+
+        def row(score, rotation, translation):
+            return np.asarray(
+                [score, 0.05, 0.02, 0.03]
+                + rotation.reshape(-1).tolist()
+                + list(translation)
+                + [-1.0],
+                dtype=np.float32,
+            )
+
+        group = server_module.FallbackGraspGroup(
+            np.vstack(
+                [
+                    row(0.90, identity, [0.10, 0.20, 0.30]),
+                    row(0.80, identity, [0.105, 0.20, 0.30]),
+                    row(0.70, yaw_90, [0.105, 0.20, 0.30]),
+                    row(0.60, identity, [0.16, 0.20, 0.30]),
+                ]
+            )
+        )
+
+        group.nms(translation_thresh=0.03, rotation_thresh=np.deg2rad(30.0))
+
+        self.assertEqual(len(group), 3)
+        np.testing.assert_allclose(group.scores, [0.90, 0.70, 0.60], atol=1e-6)
+
+    def test_point_sampling_is_repeatable_for_the_same_frame(self):
+        first = server_module._sample_indices(100, 40, seed=7)
+        second = server_module._sample_indices(100, 40, seed=7)
+        different = server_module._sample_indices(100, 40, seed=8)
+
+        np.testing.assert_array_equal(first, second)
+        self.assertFalse(np.array_equal(first, different))
 
     def test_fallback_grasp_group_handles_empty_predictions(self):
         group = server_module.FallbackGraspGroup([])

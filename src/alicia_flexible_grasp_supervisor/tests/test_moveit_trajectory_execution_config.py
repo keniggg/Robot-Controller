@@ -20,6 +20,17 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
         self.assertTrue(values)
         self.assertGreaterEqual(float(values[0]), 0.05)
 
+    def test_goal_duration_margin_matches_slow_hardware_goal_window(self):
+        tree = ET.parse(str(TRAJECTORY_EXECUTION))
+        values = [
+            node.attrib.get('value')
+            for node in tree.findall('.//param')
+            if node.attrib.get('name') == 'trajectory_execution/allowed_goal_duration_margin'
+        ]
+
+        self.assertTrue(values)
+        self.assertGreaterEqual(float(values[0]), 8.0)
+
 
 if __name__ == '__main__':
     unittest.main()

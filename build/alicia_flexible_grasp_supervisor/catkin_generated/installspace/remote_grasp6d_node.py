@@ -39,6 +39,110 @@ OPTICAL_TO_ROS_CAMERA = np.asarray(
 )
 
 
+def segment_foreground_above_support_plane(
+    z_m,
+    valid_mask,
+    roi,
+    intrinsics,
+    min_points=80,
+    iterations=96,
+    far_percentile=55.0,
+    inlier_distance_m=0.0035,
+    min_height_m=0.004,
+    min_inlier_ratio=0.08,
+):
+    """Split a tabletop object from its support plane in an RGB-D ROI."""
+    z_m = np.asarray(z_m, dtype=np.float32)
+    valid = np.asarray(valid_mask, dtype=bool)
+    ys, xs = np.nonzero(valid)
+    min_points = max(3, int(min_points))
+    if len(xs) < max(min_points * 2, 12):
+        return None, None, 'support_plane=insufficient-depth'
+
+    z = z_m[ys, xs].astype(np.float64)
+    x0, y0, _x1, _y1 = roi
+    u = xs.astype(np.float64) + float(x0)
+    v = ys.astype(np.float64) + float(y0)
+    points = np.stack(
+        [
+            (u - float(intrinsics.cx)) * z / float(intrinsics.fx),
+            (v - float(intrinsics.cy)) * z / float(intrinsics.fy),
+            z,
+        ],
+        axis=1,
+    )
+
+    far_cutoff = float(np.percentile(z, min(90.0, max(40.0, float(far_percentile)))))
+    sample_indices = np.flatnonzero(z >= far_cutoff)
+    if len(sample_indices) < max(min_points, 12):
+        return None, None, 'support_plane=insufficient-far-depth'
+
+    rng = np.random.default_rng(0)
+    threshold = max(0.0005, float(inlier_distance_m))
+    best_inliers = None
+    best_score = None
+    for _ in range(max(12, int(iterations))):
+        chosen = rng.choice(sample_indices, 3, replace=False)
+        first, second, third = points[chosen]
+        normal = np.cross(second - first, third - first)
+        norm = float(np.linalg.norm(normal))
+        if norm <= 1e-9:
+            continue
+        normal /= norm
+        distances = np.abs((points - first).dot(normal))
+        inliers = distances <= threshold
+        count = int(np.count_nonzero(inliers))
+        if count < 3:
+            continue
+        plane_depth = float(np.median(z[inliers]))
+        if plane_depth < far_cutoff - threshold:
+            continue
+        score = (count, plane_depth)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_inliers = inliers
+
+    min_inliers = max(min_points, int(math.ceil(float(min_inlier_ratio) * len(points))))
+    if best_inliers is None or int(np.count_nonzero(best_inliers)) < min_inliers:
+        return None, None, 'support_plane=no-dominant-plane'
+
+    plane_points = points[best_inliers]
+    plane_center = np.mean(plane_points, axis=0)
+    _u, _s, vh = np.linalg.svd(plane_points - plane_center, full_matrices=False)
+    normal = np.asarray(vh[-1], dtype=np.float64)
+    normal /= max(float(np.linalg.norm(normal)), 1e-12)
+    # Point the plane normal toward the camera origin. Positive signed distance
+    # then means that a point is physically above the support surface.
+    if float(np.dot(-plane_center, normal)) < 0.0:
+        normal = -normal
+    signed_height = (points - plane_center).dot(normal)
+    foreground_points = signed_height >= max(0.0005, float(min_height_m))
+    foreground_count = int(np.count_nonzero(foreground_points))
+    if foreground_count < min_points:
+        return None, None, 'support_plane=no-object-above-plane'
+
+    foreground_depth = float(np.median(z[foreground_points]))
+    plane_depth = float(np.median(z[np.abs(signed_height) <= threshold]))
+    if plane_depth - foreground_depth < max(0.001, float(min_height_m) * 0.5):
+        return None, None, 'support_plane=insufficient-depth-separation'
+
+    mask = np.zeros_like(valid, dtype=bool)
+    mask[ys[foreground_points], xs[foreground_points]] = True
+    model = {
+        'point_optical': plane_center.astype(float),
+        'normal_optical': normal.astype(float),
+        'inliers': int(np.count_nonzero(np.abs(signed_height) <= threshold)),
+        'foreground': foreground_count,
+        'plane_depth_m': plane_depth,
+        'foreground_depth_m': foreground_depth,
+    }
+    diagnostic = (
+        'support_plane=inliers:%d foreground:%d gap:%.3fm'
+        % (model['inliers'], foreground_count, plane_depth - foreground_depth)
+    )
+    return mask, model, diagnostic
+
+
 def resolve_grasp_backend_health(health):
     """Return GraspNet capabilities from direct or unified WSL health payloads."""
     payload = health if isinstance(health, dict) else {}
@@ -424,6 +528,15 @@ class RemoteGrasp6DNode:
                 )
             ),
         )
+        self.camera_visibility_bbox_padding_px = max(
+            0,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_bbox_padding_px',
+                    remote_cfg.get('camera_visibility_bbox_padding_px', 8),
+                )
+            ),
+        )
         self.camera_visibility_min_depth_m = max(
             0.0,
             float(
@@ -547,6 +660,82 @@ class RemoteGrasp6DNode:
                 )
             ),
         )
+        self.target_cloud_support_plane_enabled = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/target_cloud_support_plane_enabled',
+                remote_cfg.get(
+                    'target_cloud_support_plane_enabled',
+                    getattr(self, 'target_cloud_support_plane_enabled', True),
+                ),
+            )
+        )
+        self.target_cloud_support_plane_ransac_iterations = max(
+            12,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/target_cloud_support_plane_ransac_iterations',
+                    remote_cfg.get(
+                        'target_cloud_support_plane_ransac_iterations',
+                        getattr(self, 'target_cloud_support_plane_ransac_iterations', 96),
+                    ),
+                )
+            ),
+        )
+        self.target_cloud_support_plane_far_percentile = self._clamp_range(
+            rospy.get_param(
+                '/grasp_6d/remote/target_cloud_support_plane_far_percentile',
+                remote_cfg.get(
+                    'target_cloud_support_plane_far_percentile',
+                    getattr(self, 'target_cloud_support_plane_far_percentile', 55.0),
+                ),
+            ),
+            40.0,
+            90.0,
+        )
+        self.target_cloud_support_plane_inlier_distance_m = max(
+            0.0005,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/target_cloud_support_plane_inlier_distance_m',
+                    remote_cfg.get(
+                        'target_cloud_support_plane_inlier_distance_m',
+                        getattr(self, 'target_cloud_support_plane_inlier_distance_m', 0.0035),
+                    ),
+                )
+            ),
+        )
+        self.target_cloud_support_plane_min_height_m = max(
+            0.0005,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/target_cloud_support_plane_min_height_m',
+                    remote_cfg.get(
+                        'target_cloud_support_plane_min_height_m',
+                        getattr(self, 'target_cloud_support_plane_min_height_m', 0.004),
+                    ),
+                )
+            ),
+        )
+        self.target_cloud_support_plane_min_inlier_ratio = self._clamp_range(
+            rospy.get_param(
+                '/grasp_6d/remote/target_cloud_support_plane_min_inlier_ratio',
+                remote_cfg.get(
+                    'target_cloud_support_plane_min_inlier_ratio',
+                    getattr(self, 'target_cloud_support_plane_min_inlier_ratio', 0.08),
+                ),
+            ),
+            0.01,
+            0.9,
+        )
+        self.target_cloud_candidate_min_support_clearance_m = float(
+            rospy.get_param(
+                '/grasp_6d/remote/target_cloud_candidate_min_support_clearance_m',
+                remote_cfg.get(
+                    'target_cloud_candidate_min_support_clearance_m',
+                    getattr(self, 'target_cloud_candidate_min_support_clearance_m', -0.002),
+                ),
+            )
+        )
         self.target_projection_frame_convention = normalize_candidate_frame_convention(
             rospy.get_param(
                 '/grasp_6d/remote/target_projection_frame_convention',
@@ -559,7 +748,65 @@ class RemoteGrasp6DNode:
         self.latest_target_cloud_time = None
         self.latest_target_cloud_count = 0
         self.latest_target_cloud_source = 'none'
+        self.latest_support_plane_camera_point = None
+        self.latest_support_plane_camera_normal = None
+        self.latest_target_cloud_segmentation = 'depth-window'
         self._target_cloud_request_active = False
+        self.target_cloud_support_plane_enabled = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/target_cloud_support_plane_enabled',
+                remote_cfg.get('target_cloud_support_plane_enabled', True),
+            )
+        )
+        self.target_cloud_support_plane_ransac_iterations = max(
+            12,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/target_cloud_support_plane_ransac_iterations',
+                    remote_cfg.get('target_cloud_support_plane_ransac_iterations', 96),
+                )
+            ),
+        )
+        self.target_cloud_support_plane_far_percentile = self._clamp_range(
+            rospy.get_param(
+                '/grasp_6d/remote/target_cloud_support_plane_far_percentile',
+                remote_cfg.get('target_cloud_support_plane_far_percentile', 55.0),
+            ),
+            40.0,
+            90.0,
+        )
+        self.target_cloud_support_plane_inlier_distance_m = max(
+            0.0005,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/target_cloud_support_plane_inlier_distance_m',
+                    remote_cfg.get('target_cloud_support_plane_inlier_distance_m', 0.0035),
+                )
+            ),
+        )
+        self.target_cloud_support_plane_min_height_m = max(
+            0.0005,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/target_cloud_support_plane_min_height_m',
+                    remote_cfg.get('target_cloud_support_plane_min_height_m', 0.004),
+                )
+            ),
+        )
+        self.target_cloud_support_plane_min_inlier_ratio = self._clamp_range(
+            rospy.get_param(
+                '/grasp_6d/remote/target_cloud_support_plane_min_inlier_ratio',
+                remote_cfg.get('target_cloud_support_plane_min_inlier_ratio', 0.08),
+            ),
+            0.01,
+            0.9,
+        )
+        self.target_cloud_candidate_min_support_clearance_m = float(
+            rospy.get_param(
+                '/grasp_6d/remote/target_cloud_candidate_min_support_clearance_m',
+                remote_cfg.get('target_cloud_candidate_min_support_clearance_m', -0.002),
+            )
+        )
         self.candidate_max_target_distance_m = max(
             0.0,
             float(
@@ -598,7 +845,15 @@ class RemoteGrasp6DNode:
             float(remote_cfg.get('candidate_downward_approach_weight_m', 0.020)),
         )
         self.candidate_min_downward_approach_cos = float(
-            remote_cfg.get('candidate_min_downward_approach_cos', 0.45)
+            remote_cfg.get('candidate_min_downward_approach_cos', 0.55)
+        )
+        self.candidate_max_jaw_normal_cos = self._clamp_range(
+            remote_cfg.get('candidate_max_jaw_normal_cos', 0.35),
+            0.0,
+            1.0,
+        )
+        self.candidate_min_finger_support_clearance_m = float(
+            remote_cfg.get('candidate_min_finger_support_clearance_m', 0.003)
         )
         self.candidate_max_joint_delta_rad = max(
             0.0,
@@ -606,6 +861,7 @@ class RemoteGrasp6DNode:
         )
         self._candidate_plan_metrics = {}
         self._approach_gate_rejected_count = 0
+        self._table_geometry_gate_rejected_count = 0
         self._joint_motion_gate_rejected_count = 0
         gripper_cfg = rospy.get_param('/gripper', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
@@ -756,6 +1012,9 @@ class RemoteGrasp6DNode:
             self.latest_target_cloud_time = None
             self.latest_target_cloud_count = 0
             self.latest_target_cloud_source = 'none'
+            self.latest_support_plane_camera_point = None
+            self.latest_support_plane_camera_normal = None
+            self.latest_target_cloud_segmentation = 'depth-window'
             depth_for_remote, roi_message = self._depth_for_remote(depth, stamp=stamp, frame_id=frame_id)
             status = 'remote 6D requesting candidates...'
             if roi_message:
@@ -777,11 +1036,15 @@ class RemoteGrasp6DNode:
             self._target_gate_rejected_count = 0
             self._visibility_gate_rejected_count = 0
             self._approach_gate_rejected_count = 0
+            self._table_geometry_gate_rejected_count = 0
             self._joint_motion_gate_rejected_count = 0
             self._width_gate_rejected_count = 0
             self._depth_gate_rejected_count = 0
             self._width_gate_rejected_keys = set()
             self._candidate_plan_metrics = {}
+            self._best_candidate_approach_cos = -1.0
+            self._closest_candidate_cloud_distance = float('inf')
+            self._closest_candidate_center_distance = float('inf')
             selected, grasp_pose = select_first_reachable_candidate(
                 candidates,
                 self.pose_estimator,
@@ -816,6 +1079,7 @@ class RemoteGrasp6DNode:
                     or self._target_gate_rejected_count > 0
                     or self._visibility_gate_rejected_count > 0
                     or self._approach_gate_rejected_count > 0
+                    or self._table_geometry_gate_rejected_count > 0
                     or self._joint_motion_gate_rejected_count > 0
                     or self._position_only_rejected_count > 0
                     or self._orientation_fallback_rejected_count > 0
@@ -823,7 +1087,7 @@ class RemoteGrasp6DNode:
                     message = (
                         'remote 6D returned %d candidates, none executable '
                         '(width>%0.3fm: %d, missing-depth: %d, off-target: %d, '
-                        'bad-approach: %d, excessive-joint-motion: %d, '
+                        'bad-approach: %d, table-geometry: %d, excessive-joint-motion: %d, '
                         'target-out-of-view: %d, position-only: %d, orientation-fallback: %d)'
                         % (
                             len(candidates),
@@ -832,6 +1096,7 @@ class RemoteGrasp6DNode:
                             self._depth_gate_rejected_count,
                             self._target_gate_rejected_count,
                             self._approach_gate_rejected_count,
+                            self._table_geometry_gate_rejected_count,
                             self._joint_motion_gate_rejected_count,
                             self._visibility_gate_rejected_count,
                             self._position_only_rejected_count,
@@ -860,7 +1125,7 @@ class RemoteGrasp6DNode:
                     visibility_message = ' predicted_view=unknown(%s)' % reason
             depth_text = 'missing' if selected.depth_m is None else '%.3f' % float(selected.depth_m)
             selected_metrics = self._candidate_plan_metrics.get(self._pose_key(grasp_pose), {})
-            approach_down = self._tool_approach_downward_cos(grasp_pose)
+            approach_down = self._candidate_approach_downward_cos(selected, grasp_pose)
             message = 'remote 6D plan ready score=%.3f width=%.3f depth=%s target_delta=%.3fm target=%s strict_orientation=1 tool_aligned=1 approach_down=%.3f joint_path_cost=%.3f joint_max_delta=%.3f' % (
                 selected.score,
                 selected.width_m,
@@ -871,6 +1136,12 @@ class RemoteGrasp6DNode:
                 float(selected_metrics.get('joint_path_cost', 0.0)),
                 float(selected_metrics.get('joint_max_delta', 0.0)),
             ) + visibility_message
+            support_metrics = self._candidate_support_geometry_metrics(selected)
+            if support_metrics is not None:
+                message += ' jaw_normal=%.3f finger_clearance=%.3fm' % (
+                    support_metrics['jaw_normal_cos'],
+                    support_metrics['min_finger_clearance_m'],
+                )
             self.status_pub.publish(String(message))
             self.last_error = ''
             self._backoff_until = rospy.Time(0)
@@ -1005,6 +1276,18 @@ class RemoteGrasp6DNode:
                     remote_cfg.get(
                         'camera_visibility_margin_px',
                         getattr(self, 'camera_visibility_margin_px', 36),
+                    ),
+                )
+            ),
+        )
+        self.camera_visibility_bbox_padding_px = max(
+            0,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/camera_visibility_bbox_padding_px',
+                    remote_cfg.get(
+                        'camera_visibility_bbox_padding_px',
+                        getattr(self, 'camera_visibility_bbox_padding_px', 8),
                     ),
                 )
             ),
@@ -1249,8 +1532,28 @@ class RemoteGrasp6DNode:
             rospy.get_param(
                 '/grasp_6d/remote/candidate_min_downward_approach_cos',
                 remote_cfg.get(
-                    'candidate_min_downward_approach_cos',
-                    getattr(self, 'candidate_min_downward_approach_cos', 0.45),
+                        'candidate_min_downward_approach_cos',
+                        getattr(self, 'candidate_min_downward_approach_cos', 0.55),
+                ),
+            )
+        )
+        self.candidate_max_jaw_normal_cos = self._clamp_range(
+            rospy.get_param(
+                '/grasp_6d/remote/candidate_max_jaw_normal_cos',
+                remote_cfg.get(
+                    'candidate_max_jaw_normal_cos',
+                    getattr(self, 'candidate_max_jaw_normal_cos', 0.35),
+                ),
+            ),
+            0.0,
+            1.0,
+        )
+        self.candidate_min_finger_support_clearance_m = float(
+            rospy.get_param(
+                '/grasp_6d/remote/candidate_min_finger_support_clearance_m',
+                remote_cfg.get(
+                    'candidate_min_finger_support_clearance_m',
+                    getattr(self, 'candidate_min_finger_support_clearance_m', 0.003),
                 ),
             )
         )
@@ -1361,6 +1664,35 @@ class RemoteGrasp6DNode:
         min_count = max(1, int(min_points if min_points is not None else getattr(self, 'target_cloud_min_points', 80)))
         if int(np.count_nonzero(valid)) < min_count:
             return np.zeros_like(valid, dtype=bool), int(np.count_nonzero(valid))
+        self.latest_support_plane_camera_point = None
+        self.latest_support_plane_camera_normal = None
+        self.latest_target_cloud_segmentation = 'depth-window'
+        if bool(getattr(self, 'target_cloud_support_plane_enabled', True)):
+            plane_mask, plane_model, diagnostic = segment_foreground_above_support_plane(
+                z_m,
+                valid,
+                roi,
+                self._camera_intrinsics(),
+                min_points=min_count,
+                iterations=getattr(self, 'target_cloud_support_plane_ransac_iterations', 96),
+                far_percentile=getattr(self, 'target_cloud_support_plane_far_percentile', 55.0),
+                inlier_distance_m=getattr(self, 'target_cloud_support_plane_inlier_distance_m', 0.0035),
+                min_height_m=getattr(self, 'target_cloud_support_plane_min_height_m', 0.004),
+                min_inlier_ratio=getattr(self, 'target_cloud_support_plane_min_inlier_ratio', 0.08),
+            )
+            if plane_mask is not None and plane_model is not None:
+                point = self._project_points_for_camera_frame(
+                    np.asarray(plane_model['point_optical'], dtype=np.float32).reshape(1, 3)
+                )[0]
+                normal = self._project_vectors_for_camera_frame(
+                    np.asarray(plane_model['normal_optical'], dtype=np.float32).reshape(1, 3)
+                )[0]
+                normal /= max(float(np.linalg.norm(normal)), 1e-12)
+                self.latest_support_plane_camera_point = np.asarray(point, dtype=float)
+                self.latest_support_plane_camera_normal = np.asarray(normal, dtype=float)
+                self.latest_target_cloud_segmentation = diagnostic
+                return plane_mask, int(np.count_nonzero(plane_mask))
+            self.latest_target_cloud_segmentation = diagnostic
         values = z_m[valid]
         foreground_z = float(np.percentile(values, float(getattr(self, 'target_cloud_foreground_percentile', 35.0))))
         window = max(0.0, float(getattr(self, 'target_cloud_depth_window_m', 0.055)))
@@ -1415,11 +1747,12 @@ class RemoteGrasp6DNode:
         self.latest_target_cloud_count = int(len(points_camera))
         self.latest_target_cloud_source = 'roi_depth_foreground'
         self._target_cloud_request_active = True
-        return 'target_cloud=%d center_base=(%.3f,%.3f,%.3f)' % (
+        return 'target_cloud=%d center_base=(%.3f,%.3f,%.3f) %s' % (
             int(len(points_camera)),
             float(position.x),
             float(position.y),
             float(position.z),
+            str(getattr(self, 'latest_target_cloud_segmentation', 'depth-window')),
         )
 
     def _target_cloud_points_camera(self, depth, roi, foreground_mask):
@@ -1437,6 +1770,17 @@ class RemoteGrasp6DNode:
         y_cv = (v - float(intrinsics.cy)) * z / float(intrinsics.fy)
         points_cv = np.stack([x_cv, y_cv, z], axis=1).astype(np.float32)
         return self._project_points_for_camera_frame(points_cv)
+
+    def _project_vectors_for_camera_frame(self, vectors_cv):
+        vectors = np.asarray(vectors_cv, dtype=np.float32)
+        convention = normalize_candidate_frame_convention(
+            getattr(self, 'target_projection_frame_convention', 'ros_camera_link')
+        )
+        if convention == 'opencv_optical':
+            return vectors
+        if convention == 'ros_camera_link':
+            return vectors.dot(OPTICAL_TO_ROS_CAMERA.T)
+        raise ValueError('unknown target projection frame convention: %s' % convention)
 
     def _depth_to_meters(self, depth_values):
         values = np.asarray(depth_values)
@@ -1497,6 +1841,15 @@ class RemoteGrasp6DNode:
             return False
         cloud_distance = self._camera_candidate_cloud_distance(_camera_candidate)
         max_cloud_distance = float(getattr(self, 'target_cloud_candidate_max_point_distance_m', 0.055) or 0.0)
+        if np.isfinite(cloud_distance):
+            self._closest_candidate_cloud_distance = min(
+                float(getattr(self, '_closest_candidate_cloud_distance', float('inf'))),
+                float(cloud_distance),
+            )
+        self._closest_candidate_center_distance = min(
+            float(getattr(self, '_closest_candidate_center_distance', float('inf'))),
+            float(distance),
+        )
         if np.isfinite(cloud_distance) and max_cloud_distance > 0.0 and cloud_distance > max_cloud_distance:
             self._target_gate_rejected_count += 1
             rospy.logwarn_throttle(
@@ -1511,10 +1864,67 @@ class RemoteGrasp6DNode:
                 float(getattr(_camera_candidate, 'score', 0.0) or 0.0),
             )
             return False
+        support_point = getattr(self, 'latest_support_plane_camera_point', None)
+        support_normal = getattr(self, 'latest_support_plane_camera_normal', None)
+        support_clearance = None
+        if support_point is not None and support_normal is not None and _camera_candidate is not None:
+            try:
+                support_clearance = float(
+                    np.dot(
+                        np.asarray(_camera_candidate.translation_m, dtype=float) - np.asarray(support_point, dtype=float),
+                        np.asarray(support_normal, dtype=float),
+                    )
+                )
+            except Exception:
+                support_clearance = None
+        min_support_clearance = float(
+            getattr(self, 'target_cloud_candidate_min_support_clearance_m', -0.002)
+        )
+        if support_clearance is not None and support_clearance < min_support_clearance:
+            self._target_gate_rejected_count += 1
+            rospy.logwarn_throttle(
+                1.0,
+                'remote 6D candidate rejected below support plane: clearance=%.3fm < %.3fm score=%.3f',
+                support_clearance,
+                min_support_clearance,
+                float(getattr(_camera_candidate, 'score', 0.0) or 0.0),
+            )
+            return False
+        support_metrics = self._candidate_support_geometry_metrics(_camera_candidate)
+        if support_metrics is not None:
+            max_jaw_normal = float(getattr(self, 'candidate_max_jaw_normal_cos', 1.0))
+            min_finger_clearance = float(
+                getattr(self, 'candidate_min_finger_support_clearance_m', -float('inf'))
+            )
+            jaw_normal = support_metrics['jaw_normal_cos']
+            finger_clearance = support_metrics['min_finger_clearance_m']
+            if jaw_normal > max_jaw_normal or finger_clearance < min_finger_clearance:
+                self._table_geometry_gate_rejected_count += 1
+                rospy.logwarn_throttle(
+                    1.0,
+                    (
+                        'remote 6D candidate rejected by support-plane gripper geometry: '
+                        'jaw_normal=%.3f limit=%.3f min_finger_clearance=%.3fm limit=%.3fm '
+                        'center_clearance=%.3fm width=%.3fm score=%.3f'
+                    ),
+                    jaw_normal,
+                    max_jaw_normal,
+                    finger_clearance,
+                    min_finger_clearance,
+                    support_metrics['center_clearance_m'],
+                    support_metrics['width_m'],
+                    float(getattr(_camera_candidate, 'score', 0.0) or 0.0),
+                )
+                return False
         max_distance = max(0.0, float(getattr(self, 'candidate_max_target_distance_m', 0.04)))
         min_z = float(getattr(self, 'candidate_min_relative_z_m', -0.015))
         max_z = float(getattr(self, 'candidate_max_relative_z_m', 0.08))
-        if distance > max_distance or dz < min_z or dz > max_z:
+        cloud_primary = (
+            np.isfinite(cloud_distance)
+            and max_cloud_distance > 0.0
+            and str(getattr(self, 'latest_target_cloud_segmentation', '')).startswith('support_plane=inliers:')
+        )
+        if not cloud_primary and (distance > max_distance or dz < min_z or dz > max_z):
             self._target_gate_rejected_count += 1
             rospy.logwarn_throttle(
                 1.0,
@@ -1539,7 +1949,11 @@ class RemoteGrasp6DNode:
                 target_source,
             )
             return False
-        downward_cos = self._tool_approach_downward_cos(grasp_pose)
+        downward_cos = self._candidate_approach_downward_cos(_camera_candidate, grasp_pose)
+        self._best_candidate_approach_cos = max(
+            float(getattr(self, '_best_candidate_approach_cos', -1.0)),
+            float(downward_cos),
+        )
         min_downward_cos = float(getattr(self, 'candidate_min_downward_approach_cos', -1.0))
         if downward_cos < min_downward_cos:
             self._approach_gate_rejected_count += 1
@@ -1592,7 +2006,10 @@ class RemoteGrasp6DNode:
             0.0,
             float(getattr(self, 'candidate_downward_approach_weight_m', 0.0) or 0.0),
         )
-        downward_cos = min(1.0, max(-1.0, self._tool_approach_downward_cos(grasp_pose)))
+        downward_cos = min(
+            1.0,
+            max(-1.0, self._candidate_approach_downward_cos(camera_candidate, grasp_pose)),
+        )
         rank += downward_weight * (1.0 - downward_cos)
         weight = max(0.0, float(getattr(self, 'camera_visibility_rank_weight_m', 0.0) or 0.0))
         if weight <= 0.0 or not bool(getattr(self, 'camera_visibility_gate_enabled', False)):
@@ -1621,6 +2038,54 @@ class RemoteGrasp6DNode:
             return float(-axis[2] / norm)
         except Exception:
             return -1.0
+
+    def _candidate_approach_downward_cos(self, camera_candidate, grasp_pose):
+        support_normal = getattr(self, 'latest_support_plane_camera_normal', None)
+        if support_normal is None or camera_candidate is None:
+            return self._tool_approach_downward_cos(grasp_pose)
+        try:
+            matrix = quaternion_matrix(np.asarray(camera_candidate.quaternion_xyzw, dtype=float))
+            name = str(self.grasp_config.get('tool_approach_axis', 'z') or 'z').strip().lower()
+            sign = -1.0 if name.startswith('-') else 1.0
+            axis_index = {'x': 0, 'y': 1, 'z': 2}[name.lstrip('+-')]
+            approach = sign * np.asarray(matrix[:3, axis_index], dtype=float)
+            normal = np.asarray(support_normal, dtype=float)
+            approach /= max(float(np.linalg.norm(approach)), 1e-12)
+            normal /= max(float(np.linalg.norm(normal)), 1e-12)
+            # The fitted normal points away from the table toward the camera;
+            # insertion toward the object/table therefore follows -normal.
+            return float(np.dot(approach, -normal))
+        except Exception:
+            return self._tool_approach_downward_cos(grasp_pose)
+
+    def _candidate_support_geometry_metrics(self, camera_candidate):
+        """Measure a parallel-jaw candidate against the observed support plane."""
+        support_point = getattr(self, 'latest_support_plane_camera_point', None)
+        support_normal = getattr(self, 'latest_support_plane_camera_normal', None)
+        if support_point is None or support_normal is None or camera_candidate is None:
+            return None
+        try:
+            translation = np.asarray(camera_candidate.translation_m, dtype=float).reshape(3)
+            normal = np.asarray(support_normal, dtype=float).reshape(3)
+            normal /= max(float(np.linalg.norm(normal)), 1e-12)
+            matrix = quaternion_matrix(np.asarray(camera_candidate.quaternion_xyzw, dtype=float))
+            # GraspNet and Alicia tool0 both use +Y as the jaw-closing axis.
+            jaw_axis = np.asarray(matrix[:3, 1], dtype=float)
+            jaw_axis /= max(float(np.linalg.norm(jaw_axis)), 1e-12)
+            jaw_normal_cos = abs(float(np.dot(jaw_axis, normal)))
+            center_clearance = float(
+                np.dot(translation - np.asarray(support_point, dtype=float).reshape(3), normal)
+            )
+            width = max(0.0, float(getattr(camera_candidate, 'width_m', 0.0) or 0.0))
+            min_finger_clearance = center_clearance - 0.5 * width * jaw_normal_cos
+            return {
+                'jaw_normal_cos': jaw_normal_cos,
+                'center_clearance_m': center_clearance,
+                'min_finger_clearance_m': min_finger_clearance,
+                'width_m': width,
+            }
+        except Exception:
+            return None
 
     @staticmethod
     def _pose_key(pose_stamped):
@@ -1666,11 +2131,9 @@ class RemoteGrasp6DNode:
             if bool(getattr(self, 'camera_visibility_require_approach', True)):
                 stages.append(('approach', plan.approach))
             intrinsics = self._camera_intrinsics()
-            margin = max(0, int(getattr(self, 'camera_visibility_margin_px', 36)))
+            base_margin = max(0, int(getattr(self, 'camera_visibility_margin_px', 36)))
             min_depth = max(0.0, float(getattr(self, 'camera_visibility_min_depth_m', 0.035)))
             max_depth = max(min_depth, float(getattr(self, 'camera_visibility_max_depth_m', 1.20)))
-            x_limit = max(1.0, float(intrinsics.width) * 0.5 - margin)
-            y_limit = max(1.0, float(intrinsics.height) * 0.5 - margin)
             metrics = []
             for stage_name, tool_pose in stages:
                 u, v, depth = project_base_target_at_tool_pose(
@@ -1679,6 +2142,9 @@ class RemoteGrasp6DNode:
                     tool_from_camera,
                     intrinsics,
                 )
+                margin_x, margin_y = self._camera_visibility_margins_px(depth, base_margin)
+                x_limit = max(1.0, float(intrinsics.width) * 0.5 - margin_x)
+                y_limit = max(1.0, float(intrinsics.height) * 0.5 - margin_y)
                 center_cost = math.sqrt(
                     ((float(u) - float(intrinsics.cx)) / x_limit) ** 2
                     + ((float(v) - float(intrinsics.cy)) / y_limit) ** 2
@@ -1689,6 +2155,8 @@ class RemoteGrasp6DNode:
                     'v': float(v),
                     'depth_m': float(depth),
                     'center_cost': float(center_cost),
+                    'margin_x_px': int(margin_x),
+                    'margin_y_px': int(margin_y),
                 }
                 metrics.append(metric)
                 inside = (
@@ -1696,20 +2164,21 @@ class RemoteGrasp6DNode:
                     and np.isfinite(v)
                     and float(depth) >= min_depth
                     and float(depth) <= max_depth
-                    and float(u) >= margin
-                    and float(u) < float(intrinsics.width) - margin
-                    and float(v) >= margin
-                    and float(v) < float(intrinsics.height) - margin
+                    and float(u) >= margin_x
+                    and float(u) < float(intrinsics.width) - margin_x
+                    and float(v) >= margin_y
+                    and float(v) < float(intrinsics.height) - margin_y
                 )
                 if not inside:
                     return False, metrics, (
-                        '%s predicts uv=(%.1f,%.1f) depth=%.3fm outside margin=%d image=%dx%d'
+                        '%s predicts uv=(%.1f,%.1f) depth=%.3fm outside margins=(%d,%d) image=%dx%d'
                         % (
                             stage_name,
                             float(u),
                             float(v),
                             float(depth),
-                            margin,
+                            margin_x,
+                            margin_y,
                             int(intrinsics.width),
                             int(intrinsics.height),
                         )
@@ -1717,6 +2186,44 @@ class RemoteGrasp6DNode:
             return True, metrics, 'visible'
         except Exception as exc:
             return False, [], 'visibility transform failed: %s' % exc
+
+    def _camera_visibility_margins_px(self, predicted_depth_m, base_margin=None):
+        margin = max(
+            0,
+            int(
+                getattr(self, 'camera_visibility_margin_px', 36)
+                if base_margin is None
+                else base_margin
+            ),
+        )
+        try:
+            obj, _obj_time = self._latest_object_snapshot()
+        except Exception:
+            obj = getattr(self, 'latest_object', None)
+        if obj is None or not bool(getattr(obj, 'detected', False)):
+            return margin, margin
+
+        current_depth = float(getattr(obj, 'depth_m', 0.0) or 0.0)
+        predicted_depth = float(predicted_depth_m)
+        bbox_width = float(getattr(obj, 'bbox_width', 0.0) or 0.0)
+        bbox_height = float(getattr(obj, 'bbox_height', 0.0) or 0.0)
+        if (
+            not np.isfinite(current_depth)
+            or not np.isfinite(predicted_depth)
+            or current_depth <= 1e-6
+            or predicted_depth <= 1e-6
+            or bbox_width <= 0.0
+            or bbox_height <= 0.0
+        ):
+            return margin, margin
+
+        # Preserve the complete target footprint, not only its center. Under a
+        # pinhole model the apparent box size grows inversely with depth.
+        scale = current_depth / predicted_depth
+        padding = max(0, int(getattr(self, 'camera_visibility_bbox_padding_px', 8)))
+        margin_x = max(margin, int(math.ceil(0.5 * bbox_width * scale)) + padding)
+        margin_y = max(margin, int(math.ceil(0.5 * bbox_height * scale)) + padding)
+        return margin_x, margin_y
 
     def _tool_from_camera_matrix(self):
         cached = getattr(self, '_cached_tool_from_camera', None)

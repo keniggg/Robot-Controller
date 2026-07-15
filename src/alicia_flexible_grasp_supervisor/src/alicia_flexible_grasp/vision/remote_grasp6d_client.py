@@ -16,6 +16,7 @@ class RemoteGraspCandidate:
     translation_m: np.ndarray
     quaternion_xyzw: np.ndarray
     width_m: float = 0.0
+    height_m: float = None
     depth_m: float = None
 
 
@@ -101,6 +102,7 @@ def decode_remote_grasp_response(response):
             RemoteGraspCandidate(
                 score=float(item.get('score', 0.0)),
                 width_m=float(item.get('width_m', 0.0) or 0.0),
+                height_m=(float(item['height_m']) if item.get('height_m') is not None else None),
                 depth_m=(float(item['depth_m']) if item.get('depth_m') is not None else None),
                 translation_m=translation,
                 quaternion_xyzw=quat,

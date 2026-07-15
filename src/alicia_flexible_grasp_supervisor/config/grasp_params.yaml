@@ -39,9 +39,10 @@ grasp:
   # closed-loop tracker to use genuine detections down to the detector limit.
   visual_retarget_min_object_confidence: 0.35
   visual_retarget_require_pregrasp_detection: true
-  visual_retarget_after_approach: true
-  # Never continue the final contact motion from a stale target pose.
-  visual_retarget_require_approach_detection: true
+  # The wrist camera becomes occluded during the final insertion. Reobserve at
+  # pregrasp, then preserve that locked strict 6D pose through contact.
+  visual_retarget_after_approach: false
+  visual_retarget_require_approach_detection: false
   visual_retarget_timeout_sec: 2.0
   visual_retarget_sample_sec: 0.05
   visual_retarget_required_samples: 3
@@ -99,7 +100,9 @@ grasp_6d:
     timeout_sec: 30.0
     auto_request: false
     request_hz: 0.05
-    max_candidates: 120
+    # Return a broader score-ranked set so strict target, support-plane and
+    # approach gates can find a safe pose instead of seeing only side grasps.
+    max_candidates: 300
     failure_backoff_sec: 10.0
     # GraspNet baseline predicts in OpenCV optical camera coordinates:
     # x right, y down, z forward. ROS-side planning uses camera_link.
@@ -130,16 +133,29 @@ grasp_6d:
     # Rank reachable candidates by target-cloud geometry, model confidence,
     # current-joint motion cost, and a tabletop-compatible approach direction.
     rank_by_target_distance: true
-    candidate_center_distance_weight: 1.0
+    # Object-cloud distance is primary. The center term is only a mild tie
+    # breaker because valid grasps on elongated objects need not be at the
+    # bounding-box center.
+    candidate_center_distance_weight: 0.25
     candidate_model_score_weight_m: 0.015
     candidate_joint_path_cost_weight_m: 0.004
     # Reject technically reachable poses that require a large base/wrist flip.
     candidate_max_joint_delta_rad: 1.8
     candidate_downward_approach_weight_m: 0.020
-    # tool0 +Z is the insertion direction. Require a meaningful downward
-    # component for tabletop objects. The failed grasps measured 0.355 and
-    # 0.477, both too shallow for a reliable top-down mouse grasp.
-    candidate_min_downward_approach_cos: 0.55
+    # tool0 +Z is the insertion direction. Keep a meaningful downward
+    # component while allowing collision-safe diagonal grasps. The separate
+    # jaw/support-plane gate rejects the former above/below-table failure mode.
+    candidate_min_downward_approach_cos: 0.45
+    # For an object resting on a support plane, the jaw-closing axis must stay
+    # close to the plane. Otherwise one finger is commanded above the object
+    # and the opposing finger through the table. This is geometric and does not
+    # assume a fixed grasp pose or object category.
+    candidate_max_jaw_normal_cos: 0.35
+    # Check both physically reachable finger-center locations, not only the
+    # grasp center. Model widths larger than /gripper/open_position_m are kept
+    # for diagnostics but clamped to the real stroke for this geometry only.
+    # A positive margin absorbs depth/plane-fit noise near the tabletop.
+    candidate_min_finger_support_clearance_m: 0.003
     # Keep this disabled in strict evaluation. Target location must come from
     # RGB-D segmentation/candidate ranking, not from a fixed post-selection
     # position correction.
@@ -155,20 +171,32 @@ grasp_6d:
     target_cloud_foreground_percentile: 35.0
     target_cloud_depth_window_m: 0.055
     target_cloud_min_points: 80
+    # Estimate the support plane directly from the request-frame RGB-D ROI and
+    # remove it before WSL inference. This prevents table points inside a YOLO
+    # bounding box from dominating GraspNet candidates.
+    target_cloud_support_plane_enabled: true
+    target_cloud_support_plane_ransac_iterations: 96
+    target_cloud_support_plane_far_percentile: 55.0
+    target_cloud_support_plane_inlier_distance_m: 0.0035
+    target_cloud_support_plane_min_height_m: 0.004
+    target_cloud_support_plane_min_inlier_ratio: 0.08
     # This age applies outside inference. During an active remote request the
     # exact request-frame cloud remains pinned until selection finishes.
     target_cloud_max_age_sec: 1.0
     target_cloud_max_points_for_gate: 2500
-    target_cloud_candidate_max_point_distance_m: 0.055
+    target_cloud_candidate_max_point_distance_m: 0.030
+    target_cloud_candidate_min_support_clearance_m: -0.002
     target_projection_frame_convention: "ros_camera_link"
     # Predict eye-in-hand camera view for each strict 6D candidate. The target
-    # must remain in a safe image region at pregrasp and approach.
-    # Reject a candidate when the calibrated eye-in-hand projection predicts
-    # that the target will leave the safe image region before contact.
+    # must remain fully visible at pregrasp. Final insertion uses the locked 6D
+    # pose because the wrist camera is naturally occluded close to contact.
     camera_visibility_gate_enabled: true
     camera_visibility_diagnostic_enabled: true
-    camera_visibility_require_approach: true
+    camera_visibility_require_approach: false
     camera_visibility_margin_px: 36
+    # Add the depth-scaled detector box half-size and this padding to the base
+    # margin so a candidate cannot pass with only its center still in frame.
+    camera_visibility_bbox_padding_px: 8
     camera_visibility_min_depth_m: 0.035
     camera_visibility_max_depth_m: 1.20
     camera_visibility_rank_weight_m: 0.012

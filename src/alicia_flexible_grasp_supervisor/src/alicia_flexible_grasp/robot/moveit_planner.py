@@ -1,5 +1,6 @@
 import sys
 import math
+import inspect
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -208,12 +209,30 @@ class MoveItPlanner:
             return False, 'Cartesian move exception: %s; %s' % (exc, target_text)
 
     def _compute_cartesian_plan(self, pose):
-        result = self.manipulator.compute_cartesian_path(
-            [deepcopy(pose)],
-            max(0.0005, float(getattr(self, 'cartesian_eef_step_m', 0.003))),
-            max(0.0, float(getattr(self, 'cartesian_jump_threshold', 0.0))),
-            avoid_collisions=True,
-        )
+        compute_path = self.manipulator.compute_cartesian_path
+        waypoints = [deepcopy(pose)]
+        eef_step = max(0.0005, float(getattr(self, 'cartesian_eef_step_m', 0.003)))
+        jump_threshold = max(0.0, float(getattr(self, 'cartesian_jump_threshold', 0.0)))
+
+        # Noetic's MoveGroupCommander removed jump_threshold from this Python
+        # wrapper. Older releases still require it as the third argument.
+        try:
+            parameters = inspect.signature(compute_path).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        if 'jump_threshold' in parameters:
+            result = compute_path(
+                waypoints,
+                eef_step,
+                jump_threshold,
+                avoid_collisions=True,
+            )
+        else:
+            result = compute_path(
+                waypoints,
+                eef_step,
+                avoid_collisions=True,
+            )
         if not isinstance(result, tuple) or len(result) < 2:
             return None, 0.0
         first, second = result[0], result[1]

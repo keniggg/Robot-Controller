@@ -2,6 +2,7 @@
 import importlib.util
 import pathlib
 import sys
+import threading
 import types
 import unittest
 
@@ -98,6 +99,41 @@ class FakeTf2Module:
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
+    def test_support_plane_segmentation_removes_table_from_mouse_roi(self):
+        height, width = 60, 80
+        depth_m = np.full((height, width), 0.50, dtype=np.float32)
+        depth_m[15:50, 20:62] = 0.46
+        valid = np.ones_like(depth_m, dtype=bool)
+        intrinsics = remote_node.CameraIntrinsics(
+            width=width,
+            height=height,
+            fx=120.0,
+            fy=120.0,
+            cx=40.0,
+            cy=30.0,
+            depth_scale=0.001,
+        )
+
+        mask, plane, diagnostic = remote_node.segment_foreground_above_support_plane(
+            depth_m,
+            valid,
+            (0, 0, width, height),
+            intrinsics,
+            min_points=80,
+            iterations=64,
+            far_percentile=55.0,
+            inlier_distance_m=0.002,
+            min_height_m=0.004,
+            min_inlier_ratio=0.08,
+        )
+
+        self.assertIsNotNone(mask)
+        self.assertIsNotNone(plane)
+        self.assertGreater(int(np.count_nonzero(mask[15:50, 20:62])), 1300)
+        self.assertEqual(int(np.count_nonzero(mask[:10, :])), 0)
+        self.assertIn('support_plane=inliers:', diagnostic)
+        self.assertGreater(float(plane['plane_depth_m'] - plane['foreground_depth_m']), 0.03)
+
     def test_resolves_protocol_fields_from_unified_wsl_health_payload(self):
         resolved = remote_node.resolve_grasp_backend_health(
             {
@@ -398,6 +434,24 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertAlmostEqual(metrics[0]['depth_m'], 0.08)
         self.assertAlmostEqual(metrics[1]['depth_m'], 0.045)
 
+    def test_visibility_margin_scales_with_target_bbox_and_depth(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.camera_visibility_margin_px = 36
+        node.camera_visibility_bbox_padding_px = 8
+        node._object_lock = threading.Lock()
+        node.latest_object_time = None
+        node.latest_object = types.SimpleNamespace(
+            detected=True,
+            depth_m=0.32,
+            bbox_width=84,
+            bbox_height=112,
+        )
+
+        margin_x, margin_y = node._camera_visibility_margins_px(0.16)
+
+        self.assertEqual(margin_x, 92)
+        self.assertEqual(margin_y, 120)
+
     def test_plan_reachable_rejects_position_only_fallback_when_execute_disallows_it(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
         node.allow_position_only_fallback = False
@@ -600,6 +654,115 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         finally:
             remote_node.rospy.logwarn_throttle = original_logwarn_throttle
             remote_node.rospy.Time.now = original_time_now
+
+    def test_support_plane_cloud_allows_valid_elongated_object_grasp_outside_center_sphere(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.grasp_config = {'tool_approach_axis': 'z'}
+        node.candidate_target_gate_enabled = True
+        node.candidate_max_target_distance_m = 0.04
+        node.candidate_min_relative_z_m = -0.015
+        node.candidate_max_relative_z_m = 0.08
+        node.target_cloud_enabled = True
+        node.target_cloud_max_age_sec = 1.0
+        node.target_cloud_candidate_max_point_distance_m = 0.030
+        node.target_cloud_candidate_min_support_clearance_m = -0.002
+        node.latest_target_cloud_base_xyz = np.array([0.0, 0.0, 0.10])
+        node.latest_target_cloud_camera_points = np.array([[0.30, 0.06, 0.0]], dtype=np.float32)
+        node.latest_target_cloud_time = remote_node.rospy.Time.from_sec(1.0)
+        node.latest_target_cloud_source = 'roi_depth_foreground'
+        node.latest_target_cloud_segmentation = 'support_plane=inliers:500 foreground:300 gap:0.030m'
+        node.latest_support_plane_camera_point = None
+        node.latest_support_plane_camera_normal = None
+        node._target_cloud_request_active = True
+        node.camera_visibility_gate_enabled = False
+        node.require_candidate_depth = True
+        node.candidate_min_downward_approach_cos = 0.55
+        node._target_gate_rejected_count = 0
+        node._approach_gate_rejected_count = 0
+        node._candidate_approach_downward_cos = lambda _candidate, _pose: 0.8
+
+        grasp_pose = PoseStamped()
+        grasp_pose.pose.position.x = 0.0
+        grasp_pose.pose.position.y = 0.06
+        grasp_pose.pose.position.z = 0.10
+        camera_candidate = types.SimpleNamespace(
+            score=0.8,
+            width_m=0.05,
+            depth_m=0.02,
+            translation_m=np.array([0.30, 0.06, 0.0]),
+        )
+
+        original_logwarn_throttle = remote_node.rospy.logwarn_throttle
+        remote_node.rospy.logwarn_throttle = lambda *args, **kwargs: None
+        try:
+            accepted = node._candidate_matches_target(None, camera_candidate, grasp_pose)
+        finally:
+            remote_node.rospy.logwarn_throttle = original_logwarn_throttle
+
+        self.assertTrue(accepted)
+        self.assertGreater(0.06, node.candidate_max_target_distance_m)
+        self.assertEqual(node._target_gate_rejected_count, 0)
+
+    def test_candidate_approach_uses_observed_support_plane_normal(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.grasp_config = {'tool_approach_axis': 'z'}
+        node.latest_support_plane_camera_normal = np.array([-1.0, 0.0, 0.0])
+        candidate = types.SimpleNamespace(
+            quaternion_xyzw=remote_node.quaternion_from_euler(0.0, np.pi * 0.5, 0.0)
+        )
+        pose = PoseStamped()
+        pose.pose.orientation.w = 1.0
+
+        downward = node._candidate_approach_downward_cos(candidate, pose)
+
+        self.assertAlmostEqual(downward, 1.0, places=6)
+
+    def test_support_geometry_rejects_vertical_jaw_that_straddles_table(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.latest_support_plane_camera_point = np.array([0.0, 0.0, 0.0])
+        node.latest_support_plane_camera_normal = np.array([0.0, 0.0, 1.0])
+        candidate = types.SimpleNamespace(
+            translation_m=np.array([0.0, 0.0, 0.025]),
+            quaternion_xyzw=remote_node.quaternion_from_euler(np.pi * 0.5, 0.0, 0.0),
+            width_m=0.070,
+        )
+
+        metrics = node._candidate_support_geometry_metrics(candidate)
+
+        self.assertAlmostEqual(metrics['jaw_normal_cos'], 1.0, places=6)
+        self.assertAlmostEqual(metrics['min_finger_clearance_m'], -0.010, places=6)
+
+    def test_support_geometry_accepts_horizontal_jaw_above_table(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.latest_support_plane_camera_point = np.array([0.0, 0.0, 0.0])
+        node.latest_support_plane_camera_normal = np.array([0.0, 0.0, 1.0])
+        candidate = types.SimpleNamespace(
+            translation_m=np.array([0.0, 0.0, 0.025]),
+            quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.090,
+        )
+
+        metrics = node._candidate_support_geometry_metrics(candidate)
+
+        self.assertAlmostEqual(metrics['jaw_normal_cos'], 0.0, places=6)
+        self.assertAlmostEqual(metrics['min_finger_clearance_m'], 0.025, places=6)
+
+    def test_support_geometry_clamps_model_width_to_physical_gripper_stroke(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.latest_support_plane_camera_point = np.array([0.0, 0.0, 0.0])
+        node.latest_support_plane_camera_normal = np.array([0.0, 0.0, 1.0])
+        node.gripper_physical_open_width_m = 0.050
+        candidate = types.SimpleNamespace(
+            translation_m=np.array([0.0, 0.0, 0.011]),
+            quaternion_xyzw=remote_node.quaternion_from_euler(np.arcsin(0.233), 0.0, 0.0),
+            width_m=0.083,
+        )
+
+        metrics = node._candidate_support_geometry_metrics(candidate)
+
+        self.assertAlmostEqual(metrics['model_width_m'], 0.083, places=6)
+        self.assertAlmostEqual(metrics['geometry_width_m'], 0.050, places=6)
+        self.assertGreater(metrics['min_finger_clearance_m'], 0.005)
 
     def test_active_request_keeps_its_cloud_after_wall_clock_age_limit(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
