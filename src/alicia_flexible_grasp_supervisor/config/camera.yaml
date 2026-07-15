@@ -24,6 +24,17 @@ perception:
   enabled: true
   # yolov8 / simple_hsv。默认使用 YOLOv8，HSV 仅作为无模型时的备用调试模式。
   detector: "yolov8"
+  yolo_model_choice: "original"
+  yolo_models:
+    original:
+      display_name: "YOLOv8 原模型"
+      model_path: "yolov8n.pt"
+      target_class_mode: "description"
+    carton:
+      display_name: "Carton 模型"
+      model_path: "carton_model/best.pt"
+      target_class_mode: "fixed"
+      target_class: "carton"
   target_description: "鼠标"
   yolo_model: "yolov8n.pt"
   yolo_target_class: "mouse"
