@@ -235,6 +235,43 @@ class PregraspAsyncTest(unittest.TestCase):
 
         self.assertEqual(len(started), 2)
 
+    def test_dispatch_message_explains_timeout_keeps_controls_locked(self):
+        widget, _ = self._worker_widget(execute=False)
+
+        PerceptionWidget.plan_pregrasp(widget, False)
+
+        self.assertIn('超时后继续锁定', widget.status.text)
+        self.assertIn('直到后台请求结束', widget.status.text)
+        self.assertNotIn('自动释放按钮', widget.status.text)
+
+    def test_timeout_status_survives_refresh_until_worker_returns(self):
+        widget, started = self._worker_widget(execute=True)
+
+        PerceptionWidget.plan_pregrasp(widget, True)
+        timed_out_token = started[0][2]
+        PerceptionWidget._timeout_pregrasp_worker(widget, timed_out_token)
+        timeout_status = widget.status.text
+
+        widget._status_hold_until = 0.0
+        PerceptionWidget._set_perception_status(widget, '目标识别稳定，已更新目标坐标和预抓取位姿')
+        PerceptionWidget._update_detector_status(widget, 'error:carton:metadata unavailable')
+
+        self.assertEqual(widget.__dict__.get('_pregrasp_worker_token'), timed_out_token)
+        self.assertEqual(widget.status.text, timeout_status)
+        self.assertIn('后台请求仍未结束', widget.status.text)
+
+        PerceptionWidget._finish_pregrasp_worker(
+            widget,
+            timed_out_token,
+            True,
+            True,
+            '执行成功：late timed-out execute',
+        )
+        PerceptionWidget._set_perception_status(widget, '目标识别稳定，已恢复正常状态更新')
+
+        self.assertIsNone(widget.__dict__.get('_pregrasp_worker_token'))
+        self.assertEqual(widget.status.text, '目标识别稳定，已恢复正常状态更新')
+
     def test_plan_pregrasp_starts_worker_instead_of_sync_service_call(self):
         widget = PerceptionWidget.__new__(PerceptionWidget)
         widget.pregrasp_pose = types.SimpleNamespace(value=1)

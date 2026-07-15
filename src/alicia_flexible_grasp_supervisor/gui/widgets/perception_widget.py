@@ -429,9 +429,9 @@ class PerceptionWidget(QtWidgets.QWidget):
             self._sync_model_class_editor(selected)
             self._invalidate_actionable_target()
             self.model_status_chip.setText('%s正在加载' % selected['display_name'])
-            self.status.setText('模型选择已提交，视觉节点正在刷新')
+            self._set_perception_status('模型选择已提交，视觉节点正在刷新')
         except Exception as exc:
-            self.status.setText('模型切换失败：%s' % exc)
+            self._set_perception_status('模型切换失败：%s' % exc)
 
     def _update_detector_status(self, text):
         raw_text = str(text or '')
@@ -441,7 +441,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         detail = parts[2] if len(parts) > 2 else ''
         if state not in ('loading', 'ready', 'error') or not choice:
             self.model_status_chip.setText('检测模型状态未知')
-            self.status.setText('无法解析检测模型状态：%s' % (raw_text or '空消息'))
+            self._set_perception_status('无法解析检测模型状态：%s' % (raw_text or '空消息'))
             return
         profile = self.model_profiles.get(choice, {})
         display_name = str(profile.get('display_name', choice or '检测模型'))
@@ -453,7 +453,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         elif state == 'error':
             self._invalidate_actionable_target()
             self.model_status_chip.setText('%s加载失败' % display_name)
-            self.status.setText('模型加载失败：%s' % detail)
+            self._set_perception_status('模型加载失败：%s' % detail)
 
     def _invalidate_actionable_target(self):
         self.last_object = None
@@ -508,9 +508,9 @@ class PerceptionWidget(QtWidgets.QWidget):
             rospy.set_param('/grasp/pregrasp_distance', float(self.pregrasp.value()))
             self._clear_locked_grasp_target()
             self.interpret_chip.setText(parsed['summary'])
-            self.status.setText('识别指令已更新，视觉节点会自动刷新')
+            self._set_perception_status('识别指令已更新，视觉节点会自动刷新')
         except Exception as exc:
-            self.status.setText('参数格式错误：%s' % exc)
+            self._set_perception_status('参数格式错误：%s' % exc)
 
     def update_object(self, msg):
         if not self.__dict__.get('_alive', False):
@@ -647,9 +647,9 @@ class PerceptionWidget(QtWidgets.QWidget):
         )
         self._set_pregrasp_buttons_enabled(False)
         if execute:
-            self.status.setText('后台执行已规划预抓取中，界面保持可操作；若超时会自动释放按钮')
+            self.status.setText('后台执行已规划预抓取中，预抓取操作按钮已锁定；超时后继续锁定，直到后台请求结束')
         else:
-            self.status.setText('后台规划中，界面保持可操作；若超时会自动释放按钮')
+            self.status.setText('后台规划中，预抓取操作按钮已锁定；超时后继续锁定，直到后台请求结束')
         self._start_pregrasp_worker(deepcopy(pose), execute, token)
         try:
             timeout_sec = float(self._plan_timeout_sec)
@@ -868,7 +868,10 @@ class PerceptionWidget(QtWidgets.QWidget):
             self._status_hold_until = time.monotonic() + hold_sec
 
     def _set_perception_status(self, text):
-        if self.__dict__.get('_planning_active', False):
+        if (
+            self.__dict__.get('_pregrasp_worker_token', None) is not None
+            or self.__dict__.get('_planning_active', False)
+        ):
             return
         if float(self.__dict__.get('_status_hold_until', 0.0) or 0.0) > time.monotonic():
             return
