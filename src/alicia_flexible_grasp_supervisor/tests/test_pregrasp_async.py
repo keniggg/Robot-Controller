@@ -156,7 +156,7 @@ class PregraspAsyncTest(unittest.TestCase):
         self.assertEqual(widget.status.text, status_before_completion)
         self.assertNotIn('stale canceled plan', widget.status.text)
 
-    def test_switch_during_execute_keeps_worker_busy_then_timeout_releases_controls(self):
+    def test_switch_during_execute_timeout_waits_for_actual_worker_return(self):
         widget, started = self._worker_widget(execute=True)
 
         PerceptionWidget.plan_pregrasp(widget, True)
@@ -174,12 +174,66 @@ class PregraspAsyncTest(unittest.TestCase):
         status_before_timeout = widget.status.text
         PerceptionWidget._timeout_pregrasp_worker(widget, canceled_token)
 
+        self.assertEqual(widget.__dict__.get('_pregrasp_worker_token'), canceled_token)
+        self.assertFalse(widget.plan_pregrasp_btn.enabled)
+        self.assertFalse(widget.start_grasp_btn.enabled)
+        self.assertFalse(widget.execute_pregrasp_btn.enabled)
+        self.assertEqual(widget.status.text, status_before_timeout)
+        self.assertNotIn('超时', widget.status.text)
+
+        PerceptionWidget._finish_pregrasp_worker(
+            widget,
+            canceled_token,
+            True,
+            True,
+            '执行成功：late canceled execute',
+        )
+
         self.assertIsNone(widget.__dict__.get('_pregrasp_worker_token'))
         self.assertTrue(widget.plan_pregrasp_btn.enabled)
         self.assertTrue(widget.start_grasp_btn.enabled)
         self.assertFalse(widget.execute_pregrasp_btn.enabled)
         self.assertEqual(widget.status.text, status_before_timeout)
-        self.assertNotIn('超时', widget.status.text)
+        self.assertNotIn('late canceled execute', widget.status.text)
+
+    def test_timeout_blocks_second_dispatch_until_late_result_releases_owner(self):
+        widget, started = self._worker_widget(execute=True)
+        original_plan = widget._planned_pregrasp_pose
+
+        PerceptionWidget.plan_pregrasp(widget, True)
+        timed_out_token = started[0][2]
+        PerceptionWidget._timeout_pregrasp_worker(widget, timed_out_token)
+
+        self.assertEqual(widget.__dict__.get('_pregrasp_worker_token'), timed_out_token)
+        self.assertFalse(widget.plan_pregrasp_btn.enabled)
+        self.assertFalse(widget.start_grasp_btn.enabled)
+        self.assertFalse(widget.execute_pregrasp_btn.enabled)
+        self.assertIn('超时', widget.status.text)
+
+        PerceptionWidget.plan_pregrasp(widget, True)
+
+        self.assertEqual(len(started), 1)
+        status_before_late_result = widget.status.text
+        PerceptionWidget._finish_pregrasp_worker(
+            widget,
+            timed_out_token,
+            True,
+            True,
+            '执行成功：late timed-out execute',
+        )
+
+        self.assertIsNone(widget.__dict__.get('_pregrasp_worker_token'))
+        self.assertTrue(widget.plan_pregrasp_btn.enabled)
+        self.assertTrue(widget.start_grasp_btn.enabled)
+        self.assertTrue(widget.execute_pregrasp_btn.enabled)
+        self.assertIs(widget._planned_pregrasp_pose, original_plan)
+        self.assertIsNone(widget.__dict__.get('_locked_grasp_target_base_xyz'))
+        self.assertEqual(widget.status.text, status_before_late_result)
+        self.assertNotIn('late timed-out execute', widget.status.text)
+
+        PerceptionWidget.plan_pregrasp(widget, True)
+
+        self.assertEqual(len(started), 2)
 
     def test_plan_pregrasp_starts_worker_instead_of_sync_service_call(self):
         widget = PerceptionWidget.__new__(PerceptionWidget)

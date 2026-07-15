@@ -745,16 +745,13 @@ class PerceptionWidget(QtWidgets.QWidget):
             worker_token = self._plan_token
         if token != worker_token:
             return
-        self._pregrasp_worker_token = None
         if token != self._plan_token or not self._planning_active:
-            self._set_pregrasp_buttons_enabled(True)
             return
         self._planning_active = False
         self._plan_token += 1
-        self._set_pregrasp_buttons_enabled(True)
         rospy.logwarn('GUI pregrasp worker timeout token=%s', token)
         self._set_status(
-            '预抓取规划等待超时，已释放界面；请检查 MoveIt、关节反馈和目标位姿是否可达',
+            '预抓取请求等待超时，后台请求仍未结束；已禁止新的规划或执行，请检查 MoveIt、关节反馈和目标位姿是否可达',
             hold_sec=float(self.__dict__.get('_pregrasp_status_hold_sec', 8.0)),
         )
 
