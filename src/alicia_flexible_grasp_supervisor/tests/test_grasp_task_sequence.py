@@ -407,6 +407,48 @@ class GraspTaskSequenceTest(unittest.TestCase):
 
         self.assertIs(result, plan)
 
+    def test_negative_object_invalidation_removes_cached_targets_and_plan_without_motion(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        node.latest_obj = None
+        node.latest_obj_time = None
+        node.latest_visual_obj = None
+        node.latest_visual_obj_time = None
+        node.latest_grasp6d_plan = None
+        node.latest_grasp6d_plan_time = None
+        node.latest_grasp6d_plan_object = None
+
+        original_get_param = grasp_task_node.rospy.get_param
+        original_time_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.get_param = lambda name, default=None: default
+        grasp_task_node.rospy.Time.now = staticmethod(lambda: FakeTime(1.0))
+        try:
+            detected = self._object_at(0.40, 0.0, 0.20)
+            grasp_task_node.GraspTaskNode.obj_cb(node, detected)
+            locked_for_active_flow = grasp_task_node.deepcopy(node.latest_obj)
+            grasp_task_node.GraspTaskNode.grasp6d_plan_cb(node, self._pose_array([0.10, 0.20, 0.30, 0.40]))
+            grasp_task_node.GraspTaskNode.obj_cb(node, types.SimpleNamespace(detected=False))
+            available_plan = grasp_task_node.GraspTaskNode._fresh_grasp6d_plan(
+                node,
+                {'grasp6d_plan_max_age_sec': 180.0},
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_time_now
+
+        self.assertIsNone(node.latest_obj)
+        self.assertIsNone(node.latest_obj_time)
+        self.assertIsNone(node.latest_visual_obj)
+        self.assertIsNone(node.latest_grasp6d_plan)
+        self.assertIsNone(available_plan)
+        active_target = grasp_task_node.GraspTaskNode._target_for_approach(
+            node,
+            locked_for_active_flow,
+            {},
+        )
+        self.assertTrue(active_target.detected)
+        self.assertAlmostEqual(active_target.pose_base.pose.position.x, 0.40)
+
     def test_6d_plan_rejects_position_only_fallback_before_execute(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True

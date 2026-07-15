@@ -422,29 +422,53 @@ class PerceptionWidget(QtWidgets.QWidget):
                 'yolo_model_choice': selected['choice'],
                 'yolo_model': selected['model_path'],
                 'yolo_target_class': selected['target_class'],
+                'yolo_reload_generation': int(perception_cfg.get('yolo_reload_generation', 0)) + 1,
             })
             rospy.set_param('/perception', perception_cfg)
             self._sync_model_class_editor(selected)
-            self._clear_locked_grasp_target()
+            self._invalidate_actionable_target()
             self.model_status_chip.setText('%s正在加载' % selected['display_name'])
             self.status.setText('模型选择已提交，视觉节点正在刷新')
         except Exception as exc:
             self.status.setText('模型切换失败：%s' % exc)
 
     def _update_detector_status(self, text):
-        parts = str(text or '').split(':', 2)
+        raw_text = str(text or '')
+        parts = raw_text.split(':', 2)
         state = parts[0] if parts else ''
         choice = parts[1] if len(parts) > 1 else ''
         detail = parts[2] if len(parts) > 2 else ''
+        if state not in ('loading', 'ready', 'error') or not choice:
+            self.model_status_chip.setText('检测模型状态未知')
+            self.status.setText('无法解析检测模型状态：%s' % (raw_text or '空消息'))
+            return
         profile = self.model_profiles.get(choice, {})
         display_name = str(profile.get('display_name', choice or '检测模型'))
         if state == 'loading':
+            self._invalidate_actionable_target()
             self.model_status_chip.setText('%s正在加载' % display_name)
         elif state == 'ready':
             self.model_status_chip.setText('%s已就绪' % display_name)
         elif state == 'error':
+            self._invalidate_actionable_target()
             self.model_status_chip.setText('%s加载失败' % display_name)
             self.status.setText('模型加载失败：%s' % detail)
+
+    def _invalidate_actionable_target(self):
+        self.last_object = None
+        self.pregrasp_pose = None
+        self._last_object_receive_time = None
+        self._planning_active = False
+        self._plan_token = int(self.__dict__.get('_plan_token', 0)) + 1
+        self._pending_plan_pose = None
+        self._pending_plan_token = None
+        self._clear_planned_pregrasp()
+        self._clear_locked_grasp_target()
+        self._reset_target_stability()
+        self._localization_error_m = None
+        camera_preview = self.__dict__.get('camera_preview', None)
+        if camera_preview is not None:
+            camera_preview.set_detection_overlay(None)
 
     def apply_params(self):
         try:

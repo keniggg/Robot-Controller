@@ -106,6 +106,7 @@ roslaunch alicia_flexible_grasp_supervisor full_system.launch start_real_arm:=tr
 - YOLO 只能稳定识别模型训练过的类别。若要识别自己的特定抓取物体，需要采集图片、标注 bbox、训练自定义 `.pt` 权重，然后把 `yolo_model` 指向该权重。
 - 如果暂时没有安装 `ultralytics/torch`，感知节点不会崩溃，但会发布未检测状态并在 ROS 日志中提示安装命令。
 - GUI“目标识别”页的“检测模型”下拉框可选择“YOLOv8 原模型”或“Carton 模型”；选择后点击“确定模型”，感知节点会在不重启 ROS 的情况下重新加载权重。
+- 每次点击“确定模型”都会发起新的加载请求；修复权重或依赖问题后可直接再次确认同一模型重试。加载或失败期间会清除旧目标与预抓取/抓取计划，禁止复用旧位姿发起新动作。
 - “Carton 模型”读取工作空间根目录的 `carton_model/best.pt`，类别固定为 `carton`；“YOLOv8 原模型”恢复根据目标描述解析 COCO 类别。
 - 模型选择只对当前 ROS 运行有效。重新启动整套系统后恢复 `config/camera.yaml` 中的 `yolo_model_choice: original`。
 - GUI 显示“加载失败”时先确认 `carton_model/best.pt` 存在，再查看 `/perception/detector_status` 和感知节点日志中的 Ultralytics/Torch 错误。

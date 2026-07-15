@@ -55,6 +55,13 @@ class GraspTaskNode:
 
     def obj_cb(self, msg):
         if not msg.detected:
+            self.latest_obj = None
+            self.latest_obj_time = None
+            self.latest_visual_obj = None
+            self.latest_visual_obj_time = None
+            self.latest_grasp6d_plan = None
+            self.latest_grasp6d_plan_time = None
+            self.latest_grasp6d_plan_object = None
             return
         gcfg = rospy.get_param('/grasp', {})
         confidence = float(getattr(msg, 'confidence', 1.0) or 0.0)

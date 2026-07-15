@@ -87,6 +87,14 @@ class FakeValue:
         return self.stored
 
 
+class FakeButton:
+    def __init__(self):
+        self.enabled = True
+
+    def setEnabled(self, enabled):
+        self.enabled = bool(enabled)
+
+
 class FakeRospy:
     def __init__(self, perception_cfg):
         self.params = {'/perception': deepcopy(perception_cfg)}
@@ -107,8 +115,8 @@ def make_widget(choice, description='鼠标'):
     widget.yolo_class_edit = FakeText()
     widget.status = FakeText()
     widget.model_status_chip = FakeText()
+    widget.execute_pregrasp_btn = FakeButton()
     widget.model_profiles = {}
-    widget._clear_locked_grasp_target = lambda: None
     return widget
 
 
@@ -136,8 +144,21 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         self.assertEqual(perception['yolo_model_choice'], 'carton')
         self.assertEqual(perception['yolo_model'], 'carton_model/best.pt')
         self.assertEqual(perception['yolo_target_class'], 'carton')
+        self.assertEqual(perception['yolo_reload_generation'], 1)
         self.assertEqual(widget.yolo_class_edit.text(), 'carton')
         self.assertFalse(widget.yolo_class_edit.enabled)
+
+    def test_confirming_same_choice_increments_reload_generation_each_time(self):
+        config = deepcopy(MODEL_CONFIG)
+        config['yolo_reload_generation'] = 7
+        fake_rospy = FakeRospy(config)
+        widget = make_widget('original', '鼠标')
+        with mock.patch.object(widget_module, 'rospy', fake_rospy):
+            widget.confirm_model_selection()
+            widget.confirm_model_selection()
+
+        self.assertEqual(fake_rospy.params['/perception']['yolo_reload_generation'], 9)
+        self.assertEqual(len(fake_rospy.set_calls), 2)
 
     def test_switching_to_original_restores_description_class(self):
         config = deepcopy(MODEL_CONFIG)
@@ -152,7 +173,9 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         self.assertTrue(widget.yolo_class_edit.enabled)
 
     def test_missing_carton_file_preserves_active_ros_config(self):
-        fake_rospy = FakeRospy(MODEL_CONFIG)
+        config = deepcopy(MODEL_CONFIG)
+        config['yolo_reload_generation'] = 4
+        fake_rospy = FakeRospy(config)
         widget = make_widget('carton')
         with mock.patch.object(widget_module, 'rospy', fake_rospy), mock.patch.object(
             widget_module,
@@ -162,6 +185,7 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
             widget.confirm_model_selection()
 
         self.assertEqual(fake_rospy.params['/perception']['yolo_model_choice'], 'original')
+        self.assertEqual(fake_rospy.params['/perception']['yolo_reload_generation'], 4)
         self.assertEqual(fake_rospy.set_calls, [])
         self.assertIn('carton_model/best.pt', widget.status.text())
 
@@ -174,6 +198,57 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         widget._update_detector_status('ready:carton:/workspace/carton_model/best.pt')
 
         self.assertEqual(widget.model_status_chip.text(), 'Carton 模型已就绪')
+
+    def test_loading_and_error_status_clear_every_actionable_target_state(self):
+        widget = make_widget('carton')
+        widget.model_profiles = {'carton': {'display_name': 'Carton 模型'}}
+        widget.last_object = object()
+        widget.pregrasp_pose = object()
+        widget._planned_pregrasp_pose = object()
+        widget._planned_pregrasp_executable = True
+        widget._planned_pregrasp_time = 1.0
+        widget._planned_target_base_xyz = (0.1, 0.2, 0.3)
+        widget._locked_grasp_target_base_xyz = (0.1, 0.2, 0.3)
+        widget._locked_grasp_target_time = 1.0
+        widget._pending_plan_pose = object()
+        widget._pending_plan_token = 3
+        widget._planning_active = True
+        widget._plan_token = 3
+        widget._last_object_receive_time = 1.0
+        widget._object_stable_count = 3
+        widget._last_object_base_xyz = (0.1, 0.2, 0.3)
+        widget._last_target_signature = {'label': 'carton'}
+
+        widget._update_detector_status('loading:carton')
+
+        self.assertIsNone(widget.last_object)
+        self.assertIsNone(widget.pregrasp_pose)
+        self.assertIsNone(widget._planned_pregrasp_pose)
+        self.assertIsNone(widget._locked_grasp_target_base_xyz)
+        self.assertIsNone(widget._pending_plan_pose)
+        self.assertFalse(widget._planning_active)
+        self.assertEqual(widget._object_stable_count, 0)
+
+        widget.last_object = object()
+        widget.pregrasp_pose = object()
+        widget._update_detector_status('error:carton:torch: invalid archive: eof')
+
+        self.assertIsNone(widget.last_object)
+        self.assertIsNone(widget.pregrasp_pose)
+        self.assertEqual(widget.status.text(), '模型加载失败：torch: invalid archive: eof')
+
+    def test_malformed_and_unknown_detector_status_are_visible(self):
+        widget = make_widget('carton')
+
+        widget._update_detector_status('malformed')
+
+        self.assertEqual(widget.model_status_chip.text(), '检测模型状态未知')
+        self.assertIn('malformed', widget.status.text())
+
+        widget._update_detector_status('paused:carton:maintenance')
+
+        self.assertEqual(widget.model_status_chip.text(), '检测模型状态未知')
+        self.assertIn('paused:carton:maintenance', widget.status.text())
 
 
 def test_start_recognition_does_not_override_carton_class():
@@ -195,6 +270,28 @@ def test_start_recognition_does_not_override_carton_class():
 
     assert fake_rospy.params['/perception']['yolo_target_class'] == 'carton'
     assert widget.yolo_class_edit.text() == 'carton'
+
+
+def test_start_recognition_uses_active_ros_choice_not_unconfirmed_dropdown():
+    config = deepcopy(MODEL_CONFIG)
+    config['yolo_model_choice'] = 'carton'
+    config['yolo_model'] = 'carton_model/best.pt'
+    config['yolo_target_class'] = 'carton'
+    fake_rospy = FakeRospy(config)
+    widget = make_widget('original', '绿色瓶子')
+    widget.enabled = FakeCheck(True)
+    widget.lower_edit = FakeText('28,35,35')
+    widget.upper_edit = FakeText('95,255,255')
+    widget.label_edit = FakeText()
+    widget.min_area = FakeValue(300)
+    widget.pregrasp = FakeValue(0.08)
+    widget.interpret_chip = FakeText()
+    with mock.patch.object(widget_module, 'rospy', fake_rospy):
+        widget.apply_params()
+
+    assert widget.model_combo.currentData() == 'original'
+    assert fake_rospy.params['/perception']['yolo_model_choice'] == 'carton'
+    assert fake_rospy.params['/perception']['yolo_target_class'] == 'carton'
 
 
 if __name__ == '__main__':

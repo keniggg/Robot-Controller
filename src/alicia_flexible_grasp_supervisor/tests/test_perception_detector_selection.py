@@ -61,6 +61,14 @@ class FakePublisher:
         self.messages.append(str(getattr(msg, 'data', msg)))
 
 
+class FakeMessagePublisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, msg):
+        self.messages.append(msg)
+
+
 class PerceptionDetectorSelectionTest(unittest.TestCase):
     def test_yolov8_config_creates_yolo_detector(self):
         module = load_perception_node()
@@ -131,6 +139,139 @@ class PerceptionDetectorSelectionTest(unittest.TestCase):
         self.assertIsNone(node.stabilizer.last_detection)
         self.assertEqual(status_pub.messages[0], 'loading:carton')
         self.assertEqual(status_pub.messages[1], 'error:carton:broken weights')
+
+    def test_reload_generation_retries_same_selection_after_failed_construction(self):
+        module = load_perception_node()
+        perception_cfg = {
+            'enabled': True,
+            'detector': 'yolov8',
+            'yolo_model_choice': 'carton',
+            'yolo_model': 'carton_model/best.pt',
+            'yolo_target_class': 'carton',
+            'yolo_reload_generation': 1,
+        }
+        module.rospy = FakeRospy(perception_cfg)
+        status_pub = FakePublisher()
+        node = types.SimpleNamespace(
+            detector=None,
+            detector_signature=None,
+            detector_status_pub=status_pub,
+            pub_obj=FakeMessagePublisher(),
+            pub_detected=FakeMessagePublisher(),
+            pub_raw_detected=FakeMessagePublisher(),
+            stabilizer=module.DetectionStabilizer(),
+        )
+
+        class RetryYOLODetector:
+            attempts = 0
+
+            def __init__(self, **kwargs):
+                RetryYOLODetector.attempts += 1
+                if RetryYOLODetector.attempts == 1:
+                    raise RuntimeError('temporary load failure')
+
+        module.YOLOv8ObjectDetector = RetryYOLODetector
+        with mock.patch.object(module, 'resolve_yolo_model_path', return_value='/workspace/carton_model/best.pt'):
+            module.PerceptionNode.refresh_detector(node, force=True)
+            module.PerceptionNode.refresh_detector(node)
+            perception_cfg['yolo_reload_generation'] = 2
+            module.PerceptionNode.refresh_detector(node)
+
+        self.assertEqual(RetryYOLODetector.attempts, 2)
+        self.assertIsInstance(node.detector, RetryYOLODetector)
+        self.assertEqual(
+            [message for message in status_pub.messages if message.startswith('loading:')],
+            ['loading:carton', 'loading:carton'],
+        )
+
+    def test_detector_reload_publishes_negative_object_and_visibility_before_loading(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({
+            'enabled': True,
+            'detector': 'yolov8',
+            'yolo_model_choice': 'carton',
+            'yolo_model': 'carton_model/best.pt',
+            'yolo_target_class': 'carton',
+            'yolo_reload_generation': 1,
+        })
+        stabilizer = module.DetectionStabilizer()
+        stabilizer.last_detection = types.SimpleNamespace(detected=True)
+        node = types.SimpleNamespace(
+            detector=object(),
+            detector_signature=None,
+            detector_status_pub=FakePublisher(),
+            pub_obj=FakeMessagePublisher(),
+            pub_detected=FakeMessagePublisher(),
+            pub_raw_detected=FakeMessagePublisher(),
+            stabilizer=stabilizer,
+        )
+        module.YOLOv8ObjectDetector = FakeYOLODetector
+
+        with mock.patch.object(module, 'resolve_yolo_model_path', return_value='/workspace/carton_model/best.pt'):
+            module.PerceptionNode.refresh_detector(node, force=True)
+
+        self.assertFalse(node.pub_obj.messages[-1].detected)
+        self.assertFalse(node.pub_detected.messages[-1].data)
+        self.assertFalse(node.pub_raw_detected.messages[-1].data)
+        self.assertIsNone(node.stabilizer.last_detection)
+
+    def test_unavailable_detector_republishes_complete_negative_state(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({})
+        node = types.SimpleNamespace(
+            color=module.np.zeros((2, 2, 3), dtype=module.np.uint8),
+            depth=module.np.ones((2, 2), dtype=module.np.uint16),
+            enabled=True,
+            detector=None,
+            detector_error='load failed',
+            label='carton',
+            pub_obj=FakeMessagePublisher(),
+            pub_detected=FakeMessagePublisher(),
+            pub_raw_detected=FakeMessagePublisher(),
+            stabilizer=module.DetectionStabilizer(),
+            _refresh_camera_params=lambda: None,
+            refresh_detector=lambda: None,
+        )
+
+        module.PerceptionNode.try_detect(node, stamp=None)
+
+        self.assertFalse(node.pub_obj.messages[-1].detected)
+        self.assertFalse(node.pub_detected.messages[-1].data)
+        self.assertFalse(node.pub_raw_detected.messages[-1].data)
+
+    def test_resolver_exception_directly_publishes_error_without_constructing_detector(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({
+            'enabled': True,
+            'detector': 'yolov8',
+            'yolo_model_choice': 'carton',
+            'yolo_model': 'carton_model/missing.pt',
+            'yolo_target_class': 'carton',
+            'yolo_reload_generation': 1,
+        })
+        status_pub = FakePublisher()
+        node = types.SimpleNamespace(
+            detector=object(),
+            detector_signature=None,
+            detector_status_pub=status_pub,
+            pub_obj=FakeMessagePublisher(),
+            pub_detected=FakeMessagePublisher(),
+            pub_raw_detected=FakeMessagePublisher(),
+            stabilizer=module.DetectionStabilizer(),
+        )
+        FakeYOLODetector.created = []
+        module.YOLOv8ObjectDetector = FakeYOLODetector
+
+        with mock.patch.object(
+            module,
+            'resolve_yolo_model_path',
+            side_effect=FileNotFoundError('carton_model/missing.pt'),
+        ):
+            module.PerceptionNode.refresh_detector(node, force=True)
+
+        self.assertIsNone(node.detector)
+        self.assertEqual(FakeYOLODetector.created, [])
+        self.assertEqual(status_pub.messages[-1], 'error:carton:carton_model/missing.pt')
 
     def test_hsv_config_still_creates_hsv_detector(self):
         module = load_perception_node()
