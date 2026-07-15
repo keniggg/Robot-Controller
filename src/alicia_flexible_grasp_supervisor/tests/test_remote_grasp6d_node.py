@@ -99,6 +99,117 @@ class FakeTf2Module:
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
+    def test_gate_audit_exposes_independent_filter_intersection(self):
+        rows = [
+            {
+                'depth_ok': True,
+                'width_ok': True,
+                'target_ok': True,
+                'finger_clearance_m': 0.006,
+                'center_clearance_m': 0.020,
+                'jaw_normal_cos': 0.20,
+                'approach_cos': 0.60,
+                'cloud_distance_m': 0.001,
+                'visibility_ok': True,
+            },
+            {
+                'depth_ok': True,
+                'width_ok': True,
+                'target_ok': True,
+                'finger_clearance_m': -0.004,
+                'center_clearance_m': 0.010,
+                'jaw_normal_cos': 0.70,
+                'approach_cos': 0.70,
+                'cloud_distance_m': 0.002,
+                'visibility_ok': True,
+            },
+            {
+                'depth_ok': True,
+                'width_ok': True,
+                'target_ok': True,
+                'finger_clearance_m': 0.008,
+                'center_clearance_m': 0.018,
+                'jaw_normal_cos': 0.10,
+                'approach_cos': 0.10,
+                'cloud_distance_m': 0.003,
+                'visibility_ok': False,
+            },
+        ]
+
+        summary = remote_node.summarize_candidate_gate_audit(
+            rows,
+            clearance_thresholds_m=[0.003, -0.010],
+            approach_thresholds=[0.45, -0.20],
+        )
+
+        self.assertEqual(summary['target_pass'], 3)
+        profiles = {
+            (item['clearance_m'], item['approach_cos']): item
+            for item in summary['profiles']
+        }
+        self.assertEqual(profiles[(0.003, 0.45)]['pass_count'], 1)
+        self.assertEqual(profiles[(-0.010, 0.45)]['pass_count'], 2)
+        self.assertEqual(profiles[(0.003, -0.20)]['pass_count'], 2)
+        self.assertEqual(profiles[(0.003, 0.45)]['visible_count'], 1)
+
+    def test_gate_audit_handles_missing_support_metrics(self):
+        summary = remote_node.summarize_candidate_gate_audit(
+            [
+                {
+                    'depth_ok': True,
+                    'width_ok': True,
+                    'target_ok': True,
+                    'finger_clearance_m': None,
+                    'approach_cos': 0.8,
+                    'visibility_ok': True,
+                }
+            ],
+            clearance_thresholds_m=[0.003],
+            approach_thresholds=[0.45],
+        )
+
+        self.assertEqual(summary['target_pass'], 1)
+        self.assertEqual(summary['profiles'][0]['pass_count'], 0)
+
+    def test_gate_audit_separates_parallel_jaw_symmetry_variants(self):
+        rows = [
+            {
+                'variant_index': 0,
+                'depth_ok': True,
+                'width_ok': True,
+                'target_ok': True,
+                'finger_clearance_m': 0.006,
+                'approach_cos': 0.60,
+                'visibility_ok': False,
+            },
+            {
+                'variant_index': 1,
+                'depth_ok': True,
+                'width_ok': True,
+                'target_ok': True,
+                'finger_clearance_m': 0.006,
+                'approach_cos': 0.60,
+                'visibility_ok': True,
+            },
+        ]
+
+        summary = remote_node.summarize_candidate_gate_audit(
+            rows,
+            clearance_thresholds_m=[0.003],
+            approach_thresholds=[0.45],
+            baseline_clearance_m=0.003,
+            baseline_approach_cos=0.45,
+        )
+
+        variants = {
+            item['variant_index']: item
+            for item in summary['variant_profiles']
+        }
+        self.assertEqual(variants[0]['safe_count'], 1)
+        self.assertEqual(variants[0]['visible_count'], 0)
+        self.assertEqual(variants[1]['safe_count'], 1)
+        self.assertEqual(variants[1]['visible_count'], 1)
+
     def test_support_plane_segmentation_removes_table_from_mouse_roi(self):
         height, width = 60, 80
         depth_m = np.full((height, width), 0.50, dtype=np.float32)
@@ -133,6 +244,51 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(int(np.count_nonzero(mask[:10, :])), 0)
         self.assertIn('support_plane=inliers:', diagnostic)
         self.assertGreater(float(plane['plane_depth_m'] - plane['foreground_depth_m']), 0.03)
+
+    def test_support_plane_uses_context_outside_tight_mouse_bbox(self):
+        height, width = 100, 120
+        depth_m = np.full((height, width), 0.50, dtype=np.float32)
+        target_roi = (40, 30, 80, 70)
+        depth_m[30:70, 40:80] = 0.46
+        intrinsics = remote_node.CameraIntrinsics(
+            width=width,
+            height=height,
+            fx=180.0,
+            fy=180.0,
+            cx=60.0,
+            cy=50.0,
+            depth_scale=0.001,
+        )
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.target_cloud_min_points = 80
+        node.target_cloud_support_plane_enabled = True
+        node.target_cloud_support_plane_context_margin_px = 20
+        node.target_cloud_support_plane_ransac_iterations = 64
+        node.target_cloud_support_plane_far_percentile = 55.0
+        node.target_cloud_support_plane_inlier_distance_m = 0.002
+        node.target_cloud_support_plane_min_height_m = 0.004
+        node.target_cloud_support_plane_min_inlier_ratio = 0.08
+        node.target_projection_frame_convention = 'ros_camera_link'
+        node._camera_intrinsics = lambda: intrinsics
+
+        original_get_param = remote_node.rospy.get_param
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/perception': {'depth_min_m': 0.03, 'depth_max_m': 2.0},
+        }.get(name, default)
+        try:
+            mask, count = node._foreground_mask_for_roi(
+                depth_m,
+                target_roi,
+                min_points=80,
+            )
+        finally:
+            remote_node.rospy.get_param = original_get_param
+
+        self.assertEqual(mask.shape, (40, 40))
+        self.assertGreater(count, 1500)
+        self.assertIsNotNone(node.latest_support_plane_camera_point)
+        self.assertIsNotNone(node.latest_support_plane_camera_normal)
+        self.assertIn('context-margin:20px', node.latest_target_cloud_segmentation)
 
     def test_resolves_protocol_fields_from_unified_wsl_health_payload(self):
         resolved = remote_node.resolve_grasp_backend_health(
@@ -301,6 +457,41 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         np.testing.assert_allclose(rotation[:, 2], [1.0, 0.0, 0.0], atol=1e-7)
         np.testing.assert_allclose(rotation[:, 1], [0.0, 1.0, 0.0], atol=1e-7)
         self.assertAlmostEqual(selected.depth_m, 0.03)
+
+    def test_parallel_jaw_symmetry_preserves_approach_and_swaps_jaw_axis(self):
+        candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=np.array([0.30, 0.0, 0.0]),
+            quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.05,
+            depth_m=0.03,
+        )
+        estimator = RecordingPoseEstimator()
+        model_to_tool = remote_node.quaternion_from_euler(0.0, np.pi * 0.5, 0.0)
+        tool_z_half_turn = remote_node.quaternion_from_euler(0.0, 0.0, np.pi)
+
+        selected, pose = remote_node.select_first_reachable_candidate(
+            [candidate],
+            estimator,
+            lambda _pose: False,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            orientation_variant_quaternions=[
+                np.array([0.0, 0.0, 0.0, 1.0]),
+                tool_z_half_turn,
+            ],
+            model_grasp_to_tool_quaternion=model_to_tool,
+        )
+
+        self.assertIsNone(selected)
+        self.assertIsNone(pose)
+        self.assertEqual(len(estimator.calls), 2)
+        first = remote_node.quaternion_matrix(estimator.calls[0][1])[:3, :3]
+        symmetric = remote_node.quaternion_matrix(estimator.calls[1][1])[:3, :3]
+        np.testing.assert_allclose(symmetric[:, 2], first[:, 2], atol=1e-7)
+        np.testing.assert_allclose(symmetric[:, 1], -first[:, 1], atol=1e-7)
+        np.testing.assert_allclose(symmetric[:, 0], -first[:, 0], atol=1e-7)
 
     def test_reachability_receives_converted_opencv_optical_candidate(self):
         candidate = RemoteGraspCandidate(
@@ -763,6 +954,28 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertAlmostEqual(metrics['model_width_m'], 0.083, places=6)
         self.assertAlmostEqual(metrics['geometry_width_m'], 0.050, places=6)
         self.assertGreater(metrics['min_finger_clearance_m'], 0.005)
+
+    def test_support_geometry_allows_inclined_jaw_when_both_fingers_clear_table(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.candidate_max_jaw_normal_cos = 0.35
+        node.candidate_min_finger_support_clearance_m = 0.003
+        metrics = {
+            'jaw_normal_cos': 0.55,
+            'min_finger_clearance_m': 0.006,
+        }
+
+        self.assertFalse(node._candidate_support_geometry_collides(metrics))
+
+    def test_support_geometry_rejects_vertical_jaw_when_finger_crosses_table(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.candidate_max_jaw_normal_cos = 0.35
+        node.candidate_min_finger_support_clearance_m = 0.003
+        metrics = {
+            'jaw_normal_cos': 1.0,
+            'min_finger_clearance_m': -0.010,
+        }
+
+        self.assertTrue(node._candidate_support_geometry_collides(metrics))
 
     def test_active_request_keeps_its_cloud_after_wall_clock_age_limit(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)

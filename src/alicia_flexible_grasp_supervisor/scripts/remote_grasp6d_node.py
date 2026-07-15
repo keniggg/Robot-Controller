@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+import json
 import math
+import os
 import re
 import threading
 from copy import deepcopy
@@ -249,6 +251,113 @@ def align_candidate_to_tool_frame(candidate, model_grasp_to_tool_quaternion=None
     )
 
 
+def summarize_candidate_gate_audit(
+    rows,
+    clearance_thresholds_m,
+    approach_thresholds,
+    baseline_clearance_m=None,
+    baseline_approach_cos=None,
+):
+    """Summarize independent gate results for one immutable candidate batch."""
+    rows = list(rows or [])
+    clearance_thresholds = [float(value) for value in clearance_thresholds_m]
+    approach_limits = [float(value) for value in approach_thresholds]
+    base_rows = [
+        row for row in rows
+        if bool(row.get('depth_ok')) and bool(row.get('width_ok')) and bool(row.get('target_ok'))
+    ]
+
+    def _finite_values(key):
+        values = []
+        for row in base_rows:
+            try:
+                value = float(row.get(key))
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value):
+                values.append(value)
+        return values
+
+    def _number(row, key, default):
+        try:
+            value = float(row.get(key))
+        except (TypeError, ValueError):
+            return float(default)
+        return value if np.isfinite(value) else float(default)
+
+    def _quantiles(key):
+        values = _finite_values(key)
+        if not values:
+            return {}
+        percentiles = (0, 10, 25, 50, 75, 90, 100)
+        result = np.percentile(np.asarray(values, dtype=float), percentiles)
+        return {'p%d' % percentile: float(value) for percentile, value in zip(percentiles, result)}
+
+    profiles = []
+    for clearance in clearance_thresholds:
+        for approach in approach_limits:
+            geometric = [
+                row for row in base_rows
+                if _number(row, 'finger_clearance_m', float('-inf')) >= clearance
+                and _number(row, 'approach_cos', -1.0) >= approach
+            ]
+            profiles.append(
+                {
+                    'clearance_m': clearance,
+                    'approach_cos': approach,
+                    'pass_count': len(geometric),
+                    'visible_count': sum(bool(row.get('visibility_ok')) for row in geometric),
+                }
+            )
+
+    baseline_clearance = float(
+        clearance_thresholds[0]
+        if baseline_clearance_m is None and clearance_thresholds
+        else baseline_clearance_m if baseline_clearance_m is not None else float('inf')
+    )
+    baseline_approach = float(
+        approach_limits[0]
+        if baseline_approach_cos is None and approach_limits
+        else baseline_approach_cos if baseline_approach_cos is not None else float('inf')
+    )
+    variant_profiles = []
+    variant_indices = sorted(
+        set(int(row.get('variant_index', 0)) for row in rows)
+    )
+    for variant_index in variant_indices:
+        variant_rows = [
+            row for row in base_rows
+            if int(row.get('variant_index', 0)) == variant_index
+        ]
+        safe_rows = [
+            row for row in variant_rows
+            if _number(row, 'finger_clearance_m', float('-inf')) >= baseline_clearance
+            and _number(row, 'approach_cos', -1.0) >= baseline_approach
+        ]
+        variant_profiles.append(
+            {
+                'variant_index': int(variant_index),
+                'target_count': len(variant_rows),
+                'safe_count': len(safe_rows),
+                'visible_count': sum(bool(row.get('visibility_ok')) for row in safe_rows),
+            }
+        )
+
+    return {
+        'candidate_variants': len(rows),
+        'depth_pass': sum(bool(row.get('depth_ok')) for row in rows),
+        'width_pass': sum(bool(row.get('width_ok')) for row in rows),
+        'target_pass': len(base_rows),
+        'profiles': profiles,
+        'variant_profiles': variant_profiles,
+        'finger_clearance_quantiles_m': _quantiles('finger_clearance_m'),
+        'center_clearance_quantiles_m': _quantiles('center_clearance_m'),
+        'jaw_normal_quantiles': _quantiles('jaw_normal_cos'),
+        'approach_quantiles': _quantiles('approach_cos'),
+        'cloud_distance_quantiles_m': _quantiles('cloud_distance_m'),
+    }
+
+
 def _normalize_quaternion(quaternion):
     norm = float(np.linalg.norm(quaternion))
     if norm <= 1e-12:
@@ -430,11 +539,17 @@ class RemoteGrasp6DNode:
         self._backoff_until = rospy.Time(0)
         self.plan_pub = rospy.Publisher(rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'), PoseArray, queue_size=1)
         self.status_pub = rospy.Publisher('/grasp_6d/status', String, queue_size=1, latch=True)
+        self.gate_audit_pub = rospy.Publisher('/grasp_6d/gate_audit', String, queue_size=1, latch=True)
 
         cam_cfg = rospy.get_param('/camera', {})
         hcfg = rospy.get_param('/handeye', {})
         gcfg = rospy.get_param('/grasp', {})
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
+        self.gate_audit_enabled = bool(remote_cfg.get('gate_audit_enabled', True))
+        self.gate_audit_output_path = os.path.expanduser(
+            str(remote_cfg.get('gate_audit_output_path', '~/.ros/grasp6d_gate_audit_latest.json'))
+        )
+        self._latest_gate_audit_summary = {}
         self.grasp_config = dict(gcfg or {})
         self.handeye_parent_frame = str(hcfg.get('parent_frame', 'tool0'))
         self.handeye_camera_frame = str(hcfg.get('camera_frame', cam_cfg.get('frame_id', 'camera_link')))
@@ -761,6 +876,15 @@ class RemoteGrasp6DNode:
                 remote_cfg.get('target_cloud_support_plane_enabled', True),
             )
         )
+        self.target_cloud_support_plane_context_margin_px = max(
+            0,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/target_cloud_support_plane_context_margin_px',
+                    remote_cfg.get('target_cloud_support_plane_context_margin_px', 24),
+                )
+            ),
+        )
         self.target_cloud_support_plane_ransac_iterations = max(
             12,
             int(
@@ -854,6 +978,10 @@ class RemoteGrasp6DNode:
             remote_cfg.get('candidate_max_jaw_normal_cos', 0.35),
             0.0,
             1.0,
+        )
+        self.candidate_jaw_tilt_rank_weight_m = max(
+            0.0,
+            float(remote_cfg.get('candidate_jaw_tilt_rank_weight_m', 0.010)),
         )
         self.candidate_min_finger_support_clearance_m = float(
             remote_cfg.get('candidate_min_finger_support_clearance_m', 0.003)
@@ -1026,6 +1154,7 @@ class RemoteGrasp6DNode:
             status = 'remote 6D requesting candidates...'
             if roi_message:
                 status += ' ' + roi_message
+                rospy.loginfo('remote 6D request geometry: %s', roi_message)
             self.status_pub.publish(String(status))
             candidates = self.client.predict(
                 color,
@@ -1052,6 +1181,17 @@ class RemoteGrasp6DNode:
             self._best_candidate_approach_cos = -1.0
             self._closest_candidate_cloud_distance = float('inf')
             self._closest_candidate_center_distance = float('inf')
+            if bool(getattr(self, 'gate_audit_enabled', True)):
+                try:
+                    self._run_candidate_gate_audit(
+                        candidates,
+                        stamp=stamp,
+                        camera_frame=frame_id or self.pose_estimator.camera_frame,
+                        remote_diagnostics=remote_diagnostics,
+                    )
+                except Exception as exc:
+                    self._latest_gate_audit_summary = {}
+                    rospy.logwarn('remote 6D gate audit skipped after internal error: %s', exc)
             selected, grasp_pose = select_first_reachable_candidate(
                 candidates,
                 self.pose_estimator,
@@ -1115,6 +1255,8 @@ class RemoteGrasp6DNode:
                     )
                 else:
                     message = 'remote 6D returned %d candidates, none reachable' % len(candidates)
+                message += self._candidate_failure_diagnostics(remote_diagnostics)
+                message += self._candidate_gate_audit_diagnostics()
                 self._publish_error(message)
                 return False, message
             final_target_delta = self._candidate_target_distance(None, None, grasp_pose)
@@ -1399,6 +1541,18 @@ class RemoteGrasp6DNode:
                 remote_cfg.get('target_cloud_roi_margin_px', getattr(self, 'target_cloud_roi_margin_px', 0)),
             )
         )
+        self.target_cloud_support_plane_context_margin_px = max(
+            0,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/target_cloud_support_plane_context_margin_px',
+                    remote_cfg.get(
+                        'target_cloud_support_plane_context_margin_px',
+                        getattr(self, 'target_cloud_support_plane_context_margin_px', 24),
+                    ),
+                )
+            ),
+        )
         self.target_cloud_foreground_percentile = self._clamp_range(
             rospy.get_param(
                 '/grasp_6d/remote/target_cloud_foreground_percentile',
@@ -1559,6 +1713,18 @@ class RemoteGrasp6DNode:
             0.0,
             1.0,
         )
+        self.candidate_jaw_tilt_rank_weight_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/candidate_jaw_tilt_rank_weight_m',
+                    remote_cfg.get(
+                        'candidate_jaw_tilt_rank_weight_m',
+                        getattr(self, 'candidate_jaw_tilt_rank_weight_m', 0.010),
+                    ),
+                )
+            ),
+        )
         self.candidate_min_finger_support_clearance_m = float(
             rospy.get_param(
                 '/grasp_6d/remote/candidate_min_finger_support_clearance_m',
@@ -1674,7 +1840,52 @@ class RemoteGrasp6DNode:
             raise RuntimeError('target foreground has too few valid depth pixels %d < %d' % (valid, self.roi_min_valid_depth_px))
         return masked, roi, valid
 
-    def _foreground_mask_for_roi(self, depth, roi, min_points=None):
+    def _foreground_mask_for_roi(self, depth, roi, min_points=None, use_support_context=True):
+        min_count = max(
+            1,
+            int(min_points if min_points is not None else getattr(self, 'target_cloud_min_points', 80)),
+        )
+        context_margin = max(
+            0,
+            int(getattr(self, 'target_cloud_support_plane_context_margin_px', 0)),
+        )
+        if (
+            use_support_context
+            and bool(getattr(self, 'target_cloud_support_plane_enabled', True))
+            and context_margin > 0
+        ):
+            context_roi = expanded_bbox_roi(
+                np.asarray(depth).shape,
+                roi[0],
+                roi[1],
+                roi[2] - roi[0],
+                roi[3] - roi[1],
+                context_margin,
+            )
+            if context_roi != roi:
+                context_mask, _context_count = self._foreground_mask_for_roi(
+                    depth,
+                    context_roi,
+                    min_points=min_count,
+                    use_support_context=False,
+                )
+                if (
+                    getattr(self, 'latest_support_plane_camera_point', None) is not None
+                    and getattr(self, 'latest_support_plane_camera_normal', None) is not None
+                ):
+                    offset_x = roi[0] - context_roi[0]
+                    offset_y = roi[1] - context_roi[1]
+                    width = roi[2] - roi[0]
+                    height = roi[3] - roi[1]
+                    cropped = np.asarray(context_mask)[
+                        offset_y:offset_y + height,
+                        offset_x:offset_x + width,
+                    ].copy()
+                    cropped_count = int(np.count_nonzero(cropped))
+                    if cropped_count >= min_count:
+                        self.latest_target_cloud_segmentation += ' context-margin:%dpx' % context_margin
+                        return cropped, cropped_count
+
         x0, y0, x1, y1 = roi
         depth_roi = np.asarray(depth)[y0:y1, x0:x1]
         if depth_roi.size == 0:
@@ -1684,7 +1895,6 @@ class RemoteGrasp6DNode:
         depth_min = max(0.0, float(pcfg.get('depth_min_m', 0.03)))
         depth_max = max(depth_min, float(pcfg.get('depth_max_m', 2.0)))
         valid = np.isfinite(z_m) & (z_m >= depth_min) & (z_m <= depth_max)
-        min_count = max(1, int(min_points if min_points is not None else getattr(self, 'target_cloud_min_points', 80)))
         if int(np.count_nonzero(valid)) < min_count:
             return np.zeros_like(valid, dtype=bool), int(np.count_nonzero(valid))
         self.latest_support_plane_camera_point = None
@@ -1727,6 +1937,319 @@ class RemoteGrasp6DNode:
             else:
                 foreground = valid
         return foreground, int(np.count_nonzero(foreground))
+
+    def _candidate_failure_diagnostics(self, remote_diagnostics):
+        diagnostics = dict(remote_diagnostics or {})
+
+        def _count(name):
+            try:
+                return int(diagnostics.get(name, -1))
+            except Exception:
+                return -1
+
+        closest_cloud = float(getattr(self, '_closest_candidate_cloud_distance', float('inf')))
+        closest_center = float(getattr(self, '_closest_candidate_center_distance', float('inf')))
+        cloud_text = 'inf' if not np.isfinite(closest_cloud) else '%.3f' % closest_cloud
+        center_text = 'inf' if not np.isfinite(closest_center) else '%.3f' % closest_center
+        segmentation = str(getattr(self, 'latest_target_cloud_segmentation', 'unknown'))
+        return (
+            ' [WSL raw=%d nms=%d collision=%d returned=%d; '
+            'target-cloud=%d closest-cloud=%sm closest-center=%sm; %s]'
+            % (
+                _count('raw_candidates'),
+                _count('after_nms'),
+                _count('after_collision'),
+                _count('returned'),
+                int(getattr(self, 'latest_target_cloud_count', 0)),
+                cloud_text,
+                center_text,
+                segmentation,
+            )
+        )
+
+    def _run_candidate_gate_audit(self, candidates, stamp, camera_frame, remote_diagnostics=None):
+        rows = []
+        variants = list(getattr(self, 'orientation_variant_quaternions', []) or [])
+        if not variants:
+            variants = [np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)]
+        for candidate_index, candidate in enumerate(candidates):
+            camera_candidate = convert_candidate_to_camera_link(
+                candidate,
+                self.candidate_frame_convention,
+            )
+            camera_candidate = align_candidate_to_tool_frame(
+                camera_candidate,
+                self.model_grasp_to_tool_quaternion,
+            )
+            for variant_index, correction in enumerate(variants):
+                variant_candidate = camera_candidate
+                if not np.allclose(
+                    np.asarray(correction, dtype=float),
+                    np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float),
+                ):
+                    variant_candidate = RemoteGraspCandidate(
+                        score=float(camera_candidate.score),
+                        translation_m=np.asarray(camera_candidate.translation_m, dtype=float),
+                        quaternion_xyzw=_normalize_quaternion(
+                            np.asarray(
+                                quaternion_multiply(camera_candidate.quaternion_xyzw, correction),
+                                dtype=float,
+                            )
+                        ),
+                        width_m=float(camera_candidate.width_m),
+                        height_m=getattr(camera_candidate, 'height_m', None),
+                        depth_m=getattr(camera_candidate, 'depth_m', None),
+                    )
+                pose = self.pose_estimator.make_base_pose_from_camera_pose(
+                    variant_candidate.translation_m,
+                    variant_candidate.quaternion_xyzw,
+                    stamp=stamp,
+                    camera_frame=camera_frame,
+                )
+                rows.append(
+                    self._candidate_gate_audit_row(
+                        candidate_index,
+                        variant_index,
+                        variant_candidate,
+                        pose,
+                    )
+                )
+
+        clearance_thresholds = self._audit_thresholds(
+            getattr(self, 'candidate_min_finger_support_clearance_m', 0.003),
+            (0.003, 0.0, -0.003, -0.010),
+        )
+        approach_thresholds = self._audit_thresholds(
+            getattr(self, 'candidate_min_downward_approach_cos', 0.45),
+            (0.45, 0.20, 0.0, -0.20),
+        )
+        summary = summarize_candidate_gate_audit(
+            rows,
+            clearance_thresholds,
+            approach_thresholds,
+            baseline_clearance_m=getattr(
+                self,
+                'candidate_min_finger_support_clearance_m',
+                0.003,
+            ),
+            baseline_approach_cos=getattr(
+                self,
+                'candidate_min_downward_approach_cos',
+                0.45,
+            ),
+        )
+        summary['baseline_clearance_m'] = float(
+            getattr(self, 'candidate_min_finger_support_clearance_m', 0.003)
+        )
+        summary['baseline_approach_cos'] = float(
+            getattr(self, 'candidate_min_downward_approach_cos', 0.45)
+        )
+        report = {
+            'stamp_sec': float(stamp.to_sec()) if stamp is not None else 0.0,
+            'camera_frame': str(camera_frame),
+            'target_cloud_segmentation': str(
+                getattr(self, 'latest_target_cloud_segmentation', 'unknown')
+            ),
+            'support_plane_point_camera': self._json_vector(
+                getattr(self, 'latest_support_plane_camera_point', None)
+            ),
+            'support_plane_normal_camera': self._json_vector(
+                getattr(self, 'latest_support_plane_camera_normal', None)
+            ),
+            'target_cloud_center_camera': self._json_vector(
+                getattr(self, 'latest_target_cloud_camera_center', None)
+            ),
+            'target_cloud_center_base': self._json_vector(
+                getattr(self, 'latest_target_cloud_base_xyz', None)
+            ),
+            'remote_diagnostics': dict(remote_diagnostics or {}),
+            'summary': summary,
+            'rows': rows,
+        }
+        self._latest_gate_audit_summary = summary
+        summary_text = self._format_gate_audit_summary(summary)
+        self.gate_audit_pub.publish(String(json.dumps(summary, ensure_ascii=True, sort_keys=True)))
+        rospy.logwarn('remote 6D controlled gate audit: %s', summary_text)
+        self._write_gate_audit_report(report)
+
+    def _candidate_gate_audit_row(self, candidate_index, variant_index, candidate, grasp_pose):
+        try:
+            depth = float(getattr(candidate, 'depth_m', float('nan')))
+        except (TypeError, ValueError):
+            depth = float('nan')
+        depth_ok = (
+            not bool(getattr(self, 'require_candidate_depth', False))
+            or (np.isfinite(depth) and depth > 0.0)
+        )
+        width = float(getattr(candidate, 'width_m', 0.0) or 0.0)
+        width_limit = float(getattr(self, 'max_gripper_width_m', 0.0) or 0.0)
+        width_tolerance = float(getattr(self, 'candidate_width_tolerance_m', 0.0) or 0.0)
+        width_ok = width_limit <= 0.0 or width <= width_limit + width_tolerance
+
+        target_xyz, target_source = self._target_base_xyz()
+        target_ok = target_xyz is not None
+        center_distance = float('inf')
+        relative_z = float('nan')
+        if target_xyz is not None:
+            position = grasp_pose.pose.position
+            delta = np.asarray(
+                [float(position.x), float(position.y), float(position.z)],
+                dtype=float,
+            ) - np.asarray(target_xyz, dtype=float)
+            center_distance = float(np.linalg.norm(delta))
+            relative_z = float(delta[2])
+
+        cloud_distance = self._camera_candidate_cloud_distance(candidate)
+        max_cloud_distance = float(
+            getattr(self, 'target_cloud_candidate_max_point_distance_m', 0.055) or 0.0
+        )
+        if np.isfinite(cloud_distance) and max_cloud_distance > 0.0:
+            target_ok = target_ok and cloud_distance <= max_cloud_distance
+
+        support_metrics = self._candidate_support_geometry_metrics(candidate) or {}
+        center_clearance = float(support_metrics.get('center_clearance_m', float('nan')))
+        finger_clearance = float(support_metrics.get('min_finger_clearance_m', float('nan')))
+        support_minimum = float(
+            getattr(self, 'target_cloud_candidate_min_support_clearance_m', -0.002)
+        )
+        if np.isfinite(center_clearance):
+            target_ok = target_ok and center_clearance >= support_minimum
+
+        cloud_primary = (
+            np.isfinite(cloud_distance)
+            and max_cloud_distance > 0.0
+            and str(getattr(self, 'latest_target_cloud_segmentation', '')).startswith(
+                'support_plane=inliers:'
+            )
+        )
+        if target_xyz is not None and not cloud_primary:
+            target_ok = target_ok and center_distance <= max(
+                0.0,
+                float(getattr(self, 'candidate_max_target_distance_m', 0.04)),
+            )
+            target_ok = target_ok and relative_z >= float(
+                getattr(self, 'candidate_min_relative_z_m', -0.015)
+            )
+            target_ok = target_ok and relative_z <= float(
+                getattr(self, 'candidate_max_relative_z_m', 0.08)
+            )
+
+        approach_cos = float(self._candidate_approach_downward_cos(candidate, grasp_pose))
+        visibility_ok = True
+        visibility_reason = 'disabled'
+        if bool(getattr(self, 'camera_visibility_gate_enabled', False)) and target_xyz is not None:
+            visibility_ok, _visibility_metrics, visibility_reason = self._candidate_visibility_metrics(
+                grasp_pose,
+                target_xyz,
+            )
+        return {
+            'candidate_index': int(candidate_index),
+            'variant_index': int(variant_index),
+            'score': float(getattr(candidate, 'score', 0.0) or 0.0),
+            'width_m': width,
+            'depth_m': depth if np.isfinite(depth) else None,
+            'translation_camera_m': self._json_vector(candidate.translation_m),
+            'quaternion_camera_xyzw': self._json_vector(candidate.quaternion_xyzw),
+            'depth_ok': bool(depth_ok),
+            'width_ok': bool(width_ok),
+            'target_ok': bool(target_ok),
+            'target_source': str(target_source),
+            'cloud_distance_m': cloud_distance if np.isfinite(cloud_distance) else None,
+            'center_distance_m': center_distance if np.isfinite(center_distance) else None,
+            'relative_z_m': relative_z if np.isfinite(relative_z) else None,
+            'center_clearance_m': center_clearance if np.isfinite(center_clearance) else None,
+            'finger_clearance_m': finger_clearance if np.isfinite(finger_clearance) else None,
+            'jaw_normal_cos': (
+                float(support_metrics['jaw_normal_cos'])
+                if 'jaw_normal_cos' in support_metrics
+                and np.isfinite(float(support_metrics['jaw_normal_cos']))
+                else None
+            ),
+            'approach_cos': approach_cos,
+            'visibility_ok': bool(visibility_ok),
+            'visibility_reason': str(visibility_reason),
+        }
+
+    @staticmethod
+    def _audit_thresholds(primary, defaults):
+        values = [float(primary)] + [float(value) for value in defaults]
+        return sorted(set(round(value, 6) for value in values), reverse=True)
+
+    @staticmethod
+    def _json_vector(values):
+        if values is None:
+            return None
+        return [float(value) for value in np.asarray(values, dtype=float).reshape(-1)]
+
+    def _write_gate_audit_report(self, report):
+        path = str(getattr(self, 'gate_audit_output_path', '') or '').strip()
+        if not path:
+            return
+        try:
+            directory = os.path.dirname(path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as handle:
+                json.dump(report, handle, ensure_ascii=True, indent=2, sort_keys=True)
+        except Exception as exc:
+            rospy.logwarn('remote 6D could not write gate audit %s: %s', path, exc)
+
+    @staticmethod
+    def _profile_from_summary(summary, clearance, approach):
+        for profile in list(summary.get('profiles', []) or []):
+            if (
+                abs(float(profile.get('clearance_m', 0.0)) - float(clearance)) < 1e-9
+                and abs(float(profile.get('approach_cos', 0.0)) - float(approach)) < 1e-9
+            ):
+                return profile
+        return {}
+
+    def _format_gate_audit_summary(self, summary):
+        clearance = float(summary.get('baseline_clearance_m', 0.003))
+        approach = float(summary.get('baseline_approach_cos', 0.45))
+        baseline = self._profile_from_summary(summary, clearance, approach)
+        no_clearance = self._profile_from_summary(summary, -0.010, approach)
+        no_approach = self._profile_from_summary(summary, clearance, -0.20)
+        variant_text = ','.join(
+            'v%d:%d/%d'
+            % (
+                int(profile.get('variant_index', 0)),
+                int(profile.get('safe_count', 0)),
+                int(profile.get('visible_count', 0)),
+            )
+            for profile in list(summary.get('variant_profiles', []) or [])
+        ) or 'n/a'
+        return (
+            'base=%d baseline-safe=%d baseline-visible=%d '
+            'clearance>=-10mm:%d approach>=-0.20:%d '
+            'variants-safe/visible=%s finger-clearance=%s approach=%s'
+            % (
+                int(summary.get('target_pass', 0)),
+                int(baseline.get('pass_count', 0)),
+                int(baseline.get('visible_count', 0)),
+                int(no_clearance.get('pass_count', 0)),
+                int(no_approach.get('pass_count', 0)),
+                variant_text,
+                self._compact_quantiles(summary.get('finger_clearance_quantiles_m', {}), scale=1000.0),
+                self._compact_quantiles(summary.get('approach_quantiles', {})),
+            )
+        )
+
+    @staticmethod
+    def _compact_quantiles(values, scale=1.0):
+        data = dict(values or {})
+        if not data:
+            return 'n/a'
+        return 'p10=%.3f,p50=%.3f,p90=%.3f' % tuple(
+            float(data.get(key, float('nan'))) * float(scale)
+            for key in ('p10', 'p50', 'p90')
+        )
+
+    def _candidate_gate_audit_diagnostics(self):
+        summary = dict(getattr(self, '_latest_gate_audit_summary', {}) or {})
+        if not summary:
+            return ''
+        return ' [gate-audit %s]' % self._format_gate_audit_summary(summary)
 
     def _update_target_cloud_estimate(self, depth, obj, obj_time, stamp=None, frame_id=''):
         if obj is None or not bool(getattr(obj, 'detected', False)):
@@ -1915,23 +2438,21 @@ class RemoteGrasp6DNode:
             return False
         support_metrics = self._candidate_support_geometry_metrics(_camera_candidate)
         if support_metrics is not None:
-            max_jaw_normal = float(getattr(self, 'candidate_max_jaw_normal_cos', 1.0))
             min_finger_clearance = float(
                 getattr(self, 'candidate_min_finger_support_clearance_m', -float('inf'))
             )
-            jaw_normal = support_metrics['jaw_normal_cos']
             finger_clearance = support_metrics['min_finger_clearance_m']
-            if jaw_normal > max_jaw_normal or finger_clearance < min_finger_clearance:
+            if self._candidate_support_geometry_collides(support_metrics):
                 self._table_geometry_gate_rejected_count += 1
                 rospy.logwarn_throttle(
                     1.0,
                     (
                         'remote 6D candidate rejected by support-plane gripper geometry: '
-                        'jaw_normal=%.3f limit=%.3f min_finger_clearance=%.3fm limit=%.3fm '
+                        'jaw_normal=%.3f preferred<=%.3f min_finger_clearance=%.3fm limit=%.3fm '
                         'center_clearance=%.3fm model_width=%.3fm geometry_width=%.3fm score=%.3f'
                     ),
-                    jaw_normal,
-                    max_jaw_normal,
+                    support_metrics['jaw_normal_cos'],
+                    float(getattr(self, 'candidate_max_jaw_normal_cos', 1.0)),
                     finger_clearance,
                     min_finger_clearance,
                     support_metrics['center_clearance_m'],
@@ -2035,6 +2556,18 @@ class RemoteGrasp6DNode:
             max(-1.0, self._candidate_approach_downward_cos(camera_candidate, grasp_pose)),
         )
         rank += downward_weight * (1.0 - downward_cos)
+        support_metrics = self._candidate_support_geometry_metrics(camera_candidate)
+        if support_metrics is not None:
+            preferred = float(getattr(self, 'candidate_max_jaw_normal_cos', 1.0))
+            normal_span = max(1e-6, 1.0 - preferred)
+            normalized_excess = max(
+                0.0,
+                (float(support_metrics['jaw_normal_cos']) - preferred) / normal_span,
+            )
+            rank += max(
+                0.0,
+                float(getattr(self, 'candidate_jaw_tilt_rank_weight_m', 0.0)),
+            ) * normalized_excess
         weight = max(0.0, float(getattr(self, 'camera_visibility_rank_weight_m', 0.0) or 0.0))
         if weight <= 0.0 or not bool(getattr(self, 'camera_visibility_gate_enabled', False)):
             return float(rank)
@@ -2122,6 +2655,15 @@ class RemoteGrasp6DNode:
             }
         except Exception:
             return None
+
+    def _candidate_support_geometry_collides(self, support_metrics):
+        """Reject only geometry that physically enters the observed support plane."""
+        if support_metrics is None:
+            return False
+        minimum = float(
+            getattr(self, 'candidate_min_finger_support_clearance_m', -float('inf'))
+        )
+        return float(support_metrics['min_finger_clearance_m']) < minimum
 
     @staticmethod
     def _pose_key(pose_stamped):

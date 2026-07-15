@@ -96,6 +96,10 @@ grasp_6d:
   collision_voxel_size: 0.01
   tactile_weight: 0.2
   remote:
+    # Record independent gate results for the exact same WSL candidate batch.
+    # This is planning-only diagnostics and never sends a motion command.
+    gate_audit_enabled: true
+    gate_audit_output_path: ~/.ros/grasp6d_gate_audit_latest.json
     server_url: "http://172.23.132.97:8000"
     timeout_sec: 30.0
     auto_request: false
@@ -110,6 +114,14 @@ grasp_6d:
     # GraspNet: +X approach, +Y jaw closing. Alicia tool0: +Z approach,
     # +Y jaw closing. Right-multiplying Ry(+90 deg) maps model axes to tool0.
     model_grasp_to_tool_rpy_deg: [0.0, 90.0, 0.0]
+    # A parallel-jaw grasp is physically unchanged after a 180 deg turn about
+    # tool +Z: the approach axis and grasp center stay fixed while the two
+    # identical fingers exchange sides. GraspNet NMS collapses this symmetry,
+    # so restore both wrist solutions for the asymmetric eye-in-hand camera.
+    # This is an exact grasp symmetry, not an orientation fallback.
+    orientation_variants_rpy_deg:
+      - [0.0, 0.0, 0.0]
+      - [0.0, 0.0, 180.0]
     # Baseline predictions contain insertion depth. Refuse an old WSL server
     # that silently drops it, because that hides an incomplete grasp geometry.
     require_candidate_depth: true
@@ -150,7 +162,10 @@ grasp_6d:
     # close to the plane. Otherwise one finger is commanded above the object
     # and the opposing finger through the table. This is geometric and does not
     # assume a fixed grasp pose or object category.
+    # Prefer a jaw-closing axis parallel to the support plane, but do not
+    # discard an inclined grasp when both physical fingers remain above it.
     candidate_max_jaw_normal_cos: 0.35
+    candidate_jaw_tilt_rank_weight_m: 0.010
     # Check both physically reachable finger-center locations, not only the
     # grasp center. Model widths larger than /gripper/open_position_m are kept
     # for diagnostics but clamped to the real stroke for this geometry only.
@@ -175,6 +190,11 @@ grasp_6d:
     # remove it before WSL inference. This prevents table points inside a YOLO
     # bounding box from dominating GraspNet candidates.
     target_cloud_support_plane_enabled: true
+    # Estimate the support plane from RGB-D surrounding the detection box, then
+    # crop the segmented foreground back to the target. A tight mouse box does
+    # not contain enough visible table and can otherwise fit the mouse shell as
+    # the support plane.
+    target_cloud_support_plane_context_margin_px: 24
     target_cloud_support_plane_ransac_iterations: 96
     target_cloud_support_plane_far_percentile: 55.0
     target_cloud_support_plane_inlier_distance_m: 0.0035
