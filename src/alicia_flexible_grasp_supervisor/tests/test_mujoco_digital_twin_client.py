@@ -4,6 +4,7 @@ import pathlib
 import sys
 import types
 import unittest
+import xml.etree.ElementTree as ET
 
 import pytest
 from geometry_msgs.msg import PoseArray, PoseStamped
@@ -30,6 +31,25 @@ SAFETY_KEYS = (
     'contact_success',
     'lift_success',
 )
+
+
+def test_grasp_system_launch_wires_shared_remote_url_to_both_clients():
+    launch_root = ET.parse(ROOT / 'launch' / 'grasp_system.launch').getroot()
+
+    remote_url_args = launch_root.findall(".//arg[@name='remote_grasp6d_url']")
+    assert len(remote_url_args) == 1
+
+    for param_name in (
+        '/grasp_6d/remote/server_url',
+        '/mujoco_digital_twin/server_url',
+    ):
+        matching_params = [
+            param
+            for param in launch_root.findall('.//param')
+            if param.get('name') == param_name
+        ]
+        assert len(matching_params) == 1
+        assert matching_params[0].get('value') == '$(arg remote_grasp6d_url)'
 
 
 def _rich_plan():
