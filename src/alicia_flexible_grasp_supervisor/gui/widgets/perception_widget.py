@@ -352,6 +352,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         layout.addLayout(controls, 4)
         if color_topic and depth_topic:
             self.camera_preview = CameraWidget(color_topic, depth_topic, compact=True, default_mode='split')
+            self.camera_preview.color_frame_updated.connect(self._on_camera_color_frame)
             layout.addWidget(self.camera_preview, 3)
 
         self.object_signal.connect(self.update_object)
@@ -398,6 +399,11 @@ class PerceptionWidget(QtWidgets.QWidget):
         except RuntimeError:
             self._shutdown_ros()
 
+    def _on_camera_color_frame(self, _rgb):
+        if not self.__dict__.get('_alive', False):
+            return
+        self._refresh_detection_overlay()
+
     def update_mask(self, msg):
         if not self.__dict__.get('_alive', False):
             return
@@ -431,6 +437,7 @@ class PerceptionWidget(QtWidgets.QWidget):
             self._latest_mask = None
             self._latest_mask_stamp = None
             self._set_mask_status('mask error')
+            self._refresh_detection_overlay()
             rospy.logwarn_throttle(2.0, 'PerceptionWidget mask convert failed: %s', exc)
 
     @staticmethod
@@ -500,6 +507,11 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._latest_mask = None
         self._latest_mask_stamp = None
         self._set_mask_status('mask waiting')
+
+    def _invalidate_current_mask(self):
+        self._latest_mask = None
+        self._latest_mask_stamp = None
+        self._set_mask_status('mask stale')
 
     def _emit_plan_result_if_alive(self, token, execute, success, message):
         if not self.__dict__.get('_alive', False):
@@ -652,11 +664,14 @@ class PerceptionWidget(QtWidgets.QWidget):
             and self.__dict__.get('_grasp_active', False)
             and self._has_recent_locked_grasp_target()
         ):
+            self._invalidate_current_mask()
+            self._refresh_detection_overlay()
             self.detected_chip.setText('目标已锁定 %s' % (msg.label or self.label_edit.text()))
             self._set_perception_status('目标已锁定，运动中临时丢帧不打断抓取流程')
             return
         self.last_object = msg
         if not msg.detected:
+            self._invalidate_current_mask()
             self.pregrasp_pose = None
             self._reset_target_stability()
             self._localization_error_m = None
@@ -667,8 +682,7 @@ class PerceptionWidget(QtWidgets.QWidget):
                 self._set_perception_status('当前画面暂时丢失目标；已保留已规划预抓取轨迹，可在有效期内执行')
             else:
                 self._set_perception_status('未识别到目标，调整 HSV 阈值或移动目标到视野内')
-            if hasattr(self, 'camera_preview'):
-                self.camera_preview.set_detection_overlay(None)
+            self._refresh_detection_overlay()
             return
 
         cam = msg.pose_camera.pose.position

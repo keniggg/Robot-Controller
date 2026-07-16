@@ -13,6 +13,7 @@ except Exception:
 
 class CameraWidget(QtWidgets.QWidget):
     color_signal = QtCore.pyqtSignal(object)
+    color_frame_updated = QtCore.pyqtSignal(object)
     depth_signal = QtCore.pyqtSignal(object)
 
     def __init__(self, topic='/supervisor/camera/color/image_raw', depth_topic='/supervisor/camera/depth/image_raw',
@@ -137,6 +138,7 @@ class CameraWidget(QtWidgets.QWidget):
             if not self.__dict__.get('_alive', False):
                 return
             self._last_color_rgb = rgb.copy()
+            self.color_frame_updated.emit(self._last_color_rgb)
             self._refresh_color_pixmap()
             self._render_pixmaps()
         except RuntimeError:

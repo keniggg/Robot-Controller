@@ -14,6 +14,7 @@ for path in (ROOT, ROOT / 'src'):
         sys.path.insert(0, str(path))
 
 import gui.widgets.perception_widget as widget_module
+from gui.widgets.camera_widget import CameraWidget
 from gui.widgets.perception_widget import PerceptionWidget
 
 
@@ -123,6 +124,13 @@ class FakeBridge:
         return self.mask
 
 
+class FailingBridge:
+    def imgmsg_to_cv2(self, _msg, desired_encoding):
+        if desired_encoding != 'mono8':
+            raise AssertionError('mask must be converted as mono8')
+        raise ValueError('invalid mask encoding')
+
+
 class FakeCameraPreview:
     def __init__(self, image_shape=(60, 80, 3)):
         self._last_color_rgb = np.zeros(image_shape, dtype=np.uint8)
@@ -135,6 +143,18 @@ class FakeCameraPreview:
             'color': color,
             'contour_xy': contour_xy,
         }
+
+
+class FakeCallbackSignal:
+    def __init__(self):
+        self.callbacks = []
+
+    def connect(self, callback):
+        self.callbacks.append(callback)
+
+    def emit(self, value):
+        for callback in list(self.callbacks):
+            callback(value)
 
 
 class FakeRospy:
@@ -210,6 +230,62 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         self.assertEqual(widget.mask_status_chip.text(), 'mask ready')
         self.assertTrue(np.array_equal(mask, original))
 
+    def test_locked_no_detection_preserves_bbox_but_invalidates_ready_contour(self):
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        mask[20:51, 30:61] = 255
+        widget = make_mask_widget(mask)
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+        locked_object = widget.last_object
+        widget._grasp_active = True
+        widget._has_recent_locked_grasp_target = lambda: True
+        widget._planning_active = False
+        widget._status_hold_until = 0.0
+        widget.detected_chip = FakeText()
+        widget.status = FakeText()
+
+        PerceptionWidget.update_object(
+            widget,
+            SimpleNamespace(
+                detected=False,
+                header=SimpleNamespace(stamp=FakeStamp(124)),
+                label='carton',
+            ),
+        )
+
+        self.assertIs(widget.last_object, locked_object)
+        self.assertEqual(widget.camera_preview.overlay['bbox'], (5, 5, 70, 50))
+        self.assertEqual(widget.camera_preview.overlay['label'], 'carton')
+        self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask stale')
+
+    def test_normal_no_detection_clears_overlay_and_invalidates_ready_contour(self):
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        mask[20:51, 30:61] = 255
+        widget = make_mask_widget(mask)
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+        widget._grasp_active = False
+        widget._has_recent_locked_grasp_target = lambda: False
+        widget._planned_pregrasp_pose = None
+        widget._planning_active = False
+        widget._status_hold_until = 0.0
+        widget.pregrasp_pose = object()
+        widget._reset_target_stability = lambda: None
+        widget.detected_chip = FakeText()
+        widget.status = FakeText()
+
+        PerceptionWidget.update_object(
+            widget,
+            SimpleNamespace(
+                detected=False,
+                header=SimpleNamespace(stamp=FakeStamp(124)),
+                label='carton',
+            ),
+        )
+
+        self.assertIsNone(widget.camera_preview.overlay['bbox'])
+        self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask stale')
+
     def test_mismatched_mask_stamp_keeps_bbox_only_and_reports_stale(self):
         mask = np.zeros((60, 80), dtype=np.uint8)
         mask[20:51, 30:61] = 255
@@ -268,6 +344,50 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         self.assertIsNone(widget._latest_mask_stamp)
         self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
         self.assertEqual(widget.mask_status_chip.text(), 'mask size mismatch')
+
+    def test_first_rgb_frame_revalidates_mask_without_manual_perception_refresh(self):
+        mask = np.full((60, 80), 255, dtype=np.uint8)
+        widget = make_mask_widget(mask)
+        camera = CameraWidget.__new__(CameraWidget)
+        camera._alive = True
+        camera._last_color_rgb = None
+        camera._detection_overlay = None
+        camera._refresh_color_pixmap = lambda: None
+        camera._render_pixmaps = lambda: None
+        camera.color_frame_updated = FakeCallbackSignal()
+        camera.color_frame_updated.connect(
+            lambda rgb: PerceptionWidget._on_camera_color_frame(widget, rgb)
+        )
+        widget.camera_preview = camera
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+        self.assertIsNotNone(camera._detection_overlay['contour_xy'])
+
+        CameraWidget.update_color_image(
+            camera,
+            np.zeros((30, 40, 3), dtype=np.uint8),
+        )
+
+        self.assertIsNone(widget._latest_mask)
+        self.assertIsNone(widget._latest_mask_stamp)
+        self.assertIsNone(camera._detection_overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask size mismatch')
+
+    def test_mask_conversion_error_immediately_removes_previous_contour(self):
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        mask[20:51, 30:61] = 255
+        widget = make_mask_widget(mask)
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+        self.assertIsNotNone(widget.camera_preview.overlay['contour_xy'])
+        widget.bridge = FailingBridge()
+
+        with mock.patch.object(widget_module.rospy, 'logwarn_throttle'):
+            PerceptionWidget.update_mask(widget, make_mask_message(mask, stamp=124))
+
+        self.assertIsNone(widget._latest_mask)
+        self.assertIsNone(widget._latest_mask_stamp)
+        self.assertEqual(widget.camera_preview.overlay['bbox'], (5, 5, 70, 50))
+        self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask error')
 
     def test_model_combo_initializes_from_current_ros_choice(self):
         widget = make_widget(None)

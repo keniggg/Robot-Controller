@@ -49,8 +49,13 @@ class FakeCamera:
     def __init__(self):
         self.overlay = 'initial'
 
-    def set_detection_overlay(self, overlay):
-        self.overlay = overlay
+    def set_detection_overlay(self, bbox=None, label='', color=(80, 255, 120), contour_xy=None):
+        self.overlay = {
+            'bbox': bbox,
+            'label': label,
+            'color': color,
+            'contour_xy': contour_xy,
+        }
 
 
 class FakeText:
@@ -737,7 +742,10 @@ class PregraspAsyncTest(unittest.TestCase):
 
         self.assertIs(widget.last_object, previous)
         self.assertIsNotNone(widget.pregrasp_pose)
-        self.assertEqual(widget.camera_preview.overlay, 'initial')
+        self.assertEqual(widget.camera_preview.overlay['bbox'], (300, 220, 40, 40))
+        self.assertEqual(widget.camera_preview.overlay['label'], 'mouse')
+        self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget._mask_status, 'mask stale')
         self.assertIn('目标已锁定', widget.status.text)
 
 
