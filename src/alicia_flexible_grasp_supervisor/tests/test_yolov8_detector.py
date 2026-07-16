@@ -36,6 +36,11 @@ class FakeBoxes:
         self.cls = FakeTensor(cls)
 
 
+class FakeMasks:
+    def __init__(self, data):
+        self.data = FakeTensor(data)
+
+
 class FakeResult:
     def __init__(self, names, boxes):
         self.names = names
@@ -115,6 +120,95 @@ class YOLOv8DetectorTest(unittest.TestCase):
 
         self.assertIn('ultralytics', str(ctx.exception))
         self.assertIn('pip3 install', str(ctx.exception))
+
+    def test_selected_bbox_uses_mask_from_same_instance(self):
+        backend = FakeBackend()
+        first = np.zeros((8, 13), dtype=np.float32)
+        second = np.zeros((8, 13), dtype=np.float32)
+        first[1:4, 1:4] = 1.0
+        second[2:7, 7:12] = 1.0
+        result = backend.predict(np.zeros((16, 26, 3), dtype=np.uint8))[0]
+        result.boxes = FakeBoxes(
+            xyxy=[[2, 2, 8, 8], [14, 4, 24, 14]],
+            conf=[0.60, 0.82],
+            cls=[0, 1],
+        )
+        result.masks = FakeMasks([first, second])
+        backend.predict = lambda image, **kwargs: [result]
+        detector = YOLOv8ObjectDetector(
+            model_backend=backend,
+            target_class='bottle',
+            expected_task='segment',
+            require_instance_mask=True,
+        )
+
+        detection, mask = detector.detect(np.zeros((16, 26, 3), dtype=np.uint8))
+
+        self.assertEqual(detection['class_id'], 1)
+        self.assertEqual(mask.shape, (16, 26))
+        self.assertEqual(mask.dtype, np.uint8)
+        self.assertGreater(np.count_nonzero(mask[:, 14:]), 0)
+        self.assertEqual(np.count_nonzero(mask[:, :6]), 0)
+        self.assertIs(detection['mask'], mask)
+        self.assertEqual(detection['mask_area'], int(np.count_nonzero(mask)))
+        ys, xs = np.nonzero(mask)
+        self.assertEqual(
+            detection['mask_centroid'],
+            (int(round(float(np.mean(xs)))), int(round(float(np.mean(ys))))),
+        )
+
+    def test_required_instance_mask_rejects_missing_mask(self):
+        detector = YOLOv8ObjectDetector(
+            model_backend=FakeBackend(),
+            target_class='bottle',
+            expected_task='segment',
+            require_instance_mask=True,
+        )
+
+        detection, mask = detector.detect(np.zeros((160, 260, 3), dtype=np.uint8))
+
+        self.assertIsNone(detection)
+        self.assertIsNone(mask)
+
+    def test_required_instance_mask_rejects_mask_inconsistent_with_bbox(self):
+        backend = FakeBackend()
+        first = np.zeros((80, 130), dtype=np.float32)
+        second = np.zeros((80, 130), dtype=np.float32)
+        first[10:50, 5:35] = 1.0
+        second[10:50, 5:35] = 1.0
+        result = backend.predict(np.zeros((160, 260, 3), dtype=np.uint8))[0]
+        result.masks = FakeMasks([first, second])
+        backend.predict = lambda image, **kwargs: [result]
+        detector = YOLOv8ObjectDetector(
+            model_backend=backend,
+            target_class='bottle',
+            expected_task='segment',
+            require_instance_mask=True,
+        )
+
+        detection, mask = detector.detect(np.zeros((160, 260, 3), dtype=np.uint8))
+
+        self.assertIsNone(detection)
+        self.assertIsNone(mask)
+
+    def test_segment_task_rejects_detect_checkpoint(self):
+        backend = FakeBackend()
+        backend.task = 'detect'
+        with self.assertRaisesRegex(RuntimeError, 'task mismatch'):
+            YOLOv8ObjectDetector(
+                model_backend=backend,
+                expected_task='segment',
+                require_instance_mask=True,
+            )
+
+    def test_letterboxed_mask_restores_to_original_image_coordinates(self):
+        original_shape = (360, 640)
+        padded_mask = np.zeros((640, 640), dtype=np.float32)
+        padded_mask[240:400, 160:480] = 1.0
+        restored = YOLOv8ObjectDetector._restore_mask(padded_mask, original_shape)
+        self.assertEqual(restored.shape, original_shape)
+        self.assertGreater(np.count_nonzero(restored[55:305, 150:490]), 0)
+        self.assertEqual(np.count_nonzero(restored[:20]), 0)
 
 
 if __name__ == '__main__':

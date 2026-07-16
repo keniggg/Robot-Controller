@@ -3,7 +3,8 @@ import numpy as np
 
 class YOLOv8ObjectDetector:
     def __init__(self, model_path='yolov8n.pt', target_class='', conf=0.35,
-                 iou=0.45, device='cpu', imgsz=None, model_backend=None, model_loader=None):
+                 iou=0.45, device='cpu', imgsz=None, expected_task='detect',
+                 require_instance_mask=False, model_backend=None, model_loader=None):
         self.model_path = str(model_path or 'yolov8n.pt')
         self.target_classes = self._normalize_targets(target_class)
         self.conf = float(conf)
@@ -11,6 +12,14 @@ class YOLOv8ObjectDetector:
         self.device = str(device or 'cpu')
         self.imgsz = self._positive_int(imgsz)
         self.model = model_backend if model_backend is not None else self._load_model(model_loader)
+        self.expected_task = str(expected_task or 'detect').strip().lower()
+        self.require_instance_mask = bool(require_instance_mask)
+        actual_task = str(getattr(self.model, 'task', '') or '').strip().lower()
+        if actual_task and actual_task != self.expected_task:
+            raise RuntimeError(
+                'YOLO checkpoint task mismatch: expected %s, got %s'
+                % (self.expected_task, actual_task)
+            )
 
     def detect(self, bgr, preferred_uv=None, max_preferred_distance_px=None):
         kwargs = {
@@ -27,7 +36,11 @@ class YOLOv8ObjectDetector:
             candidates.extend(self._result_candidates(result, bgr.shape))
         if not candidates:
             return None, None
-        return self._choose_candidate(candidates, preferred_uv, max_preferred_distance_px), None
+        chosen = self._choose_candidate(candidates, preferred_uv, max_preferred_distance_px)
+        mask = chosen.get('mask')
+        if self.require_instance_mask and (mask is None or not chosen.get('mask_consistent', False)):
+            return None, None
+        return chosen, mask
 
     def _load_model(self, model_loader):
         try:
@@ -56,6 +69,7 @@ class YOLOv8ObjectDetector:
         for index, box in enumerate(xyxy):
             if len(box) < 4:
                 continue
+            instance_mask = self._instance_mask(result, index, image_shape)
             confidence = float(confs[index]) if index < len(confs) else 0.0
             class_id = int(classes[index]) if index < len(classes) else -1
             label = self._class_name(names, class_id)
@@ -69,17 +83,82 @@ class YOLOv8ObjectDetector:
             if width <= 0 or height <= 0:
                 continue
             area = float(width * height)
+            bbox = (x, y, width, height)
+            mask_area, mask_centroid = self._mask_metrics(instance_mask)
+            mask_consistent = self._mask_is_consistent(
+                instance_mask, bbox, mask_area, mask_centroid
+            )
+            if not mask_consistent:
+                instance_mask = None
+                mask_area = 0
+                mask_centroid = None
             candidates.append({
                 'u': int(round(x + width * 0.5)),
                 'v': int(round(y + height * 0.5)),
-                'bbox': (x, y, width, height),
+                'bbox': bbox,
                 'area': area,
                 'confidence': confidence,
                 'score': confidence * max(1.0, area / max(1.0, frame_area)),
                 'label': label,
                 'class_id': class_id,
+                'instance_index': index,
+                'mask': instance_mask,
+                'mask_area': mask_area,
+                'mask_centroid': mask_centroid,
+                'mask_consistent': mask_consistent,
             })
         return candidates
+
+    @classmethod
+    def _instance_mask(cls, result, index, image_shape):
+        masks = getattr(result, 'masks', None)
+        data = cls._to_numpy(getattr(masks, 'data', [])) if masks is not None else np.asarray([])
+        if data.ndim != 3 or index >= data.shape[0]:
+            return None
+        restored = cls._restore_mask(np.asarray(data[index], dtype=np.float32), image_shape[:2])
+        binary = np.where(restored >= 0.5, 255, 0).astype(np.uint8)
+        return binary if np.any(binary) else None
+
+    @staticmethod
+    def _restore_mask(mask, original_shape):
+        import cv2
+        src_h, src_w = mask.shape[:2]
+        dst_h, dst_w = [int(value) for value in original_shape[:2]]
+        if abs((src_w / float(src_h)) - (dst_w / float(dst_h))) > 1e-3:
+            gain = min(src_w / float(dst_w), src_h / float(dst_h))
+            used_w = int(round(dst_w * gain))
+            used_h = int(round(dst_h * gain))
+            left = max(0, (src_w - used_w) // 2)
+            top = max(0, (src_h - used_h) // 2)
+            mask = mask[top:top + used_h, left:left + used_w]
+        return cv2.resize(mask, (dst_w, dst_h), interpolation=cv2.INTER_NEAREST)
+
+    @staticmethod
+    def _mask_metrics(mask):
+        if mask is None:
+            return 0, None
+        ys, xs = np.nonzero(mask)
+        if len(xs) == 0:
+            return 0, None
+        return int(len(xs)), (int(round(float(np.mean(xs)))), int(round(float(np.mean(ys)))))
+
+    @staticmethod
+    def _mask_is_consistent(mask, bbox, mask_area, mask_centroid):
+        if mask is None or mask_area <= 0 or mask_centroid is None:
+            return False
+        x, y, width, height = bbox
+        ys, xs = np.nonzero(mask)
+        inside = (
+            (xs >= x) & (xs < x + width)
+            & (ys >= y) & (ys < y + height)
+        )
+        if float(np.count_nonzero(inside)) / float(mask_area) < 0.80:
+            return False
+        centroid_x, centroid_y = mask_centroid
+        return (
+            x - 2 <= centroid_x <= x + width + 2
+            and y - 2 <= centroid_y <= y + height + 2
+        )
 
     def _choose_candidate(self, candidates, preferred_uv, max_preferred_distance_px):
         preferred = self._preferred_point(preferred_uv)
