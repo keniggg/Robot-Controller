@@ -1,4 +1,6 @@
+from copy import deepcopy
 from dataclasses import dataclass
+import math
 import threading
 import time
 
@@ -8,7 +10,7 @@ from geometry_msgs.msg import PoseArray
 from std_msgs.msg import String
 
 from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient
-from alicia_flexible_grasp_supervisor.msg import GraspState
+from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan, GraspState
 from alicia_flexible_grasp_supervisor.srv import StartGrasp, StopGrasp, TriggerZero
 from gui.theme import metric_chip, panel
 
@@ -18,6 +20,209 @@ class Grasp6DPlanState:
     fresh: bool
     age_sec: float
     text: str
+
+
+def _stamp_seconds(stamp):
+    if stamp is None:
+        return 0.0
+    if hasattr(stamp, 'to_nsec'):
+        return float(stamp.to_nsec()) * 1e-9
+    if hasattr(stamp, 'to_sec'):
+        return float(stamp.to_sec())
+    return (
+        float(getattr(stamp, 'secs', 0))
+        + float(getattr(stamp, 'nsecs', 0)) * 1e-9
+    )
+
+
+def _stamp_nanoseconds(stamp):
+    if stamp is None:
+        return 0
+    if hasattr(stamp, 'to_nsec'):
+        return int(stamp.to_nsec())
+    return (
+        int(getattr(stamp, 'secs', 0)) * 1_000_000_000
+        + int(getattr(stamp, 'nsecs', 0))
+    )
+
+
+def _ros_now_seconds():
+    return _stamp_seconds(rospy.Time.now())
+
+
+def _finite_pose(pose):
+    try:
+        values = (
+            float(pose.position.x),
+            float(pose.position.y),
+            float(pose.position.z),
+            float(pose.orientation.x),
+            float(pose.orientation.y),
+            float(pose.orientation.z),
+            float(pose.orientation.w),
+        )
+    except Exception:
+        return False
+    return all(math.isfinite(value) for value in values) and sum(
+        value * value for value in values[3:]
+    ) > 1e-24
+
+
+def _finite_geometry(geometry):
+    try:
+        if not bool(geometry.valid) or not _finite_pose(geometry.pose_base):
+            return False
+        size = (
+            float(geometry.size_xyz_m.x),
+            float(geometry.size_xyz_m.y),
+            float(geometry.size_xyz_m.z),
+        )
+        support = (
+            float(geometry.support_normal_base.x),
+            float(geometry.support_normal_base.y),
+            float(geometry.support_normal_base.z),
+            float(geometry.support_offset_m),
+        )
+    except Exception:
+        return False
+    return (
+        all(math.isfinite(value) and value > 0.0 for value in size)
+        and all(math.isfinite(value) for value in support)
+        and sum(value * value for value in support[:3]) > 1e-24
+    )
+
+
+def validate_enriched_plan(plan, now_sec=None, validity_sec=2.0):
+    now = _ros_now_seconds() if now_sec is None else float(now_sec)
+    validity = max(0.0, float(validity_sec))
+    diagnostic = str(getattr(plan, 'diagnostic', '') or '')
+    if plan is None or not bool(getattr(plan, 'valid', False)):
+        return Grasp6DPlanState(False, float('inf'), diagnostic or '富计划无效')
+    plan_id = str(getattr(plan, 'plan_id', '') or '').strip()
+    if not plan_id:
+        return Grasp6DPlanState(False, float('inf'), 'PLAN_ID_MISSING: 富计划标识为空')
+    if not str(getattr(plan, 'model_choice', '') or '').strip():
+        return Grasp6DPlanState(False, float('inf'), 'MODEL_MISSING: 富计划模型为空')
+    poses = list(getattr(plan, 'poses', ()) or ())
+    if len(poses) != 4 or not all(_finite_pose(pose) for pose in poses):
+        return Grasp6DPlanState(False, float('inf'), 'PLAN_MALFORMED: 必须包含四个有限姿态')
+    try:
+        required_width = float(plan.required_open_width_m)
+    except Exception:
+        required_width = float('nan')
+    if (
+        not math.isfinite(required_width)
+        or required_width <= 0.0
+        or required_width > 0.050
+    ):
+        return Grasp6DPlanState(False, float('inf'), 'GRIPPER_TOO_NARROW: 富计划开口宽度无效')
+    if not _finite_geometry(getattr(plan, 'object_geometry', None)):
+        return Grasp6DPlanState(False, float('inf'), 'OBB_INVALID: 富计划物体几何无效')
+    stamp_sec = _stamp_seconds(getattr(getattr(plan, 'header', None), 'stamp', None))
+    if not math.isfinite(stamp_sec) or stamp_sec <= 0.0:
+        return Grasp6DPlanState(False, float('inf'), 'PLAN_STALE: 源时间戳为空')
+    age = now - stamp_sec
+    if age < 0.0:
+        return Grasp6DPlanState(False, age, 'PLAN_FUTURE: 富计划来自未来时间')
+    if age > validity:
+        return Grasp6DPlanState(False, age, 'PLAN_STALE: 富计划已过期 %.1fs' % age)
+    return Grasp6DPlanState(
+        True,
+        age,
+        '富计划 %s %.1fs 内有效' % (plan_id, age),
+    )
+
+
+class Grasp6DReadinessTracker:
+    def __init__(self, validity_sec=2.0):
+        self.validity_sec = max(0.0, float(validity_sec))
+        self.legacy_pose_count = 0
+        self.enriched_seen = False
+        self.plan_id = ''
+        self._plan = None
+        self._invalid_text = '等待 6D 富计划'
+        self._lock = threading.RLock()
+
+    def clear(self, reason='等待 6D 富计划'):
+        with self._lock:
+            self.plan_id = ''
+            self._plan = None
+            self._invalid_text = str(reason or '等待 6D 富计划')
+
+    def update_legacy(self, message):
+        with self._lock:
+            self.legacy_pose_count = len(getattr(message, 'poses', ()) or ())
+
+    def update_enriched(self, message, now_sec=None):
+        state = validate_enriched_plan(
+            message,
+            now_sec=now_sec,
+            validity_sec=self.validity_sec,
+        )
+        with self._lock:
+            self.enriched_seen = True
+            if not state.fresh:
+                self.plan_id = ''
+                self._plan = None
+                self._invalid_text = state.text
+                return state
+            if self._plan is not None:
+                incoming_ns = _stamp_nanoseconds(message.header.stamp)
+                current_ns = _stamp_nanoseconds(self._plan.header.stamp)
+                incoming_id = str(getattr(message, 'plan_id', '') or '')
+                current_id = str(getattr(self._plan, 'plan_id', '') or '')
+                if (
+                    incoming_ns < current_ns
+                    or (incoming_ns == current_ns and incoming_id != current_id)
+                ):
+                    replayed = Grasp6DPlanState(
+                        False,
+                        state.age_sec,
+                        'PLAN_REPLAYED: 收到旧的或冲突的富计划源时间戳',
+                    )
+                    self.plan_id = ''
+                    self._plan = None
+                    self._invalid_text = replayed.text
+                    return replayed
+            copied = deepcopy(message)
+            self._plan = copied
+            self.plan_id = str(copied.plan_id)
+            self._invalid_text = ''
+            return state
+
+    def state(self, now_sec=None):
+        with self._lock:
+            if self._plan is None:
+                return Grasp6DPlanState(False, float('inf'), self._invalid_text)
+            state = validate_enriched_plan(
+                self._plan,
+                now_sec=now_sec,
+                validity_sec=self.validity_sec,
+            )
+            if not state.fresh:
+                self.plan_id = ''
+                self._plan = None
+                self._invalid_text = state.text
+            return state
+
+    def matches_current(self, plan_id, now_sec=None):
+        state = self.state(now_sec=now_sec)
+        with self._lock:
+            return state.fresh and self.plan_id == str(plan_id or '')
+
+
+def local_plan_execution_notice(use_remote_grasp6d):
+    if bool(use_remote_grasp6d):
+        return ''
+    return '本地旧版候选仅供显示，执行需要富计划'
+
+
+def is_local_legacy_status(text):
+    normalized = str(text or '').strip().lower()
+    return (
+        normalized.startswith('6d grasp ')
+        and not normalized.startswith('remote 6d grasp ')
+    )
 
 
 @dataclass
@@ -74,6 +279,7 @@ def format_grasp6d_plan_state(last_plan_time_sec, now_sec=None, max_age_sec=2.0)
 class Grasp6DControlWidget(QtWidgets.QWidget):
     status_signal = QtCore.pyqtSignal(str)
     plan_signal = QtCore.pyqtSignal(object)
+    legacy_plan_signal = QtCore.pyqtSignal(object)
     grasp_signal = QtCore.pyqtSignal(object)
     check_signal = QtCore.pyqtSignal(bool, str)
     command_signal = QtCore.pyqtSignal(bool, str)
@@ -84,20 +290,33 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         plan_topic='/grasp_6d/plan',
         grasp_state_topic='/grasp/state',
         compact=False,
+        enriched_plan_topic='/grasp_6d/plan_enriched',
     ):
         super().__init__()
         self._alive = True
         self._compact = bool(compact)
-        self._last_plan_time = None
+        self._plan_validity_sec = float(
+            rospy.get_param('/grasp_6d/plan_validity_sec', 2.0)
+        )
+        self._readiness = Grasp6DReadinessTracker(self._plan_validity_sec)
         self._last_plan_pose_count = 0
+        self._use_remote_grasp6d = bool(
+            rospy.get_param('/grasp_6d/use_remote_grasp6d', True)
+        )
+        self._legacy_only_status = False
         self._remote_status = '等待远程 6D 状态'
         self._grasp_state = 'IDLE'
         self._grasp_message = ''
         self._checking = False
         self._requesting_plan = False
         self._command_active = False
-        self._plan_max_age_sec = float(rospy.get_param('/grasp/grasp6d_plan_max_age_sec', 2.0))
         self._server_url = str(rospy.get_param('/grasp_6d/remote/server_url', 'http://172.23.132.97:8000'))
+        enriched_plan_topic = str(
+            rospy.get_param(
+                '/grasp/grasp6d_enriched_plan_topic',
+                enriched_plan_topic,
+            )
+        )
         labels = grasp6d_button_labels()
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -152,12 +371,24 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
 
         self.status_signal.connect(self._update_remote_status)
         self.plan_signal.connect(self._update_plan)
+        self.legacy_plan_signal.connect(self._update_legacy_plan)
         self.grasp_signal.connect(self._update_grasp)
         self.check_signal.connect(self._finish_remote_check)
         self.command_signal.connect(self._finish_command)
         self._subscribers = [
             rospy.Subscriber(status_topic, String, self._emit_status_if_alive, queue_size=1),
-            rospy.Subscriber(plan_topic, PoseArray, self._emit_plan_if_alive, queue_size=1),
+            rospy.Subscriber(
+                enriched_plan_topic,
+                Grasp6DPlan,
+                self._emit_plan_if_alive,
+                queue_size=1,
+            ),
+            rospy.Subscriber(
+                plan_topic,
+                PoseArray,
+                self._emit_legacy_plan_if_alive,
+                queue_size=1,
+            ),
             rospy.Subscriber(grasp_state_topic, GraspState, self._emit_grasp_if_alive, queue_size=1),
         ]
         self._timer = QtCore.QTimer(self)
@@ -174,17 +405,31 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         if self.__dict__.get('_alive', False):
             self.plan_signal.emit(msg)
 
+    def _emit_legacy_plan_if_alive(self, msg):
+        if self.__dict__.get('_alive', False):
+            self.legacy_plan_signal.emit(msg)
+
     def _emit_grasp_if_alive(self, msg):
         if self.__dict__.get('_alive', False):
             self.grasp_signal.emit(msg)
 
     def _update_remote_status(self, text):
         self._remote_status = text or '等待远程 6D 状态'
+        if (
+            is_local_legacy_status(self._remote_status)
+            and not self._readiness.enriched_seen
+        ):
+            self._legacy_only_status = True
+            self._use_remote_grasp6d = False
         self._refresh_view()
 
     def _update_plan(self, msg):
-        self._last_plan_pose_count = len(getattr(msg, 'poses', []) or [])
-        self._last_plan_time = time.monotonic() if self._last_plan_pose_count >= 4 else None
+        self._readiness.update_enriched(msg)
+        self._refresh_view()
+
+    def _update_legacy_plan(self, msg):
+        self._readiness.update_legacy(msg)
+        self._last_plan_pose_count = self._readiness.legacy_pose_count
         self._refresh_view()
 
     def _update_grasp(self, msg):
@@ -219,8 +464,7 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         if self._requesting_plan:
             return
         self._requesting_plan = True
-        self._last_plan_time = None
-        self._last_plan_pose_count = 0
+        self._readiness.clear('PLAN_PENDING: 正在请求新的 6D 富计划')
         self.request_plan_btn.setEnabled(False)
         self.execute_btn.setEnabled(False)
         self._remote_status = '正在请求远程 6D 候选...'
@@ -239,10 +483,11 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
     def execute_grasp(self):
         if self._command_active:
             return
-        plan_state = format_grasp6d_plan_state(self._last_plan_time, max_age_sec=self._plan_max_age_sec)
+        plan_state = self._readiness.state()
         if not plan_state.fresh:
             self._set_command_status(False, '没有新鲜的 6D 抓取候选，无法执行；请确认 WSL2 推理端和相机画面')
             return
+        self._execution_plan_id = str(self._readiness.plan_id)
         self._command_active = True
         self.execute_btn.setEnabled(False)
         self.check_btn.setEnabled(False)
@@ -251,9 +496,19 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         thread.start()
 
     def _run_start_grasp(self):
+        plan_id = str(getattr(self, '_execution_plan_id', '') or '')
+        if not self._readiness.matches_current(plan_id):
+            self._emit_command_result_if_alive(False, 'PLAN_REPLACED: 富计划在服务调用前失效')
+            return
         try:
             rospy.wait_for_service('/grasp/start', timeout=1.5)
+            if not self._readiness.matches_current(plan_id):
+                self._emit_command_result_if_alive(False, 'PLAN_REPLACED: 富计划在等待服务时失效')
+                return
             res = rospy.ServiceProxy('/grasp/start', StartGrasp)(True)
+            if not self._readiness.matches_current(plan_id):
+                self._emit_command_result_if_alive(False, 'PLAN_REPLACED: 执行期间富计划已替换或过期')
+                return
             self._emit_command_result_if_alive(bool(res.success), str(res.message))
         except Exception as exc:
             self._emit_command_result_if_alive(False, str(exc))
@@ -299,8 +554,24 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         self._refresh_view()
 
     def _refresh_view(self):
-        self._plan_max_age_sec = float(rospy.get_param('/grasp/grasp6d_plan_max_age_sec', self._plan_max_age_sec))
-        plan_state = format_grasp6d_plan_state(self._last_plan_time, max_age_sec=self._plan_max_age_sec)
+        self._plan_validity_sec = float(
+            rospy.get_param(
+                '/grasp_6d/plan_validity_sec',
+                self._plan_validity_sec,
+            )
+        )
+        self._readiness.validity_sec = max(0.0, self._plan_validity_sec)
+        configured_remote = bool(
+            rospy.get_param(
+                '/grasp_6d/use_remote_grasp6d',
+                self._use_remote_grasp6d,
+            )
+        )
+        self._use_remote_grasp6d = configured_remote and not self._legacy_only_status
+        plan_state = self._readiness.state()
+        local_notice = local_plan_execution_notice(self._use_remote_grasp6d)
+        if local_notice and not plan_state.fresh:
+            plan_state = Grasp6DPlanState(False, plan_state.age_sec, local_notice)
         state = Grasp6DGuiState(
             remote_status=self._remote_status,
             plan_state=plan_state,
@@ -313,7 +584,11 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         if self.plan_chip is not None:
             self.plan_chip.setText(('候选可执行 ' if plan_state.fresh else '候选不可用 ') + plan_state.text)
         if self.pose_chip is not None:
-            self.pose_chip.setText('路径 %d / 4' % int(self._last_plan_pose_count))
+            rich_count = 4 if plan_state.fresh else 0
+            self.pose_chip.setText(
+                '富路径 %d / 4 | 可视化 %d'
+                % (rich_count, int(self._last_plan_pose_count))
+            )
         if self.grasp_chip is not None:
             self.grasp_chip.setText('抓取 %s' % _short_text(self._grasp_state, 18))
         self.request_plan_btn.setEnabled(not self._requesting_plan)

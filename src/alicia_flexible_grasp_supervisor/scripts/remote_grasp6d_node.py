@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import math
 import os
 import re
 import socket
+import struct
 import threading
 import time
 import urllib.error
@@ -48,7 +50,7 @@ from alicia_flexible_grasp.vision.rgbd_snapshot import (
     SynchronizedRgbdBuffer,
     fuse_stable_samples,
 )
-from alicia_flexible_grasp_supervisor.msg import ObjectGeometry, ObjectPose
+from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan, ObjectGeometry, ObjectPose
 from alicia_flexible_grasp_supervisor.srv import SetTargetPose, TriggerZero, TriggerZeroResponse
 
 
@@ -589,6 +591,159 @@ def make_grasp_plan_pose_array(grasp_pose, stamp, grasp_config):
     return msg
 
 
+def _stamp_to_nsec(stamp):
+    if stamp is None:
+        return 0
+    if hasattr(stamp, 'to_nsec'):
+        return int(stamp.to_nsec())
+    return (
+        int(getattr(stamp, 'secs', 0)) * 1_000_000_000
+        + int(getattr(stamp, 'nsecs', 0))
+    )
+
+
+def _pose_floats(pose):
+    return (
+        float(pose.position.x),
+        float(pose.position.y),
+        float(pose.position.z),
+        float(pose.orientation.x),
+        float(pose.orientation.y),
+        float(pose.orientation.z),
+        float(pose.orientation.w),
+    )
+
+
+def _validate_finite_pose(pose, name):
+    values = _pose_floats(pose)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError('%s contains non-finite values' % name)
+    quaternion_norm = math.sqrt(sum(value * value for value in values[3:]))
+    if quaternion_norm <= 1e-12:
+        raise ValueError('%s quaternion has zero norm' % name)
+    return values
+
+
+def _validate_rich_geometry(geometry):
+    if geometry is None or not bool(getattr(geometry, 'valid', False)):
+        raise ValueError('object geometry is invalid')
+    pose_values = _validate_finite_pose(geometry.pose_base, 'object geometry pose')
+    size_values = (
+        float(geometry.size_xyz_m.x),
+        float(geometry.size_xyz_m.y),
+        float(geometry.size_xyz_m.z),
+    )
+    if not all(math.isfinite(value) and value > 0.0 for value in size_values):
+        raise ValueError('object geometry size must be finite and positive')
+    support_values = (
+        float(geometry.support_normal_base.x),
+        float(geometry.support_normal_base.y),
+        float(geometry.support_normal_base.z),
+        float(geometry.support_offset_m),
+    )
+    if not all(math.isfinite(value) for value in support_values):
+        raise ValueError('support plane contains non-finite values')
+    if math.sqrt(sum(value * value for value in support_values[:3])) <= 1e-12:
+        raise ValueError('support plane normal has zero norm')
+    return pose_values, size_values, support_values
+
+
+def _candidate_plan_poses(selected_candidate):
+    sequence = getattr(selected_candidate, '_grasp_sequence', None)
+    if sequence is None:
+        raise ValueError('selected candidate has no four-stage grasp sequence')
+    stamped = (
+        getattr(sequence, 'pregrasp', None),
+        getattr(sequence, 'approach', None),
+        getattr(sequence, 'grasp', None),
+        getattr(sequence, 'lift', None),
+    )
+    if any(item is None or getattr(item, 'pose', None) is None for item in stamped):
+        raise ValueError('selected candidate grasp sequence is incomplete')
+    return [deepcopy(item.pose) for item in stamped]
+
+
+def _canonical_plan_id_bytes(plan):
+    stamp_ns = _stamp_to_nsec(plan.header.stamp)
+    if stamp_ns <= 0:
+        raise ValueError('snapshot header stamp must be non-zero')
+    model = str(plan.model_choice or '').encode('utf-8')
+    if not model:
+        raise ValueError('model choice must be non-empty')
+    payload = bytearray(b'ALICIA_GRASP6D_PLAN_V1\x00')
+    payload.extend(struct.pack('>qI', stamp_ns, len(model)))
+    payload.extend(model)
+    for pose in plan.poses:
+        payload.extend(struct.pack('>7d', *_validate_finite_pose(pose, 'plan pose')))
+    payload.extend(
+        struct.pack(
+            '>2d',
+            float(plan.candidate_width_m),
+            float(plan.required_open_width_m),
+        )
+    )
+    geometry_pose, geometry_size, support_plane = _validate_rich_geometry(
+        plan.object_geometry
+    )
+    payload.extend(struct.pack('>7d', *geometry_pose))
+    payload.extend(struct.pack('>3d', *geometry_size))
+    payload.extend(struct.pack('>4d', *support_plane))
+    return bytes(payload)
+
+
+def build_rich_plan(
+    selected_candidate,
+    geometry_msg,
+    snapshot_header,
+    model_choice,
+):
+    """Build one immutable-by-copy execution plan from one RGB-D snapshot."""
+    score = float(getattr(selected_candidate, 'score', float('nan')))
+    candidate_width = float(
+        getattr(selected_candidate, 'width_m', float('nan'))
+    )
+    required_width = float(
+        getattr(selected_candidate, 'required_open_width_m', float('nan'))
+    )
+    if not math.isfinite(score):
+        raise ValueError('selected candidate score is non-finite')
+    if not math.isfinite(candidate_width) or candidate_width < 0.0:
+        raise ValueError('selected candidate width is invalid')
+    if (
+        not math.isfinite(required_width)
+        or required_width <= 0.0
+        or required_width > 0.050
+    ):
+        raise ValueError('required open width must be in (0, 0.050] m')
+    model = str(model_choice or '').strip()
+    if not model:
+        raise ValueError('model choice must be non-empty')
+
+    message = Grasp6DPlan()
+    message.header = deepcopy(snapshot_header)
+    message.valid = True
+    message.poses = _candidate_plan_poses(selected_candidate)
+    if len(message.poses) != 4:
+        raise ValueError('rich plan must contain exactly four poses')
+    message.score = score
+    message.candidate_width_m = candidate_width
+    message.required_open_width_m = required_width
+    message.object_geometry = deepcopy(geometry_msg)
+    message.model_choice = model
+    message.diagnostic = ''
+    message.plan_id = hashlib.sha256(
+        _canonical_plan_id_bytes(message)
+    ).hexdigest()[:24]
+    return message
+
+
+def rich_plan_to_legacy(plan):
+    legacy = PoseArray()
+    legacy.header = deepcopy(plan.header)
+    legacy.poses = [deepcopy(pose) for pose in plan.poses]
+    return legacy
+
+
 def geometry_estimate_to_message(estimate, snapshot=None, stamp=None, label=''):
     """Map one immutable geometry estimate into the base-frame ROS contract."""
     message = ObjectGeometry()
@@ -668,6 +823,15 @@ class RemoteGrasp6DNode:
         self._request_lock = threading.Lock()
         self._backoff_until = rospy.Time(0)
         self.plan_pub = rospy.Publisher(rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'), PoseArray, queue_size=1)
+        self.rich_plan_pub = rospy.Publisher(
+            rospy.get_param(
+                '/grasp/grasp6d_enriched_plan_topic',
+                '/grasp_6d/plan_enriched',
+            ),
+            Grasp6DPlan,
+            queue_size=1,
+            latch=True,
+        )
         self.status_pub = rospy.Publisher('/grasp_6d/status', String, queue_size=1, latch=True)
         self.gate_audit_pub = rospy.Publisher('/grasp_6d/gate_audit', String, queue_size=1, latch=True)
         self.geometry_pub = rospy.Publisher(
@@ -678,6 +842,7 @@ class RemoteGrasp6DNode:
         )
         self.previous_object_axes_base = None
         self.latest_object_geometry = None
+        self.latest_rich_plan = None
         self._geometry_invalidation_generation = 0
         self._last_geometry_invalidation_code = ''
 
@@ -1374,6 +1539,10 @@ class RemoteGrasp6DNode:
         rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
         self.rate_hz = max(0.1, float(rospy.get_param('/grasp_6d/remote/request_hz', remote_cfg.get('request_hz', rospy.get_param('/grasp_6d/plan_hz', 1.0)))))
         rospy.Service('/grasp_6d/request_plan', TriggerZero, self.request_plan_cb)
+        self._publish_invalid_plan_pair(
+            'INITIALIZING',
+            'no rich 6D plan has been generated',
+        )
         self._check_remote_health()
         mode = 'auto %.2f Hz' % self.rate_hz if self.auto_request else 'manual trigger'
         self.status_pub.publish(String('remote 6D grasp waiting for RGB-D: %s (%s)' % (server_url, mode)))
@@ -1457,6 +1626,46 @@ class RemoteGrasp6DNode:
             publisher.publish(invalid_plan)
         self.latest_plan = None
 
+    def _latest_rich_plan_copy(self):
+        with self._geometry_state_guard():
+            cached = getattr(self, 'latest_rich_plan', None)
+            return deepcopy(cached) if cached is not None else None
+
+    def _publish_invalid_plan_pair(
+        self,
+        failure_code,
+        failure_reason,
+        stamp=None,
+        header=None,
+    ):
+        with self._geometry_state_guard():
+            current_header = deepcopy(header) if header is not None else None
+            if current_header is None:
+                current_header = PoseArray().header
+                current_header.frame_id = 'base_link'
+                current_header.stamp = self._safe_time(stamp)
+            invalid = Grasp6DPlan()
+            invalid.header = deepcopy(current_header)
+            invalid.valid = False
+            invalid.diagnostic = '%s: %s' % (
+                str(failure_code or 'PLAN_INVALID'),
+                str(failure_reason or 'plan is invalid'),
+            )
+            self.latest_rich_plan = None
+            self._selected_candidate_gate = None
+            self.selected_required_open_width_m = None
+            rich_publisher = getattr(self, 'rich_plan_pub', None)
+            if rich_publisher is not None:
+                rich_publisher.publish(deepcopy(invalid))
+            legacy = PoseArray()
+            legacy.header = deepcopy(current_header)
+            legacy.poses = []
+            legacy_publisher = getattr(self, 'plan_pub', None)
+            if legacy_publisher is not None:
+                legacy_publisher.publish(deepcopy(legacy))
+            self.latest_plan = None
+            return invalid
+
     def _geometry_state_guard(self):
         lock = getattr(self, '_geometry_state_lock', None)
         if lock is None:
@@ -1535,6 +1744,30 @@ class RemoteGrasp6DNode:
             self.plan_pub.publish(plan)
             return True, ''
 
+    def _publish_plan_pair_if_current(self, rich_plan, expected_generation):
+        with self._geometry_state_guard():
+            current = int(getattr(self, '_geometry_invalidation_generation', 0))
+            if current != int(expected_generation):
+                code = str(
+                    getattr(self, '_last_geometry_invalidation_code', 'PLAN_STALE')
+                    or 'PLAN_STALE'
+                )
+                return False, code
+            if not bool(getattr(rich_plan, 'valid', False)):
+                return False, 'PLAN_INVALID'
+            # Construct both outgoing messages before publishing either one.
+            outgoing_rich = deepcopy(rich_plan)
+            outgoing_legacy = rich_plan_to_legacy(outgoing_rich)
+            cached = deepcopy(outgoing_rich)
+            rich_publisher = getattr(self, 'rich_plan_pub', None)
+            if rich_publisher is None:
+                return False, 'RICH_PLAN_PUBLISHER_UNAVAILABLE'
+            rich_publisher.publish(deepcopy(outgoing_rich))
+            self.plan_pub.publish(deepcopy(outgoing_legacy))
+            self.latest_rich_plan = cached
+            self.latest_plan = deepcopy(outgoing_legacy)
+            return True, ''
+
     def _commit_selected_gate_if_current(
         self,
         candidate,
@@ -1604,7 +1837,11 @@ class RemoteGrasp6DNode:
             self.latest_object_geometry = message
             self.previous_object_axes_base = None
             self._clear_geometry_cache()
-            self._publish_empty_legacy_plan(stamp)
+            self._publish_invalid_plan_pair(
+                failure_code,
+                failure_reason,
+                header=message.header,
+            )
             return message
 
     def _snapshot_geometry_inputs(self, snapshot):
@@ -2066,7 +2303,11 @@ class RemoteGrasp6DNode:
         try:
             self._refresh_runtime_params()
             self._cached_tool_from_camera = None
-            self._publish_empty_legacy_plan(stamp)
+            self._publish_invalid_plan_pair(
+                'PLAN_PENDING',
+                'a new RGB-D planning snapshot is being processed',
+                stamp=stamp,
+            )
             # Every filter below must use geometry from this exact RGB-D
             # request, even when remote inference takes several seconds.
             self._target_cloud_request_active = False
@@ -2334,19 +2575,6 @@ class RemoteGrasp6DNode:
                 )
                 self._publish_error(message)
                 return False, message
-            plan_msg = make_grasp_plan_pose_array(
-                grasp_pose,
-                stamp,
-                self.grasp_config,
-            )
-            published, failure_code = self._publish_legacy_plan_if_current(
-                plan_msg,
-                request_invalidation_generation,
-            )
-            if not published:
-                message = '%s: planning request was invalidated before publication' % failure_code
-                self._publish_error(message)
-                return False, message
             selected_target_xyz, target_source = self._target_base_xyz()
             visibility_message = ''
             if bool(getattr(self, 'camera_visibility_diagnostic_enabled', True)) and selected_target_xyz is not None:
@@ -2393,6 +2621,23 @@ class RemoteGrasp6DNode:
                     'planning request was invalidated before selected gate commit',
                     stamp=stamp,
                     snapshot=snapshot,
+                )
+                self._publish_error(message)
+                return False, message
+            rich_plan = build_rich_plan(
+                selected,
+                deepcopy(self.latest_object_geometry),
+                deepcopy(self.latest_object_geometry.header),
+                str(getattr(self, '_last_model_choice', '') or ''),
+            )
+            published, failure_code = self._publish_plan_pair_if_current(
+                rich_plan,
+                request_invalidation_generation,
+            )
+            if not published:
+                message = (
+                    '%s: planning request was invalidated before publication'
+                    % failure_code
                 )
                 self._publish_error(message)
                 return False, message

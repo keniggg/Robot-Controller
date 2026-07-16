@@ -8,6 +8,7 @@ import unittest
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import PoseArray
 from sensor_msgs.msg import JointState
+from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -66,17 +67,215 @@ class GraspTaskSequenceTest(unittest.TestCase):
             array.poses.append(self._pose(x).pose)
         return array
 
+    def _rich_plan(self, xs=None, plan_id='plan-a', stamp_sec=1.0):
+        xs = [0.10, 0.20, 0.30, 0.40] if xs is None else list(xs)
+        plan = Grasp6DPlan()
+        plan.header.frame_id = 'base_link'
+        plan.header.stamp = grasp_task_node.rospy.Time.from_sec(float(stamp_sec))
+        plan.valid = True
+        plan.score = 0.9
+        plan.candidate_width_m = 0.039
+        plan.required_open_width_m = 0.044
+        plan.model_choice = 'carton_segment'
+        plan.plan_id = str(plan_id)
+        plan.poses = [self._pose(x).pose for x in xs]
+        geometry = plan.object_geometry
+        geometry.header = plan.header
+        geometry.valid = True
+        geometry.label = 'carton'
+        geometry.source_mode = 'instance_mask'
+        geometry.pose_base.position.x = 0.40
+        geometry.pose_base.position.y = 0.0
+        geometry.pose_base.position.z = 0.20
+        geometry.pose_base.orientation.w = 1.0
+        geometry.size_xyz_m.x = 0.08
+        geometry.size_xyz_m.y = 0.04
+        geometry.size_xyz_m.z = 0.06
+        geometry.support_normal_base.z = 1.0
+        return plan
+
     def _joint_state(self):
         msg = JointState()
         msg.name = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6', 'right_finger']
         msg.position = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.05]
         return msg
 
+    def test_legacy_pose_array_is_never_execution_authority(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_grasp6d_plan = None
+        node.latest_grasp6d_legacy_plan = None
+
+        node.grasp6d_legacy_plan_cb(
+            self._pose_array([0.10, 0.20, 0.30, 0.40])
+        )
+
+        self.assertIsNone(node.latest_grasp6d_plan)
+        self.assertEqual(len(node.latest_grasp6d_legacy_plan.poses), 4)
+
+    def test_rich_callback_deep_copies_and_replacement_invalidates_old_id(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_grasp6d_plan = None
+        original_get_param = grasp_task_node.rospy.get_param
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/plan_validity_sec': 2.0,
+        }.get(name, default)
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(2.0)
+        )
+        try:
+            first = self._rich_plan(plan_id='first', stamp_sec=1.0)
+            node.grasp6d_plan_cb(first)
+            first.poses[0].position.x = 99.0
+            self.assertAlmostEqual(node.latest_grasp6d_plan.poses[0].position.x, 0.10)
+
+            node.grasp6d_plan_cb(
+                self._rich_plan(plan_id='second', stamp_sec=1.5)
+            )
+            old = node.validate_plan_id_for_execution('first')
+            current = node.validate_plan_id_for_execution('second')
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertFalse(old.ok)
+        self.assertEqual(old.code, 'PLAN_REPLACED')
+        self.assertTrue(current.ok)
+
+    def test_stale_future_or_malformed_rich_callback_clears_authority(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_grasp6d_plan = None
+        original_get_param = grasp_task_node.rospy.get_param
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/plan_validity_sec': 2.0,
+        }.get(name, default)
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            for plan in (
+                self._rich_plan(plan_id='stale', stamp_sec=7.0),
+                self._rich_plan(plan_id='future', stamp_sec=10.1),
+                self._rich_plan(plan_id='zero', stamp_sec=0.0),
+            ):
+                node.grasp6d_plan_cb(plan)
+                self.assertIsNone(node.latest_grasp6d_plan)
+
+            malformed = self._rich_plan(plan_id='malformed', stamp_sec=9.0)
+            malformed.poses[2].orientation.w = 0.0
+            node.grasp6d_plan_cb(malformed)
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertIsNone(node.latest_grasp6d_plan)
+
+    def test_older_source_stamp_replay_clears_execution_authority(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_grasp6d_plan = None
+        original_get_param = grasp_task_node.rospy.get_param
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/plan_validity_sec': 2.0,
+        }.get(name, default)
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            node.grasp6d_plan_cb(
+                self._rich_plan(plan_id='newer', stamp_sec=9.5)
+            )
+            self.assertEqual(node.latest_grasp6d_plan.plan_id, 'newer')
+            node.grasp6d_plan_cb(
+                self._rich_plan(plan_id='replayed', stamp_sec=9.0)
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertIsNone(node.latest_grasp6d_plan)
+
+    def test_fresh_plan_uses_obb_center_only_as_drift_reference_without_retarget(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_grasp6d_plan = self._rich_plan(stamp_sec=9.0)
+        node.latest_obj = self._object_at(0.41, 0.0, 0.20)
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            plan = node._fresh_grasp6d_plan(
+                {
+                    'plan_validity_sec': 2.0,
+                    'target_max_drift_m': 0.02,
+                }
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertIsNotNone(plan)
+        self.assertAlmostEqual(plan.poses[0].position.x, 0.10)
+        self.assertAlmostEqual(plan.object_geometry.pose_base.position.x, 0.40)
+        plan.poses[0].position.x = -99.0
+        self.assertAlmostEqual(node.latest_grasp6d_plan.poses[0].position.x, 0.10)
+
+    def test_plan_bound_object_reference_is_deep_copied_from_obb_not_live_bbox(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        plan = self._rich_plan(stamp_sec=9.0)
+        node.latest_obj = self._object_at(0.41, 0.0, 0.20)
+
+        reference = node._bound_object_pose_from_plan(plan)
+        plan.object_geometry.pose_base.position.x = 99.0
+
+        self.assertTrue(reference.detected)
+        self.assertEqual(reference.label, 'carton')
+        self.assertAlmostEqual(reference.pose_base.pose.position.x, 0.40)
+        self.assertNotAlmostEqual(
+            reference.pose_base.pose.position.x,
+            node.latest_obj.pose_base.pose.position.x,
+        )
+
+    def test_motion_stage_stops_if_plan_is_replaced_after_planning(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        node.latest_grasp6d_plan = self._rich_plan(plan_id='first', stamp_sec=9.0)
+        node.set_state = lambda *args, **kwargs: None
+        node._wait_for_motion_settle = lambda *_args, **_kwargs: True
+        calls = []
+
+        def move_pose(_pose, execute):
+            calls.append(bool(execute))
+            if not execute:
+                node.latest_grasp6d_plan = self._rich_plan(
+                    plan_id='second', stamp_sec=9.5
+                )
+            return FakeServiceResponse(True, 'ok')
+
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            result = node._plan_and_execute_pose(
+                grasp_task_node.GraspStages.MOVE_PREGRASP,
+                '6D pregrasp',
+                self._pose(0.10),
+                move_pose,
+                '6D pregrasp',
+                execution_plan_id='first',
+                gcfg={'plan_validity_sec': 2.0},
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertFalse(result)
+        self.assertEqual(calls, [False])
+
     def test_full_grasp_uses_6d_plan_sequence_when_enabled(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = None
-        node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
-        node.latest_grasp6d_plan_time = FakeTime(1.0)
+        node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.active = True
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
         node.set_state = lambda *args, **kwargs: None
@@ -112,7 +311,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         grasp_task_node.rospy.get_param = lambda name, default=None: {
             '/grasp': {
                 'use_grasp6d_plan': True,
-                'grasp6d_plan_max_age_sec': 5.0,
+                'plan_validity_sec': 5.0,
                 'lift_height_m': 0.05,
             },
             '/gripper': {
@@ -146,8 +345,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
     def test_6d_plan_honors_configured_simple_open_and_close_positions(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = None
-        node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
-        node.latest_grasp6d_plan_time = FakeTime(1.0)
+        node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.active = True
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
         node.set_state = lambda *args, **kwargs: None
@@ -182,7 +380,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         grasp_task_node.rospy.get_param = lambda name, default=None: {
             '/grasp': {
                 'use_grasp6d_plan': True,
-                'grasp6d_plan_max_age_sec': 5.0,
+                'plan_validity_sec': 5.0,
             },
             '/gripper': {
                 'open_position_m': 0.05,
@@ -211,8 +409,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
     def test_6d_plan_blocks_execution_when_mujoco_digital_twin_rejects(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = self._object()
-        node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
-        node.latest_grasp6d_plan_time = FakeTime(1.0)
+        node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.latest_joint_state = self._joint_state()
         node.active = True
         states = []
@@ -259,7 +456,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         grasp_task_node.rospy.get_param = lambda name, default=None: {
             '/grasp': {
                 'use_grasp6d_plan': True,
-                'grasp6d_plan_max_age_sec': 5.0,
+                'plan_validity_sec': 5.0,
             },
             '/gripper': {
                 'open_position_m': 0.05,
@@ -296,8 +493,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
     def test_6d_plan_blocks_mujoco_simulation_when_joint_state_payload_required_but_missing(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = self._object()
-        node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
-        node.latest_grasp6d_plan_time = FakeTime(1.0)
+        node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.latest_joint_state = None
         node.active = True
         states = []
@@ -327,7 +523,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         grasp_task_node.rospy.get_param = lambda name, default=None: {
             '/grasp': {
                 'use_grasp6d_plan': True,
-                'grasp6d_plan_max_age_sec': 5.0,
+                'plan_validity_sec': 5.0,
             },
             '/gripper': {
                 'open_position_m': 0.05,
@@ -358,9 +554,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
 
     def test_6d_plan_rejects_execution_when_locked_object_drifted(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
-        node.latest_grasp6d_plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
-        node.latest_grasp6d_plan_time = FakeTime(1.0)
-        node.latest_grasp6d_plan_object = self._object_at(0.40, 0.0, 0.20)
+        node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.latest_obj = self._object_at(0.46, 0.0, 0.20)
 
         original_get_param = grasp_task_node.rospy.get_param
@@ -371,8 +565,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
             result = grasp_task_node.GraspTaskNode._fresh_grasp6d_plan(
                 node,
                 {
-                    'grasp6d_plan_max_age_sec': 180.0,
-                    'grasp6d_plan_max_object_drift_m': 0.03,
+                    'plan_validity_sec': 2.0,
+                    'target_max_drift_m': 0.03,
                 },
             )
         finally:
@@ -381,12 +575,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    def test_6d_plan_remains_fresh_with_longer_manual_confirmation_window(self):
+    def test_6d_plan_rejects_long_manual_confirmation_from_source_timestamp(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
-        plan = self._pose_array([0.10, 0.20, 0.30, 0.40])
+        plan = self._rich_plan(stamp_sec=1.0)
         node.latest_grasp6d_plan = plan
-        node.latest_grasp6d_plan_time = FakeTime(1.0)
-        node.latest_grasp6d_plan_object = self._object_at(0.40, 0.0, 0.20)
         node.latest_obj = self._object_at(0.41, 0.0, 0.20)
 
         original_get_param = grasp_task_node.rospy.get_param
@@ -397,15 +589,16 @@ class GraspTaskSequenceTest(unittest.TestCase):
             result = grasp_task_node.GraspTaskNode._fresh_grasp6d_plan(
                 node,
                 {
-                    'grasp6d_plan_max_age_sec': 180.0,
-                    'grasp6d_plan_max_object_drift_m': 0.03,
+                    'plan_validity_sec': 2.0,
+                    'target_max_drift_m': 0.03,
                 },
             )
         finally:
             grasp_task_node.rospy.get_param = original_get_param
             grasp_task_node.rospy.Time.now = original_time_now
 
-        self.assertIs(result, plan)
+        self.assertIsNone(result)
+        self.assertIsNone(node.latest_grasp6d_plan)
 
     def test_negative_object_invalidation_removes_cached_targets_and_plan_without_motion(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
@@ -415,8 +608,6 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_visual_obj = None
         node.latest_visual_obj_time = None
         node.latest_grasp6d_plan = None
-        node.latest_grasp6d_plan_time = None
-        node.latest_grasp6d_plan_object = None
 
         original_get_param = grasp_task_node.rospy.get_param
         original_time_now = grasp_task_node.rospy.Time.now
@@ -426,11 +617,14 @@ class GraspTaskSequenceTest(unittest.TestCase):
             detected = self._object_at(0.40, 0.0, 0.20)
             grasp_task_node.GraspTaskNode.obj_cb(node, detected)
             locked_for_active_flow = grasp_task_node.deepcopy(node.latest_obj)
-            grasp_task_node.GraspTaskNode.grasp6d_plan_cb(node, self._pose_array([0.10, 0.20, 0.30, 0.40]))
+            grasp_task_node.GraspTaskNode.grasp6d_plan_cb(
+                node,
+                self._rich_plan(stamp_sec=1.0),
+            )
             grasp_task_node.GraspTaskNode.obj_cb(node, types.SimpleNamespace(detected=False))
             available_plan = grasp_task_node.GraspTaskNode._fresh_grasp6d_plan(
                 node,
-                {'grasp6d_plan_max_age_sec': 180.0},
+                {'plan_validity_sec': 2.0},
             )
         finally:
             grasp_task_node.rospy.get_param = original_get_param
@@ -546,7 +740,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('did not settle', states[-1][1])
 
-    def test_visual_retarget_translates_remaining_path_and_preserves_6d_rotation(self):
+    def test_visual_retarget_entry_point_only_checks_drift_and_never_translates(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True
         node.set_state = lambda *args, **kwargs: None
@@ -564,22 +758,21 @@ class GraspTaskSequenceTest(unittest.TestCase):
             poses,
             {
                 'visual_retarget_enabled': True,
-                'visual_retarget_max_correction_m': 0.04,
-                'visual_retarget_deadband_m': 0.0,
+                'target_max_drift_m': 0.04,
             },
             'pregrasp',
             required=True,
         )
 
         self.assertIsNotNone(result)
-        shifted, updated_reference = result
-        self.assertIs(updated_reference, live)
-        self.assertAlmostEqual(shifted[0].pose.position.x, 0.21)
-        self.assertAlmostEqual(shifted[0].pose.position.y, 0.12)
-        self.assertAlmostEqual(shifted[0].pose.position.z, 0.29)
-        self.assertAlmostEqual(shifted[1].pose.position.x, 0.31)
-        self.assertAlmostEqual(shifted[0].pose.orientation.x, 0.25)
-        self.assertAlmostEqual(shifted[0].pose.orientation.w, 0.75)
+        guarded, updated_reference = result
+        self.assertIs(updated_reference, reference)
+        self.assertAlmostEqual(guarded[0].pose.position.x, 0.20)
+        self.assertAlmostEqual(guarded[0].pose.position.y, 0.10)
+        self.assertAlmostEqual(guarded[0].pose.position.z, 0.30)
+        self.assertAlmostEqual(guarded[1].pose.position.x, 0.30)
+        self.assertAlmostEqual(guarded[0].pose.orientation.x, 0.25)
+        self.assertAlmostEqual(guarded[0].pose.orientation.w, 0.75)
 
     def test_visual_retarget_rejects_large_handeye_inconsistency(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
@@ -595,7 +788,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             [self._pose(0.20)],
             {
                 'visual_retarget_enabled': True,
-                'visual_retarget_max_correction_m': 0.04,
+                'target_max_drift_m': 0.04,
             },
             'pregrasp',
             required=True,
@@ -603,7 +796,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
-        self.assertIn('hand-eye consistency failed', states[-1][1])
+        self.assertIn('TARGET_DRIFT', states[-1][1])
 
     def test_visual_retarget_accepts_close_range_detection_below_plan_threshold(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)

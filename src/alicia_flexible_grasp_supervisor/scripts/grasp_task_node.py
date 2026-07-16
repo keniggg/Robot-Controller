@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 from copy import deepcopy
+from dataclasses import dataclass
 import math
+import threading
 import time
 import rospy
 from geometry_msgs.msg import PoseArray, PoseStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
-from alicia_flexible_grasp_supervisor.msg import ObjectPose, GraspState
+from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan, ObjectPose, GraspState
 from alicia_flexible_grasp_supervisor.srv import StartGrasp, StartGraspResponse, StopGrasp, StopGraspResponse, SetTargetPose, SetFloat
 from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages, STATE_NAMES
 from alicia_flexible_grasp.grasp.grasp_pose_generator import make_pregrasp_pose, make_lift_pose
@@ -25,6 +27,142 @@ try:
 except Exception:
     tf2_ros = None
 
+
+@dataclass(frozen=True)
+class PlanValidationResult:
+    ok: bool
+    code: str = ''
+    reason: str = ''
+    age_sec: float = float('inf')
+
+
+def _stamp_seconds(stamp):
+    if stamp is None:
+        return 0.0
+    if hasattr(stamp, 'to_nsec'):
+        return float(stamp.to_nsec()) * 1e-9
+    if hasattr(stamp, 'to_sec'):
+        return float(stamp.to_sec())
+    if hasattr(stamp, 'seconds'):
+        return float(stamp.seconds)
+    return (
+        float(getattr(stamp, 'secs', 0))
+        + float(getattr(stamp, 'nsecs', 0)) * 1e-9
+    )
+
+
+def _stamp_nanoseconds(stamp):
+    if stamp is None:
+        return 0
+    if hasattr(stamp, 'to_nsec'):
+        return int(stamp.to_nsec())
+    if hasattr(stamp, 'seconds'):
+        return int(round(float(stamp.seconds) * 1_000_000_000.0))
+    return (
+        int(getattr(stamp, 'secs', 0)) * 1_000_000_000
+        + int(getattr(stamp, 'nsecs', 0))
+    )
+
+
+def _finite_pose(pose):
+    try:
+        values = (
+            float(pose.position.x),
+            float(pose.position.y),
+            float(pose.position.z),
+            float(pose.orientation.x),
+            float(pose.orientation.y),
+            float(pose.orientation.z),
+            float(pose.orientation.w),
+        )
+    except Exception:
+        return False
+    return all(math.isfinite(value) for value in values) and sum(
+        value * value for value in values[3:]
+    ) > 1e-24
+
+
+def _finite_geometry(geometry):
+    try:
+        if not bool(geometry.valid) or not _finite_pose(geometry.pose_base):
+            return False
+        size = (
+            float(geometry.size_xyz_m.x),
+            float(geometry.size_xyz_m.y),
+            float(geometry.size_xyz_m.z),
+        )
+        support = (
+            float(geometry.support_normal_base.x),
+            float(geometry.support_normal_base.y),
+            float(geometry.support_normal_base.z),
+            float(geometry.support_offset_m),
+        )
+    except Exception:
+        return False
+    return (
+        all(math.isfinite(value) and value > 0.0 for value in size)
+        and all(math.isfinite(value) for value in support)
+        and sum(value * value for value in support[:3]) > 1e-24
+    )
+
+
+def validate_execution_plan(plan, now_sec, validity_sec):
+    if plan is None:
+        return PlanValidationResult(False, 'PLAN_MISSING', 'no rich 6D plan')
+    diagnostic = str(getattr(plan, 'diagnostic', '') or '')
+    if not bool(getattr(plan, 'valid', False)):
+        code = diagnostic.split(':', 1)[0].strip() if diagnostic else 'PLAN_INVALID'
+        return PlanValidationResult(False, code, diagnostic or 'rich plan is invalid')
+    plan_id = str(getattr(plan, 'plan_id', '') or '').strip()
+    if not plan_id:
+        return PlanValidationResult(False, 'PLAN_ID_MISSING', 'plan_id is empty')
+    if not str(getattr(plan, 'model_choice', '') or '').strip():
+        return PlanValidationResult(False, 'MODEL_MISSING', 'model_choice is empty')
+    poses = list(getattr(plan, 'poses', ()) or ())
+    if len(poses) != 4 or not all(_finite_pose(pose) for pose in poses):
+        return PlanValidationResult(
+            False,
+            'PLAN_MALFORMED',
+            'rich plan must contain exactly four finite non-zero-quaternion poses',
+        )
+    try:
+        score = float(plan.score)
+        candidate_width = float(plan.candidate_width_m)
+        required_width = float(plan.required_open_width_m)
+    except Exception:
+        return PlanValidationResult(False, 'PLAN_MALFORMED', 'plan scalar fields are invalid')
+    if not math.isfinite(score) or not math.isfinite(candidate_width):
+        return PlanValidationResult(False, 'PLAN_MALFORMED', 'plan score or candidate width is non-finite')
+    if (
+        not math.isfinite(required_width)
+        or required_width <= 0.0
+        or required_width > 0.050
+    ):
+        return PlanValidationResult(False, 'GRIPPER_TOO_NARROW', 'required opening is outside (0, 0.050] m')
+    if not _finite_geometry(getattr(plan, 'object_geometry', None)):
+        return PlanValidationResult(False, 'OBB_INVALID', 'embedded object geometry is invalid')
+    stamp_sec = _stamp_seconds(getattr(getattr(plan, 'header', None), 'stamp', None))
+    if not math.isfinite(stamp_sec) or stamp_sec <= 0.0:
+        return PlanValidationResult(False, 'PLAN_STALE', 'plan source timestamp is zero')
+    age = float(now_sec) - stamp_sec
+    if age < 0.0:
+        return PlanValidationResult(False, 'PLAN_FUTURE', 'plan source timestamp is in the future', age)
+    if age > max(0.0, float(validity_sec)):
+        return PlanValidationResult(False, 'PLAN_STALE', 'plan source timestamp is stale', age)
+    return PlanValidationResult(True, age_sec=age)
+
+
+def split_rich_plan_poses(plan):
+    if len(getattr(plan, 'poses', ()) or ()) != 4:
+        raise ValueError('rich 6D plan must contain exactly four poses')
+    result = []
+    for source in plan.poses:
+        stamped = PoseStamped()
+        stamped.header = deepcopy(plan.header)
+        stamped.pose = deepcopy(source)
+        result.append(stamped)
+    return tuple(result)
+
 class GraspTaskNode:
     def __init__(self):
         self.latest_obj = None
@@ -32,8 +170,8 @@ class GraspTaskNode:
         self.latest_visual_obj = None
         self.latest_visual_obj_time = None
         self.latest_grasp6d_plan = None
-        self.latest_grasp6d_plan_time = None
-        self.latest_grasp6d_plan_object = None
+        self.latest_grasp6d_legacy_plan = None
+        self._grasp6d_plan_lock = threading.RLock()
         self.latest_joint_state = None
         self.latest_raw_detection = False
         self.latest_raw_detection_time = None
@@ -46,7 +184,21 @@ class GraspTaskNode:
             self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.pub = rospy.Publisher('/grasp/state', GraspState, queue_size=10)
         rospy.Subscriber('/perception/object', ObjectPose, self.obj_cb, queue_size=1)
-        rospy.Subscriber(rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'), PoseArray, self.grasp6d_plan_cb, queue_size=1)
+        rospy.Subscriber(
+            rospy.get_param(
+                '/grasp/grasp6d_enriched_plan_topic',
+                '/grasp_6d/plan_enriched',
+            ),
+            Grasp6DPlan,
+            self.grasp6d_plan_cb,
+            queue_size=1,
+        )
+        rospy.Subscriber(
+            rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'),
+            PoseArray,
+            self.grasp6d_legacy_plan_cb,
+            queue_size=1,
+        )
         rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
         rospy.Subscriber('/perception/raw_object_detected', Bool, self.raw_detection_cb, queue_size=1)
         rospy.Service('/grasp/start', StartGrasp, self.start_cb)
@@ -59,9 +211,7 @@ class GraspTaskNode:
             self.latest_obj_time = None
             self.latest_visual_obj = None
             self.latest_visual_obj_time = None
-            self.latest_grasp6d_plan = None
-            self.latest_grasp6d_plan_time = None
-            self.latest_grasp6d_plan_object = None
+            self._clear_grasp6d_authority()
             return
         gcfg = rospy.get_param('/grasp', {})
         confidence = float(getattr(msg, 'confidence', 1.0) or 0.0)
@@ -111,10 +261,60 @@ class GraspTaskNode:
         self.latest_raw_detection_time = rospy.Time.now()
 
     def grasp6d_plan_cb(self, msg):
-        self.latest_grasp6d_plan = msg
-        self.latest_grasp6d_plan_time = rospy.Time.now()
-        obj = getattr(self, 'latest_obj', None)
-        self.latest_grasp6d_plan_object = deepcopy(obj) if obj is not None and bool(getattr(obj, 'detected', False)) else None
+        result = validate_execution_plan(
+            msg,
+            _stamp_seconds(rospy.Time.now()),
+            self._configured_plan_validity({}),
+        )
+        with self._grasp6d_plan_guard():
+            if not result.ok:
+                self.latest_grasp6d_plan = None
+                rospy.logwarn(
+                    'Rejected rich 6D plan %s: %s',
+                    result.code,
+                    result.reason,
+                )
+                return
+            current = getattr(self, 'latest_grasp6d_plan', None)
+            if current is not None:
+                incoming_ns = _stamp_nanoseconds(msg.header.stamp)
+                current_ns = _stamp_nanoseconds(current.header.stamp)
+                incoming_id = str(getattr(msg, 'plan_id', '') or '')
+                current_id = str(getattr(current, 'plan_id', '') or '')
+                if (
+                    incoming_ns < current_ns
+                    or (incoming_ns == current_ns and incoming_id != current_id)
+                ):
+                    self.latest_grasp6d_plan = None
+                    rospy.logwarn(
+                        'Rejected rich 6D plan PLAN_REPLAYED: older or conflicting source timestamp'
+                    )
+                    return
+            self.latest_grasp6d_plan = deepcopy(msg)
+
+    def grasp6d_legacy_plan_cb(self, msg):
+        # Compatibility visualization only. Never assign execution authority.
+        self.latest_grasp6d_legacy_plan = deepcopy(msg)
+
+    def _grasp6d_plan_guard(self):
+        lock = getattr(self, '_grasp6d_plan_lock', None)
+        if lock is None:
+            lock = threading.RLock()
+            self._grasp6d_plan_lock = lock
+        return lock
+
+    def _clear_grasp6d_authority(self, expected_plan_id=None):
+        with self._grasp6d_plan_guard():
+            current = getattr(self, 'latest_grasp6d_plan', None)
+            if (
+                expected_plan_id is not None
+                and current is not None
+                and str(getattr(current, 'plan_id', '') or '')
+                != str(expected_plan_id)
+            ):
+                return False
+            self.latest_grasp6d_plan = None
+            return True
 
     def set_state(self, stage, message='', success=False):
         self.stage = stage
@@ -280,25 +480,13 @@ class GraspTaskNode:
             self.set_state(GraspStages.FAILED, 'no fresh 6D grasp plan')
             return False
 
-        pregrasp = self._pose_array_item_as_stamped(plan, 0)
-        approach = self._pose_array_item_as_stamped(plan, 1)
-        grasp = self._pose_array_item_as_stamped(plan, 2)
-        lift = self._pose_array_item_as_stamped(plan, 3)
-        locked_obj = deepcopy(getattr(self, 'latest_grasp6d_plan_object', None))
-
+        pregrasp, approach, grasp, lift = split_rich_plan_poses(plan)
+        if not self._execution_checkpoint(plan, gcfg, 'MuJoCo gate'):
+            return False
         if not self._simulate_grasp6d_plan_if_required(gcfg, gripper_cfg, plan):
             return False
-
-        retargeted = self._visual_retarget_6d_poses(
-            locked_obj,
-            [pregrasp, approach, grasp, lift],
-            gcfg,
-            'execution start',
-            required=bool(gcfg.get('visual_retarget_require_start_detection', True)),
-        )
-        if retargeted is None:
+        if not self._execution_checkpoint(plan, gcfg, 'gripper open'):
             return False
-        (pregrasp, approach, grasp, lift), locked_obj = retargeted
 
         self.set_state(GraspStages.PLAN_PREGRASP, 'using 6D grasp plan')
         if not self._command_gripper_position(
@@ -308,50 +496,47 @@ class GraspTaskNode:
             self._cfg_float(gripper_cfg, 'open_wait_sec', 0.5),
         ):
             return False
-        if not self._plan_and_execute_pose(GraspStages.MOVE_PREGRASP, '6D pregrasp', pregrasp, move_pose, '6D pregrasp'):
+        if not self._execution_checkpoint(plan, gcfg, 'pregrasp'):
+            return False
+        if not self._plan_and_execute_pose(
+            GraspStages.MOVE_PREGRASP,
+            '6D pregrasp',
+            pregrasp,
+            move_pose,
+            '6D pregrasp',
+            execution_plan_id=plan.plan_id,
+            gcfg=gcfg,
+        ):
             return False
 
-        retargeted = self._visual_retarget_6d_poses(
-            locked_obj,
-            [approach, grasp, lift],
-            gcfg,
-            'pregrasp',
-            required=bool(gcfg.get('visual_retarget_require_pregrasp_detection', True)),
-        )
-        if retargeted is None:
+        if not self._execution_checkpoint(plan, gcfg, 'approach'):
             return False
-        (approach, grasp, lift), locked_obj = retargeted
-
         if not self._plan_and_execute_pose(
             GraspStages.APPROACH_TARGET,
             'linear 6D approach',
             approach,
             move_pose_linear,
             '6D approach',
+            execution_plan_id=plan.plan_id,
+            gcfg=gcfg,
         ):
             return False
 
-        if bool(gcfg.get('visual_retarget_after_approach', True)):
-            retargeted = self._visual_retarget_6d_poses(
-                locked_obj,
-                [grasp, lift],
-                gcfg,
-                'approach',
-                required=bool(gcfg.get('visual_retarget_require_approach_detection', False)),
-            )
-            if retargeted is None:
-                return False
-            (grasp, lift), locked_obj = retargeted
-
+        if not self._execution_checkpoint(plan, gcfg, 'grasp pose'):
+            return False
         if not self._plan_and_execute_pose(
             GraspStages.APPROACH_TARGET,
             'linear 6D grasp pose',
             grasp,
             move_pose_linear,
             '6D grasp pose',
+            execution_plan_id=plan.plan_id,
+            gcfg=gcfg,
         ):
             return False
 
+        if not self._execution_checkpoint(plan, gcfg, 'gripper close'):
+            return False
         close_label = 'force-guided close' if bool(gripper_cfg.get('use_compliant_close', True)) else 'fixed gripper close'
         self.set_state(GraspStages.COMPLIANT_CLOSE, close_label)
         ok, message = self._close_gripper(gripper_cfg, set_gripper, close)
@@ -359,18 +544,45 @@ class GraspTaskNode:
             self.set_state(GraspStages.FAILED, message)
             return False
 
+        if not self._execution_checkpoint(plan, gcfg, 'lift'):
+            return False
         if not self._plan_and_execute_pose(
             GraspStages.LIFT_OBJECT,
             'linear 6D lift',
             lift,
             move_pose_linear,
             '6D lift',
+            execution_plan_id=plan.plan_id,
+            gcfg=gcfg,
         ):
+            return False
+        if not self._execution_checkpoint(plan, gcfg, 'success acknowledgement'):
             return False
         self.set_state(GraspStages.SUCCESS, '6D grasp done', True)
         return True
 
-    def _plan_and_execute_pose(self, stage, label, pose, move_pose, settle_reason):
+    def _plan_and_execute_pose(
+        self,
+        stage,
+        label,
+        pose,
+        move_pose,
+        settle_reason,
+        execution_plan_id=None,
+        gcfg=None,
+    ):
+        if execution_plan_id is not None:
+            validation = self.validate_plan_id_for_execution(
+                execution_plan_id,
+                gcfg or {},
+            )
+            if not validation.ok:
+                self.set_state(
+                    GraspStages.FAILED,
+                    '%s: %s before planning %s'
+                    % (validation.code, validation.reason, label),
+                )
+                return False
         self.set_state(stage, 'planning ' + label)
         resp = move_pose(pose, False)
         if not resp.success:
@@ -394,6 +606,18 @@ class GraspTaskNode:
                 orientation_fallback_rejection_message(label, getattr(resp, 'message', '')),
             )
             return False
+        if execution_plan_id is not None:
+            validation = self.validate_plan_id_for_execution(
+                execution_plan_id,
+                gcfg or {},
+            )
+            if not validation.ok:
+                self.set_state(
+                    GraspStages.FAILED,
+                    '%s: %s before moving %s'
+                    % (validation.code, validation.reason, label),
+                )
+                return False
         self.set_state(stage, 'moving ' + label)
         resp = move_pose(pose, True)
         if not resp.success:
@@ -409,15 +633,16 @@ class GraspTaskNode:
         return True
 
     def _visual_retarget_6d_poses(self, reference_obj, poses, gcfg, stage_label, required=False):
+        """Legacy entry point retained as a drift guard; never translate rich poses."""
         if not bool(gcfg.get('visual_retarget_enabled', False)):
-            return list(poses), reference_obj
+            return [deepcopy(pose) for pose in poses], reference_obj
         if reference_obj is None or not bool(getattr(reference_obj, 'detected', False)):
             message = 'visual retarget unavailable: no object locked with the 6D plan'
             if required:
                 self.set_state(GraspStages.FAILED, message)
                 return None
             rospy.logwarn('%s', message)
-            return list(poses), reference_obj
+            return [deepcopy(pose) for pose in poses], reference_obj
 
         live_obj = self._wait_for_stable_visual_target(reference_obj, gcfg, stage_label)
         if live_obj is None:
@@ -426,25 +651,23 @@ class GraspTaskNode:
                 self.set_state(GraspStages.FAILED, message)
                 return None
             rospy.logwarn('%s', message)
-            return list(poses), reference_obj
+            return [deepcopy(pose) for pose in poses], reference_obj
 
         delta = self._object_delta_xyz(reference_obj, live_obj)
         distance = math.sqrt(sum(float(value) ** 2 for value in delta))
-        max_correction = max(0.0, self._cfg_float(gcfg, 'visual_retarget_max_correction_m', 0.04))
-        if max_correction > 0.0 and distance > max_correction:
+        max_drift = self._configured_target_max_drift(gcfg)
+        if distance > max_drift:
             self.set_state(
                 GraspStages.FAILED,
                 (
-                    'visual/hand-eye consistency failed after %s: target shifted %.3fm > %.3fm; '
-                    'check rigid camera mounting and hand-eye calibration'
-                ) % (stage_label, distance, max_correction),
+                    'TARGET_DRIFT after %s: target shifted %.3fm > %.3fm; '
+                    'generate a new rich plan'
+                ) % (stage_label, distance, max_drift),
             )
             return None
 
-        deadband = max(0.0, self._cfg_float(gcfg, 'visual_retarget_deadband_m', 0.002))
-        shifted = [self._translate_pose(pose, delta if distance > deadband else (0.0, 0.0, 0.0)) for pose in poses]
         rospy.loginfo(
-            'Grasp visual retarget after %s: delta=(%.3f, %.3f, %.3f)m norm=%.3fm orientation_preserved=1',
+            'Grasp rich-plan drift guard after %s: delta=(%.3f, %.3f, %.3f)m norm=%.3fm retarget=0',
             stage_label,
             float(delta[0]),
             float(delta[1]),
@@ -453,9 +676,10 @@ class GraspTaskNode:
         )
         self.set_state(
             GraspStages.APPROACH_TARGET,
-            'visual target locked after %s; correction %.1f mm' % (stage_label, distance * 1000.0),
+            'rich-plan target stable after %s; drift %.1f mm; retarget disabled'
+            % (stage_label, distance * 1000.0),
         )
-        return shifted, live_obj
+        return [deepcopy(pose) for pose in poses], reference_obj
 
     def _wait_for_stable_visual_target(self, reference_obj, gcfg, stage_label):
         timeout = max(0.0, self._cfg_float(gcfg, 'visual_retarget_timeout_sec', 1.2))
@@ -574,39 +798,131 @@ class GraspTaskNode:
         shifted.pose.position.z += float(delta_xyz[2])
         return shifted
 
-    def _fresh_grasp6d_plan(self, gcfg):
-        plan = getattr(self, 'latest_grasp6d_plan', None)
-        if plan is None or len(getattr(plan, 'poses', [])) < 4:
-            return None
-        plan_time = getattr(self, 'latest_grasp6d_plan_time', None)
-        if plan_time is None:
-            return None
-        max_age = max(0.0, self._cfg_float(gcfg, 'grasp6d_plan_max_age_sec', 2.0))
+    def _configured_plan_validity(self, gcfg):
+        if isinstance(gcfg, dict) and 'plan_validity_sec' in gcfg:
+            return max(0.0, self._cfg_float(gcfg, 'plan_validity_sec', 2.0))
         try:
-            age = (rospy.Time.now() - plan_time).to_sec()
+            default = rospy.get_param('/grasp_6d/plan_validity_sec', 2.0)
+        except Exception:
+            default = 2.0
+        return max(0.0, float(default))
+
+    def _configured_target_max_drift(self, gcfg):
+        if isinstance(gcfg, dict) and 'target_max_drift_m' in gcfg:
+            return max(0.0, self._cfg_float(gcfg, 'target_max_drift_m', 0.02))
+        try:
+            default = rospy.get_param('/grasp_6d/target_max_drift_m', 0.02)
+        except Exception:
+            default = 0.02
+        return max(0.0, float(default))
+
+    def validate_plan_id_for_execution(self, plan_id, gcfg=None):
+        requested_id = str(plan_id or '')
+        with self._grasp6d_plan_guard():
+            current = getattr(self, 'latest_grasp6d_plan', None)
+            if current is None:
+                return PlanValidationResult(False, 'PLAN_MISSING', 'no current rich plan')
+            current_id = str(getattr(current, 'plan_id', '') or '')
+            if current_id != requested_id:
+                return PlanValidationResult(
+                    False,
+                    'PLAN_REPLACED',
+                    'current rich plan id no longer matches execution copy',
+                )
+            copied = deepcopy(current)
+        result = validate_execution_plan(
+            copied,
+            _stamp_seconds(rospy.Time.now()),
+            self._configured_plan_validity(gcfg or {}),
+        )
+        if not result.ok:
+            self._clear_grasp6d_authority(expected_plan_id=requested_id)
+        return result
+
+    def _plan_geometry_center_xyz(self, plan):
+        try:
+            point = plan.object_geometry.pose_base.position
+            values = (float(point.x), float(point.y), float(point.z))
         except Exception:
             return None
-        if age > max_age:
-            rospy.logwarn('Rejected stale 6D grasp plan age %.2fs > %.2fs', age, max_age)
+        return values if all(math.isfinite(value) for value in values) else None
+
+    @staticmethod
+    def _bound_object_pose_from_plan(plan):
+        geometry = deepcopy(plan.object_geometry)
+        reference = ObjectPose()
+        reference.header = deepcopy(plan.header)
+        reference.detected = bool(geometry.valid)
+        reference.label = str(geometry.label or 'object')
+        reference.confidence = 1.0
+        reference.pose_base.header = deepcopy(plan.header)
+        reference.pose_base.pose = deepcopy(geometry.pose_base)
+        return reference
+
+    def _bound_target_drift_result(self, plan, gcfg):
+        latest_obj = getattr(self, 'latest_obj', None)
+        if latest_obj is None or not bool(getattr(latest_obj, 'detected', False)):
+            return PlanValidationResult(True)
+        plan_center = self._plan_geometry_center_xyz(plan)
+        live_center = self._object_xyz(latest_obj)
+        if plan_center is None or live_center is None:
+            return PlanValidationResult(False, 'OBB_INVALID', 'plan or live target center is unavailable')
+        drift = math.sqrt(
+            sum(
+                (float(live_center[index]) - float(plan_center[index])) ** 2
+                for index in range(3)
+            )
+        )
+        maximum = self._configured_target_max_drift(gcfg)
+        if drift > maximum:
+            return PlanValidationResult(
+                False,
+                'TARGET_DRIFT',
+                'live target drift %.3fm exceeds %.3fm' % (drift, maximum),
+            )
+        return PlanValidationResult(True)
+
+    def _fresh_grasp6d_plan(self, gcfg):
+        with self._grasp6d_plan_guard():
+            current = getattr(self, 'latest_grasp6d_plan', None)
+            plan = deepcopy(current) if current is not None else None
+        result = validate_execution_plan(
+            plan,
+            _stamp_seconds(rospy.Time.now()),
+            self._configured_plan_validity(gcfg),
+        )
+        if not result.ok:
+            if plan is not None:
+                self._clear_grasp6d_authority(
+                    expected_plan_id=str(getattr(plan, 'plan_id', '') or '')
+                )
+            rospy.logwarn('Rejected rich 6D plan %s: %s', result.code, result.reason)
             return None
-        max_drift = max(0.0, self._cfg_float(gcfg, 'grasp6d_plan_max_object_drift_m', 0.0))
-        if max_drift > 0.0:
-            locked_obj = getattr(self, 'latest_grasp6d_plan_object', None)
-            latest_obj = getattr(self, 'latest_obj', None)
-            if (
-                locked_obj is not None
-                and latest_obj is not None
-                and bool(getattr(latest_obj, 'detected', False))
-            ):
-                drift = self._object_distance(locked_obj, latest_obj)
-                if drift > max_drift:
-                    rospy.logwarn(
-                        'Rejected 6D grasp plan: object drift %.3fm > %.3fm since plan generation',
-                        drift,
-                        max_drift,
-                    )
-                    return None
+        drift = self._bound_target_drift_result(plan, gcfg)
+        if not drift.ok:
+            self._clear_grasp6d_authority(expected_plan_id=plan.plan_id)
+            rospy.logwarn('Rejected rich 6D plan %s: %s', drift.code, drift.reason)
+            return None
         return plan
+
+    def _execution_checkpoint(self, plan, gcfg, stage_label):
+        identity = self.validate_plan_id_for_execution(plan.plan_id, gcfg)
+        if not identity.ok:
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: %s before %s'
+                % (identity.code, identity.reason, stage_label),
+            )
+            return False
+        drift = self._bound_target_drift_result(plan, gcfg)
+        if not drift.ok:
+            self._clear_grasp6d_authority(expected_plan_id=plan.plan_id)
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: %s before %s' % (drift.code, drift.reason, stage_label),
+            )
+            return False
+        return True
 
     def _simulate_grasp6d_plan_if_required(self, gcfg, gripper_cfg, plan):
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
@@ -615,9 +931,9 @@ class GraspTaskNode:
 
         self.set_state(GraspStages.PLAN_PREGRASP, 'MuJoCo digital twin checking 6D plan')
         require_object = bool(twin_cfg.get('require_object_pose', True))
-        object_pose = getattr(self, 'latest_obj', None)
+        object_pose = self._bound_object_pose_from_plan(plan)
         if require_object and (object_pose is None or not bool(getattr(object_pose, 'detected', False))):
-            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked: no detected object pose')
+            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked: rich plan has no valid object geometry')
             return False
 
         send_joint_state = bool(twin_cfg.get('send_joint_state_in_request', False))

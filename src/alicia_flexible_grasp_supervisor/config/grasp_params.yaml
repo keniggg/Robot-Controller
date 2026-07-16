@@ -1,10 +1,7 @@
 grasp:
   use_grasp6d_plan: true
   grasp6d_plan_topic: "/grasp_6d/plan"
-  # Manual 6D debugging needs time for operator/log confirmation. Execution
-  # still rejects the plan if the tracked object drifts too far.
-  grasp6d_plan_max_age_sec: 600.0
-  grasp6d_plan_max_object_drift_m: 0.02
+  grasp6d_enriched_plan_topic: "/grasp_6d/plan_enriched"
   pregrasp_distance_m: 0.08
   # The Alicia tool0 frame points through the fingertips along +Z. After the
   # GraspNet grasp frame is aligned to tool0, all approach offsets must use Z.
@@ -30,9 +27,9 @@ grasp:
   max_object_jump_m: 0.12
   object_jump_filter_window_sec: 4.0
   max_locked_target_refine_m: 0.06
-  # Eye-in-hand closed loop: reobserve the target at pregrasp, translate the
-  # remaining path from live RGB-D, and preserve the model-predicted 6D rotation.
-  visual_retarget_enabled: true
+  # Rich 6D poses are bound to one mask/OBB snapshot. Live perception is only
+  # a drift guard and must never translate or retarget the four execution poses.
+  visual_retarget_enabled: false
   visual_retarget_require_start_detection: true
   # Close-range YOLO confidence falls as the wrist partially occludes the
   # object. Keep the initial 0.50 gate for candidate generation, but allow the
@@ -84,6 +81,9 @@ gripper:
 
 grasp_6d:
   enabled: true
+  use_remote_grasp6d: true
+  plan_validity_sec: 2.0
+  target_max_drift_m: 0.02
   backend: "remote_graspnet_baseline"
   root: ""
   checkpoint_path: ""
