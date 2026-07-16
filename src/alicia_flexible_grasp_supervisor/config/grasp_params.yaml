@@ -84,6 +84,7 @@ grasp_6d:
   use_remote_grasp6d: true
   plan_validity_sec: 2.0
   target_max_drift_m: 0.02
+  target_observation_validity_sec: 1.5
   backend: "remote_graspnet_baseline"
   root: ""
   checkpoint_path: ""

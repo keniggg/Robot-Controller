@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import io
 import pathlib
 import sys
 import unittest
@@ -209,6 +210,65 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         )
         self.assertEqual(results, [(True, 'ok')])
 
+    def test_successful_start_response_is_not_overwritten_by_post_call_expiry(self):
+        widget = control_widget.Grasp6DControlWidget.__new__(
+            control_widget.Grasp6DControlWidget
+        )
+        widget._execution_plan_id = 'captured-plan-id'
+        checks = []
+
+        def matches_current(_plan_id):
+            checks.append(True)
+            return len(checks) <= 2
+
+        widget._readiness = type(
+            'Ready', (), {'matches_current': lambda self, plan_id: matches_current(plan_id)}
+        )()
+        results = []
+        widget._emit_command_result_if_alive = (
+            lambda ok, message: results.append((ok, message))
+        )
+        original_wait = control_widget.rospy.wait_for_service
+        original_proxy = control_widget.rospy.ServiceProxy
+        control_widget.rospy.wait_for_service = lambda *_args, **_kwargs: None
+        control_widget.rospy.ServiceProxy = lambda *_args, **_kwargs: (
+            lambda **_kwargs: type(
+                'Response', (), {'success': True, 'message': 'completed'}
+            )()
+        )
+        try:
+            widget._run_start_grasp()
+        finally:
+            control_widget.rospy.wait_for_service = original_wait
+            control_widget.rospy.ServiceProxy = original_proxy
+
+        self.assertEqual(len(checks), 2)
+        self.assertEqual(results, [(True, 'completed')])
+
+    def test_float32_wire_width_limit_accepts_exact_50mm_only(self):
+        exact = self._rich_plan(stamp_sec=9.0)
+        exact.required_open_width_m = 0.050
+        exact.plan_id = compute_plan_id(exact)
+        wire = io.BytesIO()
+        exact.serialize(wire)
+        received = Grasp6DPlan()
+        received.deserialize(wire.getvalue())
+
+        self.assertTrue(
+            control_widget.validate_enriched_plan(
+                received, now_sec=10.0, validity_sec=2.0
+            ).fresh
+        )
+
+        over = self._rich_plan(stamp_sec=9.0)
+        over.required_open_width_m = 0.0501
+        over.plan_id = compute_plan_id(over)
+        self.assertFalse(
+            control_widget.validate_enriched_plan(
+                over, now_sec=10.0, validity_sec=2.0
+            ).fresh
+        )
+
     def test_replacement_changes_ready_plan_identity_without_aliasing(self):
         tracker = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)
         first = self._rich_plan(stamp_sec=9.0, plan_id='first')
@@ -238,6 +298,44 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         self.assertFalse(state.fresh)
         self.assertEqual(tracker.plan_id, '')
         self.assertIn('PLAN_REPLAYED', tracker.state(now_sec=10.0).text)
+
+    def test_gui_replay_watermark_survives_invalid_clear_and_repeated_replay(self):
+        tracker = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)
+        newer = self._rich_plan(stamp_sec=9.5, plan_id='newer')
+        tracker.update_enriched(newer, now_sec=10.0)
+
+        invalid = self._rich_plan(stamp_sec=9.6, plan_id='invalid')
+        invalid.valid = False
+        invalid.diagnostic = 'TARGET_LOST: invalidation tombstone'
+        tracker.update_enriched(invalid, now_sec=10.0)
+        for suffix in ('first', 'second'):
+            state = tracker.update_enriched(
+                self._rich_plan(stamp_sec=9.0, plan_id='older-' + suffix),
+                now_sec=10.0,
+            )
+            self.assertFalse(state.fresh)
+            self.assertEqual(tracker.plan_id, '')
+            self.assertIn('PLAN_REPLAYED', state.text)
+
+        newest = self._rich_plan(stamp_sec=9.8, plan_id='newest')
+        self.assertTrue(tracker.update_enriched(newest, now_sec=10.0).fresh)
+
+    def test_gui_replay_tombstone_survives_replay_local_clear_and_expiry(self):
+        tracker = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)
+        newer = self._rich_plan(stamp_sec=9.5, plan_id='newer')
+        replay = self._rich_plan(stamp_sec=9.0, plan_id='replay')
+        tracker.update_enriched(newer, now_sec=10.0)
+        tracker.update_enriched(replay, now_sec=10.0)
+        self.assertFalse(tracker.update_enriched(replay, now_sec=10.0).fresh)
+
+        tracker.update_enriched(newer, now_sec=10.0)
+        tracker.clear('local clear')
+        self.assertFalse(tracker.update_enriched(newer, now_sec=10.0).fresh)
+
+        newest = self._rich_plan(stamp_sec=9.8, plan_id='newest')
+        tracker.update_enriched(newest, now_sec=10.0)
+        self.assertFalse(tracker.state(now_sec=12.1).fresh)
+        self.assertFalse(tracker.update_enriched(newest, now_sec=10.0).fresh)
 
     def test_local_legacy_mode_is_explicitly_visualization_only(self):
         self.assertEqual(

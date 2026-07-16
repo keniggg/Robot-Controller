@@ -12,6 +12,7 @@ from std_msgs.msg import String
 from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     plan_id_matches_content,
+    required_open_width_is_valid,
     stamp_nanoseconds as _stamp_nanoseconds,
     stamp_seconds as _stamp_seconds,
     strict_plan_id_equal,
@@ -69,11 +70,7 @@ def validate_enriched_plan(plan, now_sec=None, validity_sec=2.0):
         required_width = float(plan.required_open_width_m)
     except Exception:
         required_width = float('nan')
-    if (
-        not math.isfinite(required_width)
-        or required_width <= 0.0
-        or required_width > 0.050
-    ):
+    if not required_open_width_is_valid(required_width):
         return Grasp6DPlanState(False, float('inf'), 'GRIPPER_TOO_NARROW: 富计划开口宽度无效')
     if not _finite_geometry(getattr(plan, 'object_geometry', None)):
         return Grasp6DPlanState(False, float('inf'), 'OBB_INVALID: 富计划物体几何无效')
@@ -113,11 +110,21 @@ class Grasp6DReadinessTracker:
         self.enriched_seen = False
         self.plan_id = ''
         self._plan = None
+        self._watermark_stamp_ns = 0
+        self._watermark_plan_id = ''
+        self._watermark_tombstoned = False
         self._invalid_text = '等待 6D 富计划'
         self._lock = threading.RLock()
 
     def clear(self, reason='等待 6D 富计划'):
         with self._lock:
+            if self._plan is not None and self._watermark_stamp_ns <= 0:
+                self._watermark_stamp_ns = _stamp_nanoseconds(
+                    self._plan.header.stamp
+                )
+                self._watermark_plan_id = str(self._plan.plan_id or '')
+            if self._watermark_stamp_ns > 0:
+                self._watermark_tombstoned = True
             self.plan_id = ''
             self._plan = None
             self._invalid_text = str(reason or '等待 6D 富计划')
@@ -134,32 +141,48 @@ class Grasp6DReadinessTracker:
         )
         with self._lock:
             self.enriched_seen = True
+            incoming_ns = _stamp_nanoseconds(
+                getattr(getattr(message, 'header', None), 'stamp', None)
+            )
+            incoming_id = str(getattr(message, 'plan_id', '') or '')
             if not state.fresh:
+                if incoming_ns > self._watermark_stamp_ns:
+                    self._watermark_stamp_ns = incoming_ns
+                    self._watermark_plan_id = incoming_id
+                if self._watermark_stamp_ns > 0:
+                    self._watermark_tombstoned = True
                 self.plan_id = ''
                 self._plan = None
                 self._invalid_text = state.text
                 return state
-            if self._plan is not None:
-                incoming_ns = _stamp_nanoseconds(message.header.stamp)
-                current_ns = _stamp_nanoseconds(self._plan.header.stamp)
-                incoming_id = str(getattr(message, 'plan_id', '') or '')
-                current_id = str(getattr(self._plan, 'plan_id', '') or '')
-                if (
-                    incoming_ns < current_ns
-                    or (
-                        incoming_ns == current_ns
-                        and not strict_plan_id_equal(incoming_id, current_id)
+            replayed_source = (
+                incoming_ns < self._watermark_stamp_ns
+                or (
+                    incoming_ns == self._watermark_stamp_ns
+                    and (
+                        self._watermark_tombstoned
+                        or not strict_plan_id_equal(
+                            incoming_id, self._watermark_plan_id
+                        )
                     )
-                ):
-                    replayed = Grasp6DPlanState(
-                        False,
-                        state.age_sec,
-                        'PLAN_REPLAYED: 收到旧的或冲突的富计划源时间戳',
-                    )
-                    self.plan_id = ''
-                    self._plan = None
-                    self._invalid_text = replayed.text
-                    return replayed
+                )
+            )
+            if replayed_source:
+                replayed = Grasp6DPlanState(
+                    False,
+                    state.age_sec,
+                    'PLAN_REPLAYED: 收到旧的、冲突的或已撤权富计划源时间戳',
+                )
+                if self._watermark_stamp_ns > 0:
+                    self._watermark_tombstoned = True
+                self.plan_id = ''
+                self._plan = None
+                self._invalid_text = replayed.text
+                return replayed
+            if incoming_ns > self._watermark_stamp_ns:
+                self._watermark_stamp_ns = incoming_ns
+                self._watermark_plan_id = incoming_id
+                self._watermark_tombstoned = False
             copied = deepcopy(message)
             self._plan = copied
             self.plan_id = str(copied.plan_id)
@@ -176,6 +199,8 @@ class Grasp6DReadinessTracker:
                 validity_sec=self.validity_sec,
             )
             if not state.fresh:
+                if self._watermark_stamp_ns > 0:
+                    self._watermark_tombstoned = True
                 self.plan_id = ''
                 self._plan = None
                 self._invalid_text = state.text
@@ -485,9 +510,6 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
                 execute=True,
                 plan_id=plan_id,
             )
-            if not self._readiness.matches_current(plan_id):
-                self._emit_command_result_if_alive(False, 'PLAN_REPLACED: 执行期间富计划已替换或过期')
-                return
             self._emit_command_result_if_alive(bool(res.success), str(res.message))
         except Exception as exc:
             self._emit_command_result_if_alive(False, str(exc))

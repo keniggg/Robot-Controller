@@ -10,6 +10,28 @@ import struct
 _CANONICAL_PREFIX = b'ALICIA_GRASP6D_PLAN_V1\x00'
 _PLAN_ID_PATTERN = re.compile(r'^[0-9a-f]{24}$')
 SUPPORTED_GEOMETRY_SOURCE_MODES = frozenset(('instance_mask', 'bbox_depth'))
+GRIPPER_MAX_OPEN_WIDTH_M = 0.050
+
+
+def float32_wire_value(value):
+    """Return the value a ROS float32 field carries across the wire."""
+    return struct.unpack('>f', struct.pack('>f', float(value)))[0]
+
+
+GRIPPER_MAX_OPEN_WIDTH_F32 = float32_wire_value(GRIPPER_MAX_OPEN_WIDTH_M)
+
+
+def required_open_width_is_valid(value):
+    """Validate the physical opening after ROS float32 quantization."""
+    try:
+        wire_value = float32_wire_value(value)
+    except (TypeError, ValueError, OverflowError, struct.error):
+        return False
+    return (
+        math.isfinite(wire_value)
+        and wire_value > 0.0
+        and wire_value <= GRIPPER_MAX_OPEN_WIDTH_F32
+    )
 
 
 def stamp_nanoseconds(stamp):

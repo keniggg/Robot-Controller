@@ -25,6 +25,7 @@ except Exception:
 from alicia_flexible_grasp.grasp.grasp6d_sequence import make_grasp_sequence_from_grasp_pose
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     compute_plan_id,
+    required_open_width_is_valid,
     validate_plan_header_binding,
     validate_rich_geometry,
 )
@@ -627,11 +628,7 @@ def build_rich_plan(
         raise ValueError('selected candidate score is non-finite')
     if not math.isfinite(candidate_width) or candidate_width < 0.0:
         raise ValueError('selected candidate width is invalid')
-    if (
-        not math.isfinite(required_width)
-        or required_width <= 0.0
-        or required_width > 0.050
-    ):
+    if not required_open_width_is_valid(required_width):
         raise ValueError('required open width must be in (0, 0.050] m')
     model = str(model_choice or '').strip()
     if not model:
