@@ -30,12 +30,17 @@ class CameraNode:
         self.rate = rospy.Rate(float(self.fps))
 
     def _make_camera(self, simulate):
+        depth_filter_cfg = dict(self.cfg.get('depth_filter', {}) or {})
+        perception_cfg = rospy.get_param('/perception', {})
+        depth_filter_cfg.setdefault('depth_min_m', perception_cfg.get('depth_min_m', 0.03))
+        depth_filter_cfg.setdefault('depth_max_m', perception_cfg.get('depth_max_m', 2.0))
         return RealSenseManager(
-            self.width,
-            self.height,
-            self.fps,
-            self.align_depth_to_color,
-            simulate=simulate
+            width=self.width,
+            height=self.height,
+            fps=self.fps,
+            align_depth_to_color=self.align_depth_to_color,
+            simulate=simulate,
+            depth_filter_cfg=depth_filter_cfg,
         )
 
     def _start_camera(self, simulate):
@@ -106,11 +111,11 @@ class CameraNode:
             self._read_failures = self.read_failure_limit
             return False
 
-    def publish_image(self, pub, cv_img, encoding):
+    def publish_image(self, pub, cv_img, encoding, stamp):
         if self.bridge is None:
             return
         msg = self.bridge.cv2_to_imgmsg(cv_img, encoding=encoding)
-        msg.header.stamp = rospy.Time.now()
+        msg.header.stamp = stamp
         msg.header.frame_id = self.frame_id
         pub.publish(msg)
 
@@ -134,10 +139,11 @@ class CameraNode:
                 if not recovered:
                     self.rate.sleep()
                 continue
+            stamp = rospy.Time.now()
             if color is not None:
-                self.publish_image(self.pub_color, color, 'bgr8')
+                self.publish_image(self.pub_color, color, 'bgr8', stamp)
             if depth is not None:
-                self.publish_image(self.pub_depth, depth, '16UC1')
+                self.publish_image(self.pub_depth, depth, '16UC1', stamp)
             self.rate.sleep()
 
 if __name__ == '__main__':
