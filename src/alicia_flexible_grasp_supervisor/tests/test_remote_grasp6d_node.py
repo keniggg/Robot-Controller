@@ -5,6 +5,7 @@ import sys
 import threading
 import types
 import unittest
+import urllib.error
 
 import numpy as np
 from geometry_msgs.msg import PoseStamped
@@ -94,12 +95,48 @@ class DummyLock:
         return False
 
 
+class NonBlockingLock:
+    def __init__(self):
+        self.locked = False
+
+    def acquire(self, blocking=True):
+        del blocking
+        if self.locked:
+            return False
+        self.locked = True
+        return True
+
+    def release(self):
+        self.locked = False
+
+
 class RecordingPublisher:
     def __init__(self):
         self.messages = []
 
     def publish(self, message):
         self.messages.append(getattr(message, 'data', message))
+
+
+class RecordingClient:
+    def __init__(self, candidates=None, error=None):
+        self.candidates = list(candidates or [])
+        self.error = error
+        self.calls = []
+        self.last_diagnostics = {}
+
+    def predict(self, color, depth, intrinsics, **kwargs):
+        self.calls.append(
+            {
+                'color': np.asarray(color).copy(),
+                'depth': np.asarray(depth).copy(),
+                'intrinsics': intrinsics,
+                'kwargs': dict(kwargs),
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        return list(self.candidates)
 
 
 class SequenceSampleBuffer:
@@ -125,6 +162,114 @@ class FakeTf2Module:
     class TransformListener:
         def __init__(self, buffer):
             self.buffer = buffer
+
+
+def make_snapshot(target_depth, source_mode='instance_mask', stamp_ns=10_000_000_123):
+    target_depth = np.asarray(target_depth, dtype=np.uint16)
+    full_depth = np.full(target_depth.shape, 2400, dtype=np.uint16)
+    full_depth[target_depth > 0] = target_depth[target_depth > 0]
+    mask = np.where(target_depth > 0, 255, 0).astype(np.uint8)
+    ys, xs = np.nonzero(mask)
+    if xs.size:
+        bbox = (
+            int(np.min(xs)),
+            int(np.min(ys)),
+            int(np.max(xs) - np.min(xs) + 1),
+            int(np.max(ys) - np.min(ys) + 1),
+        )
+    else:
+        bbox = (0, 0, target_depth.shape[1], target_depth.shape[0])
+    return SnapshotResult(
+        ok=True,
+        failure_code='',
+        failure_reason='',
+        color_bgr=np.zeros(target_depth.shape + (3,), dtype=np.uint8),
+        depth_raw=full_depth,
+        target_depth_raw=target_depth,
+        object_mask=mask,
+        bbox=bbox,
+        object_msg=types.SimpleNamespace(detected=True, label='carton'),
+        stamp_sec=float(stamp_ns) * 1e-9,
+        frame_id='camera_link',
+        quality=DepthQuality(
+            fused_frames=3,
+            mask_area=int(np.count_nonzero(mask)),
+            valid_depth_points=int(np.count_nonzero(target_depth)),
+            valid_depth_ratio=1.0 if np.any(target_depth) else 0.0,
+            depth_median_m=0.22,
+            depth_mad_m=0.0015,
+        ),
+        source_mode=source_mode,
+        stamp_ns=int(stamp_ns),
+    )
+
+
+def make_geometry_estimate(ok=True, code='', reason='', source_mode='instance_mask'):
+    return remote_node.GeometryEstimate(
+        ok=bool(ok),
+        failure_code=str(code),
+        failure_reason=str(reason),
+        center_base=np.asarray([0.40, -0.10, 0.22]),
+        axes_base=np.eye(3),
+        size_xyz_m=np.asarray([0.24, 0.16, 0.10]),
+        support_normal_base=np.asarray([0.0, 0.0, 1.0]),
+        support_offset_m=0.0,
+        support_inlier_ratio=0.82,
+        object_points_base=np.asarray(
+            [[0.39, -0.10, 0.20], [0.41, -0.10, 0.21], [0.40, -0.09, 0.22]]
+        ),
+        source_mode=source_mode,
+    )
+
+
+def make_processing_node(client=None):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node._request_lock = NonBlockingLock()
+    node._refresh_runtime_params = lambda: None
+    node.plan_pub = RecordingPublisher()
+    node.geometry_pub = RecordingPublisher()
+    node.status_pub = RecordingPublisher()
+    node.client = client or RecordingClient()
+    node.pose_estimator = types.SimpleNamespace(
+        camera_frame='camera_link',
+        base_frame='base_link',
+        tf_buffer=None,
+        allow_static_fallback=True,
+        translation_xyz=[0.0, 0.0, 0.0],
+        rotation_xyzw=[0.0, 0.0, 0.0, 1.0],
+    )
+    node.tf_buffer = None
+    node.failure_backoff_sec = 0.0
+    node.last_error = ''
+    node._backoff_until = remote_node.rospy.Time(0)
+    node._cached_tool_from_camera = None
+    node.previous_object_axes_base = np.eye(3)
+    node.latest_object_geometry = None
+    node.target_cloud_enabled = True
+    node.target_projection_frame_convention = 'ros_camera_link'
+    node.geometry_support_bbox_expand_ratio = 0.30
+    node.geometry_support_distance_threshold_m = 0.004
+    node.geometry_voxel_size_m = 0.0025
+    node.geometry_min_support_points = 3
+    node.geometry_min_object_points = 1
+    node.geometry_min_size_m = 0.005
+    node.geometry_max_size_m = 0.600
+    node.geometry_max_height_m = 0.500
+    node.geometry_outlier_neighbors = 2
+    node.geometry_outlier_std_ratio = 2.0
+    node.max_candidates = 20
+    node.max_gripper_width_m = 0.05
+    node.candidate_width_tolerance_m = 0.0
+    node._camera_intrinsics = lambda: remote_node.CameraIntrinsics(
+        width=4,
+        height=3,
+        fx=100.0,
+        fy=100.0,
+        cx=1.5,
+        cy=1.0,
+        depth_scale=0.0001,
+    )
+    return node
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
@@ -434,6 +579,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             [[rgbd(good_mask, 1.00), rgbd(wrong_mask, 1.03), rgbd(good_mask, 1.06)]]
         )
         node.status_pub = RecordingPublisher()
+        node.plan_pub = RecordingPublisher()
+        node.geometry_pub = RecordingPublisher()
+        node.previous_object_axes_base = np.eye(3)
         node.planning_snapshot_frames = 3
         node.planning_snapshot_timeout_sec = 1.0
         node.planning_snapshot_max_age_sec = 0.35
@@ -453,6 +601,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertTrue(response.message.startswith('MASK_SIZE_MISMATCH: '))
         self.assertEqual(response.message.count('MASK_SIZE_MISMATCH:'), 1)
         self.assertEqual(node.status_pub.messages[-1], response.message)
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, response.message)
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
 
     def test_segment_snapshot_sends_only_target_depth_to_remote_path(self):
         context_depth = np.full((4, 5), 2200, dtype=np.uint16)
@@ -480,6 +632,370 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         np.testing.assert_array_equal(remote_depth, target_depth)
         self.assertEqual(int(remote_depth[0, 0]), 0)
+
+    def test_geometry_message_maps_obb_and_snapshot_quality(self):
+        snapshot = make_snapshot(
+            np.asarray(
+                [
+                    [0, 0, 0, 0],
+                    [0, 2200, 2200, 0],
+                    [0, 2200, 2200, 0],
+                ],
+                dtype=np.uint16,
+            )
+        )
+        estimate = make_geometry_estimate()
+        stamp = remote_node.rospy.Time(10, 123)
+
+        message = remote_node.geometry_estimate_to_message(
+            estimate,
+            snapshot=snapshot,
+            stamp=stamp,
+            label='carton',
+        )
+
+        self.assertTrue(message.valid)
+        self.assertEqual(message.header.frame_id, 'base_link')
+        self.assertEqual(message.header.stamp.to_nsec(), 10_000_000_123)
+        self.assertEqual(message.label, 'carton')
+        self.assertEqual(message.source_mode, 'instance_mask')
+        self.assertAlmostEqual(message.pose_base.position.x, 0.40)
+        self.assertAlmostEqual(message.size_xyz_m.x, 0.24)
+        self.assertAlmostEqual(message.size_xyz_m.y, 0.16)
+        self.assertAlmostEqual(message.size_xyz_m.z, 0.10)
+        self.assertEqual(message.valid_depth_points, 4)
+        self.assertAlmostEqual(message.valid_depth_ratio, 1.0)
+        self.assertAlmostEqual(message.depth_mad_m, 0.0015)
+        self.assertEqual(message.fused_frames, 3)
+        self.assertAlmostEqual(message.support_inlier_ratio, 0.82)
+        self.assertEqual(message.object_point_count, 3)
+        quaternion = np.asarray(
+            [
+                message.pose_base.orientation.x,
+                message.pose_base.orientation.y,
+                message.pose_base.orientation.z,
+                message.pose_base.orientation.w,
+            ]
+        )
+        self.assertAlmostEqual(float(np.linalg.norm(quaternion)), 1.0)
+        np.testing.assert_allclose(
+            remote_node.quaternion_matrix(quaternion)[:3, :3],
+            estimate.axes_base,
+            atol=1e-7,
+        )
+
+    def test_snapshot_geometry_tf_uses_exact_stamp_and_optical_convention(self):
+        class TfBuffer:
+            def __init__(self):
+                self.calls = []
+
+            def lookup_transform(self, target, source, stamp, timeout):
+                self.calls.append((target, source, stamp, timeout))
+                return types.SimpleNamespace(
+                    transform=types.SimpleNamespace(
+                        translation=types.SimpleNamespace(x=0.1, y=0.2, z=0.3),
+                        rotation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+                    )
+                )
+
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        stamp = remote_node.rospy.Time(10, 123)
+        node = make_processing_node()
+        buffer = TfBuffer()
+        node.tf_buffer = buffer
+        node.pose_estimator.tf_buffer = buffer
+        node.pose_estimator.tf_timeout_sec = 0.2
+
+        transform = node._snapshot_base_optical_transform(snapshot, stamp)
+
+        self.assertEqual(len(buffer.calls), 1)
+        self.assertEqual(buffer.calls[0][0], 'base_link')
+        self.assertEqual(buffer.calls[0][1], 'camera_link')
+        self.assertEqual(buffer.calls[0][2].to_nsec(), 10_000_000_123)
+        np.testing.assert_allclose(transform[:3, :3], remote_node.OPTICAL_TO_ROS_CAMERA)
+        np.testing.assert_allclose(transform[:3, 3], [0.1, 0.2, 0.3])
+
+    def test_process_frame_rejects_insufficient_depth_without_tf_or_predict(self):
+        snapshot = make_snapshot(
+            np.asarray(
+                [
+                    [0, 0, 0, 0],
+                    [0, 2200, 0, 0],
+                    [0, 0, 0, 0],
+                ],
+                dtype=np.uint16,
+            )
+        )
+        client = RecordingClient()
+        node = make_processing_node(client)
+        node.geometry_min_object_points = 3
+        node._snapshot_base_optical_transform = lambda *_args: (_ for _ in ()).throw(
+            AssertionError('TF must not be resolved for insufficient target depth')
+        )
+
+        ok, message = node._process_frame(snapshot, manual=True)
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('DEPTH_INSUFFICIENT: '))
+        self.assertEqual(client.calls, [])
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_process_frame_rejects_snapshot_whose_locked_target_is_lost(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        snapshot.object_msg.detected = False
+        client = RecordingClient()
+        node = make_processing_node(client)
+
+        ok, message = node._process_frame(snapshot, manual=True)
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('TARGET_LOST: '))
+        self.assertEqual(client.calls, [])
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_process_frame_geometry_failure_invalidates_plan_and_axes(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        for code in ('SUPPORT_PLANE_INVALID', 'OBB_INVALID'):
+            with self.subTest(code=code):
+                client = RecordingClient()
+                node = make_processing_node(client)
+                original_estimator = remote_node.estimate_object_geometry
+                remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+                    ok=False,
+                    code=code,
+                    reason='synthetic geometry failure',
+                )
+                node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+                try:
+                    ok, message = node._process_frame(snapshot, manual=True)
+                finally:
+                    remote_node.estimate_object_geometry = original_estimator
+
+                self.assertFalse(ok)
+                self.assertEqual(
+                    message,
+                    '%s: synthetic geometry failure' % code,
+                )
+                self.assertEqual(client.calls, [])
+                self.assertFalse(node.geometry_pub.messages[-1].valid)
+                self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
+                self.assertIsNone(node.previous_object_axes_base)
+                self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_process_frame_publishes_geometry_and_sends_only_target_depth(self):
+        target_depth = np.asarray(
+            [
+                [0, 0, 0, 0],
+                [0, 2200, 2200, 0],
+                [0, 2200, 2200, 0],
+            ],
+            dtype=np.uint16,
+        )
+        snapshot = make_snapshot(target_depth)
+        client = RecordingClient(candidates=[])
+        node = make_processing_node(client)
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('NO_RAW_CANDIDATE: '))
+        self.assertEqual(len(client.calls), 1)
+        np.testing.assert_array_equal(client.calls[0]['depth'], target_depth)
+        self.assertEqual(int(client.calls[0]['depth'][0, 0]), 0)
+        self.assertTrue(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].source_mode, 'instance_mask')
+        np.testing.assert_allclose(node.previous_object_axes_base, np.eye(3))
+
+    def test_detect_snapshot_uses_bbox_foreground_with_same_geometry_contract(self):
+        snapshot = make_snapshot(
+            np.zeros((3, 4), dtype=np.uint16),
+            source_mode='bbox_depth',
+        )
+        foreground_roi = np.asarray(
+            [
+                [False, False, False, False],
+                [False, True, True, False],
+                [False, True, True, False],
+            ]
+        )
+        client = RecordingClient(candidates=[])
+        node = make_processing_node(client)
+        node.geometry_min_object_points = 2
+        node._foreground_mask_for_roi = (
+            lambda _depth, _roi, min_points: (foreground_roi, 4)
+        )
+        captured = {}
+        original_estimator = remote_node.estimate_object_geometry
+
+        def fake_estimator(**kwargs):
+            captured.update(kwargs)
+            return make_geometry_estimate(source_mode='bbox_depth')
+
+        remote_node.estimate_object_geometry = fake_estimator
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        expected_depth = np.where(foreground_roi, snapshot.depth_raw, 0)
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('NO_RAW_CANDIDATE: '))
+        np.testing.assert_array_equal(captured['target_depth_raw'], expected_depth)
+        self.assertEqual(captured['source_mode'], 'bbox_depth')
+        np.testing.assert_array_equal(client.calls[0]['depth'], expected_depth)
+        self.assertEqual(node.geometry_pub.messages[-1].source_mode, 'bbox_depth')
+
+    def test_target_loss_during_predict_cannot_resurrect_a_plan(self):
+        target_depth = np.asarray(
+            [
+                [0, 0, 0, 0],
+                [0, 2200, 2200, 0],
+                [0, 2200, 2200, 0],
+            ],
+            dtype=np.uint16,
+        )
+        snapshot = make_snapshot(target_depth)
+        node = make_processing_node()
+
+        class InvalidatingClient(RecordingClient):
+            def predict(self, color, depth, intrinsics, **kwargs):
+                self.calls.append({'depth': np.asarray(depth).copy()})
+                node._invalidate_geometry(
+                    'TARGET_LOST',
+                    'target disappeared during inference',
+                    stamp=remote_node.rospy.Time(10, 123),
+                    snapshot=snapshot,
+                )
+                return []
+
+        node.client = InvalidatingClient()
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('TARGET_LOST: '))
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_remote_prediction_error_codes_follow_exception_cause(self):
+        connection = RuntimeError('wrapped connection')
+        connection.__cause__ = urllib.error.URLError('refused')
+        http = RuntimeError('wrapped HTTP')
+        http.__cause__ = urllib.error.HTTPError(
+            'http://wsl/predict',
+            500,
+            'failure',
+            {},
+            None,
+        )
+
+        self.assertEqual(
+            remote_node.remote_prediction_failure_code(connection),
+            'WSL_UNAVAILABLE',
+        )
+        self.assertEqual(
+            remote_node.remote_prediction_failure_code(TimeoutError('timed out')),
+            'WSL_UNAVAILABLE',
+        )
+        self.assertEqual(
+            remote_node.remote_prediction_failure_code(http),
+            'WSL_PREDICT_FAILED',
+        )
+        self.assertEqual(
+            remote_node.remote_prediction_failure_code(ValueError('bad protocol')),
+            'WSL_PREDICT_FAILED',
+        )
+
+    def test_process_frame_publishes_structured_remote_error_codes(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        connection = RuntimeError('connection failed')
+        connection.__cause__ = urllib.error.URLError('refused')
+        cases = (
+            (connection, 'WSL_UNAVAILABLE'),
+            (ValueError('invalid decoded candidate'), 'WSL_PREDICT_FAILED'),
+        )
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        try:
+            for error, expected_code in cases:
+                with self.subTest(expected_code=expected_code):
+                    node = make_processing_node(RecordingClient(error=error))
+                    node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+
+                    ok, message = node._process_frame(snapshot, manual=True)
+
+                    self.assertFalse(ok)
+                    self.assertTrue(message.startswith(expected_code + ': '))
+                    self.assertEqual(node.plan_pub.messages[-1].poses, [])
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+    def test_target_loss_publishes_invalid_geometry_and_clears_plan(self):
+        node = make_processing_node()
+        node._object_lock = DummyLock()
+        node.latest_object = types.SimpleNamespace(detected=True)
+        node.latest_object_time = remote_node.rospy.Time.from_sec(9.0)
+        lost = types.SimpleNamespace(
+            detected=False,
+            label='carton',
+            header=types.SimpleNamespace(stamp=remote_node.rospy.Time.from_sec(10.0)),
+        )
+
+        original_now = remote_node.rospy.Time.now
+        remote_node.rospy.Time.now = staticmethod(
+            lambda: remote_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            node.object_cb(lost)
+        finally:
+            remote_node.rospy.Time.now = original_now
+
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertTrue(
+            node.geometry_pub.messages[-1].failure_reason.startswith('TARGET_LOST: ')
+        )
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_model_choice_change_invalidates_previous_geometry(self):
+        node = make_processing_node()
+        node._last_model_choice = 'original'
+        original_get_param = remote_node.rospy.get_param
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/perception': {
+                'detector': 'yolo',
+                'yolo_model_choice': 'carton_segment',
+                'yolo_target_class': 'carton',
+            },
+        }.get(name, default)
+        try:
+            requires_mask = node._active_profile_requires_mask()
+        finally:
+            remote_node.rospy.get_param = original_get_param
+
+        self.assertTrue(requires_mask)
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertTrue(
+            node.geometry_pub.messages[-1].failure_reason.startswith('MODEL_RELOADED: ')
+        )
+        self.assertIsNone(node.previous_object_axes_base)
 
     def test_selects_first_reachable_candidate_after_camera_to_base_transform(self):
         candidates = [

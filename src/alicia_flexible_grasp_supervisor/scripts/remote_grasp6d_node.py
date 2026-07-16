@@ -3,8 +3,10 @@ import json
 import math
 import os
 import re
+import socket
 import threading
 import time
+import urllib.error
 from copy import deepcopy
 
 import numpy as np
@@ -27,6 +29,10 @@ from alicia_flexible_grasp.robot.planning_feedback import (
 )
 from alicia_flexible_grasp.vision.grasp6d_adapter import CameraIntrinsics
 from alicia_flexible_grasp.vision.model_selection import select_yolo_model
+from alicia_flexible_grasp.vision.object_geometry import (
+    GeometryEstimate,
+    estimate_object_geometry,
+)
 from alicia_flexible_grasp.vision.pose_estimator import PoseEstimator
 from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient, RemoteGraspCandidate
 from alicia_flexible_grasp.vision.rgbd_snapshot import (
@@ -34,7 +40,7 @@ from alicia_flexible_grasp.vision.rgbd_snapshot import (
     SynchronizedRgbdBuffer,
     fuse_stable_samples,
 )
-from alicia_flexible_grasp_supervisor.msg import ObjectPose
+from alicia_flexible_grasp_supervisor.msg import ObjectGeometry, ObjectPose
 from alicia_flexible_grasp_supervisor.srv import SetTargetPose, TriggerZero, TriggerZeroResponse
 
 
@@ -157,6 +163,28 @@ def resolve_grasp_backend_health(health):
     payload = health if isinstance(health, dict) else {}
     nested = payload.get('grasp_backend')
     return nested if isinstance(nested, dict) else payload
+
+
+def remote_prediction_failure_code(exception):
+    """Classify WSL prediction failures by their causal transport exception."""
+    current = exception
+    visited = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, urllib.error.HTTPError):
+            return 'WSL_PREDICT_FAILED'
+        if isinstance(
+            current,
+            (
+                urllib.error.URLError,
+                ConnectionError,
+                TimeoutError,
+                socket.timeout,
+            ),
+        ):
+            return 'WSL_UNAVAILABLE'
+        current = getattr(current, '__cause__', None) or getattr(current, '__context__', None)
+    return 'WSL_PREDICT_FAILED'
 
 
 def normalize_candidate_frame_convention(convention):
@@ -495,6 +523,69 @@ def make_grasp_plan_pose_array(grasp_pose, stamp, grasp_config):
     return msg
 
 
+def geometry_estimate_to_message(estimate, snapshot=None, stamp=None, label=''):
+    """Map one immutable geometry estimate into the base-frame ROS contract."""
+    message = ObjectGeometry()
+    message.header.frame_id = 'base_link'
+    message.header.stamp = stamp if stamp is not None else rospy.Time(0)
+    message.valid = bool(getattr(estimate, 'ok', False))
+    message.label = str(label or '')
+    message.source_mode = str(
+        getattr(estimate, 'source_mode', '')
+        or getattr(snapshot, 'source_mode', '')
+        or ''
+    )
+    center = np.asarray(getattr(estimate, 'center_base', np.zeros(3)), dtype=float).reshape(3)
+    axes = np.asarray(getattr(estimate, 'axes_base', np.eye(3)), dtype=float).reshape(3, 3)
+    size = np.asarray(getattr(estimate, 'size_xyz_m', np.zeros(3)), dtype=float).reshape(3)
+    normal = np.asarray(
+        getattr(estimate, 'support_normal_base', np.zeros(3)),
+        dtype=float,
+    ).reshape(3)
+    if message.valid:
+        rotation = np.eye(4, dtype=float)
+        rotation[:3, :3] = axes
+        quaternion = _normalize_quaternion(
+            np.asarray(quaternion_from_matrix(rotation), dtype=float)
+        )
+    else:
+        quaternion = np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)
+    message.pose_base.position.x = float(center[0])
+    message.pose_base.position.y = float(center[1])
+    message.pose_base.position.z = float(center[2])
+    message.pose_base.orientation.x = float(quaternion[0])
+    message.pose_base.orientation.y = float(quaternion[1])
+    message.pose_base.orientation.z = float(quaternion[2])
+    message.pose_base.orientation.w = float(quaternion[3])
+    message.size_xyz_m.x = float(size[0])
+    message.size_xyz_m.y = float(size[1])
+    message.size_xyz_m.z = float(size[2])
+    message.support_normal_base.x = float(normal[0])
+    message.support_normal_base.y = float(normal[1])
+    message.support_normal_base.z = float(normal[2])
+    message.support_offset_m = float(getattr(estimate, 'support_offset_m', 0.0))
+    quality = getattr(snapshot, 'quality', None)
+    message.valid_depth_points = int(getattr(quality, 'valid_depth_points', 0))
+    message.valid_depth_ratio = float(getattr(quality, 'valid_depth_ratio', 0.0))
+    message.depth_mad_m = float(getattr(quality, 'depth_mad_m', 0.0))
+    message.fused_frames = int(getattr(quality, 'fused_frames', 0))
+    message.support_inlier_ratio = float(
+        getattr(estimate, 'support_inlier_ratio', 0.0)
+    )
+    object_points = np.asarray(
+        getattr(estimate, 'object_points_base', np.zeros((0, 3))),
+        dtype=float,
+    )
+    message.object_point_count = int(len(object_points.reshape(-1, 3)))
+    if message.valid:
+        message.failure_reason = ''
+    else:
+        code = str(getattr(estimate, 'failure_code', '') or 'OBB_INVALID')
+        reason = str(getattr(estimate, 'failure_reason', '') or 'geometry is invalid')
+        message.failure_reason = '%s: %s' % (code, reason)
+    return message
+
+
 class RemoteGrasp6DNode:
     def __init__(self):
         self.enabled = bool(rospy.get_param('/grasp_6d/enabled', True))
@@ -512,12 +603,23 @@ class RemoteGrasp6DNode:
         self.plan_pub = rospy.Publisher(rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'), PoseArray, queue_size=1)
         self.status_pub = rospy.Publisher('/grasp_6d/status', String, queue_size=1, latch=True)
         self.gate_audit_pub = rospy.Publisher('/grasp_6d/gate_audit', String, queue_size=1, latch=True)
+        self.geometry_pub = rospy.Publisher(
+            '/grasp_6d/object_geometry',
+            ObjectGeometry,
+            queue_size=1,
+            latch=True,
+        )
+        self.previous_object_axes_base = None
+        self.latest_object_geometry = None
+        self._geometry_invalidation_generation = 0
+        self._last_geometry_invalidation_code = ''
 
         cam_cfg = rospy.get_param('/camera', {})
         pcfg = rospy.get_param('/perception', {})
         hcfg = rospy.get_param('/handeye', {})
         gcfg = rospy.get_param('/grasp', {})
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
+        self._last_model_choice = str(pcfg.get('yolo_model_choice', 'original'))
         self.planning_snapshot_frames = max(
             1,
             int(
@@ -604,6 +706,56 @@ class RemoteGrasp6DNode:
                     remote_cfg.get('depth_mad_absolute_floor_m', 0.002),
                 )
             ),
+        )
+        self.geometry_support_bbox_expand_ratio = max(
+            0.0,
+            float(remote_cfg.get('support_bbox_expand_ratio', 0.30)),
+        )
+        self.geometry_support_distance_threshold_m = max(
+            0.0001,
+            float(
+                remote_cfg.get(
+                    'support_distance_threshold_m',
+                    remote_cfg.get('target_cloud_support_plane_inlier_distance_m', 0.004),
+                )
+            ),
+        )
+        self.geometry_voxel_size_m = max(
+            0.0001,
+            float(remote_cfg.get('target_cloud_voxel_size_m', 0.0025)),
+        )
+        self.geometry_outlier_neighbors = max(
+            1,
+            int(remote_cfg.get('target_cloud_outlier_neighbors', 16)),
+        )
+        self.geometry_outlier_std_ratio = max(
+            0.0,
+            float(remote_cfg.get('target_cloud_outlier_std_ratio', 2.0)),
+        )
+        self.geometry_min_support_points = max(
+            3,
+            int(remote_cfg.get('geometry_min_support_points', 200)),
+        )
+        self.geometry_min_object_points = max(
+            3,
+            int(
+                remote_cfg.get(
+                    'geometry_min_object_points',
+                    remote_cfg.get('target_cloud_min_points', 120),
+                )
+            ),
+        )
+        self.geometry_min_size_m = max(
+            0.0001,
+            float(remote_cfg.get('geometry_min_size_m', 0.005)),
+        )
+        self.geometry_max_size_m = max(
+            self.geometry_min_size_m,
+            float(remote_cfg.get('geometry_max_size_m', 0.600)),
+        )
+        self.geometry_max_height_m = max(
+            self.geometry_min_size_m,
+            float(remote_cfg.get('geometry_max_height_m', 0.500)),
         )
         self.gate_audit_enabled = bool(remote_cfg.get('gate_audit_enabled', True))
         self.gate_audit_output_path = os.path.expanduser(
@@ -1146,6 +1298,308 @@ class RemoteGrasp6DNode:
                 positions = np.asarray(ordered, dtype=float)
         self.frames.update_joints(positions[:6])
 
+    @staticmethod
+    def _invalid_geometry_estimate(code, reason, source_mode=''):
+        return GeometryEstimate(
+            ok=False,
+            failure_code=str(code),
+            failure_reason=str(reason),
+            center_base=np.zeros(3, dtype=float),
+            axes_base=np.eye(3, dtype=float),
+            size_xyz_m=np.zeros(3, dtype=float),
+            support_normal_base=np.zeros(3, dtype=float),
+            support_offset_m=0.0,
+            support_inlier_ratio=0.0,
+            object_points_base=np.zeros((0, 3), dtype=float),
+            source_mode=str(source_mode or ''),
+        )
+
+    @staticmethod
+    def _safe_time(value=None):
+        if value is not None:
+            return value
+        try:
+            return rospy.Time.now()
+        except Exception:
+            return rospy.Time(0)
+
+    @staticmethod
+    def _snapshot_ros_stamp(snapshot):
+        stamp_ns = int(getattr(snapshot, 'stamp_ns', 0) or 0)
+        if stamp_ns > 0:
+            seconds, nanoseconds = divmod(stamp_ns, 1_000_000_000)
+            return rospy.Time(seconds, nanoseconds)
+        return rospy.Time.from_sec(float(getattr(snapshot, 'stamp_sec', 0.0) or 0.0))
+
+    def _publish_empty_legacy_plan(self, stamp=None):
+        invalid_plan = PoseArray()
+        invalid_plan.header.stamp = self._safe_time(stamp)
+        invalid_plan.header.frame_id = 'base_link'
+        publisher = getattr(self, 'plan_pub', None)
+        if publisher is not None:
+            publisher.publish(invalid_plan)
+        self.latest_plan = None
+
+    def _clear_geometry_cache(self):
+        self.latest_target_cloud_base_xyz = None
+        self.latest_target_cloud_camera_center = None
+        self.latest_target_cloud_camera_points = None
+        self.latest_target_cloud_time = None
+        self.latest_target_cloud_count = 0
+        self.latest_target_cloud_source = 'none'
+        self.latest_support_plane_camera_point = None
+        self.latest_support_plane_camera_normal = None
+        self.latest_target_cloud_segmentation = 'depth-window'
+
+    def _invalidate_geometry(
+        self,
+        failure_code,
+        failure_reason,
+        stamp=None,
+        snapshot=None,
+        label='',
+    ):
+        self._geometry_invalidation_generation = (
+            int(getattr(self, '_geometry_invalidation_generation', 0)) + 1
+        )
+        self._last_geometry_invalidation_code = str(failure_code)
+        source_mode = str(getattr(snapshot, 'source_mode', '') or '')
+        estimate = self._invalid_geometry_estimate(
+            failure_code,
+            failure_reason,
+            source_mode,
+        )
+        if not label:
+            obj = getattr(snapshot, 'object_msg', None)
+            label = str(getattr(obj, 'label', '') or '')
+        message = geometry_estimate_to_message(
+            estimate,
+            snapshot=snapshot,
+            stamp=self._safe_time(stamp),
+            label=label,
+        )
+        publisher = getattr(self, 'geometry_pub', None)
+        if publisher is not None:
+            publisher.publish(message)
+        self.latest_object_geometry = message
+        self.previous_object_axes_base = None
+        self._clear_geometry_cache()
+        self._publish_empty_legacy_plan(stamp)
+        return message
+
+    def _snapshot_geometry_inputs(self, snapshot):
+        if snapshot.source_mode == 'instance_mask':
+            return snapshot.target_depth_raw, snapshot.object_mask
+        if snapshot.source_mode != 'bbox_depth':
+            raise ValueError('unsupported snapshot source_mode: %s' % snapshot.source_mode)
+        bbox = tuple(snapshot.bbox or ())
+        if len(bbox) != 4:
+            raise ValueError('bbox_depth snapshot bbox is invalid')
+        roi = expanded_bbox_roi(
+            np.asarray(snapshot.depth_raw).shape,
+            int(bbox[0]),
+            int(bbox[1]),
+            int(bbox[2]),
+            int(bbox[3]),
+            0,
+        )
+        foreground_roi, _count = self._foreground_mask_for_roi(
+            snapshot.depth_raw,
+            roi,
+            min_points=getattr(self, 'geometry_min_object_points', 120),
+        )
+        target_depth = np.zeros_like(snapshot.depth_raw)
+        foreground = np.zeros_like(snapshot.object_mask, dtype=np.uint8)
+        x0, y0, x1, y1 = roi
+        depth_roi = np.asarray(snapshot.depth_raw)[y0:y1, x0:x1]
+        target_depth[y0:y1, x0:x1][foreground_roi] = depth_roi[foreground_roi]
+        foreground[y0:y1, x0:x1][foreground_roi] = 255
+        return target_depth, foreground
+
+    def _snapshot_base_optical_transform(self, snapshot, stamp):
+        source_frame = str(getattr(snapshot, 'frame_id', '') or '')
+        if not source_frame:
+            raise RuntimeError('snapshot camera frame is empty')
+        pose_estimator = getattr(self, 'pose_estimator', None)
+        base_frame = str(getattr(pose_estimator, 'base_frame', 'base_link') or 'base_link')
+        tf_buffer = getattr(self, 'tf_buffer', None)
+        if tf_buffer is None:
+            tf_buffer = getattr(pose_estimator, 'tf_buffer', None)
+        if tf_buffer is not None:
+            transform = tf_buffer.lookup_transform(
+                base_frame,
+                source_frame,
+                stamp,
+                rospy.Duration(float(getattr(pose_estimator, 'tf_timeout_sec', 0.2))),
+            )
+            translation = transform.transform.translation
+            rotation = transform.transform.rotation
+            base_from_source = transform_matrix(
+                [translation.x, translation.y, translation.z],
+                [rotation.x, rotation.y, rotation.z, rotation.w],
+            )
+        else:
+            if pose_estimator is None or not bool(
+                getattr(pose_estimator, 'allow_static_fallback', False)
+            ):
+                raise RuntimeError(
+                    'snapshot-time TF %s <- %s is unavailable'
+                    % (base_frame, source_frame)
+                )
+            base_from_source = transform_matrix(
+                getattr(pose_estimator, 'translation_xyz', [0.0, 0.0, 0.0]),
+                getattr(pose_estimator, 'rotation_xyzw', [0.0, 0.0, 0.0, 1.0]),
+            )
+        if 'optical' in source_frame.lower():
+            return base_from_source
+        source_from_optical = np.eye(4, dtype=float)
+        source_from_optical[:3, :3] = OPTICAL_TO_ROS_CAMERA
+        return base_from_source.dot(source_from_optical)
+
+    def _prepare_snapshot_geometry(self, snapshot, stamp):
+        try:
+            target_depth, object_mask = self._snapshot_geometry_inputs(snapshot)
+        except Exception as exc:
+            return (
+                self._invalid_geometry_estimate(
+                    'DEPTH_INSUFFICIENT',
+                    str(exc),
+                    getattr(snapshot, 'source_mode', ''),
+                ),
+                np.zeros_like(snapshot.depth_raw),
+                None,
+            )
+        valid_points = valid_depth_count(target_depth)
+        minimum = max(1, int(getattr(self, 'geometry_min_object_points', 120)))
+        if valid_points < minimum:
+            return (
+                self._invalid_geometry_estimate(
+                    'DEPTH_INSUFFICIENT',
+                    'target depth has too few valid points %d < %d'
+                    % (valid_points, minimum),
+                    getattr(snapshot, 'source_mode', ''),
+                ),
+                target_depth,
+                None,
+            )
+        try:
+            transform = self._snapshot_base_optical_transform(snapshot, stamp)
+        except Exception as exc:
+            return (
+                self._invalid_geometry_estimate(
+                    'TF_UNAVAILABLE',
+                    str(exc),
+                    getattr(snapshot, 'source_mode', ''),
+                ),
+                target_depth,
+                None,
+            )
+        intrinsics = self._camera_intrinsics()
+        estimate = estimate_object_geometry(
+            depth_raw=snapshot.depth_raw,
+            target_depth_raw=target_depth,
+            object_mask=object_mask,
+            bbox=snapshot.bbox,
+            intrinsics=intrinsics,
+            depth_scale=float(intrinsics.depth_scale),
+            T_base_camera=transform,
+            source_mode=snapshot.source_mode,
+            support_bbox_expand_ratio=float(
+                getattr(self, 'geometry_support_bbox_expand_ratio', 0.30)
+            ),
+            support_distance_threshold_m=float(
+                getattr(self, 'geometry_support_distance_threshold_m', 0.004)
+            ),
+            voxel_size_m=float(getattr(self, 'geometry_voxel_size_m', 0.0025)),
+            min_support_points=int(
+                getattr(self, 'geometry_min_support_points', 200)
+            ),
+            min_object_points=minimum,
+            min_size_m=float(getattr(self, 'geometry_min_size_m', 0.005)),
+            max_size_m=float(getattr(self, 'geometry_max_size_m', 0.600)),
+            max_height_m=float(getattr(self, 'geometry_max_height_m', 0.500)),
+            previous_axes_base=getattr(self, 'previous_object_axes_base', None),
+            outlier_neighbors=int(getattr(self, 'geometry_outlier_neighbors', 16)),
+            outlier_std_ratio=float(
+                getattr(self, 'geometry_outlier_std_ratio', 2.0)
+            ),
+        )
+        return estimate, target_depth, transform
+
+    def _activate_geometry(self, estimate, snapshot, stamp, transform):
+        label = str(getattr(getattr(snapshot, 'object_msg', None), 'label', '') or '')
+        message = geometry_estimate_to_message(
+            estimate,
+            snapshot=snapshot,
+            stamp=stamp,
+            label=label,
+        )
+        publisher = getattr(self, 'geometry_pub', None)
+        if publisher is not None:
+            publisher.publish(message)
+        self.latest_object_geometry = message
+        self.previous_object_axes_base = np.asarray(estimate.axes_base, dtype=float).copy()
+        self.latest_target_cloud_base_xyz = np.asarray(
+            estimate.center_base,
+            dtype=float,
+        ).copy()
+        self.latest_target_cloud_time = stamp
+        self.latest_target_cloud_count = len(estimate.object_points_base)
+        self.latest_target_cloud_source = '%s_geometry' % estimate.source_mode
+        self.latest_target_cloud_segmentation = (
+            'support_plane=inliers:%.3f object:%d obb=(%.3f,%.3f,%.3f)m'
+            % (
+                float(estimate.support_inlier_ratio),
+                len(estimate.object_points_base),
+                float(estimate.size_xyz_m[0]),
+                float(estimate.size_xyz_m[1]),
+                float(estimate.size_xyz_m[2]),
+            )
+        )
+        optical_from_base = np.linalg.inv(np.asarray(transform, dtype=float))
+        base_points = np.asarray(estimate.object_points_base, dtype=float)
+        optical_points = (
+            base_points @ optical_from_base[:3, :3].T
+            + optical_from_base[:3, 3]
+        )
+        camera_points = self._project_points_for_camera_frame(optical_points)
+        self.latest_target_cloud_camera_points = np.asarray(
+            camera_points,
+            dtype=np.float32,
+        )
+        center_optical = (
+            np.asarray(estimate.center_base, dtype=float) @ optical_from_base[:3, :3].T
+            + optical_from_base[:3, 3]
+        )
+        self.latest_target_cloud_camera_center = self._project_points_for_camera_frame(
+            center_optical.reshape(1, 3)
+        )[0]
+        support_point_base = (
+            -float(estimate.support_offset_m)
+            * np.asarray(estimate.support_normal_base, dtype=float)
+        )
+        support_point_optical = (
+            support_point_base @ optical_from_base[:3, :3].T
+            + optical_from_base[:3, 3]
+        )
+        support_normal_optical = (
+            optical_from_base[:3, :3]
+            @ np.asarray(estimate.support_normal_base, dtype=float)
+        )
+        self.latest_support_plane_camera_point = self._project_points_for_camera_frame(
+            support_point_optical.reshape(1, 3)
+        )[0]
+        support_normal_camera = self._project_vectors_for_camera_frame(
+            support_normal_optical.reshape(1, 3)
+        )[0]
+        support_normal_camera /= max(
+            float(np.linalg.norm(support_normal_camera)),
+            1e-12,
+        )
+        self.latest_support_plane_camera_normal = support_normal_camera
+        self._target_cloud_request_active = True
+        return message
+
     def object_cb(self, msg):
         now = rospy.Time.now()
         source_stamp = getattr(getattr(msg, 'header', None), 'stamp', now)
@@ -1155,6 +1609,12 @@ class RemoteGrasp6DNode:
                 self.latest_object_time = now
             if hasattr(self, 'frames'):
                 self.frames.update_object(msg, source_stamp)
+            self._invalidate_geometry(
+                'TARGET_LOST',
+                'target object is not detected',
+                stamp=source_stamp,
+                label=str(getattr(msg, 'label', '') or ''),
+            )
             return
 
         gcfg = rospy.get_param('/grasp', {})
@@ -1217,11 +1677,23 @@ class RemoteGrasp6DNode:
             require_mask = self._active_profile_requires_mask()
         except Exception as exc:
             message = 'MODEL_TASK_MISMATCH: %s' % exc
+            self._invalidate_geometry('MODEL_TASK_MISMATCH', str(exc))
             self.status_pub.publish(String(message))
             return TriggerZeroResponse(False, message)
         snapshot, failure_code, failure_reason = self._wait_for_stable_snapshot(require_mask)
         if snapshot is None or not snapshot.ok:
             message = '%s: %s' % (failure_code, failure_reason)
+            stamp = (
+                self._snapshot_ros_stamp(snapshot)
+                if snapshot is not None
+                else None
+            )
+            self._invalidate_geometry(
+                failure_code,
+                failure_reason,
+                stamp=stamp,
+                snapshot=snapshot,
+            )
             self.status_pub.publish(String(message))
             return TriggerZeroResponse(False, message)
         ok, message = self._process_frame(snapshot, manual=True)
@@ -1233,22 +1705,43 @@ class RemoteGrasp6DNode:
         try:
             require_mask = self._active_profile_requires_mask()
         except Exception as exc:
+            self._invalidate_geometry('MODEL_TASK_MISMATCH', str(exc))
             self.status_pub.publish(String('MODEL_TASK_MISMATCH: %s' % exc))
             return
         snapshot, failure_code, failure_reason = self._wait_for_stable_snapshot(require_mask)
         if snapshot is None or not snapshot.ok:
+            stamp = (
+                self._snapshot_ros_stamp(snapshot)
+                if snapshot is not None
+                else None
+            )
+            self._invalidate_geometry(
+                failure_code,
+                failure_reason,
+                stamp=stamp,
+                snapshot=snapshot,
+            )
             self.status_pub.publish(String('%s: %s' % (failure_code, failure_reason)))
             return
         self._process_frame(snapshot, manual=False)
 
     def _active_profile_requires_mask(self):
         pcfg = rospy.get_param('/perception', {})
+        model_choice = str(pcfg.get('yolo_model_choice', 'original'))
+        previous_choice = getattr(self, '_last_model_choice', None)
+        if previous_choice is not None and model_choice != previous_choice:
+            self._invalidate_geometry(
+                'MODEL_RELOADED',
+                'model choice changed from %s to %s'
+                % (previous_choice, model_choice),
+            )
+        self._last_model_choice = model_choice
         detector_kind = str(pcfg.get('detector', 'simple_hsv')).strip().lower()
         if detector_kind not in ('yolo', 'yolov8'):
             return False
         profile = select_yolo_model(
             pcfg,
-            pcfg.get('yolo_model_choice', 'original'),
+            model_choice,
             pcfg.get('yolo_target_class', pcfg.get('object_label', 'target')),
         )
         return bool(profile.get('require_instance_mask', False))
@@ -1314,52 +1807,114 @@ class RemoteGrasp6DNode:
         if not isinstance(snapshot, SnapshotResult) or not snapshot.ok:
             self._request_lock.release()
             return False, 'remote 6D request requires a valid planning snapshot'
+        stamp = self._snapshot_ros_stamp(snapshot)
+        if not bool(getattr(snapshot.object_msg, 'detected', False)):
+            message = 'TARGET_LOST: locked planning snapshot target is not detected'
+            self._invalidate_geometry(
+                'TARGET_LOST',
+                'locked planning snapshot target is not detected',
+                stamp=stamp,
+                snapshot=snapshot,
+            )
+            self._publish_error(message)
+            self._request_lock.release()
+            return False, message
         color = snapshot.color_bgr
-        if int(getattr(snapshot, 'stamp_ns', 0)) > 0:
-            stamp_secs, stamp_nsecs = divmod(int(snapshot.stamp_ns), 1_000_000_000)
-            stamp = rospy.Time(stamp_secs, stamp_nsecs)
-        else:
-            stamp = rospy.Time.from_sec(float(snapshot.stamp_sec))
         frame_id = snapshot.frame_id
+        request_invalidation_generation = int(
+            getattr(self, '_geometry_invalidation_generation', 0)
+        )
         self._planning_snapshot_active = True
         self._planning_object_msg = snapshot.object_msg
         self._planning_object_time = stamp
         try:
             self._refresh_runtime_params()
             self._cached_tool_from_camera = None
-            invalid_plan = PoseArray()
-            invalid_plan.header.stamp = stamp if stamp is not None else rospy.Time.now()
-            invalid_plan.header.frame_id = 'base_link'
-            self.plan_pub.publish(invalid_plan)
+            self._publish_empty_legacy_plan(stamp)
             # Every filter below must use geometry from this exact RGB-D
             # request, even when remote inference takes several seconds.
             self._target_cloud_request_active = False
-            self.latest_target_cloud_base_xyz = None
-            self.latest_target_cloud_camera_center = None
-            self.latest_target_cloud_camera_points = None
-            self.latest_target_cloud_time = None
-            self.latest_target_cloud_count = 0
-            self.latest_target_cloud_source = 'none'
-            self.latest_support_plane_camera_point = None
-            self.latest_support_plane_camera_normal = None
-            self.latest_target_cloud_segmentation = 'depth-window'
-            depth_for_remote, roi_message = self._depth_for_remote(snapshot, stamp=stamp, frame_id=frame_id)
+            self._clear_geometry_cache()
+            estimate, depth_for_remote, transform = self._prepare_snapshot_geometry(
+                snapshot,
+                stamp,
+            )
+            if not estimate.ok:
+                message = '%s: %s' % (
+                    estimate.failure_code,
+                    estimate.failure_reason,
+                )
+                self._invalidate_geometry(
+                    estimate.failure_code,
+                    estimate.failure_reason,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
+                self._publish_error(message)
+                return False, message
+            self._activate_geometry(estimate, snapshot, stamp, transform)
+            bbox = tuple(snapshot.bbox or (0, 0, 0, 0))
+            roi_message = (
+                '%s x=%d y=%d w=%d h=%d target_depth=%d'
+                % (
+                    snapshot.source_mode,
+                    int(bbox[0]) if len(bbox) > 0 else 0,
+                    int(bbox[1]) if len(bbox) > 1 else 0,
+                    int(bbox[2]) if len(bbox) > 2 else 0,
+                    int(bbox[3]) if len(bbox) > 3 else 0,
+                    valid_depth_count(depth_for_remote),
+                )
+            )
             status = 'remote 6D requesting candidates...'
             if roi_message:
                 status += ' ' + roi_message
                 rospy.loginfo('remote 6D request geometry: %s', roi_message)
             self.status_pub.publish(String(status))
-            candidates = self.client.predict(
-                color,
-                depth_for_remote,
-                self._camera_intrinsics(),
-                frame_id=frame_id or self.pose_estimator.camera_frame,
-                stamp_sec=float(snapshot.stamp_sec),
-                max_candidates=self.max_candidates,
-                max_gripper_width_m=self.max_gripper_width_m,
-                candidate_width_tolerance_m=self.candidate_width_tolerance_m,
-            )
+            try:
+                candidates = self.client.predict(
+                    color,
+                    depth_for_remote,
+                    self._camera_intrinsics(),
+                    frame_id=frame_id or self.pose_estimator.camera_frame,
+                    stamp_sec=float(snapshot.stamp_sec),
+                    max_candidates=self.max_candidates,
+                    max_gripper_width_m=self.max_gripper_width_m,
+                    candidate_width_tolerance_m=self.candidate_width_tolerance_m,
+                )
+            except Exception as exc:
+                failure_code = remote_prediction_failure_code(exc)
+                message = '%s: %s' % (failure_code, exc)
+                self._publish_empty_legacy_plan(stamp)
+                self._publish_error(message)
+                if self.failure_backoff_sec > 0.0:
+                    self._backoff_until = (
+                        rospy.Time.now()
+                        + rospy.Duration(self.failure_backoff_sec)
+                    )
+                return False, message
+            if int(
+                getattr(self, '_geometry_invalidation_generation', 0)
+            ) != request_invalidation_generation:
+                failure_code = str(
+                    getattr(
+                        self,
+                        '_last_geometry_invalidation_code',
+                        'PLAN_STALE',
+                    )
+                    or 'PLAN_STALE'
+                )
+                message = (
+                    '%s: planning request was invalidated during remote inference'
+                    % failure_code
+                )
+                self._publish_error(message)
+                return False, message
             remote_diagnostics = dict(getattr(self.client, 'last_diagnostics', {}) or {})
+            if not candidates:
+                message = 'NO_RAW_CANDIDATE: remote GraspNet returned no candidates'
+                message += self._candidate_failure_diagnostics(remote_diagnostics)
+                self._publish_error(message)
+                return False, message
             self._position_only_rejected_count = 0
             self._orientation_fallback_rejected_count = 0
             self._target_gate_rejected_count = 0
@@ -1397,6 +1952,23 @@ class RemoteGrasp6DNode:
                 orientation_variant_quaternions=self.orientation_variant_quaternions,
                 model_grasp_to_tool_quaternion=self.model_grasp_to_tool_quaternion,
             )
+            if int(
+                getattr(self, '_geometry_invalidation_generation', 0)
+            ) != request_invalidation_generation:
+                failure_code = str(
+                    getattr(
+                        self,
+                        '_last_geometry_invalidation_code',
+                        'PLAN_STALE',
+                    )
+                    or 'PLAN_STALE'
+                )
+                message = (
+                    '%s: planning request was invalidated during candidate selection'
+                    % failure_code
+                )
+                self._publish_error(message)
+                return False, message
             if selected is None:
                 if (
                     not candidates
@@ -1454,6 +2026,20 @@ class RemoteGrasp6DNode:
                 return False, message
             final_target_delta = self._candidate_target_distance(None, None, grasp_pose)
             plan_msg = make_grasp_plan_pose_array(grasp_pose, stamp, rospy.get_param('/grasp', {}))
+            if int(
+                getattr(self, '_geometry_invalidation_generation', 0)
+            ) != request_invalidation_generation:
+                failure_code = str(
+                    getattr(
+                        self,
+                        '_last_geometry_invalidation_code',
+                        'PLAN_STALE',
+                    )
+                    or 'PLAN_STALE'
+                )
+                message = '%s: planning request was invalidated before publication' % failure_code
+                self._publish_error(message)
+                return False, message
             self.plan_pub.publish(plan_msg)
             selected_target_xyz, target_source = self._target_base_xyz()
             visibility_message = ''
@@ -1564,6 +2150,102 @@ class RemoteGrasp6DNode:
     def _refresh_runtime_params(self):
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
         self.grasp_config = dict(rospy.get_param('/grasp', getattr(self, 'grasp_config', {})) or {})
+        self.geometry_support_bbox_expand_ratio = max(
+            0.0,
+            float(
+                remote_cfg.get(
+                    'support_bbox_expand_ratio',
+                    getattr(self, 'geometry_support_bbox_expand_ratio', 0.30),
+                )
+            ),
+        )
+        self.geometry_support_distance_threshold_m = max(
+            0.0001,
+            float(
+                remote_cfg.get(
+                    'support_distance_threshold_m',
+                    remote_cfg.get(
+                        'target_cloud_support_plane_inlier_distance_m',
+                        getattr(self, 'geometry_support_distance_threshold_m', 0.004),
+                    ),
+                )
+            ),
+        )
+        self.geometry_voxel_size_m = max(
+            0.0001,
+            float(
+                remote_cfg.get(
+                    'target_cloud_voxel_size_m',
+                    getattr(self, 'geometry_voxel_size_m', 0.0025),
+                )
+            ),
+        )
+        self.geometry_outlier_neighbors = max(
+            1,
+            int(
+                remote_cfg.get(
+                    'target_cloud_outlier_neighbors',
+                    getattr(self, 'geometry_outlier_neighbors', 16),
+                )
+            ),
+        )
+        self.geometry_outlier_std_ratio = max(
+            0.0,
+            float(
+                remote_cfg.get(
+                    'target_cloud_outlier_std_ratio',
+                    getattr(self, 'geometry_outlier_std_ratio', 2.0),
+                )
+            ),
+        )
+        self.geometry_min_support_points = max(
+            3,
+            int(
+                remote_cfg.get(
+                    'geometry_min_support_points',
+                    getattr(self, 'geometry_min_support_points', 200),
+                )
+            ),
+        )
+        self.geometry_min_object_points = max(
+            3,
+            int(
+                remote_cfg.get(
+                    'geometry_min_object_points',
+                    remote_cfg.get(
+                        'target_cloud_min_points',
+                        getattr(self, 'geometry_min_object_points', 120),
+                    ),
+                )
+            ),
+        )
+        self.geometry_min_size_m = max(
+            0.0001,
+            float(
+                remote_cfg.get(
+                    'geometry_min_size_m',
+                    getattr(self, 'geometry_min_size_m', 0.005),
+                )
+            ),
+        )
+        self.geometry_max_size_m = max(
+            self.geometry_min_size_m,
+            float(
+                remote_cfg.get(
+                    'geometry_max_size_m',
+                    getattr(self, 'geometry_max_size_m', 0.600),
+                )
+            ),
+        )
+        self.geometry_max_height_m = max(
+            self.geometry_min_size_m,
+            float(
+                remote_cfg.get(
+                    'geometry_max_height_m',
+                    getattr(self, 'geometry_max_height_m', 0.500),
+                )
+            ),
+        )
         self.candidate_frame_convention = normalize_candidate_frame_convention(
             rospy.get_param(
                 '/grasp_6d/remote/candidate_frame_convention',
