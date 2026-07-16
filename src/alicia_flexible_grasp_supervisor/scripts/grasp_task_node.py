@@ -30,7 +30,8 @@ from alicia_flexible_grasp.robot.planning_feedback import (
 )
 from alicia_flexible_grasp.vision.mujoco_digital_twin_client import (
     MujocoDigitalTwinClient,
-    build_simulation_payload,
+    build_mujoco_payload,
+    validate_mujoco_gate_response,
 )
 try:
     import tf2_ros
@@ -1282,27 +1283,38 @@ class GraspTaskNode:
             self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked: rich plan has no valid object geometry')
             return False
 
-        send_joint_state = bool(twin_cfg.get('send_joint_state_in_request', False))
-        joint_state = getattr(self, 'latest_joint_state', None) if send_joint_state else None
-        if send_joint_state and joint_state is None:
-            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked: no /joint_states for request payload')
+        if not bool(twin_cfg.get('send_joint_state_in_request', False)):
+            self.set_state(
+                GraspStages.FAILED,
+                'WSL_UNAVAILABLE: strict MuJoCo gate requires current joint state in every request',
+            )
             return False
-        object_model = dict(twin_cfg.get('object_model', {}) or {})
-        open_width = self._cfg_float(twin_cfg, 'open_width_m', self._cfg_float(gripper_cfg, 'open_position_m', 0.05))
-        payload = build_simulation_payload(
-            joint_state=joint_state,
-            object_pose=object_pose if object_pose is not None else None,
-            grasp_plan=plan,
-            gripper_width_m=open_width,
-            object_model=object_model,
-        )
-        payload['close_width_m'] = self._cfg_float(
-            twin_cfg,
-            'close_width_m',
-            self._cfg_float(gripper_cfg, 'simple_close_position_m', self._cfg_float(gripper_cfg, 'close_limit_m', 0.0)),
-        )
-        payload['min_lift_success_m'] = self._cfg_float(twin_cfg, 'min_lift_success_m', 0.015)
+        joint_state = deepcopy(getattr(self, 'latest_joint_state', None))
+        if joint_state is None:
+            self.set_state(
+                GraspStages.FAILED,
+                'WSL_UNAVAILABLE: no /joint_states for strict MuJoCo request payload',
+            )
+            return False
+        joint_names = list(getattr(joint_state, 'name', ()) or ())
+        joint_positions = list(getattr(joint_state, 'position', ()) or ())
 
+        try:
+            payload = build_mujoco_payload(
+                plan,
+                joint_names,
+                joint_positions,
+                twin_cfg,
+            )
+        except Exception as exc:
+            self.set_state(
+                GraspStages.FAILED,
+                'WSL_UNAVAILABLE: invalid MuJoCo request payload: %s' % exc,
+            )
+            return False
+
+        response = None
+        request_error = None
         try:
             client = MujocoDigitalTwinClient(
                 twin_cfg.get('server_url', 'http://172.23.132.97:8000'),
@@ -1310,21 +1322,45 @@ class GraspTaskNode:
             )
             response = client.simulate_grasp(payload)
         except Exception as exc:
-            message = 'MuJoCo simulation request failed: %s' % exc
-            if bool(twin_cfg.get('allow_execution_on_error', False)):
-                rospy.logwarn('%s; execution allowed by config', message)
-                return True
-            self.set_state(GraspStages.FAILED, message)
+            request_error = exc
+
+        post_network = self._validate_bound_plan(plan, gcfg)
+        if not post_network.ok:
+            stage = (
+                GraspStages.IDLE
+                if post_network.code == 'EXECUTION_CANCELLED'
+                else GraspStages.FAILED
+            )
+            self.set_state(
+                stage,
+                '%s: %s after MuJoCo network return'
+                % (post_network.code, post_network.reason),
+            )
             return False
 
-        score = int(response.get('score', 0) or 0)
-        min_score = int(twin_cfg.get('min_score', 80) or 80)
-        simulation_ok = bool(response.get('simulation_ok', False)) and score >= min_score
-        if not simulation_ok:
-            reason = str(response.get('failure_reason') or 'score %d < %d' % (score, min_score))
-            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked execution: %s' % reason)
+        if request_error is not None:
+            self.set_state(
+                GraspStages.FAILED,
+                'WSL_UNAVAILABLE: MuJoCo simulation request failed: %s'
+                % request_error,
+            )
             return False
-        self.set_state(GraspStages.PLAN_PREGRASP, 'MuJoCo simulation passed score=%d' % score)
+
+        gate = validate_mujoco_gate_response(
+            response,
+            str(getattr(plan, 'plan_id', '') or ''),
+            twin_cfg.get('min_score', 80),
+        )
+        if not gate.ok:
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: %s' % (gate.code, gate.reason),
+            )
+            return False
+        self.set_state(
+            GraspStages.PLAN_PREGRASP,
+            'MuJoCo simulation passed score=%.3f' % gate.score,
+        )
         return True
 
     @staticmethod

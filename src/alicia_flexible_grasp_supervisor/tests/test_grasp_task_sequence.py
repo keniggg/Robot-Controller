@@ -122,6 +122,101 @@ class GraspTaskSequenceTest(unittest.TestCase):
         msg.position = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.05]
         return msg
 
+    @staticmethod
+    def _passing_mujoco_response(plan_id):
+        return {
+            'plan_id': plan_id,
+            'score': 95.0,
+            'simulation_ok': True,
+            'ik_success': True,
+            'collision_free': True,
+            'contact_success': True,
+            'lift_success': True,
+        }
+
+    def _run_mujoco_gate_to_first_physical_action(
+        self,
+        response=None,
+        request_error=None,
+        during_request=None,
+        allow_execution_on_error=False,
+    ):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        plan = self._rich_plan(stamp_sec=1.0)
+        node.latest_grasp6d_plan = plan
+        node.latest_obj = self._object(stamp_sec=1.0)
+        node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(1.0)
+        node.latest_joint_state = self._joint_state()
+        node.active = True
+        states = []
+        physical_actions = []
+        payloads = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._command_gripper_position = lambda *args, **kwargs: (
+            physical_actions.append('open-gripper') or False
+        )
+
+        class TwinClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def simulate_grasp(self, payload):
+                payloads.append(payload)
+                if during_request is not None:
+                    during_request(node, plan)
+                if request_error is not None:
+                    raise request_error
+                if callable(response):
+                    return response(plan)
+                return response
+
+        original_get_param = grasp_task_node.rospy.get_param
+        original_time_now = grasp_task_node.rospy.Time.now
+        original_client = grasp_task_node.MujocoDigitalTwinClient
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/mujoco_digital_twin': {
+                'enabled': True,
+                'execution_gate_enabled': True,
+                'server_url': 'http://172.23.132.97:8000',
+                'timeout_sec': 0.01,
+                'min_score': 80,
+                'allow_execution_on_error': bool(allow_execution_on_error),
+                'require_object_pose': True,
+                'send_joint_state_in_request': True,
+                'object_model': {
+                    'type': 'carton_box',
+                    'mass_kg': 0.08,
+                    'friction': [1.2, 0.08, 0.02],
+                },
+                'gripper_model': {
+                    'name': 'Alicia_D_v5_6_gripper_50mm',
+                    'max_inner_gap_m': 0.050,
+                },
+            },
+        }.get(name, default)
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: FakeTime(1.0)
+        )
+        grasp_task_node.MujocoDigitalTwinClient = TwinClient
+        try:
+            result = node._execute_grasp6d_plan(
+                {'plan_validity_sec': 5.0},
+                {'open_position_m': 0.050, 'use_compliant_close': False},
+                0.050,
+                None,
+                None,
+                None,
+                None,
+                plan,
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_time_now
+            grasp_task_node.MujocoDigitalTwinClient = original_client
+        return result, physical_actions, states, payloads, node, plan
+
     def test_legacy_pose_array_is_never_execution_authority(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_grasp6d_plan = None
@@ -1279,11 +1374,17 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 pass
 
             def simulate_grasp(self, payload):
-                calls.append(('simulate', len(payload.get('grasp_sequence_base') or [])))
+                calls.append(('simulate', len(payload.get('trajectory') or [])))
                 calls.append(('joint_payload', len(payload.get('joint_names') or [])))
                 return {
-                    'simulation_ok': False,
-                    'score': 42,
+                    'plan_id': node.latest_grasp6d_plan.plan_id,
+                    'simulation_ok': True,
+                    'ik_success': True,
+                    'collision_free': False,
+                    'contact_success': True,
+                    'lift_success': True,
+                    'score': 95,
+                    'failure_code': 'MUJOCO_COLLISION',
                     'failure_reason': 'gripper would collide with table',
                 }
 
@@ -1351,6 +1452,157 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual([call for call in calls if call[0] == 'move'], [])
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('gripper would collide with table', states[-1][1])
+
+    def test_strict_mujoco_gate_complete_pass_reaches_first_physical_action_once(self):
+        result, physical, states, payloads, _node, plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=lambda bound: self._passing_mujoco_response(
+                    bound.plan_id
+                )
+            )
+        )
+
+        self.assertFalse(result)  # the first-action stub stops the sequence
+        self.assertEqual(physical, ['open-gripper'])
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[0]['schema_version'], 2)
+        self.assertEqual(payloads[0]['plan_id'], plan.plan_id)
+        self.assertEqual(len(payloads[0]['trajectory']), 4)
+        self.assertIn('MuJoCo simulation passed', states[-2][1])
+
+    def test_strict_mujoco_gate_revalidates_bound_plan_after_network_return(self):
+        def replace_plan(node, _bound):
+            node.latest_grasp6d_plan = self._rich_plan(
+                plan_id='replacement',
+                stamp_sec=1.5,
+            )
+
+        _result, physical, states, _payloads, _node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=lambda bound: self._passing_mujoco_response(
+                    bound.plan_id
+                ),
+                during_request=replace_plan,
+            )
+        )
+
+        self.assertEqual(physical, [])
+        self.assertIn('PLAN_REPLACED', states[-1][1])
+
+    def test_strict_mujoco_gate_stop_during_network_returns_to_idle(self):
+        def stop_execution(node, _bound):
+            node.active = False
+
+        _result, physical, states, _payloads, _node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=lambda bound: self._passing_mujoco_response(
+                    bound.plan_id
+                ),
+                during_request=stop_execution,
+            )
+        )
+
+        self.assertEqual(physical, [])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.IDLE)
+        self.assertIn('EXECUTION_CANCELLED', states[-1][1])
+
+    def test_strict_mujoco_gate_authority_change_precedes_network_error(self):
+        def stop_execution(node, _bound):
+            node.active = False
+
+        def replace_plan(node, _bound):
+            node.latest_grasp6d_plan = self._rich_plan(
+                plan_id='replacement-on-error',
+                stamp_sec=1.5,
+            )
+
+        cases = (
+            (
+                'stop-timeout',
+                stop_execution,
+                TimeoutError('request timed out'),
+                grasp_task_node.GraspStages.IDLE,
+                'EXECUTION_CANCELLED',
+            ),
+            (
+                'replacement-malformed',
+                replace_plan,
+                ValueError('malformed JSON'),
+                grasp_task_node.GraspStages.FAILED,
+                'PLAN_REPLACED',
+            ),
+        )
+        for label, mutation, error, expected_stage, expected_code in cases:
+            with self.subTest(case=label):
+                _result, physical, states, _payloads, _node, _plan = (
+                    self._run_mujoco_gate_to_first_physical_action(
+                        request_error=error,
+                        during_request=mutation,
+                    )
+                )
+                self.assertEqual(physical, [])
+                self.assertEqual(states[-1][0], expected_stage)
+                self.assertIn(expected_code, states[-1][1])
+
+    def test_strict_mujoco_gate_errors_malformed_and_incomplete_responses_block_motion(self):
+        def response_without(key):
+            def make(bound):
+                value = self._passing_mujoco_response(bound.plan_id)
+                value.pop(key)
+                return value
+            return make
+
+        cases = [
+            ('timeout', None, TimeoutError('request timed out'), 'WSL_UNAVAILABLE'),
+            ('malformed-json', None, ValueError('malformed JSON'), 'WSL_UNAVAILABLE'),
+            ('non-object', lambda _bound: [], None, 'WSL_UNAVAILABLE'),
+            ('missing-plan-id', response_without('plan_id'), None, 'PLAN_ID_MISMATCH'),
+            (
+                'mismatched-plan-id',
+                lambda bound: dict(
+                    self._passing_mujoco_response(bound.plan_id),
+                    plan_id='different-plan-id',
+                ),
+                None,
+                'PLAN_ID_MISMATCH',
+            ),
+        ]
+        cases.extend(
+            ('missing-' + key, response_without(key), None, 'WSL_UNAVAILABLE')
+            for key in (
+                'simulation_ok',
+                'ik_success',
+                'collision_free',
+                'contact_success',
+                'lift_success',
+            )
+        )
+
+        for label, response, error, expected_code in cases:
+            with self.subTest(case=label):
+                _result, physical, states, _payloads, _node, _plan = (
+                    self._run_mujoco_gate_to_first_physical_action(
+                        response=response,
+                        request_error=error,
+                    )
+                )
+                self.assertEqual(physical, [])
+                self.assertIn(expected_code, states[-1][1])
+
+    def test_strict_mujoco_gate_ignores_allow_on_error_for_timeout_and_malformed(self):
+        for label, error in (
+            ('timeout', TimeoutError('request timed out')),
+            ('malformed', ValueError('malformed JSON')),
+        ):
+            with self.subTest(case=label):
+                _result, physical, states, _payloads, _node, _plan = (
+                    self._run_mujoco_gate_to_first_physical_action(
+                        request_error=error,
+                        allow_execution_on_error=True,
+                    )
+                )
+                self.assertEqual(physical, [])
+                self.assertIn('WSL_UNAVAILABLE', states[-1][1])
 
     def test_6d_plan_blocks_mujoco_simulation_when_joint_state_payload_required_but_missing(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)

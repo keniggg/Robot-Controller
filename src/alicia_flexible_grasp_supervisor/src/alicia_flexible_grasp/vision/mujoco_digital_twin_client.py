@@ -1,7 +1,388 @@
+from dataclasses import dataclass
 import json
+import math
+from numbers import Real
 import urllib.error
 import urllib.parse
 import urllib.request
+
+
+_GRIPPER_MODEL_NAME = 'Alicia_D_v5_6_gripper_50mm'
+_MAX_INNER_GAP_M = 0.050
+_FINGER_SIZE_XYZ_M = (0.0434, 0.0286, 0.0600)
+_PALM_SIZE_XYZ_M = (0.1175, 0.1550, 0.0774)
+_DEFAULT_CARTON_MASS_KG = 0.08
+_DEFAULT_CARTON_FRICTION = (1.2, 0.08, 0.02)
+_SAFETY_KEYS = (
+    'simulation_ok',
+    'ik_success',
+    'collision_free',
+    'contact_success',
+    'lift_success',
+)
+_COMPONENT_FAILURES = (
+    ('ik_success', 'MUJOCO_IK_FAILED', 'MuJoCo inverse kinematics failed'),
+    ('collision_free', 'MUJOCO_COLLISION', 'MuJoCo trajectory collision check failed'),
+    ('contact_success', 'MUJOCO_CONTACT_FAILED', 'MuJoCo two-sided contact check failed'),
+    ('lift_success', 'MUJOCO_LIFT_FAILED', 'MuJoCo lift check failed'),
+)
+
+
+@dataclass(frozen=True)
+class MujocoGateValidationResult:
+    ok: bool
+    code: str = ''
+    reason: str = ''
+    score: float = 0.0
+
+    @property
+    def failure_code(self):
+        return self.code
+
+    @property
+    def failure_reason(self):
+        return self.reason
+
+
+def _finite_float(value, field_name):
+    if isinstance(value, bool):
+        raise TypeError('%s must be a finite number' % field_name)
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise TypeError('%s must be a finite number' % field_name) from exc
+    if not math.isfinite(result):
+        raise ValueError('%s must be finite' % field_name)
+    return result
+
+
+def _finite_vector3(value, field_name, positive=False):
+    try:
+        values = [value.x, value.y, value.z]
+    except AttributeError:
+        try:
+            values = list(value)
+        except (TypeError, ValueError) as exc:
+            raise TypeError('%s must contain three values' % field_name) from exc
+    if len(values) != 3:
+        raise ValueError('%s must contain exactly three values' % field_name)
+    result = [
+        _finite_float(item, '%s[%d]' % (field_name, index))
+        for index, item in enumerate(values)
+    ]
+    if positive and any(item <= 0.0 for item in result):
+        raise ValueError('%s values must be positive' % field_name)
+    return result
+
+
+def _pose_to_dict(value, field_name):
+    pose = getattr(value, 'pose', value)
+    try:
+        position = pose.position
+        orientation = pose.orientation
+    except AttributeError as exc:
+        raise TypeError('%s must be a pose' % field_name) from exc
+    position_m = _finite_vector3(position, field_name + '.position')
+    quaternion = [
+        _finite_float(getattr(orientation, axis), field_name + '.orientation.' + axis)
+        for axis in ('x', 'y', 'z', 'w')
+    ]
+    if math.sqrt(sum(item * item for item in quaternion)) <= 1e-12:
+        raise ValueError('%s quaternion must be non-zero' % field_name)
+    return {
+        'position_m': position_m,
+        'quaternion_xyzw': quaternion,
+    }
+
+
+def _config_mapping(value, field_name):
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TypeError('%s must be a mapping' % field_name)
+    return value
+
+
+def _configured_vector(config, keys, default, field_name):
+    configured = None
+    for key in keys:
+        if key in config:
+            configured = config[key]
+            break
+    result = list(default) if configured is None else _finite_vector3(
+        configured,
+        field_name,
+        positive=True,
+    )
+    if any(abs(actual - expected) > 1e-9 for actual, expected in zip(result, default)):
+        raise ValueError('%s does not match the fixed 50 mm gripper contract' % field_name)
+    return list(default)
+
+
+def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None):
+    """Build the finite, JSON-only schema-v2 request for one immutable plan."""
+    if plan is None:
+        raise TypeError('plan is required')
+    if getattr(plan, 'valid', None) is not True:
+        raise ValueError('plan.valid must be true')
+    plan_id = getattr(plan, 'plan_id', None)
+    if not isinstance(plan_id, str) or not plan_id:
+        raise ValueError('plan_id must be a non-empty string')
+    model_choice = getattr(plan, 'model_choice', None)
+    if not isinstance(model_choice, str) or not model_choice:
+        raise ValueError('model_choice must be a non-empty string')
+    _finite_float(getattr(plan, 'score', None), 'plan.score')
+
+    header = getattr(plan, 'header', None)
+    stamp = getattr(header, 'stamp', None)
+    try:
+        snapshot_stamp_sec = _finite_float(
+            stamp.to_sec(),
+            'snapshot_stamp_sec',
+        )
+    except AttributeError as exc:
+        raise TypeError('plan.header.stamp must provide to_sec()') from exc
+    if snapshot_stamp_sec <= 0.0:
+        raise ValueError('snapshot_stamp_sec must be positive')
+
+    names = list(joint_names) if joint_names is not None else []
+    positions = list(joint_positions) if joint_positions is not None else []
+    if not names or len(names) != len(positions):
+        raise ValueError('joint_names and joint_positions must be non-empty and have equal length')
+    for index, name in enumerate(names):
+        if not isinstance(name, str) or not name:
+            raise ValueError('joint_names[%d] must be a non-empty string' % index)
+    positions = [
+        _finite_float(value, 'joint_positions[%d]' % index)
+        for index, value in enumerate(positions)
+    ]
+
+    poses = list(getattr(plan, 'poses', ()) or ())
+    if len(poses) != 4:
+        raise ValueError('plan.poses must contain exactly four poses')
+    trajectory = [
+        _pose_to_dict(pose, 'trajectory[%d]' % index)
+        for index, pose in enumerate(poses)
+    ]
+
+    candidate_width = _finite_float(
+        getattr(plan, 'candidate_width_m', None),
+        'candidate_width_m',
+    )
+    required_width = _finite_float(
+        getattr(plan, 'required_open_width_m', None),
+        'required_open_width_m',
+    )
+    if candidate_width < 0.0:
+        raise ValueError('candidate_width_m must be non-negative')
+    if required_width <= 0.0 or required_width > _MAX_INNER_GAP_M:
+        raise ValueError('required_open_width_m must be in (0, 0.050]')
+
+    root_config = _config_mapping(gripper_config, 'gripper_config')
+    model_config = _config_mapping(
+        root_config.get('gripper_model', root_config),
+        'gripper_model',
+    )
+    configured_name = model_config.get(
+        'name',
+        model_config.get('model_name', _GRIPPER_MODEL_NAME),
+    )
+    if configured_name != _GRIPPER_MODEL_NAME:
+        raise ValueError('gripper model does not match the fixed 50 mm contract')
+    configured_gap = _finite_float(
+        model_config.get('max_inner_gap_m', _MAX_INNER_GAP_M),
+        'gripper.max_inner_gap_m',
+    )
+    if abs(configured_gap - _MAX_INNER_GAP_M) > 1e-9:
+        raise ValueError('gripper max_inner_gap_m does not match 0.050 m')
+    if 'open_width_m' in root_config:
+        open_width = _finite_float(root_config['open_width_m'], 'open_width_m')
+        if abs(open_width - _MAX_INNER_GAP_M) > 1e-9:
+            raise ValueError('open_width_m does not match the fixed 0.050 m contract')
+    finger_size = _configured_vector(
+        model_config,
+        ('finger_size_xyz_m', 'finger_box_xyz_m'),
+        _FINGER_SIZE_XYZ_M,
+        'gripper.finger_size_xyz_m',
+    )
+    palm_size = _configured_vector(
+        model_config,
+        ('palm_size_xyz_m', 'palm_box_xyz_m'),
+        _PALM_SIZE_XYZ_M,
+        'gripper.palm_size_xyz_m',
+    )
+
+    geometry = getattr(plan, 'object_geometry', None)
+    if geometry is None or getattr(geometry, 'valid', None) is not True:
+        raise ValueError('plan.object_geometry.valid must be true')
+    object_pose = _pose_to_dict(
+        getattr(geometry, 'pose_base', None),
+        'object_model.pose_base',
+    )
+    object_size = _finite_vector3(
+        getattr(geometry, 'size_xyz_m', None),
+        'object_model.size_xyz_m',
+        positive=True,
+    )
+    support_normal = _finite_vector3(
+        getattr(geometry, 'support_normal_base', None),
+        'support_plane.normal_base',
+    )
+    if math.sqrt(sum(item * item for item in support_normal)) <= 1e-12:
+        raise ValueError('support_plane.normal_base must be non-zero')
+    support_offset = _finite_float(
+        getattr(geometry, 'support_offset_m', None),
+        'support_plane.offset_m',
+    )
+
+    object_config = _config_mapping(
+        root_config.get('object_model', {}),
+        'object_model',
+    )
+    object_type = object_config.get('type', 'carton_box')
+    if object_type != 'carton_box':
+        raise ValueError('object_model.type must be carton_box')
+    mass = _finite_float(
+        object_config.get('mass_kg', _DEFAULT_CARTON_MASS_KG),
+        'object_model.mass_kg',
+    )
+    if mass <= 0.0:
+        raise ValueError('object_model.mass_kg must be positive')
+    friction = _finite_vector3(
+        object_config.get('friction', _DEFAULT_CARTON_FRICTION),
+        'object_model.friction',
+    )
+    if any(value < 0.0 for value in friction):
+        raise ValueError('object_model.friction values must be non-negative')
+
+    payload = {
+        'schema_version': 2,
+        'plan_id': plan_id,
+        'snapshot_stamp_sec': snapshot_stamp_sec,
+        'model_choice': model_choice,
+        'joint_names': names,
+        'joint_positions': positions,
+        'trajectory': trajectory,
+        'candidate_width_m': candidate_width,
+        'required_open_width_m': required_width,
+        'gripper': {
+            'model_name': _GRIPPER_MODEL_NAME,
+            'max_inner_gap_m': _MAX_INNER_GAP_M,
+            'finger_size_xyz_m': finger_size,
+            'palm_size_xyz_m': palm_size,
+        },
+        'object_model': {
+            'type': 'carton_box',
+            'pose_base': object_pose,
+            'size_xyz_m': object_size,
+            'mass_kg': mass,
+            'friction': friction,
+        },
+        'support_plane': {
+            'normal_base': support_normal,
+            'offset_m': support_offset,
+        },
+    }
+    json.dumps(payload, allow_nan=False)
+    return payload
+
+
+def _failure_details(response, default_code, default_reason):
+    code = response.get('failure_code')
+    reason = response.get('failure_reason')
+    if not isinstance(code, str) or not code:
+        code = default_code
+    if not isinstance(reason, str) or not reason:
+        reason = default_reason
+    return code, reason
+
+
+def validate_mujoco_gate_response(response, expected_plan_id, min_score):
+    """Accept only an exactly correlated, fully explicit MuJoCo safety pass."""
+    if not isinstance(response, dict):
+        return MujocoGateValidationResult(
+            False,
+            'WSL_UNAVAILABLE',
+            'MuJoCo response must be a JSON object',
+        )
+    echoed_id = response.get('plan_id')
+    if (
+        not isinstance(expected_plan_id, str)
+        or not expected_plan_id
+        or not isinstance(echoed_id, str)
+        or echoed_id != expected_plan_id
+    ):
+        return MujocoGateValidationResult(
+            False,
+            'PLAN_ID_MISMATCH',
+            'MuJoCo response plan_id does not exactly match the bound plan',
+        )
+
+    raw_score = response.get('score')
+    if isinstance(raw_score, bool) or not isinstance(raw_score, Real):
+        return MujocoGateValidationResult(
+            False,
+            'WSL_UNAVAILABLE',
+            'MuJoCo response score must be a finite number',
+        )
+    score = float(raw_score)
+    try:
+        threshold = _finite_float(min_score, 'min_score')
+    except (TypeError, ValueError):
+        return MujocoGateValidationResult(
+            False,
+            'WSL_UNAVAILABLE',
+            'configured MuJoCo min_score is invalid',
+        )
+    if not math.isfinite(score):
+        return MujocoGateValidationResult(
+            False,
+            'WSL_UNAVAILABLE',
+            'MuJoCo response score must be finite',
+        )
+
+    for key in _SAFETY_KEYS:
+        if key not in response or type(response[key]) is not bool:
+            return MujocoGateValidationResult(
+                False,
+                'WSL_UNAVAILABLE',
+                'MuJoCo response %s must be an explicit Python bool' % key,
+                score,
+            )
+    if (
+        response['simulation_ok'] is not True
+        and isinstance(response.get('failure_code'), str)
+        and response.get('failure_code')
+    ):
+        code, reason = _failure_details(
+            response,
+            'WSL_UNAVAILABLE',
+            'MuJoCo simulation preflight failed',
+        )
+        return MujocoGateValidationResult(False, code, reason, score)
+    for key, code, default_reason in _COMPONENT_FAILURES:
+        if response[key] is not True:
+            _ignored_code, reason = _failure_details(
+                response,
+                code,
+                default_reason,
+            )
+            return MujocoGateValidationResult(False, code, reason, score)
+    if score < threshold:
+        code, reason = _failure_details(
+            response,
+            'WSL_UNAVAILABLE',
+            'MuJoCo score %.3f is below required %.3f' % (score, threshold),
+        )
+        return MujocoGateValidationResult(False, code, reason, score)
+    if response['simulation_ok'] is not True:
+        code, reason = _failure_details(
+            response,
+            'WSL_UNAVAILABLE',
+            'MuJoCo simulation_ok is false',
+        )
+        return MujocoGateValidationResult(False, code, reason, score)
+    return MujocoGateValidationResult(True, score=score)
 
 
 def validate_mujoco_digital_twin_url(server_url):
@@ -40,7 +421,7 @@ class MujocoDigitalTwinClient:
         method = 'GET'
         headers = {'Accept': 'application/json'}
         if payload is not None:
-            data = json.dumps(payload).encode('utf-8')
+            data = json.dumps(payload, allow_nan=False).encode('utf-8')
             method = 'POST'
             headers['Content-Type'] = 'application/json'
         request = urllib.request.Request(url, data=data, headers=headers, method=method)

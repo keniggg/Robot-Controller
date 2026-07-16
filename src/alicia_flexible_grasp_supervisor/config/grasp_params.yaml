@@ -249,13 +249,13 @@ mujoco_digital_twin:
   server_url: "http://172.23.132.97:8000"
   timeout_sec: 20.0
   min_score: 80
+  # Safety invariant: network/protocol failures never bypass the execution gate.
   allow_execution_on_error: false
   require_object_pose: true
   # Route A: WSL 自己推理、自己仿真；ROS 端在 /simulate_grasp
   # 请求里携带当前 /joint_states，WSL 不需要加入 ROS 网络。
   send_joint_state_in_request: true
   open_width_m: 0.05
-  close_width_m: 0.0
   object_model:
     type: "carton_box"
     label: "carton"
