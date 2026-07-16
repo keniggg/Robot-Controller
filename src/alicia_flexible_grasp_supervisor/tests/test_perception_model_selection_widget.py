@@ -188,6 +188,8 @@ def make_mask_widget(mask, object_stamp=123, image_shape=(60, 80, 3)):
     widget.bridge = FakeBridge(mask)
     widget._latest_mask = None
     widget._latest_mask_stamp = None
+    widget._current_object_stamp = int(object_stamp)
+    widget._current_object_detected = True
     widget.mask_status_chip = FakeText('mask waiting')
     widget.camera_preview = FakeCameraPreview(image_shape)
     widget.label_edit = FakeText('carton')
@@ -253,6 +255,35 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         )
 
         self.assertIs(widget.last_object, locked_object)
+        self.assertEqual(widget.camera_preview.overlay['bbox'], (5, 5, 70, 50))
+        self.assertEqual(widget.camera_preview.overlay['label'], 'carton')
+        self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask stale')
+
+    def test_late_old_mask_cannot_restore_contour_after_locked_no_detection(self):
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        mask[20:51, 30:61] = 255
+        widget = make_mask_widget(mask, object_stamp=123)
+        PerceptionWidget.update_mask(widget, make_mask_message(mask, stamp=123))
+        widget._grasp_active = True
+        widget._has_recent_locked_grasp_target = lambda: True
+        widget._planning_active = False
+        widget._status_hold_until = 0.0
+        widget.detected_chip = FakeText()
+        widget.status = FakeText()
+
+        PerceptionWidget.update_object(
+            widget,
+            SimpleNamespace(
+                detected=False,
+                header=SimpleNamespace(stamp=FakeStamp(124)),
+                label='carton',
+            ),
+        )
+        PerceptionWidget.update_mask(widget, make_mask_message(mask, stamp=123))
+
+        self.assertEqual(widget._current_object_stamp, 124)
+        self.assertFalse(widget._current_object_detected)
         self.assertEqual(widget.camera_preview.overlay['bbox'], (5, 5, 70, 50))
         self.assertEqual(widget.camera_preview.overlay['label'], 'carton')
         self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
@@ -497,6 +528,8 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         widget._last_target_signature = {'label': 'carton'}
         widget._latest_mask = np.full((60, 80), 255, dtype=np.uint8)
         widget._latest_mask_stamp = 123
+        widget._current_object_stamp = 123
+        widget._current_object_detected = True
         widget._mask_status = 'mask ready'
         widget.mask_status_chip = FakeText('mask ready')
         widget.camera_preview = FakeCameraPreview()
@@ -517,6 +550,8 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         self.assertEqual(widget._object_stable_count, 0)
         self.assertIsNone(widget._latest_mask)
         self.assertIsNone(widget._latest_mask_stamp)
+        self.assertIsNone(widget._current_object_stamp)
+        self.assertFalse(widget._current_object_detected)
         self.assertEqual(widget.mask_status_chip.text(), 'mask waiting')
         self.assertIsNone(widget.camera_preview.overlay['bbox'])
 
@@ -524,12 +559,16 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         widget.pregrasp_pose = object()
         widget._latest_mask = np.full((60, 80), 255, dtype=np.uint8)
         widget._latest_mask_stamp = 124
+        widget._current_object_stamp = 124
+        widget._current_object_detected = True
         widget._update_detector_status('error:carton:torch: invalid archive: eof')
 
         self.assertIsNone(widget.last_object)
         self.assertIsNone(widget.pregrasp_pose)
         self.assertIsNone(widget._latest_mask)
         self.assertIsNone(widget._latest_mask_stamp)
+        self.assertIsNone(widget._current_object_stamp)
+        self.assertFalse(widget._current_object_detected)
         self.assertEqual(widget.status.text(), '模型加载失败：torch: invalid archive: eof')
 
     def test_malformed_and_unknown_detector_status_are_visible(self):

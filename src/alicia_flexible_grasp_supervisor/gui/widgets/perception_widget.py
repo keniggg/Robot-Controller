@@ -125,6 +125,8 @@ class PerceptionWidget(QtWidgets.QWidget):
         self.bridge = CvBridge()
         self.topic = topic
         self.last_object = None
+        self._current_object_stamp = None
+        self._current_object_detected = False
         self._latest_mask = None
         self._latest_mask_stamp = None
         self._mask_status = 'mask waiting'
@@ -475,7 +477,8 @@ class PerceptionWidget(QtWidgets.QWidget):
     def _matching_mask_contour(self, msg):
         mask = self.__dict__.get('_latest_mask', None)
         mask_stamp = self.__dict__.get('_latest_mask_stamp', None)
-        object_stamp = self._stamp_key(getattr(msg, 'header', None))
+        current_stamp = self.__dict__.get('_current_object_stamp', None)
+        current_detected = bool(self.__dict__.get('_current_object_detected', False))
         if mask is None:
             if self.__dict__.get('_mask_status', '') not in ('mask empty', 'mask size mismatch', 'mask error'):
                 self._set_mask_status('mask stale')
@@ -487,7 +490,7 @@ class PerceptionWidget(QtWidgets.QWidget):
             self._latest_mask_stamp = None
             self._set_mask_status('mask size mismatch')
             return None
-        if mask_stamp is None or mask_stamp != object_stamp:
+        if not current_detected or mask_stamp is None or mask_stamp != current_stamp:
             self._set_mask_status('mask stale')
             return None
         contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -504,6 +507,8 @@ class PerceptionWidget(QtWidgets.QWidget):
             chip.setText(self._mask_status)
 
     def _clear_mask_state(self):
+        self._current_object_stamp = None
+        self._current_object_detected = False
         self._latest_mask = None
         self._latest_mask_stamp = None
         self._set_mask_status('mask waiting')
@@ -658,6 +663,8 @@ class PerceptionWidget(QtWidgets.QWidget):
     def update_object(self, msg):
         if not self.__dict__.get('_alive', False):
             return
+        self._current_object_stamp = self._stamp_key(getattr(msg, 'header', None))
+        self._current_object_detected = bool(getattr(msg, 'detected', False))
         self._last_object_receive_time = time.monotonic()
         if (
             not getattr(msg, 'detected', False)
