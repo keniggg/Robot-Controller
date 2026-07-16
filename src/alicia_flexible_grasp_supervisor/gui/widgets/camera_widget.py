@@ -201,15 +201,19 @@ class CameraWidget(QtWidgets.QWidget):
         except Exception:
             return True
 
-    def set_detection_overlay(self, bbox=None, label='', color=(80, 255, 120)):
+    def set_detection_overlay(self, bbox=None, label='', color=(80, 255, 120), contour_xy=None):
         try:
             if bbox is None:
                 self._detection_overlay = None
             else:
+                contour = None
+                if contour_xy is not None:
+                    contour = np.asarray(contour_xy, dtype=np.int32).reshape(-1, 2).copy()
                 self._detection_overlay = {
                     'bbox': tuple(int(v) for v in bbox[:4]),
                     'label': str(label or ''),
                     'color': tuple(int(v) for v in color[:3]),
+                    'contour_xy': contour,
                 }
             if self.__dict__.get('_last_color_rgb', None) is not None:
                 self._refresh_color_pixmap()
@@ -289,6 +293,11 @@ class CameraWidget(QtWidgets.QWidget):
         y1 = max(0, min(height - 1, y + h))
         color = tuple(int(v) for v in overlay.get('color', (80, 255, 120)))
         cv2.rectangle(drawn, (x0, y0), (x1, y1), color, 2)
+        contour = overlay.get('contour_xy')
+        if contour is not None:
+            points = np.asarray(contour, dtype=np.int32).reshape(-1, 1, 2)
+            if len(points) >= 3:
+                cv2.polylines(drawn, [points], True, color, 2, cv2.LINE_AA)
         label = overlay.get('label', '')
         if label:
             text_y = max(14, y0 - 6)

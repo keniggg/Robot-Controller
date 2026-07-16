@@ -2,9 +2,11 @@
 from copy import deepcopy
 import pathlib
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+import numpy as np
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 for path in (ROOT, ROOT / 'src'):
@@ -30,6 +32,14 @@ MODEL_CONFIG = {
             'model_path': 'carton_model/best.pt',
             'target_class_mode': 'fixed',
             'target_class': 'carton',
+        },
+        'carton_segment': {
+            'display_name': 'Carton 分割模型',
+            'model_path': 'carton_segment_model/best.pt',
+            'task': 'segment',
+            'target_class_mode': 'fixed',
+            'target_class': 'carton',
+            'require_instance_mask': True,
         },
     },
 }
@@ -95,6 +105,38 @@ class FakeButton:
         self.enabled = bool(enabled)
 
 
+class FakeStamp:
+    def __init__(self, nanoseconds):
+        self.nanoseconds = int(nanoseconds)
+
+    def to_nsec(self):
+        return self.nanoseconds
+
+
+class FakeBridge:
+    def __init__(self, mask):
+        self.mask = mask
+
+    def imgmsg_to_cv2(self, _msg, desired_encoding):
+        if desired_encoding != 'mono8':
+            raise AssertionError('mask must be converted as mono8')
+        return self.mask
+
+
+class FakeCameraPreview:
+    def __init__(self, image_shape=(60, 80, 3)):
+        self._last_color_rgb = np.zeros(image_shape, dtype=np.uint8)
+        self.overlay = None
+
+    def set_detection_overlay(self, bbox=None, label='', color=(80, 255, 120), contour_xy=None):
+        self.overlay = {
+            'bbox': bbox,
+            'label': label,
+            'color': color,
+            'contour_xy': contour_xy,
+        }
+
+
 class FakeRospy:
     def __init__(self, perception_cfg):
         self.params = {'/perception': deepcopy(perception_cfg)}
@@ -120,7 +162,113 @@ def make_widget(choice, description='鼠标'):
     return widget
 
 
+def make_mask_widget(mask, object_stamp=123, image_shape=(60, 80, 3)):
+    widget = PerceptionWidget.__new__(PerceptionWidget)
+    widget._alive = True
+    widget.bridge = FakeBridge(mask)
+    widget._latest_mask = None
+    widget._latest_mask_stamp = None
+    widget.mask_status_chip = FakeText('mask waiting')
+    widget.camera_preview = FakeCameraPreview(image_shape)
+    widget.label_edit = FakeText('carton')
+    widget.description_edit = FakeText('carton')
+    widget.last_object = SimpleNamespace(
+        detected=True,
+        header=SimpleNamespace(stamp=FakeStamp(object_stamp)),
+        label='carton',
+        bbox_x=5,
+        bbox_y=5,
+        bbox_width=70,
+        bbox_height=50,
+    )
+    return widget
+
+
+def make_mask_message(mask, stamp=123):
+    return SimpleNamespace(
+        header=SimpleNamespace(stamp=FakeStamp(stamp)),
+        height=int(mask.shape[0]),
+        width=int(mask.shape[1]),
+    )
+
+
 class PerceptionModelSelectionWidgetTest(unittest.TestCase):
+    def test_matching_mask_uses_largest_external_contour_without_mutating_mask(self):
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        mask[5:10, 5:10] = 255
+        mask[20:51, 30:61] = 255
+        original = mask.copy()
+        widget = make_mask_widget(mask)
+
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+
+        contour = widget.camera_preview.overlay['contour_xy']
+        self.assertIsNotNone(contour)
+        self.assertEqual(contour.dtype, np.int32)
+        self.assertEqual((int(contour[:, 0].min()), int(contour[:, 0].max())), (30, 60))
+        self.assertEqual((int(contour[:, 1].min()), int(contour[:, 1].max())), (20, 50))
+        self.assertEqual(widget.mask_status_chip.text(), 'mask ready')
+        self.assertTrue(np.array_equal(mask, original))
+
+    def test_mismatched_mask_stamp_keeps_bbox_only_and_reports_stale(self):
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        mask[20:51, 30:61] = 255
+        widget = make_mask_widget(mask, object_stamp=124)
+
+        PerceptionWidget.update_mask(widget, make_mask_message(mask, stamp=123))
+
+        self.assertEqual(widget.camera_preview.overlay['bbox'], (5, 5, 70, 50))
+        self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask stale')
+
+    def test_mask_received_before_current_object_reports_stale(self):
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        mask[20:51, 30:61] = 255
+        widget = make_mask_widget(mask)
+        widget.last_object = None
+
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+
+        self.assertIsNone(widget.camera_preview.overlay['bbox'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask stale')
+
+    def test_empty_mask_is_rejected_with_visible_status(self):
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        widget = make_mask_widget(mask)
+
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+
+        self.assertIsNone(widget._latest_mask)
+        self.assertIsNone(widget._latest_mask_stamp)
+        self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask empty')
+
+    def test_wrong_size_mask_is_rejected_with_visible_status(self):
+        mask = np.full((30, 40), 255, dtype=np.uint8)
+        widget = make_mask_widget(mask, image_shape=(60, 80, 3))
+
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+
+        self.assertIsNone(widget._latest_mask)
+        self.assertIsNone(widget._latest_mask_stamp)
+        self.assertEqual(widget.camera_preview.overlay['bbox'], (5, 5, 70, 50))
+        self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask size mismatch')
+
+    def test_cached_mask_is_rejected_if_camera_size_becomes_incompatible(self):
+        mask = np.full((60, 80), 255, dtype=np.uint8)
+        widget = make_mask_widget(mask)
+        widget.camera_preview._last_color_rgb = None
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+        widget.camera_preview._last_color_rgb = np.zeros((30, 40, 3), dtype=np.uint8)
+
+        PerceptionWidget._refresh_detection_overlay(widget)
+
+        self.assertIsNone(widget._latest_mask)
+        self.assertIsNone(widget._latest_mask_stamp)
+        self.assertIsNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask size mismatch')
+
     def test_model_combo_initializes_from_current_ros_choice(self):
         widget = make_widget(None)
         profiles = MODEL_CONFIG['yolo_models']
@@ -129,10 +277,15 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
 
         self.assertEqual(widget.model_combo.currentData(), 'carton')
         self.assertEqual(widget.model_combo.items[1], ('Carton 模型', 'carton'))
+        self.assertEqual(widget.model_combo.items[2], ('Carton 分割模型', 'carton_segment'))
 
     def test_confirm_carton_writes_fixed_class_and_disables_editor(self):
         fake_rospy = FakeRospy(MODEL_CONFIG)
         widget = make_widget('carton', '鼠标')
+        widget._latest_mask = np.full((60, 80), 255, dtype=np.uint8)
+        widget._latest_mask_stamp = 123
+        widget.mask_status_chip = FakeText('mask ready')
+        widget.camera_preview = FakeCameraPreview()
         with mock.patch.object(widget_module, 'rospy', fake_rospy), mock.patch.object(
             widget_module,
             'resolve_yolo_model_path',
@@ -147,6 +300,10 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         self.assertEqual(perception['yolo_reload_generation'], 1)
         self.assertEqual(widget.yolo_class_edit.text(), 'carton')
         self.assertFalse(widget.yolo_class_edit.enabled)
+        self.assertIsNone(widget._latest_mask)
+        self.assertIsNone(widget._latest_mask_stamp)
+        self.assertEqual(widget.mask_status_chip.text(), 'mask waiting')
+        self.assertIsNone(widget.camera_preview.overlay['bbox'])
 
     def test_confirming_same_choice_increments_reload_generation_each_time(self):
         config = deepcopy(MODEL_CONFIG)
@@ -218,6 +375,16 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         widget._object_stable_count = 3
         widget._last_object_base_xyz = (0.1, 0.2, 0.3)
         widget._last_target_signature = {'label': 'carton'}
+        widget._latest_mask = np.full((60, 80), 255, dtype=np.uint8)
+        widget._latest_mask_stamp = 123
+        widget._mask_status = 'mask ready'
+        widget.mask_status_chip = FakeText('mask ready')
+        widget.camera_preview = FakeCameraPreview()
+        widget.camera_preview.set_detection_overlay(
+            (5, 5, 70, 50),
+            'carton',
+            contour_xy=np.array([[20, 15], [50, 15], [50, 40]], dtype=np.int32),
+        )
 
         widget._update_detector_status('loading:carton')
 
@@ -228,13 +395,21 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         self.assertIsNone(widget._pending_plan_pose)
         self.assertFalse(widget._planning_active)
         self.assertEqual(widget._object_stable_count, 0)
+        self.assertIsNone(widget._latest_mask)
+        self.assertIsNone(widget._latest_mask_stamp)
+        self.assertEqual(widget.mask_status_chip.text(), 'mask waiting')
+        self.assertIsNone(widget.camera_preview.overlay['bbox'])
 
         widget.last_object = object()
         widget.pregrasp_pose = object()
+        widget._latest_mask = np.full((60, 80), 255, dtype=np.uint8)
+        widget._latest_mask_stamp = 124
         widget._update_detector_status('error:carton:torch: invalid archive: eof')
 
         self.assertIsNone(widget.last_object)
         self.assertIsNone(widget.pregrasp_pose)
+        self.assertIsNone(widget._latest_mask)
+        self.assertIsNone(widget._latest_mask_stamp)
         self.assertEqual(widget.status.text(), '模型加载失败：torch: invalid archive: eof')
 
     def test_malformed_and_unknown_detector_status_are_visible(self):
