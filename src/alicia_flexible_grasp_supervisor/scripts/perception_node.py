@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from collections.abc import Mapping
 from copy import deepcopy
 from types import SimpleNamespace
 import threading
@@ -172,6 +173,8 @@ class PerceptionNode:
         self.color = None
         self.color_frame_id = ''
         self.depth = None
+        self.last_source_stamp = None
+        self.last_source_frame_id = ''
         self.detector = None
         self.detector_kind = 'simple_hsv'
         self.detector_error = ''
@@ -282,6 +285,11 @@ class PerceptionNode:
     def try_detect(self, stamp, camera_frame=None):
         if self.color is None or self.depth is None:
             return
+        PerceptionNode._remember_source_header(
+            self,
+            stamp,
+            camera_frame or getattr(self, 'color_frame_id', ''),
+        )
         self._refresh_camera_params()
         self.refresh_detector()
         segment_mode = PerceptionNode._segment_mode(self)
@@ -299,60 +307,82 @@ class PerceptionNode:
                 PerceptionNode._publish_target_unavailable(self)
             return
         now = rospy.get_time()
-        det, mask = self.detector.detect(
-            self.color,
-            preferred_uv=self.stabilizer.preferred_uv(now),
-            max_preferred_distance_px=self.stabilizer.max_jump_px,
-        )
         obj = ObjectPose(); obj.header.stamp = stamp; obj.header.frame_id = 'base_link'; obj.label = self.label
-        if det is None or (segment_mode and mask is None):
-            obj.detected = False
-            if segment_mode:
-                self._publish_mask(None, stamp, camera_frame)
-            self.publish_object(obj); return
         if segment_mode:
-            mask_array = np.asarray(mask)
-            color_shape = np.asarray(self.color).shape[:2]
-            centroid = det.get('mask_centroid')
-            if mask_array.shape != color_shape or not np.any(mask_array > 0) or centroid is None:
+            try:
+                detector_result = self.detector.detect(
+                    self.color,
+                    preferred_uv=self.stabilizer.preferred_uv(now),
+                    max_preferred_distance_px=self.stabilizer.max_jump_px,
+                )
+            except Exception:
+                rospy.logwarn_throttle(1.0, 'Segment detector inference failed; publishing unavailable target')
+                self._publish_invalid_segment(obj, stamp, camera_frame)
+                return
+            if not isinstance(detector_result, tuple) or len(detector_result) != 2:
+                rospy.logwarn_throttle(1.0, 'Segment detector returned an invalid payload; publishing unavailable target')
+                self._publish_invalid_segment(obj, stamp, camera_frame)
+                return
+            det, mask = detector_result
+        else:
+            det, mask = self.detector.detect(
+                self.color,
+                preferred_uv=self.stabilizer.preferred_uv(now),
+                max_preferred_distance_px=self.stabilizer.max_jump_px,
+            )
+        if segment_mode:
+            payload = self._normalize_segment_payload(det, mask)
+            if payload is None:
+                self._publish_invalid_segment(obj, stamp, camera_frame)
+                return
+            mask = payload.mask
+            u, v = payload.centroid
+        else:
+            if det is None:
                 obj.detected = False
-                self._publish_mask(None, stamp, camera_frame)
                 self.publish_object(obj)
                 return
-            u, v = centroid
-        else:
             u, v = det['u'], det['v']
         if v >= self.depth.shape[0] or u >= self.depth.shape[1]:
-            obj.detected = False
             if segment_mode:
-                self._publish_mask(None, stamp, camera_frame)
-            self.publish_object(obj)
+                self._publish_invalid_segment(obj, stamp, camera_frame)
+            else:
+                obj.detected = False
+                self.publish_object(obj)
             return
         if segment_mode:
             z = self.depth_m_at_mask(mask)
         else:
             z = self.depth_m_at_detection(det, u, v)
         if z <= 0.01:
-            obj.detected = False
             if segment_mode:
-                self._publish_mask(None, stamp, camera_frame)
-            self.publish_object(obj)
+                self._publish_invalid_segment(obj, stamp, camera_frame)
+            else:
+                obj.detected = False
+                self.publish_object(obj)
             return
         p_cv = project_pixel_to_3d(u, v, z, self.fx, self.fy, self.cx, self.cy)
         p_cam = self._projected_point_for_camera_frame(p_cv)
         try:
             pose_cam, pose_base = self.pose_estimator.make_poses(p_cam, stamp, camera_frame or self.color_frame_id)
         except Exception as exc:
-            obj.detected = False
             if segment_mode:
-                self._publish_mask(None, stamp, camera_frame)
+                self._publish_invalid_segment(obj, stamp, camera_frame)
+            else:
+                obj.detected = False
+                self.publish_object(obj)
             rospy.logwarn_throttle(1.0, 'Perception pose transform failed: %s', exc)
-            self.publish_object(obj)
             return
         obj.detected = True
-        obj.label = str(det.get('label', self.label) or self.label)
-        obj.confidence = float(det.get('confidence', 1.0)); obj.u = u; obj.v = v; obj.depth_m = z
-        x, y, w, h = det.get('bbox', (0, 0, 0, 0))
+        if segment_mode:
+            obj.label = payload.label
+            obj.confidence = payload.confidence
+            x, y, w, h = payload.bbox
+        else:
+            obj.label = str(det.get('label', self.label) or self.label)
+            obj.confidence = float(det.get('confidence', 1.0))
+            x, y, w, h = det.get('bbox', (0, 0, 0, 0))
+        obj.u = u; obj.v = v; obj.depth_m = z
         obj.bbox_x = int(max(0, x)); obj.bbox_y = int(max(0, y))
         obj.bbox_width = int(max(0, w)); obj.bbox_height = int(max(0, h))
         obj.pose_camera = pose_cam; obj.pose_base = pose_base
@@ -384,6 +414,65 @@ class PerceptionNode:
             self._publish_mask(mask, stamp, camera_frame)
         self.pub_cam.publish(pose_cam); self.pub_base.publish(pose_base); self.publish_object(obj)
 
+    def _normalize_segment_payload(self, det, mask):
+        try:
+            if not isinstance(det, Mapping):
+                return None
+            shape = np.asarray(self.color).shape[:2]
+            mask_array = np.asarray(mask)
+            real_numeric = (
+                np.issubdtype(mask_array.dtype, np.integer)
+                or np.issubdtype(mask_array.dtype, np.floating)
+            )
+            if mask_array.ndim != 2 or mask_array.shape != shape or not real_numeric:
+                return None
+            mask_values = mask_array.astype(np.float64, copy=False)
+            if not np.all(np.isfinite(mask_values)):
+                return None
+            binary = mask_values > 0.0
+            if not np.any(binary):
+                return None
+            normalized_mask = np.zeros(shape, dtype=np.uint8)
+            normalized_mask[binary] = 255
+
+            centroid = np.asarray(det.get('mask_centroid'), dtype=np.float64)
+            if centroid.shape != (2,) or not np.all(np.isfinite(centroid)):
+                return None
+            centroid_u, centroid_v = [float(value) for value in centroid]
+            height, width = shape
+            if not (0.0 <= centroid_u < width and 0.0 <= centroid_v < height):
+                return None
+            u = int(round(centroid_u))
+            v = int(round(centroid_v))
+            if not (0 <= u < width and 0 <= v < height):
+                return None
+
+            bbox_values = np.asarray(det.get('bbox', (0, 0, 0, 0)), dtype=np.float64)
+            if bbox_values.shape != (4,) or not np.all(np.isfinite(bbox_values)):
+                return None
+            bbox = tuple(int(max(0.0, float(value))) for value in bbox_values)
+            if any(value > np.iinfo(np.int32).max for value in bbox):
+                return None
+
+            confidence = float(det.get('confidence', 1.0))
+            if not np.isfinite(confidence) or abs(confidence) > np.finfo(np.float32).max:
+                return None
+            label = str(det.get('label', self.label) or self.label)
+            return SimpleNamespace(
+                mask=normalized_mask,
+                centroid=(u, v),
+                bbox=bbox,
+                confidence=confidence,
+                label=label,
+            )
+        except Exception:
+            return None
+
+    def _publish_invalid_segment(self, obj, stamp, frame_id):
+        obj.detected = False
+        self._publish_mask(None, stamp, frame_id)
+        self.publish_object(obj)
+
     def publish_object(self, obj):
         # Keep raw visibility separate from the short detection hold used by the
         # GUI. Grasp execution must never mistake a held box for a live view.
@@ -398,7 +487,13 @@ class PerceptionNode:
         self.pub_obj.publish(stable_obj)
         self.pub_detected.publish(Bool(bool(stable_obj.detected)))
 
-    def _publish_target_unavailable(self, stamp=None, frame_id=None):
+    def _publish_target_unavailable(self, stamp=None, frame_id=None, clear_mask=None):
+        clear_segment_mask = (
+            PerceptionNode._segment_mode(self)
+            if clear_mask is None else bool(clear_mask)
+        )
+        if clear_segment_mask:
+            stamp, frame_id = PerceptionNode._source_header(self, stamp, frame_id)
         obj = ObjectPose()
         if stamp is not None:
             obj.header.stamp = stamp
@@ -415,7 +510,7 @@ class PerceptionNode:
         if detected_publisher is not None:
             detected_publisher.publish(Bool(False))
         if (
-            PerceptionNode._segment_mode(self)
+            clear_segment_mask
             and getattr(self, 'color', None) is not None
             and getattr(self, 'bridge', None) is not None
             and getattr(self, 'pub_mask', None) is not None
@@ -428,6 +523,25 @@ class PerceptionNode:
             str(getattr(node, 'detector_task', 'detect')).strip().lower() == 'segment'
             or bool(getattr(node, 'require_instance_mask', False))
         )
+
+    @staticmethod
+    def _remember_source_header(node, stamp, frame_id):
+        if stamp is None:
+            return
+        node.last_source_stamp = stamp
+        node.last_source_frame_id = str(frame_id or '')
+
+    @staticmethod
+    def _source_header(node, stamp=None, frame_id=None):
+        source_stamp = stamp
+        if source_stamp is None:
+            source_stamp = getattr(node, 'last_source_stamp', None)
+        source_frame_id = str(frame_id or '')
+        if not source_frame_id:
+            source_frame_id = str(getattr(node, 'last_source_frame_id', '') or '')
+        if not source_frame_id:
+            source_frame_id = str(getattr(node, 'color_frame_id', '') or '')
+        return source_stamp, source_frame_id
 
     def _refresh_camera_params(self):
         cam_cfg = rospy.get_param('/camera', {})
@@ -607,6 +721,7 @@ class PerceptionNode:
         publisher.publish(String(data=message))
 
     def refresh_detector(self, force=False):
+        previous_segment_mode = PerceptionNode._segment_mode(self)
         pcfg = rospy.get_param('/perception', {})
         enabled = bool(pcfg.get('enabled', True))
         detector_kind = str(pcfg.get('detector', 'simple_hsv')).lower()
@@ -661,12 +776,21 @@ class PerceptionNode:
         self.enabled = enabled
         self.label = label
         self.detector_kind = detector_kind
-        self.detector_task = yolo_task
-        self.require_instance_mask = require_instance_mask
         self.detector_error = ''
         self.detector = None
         self.stabilizer = DetectionStabilizer(hold_seconds, max_jump_px, switch_confirmations)
-        PerceptionNode._publish_target_unavailable(self)
+        if previous_segment_mode:
+            last_stamp, last_frame_id = PerceptionNode._source_header(self)
+            PerceptionNode._publish_target_unavailable(
+                self,
+                last_stamp,
+                last_frame_id,
+                clear_mask=True,
+            )
+        else:
+            PerceptionNode._publish_target_unavailable(self, clear_mask=False)
+        self.detector_task = yolo_task
+        self.require_instance_mask = require_instance_mask
         PerceptionNode._publish_detector_status(self, 'loading', yolo_choice)
         try:
             if path_error is not None:
@@ -693,7 +817,17 @@ class PerceptionNode:
             if detail.startswith('YOLO checkpoint task mismatch'):
                 detail = 'MODEL_TASK_MISMATCH: ' + detail
             self.detector_error = detail
-            PerceptionNode._publish_target_unavailable(self)
+            clear_segment_mask = previous_segment_mode or PerceptionNode._segment_mode(self)
+            if clear_segment_mask:
+                last_stamp, last_frame_id = PerceptionNode._source_header(self)
+                PerceptionNode._publish_target_unavailable(
+                    self,
+                    last_stamp,
+                    last_frame_id,
+                    clear_mask=True,
+                )
+            else:
+                PerceptionNode._publish_target_unavailable(self, clear_mask=False)
             PerceptionNode._publish_detector_status(self, 'error', yolo_choice, self.detector_error)
             rospy.logwarn_throttle(2.0, 'Failed to initialize %s detector: %s', detector_kind, exc)
         self.detector_signature = signature

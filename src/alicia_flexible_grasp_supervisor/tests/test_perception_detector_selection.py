@@ -113,6 +113,17 @@ class FakeValidSegmentDetector:
         }, mask
 
 
+class SequenceDetector:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+
+    def detect(self, _color, **_kwargs):
+        output = self.outputs.pop(0)
+        if isinstance(output, Exception):
+            raise output
+        return output
+
+
 class NoFrameBuffer:
     def __init__(self):
         self.polls = 0
@@ -120,6 +131,112 @@ class NoFrameBuffer:
     def take_latest(self):
         self.polls += 1
         return None
+
+
+def valid_segment_output(shape=(20, 20)):
+    mask = np.zeros(shape, dtype=np.uint8)
+    mask[5:15, 5:15] = 255
+    return {
+        'u': 10,
+        'v': 10,
+        'bbox': (5, 5, 10, 10),
+        'mask_centroid': (10, 10),
+        'label': 'carton',
+        'confidence': 0.9,
+    }, mask
+
+
+def make_localizing_segment_node(module, detector):
+    node = module.PerceptionNode.__new__(module.PerceptionNode)
+    node.color = np.zeros((20, 20, 3), dtype=np.uint8)
+    node.depth = np.full((20, 20), 2200, dtype=np.uint16)
+    node.color_frame_id = 'camera_link'
+    node.enabled = True
+    node.detector = detector
+    node.detector_error = ''
+    node.detector_task = 'segment'
+    node.require_instance_mask = True
+    node.label = 'carton'
+    node.bridge = FakeBridge()
+    node.pub_mask = FakeMessagePublisher()
+    node.pub_obj = FakeMessagePublisher()
+    node.pub_detected = FakeMessagePublisher()
+    node.pub_raw_detected = FakeMessagePublisher()
+    node.pub_cam = FakeMessagePublisher()
+    node.pub_base = FakeMessagePublisher()
+    node.stabilizer = module.DetectionStabilizer(hold_seconds=0.8)
+    node.depth_scale = 0.0001
+    node.depth_min_m = 0.03
+    node.depth_max_m = 2.0
+    node.depth_min_valid_px = 24
+    node._last_depth_source = 'none'
+    node._last_depth_valid_count = 0
+    node.fx = 100.0
+    node.fy = 100.0
+    node.cx = 10.0
+    node.cy = 10.0
+    node.projection_frame_convention = 'opencv_optical'
+
+    def make_poses(_point, stamp, frame_id):
+        pose_cam = module.PoseStamped()
+        pose_cam.header.stamp = stamp
+        pose_cam.header.frame_id = frame_id
+        pose_base = module.PoseStamped()
+        pose_base.header.stamp = stamp
+        pose_base.header.frame_id = 'base_link'
+        return pose_cam, pose_base
+
+    node.pose_estimator = types.SimpleNamespace(
+        last_transform_source='test',
+        make_poses=make_poses,
+    )
+    node._refresh_camera_params = lambda: None
+    node.refresh_detector = lambda: None
+    return node
+
+
+def segment_perception_config():
+    return {
+        'enabled': True,
+        'object_label': 'carton',
+        'detector': 'yolov8',
+        'yolo_model_choice': 'carton_segment',
+        'yolo_model': 'carton_segment_model/best.pt',
+        'yolo_models': {
+            'carton_segment': {
+                'display_name': 'Carton segment',
+                'model_path': 'carton_segment_model/best.pt',
+                'task': 'segment',
+                'target_class_mode': 'fixed',
+                'target_class': 'carton',
+                'require_instance_mask': True,
+            },
+        },
+    }
+
+
+def make_refreshing_segment_node(module, last_stamp):
+    node = module.PerceptionNode.__new__(module.PerceptionNode)
+    node.color = np.zeros((20, 20, 3), dtype=np.uint8)
+    node.color_frame_id = 'stale_color_frame'
+    node.last_source_stamp = last_stamp
+    node.last_source_frame_id = 'camera_last'
+    node.bridge = FakeBridge()
+    node.pub_mask = FakeMessagePublisher()
+    node.pub_obj = FakeMessagePublisher()
+    node.pub_detected = FakeMessagePublisher()
+    node.pub_raw_detected = FakeMessagePublisher()
+    node.detector_status_pub = FakePublisher()
+    node.detector = object()
+    node.detector_signature = None
+    node.detector_task = 'segment'
+    node.require_instance_mask = True
+    node.label = 'carton'
+    node.stabilizer = module.DetectionStabilizer()
+    old = module.ObjectPose()
+    old.detected = True
+    node.stabilizer.update(old, 9.8)
+    return node
 
 
 class PerceptionDetectorSelectionTest(unittest.TestCase):
@@ -301,6 +418,232 @@ class PerceptionDetectorSelectionTest(unittest.TestCase):
         self.assertIs(mask_message.header.stamp, stamp)
         self.assertEqual(mask_message.encoding, 'mono8')
         self.assertEqual(np.count_nonzero(mask_message.data), 0)
+
+    def test_malformed_segment_masks_clear_a_primed_segment_result(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({})
+        valid_det, valid_mask = valid_segment_output()
+        malformed_masks = {
+            'ragged': [[255], [255, 255]],
+            'object': np.full((20, 20), 'not-numeric', dtype=object),
+            'non-finite': np.full((20, 20), np.nan, dtype=np.float32),
+        }
+
+        for name, malformed_mask in malformed_masks.items():
+            with self.subTest(name=name):
+                invalid_det = dict(valid_det)
+                detector = SequenceDetector([
+                    (dict(valid_det), valid_mask.copy()),
+                    (invalid_det, malformed_mask),
+                ])
+                node = make_localizing_segment_node(module, detector)
+                valid_stamp = types.SimpleNamespace(secs=60, nsecs=1)
+                invalid_stamp = types.SimpleNamespace(secs=60, nsecs=2)
+
+                module.PerceptionNode.try_detect(node, valid_stamp, 'camera_link')
+                self.assertTrue(node.pub_obj.messages[-1].detected)
+                self.assertGreater(np.count_nonzero(node.pub_mask.messages[-1].data), 0)
+
+                module.PerceptionNode.try_detect(node, invalid_stamp, 'camera_link')
+
+                self.assertFalse(node.pub_obj.messages[-1].detected)
+                self.assertIs(node.pub_obj.messages[-1].header.stamp, invalid_stamp)
+                self.assertEqual(np.count_nonzero(node.pub_mask.messages[-1].data), 0)
+                self.assertIs(node.pub_mask.messages[-1].header.stamp, invalid_stamp)
+
+    def test_malformed_segment_detector_returns_clear_a_primed_segment_result(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({})
+        valid_det, valid_mask = valid_segment_output()
+        malformed_returns = {
+            'inference-exception': RuntimeError('segment inference failed'),
+            'none': None,
+            'one-element': (dict(valid_det),),
+            'three-elements': (dict(valid_det), valid_mask.copy(), 'extra'),
+        }
+
+        for name, malformed_return in malformed_returns.items():
+            with self.subTest(name=name):
+                detector = SequenceDetector([
+                    (dict(valid_det), valid_mask.copy()),
+                    malformed_return,
+                ])
+                node = make_localizing_segment_node(module, detector)
+                valid_stamp = types.SimpleNamespace(secs=60, nsecs=3)
+                invalid_stamp = types.SimpleNamespace(secs=60, nsecs=4)
+
+                module.PerceptionNode.try_detect(node, valid_stamp, 'camera_link')
+                self.assertTrue(node.pub_obj.messages[-1].detected)
+                self.assertGreater(np.count_nonzero(node.pub_mask.messages[-1].data), 0)
+
+                module.PerceptionNode.try_detect(node, invalid_stamp, 'camera_link')
+
+                self.assertFalse(node.pub_obj.messages[-1].detected)
+                self.assertIs(node.pub_obj.messages[-1].header.stamp, invalid_stamp)
+                self.assertEqual(np.count_nonzero(node.pub_mask.messages[-1].data), 0)
+                self.assertIs(node.pub_mask.messages[-1].header.stamp, invalid_stamp)
+
+    def test_invalid_segment_centroids_clear_a_primed_segment_result(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({})
+        valid_det, valid_mask = valid_segment_output()
+        invalid_centroids = {
+            'nan': (np.nan, 10),
+            'negative': (-1, 10),
+            'out-of-frame': (20, 10),
+            'wrong-length': (10,),
+            'non-numeric': ('bad', 10),
+        }
+
+        for name, centroid in invalid_centroids.items():
+            with self.subTest(name=name):
+                invalid_det = dict(valid_det, mask_centroid=centroid)
+                detector = SequenceDetector([
+                    (dict(valid_det), valid_mask.copy()),
+                    (invalid_det, valid_mask.copy()),
+                ])
+                node = make_localizing_segment_node(module, detector)
+                valid_stamp = types.SimpleNamespace(secs=61, nsecs=1)
+                invalid_stamp = types.SimpleNamespace(secs=61, nsecs=2)
+
+                module.PerceptionNode.try_detect(node, valid_stamp, 'camera_link')
+                self.assertTrue(node.pub_obj.messages[-1].detected)
+
+                module.PerceptionNode.try_detect(node, invalid_stamp, 'camera_link')
+
+                self.assertFalse(node.pub_obj.messages[-1].detected)
+                self.assertEqual(np.count_nonzero(node.pub_mask.messages[-1].data), 0)
+                self.assertIs(node.pub_mask.messages[-1].header.stamp, invalid_stamp)
+
+    def test_malformed_segment_object_fields_clear_a_primed_segment_result(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({})
+        valid_det, valid_mask = valid_segment_output()
+        malformed_detections = {
+            'not-a-mapping': ['carton'],
+            'bbox-shape': dict(valid_det, bbox=(5, 5, 10)),
+            'bbox-value': dict(valid_det, bbox=('bad', 5, 10, 10)),
+            'confidence-value': dict(valid_det, confidence='bad'),
+            'confidence-nan': dict(valid_det, confidence=np.nan),
+        }
+
+        for name, malformed_det in malformed_detections.items():
+            with self.subTest(name=name):
+                detector = SequenceDetector([
+                    (dict(valid_det), valid_mask.copy()),
+                    (malformed_det, valid_mask.copy()),
+                ])
+                node = make_localizing_segment_node(module, detector)
+                valid_stamp = types.SimpleNamespace(secs=62, nsecs=1)
+                invalid_stamp = types.SimpleNamespace(secs=62, nsecs=2)
+
+                module.PerceptionNode.try_detect(node, valid_stamp, 'camera_link')
+                self.assertTrue(node.pub_obj.messages[-1].detected)
+
+                module.PerceptionNode.try_detect(node, invalid_stamp, 'camera_link')
+
+                self.assertFalse(node.pub_obj.messages[-1].detected)
+                self.assertEqual(np.count_nonzero(node.pub_mask.messages[-1].data), 0)
+                self.assertIs(node.pub_mask.messages[-1].header.stamp, invalid_stamp)
+
+    def test_segment_to_detect_switch_clears_mask_with_last_source_header(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({
+            'enabled': True,
+            'object_label': 'carton',
+            'detector': 'yolov8',
+            'yolo_model_choice': 'carton',
+            'yolo_model': 'carton_model/best.pt',
+        })
+        last_stamp = types.SimpleNamespace(secs=70, nsecs=1)
+        node = make_refreshing_segment_node(module, last_stamp)
+        FakeYOLODetector.created = []
+        module.YOLOv8ObjectDetector = FakeYOLODetector
+
+        with mock.patch.object(
+            module,
+            'resolve_yolo_model_path',
+            return_value='/workspace/carton_model/best.pt',
+        ):
+            module.PerceptionNode.refresh_detector(node, force=True)
+
+        self.assertEqual(node.detector_task, 'detect')
+        self.assertFalse(node.require_instance_mask)
+        self.assertEqual(len(node.pub_mask.messages), 1)
+        mask_message = node.pub_mask.messages[-1]
+        self.assertEqual(np.count_nonzero(mask_message.data), 0)
+        self.assertIs(mask_message.header.stamp, last_stamp)
+        self.assertEqual(mask_message.header.frame_id, 'camera_last')
+        self.assertIs(node.pub_obj.messages[-1].header.stamp, last_stamp)
+
+    def test_segment_refresh_clears_mask_with_last_source_header(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy(segment_perception_config())
+        last_stamp = types.SimpleNamespace(secs=71, nsecs=2)
+        node = make_refreshing_segment_node(module, last_stamp)
+        FakeYOLODetector.created = []
+        module.YOLOv8ObjectDetector = FakeYOLODetector
+
+        with mock.patch.object(
+            module,
+            'resolve_yolo_model_path',
+            return_value='/workspace/carton_segment_model/best.pt',
+        ):
+            module.PerceptionNode.refresh_detector(node, force=True)
+
+        self.assertEqual(node.detector_task, 'segment')
+        mask_message = node.pub_mask.messages[-1]
+        self.assertEqual(np.count_nonzero(mask_message.data), 0)
+        self.assertIs(mask_message.header.stamp, last_stamp)
+        self.assertEqual(mask_message.header.frame_id, 'camera_last')
+        self.assertIs(node.pub_obj.messages[-1].header.stamp, last_stamp)
+
+    def test_segment_refresh_errors_clear_mask_with_last_source_header(self):
+        for error in (
+            'broken weights',
+            'YOLO checkpoint task mismatch: expected segment, got detect',
+        ):
+            with self.subTest(error=error):
+                module = load_perception_node()
+                module.rospy = FakeRospy(segment_perception_config())
+                last_stamp = types.SimpleNamespace(secs=72, nsecs=3)
+                node = make_refreshing_segment_node(module, last_stamp)
+
+                class BrokenYOLODetector:
+                    def __init__(self, **_kwargs):
+                        raise RuntimeError(error)
+
+                module.YOLOv8ObjectDetector = BrokenYOLODetector
+                with mock.patch.object(
+                    module,
+                    'resolve_yolo_model_path',
+                    return_value='/workspace/carton_segment_model/best.pt',
+                ):
+                    module.PerceptionNode.refresh_detector(node, force=True)
+
+                self.assertIsNone(node.detector)
+                mask_message = node.pub_mask.messages[-1]
+                self.assertEqual(np.count_nonzero(mask_message.data), 0)
+                self.assertIs(mask_message.header.stamp, last_stamp)
+                self.assertEqual(mask_message.header.frame_id, 'camera_last')
+                self.assertIs(node.pub_obj.messages[-1].header.stamp, last_stamp)
+
+    def test_segment_selection_failure_clears_mask_with_last_source_header(self):
+        module = load_perception_node()
+        config = segment_perception_config()
+        config['yolo_model_choice'] = 'missing-profile'
+        module.rospy = FakeRospy(config)
+        last_stamp = types.SimpleNamespace(secs=73, nsecs=4)
+        node = make_refreshing_segment_node(module, last_stamp)
+
+        module.PerceptionNode.refresh_detector(node, force=True)
+
+        self.assertIsNone(node.detector)
+        mask_message = node.pub_mask.messages[-1]
+        self.assertEqual(np.count_nonzero(mask_message.data), 0)
+        self.assertIs(mask_message.header.stamp, last_stamp)
+        self.assertEqual(mask_message.header.frame_id, 'camera_last')
+        self.assertIs(node.pub_obj.messages[-1].header.stamp, last_stamp)
 
     def test_failed_model_switch_clears_old_detector_and_publishes_error(self):
         module = load_perception_node()
