@@ -1541,6 +1541,27 @@ class RemoteGrasp6DNode:
             self.plan_pub.publish(plan)
             return True, ''
 
+    def _commit_selected_gate_if_current(
+        self,
+        candidate,
+        gate,
+        expected_generation,
+    ):
+        with self._geometry_state_guard():
+            current = int(getattr(self, '_geometry_invalidation_generation', 0))
+            if current != int(expected_generation):
+                return False
+            self._selected_candidate_gate = gate
+            self.selected_required_open_width_m = float(
+                gate.required_open_width_m
+            )
+            setattr(
+                candidate,
+                'required_open_width_m',
+                self.selected_required_open_width_m,
+            )
+            return True
+
     def _clear_geometry_cache(self):
         self._latest_geometry_estimate = None
         self._selected_candidate_gate = None
@@ -2319,15 +2340,6 @@ class RemoteGrasp6DNode:
                 )
                 self._publish_error(message)
                 return False, message
-            self._selected_candidate_gate = selected_gate
-            self.selected_required_open_width_m = float(
-                selected_gate.required_open_width_m
-            )
-            setattr(
-                selected,
-                'required_open_width_m',
-                self.selected_required_open_width_m,
-            )
             plan_msg = make_grasp_plan_pose_array(
                 grasp_pose,
                 stamp,
@@ -2376,13 +2388,34 @@ class RemoteGrasp6DNode:
                     support_metrics['geometry_width_m'],
                 )
             self.status_pub.publish(String(message))
+            if not self._commit_selected_gate_if_current(
+                selected,
+                selected_gate,
+                request_invalidation_generation,
+            ):
+                _applied, message = self._invalidate_geometry_if_current(
+                    request_invalidation_generation,
+                    'PLAN_STALE',
+                    'planning request was invalidated before selected gate commit',
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
+                self._publish_error(message)
+                return False, message
             self.last_error = ''
             self._backoff_until = rospy.Time(0)
             return True, message
         except Exception as exc:
-            message = 'remote 6D planning failed: %s' % exc
+            failure_reason = 'remote 6D planning failed: %s' % exc
+            applied, message = self._invalidate_geometry_if_current(
+                request_invalidation_generation,
+                'PLAN_FAILED',
+                failure_reason,
+                stamp=stamp,
+                snapshot=snapshot,
+            )
             self._publish_error(message)
-            if self.failure_backoff_sec > 0.0:
+            if applied and self.failure_backoff_sec > 0.0:
                 self._backoff_until = rospy.Time.now() + rospy.Duration(self.failure_backoff_sec)
             return False, message
         finally:

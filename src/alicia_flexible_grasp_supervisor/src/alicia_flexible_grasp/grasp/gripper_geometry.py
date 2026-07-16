@@ -210,7 +210,10 @@ def required_open_width_m(
     projected_width = 2.0 * float(
         np.dot(np.abs(rotation.T @ jaw_axis), half)
     )
-    return projected_width + 2.0 * clearance
+    return _finite_number(
+        projected_width + 2.0 * clearance,
+        'required open width',
+    )
 
 
 def gripper_box_centers(
@@ -226,7 +229,11 @@ def gripper_box_centers(
     center = _readonly_vector(center_base, 'center_base')
     rotation = _validated_rotation(R_base_tool, 'R_base_tool')
     opening = _finite_number(required_open_width_m, 'required_open_width_m')
-    if opening < 0.0 or opening > gripper.max_inner_gap_m + 1e-9:
+    physical_gap = min(
+        float(gripper.max_inner_gap_m),
+        ANALYTICAL_MAX_INNER_GAP_M,
+    )
+    if opening < 0.0 or opening > physical_gap:
         raise ValueError('required_open_width_m is outside the gripper range')
     jaw_local, jaw_index = parse_tool_axis(tool_jaw_axis)
     finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
@@ -254,6 +261,12 @@ def _obb_line_interval(center, direction, obb_center, rotation, size):
     local_center = rotation.T @ (center - obb_center)
     local_direction = rotation.T @ direction
     half = 0.5 * size
+    if not (
+        np.all(np.isfinite(local_center))
+        and np.all(np.isfinite(local_direction))
+        and np.all(np.isfinite(half))
+    ):
+        return None
     lower = -float('inf')
     upper = float('inf')
     for axis in range(3):
@@ -486,22 +499,29 @@ def _failed_result(
     motion_cost,
     geometry_cost,
 ):
+    def finite_or(value, fallback):
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return float(fallback)
+        return number if np.isfinite(number) else float(fallback)
+
     return CandidateGateResult(
         ok=False,
         failure_code=code,
         failure_reason=reason,
-        required_open_width_m=max(0.0, float(required_width)),
-        center_distance_m=max(0.0, float(center_distance)),
-        support_clearance_m=float(support_clearance),
-        jaw_alignment=min(1.0, max(0.0, float(jaw_alignment))),
-        motion_cost=max(0.0, float(motion_cost)),
-        geometry_cost=max(0.0, float(geometry_cost)),
+        required_open_width_m=max(0.0, finite_or(required_width, 0.0)),
+        center_distance_m=max(0.0, finite_or(center_distance, 0.0)),
+        support_clearance_m=finite_or(support_clearance, -1.0e6),
+        jaw_alignment=min(1.0, max(0.0, finite_or(jaw_alignment, 0.0))),
+        motion_cost=max(0.0, finite_or(motion_cost, 0.0)),
+        geometry_cost=max(0.0, finite_or(geometry_cost, 0.0)),
         failed_gate=gate,
-        passed_gate_count=int(passed),
+        passed_gate_count=min(_GATE_COUNT, max(0, int(passed))),
     )
 
 
-def evaluate_candidate(
+def _evaluate_candidate_impl(
     *,
     gripper,
     candidate_center_base,
@@ -542,9 +562,13 @@ def evaluate_candidate(
             'support_normal_base',
         )
         normal_norm = float(np.linalg.norm(support_normal))
-        if normal_norm <= 1e-12:
-            raise ValueError('support_normal_base must be non-zero')
-        support_normal = np.asarray(support_normal / normal_norm, dtype=float)
+        if not math.isclose(normal_norm, 1.0, rel_tol=0.0, abs_tol=1e-6):
+            raise ValueError('support_normal_base must be a unit vector')
+        support_alignment = float(np.dot(support_normal, obb_rotation[:, 2]))
+        if support_alignment < 1.0 - 1e-5:
+            raise ValueError(
+                'support_normal_base must align with OBB positive z'
+            )
         support_offset = _finite_number(support_offset_m, 'support_offset_m')
         _finite_number(candidate_width_m, 'candidate_width_m')
         if float(candidate_width_m) < 0.0:
@@ -576,6 +600,17 @@ def evaluate_candidate(
             )
         )
         geometry_cost = center_distance
+        if not np.all(
+            np.isfinite(
+                [
+                    center_distance,
+                    support_clearance,
+                    jaw_alignment,
+                    geometry_cost,
+                ]
+            )
+        ):
+            raise ValueError('derived analytical candidate metrics are non-finite')
     except Exception as exc:
         return _failed_result(
             'transform',
@@ -649,12 +684,16 @@ def evaluate_candidate(
         jaw_axis,
         gripper.jaw_clearance_each_side_m,
     )
-    if required_width > gripper.max_inner_gap_m + 1e-9:
+    physical_gap = min(
+        float(gripper.max_inner_gap_m),
+        ANALYTICAL_MAX_INNER_GAP_M,
+    )
+    if required_width > physical_gap:
         return _failed_result(
             'jaw_width',
             'GRIPPER_TOO_NARROW',
             'required opening %.6fm exceeds physical inner gap %.6fm'
-            % (required_width, gripper.max_inner_gap_m),
+            % (required_width, physical_gap),
             2,
             required_width,
             center_distance,
@@ -666,7 +705,7 @@ def evaluate_candidate(
 
     negative_reach = -float(interval[0]) + gripper.jaw_clearance_each_side_m
     positive_reach = float(interval[1]) + gripper.jaw_clearance_each_side_m
-    maximum_side_reach = 0.5 * gripper.max_inner_gap_m
+    maximum_side_reach = 0.5 * physical_gap
     if (
         negative_reach > maximum_side_reach + 1e-9
         or positive_reach > maximum_side_reach + 1e-9
@@ -700,7 +739,7 @@ def evaluate_candidate(
         safe, clearance, reason = _check_boxes(
             transform,
             gripper,
-            gripper.max_inner_gap_m,
+            physical_gap,
             tool_jaw_axis,
             tool_finger_length_axis,
             support_normal,
@@ -761,7 +800,7 @@ def evaluate_candidate(
             safe, clearance, reason = _check_boxes(
                 transform,
                 gripper,
-                gripper.max_inner_gap_m,
+                physical_gap,
                 tool_jaw_axis,
                 tool_finger_length_axis,
                 support_normal,
@@ -800,6 +839,60 @@ def evaluate_candidate(
         failed_gate='',
         passed_gate_count=_GATE_COUNT,
     )
+
+
+def evaluate_candidate(
+    *,
+    gripper,
+    candidate_center_base,
+    R_base_tool,
+    candidate_width_m,
+    obb_center_base,
+    R_base_obb,
+    obb_size_xyz_m,
+    support_normal_base,
+    support_offset_m,
+    pregrasp_T_base_tool,
+    approach_T_base_tool,
+    grasp_T_base_tool,
+    lift_T_base_tool,
+    tool_jaw_axis='y',
+    tool_finger_length_axis='z',
+    motion_cost=0.0,
+):
+    """Evaluate one candidate and always fail closed on invalid derived state."""
+    try:
+        return _evaluate_candidate_impl(
+            gripper=gripper,
+            candidate_center_base=candidate_center_base,
+            R_base_tool=R_base_tool,
+            candidate_width_m=candidate_width_m,
+            obb_center_base=obb_center_base,
+            R_base_obb=R_base_obb,
+            obb_size_xyz_m=obb_size_xyz_m,
+            support_normal_base=support_normal_base,
+            support_offset_m=support_offset_m,
+            pregrasp_T_base_tool=pregrasp_T_base_tool,
+            approach_T_base_tool=approach_T_base_tool,
+            grasp_T_base_tool=grasp_T_base_tool,
+            lift_T_base_tool=lift_T_base_tool,
+            tool_jaw_axis=tool_jaw_axis,
+            tool_finger_length_axis=tool_finger_length_axis,
+            motion_cost=motion_cost,
+        )
+    except Exception as exc:
+        return _failed_result(
+            'transform',
+            'GRIPPER_SWEEP_COLLISION',
+            'analytical gripper evaluation failed closed: %s' % exc,
+            0,
+            0.0,
+            0.0,
+            -1.0e6,
+            0.0,
+            0.0,
+            0.0,
+        )
 
 
 def candidate_with_motion_cost(result, motion_cost):

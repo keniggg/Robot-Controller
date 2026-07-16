@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import pathlib
+import struct
 import sys
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import pytest
@@ -45,6 +47,40 @@ def rotation_about_y(angle):
         [[cosine, 0.0, sine], [0.0, 1.0, 0.0], [-sine, 0.0, cosine]],
         dtype=float,
     )
+
+
+def rotation_from_rpy(values):
+    roll, pitch, yaw = np.asarray(values, dtype=float)
+    cr, sr = np.cos(roll), np.sin(roll)
+    cp, sp = np.cos(pitch), np.sin(pitch)
+    cy, sy = np.cos(yaw), np.sin(yaw)
+    return np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ],
+        dtype=float,
+    )
+
+
+def xml_vector(element, attribute):
+    return np.asarray(
+        [float(value) for value in element.attrib[attribute].split()],
+        dtype=float,
+    )
+
+
+def binary_stl_vertices(path):
+    data = path.read_bytes()
+    assert len(data) >= 84
+    triangle_count = struct.unpack_from('<I', data, 80)[0]
+    assert len(data) == 84 + triangle_count * 50
+    vertices = []
+    for index in range(triangle_count):
+        values = struct.unpack_from('<12fH', data, 84 + index * 50)
+        vertices.extend(np.asarray(values[3:12], dtype=float).reshape(3, 3))
+    return np.asarray(vertices, dtype=float)
 
 
 def candidate_fixture(**overrides):
@@ -159,6 +195,79 @@ def test_tool_y_is_opposing_jaw_motion_and_finger_length_is_tool_z():
     assert GRIPPER.finger_size_xyz_m[2] == pytest.approx(0.060)
 
 
+def test_real_urdf_and_stl_define_tool_y_jaws_and_tool_z_finger_length():
+    urdf_path = (
+        ROOT.parents[1]
+        / 'src/arm-mujoco/synriard/urdf/Alicia_D_v5_6'
+        / 'Alicia_D_v5_6_gripper_50mm.urdf'
+    )
+    robot = ET.parse(str(urdf_path)).getroot()
+    tool_joint = robot.find("./joint[@name='Grasp2tool']")
+    assert tool_joint.find('parent').attrib['link'] == 'Link6'
+    assert tool_joint.find('child').attrib['link'] == 'tool0'
+    np.testing.assert_allclose(
+        xml_vector(tool_joint.find('origin'), 'rpy'),
+        np.zeros(3),
+        atol=1e-12,
+    )
+
+    finger_data = []
+    for joint_name, link_name, open_limit, closed_limit in (
+        ('left_finger', 'Link7', 'upper', 'lower'),
+        ('right_finger', 'Link8', 'lower', 'upper'),
+    ):
+        joint = robot.find("./joint[@name='%s']" % joint_name)
+        assert joint.find('parent').attrib['link'] == 'Link6'
+        assert joint.find('child').attrib['link'] == link_name
+        joint_origin = joint.find('origin')
+        origin_xyz = xml_vector(joint_origin, 'xyz')
+        joint_rotation = rotation_from_rpy(xml_vector(joint_origin, 'rpy'))
+        joint_axis = xml_vector(joint.find('axis'), 'xyz')
+        limits = joint.find('limit').attrib
+        open_q = float(limits[open_limit])
+        closed_q = float(limits[closed_limit])
+        assert open_q == pytest.approx(0.0)
+        closed_delta = joint_rotation @ joint_axis * (closed_q - open_q)
+
+        link = robot.find("./link[@name='%s']" % link_name)
+        collision = link.find('collision')
+        collision_origin = collision.find('origin')
+        collision_rotation = rotation_from_rpy(
+            xml_vector(collision_origin, 'rpy')
+        )
+        mesh_filename = collision.find('geometry/mesh').attrib['filename']
+        mesh_path = (urdf_path.parent / mesh_filename).resolve()
+        vertices_link = binary_stl_vertices(mesh_path)
+        vertices_link6 = (
+            joint_rotation
+            @ (
+                collision_rotation @ vertices_link.T
+                + xml_vector(collision_origin, 'xyz').reshape(3, 1)
+            )
+        ).T + origin_xyz
+        envelope = np.ptp(vertices_link6, axis=0)
+        finger_data.append((origin_xyz, closed_delta, envelope))
+
+    left_origin, left_delta, left_envelope = finger_data[0]
+    right_origin, right_delta, right_envelope = finger_data[1]
+    np.testing.assert_allclose(left_delta, -right_delta, atol=2e-7)
+    assert left_delta[1] > 0.0
+    assert right_delta[1] < 0.0
+    assert np.linalg.norm(
+        (right_origin + right_delta) - (left_origin + left_delta)
+    ) < np.linalg.norm(
+        right_origin - left_origin,
+    )
+    np.testing.assert_allclose(
+        left_envelope,
+        [0.0434, 0.0286, 0.0600],
+        atol=5e-4,
+    )
+    np.testing.assert_allclose(right_envelope, left_envelope, atol=2e-5)
+    assert int(np.argmax(left_envelope)) == 2
+    assert left_envelope[2] == pytest.approx(0.0600, abs=5e-4)
+
+
 def test_valid_40_mm_cross_section_passes():
     result = evaluate_candidate(**candidate_fixture())
 
@@ -176,6 +285,26 @@ def test_51_mm_required_opening_is_rejected_even_when_model_width_is_small():
     assert not result.ok
     assert result.failure_code == 'GRIPPER_TOO_NARROW'
     assert result.required_open_width_m == pytest.approx(0.051)
+
+
+def test_fixed_50_mm_limit_cannot_be_bypassed_by_config_tolerance():
+    configured_above_physical_limit = GripperGeometry(
+        max_inner_gap_m=0.0504,
+        jaw_clearance_each_side_m=0.002,
+        finger_size_xyz_m=np.array([0.0434, 0.0286, 0.0600]),
+        palm_size_xyz_m=np.array([0.1175, 0.1550, 0.0774]),
+        support_clearance_m=0.003,
+    )
+    args = candidate_fixture(
+        gripper=configured_above_physical_limit,
+        obb_size_xyz_m=np.array([0.080, 0.0463, 0.060]),
+    )
+
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_TOO_NARROW'
+    assert result.required_open_width_m == pytest.approx(0.0503)
 
 
 def test_model_width_is_diagnostic_not_a_physical_bypass_or_rejection():
@@ -217,7 +346,11 @@ def test_one_sided_finger_reach_is_rejected():
 def test_palm_sweep_through_tilted_plane_is_rejected():
     normal = np.array([0.20, 0.0, 0.98], dtype=float)
     normal /= np.linalg.norm(normal)
+    obb_rotation = np.column_stack(
+        (np.array([normal[2], 0.0, -normal[0]]), [0.0, 1.0, 0.0], normal)
+    )
     args = candidate_fixture(
+        R_base_obb=obb_rotation,
         support_normal_base=normal,
         support_offset_m=0.0,
         pregrasp_center_base=np.array([-0.080, 0.0, -0.010]),
@@ -227,6 +360,44 @@ def test_palm_sweep_through_tilted_plane_is_rejected():
     assert not result.ok
     assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
     assert result.failed_gate in ('static_envelope', 'swept_envelope')
+
+
+def test_support_plane_requires_unit_normal_aligned_with_obb_positive_z():
+    center = np.array([0.0, 0.0, 0.200])
+    common = {
+        'center_base': center,
+        'obb_center_base': center,
+        'pregrasp_center_base': np.array([-0.080, 0.0, 0.200]),
+        'approach_center_base': np.array([-0.020, 0.0, 0.200]),
+        'lift_center_base': np.array([0.0, 0.0, 0.250]),
+    }
+    unit = evaluate_candidate(
+        **candidate_fixture(
+            **common,
+            support_normal_base=np.array([0.0, 0.0, 1.0]),
+            support_offset_m=-0.050,
+        )
+    )
+    scaled_equivalent = evaluate_candidate(
+        **candidate_fixture(
+            **common,
+            support_normal_base=np.array([0.0, 0.0, 0.1]),
+            support_offset_m=-0.005,
+        )
+    )
+    reversed_equivalent = evaluate_candidate(
+        **candidate_fixture(
+            **common,
+            support_normal_base=np.array([0.0, 0.0, -1.0]),
+            support_offset_m=0.050,
+        )
+    )
+
+    assert unit.ok
+    assert not scaled_equivalent.ok
+    assert scaled_equivalent.failed_gate == 'transform'
+    assert not reversed_equivalent.ok
+    assert reversed_equivalent.failed_gate == 'transform'
 
 
 def test_palm_intrusion_into_non_grasp_region_is_rejected():
@@ -263,6 +434,28 @@ def test_nonfinite_or_left_handed_transform_fails_closed():
     assert evaluate_candidate(**nonfinite).failed_gate == 'transform'
     assert evaluate_candidate(**left_handed).failed_gate == 'transform'
     assert evaluate_candidate(**left_handed).failure_code == 'GRIPPER_SWEEP_COLLISION'
+
+
+def test_extreme_finite_coordinates_return_a_finite_failed_result():
+    result = evaluate_candidate(
+        **candidate_fixture(center_base=np.array([1.0e308, 0.0, 0.080]))
+    )
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert result.failed_gate == 'transform'
+    assert np.all(
+        np.isfinite(
+            [
+                result.required_open_width_m,
+                result.center_distance_m,
+                result.support_clearance_m,
+                result.jaw_alignment,
+                result.motion_cost,
+                result.geometry_cost,
+            ]
+        )
+    )
 
 
 def test_candidate_result_rejects_nonfinite_costs():

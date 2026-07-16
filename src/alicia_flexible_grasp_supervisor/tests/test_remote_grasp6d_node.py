@@ -1020,6 +1020,126 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIn('required_open=0.044', message)
         self.assertEqual(client.calls[0]['kwargs']['max_gripper_width_m'], 0.0)
 
+    def test_plan_publish_exception_invalidates_geometry_and_selected_gate(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(
+            candidates=[
+                RemoteGraspCandidate(
+                    0.90,
+                    np.array([0.40, -0.10, 0.25]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    0.04,
+                )
+            ]
+        )
+        node = make_processing_node(client)
+        node.pose_estimator = RecordingPoseEstimator()
+        node._plan_reachable = lambda _pose: True
+
+        class FailNonemptyPlanPublisher:
+            def __init__(self):
+                self.messages = []
+
+            def publish(self, message):
+                if len(getattr(message, 'poses', ())) > 0:
+                    raise RuntimeError('synthetic nonempty plan publish failure')
+                self.messages.append(message)
+
+        node.plan_pub = FailNonemptyPlanPublisher()
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.08, 0.04, 0.06],
+        )
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertIn('synthetic nonempty plan publish failure', message)
+        self.assertIsNone(node._selected_candidate_gate)
+        self.assertIsNone(node.selected_required_open_width_m)
+        self.assertFalse(node.latest_object_geometry.valid)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_post_publish_failure_preserves_concurrent_target_loss_reason(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(
+            candidates=[
+                RemoteGraspCandidate(
+                    0.90,
+                    np.array([0.40, -0.10, 0.25]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    0.04,
+                )
+            ]
+        )
+        node = make_processing_node(client)
+        node.pose_estimator = RecordingPoseEstimator()
+        node._plan_reachable = lambda _pose: True
+        plan_published = threading.Event()
+        diagnostic_started = threading.Event()
+        invalidation_done = threading.Event()
+
+        class MarkPlanPublisher:
+            def __init__(self):
+                self.messages = []
+
+            def publish(self, message):
+                self.messages.append(message)
+                if len(getattr(message, 'poses', ())) > 0:
+                    plan_published.set()
+
+        node.plan_pub = MarkPlanPublisher()
+        original_support_metrics = node._candidate_support_geometry_metrics
+
+        def fail_diagnostic_after_plan(candidate):
+            if plan_published.is_set():
+                diagnostic_started.set()
+                if not invalidation_done.wait(2.0):
+                    raise AssertionError('concurrent invalidation did not finish')
+                raise RuntimeError('synthetic post-publication diagnostic failure')
+            return original_support_metrics(candidate)
+
+        node._candidate_support_geometry_metrics = fail_diagnostic_after_plan
+
+        def invalidate_after_plan():
+            if diagnostic_started.wait(2.0):
+                node._invalidate_geometry(
+                    'TARGET_LOST',
+                    'concurrent target loss after plan publication',
+                    stamp=remote_node.rospy.Time(10, 123),
+                    snapshot=snapshot,
+                )
+                invalidation_done.set()
+
+        invalidator = threading.Thread(target=invalidate_after_plan)
+        invalidator.start()
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.08, 0.04, 0.06],
+        )
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+            invalidator.join(2.0)
+
+        self.assertFalse(ok)
+        self.assertEqual(
+            message,
+            'TARGET_LOST: concurrent target loss after plan publication',
+        )
+        self.assertEqual(node._last_geometry_invalidation_code, 'TARGET_LOST')
+        self.assertIsNone(node._selected_candidate_gate)
+        self.assertIsNone(node.selected_required_open_width_m)
+        self.assertFalse(node.latest_object_geometry.valid)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
     def test_detect_snapshot_uses_bbox_foreground_with_same_geometry_contract(self):
         snapshot = make_snapshot(
             np.zeros((3, 4), dtype=np.uint16),
