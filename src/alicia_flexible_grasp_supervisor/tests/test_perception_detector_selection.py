@@ -6,6 +6,8 @@ import types
 import unittest
 from unittest import mock
 
+import numpy as np
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PERCEPTION_NODE = ROOT / 'scripts' / 'perception_node.py'
@@ -38,6 +40,13 @@ class FakeRospy:
     def logwarn_throttle(self, *args):
         self.warnings.append(args)
 
+    def loginfo_throttle(self, *args):
+        self.infos.append(args)
+
+    @staticmethod
+    def get_time():
+        return 10.0
+
 
 class FakeHSVDetector:
     created = []
@@ -67,6 +76,41 @@ class FakeMessagePublisher:
 
     def publish(self, msg):
         self.messages.append(msg)
+
+
+class FakeBridge:
+    def cv2_to_imgmsg(self, image, encoding):
+        return types.SimpleNamespace(
+            data=np.asarray(image).copy(),
+            encoding=encoding,
+            header=types.SimpleNamespace(stamp=None, frame_id=''),
+        )
+
+
+class FakeSegmentDetector:
+    def detect(self, _color, **_kwargs):
+        return {
+            'u': 10,
+            'v': 10,
+            'bbox': (5, 5, 10, 10),
+            'mask_centroid': (10, 10),
+            'label': 'carton',
+            'confidence': 0.9,
+        }, None
+
+
+class FakeValidSegmentDetector:
+    def detect(self, color, **_kwargs):
+        mask = np.zeros(np.asarray(color).shape[:2], dtype=np.uint8)
+        mask[5:15, 5:15] = 255
+        return {
+            'u': 10,
+            'v': 10,
+            'bbox': (5, 5, 10, 10),
+            'mask_centroid': (10, 10),
+            'label': 'carton',
+            'confidence': 0.9,
+        }, mask
 
 
 class NoFrameBuffer:
@@ -112,10 +156,151 @@ class PerceptionDetectorSelectionTest(unittest.TestCase):
         self.assertEqual(FakeYOLODetector.created[0]['target_class'], 'carton')
         self.assertAlmostEqual(FakeYOLODetector.created[0]['conf'], 0.42)
         self.assertEqual(FakeYOLODetector.created[0]['imgsz'], 416)
+        self.assertEqual(FakeYOLODetector.created[0]['expected_task'], 'detect')
+        self.assertFalse(FakeYOLODetector.created[0]['require_instance_mask'])
         self.assertEqual(status_pub.messages, [
             'loading:carton',
             'ready:carton:/resolved/models/custom.pt',
         ])
+
+    def test_segment_task_without_mask_fails_closed_even_if_profile_flag_is_false(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({})
+        node = module.PerceptionNode.__new__(module.PerceptionNode)
+        node.color = np.zeros((20, 20, 3), dtype=np.uint8)
+        node.depth = np.full((20, 20), 2200, dtype=np.uint16)
+        node.color_frame_id = 'camera_link'
+        node.enabled = True
+        node.detector = FakeSegmentDetector()
+        node.detector_error = ''
+        node.detector_task = 'segment'
+        node.require_instance_mask = False
+        node.label = 'carton'
+        node.bridge = FakeBridge()
+        node.pub_mask = FakeMessagePublisher()
+        node.pub_obj = FakeMessagePublisher()
+        node.pub_detected = FakeMessagePublisher()
+        node.pub_raw_detected = FakeMessagePublisher()
+        node.stabilizer = module.DetectionStabilizer(hold_seconds=0.8)
+        held = module.ObjectPose()
+        held.detected = True
+        held.u = 2
+        held.v = 3
+        node.stabilizer.update(held, 9.8)
+        node._refresh_camera_params = lambda: None
+        node.refresh_detector = lambda: None
+        stamp = types.SimpleNamespace(secs=12, nsecs=34)
+
+        module.PerceptionNode.try_detect(node, stamp=stamp, camera_frame='camera_link')
+
+        self.assertEqual(len(node.pub_mask.messages), 1)
+        mask_message = node.pub_mask.messages[-1]
+        self.assertEqual(mask_message.encoding, 'mono8')
+        self.assertIs(mask_message.header.stamp, stamp)
+        self.assertEqual(mask_message.header.frame_id, 'camera_link')
+        self.assertEqual(np.count_nonzero(mask_message.data), 0)
+        self.assertFalse(node.pub_obj.messages[-1].detected)
+        self.assertIs(node.pub_obj.messages[-1].header.stamp, stamp)
+        self.assertFalse(node.pub_detected.messages[-1].data)
+        self.assertFalse(node.pub_raw_detected.messages[-1].data)
+
+    def test_checkpoint_task_mismatch_uses_stable_error_prefix_and_clears_segment_state(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({
+            'enabled': True,
+            'object_label': 'carton',
+            'detector': 'yolov8',
+            'yolo_model_choice': 'carton_segment',
+            'yolo_model': 'carton_segment_model/best.pt',
+            'yolo_models': {
+                'carton_segment': {
+                    'display_name': 'Carton segment',
+                    'model_path': 'carton_segment_model/best.pt',
+                    'task': 'segment',
+                    'target_class_mode': 'fixed',
+                    'target_class': 'carton',
+                    'require_instance_mask': True,
+                },
+            },
+        })
+        node = module.PerceptionNode.__new__(module.PerceptionNode)
+        node.color = np.zeros((20, 20, 3), dtype=np.uint8)
+        node.color_frame_id = 'camera_link'
+        node.bridge = FakeBridge()
+        node.pub_mask = FakeMessagePublisher()
+        node.pub_obj = FakeMessagePublisher()
+        node.pub_detected = FakeMessagePublisher()
+        node.pub_raw_detected = FakeMessagePublisher()
+        node.detector_status_pub = FakePublisher()
+        node.detector = object()
+        node.detector_signature = None
+        node.stabilizer = module.DetectionStabilizer()
+        old = module.ObjectPose()
+        old.detected = True
+        node.stabilizer.update(old, 9.8)
+
+        class MismatchedYOLODetector:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                raise RuntimeError('YOLO checkpoint task mismatch: expected segment, got detect')
+
+        module.YOLOv8ObjectDetector = MismatchedYOLODetector
+        with mock.patch.object(
+            module,
+            'resolve_yolo_model_path',
+            return_value='/workspace/carton_segment_model/best.pt',
+        ):
+            module.PerceptionNode.refresh_detector(node, force=True)
+
+        self.assertIsNone(node.detector)
+        self.assertEqual(node.detector_task, 'segment')
+        self.assertTrue(node.require_instance_mask)
+        self.assertTrue(node.detector_error.startswith('MODEL_TASK_MISMATCH'))
+        self.assertTrue(
+            node.detector_status_pub.messages[-1].startswith(
+                'error:carton_segment:MODEL_TASK_MISMATCH'
+            )
+        )
+        self.assertFalse(node.pub_obj.messages[-1].detected)
+        self.assertEqual(np.count_nonzero(node.pub_mask.messages[-1].data), 0)
+        self.assertIsNone(node.stabilizer.last_detection)
+
+    def test_segment_depth_failure_overwrites_valid_inference_mask_with_zero(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({})
+        node = module.PerceptionNode.__new__(module.PerceptionNode)
+        node.color = np.zeros((20, 20, 3), dtype=np.uint8)
+        node.depth = np.zeros((20, 20), dtype=np.uint16)
+        node.color_frame_id = 'camera_link'
+        node.enabled = True
+        node.detector = FakeValidSegmentDetector()
+        node.detector_error = ''
+        node.detector_task = 'segment'
+        node.require_instance_mask = True
+        node.label = 'carton'
+        node.bridge = FakeBridge()
+        node.pub_mask = FakeMessagePublisher()
+        node.pub_obj = FakeMessagePublisher()
+        node.pub_detected = FakeMessagePublisher()
+        node.pub_raw_detected = FakeMessagePublisher()
+        node.stabilizer = module.DetectionStabilizer(hold_seconds=0.8)
+        node.depth_scale = 0.0001
+        node.depth_min_m = 0.03
+        node.depth_max_m = 2.0
+        node.depth_min_valid_px = 24
+        node._last_depth_source = 'none'
+        node._last_depth_valid_count = 0
+        node._refresh_camera_params = lambda: None
+        node.refresh_detector = lambda: None
+        stamp = types.SimpleNamespace(secs=56, nsecs=78)
+
+        module.PerceptionNode.try_detect(node, stamp=stamp, camera_frame='camera_link')
+
+        self.assertFalse(node.pub_obj.messages[-1].detected)
+        mask_message = node.pub_mask.messages[-1]
+        self.assertIs(mask_message.header.stamp, stamp)
+        self.assertEqual(mask_message.encoding, 'mono8')
+        self.assertEqual(np.count_nonzero(mask_message.data), 0)
 
     def test_failed_model_switch_clears_old_detector_and_publishes_error(self):
         module = load_perception_node()
