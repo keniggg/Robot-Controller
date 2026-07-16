@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from copy import deepcopy
+import io
 import importlib.util
 import pathlib
 import sys
@@ -391,6 +392,31 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertAlmostEqual(plan.object_geometry.pose_base.position.x, 0.40)
         self.assertAlmostEqual(plan.required_open_width_m, 0.044)
 
+    def test_build_rich_plan_rejects_cross_snapshot_geometry_headers(self):
+        selected = make_selected_candidate()
+        geometry = make_geometry_message()
+        snapshot_header = deepcopy(geometry.header)
+
+        wrong_frame = deepcopy(geometry)
+        wrong_frame.header.frame_id = 'map'
+        with self.assertRaisesRegex(ValueError, 'frame'):
+            remote_node.build_rich_plan(
+                selected,
+                wrong_frame,
+                snapshot_header,
+                'carton_segment',
+            )
+
+        wrong_stamp = deepcopy(geometry)
+        wrong_stamp.header.stamp = remote_node.rospy.Time(10, 124)
+        with self.assertRaisesRegex(ValueError, 'stamp'):
+            remote_node.build_rich_plan(
+                selected,
+                wrong_stamp,
+                snapshot_header,
+                'carton_segment',
+            )
+
     def test_rich_plan_id_is_stable_and_changes_for_every_bound_field(self):
         geometry = make_geometry_message()
         selected = make_selected_candidate()
@@ -424,7 +450,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         mutations.append((deepcopy(selected), changed_geometry, deepcopy(geometry.header), 'carton_segment'))
         changed_header = deepcopy(geometry.header)
         changed_header.stamp = remote_node.rospy.Time(10, 124)
-        mutations.append((deepcopy(selected), deepcopy(geometry), changed_header, 'carton_segment'))
+        changed_geometry = deepcopy(geometry)
+        changed_geometry.header = deepcopy(changed_header)
+        mutations.append((deepcopy(selected), changed_geometry, changed_header, 'carton_segment'))
         mutations.append((deepcopy(selected), deepcopy(geometry), deepcopy(geometry.header), 'original'))
 
         for candidate, geometry_value, header, model in mutations:
@@ -432,6 +460,26 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 candidate, geometry_value, header, model
             )
             self.assertNotEqual(changed_plan.plan_id, baseline.plan_id)
+
+    def test_rich_plan_id_survives_ros_float32_wire_round_trip(self):
+        geometry = make_geometry_message()
+        geometry.support_offset_m = 0.0137
+        selected = make_selected_candidate(required_width_m=0.0437)
+        selected.width_m = 0.0389
+        plan = remote_node.build_rich_plan(
+            selected,
+            geometry,
+            deepcopy(geometry.header),
+            'carton_segment',
+        )
+
+        wire = io.BytesIO()
+        plan.serialize(wire)
+        received = Grasp6DPlan()
+        received.deserialize(wire.getvalue())
+
+        self.assertEqual(remote_node.compute_plan_id(received), plan.plan_id)
+        self.assertEqual(received.plan_id, plan.plan_id)
 
     def test_rich_plan_publication_and_cache_are_deep_copied_atomically(self):
         node = make_processing_node()
@@ -478,6 +526,50 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(invalid.header.stamp.to_nsec(), geometry.header.stamp.to_nsec())
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
         self.assertIsNone(node._latest_rich_plan_copy())
+
+    def test_invalidation_clears_authority_and_isolates_each_publisher_failure(self):
+        class FailingPublisher:
+            def publish(self, _message):
+                raise RuntimeError('synthetic invalidation publish failure')
+
+        for failing_attribute in ('geometry_pub', 'rich_plan_pub', 'plan_pub'):
+            with self.subTest(publisher=failing_attribute):
+                node = make_processing_node()
+                geometry = make_geometry_message()
+                node.latest_object_geometry = deepcopy(geometry)
+                node.latest_rich_plan = remote_node.build_rich_plan(
+                    make_selected_candidate(),
+                    geometry,
+                    deepcopy(geometry.header),
+                    'carton_segment',
+                )
+                node.latest_plan = remote_node.rich_plan_to_legacy(
+                    node.latest_rich_plan
+                )
+                node._latest_geometry_estimate = make_geometry_estimate()
+                node._selected_candidate_gate = object()
+                node.selected_required_open_width_m = 0.044
+                setattr(node, failing_attribute, FailingPublisher())
+
+                node._invalidate_geometry(
+                    'TARGET_LOST',
+                    'publisher failure probe',
+                    stamp=geometry.header.stamp,
+                    label='carton',
+                )
+
+                self.assertIsNone(node.latest_rich_plan)
+                self.assertIsNone(node.latest_plan)
+                self.assertIsNone(node._latest_geometry_estimate)
+                self.assertIsNone(node._selected_candidate_gate)
+                self.assertIsNone(node.selected_required_open_width_m)
+                self.assertFalse(node.latest_object_geometry.valid)
+                if failing_attribute != 'geometry_pub':
+                    self.assertFalse(node.geometry_pub.messages[-1].valid)
+                if failing_attribute != 'rich_plan_pub':
+                    self.assertFalse(node.rich_plan_pub.messages[-1].valid)
+                if failing_attribute != 'plan_pub':
+                    self.assertEqual(node.plan_pub.messages[-1].poses, [])
 
     def test_ros_source_clock_preserves_exact_nanoseconds(self):
         class Stamp:
@@ -1434,6 +1526,42 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         )
         self.assertIsNone(node.previous_object_axes_base)
         self.assertIsNone(node.latest_target_cloud_base_xyz)
+
+    def test_late_obb_failure_does_not_overwrite_concurrent_target_loss(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node = make_processing_node(RecordingClient(candidates=[]))
+
+        def target_loss_then_failed_estimate(**_kwargs):
+            node._invalidate_geometry(
+                'TARGET_LOST',
+                'target disappeared during geometry estimation',
+                stamp=remote_node.rospy.Time(10, 123),
+                snapshot=snapshot,
+            )
+            return make_geometry_estimate(
+                ok=False,
+                code='OBB_INVALID',
+                reason='late geometry estimator failure',
+            )
+
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = target_loss_then_failed_estimate
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertEqual(node._last_geometry_invalidation_code, 'TARGET_LOST')
+        self.assertEqual(
+            message,
+            'TARGET_LOST: target disappeared during geometry estimation',
+        )
+        self.assertEqual(
+            node.latest_object_geometry.failure_reason,
+            'TARGET_LOST: target disappeared during geometry estimation',
+        )
 
     def test_target_loss_serializes_with_activation_and_finishes_invalid(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)

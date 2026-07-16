@@ -13,6 +13,7 @@ for path in (ROOT, ROOT / 'src'):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from alicia_flexible_grasp.grasp.rich_plan_integrity import compute_plan_id
 from gui.widgets import grasp6d_control_widget as control_widget
 from gui.widgets.grasp6d_control_widget import (
     Grasp6DGuiState,
@@ -24,12 +25,13 @@ from gui.widgets.grasp6d_control_widget import (
 class Grasp6DControlWidgetTest(unittest.TestCase):
     @staticmethod
     def _rich_plan(stamp_sec=9.0, plan_id='plan-a'):
+        source_stamp_sec = float(stamp_sec)
+        canonical_stamp_sec = source_stamp_sec if source_stamp_sec > 0.0 else 1.0
         plan = Grasp6DPlan()
         plan.header.frame_id = 'base_link'
-        plan.header.stamp = rospy.Time.from_sec(float(stamp_sec))
+        plan.header.stamp = rospy.Time.from_sec(canonical_stamp_sec)
         plan.valid = True
-        plan.plan_id = str(plan_id)
-        plan.model_choice = 'carton_segment'
+        plan.model_choice = 'carton_segment:' + str(plan_id)
         plan.score = 0.9
         plan.candidate_width_m = 0.039
         plan.required_open_width_m = 0.044
@@ -41,7 +43,8 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
             pose.orientation.w = 1.0
             plan.poses.append(pose)
         geometry = plan.object_geometry
-        geometry.header = plan.header
+        geometry.header.frame_id = plan.header.frame_id
+        geometry.header.stamp = plan.header.stamp
         geometry.valid = True
         geometry.label = 'carton'
         geometry.source_mode = 'instance_mask'
@@ -54,6 +57,10 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         geometry.size_xyz_m.z = 0.06
         geometry.support_normal_base.z = 1.0
         geometry.support_offset_m = 0.0
+        plan.plan_id = compute_plan_id(plan)
+        if source_stamp_sec <= 0.0:
+            plan.header.stamp = rospy.Time.from_sec(source_stamp_sec)
+            plan.object_geometry.header.stamp = rospy.Time.from_sec(source_stamp_sec)
         return plan
 
     def test_enriched_source_stamp_controls_readiness_and_legacy_never_enables(self):
@@ -66,11 +73,12 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         self.assertFalse(tracker.state(now_sec=10.0).fresh)
         self.assertEqual(tracker.legacy_pose_count, 4)
 
-        tracker.update_enriched(self._rich_plan(stamp_sec=9.0), now_sec=10.0)
+        plan = self._rich_plan(stamp_sec=9.0)
+        tracker.update_enriched(plan, now_sec=10.0)
         state = tracker.state(now_sec=10.0)
         self.assertTrue(state.fresh)
-        self.assertEqual(tracker.plan_id, 'plan-a')
-        self.assertIn('plan-a', state.text)
+        self.assertEqual(tracker.plan_id, plan.plan_id)
+        self.assertIn(plan.plan_id, state.text)
 
         self.assertFalse(tracker.state(now_sec=12.01).fresh)
         self.assertEqual(tracker.plan_id, '')
@@ -101,20 +109,119 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
 
         self.assertIn('TARGET_LOST', tracker.state(now_sec=10.0).text)
 
+    def test_gui_rejects_cross_snapshot_headers(self):
+        header_cases = []
+        wrong_plan_frame = self._rich_plan(stamp_sec=9.0)
+        wrong_plan_frame.header.frame_id = 'map'
+        header_cases.append(wrong_plan_frame)
+        wrong_geometry_frame = self._rich_plan(stamp_sec=9.0)
+        wrong_geometry_frame.object_geometry.header.frame_id = 'map'
+        header_cases.append(wrong_geometry_frame)
+        wrong_geometry_stamp = self._rich_plan(stamp_sec=9.0)
+        wrong_geometry_stamp.object_geometry.header.stamp = rospy.Time(9, 1)
+        header_cases.append(wrong_geometry_stamp)
+
+        for plan in header_cases:
+            with self.subTest(frame=plan.header.frame_id):
+                state = control_widget.validate_enriched_plan(
+                    plan,
+                    now_sec=10.0,
+                    validity_sec=2.0,
+                )
+                self.assertFalse(state.fresh)
+
+    def test_gui_geometry_semantics_bbox_mode_and_digest_tampering(self):
+        for field, value in (
+            ('label', ''),
+            ('source_mode', ''),
+            ('source_mode', 'unknown'),
+        ):
+            plan = self._rich_plan(stamp_sec=9.0)
+            setattr(plan.object_geometry, field, value)
+            with self.subTest(field=field, value=value):
+                self.assertFalse(
+                    control_widget.validate_enriched_plan(
+                        plan,
+                        now_sec=10.0,
+                        validity_sec=2.0,
+                    ).fresh
+                )
+
+        bbox_plan = self._rich_plan(stamp_sec=9.0)
+        bbox_plan.object_geometry.source_mode = 'bbox_depth'
+        self.assertTrue(
+            control_widget.validate_enriched_plan(
+                bbox_plan,
+                now_sec=10.0,
+                validity_sec=2.0,
+            ).fresh
+        )
+
+        for field in ('pose', 'width', 'geometry'):
+            plan = self._rich_plan(stamp_sec=9.0)
+            if field == 'pose':
+                plan.poses[2].position.x += 0.01
+            elif field == 'width':
+                plan.required_open_width_m += 0.001
+            else:
+                plan.object_geometry.size_xyz_m.x += 0.01
+            with self.subTest(field=field):
+                state = control_widget.validate_enriched_plan(
+                    plan,
+                    now_sec=10.0,
+                    validity_sec=2.0,
+                )
+                self.assertFalse(state.fresh)
+
+    def test_start_service_request_carries_captured_plan_id(self):
+        widget = control_widget.Grasp6DControlWidget.__new__(
+            control_widget.Grasp6DControlWidget
+        )
+        widget._execution_plan_id = 'captured-plan-id'
+        widget._readiness = type(
+            'Ready',
+            (),
+            {'matches_current': lambda self, plan_id: plan_id == 'captured-plan-id'},
+        )()
+        results = []
+        widget._emit_command_result_if_alive = (
+            lambda ok, message: results.append((ok, message))
+        )
+        calls = []
+        original_wait = control_widget.rospy.wait_for_service
+        original_proxy = control_widget.rospy.ServiceProxy
+        control_widget.rospy.wait_for_service = lambda *_args, **_kwargs: None
+        control_widget.rospy.ServiceProxy = lambda *_args, **_kwargs: (
+            lambda **kwargs: (
+                calls.append(kwargs)
+                or type('Response', (), {'success': True, 'message': 'ok'})()
+            )
+        )
+        try:
+            widget._run_start_grasp()
+        finally:
+            control_widget.rospy.wait_for_service = original_wait
+            control_widget.rospy.ServiceProxy = original_proxy
+
+        self.assertEqual(
+            calls,
+            [{'execute': True, 'plan_id': 'captured-plan-id'}],
+        )
+        self.assertEqual(results, [(True, 'ok')])
+
     def test_replacement_changes_ready_plan_identity_without_aliasing(self):
         tracker = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)
         first = self._rich_plan(stamp_sec=9.0, plan_id='first')
+        first_id = first.plan_id
         tracker.update_enriched(first, now_sec=10.0)
         first.plan_id = 'mutated-after-callback'
-        self.assertEqual(tracker.plan_id, 'first')
+        self.assertEqual(tracker.plan_id, first_id)
 
-        tracker.update_enriched(
-            self._rich_plan(stamp_sec=9.5, plan_id='second'),
-            now_sec=10.0,
-        )
-        self.assertEqual(tracker.plan_id, 'second')
-        self.assertFalse(tracker.matches_current('first', now_sec=10.0))
-        self.assertTrue(tracker.matches_current('second', now_sec=10.0))
+        second = self._rich_plan(stamp_sec=9.5, plan_id='second')
+        tracker.update_enriched(second, now_sec=10.0)
+        self.assertEqual(tracker.plan_id, second.plan_id)
+        self.assertFalse(tracker.matches_current(first_id, now_sec=10.0))
+        self.assertTrue(tracker.matches_current(second.plan_id, now_sec=10.0))
 
     def test_older_source_stamp_replay_clears_gui_readiness(self):
         tracker = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)

@@ -10,6 +10,15 @@ from geometry_msgs.msg import PoseArray
 from std_msgs.msg import String
 
 from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient
+from alicia_flexible_grasp.grasp.rich_plan_integrity import (
+    plan_id_matches_content,
+    stamp_nanoseconds as _stamp_nanoseconds,
+    stamp_seconds as _stamp_seconds,
+    strict_plan_id_equal,
+    validate_finite_pose,
+    validate_plan_header_binding,
+    validate_rich_geometry,
+)
 from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan, GraspState
 from alicia_flexible_grasp_supervisor.srv import StartGrasp, StopGrasp, TriggerZero
 from gui.theme import metric_chip, panel
@@ -22,74 +31,24 @@ class Grasp6DPlanState:
     text: str
 
 
-def _stamp_seconds(stamp):
-    if stamp is None:
-        return 0.0
-    if hasattr(stamp, 'to_nsec'):
-        return float(stamp.to_nsec()) * 1e-9
-    if hasattr(stamp, 'to_sec'):
-        return float(stamp.to_sec())
-    return (
-        float(getattr(stamp, 'secs', 0))
-        + float(getattr(stamp, 'nsecs', 0)) * 1e-9
-    )
-
-
-def _stamp_nanoseconds(stamp):
-    if stamp is None:
-        return 0
-    if hasattr(stamp, 'to_nsec'):
-        return int(stamp.to_nsec())
-    return (
-        int(getattr(stamp, 'secs', 0)) * 1_000_000_000
-        + int(getattr(stamp, 'nsecs', 0))
-    )
-
-
 def _ros_now_seconds():
     return _stamp_seconds(rospy.Time.now())
 
 
 def _finite_pose(pose):
     try:
-        values = (
-            float(pose.position.x),
-            float(pose.position.y),
-            float(pose.position.z),
-            float(pose.orientation.x),
-            float(pose.orientation.y),
-            float(pose.orientation.z),
-            float(pose.orientation.w),
-        )
-    except Exception:
+        validate_finite_pose(pose)
+    except (TypeError, ValueError, AttributeError):
         return False
-    return all(math.isfinite(value) for value in values) and sum(
-        value * value for value in values[3:]
-    ) > 1e-24
+    return True
 
 
 def _finite_geometry(geometry):
     try:
-        if not bool(geometry.valid) or not _finite_pose(geometry.pose_base):
-            return False
-        size = (
-            float(geometry.size_xyz_m.x),
-            float(geometry.size_xyz_m.y),
-            float(geometry.size_xyz_m.z),
-        )
-        support = (
-            float(geometry.support_normal_base.x),
-            float(geometry.support_normal_base.y),
-            float(geometry.support_normal_base.z),
-            float(geometry.support_offset_m),
-        )
-    except Exception:
+        validate_rich_geometry(geometry)
+    except (TypeError, ValueError, AttributeError):
         return False
-    return (
-        all(math.isfinite(value) and value > 0.0 for value in size)
-        and all(math.isfinite(value) for value in support)
-        and sum(value * value for value in support[:3]) > 1e-24
-    )
+    return True
 
 
 def validate_enriched_plan(plan, now_sec=None, validity_sec=2.0):
@@ -118,6 +77,20 @@ def validate_enriched_plan(plan, now_sec=None, validity_sec=2.0):
         return Grasp6DPlanState(False, float('inf'), 'GRIPPER_TOO_NARROW: 富计划开口宽度无效')
     if not _finite_geometry(getattr(plan, 'object_geometry', None)):
         return Grasp6DPlanState(False, float('inf'), 'OBB_INVALID: 富计划物体几何无效')
+    try:
+        validate_plan_header_binding(plan)
+    except (TypeError, ValueError, AttributeError) as exc:
+        return Grasp6DPlanState(
+            False,
+            float('inf'),
+            'PLAN_SNAPSHOT_MISMATCH: %s' % exc,
+        )
+    if not plan_id_matches_content(plan):
+        return Grasp6DPlanState(
+            False,
+            float('inf'),
+            'PLAN_ID_MISMATCH: 富计划内容摘要不匹配',
+        )
     stamp_sec = _stamp_seconds(getattr(getattr(plan, 'header', None), 'stamp', None))
     if not math.isfinite(stamp_sec) or stamp_sec <= 0.0:
         return Grasp6DPlanState(False, float('inf'), 'PLAN_STALE: 源时间戳为空')
@@ -173,7 +146,10 @@ class Grasp6DReadinessTracker:
                 current_id = str(getattr(self._plan, 'plan_id', '') or '')
                 if (
                     incoming_ns < current_ns
-                    or (incoming_ns == current_ns and incoming_id != current_id)
+                    or (
+                        incoming_ns == current_ns
+                        and not strict_plan_id_equal(incoming_id, current_id)
+                    )
                 ):
                     replayed = Grasp6DPlanState(
                         False,
@@ -208,7 +184,7 @@ class Grasp6DReadinessTracker:
     def matches_current(self, plan_id, now_sec=None):
         state = self.state(now_sec=now_sec)
         with self._lock:
-            return state.fresh and self.plan_id == str(plan_id or '')
+            return state.fresh and strict_plan_id_equal(self.plan_id, plan_id)
 
 
 def local_plan_execution_notice(use_remote_grasp6d):
@@ -505,7 +481,10 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
             if not self._readiness.matches_current(plan_id):
                 self._emit_command_result_if_alive(False, 'PLAN_REPLACED: 富计划在等待服务时失效')
                 return
-            res = rospy.ServiceProxy('/grasp/start', StartGrasp)(True)
+            res = rospy.ServiceProxy('/grasp/start', StartGrasp)(
+                execute=True,
+                plan_id=plan_id,
+            )
             if not self._readiness.matches_current(plan_id):
                 self._emit_command_result_if_alive(False, 'PLAN_REPLACED: 执行期间富计划已替换或过期')
                 return

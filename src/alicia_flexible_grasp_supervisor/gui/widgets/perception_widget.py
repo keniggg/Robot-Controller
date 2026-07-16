@@ -946,7 +946,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         try:
             rospy.wait_for_service('/grasp/start', timeout=1.0)
             srv = rospy.ServiceProxy('/grasp/start', StartGrasp)
-            res = srv(True)
+            res = srv(execute=True)
             success = bool(res.success)
             message = ('抓取流程成功：' if success else '抓取流程失败：') + str(res.message)
             rospy.loginfo('GUI grasp flow result success=%s message=%s', success, res.message)
