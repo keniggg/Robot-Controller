@@ -198,6 +198,30 @@ class GraspTaskNode:
         # Candidate generation still uses latest_obj and its stricter threshold.
         self.latest_visual_obj = msg
         self.latest_visual_obj_time = now
+        source_stamp = self._object_source_stamp(msg)
+        source_age = (
+            float('inf')
+            if source_stamp is None
+            else _stamp_seconds(now) - _stamp_seconds(source_stamp)
+        )
+        source_validity = self._configured_target_observation_validity(gcfg)
+        if (
+            source_stamp is None
+            or not math.isfinite(source_age)
+            or source_age < 0.0
+            or source_age > source_validity
+        ):
+            rospy.logwarn_throttle(
+                1.0,
+                'Grasp ignored stale object source age %.3fs outside [0, %.3f]s',
+                source_age,
+                source_validity,
+            )
+            with self._grasp6d_plan_guard():
+                self.latest_obj = None
+                self.latest_obj_time = None
+                self._clear_grasp6d_authority()
+            return
         min_confidence = self._cfg_float(gcfg, 'min_object_confidence', 0.50)
         if confidence < min_confidence:
             rospy.logwarn_throttle(
@@ -240,7 +264,21 @@ class GraspTaskNode:
         # a drift-changing observation cannot cross the action boundary.
         with self._grasp6d_plan_guard():
             self.latest_obj = msg
-            self.latest_obj_time = now
+            self.latest_obj_time = source_stamp
+
+    @staticmethod
+    def _object_source_stamp(msg):
+        primary = getattr(getattr(msg, 'header', None), 'stamp', None)
+        if _stamp_nanoseconds(primary) > 0:
+            return primary
+        fallback = getattr(
+            getattr(getattr(msg, 'pose_base', None), 'header', None),
+            'stamp',
+            None,
+        )
+        if _stamp_nanoseconds(fallback) > 0:
+            return fallback
+        return None
 
     def joint_cb(self, msg):
         self.latest_joint_state = msg
@@ -396,9 +434,12 @@ class GraspTaskNode:
 
     def stop_cb(self, req):
         with self._start_guard():
-            # Stop cancels the current lifecycle but does not release its
-            # execution slot; only start_cb's finally block may do that.
-            self.active = False
+            with self._grasp6d_plan_guard():
+                # Global lock order is start -> plan. A synchronous physical
+                # action holding plan first commits before stop returns; a
+                # stop that obtains plan first cancels every later action.
+                # Only start_cb's finally block releases the execution slot.
+                self.active = False
         self.set_state(GraspStages.EMERGENCY_STOP if req.emergency else GraspStages.IDLE, 'stop requested')
         return StopGraspResponse(True, 'stop requested')
 
