@@ -133,6 +133,8 @@ class YOLOv8ObjectDetector:
             mask = np.asarray(data[index], dtype=np.float32)
         except (TypeError, ValueError, OverflowError):
             return None
+        if not np.all(np.isfinite(mask)):
+            return None
         restored = cls._restore_mask(mask, image_shape[:2])
         if restored is None:
             return None

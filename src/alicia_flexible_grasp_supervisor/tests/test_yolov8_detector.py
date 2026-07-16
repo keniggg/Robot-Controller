@@ -230,6 +230,30 @@ class YOLOv8DetectorTest(unittest.TestCase):
         self.assertIsNone(detection)
         self.assertIsNone(mask)
 
+    def test_required_instance_mask_rejects_non_finite_mask_data(self):
+        for label, non_finite in (('nan', np.nan), ('positive_inf', np.inf)):
+            with self.subTest(non_finite=label):
+                backend = FakeBackend()
+                backend.task = 'segment'
+                first = np.zeros((80, 130), dtype=np.float32)
+                second = np.zeros((80, 130), dtype=np.float32)
+                second[15:65, 70:115] = 1.0
+                second[20, 75] = non_finite
+                result = backend.predict(np.zeros((160, 260, 3), dtype=np.uint8))[0]
+                result.masks = FakeMasks([first, second])
+                backend.predict = lambda image, **kwargs: [result]
+                detector = YOLOv8ObjectDetector(
+                    model_backend=backend,
+                    target_class='bottle',
+                    expected_task='segment',
+                    require_instance_mask=True,
+                )
+
+                detection, mask = detector.detect(np.zeros((160, 260, 3), dtype=np.uint8))
+
+                self.assertIsNone(detection)
+                self.assertIsNone(mask)
+
     def test_required_instance_mask_rejects_mask_inconsistent_with_bbox(self):
         backend = FakeBackend()
         first = np.zeros((80, 130), dtype=np.float32)
