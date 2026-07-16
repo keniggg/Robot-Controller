@@ -708,6 +708,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node.tf_buffer = buffer
         node.pose_estimator.tf_buffer = buffer
         node.pose_estimator.tf_timeout_sec = 0.2
+        node.pose_estimator.base_frame = 'map'
 
         transform = node._snapshot_base_optical_transform(snapshot, stamp)
 
@@ -717,6 +718,14 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(buffer.calls[0][2].to_nsec(), 10_000_000_123)
         np.testing.assert_allclose(transform[:3, :3], remote_node.OPTICAL_TO_ROS_CAMERA)
         np.testing.assert_allclose(transform[:3, 3], [0.1, 0.2, 0.3])
+        message = remote_node.geometry_estimate_to_message(
+            make_geometry_estimate(),
+            snapshot=snapshot,
+            stamp=stamp,
+            label='carton',
+        )
+        self.assertEqual(message.header.frame_id, 'base_link')
+        self.assertAlmostEqual(message.pose_base.position.x, 0.40)
 
     def test_snapshot_geometry_tf_never_uses_static_fallback(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
@@ -1168,6 +1177,101 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                     self.assertIsNone(node.latest_target_cloud_base_xyz)
         finally:
             remote_node.estimate_object_geometry = original_estimator
+
+    def test_target_loss_between_wsl_check_and_invalidation_is_preserved(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node = make_processing_node()
+        stringify_started = threading.Event()
+        target_loss_done = threading.Event()
+
+        class WindowError(RuntimeError):
+            def __str__(self):
+                stringify_started.set()
+                target_loss_done.wait(1.0)
+                return 'connection failed after target loss'
+
+        error = WindowError()
+        error.__cause__ = urllib.error.URLError('refused')
+        node.client = RecordingClient(error=error)
+
+        def invalidate_target():
+            stringify_started.wait(1.0)
+            node._invalidate_geometry(
+                'TARGET_LOST',
+                'target lost inside WSL failure window',
+                stamp=remote_node.rospy.Time(10, 123),
+                snapshot=snapshot,
+            )
+            target_loss_done.set()
+
+        invalidation_thread = threading.Thread(target=invalidate_target)
+        invalidation_thread.start()
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+            invalidation_thread.join(2.0)
+
+        self.assertFalse(ok)
+        self.assertTrue(target_loss_done.is_set())
+        self.assertEqual(
+            message,
+            'TARGET_LOST: target lost inside WSL failure window',
+        )
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertIsNone(node.latest_target_cloud_base_xyz)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_model_reload_between_empty_check_and_invalidation_is_preserved(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node = make_processing_node(RecordingClient(candidates=[]))
+        diagnostics_started = threading.Event()
+        reload_done = threading.Event()
+
+        def diagnostics(_remote_diagnostics):
+            diagnostics_started.set()
+            reload_done.wait(1.0)
+            return ' [diagnostic-window]'
+
+        node._candidate_failure_diagnostics = diagnostics
+
+        def invalidate_model():
+            diagnostics_started.wait(1.0)
+            node._invalidate_geometry(
+                'MODEL_RELOADED',
+                'model changed inside empty-candidate window',
+                stamp=remote_node.rospy.Time(10, 123),
+                snapshot=snapshot,
+            )
+            reload_done.set()
+
+        invalidation_thread = threading.Thread(target=invalidate_model)
+        invalidation_thread.start()
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+            invalidation_thread.join(2.0)
+
+        self.assertFalse(ok)
+        self.assertTrue(reload_done.is_set())
+        self.assertEqual(
+            message,
+            'MODEL_RELOADED: model changed inside empty-candidate window',
+        )
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertIsNone(node.latest_target_cloud_base_xyz)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
 
     def test_target_loss_publishes_invalid_geometry_and_clears_plan(self):
         node = make_processing_node()

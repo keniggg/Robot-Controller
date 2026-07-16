@@ -1363,6 +1363,46 @@ class RemoteGrasp6DNode:
             )
             return True, code
 
+    def _invalidate_geometry_if_current(
+        self,
+        expected_generation,
+        failure_code,
+        failure_reason,
+        stamp=None,
+        snapshot=None,
+        label='',
+    ):
+        with self._geometry_state_guard():
+            current = int(getattr(self, '_geometry_invalidation_generation', 0))
+            if current != int(expected_generation):
+                message = str(
+                    getattr(
+                        getattr(self, 'latest_object_geometry', None),
+                        'failure_reason',
+                        '',
+                    )
+                    or ''
+                )
+                if not message:
+                    code = str(
+                        getattr(
+                            self,
+                            '_last_geometry_invalidation_code',
+                            'PLAN_STALE',
+                        )
+                        or 'PLAN_STALE'
+                    )
+                    message = '%s: geometry was invalidated concurrently' % code
+                return False, message
+            invalid = self._invalidate_geometry(
+                failure_code,
+                failure_reason,
+                stamp=stamp,
+                snapshot=snapshot,
+                label=label,
+            )
+            return True, str(invalid.failure_reason)
+
     def _publish_legacy_plan_if_current(self, plan, expected_generation):
         with self._geometry_state_guard():
             current = int(getattr(self, '_geometry_invalidation_generation', 0))
@@ -1461,7 +1501,7 @@ class RemoteGrasp6DNode:
         if not source_frame:
             raise RuntimeError('snapshot camera frame is empty')
         pose_estimator = getattr(self, 'pose_estimator', None)
-        base_frame = str(getattr(pose_estimator, 'base_frame', 'base_link') or 'base_link')
+        base_frame = 'base_link'
         tf_buffer = getattr(self, 'tf_buffer', None)
         if tf_buffer is None:
             tf_buffer = getattr(pose_estimator, 'tf_buffer', None)
@@ -1963,31 +2003,34 @@ class RemoteGrasp6DNode:
                     candidate_width_tolerance_m=self.candidate_width_tolerance_m,
                 )
             except Exception as exc:
-                invalidated, concurrent_code = self._geometry_invalidation_state(
-                    request_invalidation_generation
-                )
-                if invalidated:
-                    message = (
-                        '%s: planning request was invalidated during remote inference'
-                        % concurrent_code
-                    )
-                    self._publish_error(message)
-                    return False, message
                 failure_code = remote_prediction_failure_code(exc)
                 failure_reason = str(exc)
-                message = '%s: %s' % (failure_code, failure_reason)
-                self._invalidate_geometry(
+                applied, message = self._invalidate_geometry_if_current(
+                    request_invalidation_generation,
                     failure_code,
                     failure_reason,
                     stamp=stamp,
                     snapshot=snapshot,
                 )
                 self._publish_error(message)
-                if self.failure_backoff_sec > 0.0:
+                if applied and self.failure_backoff_sec > 0.0:
                     self._backoff_until = (
                         rospy.Time.now()
                         + rospy.Duration(self.failure_backoff_sec)
                     )
+                return False, message
+            remote_diagnostics = dict(getattr(self.client, 'last_diagnostics', {}) or {})
+            if not candidates:
+                failure_reason = 'remote GraspNet returned no candidates'
+                failure_reason += self._candidate_failure_diagnostics(remote_diagnostics)
+                _applied, message = self._invalidate_geometry_if_current(
+                    request_invalidation_generation,
+                    'NO_RAW_CANDIDATE',
+                    failure_reason,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
+                self._publish_error(message)
                 return False, message
             invalidated, failure_code = self._geometry_invalidation_state(
                 request_invalidation_generation
@@ -1996,19 +2039,6 @@ class RemoteGrasp6DNode:
                 message = (
                     '%s: planning request was invalidated during remote inference'
                     % failure_code
-                )
-                self._publish_error(message)
-                return False, message
-            remote_diagnostics = dict(getattr(self.client, 'last_diagnostics', {}) or {})
-            if not candidates:
-                failure_reason = 'remote GraspNet returned no candidates'
-                failure_reason += self._candidate_failure_diagnostics(remote_diagnostics)
-                message = 'NO_RAW_CANDIDATE: %s' % failure_reason
-                self._invalidate_geometry(
-                    'NO_RAW_CANDIDATE',
-                    failure_reason,
-                    stamp=stamp,
-                    snapshot=snapshot,
                 )
                 self._publish_error(message)
                 return False, message
