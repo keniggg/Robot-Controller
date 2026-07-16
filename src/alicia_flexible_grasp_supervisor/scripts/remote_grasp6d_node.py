@@ -499,7 +499,7 @@ class RemoteGrasp6DNode:
     def __init__(self):
         self.enabled = bool(rospy.get_param('/grasp_6d/enabled', True))
         self.bridge = CvBridge()
-        self.frames = SynchronizedRgbdBuffer()
+        self.frames = SynchronizedRgbdBuffer(source_clock_ns=self._ros_source_clock_ns)
         self.latest_object = None
         self.latest_object_time = None
         self._planning_snapshot_active = False
@@ -1112,6 +1112,13 @@ class RemoteGrasp6DNode:
     def color_cb(self, msg):
         self.frames.update_color(self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8'), msg.header.stamp, msg.header.frame_id)
 
+    @staticmethod
+    def _ros_source_clock_ns():
+        now = rospy.Time.now()
+        if hasattr(now, 'to_nsec'):
+            return int(now.to_nsec())
+        return int(now.secs) * 1_000_000_000 + int(getattr(now, 'nsecs', 0))
+
     def depth_cb(self, msg):
         self.frames.update_depth(
             self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough'),
@@ -1290,7 +1297,7 @@ class RemoteGrasp6DNode:
             if result.failure_code != 'DEPTH_UNSTABLE':
                 return result, result.failure_code, result.failure_reason
             last_failure = result
-            self.frames.discard_through(max(sample.stamp_sec for sample in samples))
+            self.frames.discard_through_ns(samples[-1].stamp_ns)
 
         if last_failure is not None:
             return last_failure, last_failure.failure_code, last_failure.failure_reason
@@ -1308,7 +1315,11 @@ class RemoteGrasp6DNode:
             self._request_lock.release()
             return False, 'remote 6D request requires a valid planning snapshot'
         color = snapshot.color_bgr
-        stamp = rospy.Time.from_sec(float(snapshot.stamp_sec))
+        if int(getattr(snapshot, 'stamp_ns', 0)) > 0:
+            stamp_secs, stamp_nsecs = divmod(int(snapshot.stamp_ns), 1_000_000_000)
+            stamp = rospy.Time(stamp_secs, stamp_nsecs)
+        else:
+            stamp = rospy.Time.from_sec(float(snapshot.stamp_sec))
         frame_id = snapshot.frame_id
         self._planning_snapshot_active = True
         self._planning_object_msg = snapshot.object_msg

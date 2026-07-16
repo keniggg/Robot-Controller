@@ -17,6 +17,7 @@ class RgbdSample:
     stamp_sec: float
     frame_id: str
     joint_positions: np.ndarray
+    stamp_ns: int = 0
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class SnapshotResult:
     frame_id: str
     quality: DepthQuality
     source_mode: str
+    stamp_ns: int = 0
 
     def __post_init__(self):
         for name in ('color_bgr', 'depth_raw', 'target_depth_raw', 'object_mask'):
@@ -111,6 +113,7 @@ def _failure(samples, code, reason, source_mode):
         bbox = ()
         object_msg = None
         stamp_sec = 0.0
+        stamp_ns = 0
         frame_id = ''
     else:
         color = np.asarray(latest.color_bgr).copy()
@@ -119,6 +122,7 @@ def _failure(samples, code, reason, source_mode):
         bbox = tuple(latest.bbox or ())
         object_msg = latest.object_msg
         stamp_sec = float(latest.stamp_sec)
+        stamp_ns = int(getattr(latest, 'stamp_ns', round(stamp_sec * 1e9)))
         frame_id = str(latest.frame_id or '')
     return SnapshotResult(
         ok=False,
@@ -134,6 +138,7 @@ def _failure(samples, code, reason, source_mode):
         frame_id=frame_id,
         quality=_empty_quality(len(samples)),
         source_mode=str(source_mode),
+        stamp_ns=stamp_ns,
     )
 
 
@@ -358,6 +363,7 @@ def fuse_stable_samples(
         frame_id=str(latest.frame_id or ''),
         quality=quality,
         source_mode=source_mode,
+        stamp_ns=int(getattr(latest, 'stamp_ns', round(float(latest.stamp_sec) * 1e9))),
     )
 
 
@@ -377,11 +383,19 @@ def _timestamp_key(stamp):
     return int(round(_stamp_seconds(stamp) * 1e9))
 
 
+def _wall_clock_ns():
+    if hasattr(time, 'time_ns'):
+        return int(time.time_ns())
+    return int(round(time.time() * 1e9))
+
+
 class SynchronizedRgbdBuffer:
-    def __init__(self):
+    def __init__(self, source_clock_ns=None, monotonic_clock=None):
         self._condition = threading.Condition()
         self._entries = {}
         self._joint_positions = np.zeros(0, dtype=float)
+        self._source_clock_ns = source_clock_ns or _wall_clock_ns
+        self._monotonic_clock = monotonic_clock or time.monotonic
 
     def update_color(self, color_bgr, stamp_sec, frame_id):
         self._update_entry(
@@ -414,22 +428,30 @@ class SynchronizedRgbdBuffer:
 
     def wait_for_samples(self, count, timeout_sec, require_mask, max_age_sec):
         count = max(1, int(count))
-        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        deadline = self._monotonic_clock() + max(0.0, float(timeout_sec))
         with self._condition:
             while True:
-                now = time.monotonic()
-                self._prune_locked(now)
-                complete = self._complete_entries_locked(bool(require_mask), now, max_age_sec)
+                monotonic_now = self._monotonic_clock()
+                source_now_ns = int(self._source_clock_ns())
+                self._prune_locked(monotonic_now)
+                complete = self._complete_entries_locked(
+                    bool(require_mask),
+                    source_now_ns,
+                    max_age_sec,
+                )
                 if len(complete) >= count:
                     selected = complete[-count:]
                     return [self._sample_from_entry(entry, bool(require_mask)) for _key, entry in selected]
-                remaining = deadline - now
+                remaining = deadline - monotonic_now
                 if remaining <= 0.0:
                     return []
                 self._condition.wait(remaining)
 
     def discard_through(self, stamp_sec):
-        key_limit = _timestamp_key(stamp_sec)
+        self.discard_through_ns(_timestamp_key(stamp_sec))
+
+    def discard_through_ns(self, stamp_ns):
+        key_limit = int(stamp_ns)
         with self._condition:
             for key in [key for key in self._entries if key <= key_limit]:
                 del self._entries[key]
@@ -438,13 +460,14 @@ class SynchronizedRgbdBuffer:
     def _update_entry(self, stamp, **values):
         key = _timestamp_key(stamp)
         stamp_sec = _stamp_seconds(stamp)
-        now = time.monotonic()
+        now = self._monotonic_clock()
         with self._condition:
             self._prune_locked(now)
             entry = self._entries.setdefault(
                 key,
                 {
                     'stamp_sec': stamp_sec,
+                    'stamp_ns': key,
                     'created_at': now,
                     'updated_at': now,
                     'joint_positions': self._joint_positions.copy(),
@@ -465,11 +488,15 @@ class SynchronizedRgbdBuffer:
         ]:
             del self._entries[key]
 
-    def _complete_entries_locked(self, require_mask, now, max_age_sec):
+    def _complete_entries_locked(self, require_mask, source_now_ns, max_age_sec):
         max_age = max(0.0, float(max_age_sec))
+        max_age_ns = int(round(max_age * 1e9))
         complete = []
         for key, entry in sorted(self._entries.items()):
-            if max_age > 0.0 and now - float(entry.get('created_at', now)) > max_age:
+            stamp_ns = int(entry['stamp_ns'])
+            if stamp_ns > source_now_ns:
+                continue
+            if max_age > 0.0 and source_now_ns - stamp_ns > max_age_ns:
                 continue
             required = ('color_bgr', 'depth_raw', 'object_msg')
             if any(name not in entry for name in required):
@@ -512,4 +539,5 @@ class SynchronizedRgbdBuffer:
             stamp_sec=float(entry['stamp_sec']),
             frame_id=frame_id,
             joint_positions=np.asarray(entry.get('joint_positions', ()), dtype=float).copy(),
+            stamp_ns=int(entry['stamp_ns']),
         )

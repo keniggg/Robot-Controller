@@ -112,7 +112,10 @@ class SequenceSampleBuffer:
         return self.windows.pop(0) if self.windows else []
 
     def discard_through(self, stamp_sec):
-        self.discarded.append(float(stamp_sec))
+        raise AssertionError('retry discard must use exact integer nanoseconds, got %r' % stamp_sec)
+
+    def discard_through_ns(self, stamp_ns):
+        self.discarded.append(int(stamp_ns))
 
 
 class FakeTf2Module:
@@ -125,6 +128,21 @@ class FakeTf2Module:
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
+    def test_ros_source_clock_preserves_exact_nanoseconds(self):
+        class Stamp:
+            def to_nsec(self):
+                return 1_700_000_000_000_000_123
+
+        original_now = remote_node.rospy.Time.now
+        remote_node.rospy.Time.now = staticmethod(lambda: Stamp())
+        try:
+            self.assertEqual(
+                remote_node.RemoteGrasp6DNode._ros_source_clock_ns(),
+                1_700_000_000_000_000_123,
+            )
+        finally:
+            remote_node.rospy.Time.now = original_now
+
     def test_gate_audit_exposes_independent_filter_intersection(self):
         rows = [
             {
@@ -340,7 +358,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         mask[5:15, 8:22] = 255
 
         def rgbd(stamp, joints):
-            return RgbdSample(
+            item = RgbdSample(
                 color_bgr=np.zeros((20, 30, 3), dtype=np.uint8),
                 depth_raw=np.full((20, 30), 2200, dtype=np.uint16),
                 object_mask=mask.copy(),
@@ -350,6 +368,8 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 frame_id='camera_link',
                 joint_positions=np.asarray(joints, dtype=float),
             )
+            item.stamp_ns = int(round(float(stamp) * 1e9))
+            return item
 
         unstable = [
             rgbd(1.00, [0.0] * 6),
@@ -386,7 +406,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         self.assertTrue(response.success)
         self.assertEqual(response.message, 'planned')
-        self.assertEqual(node.frames.discarded, [1.06])
+        self.assertEqual(node.frames.discarded, [1_060_000_000])
         self.assertEqual(len(processed), 1)
         self.assertTrue(processed[0][0].ok)
         self.assertEqual(processed[0][0].object_msg.snapshot_stamp, 1.16)

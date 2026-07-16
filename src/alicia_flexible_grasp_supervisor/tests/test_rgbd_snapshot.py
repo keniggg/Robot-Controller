@@ -65,6 +65,13 @@ def fuse(samples, **overrides):
     return fuse_stable_samples(samples, **kwargs)
 
 
+def synchronized_buffer_at(source_now_ns, monotonic_clock=None):
+    return SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: int(source_now_ns),
+        monotonic_clock=monotonic_clock,
+    )
+
+
 def test_mask_iou_uses_binary_overlap():
     first = np.zeros((4, 5), dtype=np.uint8)
     second = np.zeros((4, 5), dtype=np.uint8)
@@ -329,7 +336,7 @@ def test_direct_snapshot_result_construction_freezes_defensive_array_copies():
 
 
 def test_synchronized_buffer_requires_exact_timestamp_components_and_returns_copies():
-    buffer = SynchronizedRgbdBuffer()
+    buffer = synchronized_buffer_at(1_100_000_000)
     color = np.zeros((3, 4, 3), dtype=np.uint8)
     depth = np.full((3, 4), 2200, dtype=np.uint16)
     mask = np.ones((3, 4), dtype=np.uint8) * 255
@@ -363,7 +370,7 @@ def test_synchronized_buffer_requires_exact_timestamp_components_and_returns_cop
 
 
 def test_detect_buffer_ignores_mask_but_requires_detected_object():
-    buffer = SynchronizedRgbdBuffer()
+    buffer = synchronized_buffer_at(2_100_000_000)
     color = np.zeros((3, 4, 3), dtype=np.uint8)
     depth = np.full((3, 4), 2200, dtype=np.uint16)
     buffer.update_joints([0.0] * 6)
@@ -400,7 +407,7 @@ def test_detect_buffer_ignores_mask_but_requires_detected_object():
 
 
 def test_buffer_rejects_components_from_different_camera_frames():
-    buffer = SynchronizedRgbdBuffer()
+    buffer = synchronized_buffer_at(2_100_000_000)
     color = np.zeros((3, 4, 3), dtype=np.uint8)
     depth = np.full((3, 4), 2200, dtype=np.uint16)
     detected = types.SimpleNamespace(
@@ -420,7 +427,7 @@ def test_buffer_rejects_components_from_different_camera_frames():
 
 
 def test_wait_for_samples_blocks_until_three_complete_entries_arrive():
-    buffer = SynchronizedRgbdBuffer()
+    buffer = synchronized_buffer_at(3_100_000_000)
     color = np.zeros((3, 4, 3), dtype=np.uint8)
     depth = np.full((3, 4), 2200, dtype=np.uint16)
     mask = np.ones((3, 4), dtype=np.uint8) * 255
@@ -458,7 +465,8 @@ def test_buffer_keeps_adjacent_large_epoch_nanosecond_stamps_distinct():
         def to_sec(self):
             return float(self.secs) + float(self.nsecs) * 1e-9
 
-    buffer = SynchronizedRgbdBuffer()
+    base_ns = 1_700_000_000 * 1_000_000_000
+    buffer = synchronized_buffer_at(base_ns + 10)
     color = np.zeros((3, 4, 3), dtype=np.uint8)
     depth = np.full((3, 4), 2200, dtype=np.uint16)
     detected = types.SimpleNamespace(
@@ -478,3 +486,136 @@ def test_buffer_keeps_adjacent_large_epoch_nanosecond_stamps_distinct():
     samples = buffer.wait_for_samples(2, 0.01, require_mask=False, max_age_sec=10.0)
 
     assert len(samples) == 2
+
+
+def test_exact_nanosecond_discard_preserves_next_large_epoch_entry():
+    class Stamp:
+        def __init__(self, secs, nsecs):
+            self.secs = secs
+            self.nsecs = nsecs
+
+        def to_sec(self):
+            return float(self.secs) + float(self.nsecs) * 1e-9
+
+    base_ns = 1_700_000_000 * 1_000_000_000
+    buffer = synchronized_buffer_at(base_ns + 10)
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    rejected_stamps = [Stamp(1_700_000_000, nsecs) for nsecs in (1, 2, 3)]
+    for stamp in rejected_stamps:
+        buffer.update_color(color, stamp, 'camera_link')
+        buffer.update_depth(depth, stamp, 'camera_link')
+        buffer.update_object(detected, stamp)
+
+    first_window = buffer.wait_for_samples(3, 0.01, require_mask=False, max_age_sec=10.0)
+
+    assert [item.stamp_ns for item in first_window] == [
+        base_ns + 1,
+        base_ns + 2,
+        base_ns + 3,
+    ]
+    fresh_stamp = Stamp(1_700_000_000, 4)
+    buffer.update_color(color, fresh_stamp, 'camera_link')
+    buffer.update_depth(depth, fresh_stamp, 'camera_link')
+    buffer.update_object(detected, fresh_stamp)
+    buffer.discard_through_ns(first_window[-1].stamp_ns)
+    remaining = buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=10.0)
+    assert [item.stamp_ns for item in remaining] == [base_ns + 4]
+
+
+def test_buffer_rejects_replayed_source_stamp_received_now():
+    now_ns = 1_700_000_000_500_000_000
+    buffer = synchronized_buffer_at(now_ns)
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    stale_stamp = (now_ns - 500_000_000) * 1e-9
+    buffer.update_color(color, stale_stamp, 'camera_link')
+    buffer.update_depth(depth, stale_stamp, 'camera_link')
+    buffer.update_object(detected, stale_stamp)
+
+    assert buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=0.35) == []
+
+
+def test_buffer_accepts_fresh_source_stamp_from_injected_clock():
+    now_ns = 1_700_000_000_500_000_000
+    buffer = synchronized_buffer_at(now_ns)
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    fresh_stamp = (now_ns - 100_000_000) * 1e-9
+    buffer.update_color(color, fresh_stamp, 'camera_link')
+    buffer.update_depth(depth, fresh_stamp, 'camera_link')
+    buffer.update_object(detected, fresh_stamp)
+
+    samples = buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=0.35)
+
+    assert len(samples) == 1
+
+
+def test_buffer_rejects_future_source_stamp():
+    now_ns = 1_700_000_000_500_000_000
+    buffer = synchronized_buffer_at(now_ns)
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    future_stamp = (now_ns + 1_000_000) * 1e-9
+    buffer.update_color(color, future_stamp, 'camera_link')
+    buffer.update_depth(depth, future_stamp, 'camera_link')
+    buffer.update_object(detected, future_stamp)
+
+    assert buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=10.0) == []
+
+
+def test_buffer_retention_uses_monotonic_receive_time():
+    now_ns = 1_700_000_000_500_000_000
+    monotonic_now = [10.0]
+    buffer = synchronized_buffer_at(now_ns, monotonic_clock=lambda: monotonic_now[0])
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    fresh_stamp = (now_ns - 100_000_000) * 1e-9
+    buffer.update_color(color, fresh_stamp, 'camera_link')
+    buffer.update_depth(depth, fresh_stamp, 'camera_link')
+    buffer.update_object(detected, fresh_stamp)
+    assert len(buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=10.0)) == 1
+
+    monotonic_now[0] = 12.1
+
+    assert buffer.wait_for_samples(1, 0.0, require_mask=False, max_age_sec=10.0) == []
