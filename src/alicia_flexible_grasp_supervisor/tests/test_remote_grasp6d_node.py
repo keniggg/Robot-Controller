@@ -16,6 +16,11 @@ for path in (ROOT, ROOT / 'src'):
         sys.path.insert(0, str(path))
 
 from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGraspCandidate
+from alicia_flexible_grasp.vision.rgbd_snapshot import (
+    DepthQuality,
+    RgbdSample,
+    SnapshotResult,
+)
 
 
 SCRIPT = ROOT / 'scripts' / 'remote_grasp6d_node.py'
@@ -87,6 +92,27 @@ class DummyLock:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+class RecordingPublisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, message):
+        self.messages.append(getattr(message, 'data', message))
+
+
+class SequenceSampleBuffer:
+    def __init__(self, windows):
+        self.windows = list(windows)
+        self.discarded = []
+
+    def wait_for_samples(self, count, timeout_sec, require_mask, max_age_sec):
+        del count, timeout_sec, require_mask, max_age_sec
+        return self.windows.pop(0) if self.windows else []
+
+    def discard_through(self, stamp_sec):
+        self.discarded.append(float(stamp_sec))
 
 
 class FakeTf2Module:
@@ -306,25 +332,134 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(resolved['protocol_version'], 2)
         self.assertIn('depth_m', resolved['candidate_fields'])
 
-    def test_latest_rgbd_buffer_supports_manual_snapshot_after_auto_consumption(self):
-        buffer = remote_node.LatestRgbdBuffer()
-        color = np.zeros((2, 2, 3), dtype=np.uint8)
-        depth = np.ones((2, 2), dtype=np.uint16)
+    def test_remote_node_exports_synchronized_rgbd_buffer(self):
+        self.assertEqual(remote_node.SynchronizedRgbdBuffer.__name__, 'SynchronizedRgbdBuffer')
 
-        buffer.update_color(color, stamp='stamp', frame_id='camera_link')
-        buffer.update_depth(depth)
+    def test_one_request_retries_unstable_window_until_stable_frames_arrive(self):
+        mask = np.zeros((20, 30), dtype=np.uint8)
+        mask[5:15, 8:22] = 255
 
-        first = buffer.take_latest()
-        second = buffer.take_latest()
-        manual = buffer.snapshot_latest()
+        def rgbd(stamp, joints):
+            return RgbdSample(
+                color_bgr=np.zeros((20, 30, 3), dtype=np.uint8),
+                depth_raw=np.full((20, 30), 2200, dtype=np.uint16),
+                object_mask=mask.copy(),
+                bbox=(5, 4, 20, 12),
+                object_msg=types.SimpleNamespace(detected=True, snapshot_stamp=stamp),
+                stamp_sec=float(stamp),
+                frame_id='camera_link',
+                joint_positions=np.asarray(joints, dtype=float),
+            )
 
-        self.assertIsNotNone(first)
-        self.assertIsNone(second)
-        self.assertIsNotNone(manual)
-        np.testing.assert_array_equal(manual[0], color)
-        np.testing.assert_array_equal(manual[1], depth)
-        self.assertEqual(manual[2], 'stamp')
-        self.assertEqual(manual[3], 'camera_link')
+        unstable = [
+            rgbd(1.00, [0.0] * 6),
+            rgbd(1.03, [0.02, 0, 0, 0, 0, 0]),
+            rgbd(1.06, [0.0] * 6),
+        ]
+        stable = [
+            rgbd(1.10, [0.0] * 6),
+            rgbd(1.13, [0.0] * 6),
+            rgbd(1.16, [0.0] * 6),
+        ]
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.enabled = True
+        node.frames = SequenceSampleBuffer([unstable, stable])
+        node.status_pub = RecordingPublisher()
+        node.planning_snapshot_frames = 3
+        node.planning_snapshot_timeout_sec = 1.0
+        node.planning_snapshot_max_age_sec = 0.35
+        node.planning_mask_min_iou = 0.85
+        node.planning_mask_max_centroid_shift_px = 5.0
+        node.planning_max_joint_delta_rad = 0.01
+        node.mask_erosion_px = 2
+        node.mask_internal_hole_max_area_px = 25
+        node.depth_mad_scale = 3.5
+        node.depth_mad_absolute_floor_m = 0.002
+        node._active_profile_requires_mask = lambda: True
+        node._snapshot_depth_config = lambda: (0.0001, 0.03, 2.0)
+        processed = []
+        node._process_frame = lambda snapshot, manual=False: (
+            processed.append((snapshot, manual)) or (True, 'planned')
+        )
+
+        response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
+
+        self.assertTrue(response.success)
+        self.assertEqual(response.message, 'planned')
+        self.assertEqual(node.frames.discarded, [1.06])
+        self.assertEqual(len(processed), 1)
+        self.assertTrue(processed[0][0].ok)
+        self.assertEqual(processed[0][0].object_msg.snapshot_stamp, 1.16)
+        self.assertTrue(processed[0][1])
+
+    def test_snapshot_failure_is_published_with_one_structured_prefix(self):
+        good_mask = np.ones((20, 30), dtype=np.uint8) * 255
+        wrong_mask = np.ones((10, 10), dtype=np.uint8) * 255
+
+        def rgbd(mask, stamp):
+            return RgbdSample(
+                color_bgr=np.zeros((20, 30, 3), dtype=np.uint8),
+                depth_raw=np.full((20, 30), 2200, dtype=np.uint16),
+                object_mask=mask,
+                bbox=(5, 4, 20, 12),
+                object_msg=types.SimpleNamespace(detected=True),
+                stamp_sec=float(stamp),
+                frame_id='camera_link',
+                joint_positions=np.zeros(6, dtype=float),
+            )
+
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.enabled = True
+        node.frames = SequenceSampleBuffer(
+            [[rgbd(good_mask, 1.00), rgbd(wrong_mask, 1.03), rgbd(good_mask, 1.06)]]
+        )
+        node.status_pub = RecordingPublisher()
+        node.planning_snapshot_frames = 3
+        node.planning_snapshot_timeout_sec = 1.0
+        node.planning_snapshot_max_age_sec = 0.35
+        node.planning_mask_min_iou = 0.85
+        node.planning_mask_max_centroid_shift_px = 5.0
+        node.planning_max_joint_delta_rad = 0.01
+        node.mask_erosion_px = 2
+        node.mask_internal_hole_max_area_px = 25
+        node.depth_mad_scale = 3.5
+        node.depth_mad_absolute_floor_m = 0.002
+        node._active_profile_requires_mask = lambda: True
+        node._snapshot_depth_config = lambda: (0.0001, 0.03, 2.0)
+
+        response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
+
+        self.assertFalse(response.success)
+        self.assertTrue(response.message.startswith('MASK_SIZE_MISMATCH: '))
+        self.assertEqual(response.message.count('MASK_SIZE_MISMATCH:'), 1)
+        self.assertEqual(node.status_pub.messages[-1], response.message)
+
+    def test_segment_snapshot_sends_only_target_depth_to_remote_path(self):
+        context_depth = np.full((4, 5), 2200, dtype=np.uint16)
+        target_depth = np.zeros((4, 5), dtype=np.uint16)
+        target_depth[1:3, 2:4] = 2200
+        snapshot = SnapshotResult(
+            ok=True,
+            failure_code='',
+            failure_reason='',
+            color_bgr=np.zeros((4, 5, 3), dtype=np.uint8),
+            depth_raw=context_depth,
+            target_depth_raw=target_depth,
+            object_mask=np.where(target_depth > 0, 255, 0).astype(np.uint8),
+            bbox=(1, 1, 3, 2),
+            object_msg=types.SimpleNamespace(detected=True),
+            stamp_sec=10.0,
+            frame_id='camera_link',
+            quality=DepthQuality(3, 4, 4, 1.0, 0.22, 0.0),
+            source_mode='instance_mask',
+        )
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.use_perception_roi = True
+
+        remote_depth, _message = node._depth_for_remote(snapshot)
+
+        np.testing.assert_array_equal(remote_depth, target_depth)
+        self.assertEqual(int(remote_depth[0, 0]), 0)
 
     def test_selects_first_reachable_candidate_after_camera_to_base_transform(self):
         candidates = [

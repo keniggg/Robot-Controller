@@ -4,13 +4,14 @@ import math
 import os
 import re
 import threading
+import time
 from copy import deepcopy
 
 import numpy as np
 import rospy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseArray
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import String
 from tf.transformations import quaternion_from_euler, quaternion_from_matrix, quaternion_matrix, quaternion_multiply
 
@@ -25,8 +26,14 @@ from alicia_flexible_grasp.robot.planning_feedback import (
     is_position_only_fallback_message,
 )
 from alicia_flexible_grasp.vision.grasp6d_adapter import CameraIntrinsics
+from alicia_flexible_grasp.vision.model_selection import select_yolo_model
 from alicia_flexible_grasp.vision.pose_estimator import PoseEstimator
 from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient, RemoteGraspCandidate
+from alicia_flexible_grasp.vision.rgbd_snapshot import (
+    SnapshotResult,
+    SynchronizedRgbdBuffer,
+    fuse_stable_samples,
+)
 from alicia_flexible_grasp_supervisor.msg import ObjectPose
 from alicia_flexible_grasp_supervisor.srv import SetTargetPose, TriggerZero, TriggerZeroResponse
 
@@ -150,44 +157,6 @@ def resolve_grasp_backend_health(health):
     payload = health if isinstance(health, dict) else {}
     nested = payload.get('grasp_backend')
     return nested if isinstance(nested, dict) else payload
-
-
-class LatestRgbdBuffer:
-    def __init__(self):
-        self._lock = threading.Lock()
-        self.color = None
-        self.depth = None
-        self.stamp = None
-        self.frame_id = ''
-        self.color_seq = 0
-        self.consumed_seq = 0
-
-    def update_color(self, color, stamp, frame_id):
-        with self._lock:
-            self.color = color
-            self.stamp = stamp
-            self.frame_id = frame_id
-            self.color_seq += 1
-
-    def update_depth(self, depth):
-        with self._lock:
-            self.depth = depth
-
-    def take_latest(self):
-        with self._lock:
-            if self.color_seq == self.consumed_seq:
-                return None
-            self.consumed_seq = self.color_seq
-            return self._snapshot_locked()
-
-    def snapshot_latest(self):
-        with self._lock:
-            return self._snapshot_locked()
-
-    def _snapshot_locked(self):
-        if self.color is None or self.depth is None:
-            return None
-        return self.color.copy(), self.depth.copy(), self.stamp, self.frame_id
 
 
 def normalize_candidate_frame_convention(convention):
@@ -530,9 +499,12 @@ class RemoteGrasp6DNode:
     def __init__(self):
         self.enabled = bool(rospy.get_param('/grasp_6d/enabled', True))
         self.bridge = CvBridge()
-        self.frames = LatestRgbdBuffer()
+        self.frames = SynchronizedRgbdBuffer()
         self.latest_object = None
         self.latest_object_time = None
+        self._planning_snapshot_active = False
+        self._planning_object_msg = None
+        self._planning_object_time = None
         self._object_lock = threading.Lock()
         self.last_error = ''
         self._request_lock = threading.Lock()
@@ -542,9 +514,97 @@ class RemoteGrasp6DNode:
         self.gate_audit_pub = rospy.Publisher('/grasp_6d/gate_audit', String, queue_size=1, latch=True)
 
         cam_cfg = rospy.get_param('/camera', {})
+        pcfg = rospy.get_param('/perception', {})
         hcfg = rospy.get_param('/handeye', {})
         gcfg = rospy.get_param('/grasp', {})
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
+        self.planning_snapshot_frames = max(
+            1,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/planning_snapshot_frames',
+                    remote_cfg.get('planning_snapshot_frames', 3),
+                )
+            ),
+        )
+        self.planning_snapshot_timeout_sec = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/planning_snapshot_timeout_sec',
+                    remote_cfg.get('planning_snapshot_timeout_sec', 1.0),
+                )
+            ),
+        )
+        self.planning_snapshot_max_age_sec = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/planning_snapshot_max_age_sec',
+                    remote_cfg.get('planning_snapshot_max_age_sec', 0.35),
+                )
+            ),
+        )
+        self.planning_mask_min_iou = float(
+            rospy.get_param(
+                '/grasp_6d/remote/planning_mask_min_iou',
+                remote_cfg.get('planning_mask_min_iou', 0.85),
+            )
+        )
+        self.planning_mask_max_centroid_shift_px = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/planning_mask_max_centroid_shift_px',
+                    remote_cfg.get('planning_mask_max_centroid_shift_px', 5.0),
+                )
+            ),
+        )
+        self.planning_max_joint_delta_rad = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/planning_max_joint_delta_rad',
+                    remote_cfg.get('planning_max_joint_delta_rad', 0.01),
+                )
+            ),
+        )
+        self.mask_erosion_px = max(
+            0,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/mask_erosion_px',
+                    remote_cfg.get('mask_erosion_px', 2),
+                )
+            ),
+        )
+        self.mask_internal_hole_max_area_px = max(
+            0,
+            int(
+                rospy.get_param(
+                    '/grasp_6d/remote/mask_internal_hole_max_area_px',
+                    remote_cfg.get('mask_internal_hole_max_area_px', 25),
+                )
+            ),
+        )
+        self.depth_mad_scale = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/depth_mad_scale',
+                    remote_cfg.get('depth_mad_scale', 3.5),
+                )
+            ),
+        )
+        self.depth_mad_absolute_floor_m = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/depth_mad_absolute_floor_m',
+                    remote_cfg.get('depth_mad_absolute_floor_m', 0.002),
+                )
+            ),
+        )
         self.gate_audit_enabled = bool(remote_cfg.get('gate_audit_enabled', True))
         self.gate_audit_output_path = os.path.expanduser(
             str(remote_cfg.get('gate_audit_output_path', '~/.ros/grasp6d_gate_audit_latest.json'))
@@ -1029,11 +1089,20 @@ class RemoteGrasp6DNode:
         rospy.Subscriber(cam_cfg.get('color_topic', '/supervisor/camera/color/image_raw'), Image, self.color_cb, queue_size=1, buff_size=2**24, tcp_nodelay=True)
         rospy.Subscriber(cam_cfg.get('depth_topic', '/supervisor/camera/depth/image_raw'), Image, self.depth_cb, queue_size=1, buff_size=2**24, tcp_nodelay=True)
         rospy.Subscriber(
-            rospy.get_param('/perception/output_object_topic', '/perception/object'),
+            pcfg.get('output_mask_topic', '/perception/object_mask'),
+            Image,
+            self.mask_cb,
+            queue_size=1,
+            buff_size=2**24,
+            tcp_nodelay=True,
+        )
+        rospy.Subscriber(
+            pcfg.get('output_object_topic', '/perception/object'),
             ObjectPose,
             self.object_cb,
             queue_size=1,
         )
+        rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
         self.rate_hz = max(0.1, float(rospy.get_param('/grasp_6d/remote/request_hz', remote_cfg.get('request_hz', rospy.get_param('/grasp_6d/plan_hz', 1.0)))))
         rospy.Service('/grasp_6d/request_plan', TriggerZero, self.request_plan_cb)
         self._check_remote_health()
@@ -1044,14 +1113,41 @@ class RemoteGrasp6DNode:
         self.frames.update_color(self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8'), msg.header.stamp, msg.header.frame_id)
 
     def depth_cb(self, msg):
-        self.frames.update_depth(self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough'))
+        self.frames.update_depth(
+            self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough'),
+            msg.header.stamp,
+            msg.header.frame_id,
+        )
+
+    def mask_cb(self, msg):
+        self.frames.update_mask(
+            self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8'),
+            msg.header.stamp,
+            msg.header.frame_id,
+        )
+
+    def joint_cb(self, msg):
+        positions = np.asarray(getattr(msg, 'position', ()), dtype=float).reshape(-1)
+        names = list(getattr(msg, 'name', ()) or ())
+        if names and positions.size == len(names):
+            by_name = {str(name).lower(): positions[index] for index, name in enumerate(names)}
+            ordered = [
+                by_name.get('joint%d' % index)
+                for index in range(1, 7)
+            ]
+            if all(value is not None for value in ordered):
+                positions = np.asarray(ordered, dtype=float)
+        self.frames.update_joints(positions[:6])
 
     def object_cb(self, msg):
         now = rospy.Time.now()
+        source_stamp = getattr(getattr(msg, 'header', None), 'stamp', now)
         if not bool(getattr(msg, 'detected', False)):
             with self._object_lock:
                 self.latest_object = msg
                 self.latest_object_time = now
+            if hasattr(self, 'frames'):
+                self.frames.update_object(msg, source_stamp)
             return
 
         gcfg = rospy.get_param('/grasp', {})
@@ -1095,6 +1191,8 @@ class RemoteGrasp6DNode:
         with self._object_lock:
             self.latest_object = msg
             self.latest_object_time = now
+        if hasattr(self, 'frames'):
+            self.frames.update_object(msg, source_stamp)
 
     def spin(self):
         rate = rospy.Rate(self.rate_hz)
@@ -1108,29 +1206,113 @@ class RemoteGrasp6DNode:
             return TriggerZeroResponse(False, 'trigger=false')
         if not self.enabled:
             return TriggerZeroResponse(False, 'remote 6D disabled')
-        frame = self.frames.snapshot_latest()
-        if frame is None:
-            message = 'waiting for synchronized RGB-D frame'
-            self.status_pub.publish(String('remote 6D request ignored: ' + message))
+        try:
+            require_mask = self._active_profile_requires_mask()
+        except Exception as exc:
+            message = 'MODEL_TASK_MISMATCH: %s' % exc
+            self.status_pub.publish(String(message))
             return TriggerZeroResponse(False, message)
-        ok, message = self._process_frame(frame, manual=True)
+        snapshot, failure_code, failure_reason = self._wait_for_stable_snapshot(require_mask)
+        if snapshot is None or not snapshot.ok:
+            message = '%s: %s' % (failure_code, failure_reason)
+            self.status_pub.publish(String(message))
+            return TriggerZeroResponse(False, message)
+        ok, message = self._process_frame(snapshot, manual=True)
         return TriggerZeroResponse(bool(ok), str(message))
 
     def _process_latest_frame(self):
         if rospy.Time.now() < self._backoff_until:
             return
-        frame = self.frames.take_latest()
-        if frame is None:
+        try:
+            require_mask = self._active_profile_requires_mask()
+        except Exception as exc:
+            self.status_pub.publish(String('MODEL_TASK_MISMATCH: %s' % exc))
             return
-        self._process_frame(frame, manual=False)
+        snapshot, failure_code, failure_reason = self._wait_for_stable_snapshot(require_mask)
+        if snapshot is None or not snapshot.ok:
+            self.status_pub.publish(String('%s: %s' % (failure_code, failure_reason)))
+            return
+        self._process_frame(snapshot, manual=False)
 
-    def _process_frame(self, frame, manual=False):
+    def _active_profile_requires_mask(self):
+        pcfg = rospy.get_param('/perception', {})
+        detector_kind = str(pcfg.get('detector', 'simple_hsv')).strip().lower()
+        if detector_kind not in ('yolo', 'yolov8'):
+            return False
+        profile = select_yolo_model(
+            pcfg,
+            pcfg.get('yolo_model_choice', 'original'),
+            pcfg.get('yolo_target_class', pcfg.get('object_label', 'target')),
+        )
+        return bool(profile.get('require_instance_mask', False))
+
+    @staticmethod
+    def _snapshot_depth_config():
+        cam_cfg = rospy.get_param('/camera', {})
+        pcfg = rospy.get_param('/perception', {})
+        depth_scale = float(cam_cfg.get('depth_scale', 0.001))
+        depth_min_m = float(pcfg.get('depth_min_m', 0.03))
+        depth_max_m = float(pcfg.get('depth_max_m', 2.0))
+        return depth_scale, depth_min_m, depth_max_m
+
+    def _wait_for_stable_snapshot(self, require_mask):
+        deadline = time.monotonic() + max(0.0, float(self.planning_snapshot_timeout_sec))
+        last_failure = None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            samples = self.frames.wait_for_samples(
+                self.planning_snapshot_frames,
+                remaining,
+                require_mask=bool(require_mask),
+                max_age_sec=self.planning_snapshot_max_age_sec,
+            )
+            if len(samples) < self.planning_snapshot_frames:
+                break
+            depth_scale, depth_min_m, depth_max_m = self._snapshot_depth_config()
+            result = fuse_stable_samples(
+                samples,
+                require_mask=bool(require_mask),
+                min_mask_iou=self.planning_mask_min_iou,
+                max_centroid_shift_px=self.planning_mask_max_centroid_shift_px,
+                max_joint_delta_rad=self.planning_max_joint_delta_rad,
+                erosion_px=self.mask_erosion_px,
+                depth_scale=depth_scale,
+                depth_min_m=depth_min_m,
+                depth_max_m=depth_max_m,
+                mad_scale=self.depth_mad_scale,
+                mad_absolute_floor_m=self.depth_mad_absolute_floor_m,
+                internal_hole_max_area_px=self.mask_internal_hole_max_area_px,
+            )
+            if result.ok:
+                return result, '', ''
+            if result.failure_code != 'DEPTH_UNSTABLE':
+                return result, result.failure_code, result.failure_reason
+            last_failure = result
+            self.frames.discard_through(max(sample.stamp_sec for sample in samples))
+
+        if last_failure is not None:
+            return last_failure, last_failure.failure_code, last_failure.failure_reason
+        if require_mask:
+            return None, 'MASK_MISSING', 'no three fresh timestamp-matched RGB-D-mask-object samples'
+        return None, 'DEPTH_UNSTABLE', 'no three fresh timestamp-matched RGB-D-object samples'
+
+    def _process_frame(self, snapshot, manual=False):
         if not self._request_lock.acquire(False):
             message = 'remote 6D request already running'
             if manual:
                 self.status_pub.publish(String(message))
             return False, message
-        color, depth, stamp, frame_id = frame
+        if not isinstance(snapshot, SnapshotResult) or not snapshot.ok:
+            self._request_lock.release()
+            return False, 'remote 6D request requires a valid planning snapshot'
+        color = snapshot.color_bgr
+        stamp = rospy.Time.from_sec(float(snapshot.stamp_sec))
+        frame_id = snapshot.frame_id
+        self._planning_snapshot_active = True
+        self._planning_object_msg = snapshot.object_msg
+        self._planning_object_time = stamp
         try:
             self._refresh_runtime_params()
             self._cached_tool_from_camera = None
@@ -1150,7 +1332,7 @@ class RemoteGrasp6DNode:
             self.latest_support_plane_camera_point = None
             self.latest_support_plane_camera_normal = None
             self.latest_target_cloud_segmentation = 'depth-window'
-            depth_for_remote, roi_message = self._depth_for_remote(depth, stamp=stamp, frame_id=frame_id)
+            depth_for_remote, roi_message = self._depth_for_remote(snapshot, stamp=stamp, frame_id=frame_id)
             status = 'remote 6D requesting candidates...'
             if roi_message:
                 status += ' ' + roi_message
@@ -1161,7 +1343,7 @@ class RemoteGrasp6DNode:
                 depth_for_remote,
                 self._camera_intrinsics(),
                 frame_id=frame_id or self.pose_estimator.camera_frame,
-                stamp_sec=stamp.to_sec() if stamp is not None else 0.0,
+                stamp_sec=float(snapshot.stamp_sec),
                 max_candidates=self.max_candidates,
                 max_gripper_width_m=self.max_gripper_width_m,
                 candidate_width_tolerance_m=self.candidate_width_tolerance_m,
@@ -1307,13 +1489,30 @@ class RemoteGrasp6DNode:
             return False, message
         finally:
             self._target_cloud_request_active = False
+            self._planning_snapshot_active = False
+            self._planning_object_msg = None
+            self._planning_object_time = None
             self._request_lock.release()
 
     def _depth_for_remote(self, depth, stamp=None, frame_id=''):
+        if isinstance(depth, SnapshotResult):
+            valid = int(depth.quality.valid_depth_points)
+            bbox = tuple(depth.bbox or (0, 0, 0, 0))
+            return depth.target_depth_raw, (
+                '%s x=%d y=%d w=%d h=%d target_depth=%d'
+                % (
+                    depth.source_mode,
+                    int(bbox[0]) if len(bbox) > 0 else 0,
+                    int(bbox[1]) if len(bbox) > 1 else 0,
+                    int(bbox[2]) if len(bbox) > 2 else 0,
+                    int(bbox[3]) if len(bbox) > 3 else 0,
+                    valid,
+                )
+            )
         if not self.use_perception_roi:
             return depth, ''
         try:
-            obj, obj_time = self._latest_object_snapshot()
+            obj, obj_time = self._planning_object_snapshot()
             masked, roi, valid = self._masked_depth_for_object(depth, obj, obj_time)
             cloud_message = ''
             if bool(getattr(self, 'target_cloud_enabled', True)):
@@ -1336,6 +1535,11 @@ class RemoteGrasp6DNode:
     def _latest_object_snapshot(self):
         with self._object_lock:
             return self.latest_object, self.latest_object_time
+
+    def _planning_object_snapshot(self):
+        if bool(getattr(self, '_planning_snapshot_active', False)):
+            return self._planning_object_msg, self._planning_object_time
+        return self._latest_object_snapshot()
 
     @staticmethod
     def _cfg_float(cfg, key, default):
@@ -2775,9 +2979,9 @@ class RemoteGrasp6DNode:
             ),
         )
         try:
-            obj, _obj_time = self._latest_object_snapshot()
+            obj, _obj_time = self._planning_object_snapshot()
         except Exception:
-            obj = getattr(self, 'latest_object', None)
+            obj = None
         if obj is None or not bool(getattr(obj, 'detected', False)):
             return margin, margin
 
@@ -2871,7 +3075,7 @@ class RemoteGrasp6DNode:
                         fresh = False
                 if fresh:
                     return np.asarray(cloud_xyz, dtype=float), getattr(self, 'latest_target_cloud_source', 'roi_depth_foreground')
-        obj, _obj_time = self._latest_object_snapshot()
+        obj, _obj_time = self._planning_object_snapshot()
         if obj is None or not bool(getattr(obj, 'detected', False)):
             return None, 'none'
         try:
@@ -2902,7 +3106,7 @@ class RemoteGrasp6DNode:
         blend = float(getattr(self, 'target_position_refine_blend', 0.0) or 0.0)
         if blend <= 0.0:
             return grasp_pose, ''
-        obj, obj_time = self._latest_object_snapshot()
+        obj, obj_time = self._planning_object_snapshot()
         if obj is None or not bool(getattr(obj, 'detected', False)):
             return grasp_pose, ''
         if obj_time is not None:
