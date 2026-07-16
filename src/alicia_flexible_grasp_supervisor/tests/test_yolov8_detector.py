@@ -157,6 +157,30 @@ class YOLOv8DetectorTest(unittest.TestCase):
             (int(round(float(np.mean(xs)))), int(round(float(np.mean(ys))))),
         )
 
+    def test_detect_task_ignores_masks_exposed_by_backend(self):
+        backend = FakeBackend()
+        backend.task = 'detect'
+        first = np.zeros((80, 130), dtype=np.float32)
+        second = np.zeros((80, 130), dtype=np.float32)
+        first[10:50, 5:35] = 1.0
+        second[15:65, 70:115] = 1.0
+        result = backend.predict(np.zeros((160, 260, 3), dtype=np.uint8))[0]
+        result.masks = FakeMasks([first, second])
+        backend.predict = lambda image, **kwargs: [result]
+        detector = YOLOv8ObjectDetector(
+            model_backend=backend,
+            target_class='bottle',
+            expected_task='detect',
+        )
+
+        detection, mask = detector.detect(np.zeros((160, 260, 3), dtype=np.uint8))
+
+        self.assertEqual(detection['label'], 'bottle')
+        self.assertIsNone(mask)
+        self.assertIsNone(detection['mask'])
+        self.assertEqual(detection['mask_area'], 0)
+        self.assertIsNone(detection['mask_centroid'])
+
     def test_required_instance_mask_rejects_missing_mask(self):
         detector = YOLOv8ObjectDetector(
             model_backend=FakeBackend(),
@@ -166,6 +190,42 @@ class YOLOv8DetectorTest(unittest.TestCase):
         )
 
         detection, mask = detector.detect(np.zeros((160, 260, 3), dtype=np.uint8))
+
+        self.assertIsNone(detection)
+        self.assertIsNone(mask)
+
+    def test_required_instance_mask_rejects_zero_sized_mask_dimensions(self):
+        for mask_shape in ((2, 0, 13), (2, 8, 0)):
+            with self.subTest(mask_shape=mask_shape):
+                backend = FakeBackend()
+                result = backend.predict(np.zeros((16, 26, 3), dtype=np.uint8))[0]
+                result.masks = FakeMasks(np.zeros(mask_shape, dtype=np.float32))
+                backend.predict = lambda image, **kwargs: [result]
+                detector = YOLOv8ObjectDetector(
+                    model_backend=backend,
+                    target_class='bottle',
+                    expected_task='segment',
+                    require_instance_mask=True,
+                )
+
+                detection, mask = detector.detect(np.zeros((16, 26, 3), dtype=np.uint8))
+
+                self.assertIsNone(detection)
+                self.assertIsNone(mask)
+
+    def test_required_instance_mask_rejects_non_numeric_mask_data(self):
+        backend = FakeBackend()
+        result = backend.predict(np.zeros((16, 26, 3), dtype=np.uint8))[0]
+        result.masks = FakeMasks(np.full((2, 8, 13), 'invalid'))
+        backend.predict = lambda image, **kwargs: [result]
+        detector = YOLOv8ObjectDetector(
+            model_backend=backend,
+            target_class='bottle',
+            expected_task='segment',
+            require_instance_mask=True,
+        )
+
+        detection, mask = detector.detect(np.zeros((16, 26, 3), dtype=np.uint8))
 
         self.assertIsNone(detection)
         self.assertIsNone(mask)
@@ -206,9 +266,9 @@ class YOLOv8DetectorTest(unittest.TestCase):
         padded_mask = np.zeros((640, 640), dtype=np.float32)
         padded_mask[240:400, 160:480] = 1.0
         restored = YOLOv8ObjectDetector._restore_mask(padded_mask, original_shape)
-        self.assertEqual(restored.shape, original_shape)
-        self.assertGreater(np.count_nonzero(restored[55:305, 150:490]), 0)
-        self.assertEqual(np.count_nonzero(restored[:20]), 0)
+        expected = np.zeros(original_shape, dtype=np.float32)
+        expected[100:260, 160:480] = 1.0
+        np.testing.assert_array_equal(restored, expected)
 
 
 if __name__ == '__main__':

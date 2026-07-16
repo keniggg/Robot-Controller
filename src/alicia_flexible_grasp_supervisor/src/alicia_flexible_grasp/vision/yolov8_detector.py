@@ -69,7 +69,10 @@ class YOLOv8ObjectDetector:
         for index, box in enumerate(xyxy):
             if len(box) < 4:
                 continue
-            instance_mask = self._instance_mask(result, index, image_shape)
+            instance_mask = (
+                self._instance_mask(result, index, image_shape)
+                if self.expected_task == 'segment' else None
+            )
             confidence = float(confs[index]) if index < len(confs) else 0.0
             class_id = int(classes[index]) if index < len(classes) else -1
             label = self._class_name(names, class_id)
@@ -112,26 +115,62 @@ class YOLOv8ObjectDetector:
     @classmethod
     def _instance_mask(cls, result, index, image_shape):
         masks = getattr(result, 'masks', None)
-        data = cls._to_numpy(getattr(masks, 'data', [])) if masks is not None else np.asarray([])
-        if data.ndim != 3 or index >= data.shape[0]:
+        if masks is None:
             return None
-        restored = cls._restore_mask(np.asarray(data[index], dtype=np.float32), image_shape[:2])
+        try:
+            data = cls._to_numpy(getattr(masks, 'data', []))
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            return None
+        if (
+            data.ndim != 3
+            or index < 0
+            or index >= data.shape[0]
+            or data.shape[1] <= 0
+            or data.shape[2] <= 0
+        ):
+            return None
+        try:
+            mask = np.asarray(data[index], dtype=np.float32)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        restored = cls._restore_mask(mask, image_shape[:2])
+        if restored is None:
+            return None
         binary = np.where(restored >= 0.5, 255, 0).astype(np.uint8)
         return binary if np.any(binary) else None
 
     @staticmethod
     def _restore_mask(mask, original_shape):
         import cv2
+        try:
+            mask = np.asarray(mask, dtype=np.float32)
+            dst_h, dst_w = [int(value) for value in original_shape[:2]]
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if (
+            mask.ndim != 2
+            or mask.shape[0] <= 0
+            or mask.shape[1] <= 0
+            or dst_h <= 0
+            or dst_w <= 0
+        ):
+            return None
         src_h, src_w = mask.shape[:2]
-        dst_h, dst_w = [int(value) for value in original_shape[:2]]
         if abs((src_w / float(src_h)) - (dst_w / float(dst_h))) > 1e-3:
             gain = min(src_w / float(dst_w), src_h / float(dst_h))
             used_w = int(round(dst_w * gain))
             used_h = int(round(dst_h * gain))
+            if used_w <= 0 or used_h <= 0:
+                return None
             left = max(0, (src_w - used_w) // 2)
             top = max(0, (src_h - used_h) // 2)
             mask = mask[top:top + used_h, left:left + used_w]
-        return cv2.resize(mask, (dst_w, dst_h), interpolation=cv2.INTER_NEAREST)
+        if mask.size == 0:
+            return None
+        try:
+            return cv2.resize(mask, (dst_w, dst_h), interpolation=cv2.INTER_NEAREST)
+        except cv2.error:
+            return None
 
     @staticmethod
     def _mask_metrics(mask):
