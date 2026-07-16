@@ -144,9 +144,10 @@ class RecordingClient:
 
 
 class SequenceSampleBuffer:
-    def __init__(self, windows):
+    def __init__(self, windows, mask_timeout_code='MASK_MISSING'):
         self.windows = list(windows)
         self.discarded = []
+        self.mask_timeout_code = str(mask_timeout_code)
 
     def wait_for_samples(self, count, timeout_sec, require_mask, max_age_sec):
         del count, timeout_sec, require_mask, max_age_sec
@@ -157,6 +158,15 @@ class SequenceSampleBuffer:
 
     def discard_through_ns(self, stamp_ns):
         self.discarded.append(int(stamp_ns))
+
+    def mask_timeout_failure(self, count, max_age_sec):
+        del count, max_age_sec
+        reasons = {
+            'MASK_MISSING': 'no instance mask has been observed',
+            'MASK_EMPTY': 'latest instance mask is empty',
+            'MASK_STALE': 'instance masks were observed but no fresh exact timestamp-matched window is available',
+        }
+        return self.mask_timeout_code, reasons[self.mask_timeout_code]
 
 
 class FakeTf2Module:
@@ -903,6 +913,55 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(node.geometry_pub.messages[-1].failure_reason, response.message)
         self.assertIsNone(node.previous_object_axes_base)
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_stale_mask_timeout_is_published_with_stable_failure_code(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.enabled = True
+        node.frames = SequenceSampleBuffer([], mask_timeout_code='MASK_STALE')
+        node.status_pub = RecordingPublisher()
+        node.plan_pub = RecordingPublisher()
+        node.geometry_pub = RecordingPublisher()
+        node.previous_object_axes_base = np.eye(3)
+        node.planning_snapshot_frames = 3
+        node.planning_snapshot_timeout_sec = 0.0
+        node.planning_snapshot_max_age_sec = 0.35
+        node._active_profile_requires_mask = lambda: True
+
+        response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
+
+        self.assertFalse(response.success)
+        self.assertTrue(response.message.startswith('MASK_STALE: '))
+        self.assertEqual(node.status_pub.messages[-1], response.message)
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, response.message)
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_missing_and_empty_mask_timeouts_are_published_without_remapping(self):
+        for expected_code in ('MASK_MISSING', 'MASK_EMPTY'):
+            with self.subTest(expected_code=expected_code):
+                node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+                node.enabled = True
+                node.frames = SequenceSampleBuffer([], mask_timeout_code=expected_code)
+                node.status_pub = RecordingPublisher()
+                node.plan_pub = RecordingPublisher()
+                node.geometry_pub = RecordingPublisher()
+                node.previous_object_axes_base = np.eye(3)
+                node.planning_snapshot_frames = 3
+                node.planning_snapshot_timeout_sec = 0.0
+                node.planning_snapshot_max_age_sec = 0.35
+                node._active_profile_requires_mask = lambda: True
+
+                response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
+
+                self.assertFalse(response.success)
+                self.assertTrue(response.message.startswith(expected_code + ': '))
+                self.assertEqual(node.status_pub.messages[-1], response.message)
+                self.assertFalse(node.geometry_pub.messages[-1].valid)
+                self.assertEqual(
+                    node.geometry_pub.messages[-1].failure_reason,
+                    response.message,
+                )
 
     def test_segment_snapshot_sends_only_target_depth_to_remote_path(self):
         context_depth = np.full((4, 5), 2200, dtype=np.uint16)

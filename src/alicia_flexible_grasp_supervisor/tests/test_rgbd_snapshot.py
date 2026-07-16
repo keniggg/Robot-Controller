@@ -552,6 +552,79 @@ def test_buffer_rejects_replayed_source_stamp_received_now():
     assert buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=0.35) == []
 
 
+def test_mask_timeout_is_missing_when_buffer_has_never_observed_a_mask():
+    buffer = synchronized_buffer_at(1_700_000_000_500_000_000)
+
+    code, reason = buffer.mask_timeout_failure(3, max_age_sec=0.35)
+
+    assert code == 'MASK_MISSING'
+    assert 'no instance mask' in reason
+
+
+def test_mask_timeout_is_stale_after_mask_was_observed_but_cannot_form_fresh_window():
+    now_ns = 1_700_000_000_500_000_000
+    buffer = synchronized_buffer_at(now_ns)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    stale_stamp = (now_ns - 500_000_000) * 1e-9
+    buffer.update_mask(mask, stale_stamp, 'camera_link')
+
+    assert buffer.wait_for_samples(3, 0.01, require_mask=True, max_age_sec=0.35) == []
+    code, reason = buffer.mask_timeout_failure(3, max_age_sec=0.35)
+
+    assert code == 'MASK_STALE'
+    assert 'three fresh exact timestamp-matched' in reason
+
+
+def test_latest_empty_mask_timeout_is_empty_including_same_stamp_replacement():
+    now_ns = 1_700_000_000_500_000_000
+    buffer = synchronized_buffer_at(now_ns)
+    stamp = (now_ns - 100_000_000) * 1e-9
+    buffer.update_mask(np.ones((3, 4), dtype=np.uint8) * 255, stamp, 'camera_link')
+    buffer.update_mask(np.zeros((3, 4), dtype=np.uint8), stamp, 'camera_link')
+
+    code, reason = buffer.mask_timeout_failure(3, max_age_sec=0.35)
+
+    assert code == 'MASK_EMPTY'
+    assert 'latest instance mask is empty' in reason
+
+    buffer.update_mask(np.ones((3, 4), dtype=np.uint8) * 255, stamp, 'camera_link')
+    assert buffer.mask_timeout_failure(3, max_age_sec=0.35)[0] == 'MASK_STALE'
+
+
+def test_empty_mask_timeout_marker_survives_discard():
+    now_ns = 1_700_000_000_500_000_000
+    buffer = synchronized_buffer_at(now_ns)
+    stamp = (now_ns - 100_000_000) * 1e-9
+    buffer.update_mask(np.zeros((3, 4), dtype=np.uint8), stamp, 'camera_link')
+
+    buffer.discard_through(stamp)
+
+    assert buffer.mask_timeout_failure(3, max_age_sec=0.35)[0] == 'MASK_EMPTY'
+
+
+def test_nonempty_mask_timeout_marker_survives_monotonic_prune():
+    now_ns = 1_700_000_000_500_000_000
+    monotonic_now = [10.0]
+    buffer = synchronized_buffer_at(now_ns, monotonic_clock=lambda: monotonic_now[0])
+    stamp = (now_ns - 100_000_000) * 1e-9
+    buffer.update_mask(np.ones((3, 4), dtype=np.uint8) * 255, stamp, 'camera_link')
+    monotonic_now[0] = 12.1
+
+    assert buffer.wait_for_samples(1, 0.0, require_mask=True, max_age_sec=0.35) == []
+    assert buffer.mask_timeout_failure(3, max_age_sec=0.35)[0] == 'MASK_STALE'
+
+
+def test_unlimited_source_age_timeout_reason_does_not_claim_zero_second_limit():
+    buffer = synchronized_buffer_at(1_700_000_000_500_000_000)
+    buffer.update_mask(np.ones((3, 4), dtype=np.uint8) * 255, 1.0, 'camera_link')
+
+    code, reason = buffer.mask_timeout_failure(3, max_age_sec=0.0)
+
+    assert code == 'MASK_STALE'
+    assert '0.000 s source-age limit' not in reason
+    assert 'source age is unlimited' in reason
+
+
 def test_buffer_accepts_fresh_source_stamp_from_injected_clock():
     now_ns = 1_700_000_000_500_000_000
     buffer = synchronized_buffer_at(now_ns)

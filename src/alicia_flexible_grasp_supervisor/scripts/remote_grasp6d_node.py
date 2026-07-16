@@ -2219,7 +2219,11 @@ class RemoteGrasp6DNode:
         if last_failure is not None:
             return last_failure, last_failure.failure_code, last_failure.failure_reason
         if require_mask:
-            return None, 'MASK_MISSING', 'no three fresh timestamp-matched RGB-D-mask-object samples'
+            failure_code, failure_reason = self.frames.mask_timeout_failure(
+                self.planning_snapshot_frames,
+                self.planning_snapshot_max_age_sec,
+            )
+            return None, failure_code, failure_reason
         return None, 'DEPTH_UNSTABLE', 'no three fresh timestamp-matched RGB-D-object samples'
 
     def _process_frame(self, snapshot, manual=False):

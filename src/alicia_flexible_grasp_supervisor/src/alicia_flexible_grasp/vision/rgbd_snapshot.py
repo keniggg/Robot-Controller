@@ -394,6 +394,8 @@ class SynchronizedRgbdBuffer:
         self._condition = threading.Condition()
         self._entries = {}
         self._joint_positions = np.zeros(0, dtype=float)
+        self._latest_mask_stamp_ns = None
+        self._latest_mask_is_empty = None
         self._source_clock_ns = source_clock_ns or _wall_clock_ns
         self._monotonic_clock = monotonic_clock or time.monotonic
 
@@ -447,6 +449,43 @@ class SynchronizedRgbdBuffer:
                     return []
                 self._condition.wait(remaining)
 
+    def mask_timeout_failure(self, count, max_age_sec):
+        count = max(1, int(count))
+        max_age = max(0.0, float(max_age_sec))
+        with self._condition:
+            mask_was_observed = self._latest_mask_stamp_ns is not None
+            latest_mask_is_empty = self._latest_mask_is_empty
+        count_text = {1: 'one', 2: 'two', 3: 'three'}.get(count, str(count))
+        sample_requirement = (
+            '%s fresh exact timestamp-matched RGB-D-mask-object samples'
+            % count_text
+        )
+        if not mask_was_observed:
+            return (
+                'MASK_MISSING',
+                'no instance mask has been observed; cannot collect %s'
+                % sample_requirement,
+            )
+        if latest_mask_is_empty:
+            return (
+                'MASK_EMPTY',
+                'latest instance mask is empty; cannot collect %s'
+                % sample_requirement,
+            )
+        if max_age <= 0.0:
+            return (
+                'MASK_STALE',
+                'instance masks were observed but no %s are available; '
+                'source age is unlimited'
+                % sample_requirement,
+            )
+        return (
+            'MASK_STALE',
+            'instance masks were observed but no %s are available '
+            'within the %.3f s source-age limit'
+            % (sample_requirement, max_age),
+        )
+
     def discard_through(self, stamp_sec):
         self.discard_through_ns(_timestamp_key(stamp_sec))
 
@@ -463,6 +502,12 @@ class SynchronizedRgbdBuffer:
         now = self._monotonic_clock()
         with self._condition:
             self._prune_locked(now)
+            if 'object_mask' in values:
+                if self._latest_mask_stamp_ns is None or key >= self._latest_mask_stamp_ns:
+                    self._latest_mask_stamp_ns = key
+                    self._latest_mask_is_empty = not bool(
+                        np.any(np.asarray(values['object_mask']))
+                    )
             entry = self._entries.setdefault(
                 key,
                 {
