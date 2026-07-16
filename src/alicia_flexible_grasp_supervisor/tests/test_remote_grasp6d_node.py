@@ -48,6 +48,7 @@ class FakePoseEstimator:
 class RecordingPoseEstimator:
     def __init__(self):
         self.calls = []
+        self.camera_frame = 'camera_link'
 
     def make_base_pose_from_camera_pose(self, xyz, quat, stamp=None, camera_frame=None):
         self.calls.append((np.asarray(xyz, dtype=float), np.asarray(quat, dtype=float), camera_frame))
@@ -204,14 +205,26 @@ def make_snapshot(target_depth, source_mode='instance_mask', stamp_ns=10_000_000
     )
 
 
-def make_geometry_estimate(ok=True, code='', reason='', source_mode='instance_mask'):
+def make_geometry_estimate(
+    ok=True,
+    code='',
+    reason='',
+    source_mode='instance_mask',
+    center_base=None,
+    axes_base=None,
+    size_xyz_m=None,
+):
     return remote_node.GeometryEstimate(
         ok=bool(ok),
         failure_code=str(code),
         failure_reason=str(reason),
-        center_base=np.asarray([0.40, -0.10, 0.22]),
-        axes_base=np.eye(3),
-        size_xyz_m=np.asarray([0.24, 0.16, 0.10]),
+        center_base=np.asarray(
+            [0.40, -0.10, 0.22] if center_base is None else center_base
+        ),
+        axes_base=np.asarray(np.eye(3) if axes_base is None else axes_base),
+        size_xyz_m=np.asarray(
+            [0.24, 0.16, 0.10] if size_xyz_m is None else size_xyz_m
+        ),
         support_normal_base=np.asarray([0.0, 0.0, 1.0]),
         support_offset_m=0.0,
         support_inlier_ratio=0.82,
@@ -263,6 +276,37 @@ def make_processing_node(client=None):
     node.max_candidates = 20
     node.max_gripper_width_m = 0.05
     node.candidate_width_tolerance_m = 0.0
+    node.gripper_physical_open_width_m = 0.05
+    node.gripper_geometry = remote_node.GripperGeometry(
+        max_inner_gap_m=0.050,
+        jaw_clearance_each_side_m=0.002,
+        finger_size_xyz_m=np.array([0.0434, 0.0286, 0.0600]),
+        palm_size_xyz_m=np.array([0.1175, 0.1550, 0.0774]),
+        support_clearance_m=0.003,
+    )
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.twin_gripper_model_name = 'Alicia_D_v5_6_gripper_50mm'
+    node.twin_max_inner_gap_m = 0.05
+    node._geometry_gate_counts = {}
+    node._geometry_rejection_counts = {}
+    node._selected_candidate_gate = None
+    node.selected_required_open_width_m = None
+    node.grasp_config = {
+        'pregrasp_distance_m': 0.08,
+        'final_approach_offset_m': 0.020,
+        'lift_height_m': 0.05,
+        'tool_approach_axis': 'z',
+    }
+    node.rank_by_target_distance = False
+    node.candidate_target_gate_enabled = False
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    node.require_candidate_depth = False
+    node.orientation_variant_quaternions = [np.array([0.0, 0.0, 0.0, 1.0])]
+    node.model_grasp_to_tool_quaternion = np.array([0.0, 0.0, 0.0, 1.0])
+    node.candidate_frame_convention = 'ros_camera_link'
+    node.gate_audit_enabled = False
     node._camera_intrinsics = lambda: remote_node.CameraIntrinsics(
         width=4,
         height=3,
@@ -862,6 +906,120 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIsNone(node.previous_object_axes_base)
         self.assertIsNone(node.latest_target_cloud_base_xyz)
 
+    def test_gripper_contract_mismatch_fails_before_wsl_candidate_request(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(
+            candidates=[
+                RemoteGraspCandidate(
+                    0.9,
+                    np.array([0.40, -0.10, 0.25]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    0.04,
+                )
+            ]
+        )
+        node = make_processing_node(client)
+        node.gripper_contract_validator = lambda *_args, **_kwargs: 'synthetic 49 mm mismatch'
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.08, 0.04, 0.06],
+        )
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertEqual(
+            message,
+            'GRIPPER_MODEL_MISMATCH: synthetic 49 mm mismatch',
+        )
+        self.assertEqual(client.calls, [])
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_all_analytical_rejections_return_counts_and_invalidate_geometry(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(
+            candidates=[
+                RemoteGraspCandidate(
+                    0.99,
+                    np.array([0.40, -0.10, 0.25]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    0.001,
+                )
+            ]
+        )
+        node = make_processing_node(client)
+        node.pose_estimator = RecordingPoseEstimator()
+        node._plan_reachable = lambda _pose: (_ for _ in ()).throw(
+            AssertionError('IK must not run after analytical rejection')
+        )
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.08, 0.047, 0.06],
+        )
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('NO_GEOMETRIC_CANDIDATE: '))
+        self.assertIn('raw=1', message)
+        self.assertIn('after_transform=1', message)
+        self.assertIn('after_center=1', message)
+        self.assertIn('after_jaw_width=0', message)
+        self.assertIn('GRIPPER_TOO_NARROW=1', message)
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_process_frame_keeps_model_width_diagnostic_and_stores_required_width(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(
+            candidates=[
+                RemoteGraspCandidate(
+                    0.99,
+                    np.array([0.65, -0.10, 0.25]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    0.001,
+                ),
+                RemoteGraspCandidate(
+                    0.40,
+                    np.array([0.40, -0.10, 0.25]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    0.090,
+                ),
+            ]
+        )
+        node = make_processing_node(client)
+        node.pose_estimator = RecordingPoseEstimator()
+        node._plan_reachable = lambda _pose: True
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.08, 0.04, 0.06],
+        )
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertTrue(ok)
+        self.assertEqual(len(node.plan_pub.messages[-1].poses), 4)
+        self.assertAlmostEqual(node.selected_required_open_width_m, 0.044)
+        self.assertAlmostEqual(node._selected_candidate_gate.required_open_width_m, 0.044)
+        self.assertIn('model_width=0.090', message)
+        self.assertIn('required_open=0.044', message)
+        self.assertEqual(client.calls[0]['kwargs']['max_gripper_width_m'], 0.0)
+
     def test_detect_snapshot_uses_bbox_foreground_with_same_geometry_contract(self):
         snapshot = make_snapshot(
             np.zeros((3, 4), dtype=np.uint16),
@@ -1409,6 +1567,121 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         self.assertIsNone(selected)
         self.assertIsNone(pose)
+
+    def test_analytical_geometry_gate_runs_before_reachability_and_high_score(self):
+        candidates = [
+            RemoteGraspCandidate(
+                0.99,
+                np.array([0.30, 0.0, 0.20]),
+                np.array([0.0, 0.0, 0.0, 1.0]),
+                0.01,
+            ),
+            RemoteGraspCandidate(
+                0.40,
+                np.array([0.20, 0.0, 0.20]),
+                np.array([0.0, 0.0, 0.0, 1.0]),
+                0.09,
+            ),
+        ]
+        events = []
+
+        def geometry_gate(raw, converted, pose, plan):
+            events.append(('geometry', raw.score, len((plan.pregrasp, plan.approach, plan.grasp, plan.lift))))
+            if raw.score > 0.9:
+                return remote_node.CandidateGateResult(
+                    False,
+                    'CENTER_OUTSIDE_OBB',
+                    'synthetic off-center candidate',
+                    0.044,
+                    0.10,
+                    0.010,
+                    1.0,
+                    0.0,
+                    0.10,
+                    'center',
+                    1,
+                )
+            return remote_node.CandidateGateResult(
+                True, '', '', 0.044, 0.001, 0.010, 1.0, 0.0, 0.001, '', 6
+            )
+
+        def reachable(pose):
+            events.append(('reachability', pose.pose.position.x))
+            return True
+
+        selected, pose = remote_node.select_first_reachable_candidate(
+            candidates,
+            RecordingPoseEstimator(),
+            reachable,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            candidate_geometry_fn=geometry_gate,
+            grasp_config={
+                'pregrasp_distance_m': 0.08,
+                'final_approach_offset_m': 0.02,
+                'lift_height_m': 0.05,
+                'tool_approach_axis': 'z',
+            },
+        )
+
+        self.assertAlmostEqual(selected.score, 0.40)
+        self.assertAlmostEqual(selected.width_m, 0.09)
+        self.assertAlmostEqual(selected.required_open_width_m, 0.044)
+        self.assertAlmostEqual(pose.pose.position.x, 0.20)
+        self.assertEqual(
+            events,
+            [
+                ('geometry', 0.99, 4),
+                ('geometry', 0.40, 4),
+                ('reachability', 0.20),
+            ],
+        )
+
+    def test_selector_uses_geometry_tuple_with_motion_before_model_score(self):
+        candidates = [
+            RemoteGraspCandidate(
+                0.99,
+                np.array([0.10, 0.0, 0.20]),
+                np.array([0.0, 0.0, 0.0, 1.0]),
+                0.04,
+            ),
+            RemoteGraspCandidate(
+                0.10,
+                np.array([0.20, 0.0, 0.20]),
+                np.array([0.0, 0.0, 0.0, 1.0]),
+                0.04,
+            ),
+        ]
+
+        def geometry_gate(raw, _converted, _pose, _plan):
+            motion_cost = 2.0 if raw.score > 0.9 else 1.0
+            return remote_node.CandidateGateResult(
+                True,
+                '',
+                '',
+                0.044,
+                0.001,
+                0.010,
+                1.0,
+                motion_cost,
+                0.001,
+                '',
+                6,
+            )
+
+        selected, _pose = remote_node.select_first_reachable_candidate(
+            candidates,
+            RecordingPoseEstimator(),
+            lambda _pose: True,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            candidate_geometry_fn=geometry_gate,
+            grasp_config={'tool_approach_axis': 'z'},
+        )
+
+        self.assertAlmostEqual(selected.score, 0.10)
 
     def test_converts_opencv_optical_candidate_to_ros_camera_link(self):
         candidate = RemoteGraspCandidate(

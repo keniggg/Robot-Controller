@@ -23,6 +23,14 @@ except Exception:
     tf2_ros = None
 
 from alicia_flexible_grasp.grasp.grasp6d_sequence import make_grasp_sequence_from_grasp_pose
+from alicia_flexible_grasp.grasp.gripper_geometry import (
+    CandidateGateResult,
+    GripperGeometry,
+    candidate_rank_key,
+    candidate_with_motion_cost,
+    evaluate_candidate,
+    gripper_contract_mismatch_reason,
+)
 from alicia_flexible_grasp.robot.planning_feedback import (
     is_orientation_fallback_message,
     is_position_only_fallback_message,
@@ -458,6 +466,8 @@ def select_first_reachable_candidate(
     candidate_rank_fn=None,
     orientation_variant_quaternions=None,
     model_grasp_to_tool_quaternion=None,
+    candidate_geometry_fn=None,
+    grasp_config=None,
 ):
     variants = list(orientation_variant_quaternions or [])
     if not variants:
@@ -490,18 +500,80 @@ def select_first_reachable_candidate(
                 stamp=stamp,
                 camera_frame=camera_frame,
             )
+            gate_result = None
+            if candidate_geometry_fn is not None:
+                config = dict(grasp_config or {})
+                plan = make_grasp_sequence_from_grasp_pose(
+                    pose,
+                    pregrasp_distance_m=float(
+                        config.get('pregrasp_distance_m', 0.08)
+                    ),
+                    approach_offset_m=float(
+                        config.get('final_approach_offset_m', 0.015)
+                    ),
+                    lift_height_m=float(
+                        config.get('lift_height_m', 0.05)
+                    ),
+                    tool_approach_axis=str(
+                        config.get('tool_approach_axis', 'x')
+                    ),
+                )
+                gate_result = candidate_geometry_fn(
+                    candidate,
+                    variant_candidate,
+                    pose,
+                    plan,
+                )
+                if not isinstance(gate_result, CandidateGateResult):
+                    raise ValueError(
+                        'candidate_geometry_fn must return CandidateGateResult'
+                    )
+                setattr(variant_candidate, '_geometry_gate_result', gate_result)
+                setattr(variant_candidate, '_grasp_sequence', plan)
+                setattr(
+                    variant_candidate,
+                    'required_open_width_m',
+                    float(gate_result.required_open_width_m),
+                )
+                if not gate_result.ok:
+                    continue
             if candidate_filter_fn is not None and not bool(candidate_filter_fn(candidate, variant_candidate, pose)):
                 continue
             if bool(reachability_fn(pose)):
-                if candidate_rank_fn is None:
+                if candidate_rank_fn is None and gate_result is None:
                     return variant_candidate, pose
-                try:
-                    rank = float(candidate_rank_fn(candidate, variant_candidate, pose))
-                except Exception:
-                    rank = float('inf')
-                if not math.isfinite(rank):
+                if candidate_rank_fn is None:
+                    rank = candidate_rank_key(
+                        gate_result,
+                        float(getattr(variant_candidate, 'score', 0.0)),
+                    )
+                else:
+                    try:
+                        rank = candidate_rank_fn(
+                            candidate,
+                            variant_candidate,
+                            pose,
+                        )
+                    except Exception:
+                        rank = (float('inf'),)
+                if np.isscalar(rank):
+                    rank = (float(rank),)
+                else:
+                    try:
+                        rank = tuple(float(value) for value in rank)
+                    except Exception:
+                        rank = (float('inf'),)
+                if not rank or not all(math.isfinite(value) for value in rank):
                     continue
-                ranked.append((rank, variant_index, -float(getattr(variant_candidate, 'score', 0.0)), variant_candidate, pose))
+                ranked.append(
+                    (
+                        rank,
+                        variant_index,
+                        -float(getattr(variant_candidate, 'score', 0.0)),
+                        variant_candidate,
+                        pose,
+                    )
+                )
     if ranked:
         ranked.sort(key=lambda item: (item[0], item[1], item[2]))
         return ranked[0][3], ranked[0][4]
@@ -620,6 +692,58 @@ class RemoteGrasp6DNode:
         hcfg = rospy.get_param('/handeye', {})
         gcfg = rospy.get_param('/grasp', {})
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
+        gripper_cfg = rospy.get_param('/gripper', {})
+        twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        gripper_geometry_cfg = dict(remote_cfg.get('gripper_geometry', {}) or {})
+        self.gripper_geometry = GripperGeometry(
+            max_inner_gap_m=float(
+                gripper_geometry_cfg.get('max_inner_gap_m', 0.050)
+            ),
+            jaw_clearance_each_side_m=float(
+                gripper_geometry_cfg.get(
+                    'width_safety_margin_per_side_m',
+                    0.002,
+                )
+            ),
+            finger_size_xyz_m=np.asarray(
+                gripper_geometry_cfg.get(
+                    'finger_box_xyz_m',
+                    [0.0434, 0.0286, 0.0600],
+                ),
+                dtype=float,
+            ),
+            palm_size_xyz_m=np.asarray(
+                gripper_geometry_cfg.get(
+                    'palm_box_xyz_m',
+                    [0.1175, 0.1550, 0.0774],
+                ),
+                dtype=float,
+            ),
+            support_clearance_m=float(
+                gripper_geometry_cfg.get('support_clearance_m', 0.003)
+            ),
+        )
+        self.gripper_tool_jaw_axis = str(
+            gripper_geometry_cfg.get('tool_jaw_axis', 'y')
+        )
+        self.gripper_tool_finger_length_axis = str(
+            gripper_geometry_cfg.get('tool_finger_length_axis', 'z')
+        )
+        twin_gripper_cfg = dict(twin_cfg.get('gripper_model', {}) or {})
+        self.twin_gripper_model_name = str(
+            twin_gripper_cfg.get(
+                'name',
+                'Alicia_D_v5_6_gripper_50mm',
+            )
+        )
+        self.twin_max_inner_gap_m = float(
+            twin_gripper_cfg.get('max_inner_gap_m', 0.050)
+        )
+        self._latest_geometry_estimate = None
+        self._geometry_gate_counts = {}
+        self._geometry_rejection_counts = {}
+        self._selected_candidate_gate = None
+        self.selected_required_open_width_m = None
         self._last_model_choice = str(pcfg.get('yolo_model_choice', 'original'))
         self.planning_snapshot_frames = max(
             1,
@@ -1207,8 +1331,6 @@ class RemoteGrasp6DNode:
         self._approach_gate_rejected_count = 0
         self._table_geometry_gate_rejected_count = 0
         self._joint_motion_gate_rejected_count = 0
-        gripper_cfg = rospy.get_param('/gripper', {})
-        twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
         self.gripper_physical_open_width_m = max(
             0.0,
             float(gripper_cfg.get('open_position_m', 0.05)),
@@ -1420,6 +1542,9 @@ class RemoteGrasp6DNode:
             return True, ''
 
     def _clear_geometry_cache(self):
+        self._latest_geometry_estimate = None
+        self._selected_candidate_gate = None
+        self.selected_required_open_width_m = None
         self.latest_target_cloud_base_xyz = None
         self.latest_target_cloud_camera_center = None
         self.latest_target_cloud_camera_points = None
@@ -1627,6 +1752,7 @@ class RemoteGrasp6DNode:
             if publisher is not None:
                 publisher.publish(message)
             self.latest_object_geometry = message
+            self._latest_geometry_estimate = estimate
             self.previous_object_axes_base = np.asarray(
                 estimate.axes_base,
                 dtype=float,
@@ -1964,6 +2090,17 @@ class RemoteGrasp6DNode:
                 )
                 self._publish_error(message)
                 return False, message
+            contract_mismatch = self._gripper_contract_mismatch_reason()
+            if contract_mismatch:
+                _applied, message = self._invalidate_geometry_if_current(
+                    request_invalidation_generation,
+                    'GRIPPER_MODEL_MISMATCH',
+                    contract_mismatch,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
+                self._publish_error(message)
+                return False, message
             bbox = tuple(snapshot.bbox or (0, 0, 0, 0))
             roi_message = (
                 '%s x=%d y=%d w=%d h=%d target_depth=%d'
@@ -1999,7 +2136,9 @@ class RemoteGrasp6DNode:
                     frame_id=frame_id or self.pose_estimator.camera_frame,
                     stamp_sec=float(snapshot.stamp_sec),
                     max_candidates=self.max_candidates,
-                    max_gripper_width_m=self.max_gripper_width_m,
+                    # GraspNet's width is a model suggestion. Keep every raw
+                    # proposal for the mandatory local OBB/50 mm hard gate.
+                    max_gripper_width_m=0.0,
                     candidate_width_tolerance_m=self.candidate_width_tolerance_m,
                 )
             except Exception as exc:
@@ -2056,6 +2195,7 @@ class RemoteGrasp6DNode:
             self._best_candidate_approach_cos = -1.0
             self._closest_candidate_cloud_distance = float('inf')
             self._closest_candidate_center_distance = float('inf')
+            self._reset_geometry_gate_audit(len(candidates))
             if bool(getattr(self, 'gate_audit_enabled', True)):
                 try:
                     self._run_candidate_gate_audit(
@@ -2075,9 +2215,11 @@ class RemoteGrasp6DNode:
                 camera_frame=frame_id or self.pose_estimator.camera_frame,
                 candidate_frame_convention=self.candidate_frame_convention,
                 candidate_filter_fn=self._candidate_matches_target,
-                candidate_rank_fn=self._candidate_rank if self.rank_by_target_distance else None,
+                candidate_rank_fn=self._candidate_rank,
                 orientation_variant_quaternions=self.orientation_variant_quaternions,
                 model_grasp_to_tool_quaternion=self.model_grasp_to_tool_quaternion,
+                candidate_geometry_fn=self._evaluate_candidate_geometry,
+                grasp_config=self.grasp_config,
             )
             invalidated, failure_code = self._geometry_invalidation_state(
                 request_invalidation_generation
@@ -2090,6 +2232,26 @@ class RemoteGrasp6DNode:
                 self._publish_error(message)
                 return False, message
             if selected is None:
+                geometric_pass = int(
+                    getattr(self, '_geometry_gate_counts', {}).get(
+                        'after_swept_envelope',
+                        0,
+                    )
+                )
+                if geometric_pass == 0:
+                    failure_reason = (
+                        'raw candidates were all rejected by analytical gripper geometry; '
+                        + self._geometry_gate_diagnostics()
+                    )
+                    _applied, message = self._invalidate_geometry_if_current(
+                        request_invalidation_generation,
+                        'NO_GEOMETRIC_CANDIDATE',
+                        failure_reason,
+                        stamp=stamp,
+                        snapshot=snapshot,
+                    )
+                    self._publish_error(message)
+                    return False, message
                 if (
                     not candidates
                     and int(remote_diagnostics.get('width_rejected', 0) or 0) > 0
@@ -2145,7 +2307,32 @@ class RemoteGrasp6DNode:
                 self._publish_error(message)
                 return False, message
             final_target_delta = self._candidate_target_distance(None, None, grasp_pose)
-            plan_msg = make_grasp_plan_pose_array(grasp_pose, stamp, rospy.get_param('/grasp', {}))
+            selected_gate = getattr(selected, '_geometry_gate_result', None)
+            if not isinstance(selected_gate, CandidateGateResult) or not selected_gate.ok:
+                failure_reason = 'selected candidate has no valid analytical gripper result'
+                _applied, message = self._invalidate_geometry_if_current(
+                    request_invalidation_generation,
+                    'NO_GEOMETRIC_CANDIDATE',
+                    failure_reason,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
+                self._publish_error(message)
+                return False, message
+            self._selected_candidate_gate = selected_gate
+            self.selected_required_open_width_m = float(
+                selected_gate.required_open_width_m
+            )
+            setattr(
+                selected,
+                'required_open_width_m',
+                self.selected_required_open_width_m,
+            )
+            plan_msg = make_grasp_plan_pose_array(
+                grasp_pose,
+                stamp,
+                self.grasp_config,
+            )
             published, failure_code = self._publish_legacy_plan_if_current(
                 plan_msg,
                 request_invalidation_generation,
@@ -2170,16 +2357,17 @@ class RemoteGrasp6DNode:
             depth_text = 'missing' if selected.depth_m is None else '%.3f' % float(selected.depth_m)
             selected_metrics = self._candidate_plan_metrics.get(self._pose_key(grasp_pose), {})
             approach_down = self._candidate_approach_downward_cos(selected, grasp_pose)
-            message = 'remote 6D plan ready score=%.3f width=%.3f depth=%s target_delta=%.3fm target=%s strict_orientation=1 tool_aligned=1 approach_down=%.3f joint_path_cost=%.3f joint_max_delta=%.3f' % (
+            message = 'remote 6D plan ready score=%.3f model_width=%.3f required_open=%.3f depth=%s target_delta=%.3fm target=%s strict_orientation=1 tool_aligned=1 approach_down=%.3f joint_path_cost=%.3f joint_max_delta=%.3f' % (
                 selected.score,
                 selected.width_m,
+                selected_gate.required_open_width_m,
                 depth_text,
                 final_target_delta,
                 target_source,
                 approach_down,
                 float(selected_metrics.get('joint_path_cost', 0.0)),
                 float(selected_metrics.get('joint_max_delta', 0.0)),
-            ) + visibility_message
+            ) + visibility_message + ' [' + self._geometry_gate_diagnostics() + ']'
             support_metrics = self._candidate_support_geometry_metrics(selected)
             if support_metrics is not None:
                 message += ' jaw_normal=%.3f finger_clearance=%.3fm geometry_width=%.3fm' % (
@@ -2758,6 +2946,86 @@ class RemoteGrasp6DNode:
         )
         gripper_cfg = rospy.get_param('/gripper', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        gripper_geometry_cfg = dict(remote_cfg.get('gripper_geometry', {}) or {})
+        self.gripper_geometry = GripperGeometry(
+            max_inner_gap_m=float(
+                gripper_geometry_cfg.get(
+                    'max_inner_gap_m',
+                    getattr(self.gripper_geometry, 'max_inner_gap_m', 0.050),
+                )
+            ),
+            jaw_clearance_each_side_m=float(
+                gripper_geometry_cfg.get(
+                    'width_safety_margin_per_side_m',
+                    getattr(
+                        self.gripper_geometry,
+                        'jaw_clearance_each_side_m',
+                        0.002,
+                    ),
+                )
+            ),
+            finger_size_xyz_m=np.asarray(
+                gripper_geometry_cfg.get(
+                    'finger_box_xyz_m',
+                    getattr(
+                        self.gripper_geometry,
+                        'finger_size_xyz_m',
+                        [0.0434, 0.0286, 0.0600],
+                    ),
+                ),
+                dtype=float,
+            ),
+            palm_size_xyz_m=np.asarray(
+                gripper_geometry_cfg.get(
+                    'palm_box_xyz_m',
+                    getattr(
+                        self.gripper_geometry,
+                        'palm_size_xyz_m',
+                        [0.1175, 0.1550, 0.0774],
+                    ),
+                ),
+                dtype=float,
+            ),
+            support_clearance_m=float(
+                gripper_geometry_cfg.get(
+                    'support_clearance_m',
+                    getattr(
+                        self.gripper_geometry,
+                        'support_clearance_m',
+                        0.003,
+                    ),
+                )
+            ),
+        )
+        self.gripper_tool_jaw_axis = str(
+            gripper_geometry_cfg.get(
+                'tool_jaw_axis',
+                getattr(self, 'gripper_tool_jaw_axis', 'y'),
+            )
+        )
+        self.gripper_tool_finger_length_axis = str(
+            gripper_geometry_cfg.get(
+                'tool_finger_length_axis',
+                getattr(self, 'gripper_tool_finger_length_axis', 'z'),
+            )
+        )
+        twin_gripper_cfg = dict(twin_cfg.get('gripper_model', {}) or {})
+        self.twin_gripper_model_name = str(
+            twin_gripper_cfg.get(
+                'name',
+                getattr(
+                    self,
+                    'twin_gripper_model_name',
+                    'Alicia_D_v5_6_gripper_50mm',
+                ),
+            )
+        )
+        self.twin_max_inner_gap_m = float(
+            twin_gripper_cfg.get(
+                'max_inner_gap_m',
+                getattr(self, 'twin_max_inner_gap_m', 0.050),
+            )
+        )
         self.gripper_physical_open_width_m = max(
             0.0,
             float(
@@ -2977,6 +3245,166 @@ class RemoteGrasp6DNode:
             )
         )
 
+    def _reset_geometry_gate_audit(self, raw_candidates):
+        self._geometry_gate_counts = {
+            'raw': int(raw_candidates),
+            'raw_variants': 0,
+            'after_transform': 0,
+            'after_center': 0,
+            'after_jaw_width': 0,
+            'after_finger_reach': 0,
+            'after_static_envelope': 0,
+            'after_swept_envelope': 0,
+        }
+        self._geometry_rejection_counts = {}
+        self._selected_candidate_gate = None
+        self.selected_required_open_width_m = None
+
+    def _record_geometry_gate_result(self, result):
+        if not isinstance(result, CandidateGateResult):
+            raise ValueError('analytical gripper gate returned an invalid result')
+        counts = getattr(self, '_geometry_gate_counts', None)
+        if not isinstance(counts, dict):
+            self._reset_geometry_gate_audit(0)
+            counts = self._geometry_gate_counts
+        counts['raw_variants'] = int(counts.get('raw_variants', 0)) + 1
+        stage_names = (
+            'after_transform',
+            'after_center',
+            'after_jaw_width',
+            'after_finger_reach',
+            'after_static_envelope',
+            'after_swept_envelope',
+        )
+        for index in range(min(len(stage_names), int(result.passed_gate_count))):
+            name = stage_names[index]
+            counts[name] = int(counts.get(name, 0)) + 1
+        if not result.ok:
+            rejections = getattr(self, '_geometry_rejection_counts', None)
+            if not isinstance(rejections, dict):
+                rejections = {}
+                self._geometry_rejection_counts = rejections
+            code = str(result.failure_code or 'GRIPPER_SWEEP_COLLISION')
+            rejections[code] = int(rejections.get(code, 0)) + 1
+
+    def _geometry_gate_diagnostics(self):
+        counts = dict(getattr(self, '_geometry_gate_counts', {}) or {})
+        rejections = dict(
+            getattr(self, '_geometry_rejection_counts', {}) or {}
+        )
+        if not counts:
+            return ''
+        order = (
+            'raw',
+            'raw_variants',
+            'after_transform',
+            'after_center',
+            'after_jaw_width',
+            'after_finger_reach',
+            'after_static_envelope',
+            'after_swept_envelope',
+        )
+        count_text = ' '.join(
+            '%s=%d' % (name, int(counts.get(name, 0)))
+            for name in order
+        )
+        rejection_text = ','.join(
+            '%s=%d' % (code, int(rejections[code]))
+            for code in sorted(rejections)
+        ) or 'none'
+        return '%s rejected=%s' % (count_text, rejection_text)
+
+    def _gripper_contract_mismatch_reason(self):
+        validator = getattr(self, 'gripper_contract_validator', None)
+        if callable(validator):
+            return str(
+                validator(
+                    getattr(self, 'gripper_geometry', None),
+                    getattr(self, 'max_gripper_width_m', 0.0),
+                    getattr(self, 'gripper_physical_open_width_m', 0.0),
+                    getattr(self, 'twin_gripper_model_name', ''),
+                    getattr(self, 'twin_max_inner_gap_m', 0.0),
+                )
+                or ''
+            )
+        return gripper_contract_mismatch_reason(
+            getattr(self, 'gripper_geometry', None),
+            getattr(self, 'max_gripper_width_m', 0.0),
+            getattr(self, 'gripper_physical_open_width_m', 0.0),
+            getattr(self, 'twin_gripper_model_name', ''),
+            getattr(self, 'twin_max_inner_gap_m', 0.0),
+            tool_jaw_axis=getattr(self, 'gripper_tool_jaw_axis', 'y'),
+            tool_finger_length_axis=getattr(
+                self,
+                'gripper_tool_finger_length_axis',
+                'z',
+            ),
+        )
+
+    def _evaluate_candidate_geometry(
+        self,
+        _raw_candidate,
+        camera_candidate,
+        grasp_pose,
+        plan,
+    ):
+        estimate = getattr(self, '_latest_geometry_estimate', None)
+        if estimate is None or not bool(getattr(estimate, 'ok', False)):
+            result = CandidateGateResult(
+                ok=False,
+                failure_code='GRIPPER_SWEEP_COLLISION',
+                failure_reason='base-frame object geometry is unavailable',
+                required_open_width_m=0.0,
+                center_distance_m=0.0,
+                support_clearance_m=-1.0e6,
+                jaw_alignment=0.0,
+                motion_cost=0.0,
+                geometry_cost=0.0,
+                failed_gate='transform',
+                passed_gate_count=0,
+            )
+            self._record_geometry_gate_result(result)
+            return result
+        grasp_transform = pose_matrix(grasp_pose)
+        result = evaluate_candidate(
+            gripper=self.gripper_geometry,
+            candidate_center_base=grasp_transform[:3, 3],
+            R_base_tool=grasp_transform[:3, :3],
+            candidate_width_m=float(
+                getattr(camera_candidate, 'width_m', 0.0) or 0.0
+            ),
+            obb_center_base=estimate.center_base,
+            R_base_obb=estimate.axes_base,
+            obb_size_xyz_m=estimate.size_xyz_m,
+            support_normal_base=estimate.support_normal_base,
+            support_offset_m=estimate.support_offset_m,
+            pregrasp_T_base_tool=pose_matrix(plan.pregrasp),
+            approach_T_base_tool=pose_matrix(plan.approach),
+            grasp_T_base_tool=grasp_transform,
+            lift_T_base_tool=pose_matrix(plan.lift),
+            tool_jaw_axis=getattr(self, 'gripper_tool_jaw_axis', 'y'),
+            tool_finger_length_axis=getattr(
+                self,
+                'gripper_tool_finger_length_axis',
+                'z',
+            ),
+            motion_cost=0.0,
+        )
+        self._record_geometry_gate_result(result)
+        if not result.ok:
+            rospy.logwarn(
+                (
+                    'remote 6D analytical gripper rejection: '
+                    'gate=%s code=%s required=%.3fm model_width=%.3fm reason=%s'
+                ),
+                result.failed_gate,
+                result.failure_code,
+                result.required_open_width_m,
+                float(getattr(camera_candidate, 'width_m', 0.0) or 0.0),
+                result.failure_reason,
+            )
+        return result
+
     def _run_candidate_gate_audit(self, candidates, stamp, camera_frame, remote_diagnostics=None):
         rows = []
         variants = list(getattr(self, 'orientation_variant_quaternions', []) or [])
@@ -3092,9 +3520,9 @@ class RemoteGrasp6DNode:
             or (np.isfinite(depth) and depth > 0.0)
         )
         width = float(getattr(candidate, 'width_m', 0.0) or 0.0)
-        width_limit = float(getattr(self, 'max_gripper_width_m', 0.0) or 0.0)
-        width_tolerance = float(getattr(self, 'candidate_width_tolerance_m', 0.0) or 0.0)
-        width_ok = width_limit <= 0.0 or width <= width_limit + width_tolerance
+        # The model width is diagnostic only. The mandatory physical width
+        # result comes from the base-frame OBB and fixed 50 mm gripper.
+        width_ok = True
 
         target_xyz, target_source = self._target_base_xyz()
         target_ok = target_xyz is not None
@@ -3358,26 +3786,6 @@ class RemoteGrasp6DNode:
                     'remote 6D candidate rejected: WSL response has no valid GraspNet depth_m; sync and restart graspnet_baseline_server.py',
                 )
                 return False
-        width = float(getattr(_camera_candidate, 'width_m', 0.0) or 0.0)
-        width_limit = float(getattr(self, 'max_gripper_width_m', 0.0) or 0.0)
-        width_tol = float(getattr(self, 'candidate_width_tolerance_m', 0.0) or 0.0)
-        if width_limit > 0.0 and width > width_limit + width_tol:
-            key = (
-                round(float(width), 4),
-                tuple(round(float(v), 4) for v in getattr(_camera_candidate, 'translation_m', [])[:3]),
-            )
-            if key not in self._width_gate_rejected_keys:
-                self._width_gate_rejected_keys.add(key)
-                self._width_gate_rejected_count += 1
-            rospy.logwarn_throttle(
-                1.0,
-                'remote 6D candidate rejected by width gate: width=%.3fm limit=%.3fm tolerance=%.3fm score=%.3f',
-                width,
-                width_limit,
-                width_tol,
-                float(getattr(_camera_candidate, 'score', 0.0) or 0.0),
-            )
-            return False
         if not getattr(self, 'candidate_target_gate_enabled', True):
             return True
         target_xyz, target_source = self._target_base_xyz()
@@ -3447,7 +3855,13 @@ class RemoteGrasp6DNode:
             )
             return False
         support_metrics = self._candidate_support_geometry_metrics(_camera_candidate)
-        if support_metrics is not None:
+        if (
+            support_metrics is not None
+            and not isinstance(
+                getattr(_camera_candidate, '_geometry_gate_result', None),
+                CandidateGateResult,
+            )
+        ):
             min_finger_clearance = float(
                 getattr(self, 'candidate_min_finger_support_clearance_m', -float('inf'))
             )
@@ -3537,6 +3951,43 @@ class RemoteGrasp6DNode:
         return True
 
     def _candidate_rank(self, candidate, camera_candidate, grasp_pose):
+        gate = getattr(camera_candidate, '_geometry_gate_result', None)
+        if isinstance(gate, CandidateGateResult):
+            if not gate.ok:
+                return (float('inf'),)
+            metrics = getattr(self, '_candidate_plan_metrics', {}).get(
+                self._pose_key(grasp_pose),
+                {},
+            )
+            max_joint_delta = max(
+                0.0,
+                float(
+                    getattr(self, 'candidate_max_joint_delta_rad', 0.0)
+                    or 0.0
+                ),
+            )
+            joint_delta = float(metrics.get('joint_max_delta', 0.0) or 0.0)
+            if max_joint_delta > 0.0 and joint_delta > max_joint_delta:
+                self._joint_motion_gate_rejected_count += 1
+                rospy.logwarn_throttle(
+                    1.0,
+                    (
+                        'remote 6D candidate rejected by joint-motion gate: '
+                        'joint_max_delta=%.3frad > %.3frad'
+                    ),
+                    joint_delta,
+                    max_joint_delta,
+                )
+                return (float('inf'),)
+            updated_gate = candidate_with_motion_cost(
+                gate,
+                max(0.0, float(metrics.get('joint_path_cost', 0.0) or 0.0)),
+            )
+            setattr(camera_candidate, '_geometry_gate_result', updated_gate)
+            return candidate_rank_key(
+                updated_gate,
+                float(getattr(camera_candidate, 'score', 0.0) or 0.0),
+            )
         rank = self._candidate_target_distance(candidate, camera_candidate, grasp_pose)
         score_weight = max(0.0, float(getattr(self, 'candidate_model_score_weight_m', 0.0) or 0.0))
         rank -= score_weight * float(getattr(camera_candidate, 'score', 0.0) or 0.0)
