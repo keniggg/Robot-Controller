@@ -1,0 +1,15 @@
+std_msgs/Header header
+bool valid
+string label
+string source_mode
+geometry_msgs/Pose pose_base
+geometry_msgs/Vector3 size_xyz_m
+geometry_msgs/Vector3 support_normal_base
+float32 support_offset_m
+uint32 valid_depth_points
+float32 valid_depth_ratio
+float32 depth_mad_m
+uint32 fused_frames
+float32 support_inlier_ratio
+uint32 object_point_count
+string failure_reason

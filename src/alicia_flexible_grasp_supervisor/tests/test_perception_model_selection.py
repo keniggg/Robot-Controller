@@ -52,8 +52,57 @@ class PerceptionModelSelectionTest(unittest.TestCase):
     def test_default_profiles_exist_when_yaml_profiles_are_absent(self):
         profiles = normalize_model_profiles({})
 
-        self.assertEqual(list(profiles), ['original', 'carton'])
+        self.assertEqual(list(profiles), ['original', 'carton', 'carton_segment'])
+        self.assertEqual(profiles['original']['task'], 'detect')
+        self.assertFalse(profiles['original']['require_instance_mask'])
         self.assertEqual(profiles['carton']['target_class'], 'carton')
+        self.assertEqual(profiles['carton']['task'], 'detect')
+        self.assertFalse(profiles['carton']['require_instance_mask'])
+        self.assertEqual(profiles['carton_segment']['task'], 'segment')
+        self.assertTrue(profiles['carton_segment']['require_instance_mask'])
+
+    def test_segment_profile_exposes_task_and_requires_instance_mask(self):
+        profiles = normalize_model_profiles({
+            'yolo_models': {
+                'carton_segment': {
+                    'display_name': 'Carton 分割模型',
+                    'model_path': 'carton_segment_model/best.pt',
+                    'task': 'segment',
+                    'target_class_mode': 'fixed',
+                    'target_class': 'carton',
+                    'require_instance_mask': True,
+                },
+            },
+        })
+        self.assertEqual(profiles['carton_segment']['task'], 'segment')
+        self.assertTrue(profiles['carton_segment']['require_instance_mask'])
+
+    def test_profile_rejects_unknown_yolo_task(self):
+        with self.assertRaisesRegex(ValueError, 'Invalid YOLO task'):
+            normalize_model_profiles({
+                'yolo_models': {
+                    'broken': {
+                        'model_path': 'broken.pt',
+                        'task': 'classify',
+                        'target_class_mode': 'fixed',
+                        'target_class': 'carton',
+                    },
+                },
+            })
+
+    def test_detect_profile_rejects_required_instance_mask(self):
+        with self.assertRaisesRegex(ValueError, 'require_instance_mask needs segment task'):
+            normalize_model_profiles({
+                'yolo_models': {
+                    'broken': {
+                        'model_path': 'broken.pt',
+                        'task': 'detect',
+                        'target_class_mode': 'fixed',
+                        'target_class': 'carton',
+                        'require_instance_mask': True,
+                    },
+                },
+            })
 
     def test_resolves_carton_path_from_catkin_workspace_root(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -104,6 +104,28 @@ grasp_6d:
     timeout_sec: 30.0
     auto_request: false
     request_hz: 0.05
+    planning_snapshot_frames: 3
+    planning_snapshot_timeout_sec: 1.0
+    planning_snapshot_max_age_sec: 0.35
+    planning_mask_min_iou: 0.85
+    planning_mask_max_centroid_shift_px: 5.0
+    planning_max_joint_delta_rad: 0.01
+    mask_erosion_px: 2
+    mask_internal_hole_max_area_px: 25
+    depth_mad_scale: 3.5
+    depth_mad_absolute_floor_m: 0.002
+    target_cloud_voxel_size_m: 0.0025
+    target_cloud_outlier_neighbors: 16
+    target_cloud_outlier_std_ratio: 2.0
+    max_gripper_width_m: 0.05
+    candidate_width_tolerance_m: 0.0
+    gripper_geometry:
+      max_inner_gap_m: 0.05
+      width_safety_margin_per_side_m: 0.002
+      tool_jaw_axis: "y"
+      tool_finger_length_axis: "z"
+      finger_box_xyz_m: [0.0434, 0.0286, 0.0600]
+      palm_box_xyz_m: [0.1175, 0.1550, 0.0774]
     # Return a broader score-ranked set so strict target, support-plane and
     # approach gates can find a safe pose instead of seeing only side grasps.
     max_candidates: 300
@@ -220,17 +242,9 @@ grasp_6d:
     camera_visibility_min_depth_m: 0.035
     camera_visibility_max_depth_m: 1.20
     camera_visibility_rank_weight_m: 0.012
-    # Diagnostic mode: GraspNet predicted width is kept as information only.
-    # Set this >0 later to reject poses wider than the real gripper.
-    # The real gripper opening is still limited by /gripper/open_position_m.
-    max_gripper_width_m: 0.0
-    candidate_width_tolerance_m: 0.0
-
 mujoco_digital_twin:
   enabled: true
-  # Diagnostic mode: keep the WSL MuJoCo endpoint available, but do not block
-  # real-arm execution while the digital twin IK is being tuned.
-  execution_gate_enabled: false
+  execution_gate_enabled: true
   server_url: "http://172.23.132.97:8000"
   timeout_sec: 20.0
   min_score: 80
@@ -242,11 +256,10 @@ mujoco_digital_twin:
   open_width_m: 0.05
   close_width_m: 0.0
   object_model:
-    type: "mouse_compound"
-    label: "mouse"
-    size_xyz_m: [0.10, 0.06, 0.035]
+    type: "carton_box"
+    label: "carton"
     mass_kg: 0.08
-    # 如果你有低面数鼠标 mesh，可改成：
-    # type: "mouse_mesh"
-    # mesh_path: "/home/lv/grasp6d_ws/assets/mouse_collision.obj"
-    # mesh_scale: [1.0, 1.0, 1.0]
+    friction: [1.2, 0.08, 0.02]
+  gripper_model:
+    name: "Alicia_D_v5_6_gripper_50mm"
+    max_inner_gap_m: 0.05
