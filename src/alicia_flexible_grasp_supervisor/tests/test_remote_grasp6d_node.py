@@ -1064,6 +1064,48 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertFalse(node.latest_object_geometry.valid)
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
 
+    def test_candidate_rank_exception_invalidates_the_current_geometry_generation(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(
+            candidates=[
+                RemoteGraspCandidate(
+                    0.90,
+                    np.array([0.40, -0.10, 0.25]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    0.04,
+                )
+            ]
+        )
+        node = make_processing_node(client)
+        node.pose_estimator = RecordingPoseEstimator()
+        node._plan_reachable = lambda _pose: True
+        node._candidate_rank = lambda *_args: (_ for _ in ()).throw(
+            RuntimeError('rank exploded')
+        )
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.08, 0.04, 0.06],
+        )
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertEqual(
+            message,
+            'PLAN_FAILED: remote 6D planning failed: rank exploded',
+        )
+        self.assertEqual(node._last_geometry_invalidation_code, 'PLAN_FAILED')
+        self.assertFalse(node.latest_object_geometry.valid)
+        self.assertIsNone(node._latest_geometry_estimate)
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertIsNone(node._selected_candidate_gate)
+        self.assertIsNone(node.selected_required_open_width_m)
+        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
     def test_post_publish_failure_preserves_concurrent_target_loss_reason(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
         client = RecordingClient(
@@ -1667,7 +1709,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIs(selected, candidates[1])
         self.assertAlmostEqual(pose.pose.position.x, 1.01)
 
-    def test_nonfinite_ranked_candidate_is_not_selected(self):
+    def test_nonfinite_rank_tuple_is_a_candidate_hard_reject(self):
         candidate = RemoteGraspCandidate(
             0.9,
             np.array([0.01, 0.0, 0.0]),
@@ -1682,11 +1724,30 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             stamp=None,
             camera_frame='camera_link',
             candidate_frame_convention='ros_camera_link',
-            candidate_rank_fn=lambda *_args: float('inf'),
+            candidate_rank_fn=lambda *_args: (0.1, float('inf')),
         )
 
         self.assertIsNone(selected)
         self.assertIsNone(pose)
+
+    def test_invalid_rank_tuple_conversion_propagates(self):
+        candidate = RemoteGraspCandidate(
+            0.9,
+            np.array([0.01, 0.0, 0.0]),
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            0.04,
+        )
+
+        with self.assertRaises((TypeError, ValueError)):
+            remote_node.select_first_reachable_candidate(
+                [candidate],
+                FakePoseEstimator(),
+                lambda _pose: True,
+                stamp=None,
+                camera_frame='camera_link',
+                candidate_frame_convention='ros_camera_link',
+                candidate_rank_fn=lambda *_args: ('not-a-number',),
+            )
 
     def test_analytical_geometry_gate_runs_before_reachability_and_high_score(self):
         candidates = [

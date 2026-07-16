@@ -548,21 +548,15 @@ def select_first_reachable_candidate(
                         float(getattr(variant_candidate, 'score', 0.0)),
                     )
                 else:
-                    try:
-                        rank = candidate_rank_fn(
-                            candidate,
-                            variant_candidate,
-                            pose,
-                        )
-                    except Exception:
-                        rank = (float('inf'),)
+                    rank = candidate_rank_fn(
+                        candidate,
+                        variant_candidate,
+                        pose,
+                    )
                 if np.isscalar(rank):
                     rank = (float(rank),)
                 else:
-                    try:
-                        rank = tuple(float(value) for value in rank)
-                    except Exception:
-                        rank = (float('inf'),)
+                    rank = tuple(float(value) for value in rank)
                 if not rank or not all(math.isfinite(value) for value in rank):
                     continue
                 ranked.append(
