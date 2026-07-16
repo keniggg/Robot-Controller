@@ -2255,7 +2255,10 @@ class RemoteGrasp6DNode:
             self._publish_invalid_plan_pair(
                 'PLAN_PENDING',
                 'a new RGB-D planning snapshot is being processed',
-                stamp=stamp,
+                # PLAN_PENDING is a control tombstone, not source authority.
+                # A zero stamp prevents it from consuming the snapshot's
+                # source-watermark slot before the final valid rich plan.
+                stamp=rospy.Time(0),
             )
             # Every filter below must use geometry from this exact RGB-D
             # request, even when remote inference takes several seconds.

@@ -1270,6 +1270,13 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIn('model_width=0.090', message)
         self.assertIn('required_open=0.044', message)
         self.assertEqual(client.calls[0]['kwargs']['max_gripper_width_m'], 0.0)
+        pending = node.rich_plan_pub.messages[0]
+        final = node.rich_plan_pub.messages[-1]
+        self.assertFalse(pending.valid)
+        self.assertTrue(pending.diagnostic.startswith('PLAN_PENDING:'))
+        self.assertEqual(pending.header.stamp.to_nsec(), 0)
+        self.assertTrue(final.valid)
+        self.assertEqual(final.header.stamp.to_nsec(), snapshot.stamp_ns)
 
     def test_plan_publish_exception_invalidates_geometry_and_selected_gate(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)

@@ -337,6 +337,46 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         self.assertFalse(tracker.state(now_sec=12.1).fresh)
         self.assertFalse(tracker.update_enriched(newest, now_sec=10.0).fresh)
 
+    def test_zero_stamp_pending_preserves_strict_gui_source_watermark(self):
+        def pending(stamp_sec):
+            message = Grasp6DPlan()
+            message.header.frame_id = 'base_link'
+            message.header.stamp = rospy.Time.from_sec(stamp_sec)
+            message.valid = False
+            message.diagnostic = 'PLAN_PENDING: planning snapshot in progress'
+            return message
+
+        first = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)
+        first.update_enriched(pending(0.0), now_sec=10.0)
+        initial = self._rich_plan(stamp_sec=9.0, plan_id='initial')
+        self.assertTrue(first.update_enriched(initial, now_sec=10.0).fresh)
+
+        older = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)
+        newer = self._rich_plan(stamp_sec=9.5, plan_id='newer')
+        older.update_enriched(newer, now_sec=10.0)
+        older.update_enriched(pending(0.0), now_sec=10.0)
+        self.assertFalse(
+            older.update_enriched(
+                self._rich_plan(stamp_sec=9.0, plan_id='older'),
+                now_sec=10.0,
+            ).fresh
+        )
+
+        successor = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)
+        successor.update_enriched(newer, now_sec=10.0)
+        successor.update_enriched(pending(0.0), now_sec=10.0)
+        self.assertTrue(
+            successor.update_enriched(
+                self._rich_plan(stamp_sec=9.8, plan_id='successor'),
+                now_sec=10.0,
+            ).fresh
+        )
+
+        same_stamp = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)
+        same_stamp.update_enriched(newer, now_sec=10.0)
+        same_stamp.update_enriched(pending(9.5), now_sec=10.0)
+        self.assertFalse(same_stamp.update_enriched(newer, now_sec=10.0).fresh)
+
     def test_local_legacy_mode_is_explicitly_visualization_only(self):
         self.assertEqual(
             control_widget.local_plan_execution_notice(False),

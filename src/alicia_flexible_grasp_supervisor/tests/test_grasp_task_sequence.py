@@ -424,6 +424,64 @@ class GraspTaskSequenceTest(unittest.TestCase):
             grasp_task_node.rospy.get_param = original_get_param
             grasp_task_node.rospy.Time.now = original_now
 
+    def test_zero_stamp_pending_preserves_strict_server_source_watermark(self):
+        def pending(stamp_sec):
+            message = Grasp6DPlan()
+            message.header.frame_id = 'base_link'
+            message.header.stamp = grasp_task_node.rospy.Time.from_sec(stamp_sec)
+            message.valid = False
+            message.diagnostic = 'PLAN_PENDING: planning snapshot in progress'
+            return message
+
+        def node_with_no_plan():
+            node = grasp_task_node.GraspTaskNode.__new__(
+                grasp_task_node.GraspTaskNode
+            )
+            node.latest_grasp6d_plan = None
+            return node
+
+        original_get_param = grasp_task_node.rospy.get_param
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/plan_validity_sec': 2.0,
+        }.get(name, default)
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            first = node_with_no_plan()
+            first.grasp6d_plan_cb(pending(0.0))
+            initial = self._rich_plan(stamp_sec=9.0, plan_id='initial')
+            first.grasp6d_plan_cb(initial)
+            self.assertEqual(first.latest_grasp6d_plan.plan_id, initial.plan_id)
+
+            newer = self._rich_plan(stamp_sec=9.5, plan_id='newer')
+            older = node_with_no_plan()
+            older.grasp6d_plan_cb(newer)
+            older.grasp6d_plan_cb(pending(0.0))
+            older.grasp6d_plan_cb(
+                self._rich_plan(stamp_sec=9.0, plan_id='older')
+            )
+            self.assertIsNone(older.latest_grasp6d_plan)
+
+            successor = node_with_no_plan()
+            successor.grasp6d_plan_cb(newer)
+            successor.grasp6d_plan_cb(pending(0.0))
+            next_plan = self._rich_plan(stamp_sec=9.8, plan_id='successor')
+            successor.grasp6d_plan_cb(next_plan)
+            self.assertEqual(
+                successor.latest_grasp6d_plan.plan_id, next_plan.plan_id
+            )
+
+            same_stamp = node_with_no_plan()
+            same_stamp.grasp6d_plan_cb(newer)
+            same_stamp.grasp6d_plan_cb(pending(9.5))
+            same_stamp.grasp6d_plan_cb(newer)
+            self.assertIsNone(same_stamp.latest_grasp6d_plan)
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_now
+
     def test_object_jump_and_low_confidence_revoke_execution_authority(self):
         original_get_param = grasp_task_node.rospy.get_param
         original_now = grasp_task_node.rospy.Time.now
