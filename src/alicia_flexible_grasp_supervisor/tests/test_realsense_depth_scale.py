@@ -271,6 +271,24 @@ class RealSenseDepthScaleTest(unittest.TestCase):
         self.assertEqual(manager.depth_scale, 0.0001)
         self.assertAlmostEqual(float(np.median(depth)) * manager.depth_scale, 0.6)
 
+    def test_simulated_depth_is_zeroed_when_outside_configured_range(self):
+        manager = RealSenseManager(
+            width=4,
+            height=3,
+            simulate=True,
+            depth_filter_cfg={
+                'depth_min_m': 0.7,
+                'depth_max_m': 1.0,
+            },
+        )
+        manager.start()
+
+        _, depth = manager.read()
+
+        np.testing.assert_array_equal(depth, np.zeros((3, 4), dtype=np.uint16))
+        self.assertEqual(depth.shape, (3, 4))
+        self.assertEqual(depth.dtype, np.dtype(np.uint16))
+
 
 if __name__ == '__main__':
     unittest.main()

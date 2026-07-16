@@ -57,7 +57,8 @@ class RealSenseManager:
 
     def read(self):
         if self.simulate:
-            return self._simulate()
+            color, depth = self._simulate()
+            return color, self._clip_depth_range(depth)
         frames = self.pipeline.wait_for_frames()
         if self.align is not None:
             frames = self.align.process(frames)
@@ -68,10 +69,13 @@ class RealSenseManager:
         for depth_filter in self.depth_filters:
             depth_frame = depth_filter.process(depth_frame)
         color = np.asanyarray(color_frame.get_data())
-        depth = np.asanyarray(depth_frame.get_data()).copy()
-        depth_m = depth.astype(np.float64) * float(self.depth_scale)
-        depth[(depth_m < self.depth_min_m) | (depth_m > self.depth_max_m)] = 0
-        return color, depth
+        return color, self._clip_depth_range(depth_frame.get_data())
+
+    def _clip_depth_range(self, depth):
+        clipped = np.asanyarray(depth).copy()
+        depth_m = clipped.astype(np.float64) * float(self.depth_scale)
+        clipped[(depth_m < self.depth_min_m) | (depth_m > self.depth_max_m)] = 0
+        return clipped
 
     def _configure_depth_filters(self):
         self.depth_filters = []
