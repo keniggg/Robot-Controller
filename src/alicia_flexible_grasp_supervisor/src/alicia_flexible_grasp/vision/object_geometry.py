@@ -238,30 +238,203 @@ def _voxel_centroids(points, voxel_size_m):
     return centroids
 
 
-def _neighbor_distance_filter(points, neighbors, std_ratio):
+def _spatial_neighbor_mean_distances(
+    points,
+    neighbors,
+    cell_size_m,
+    max_local_radius=None,
+):
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    count = len(points)
+    neighbor_count = min(max(1, int(neighbors)), max(1, count - 1))
+    cell_size = float(cell_size_m)
+    if not np.isfinite(cell_size) or cell_size <= 0.0:
+        raise ValueError('neighbour bucket cell size must be finite and positive')
+    if not np.all(np.isfinite(points)):
+        raise ValueError('neighbour points contain non-finite values')
+    if count <= 1:
+        return np.zeros(count, dtype=float), {
+            'bucket_count': count,
+            'distance_evaluations': 0,
+            'fallback_points': 0,
+            'max_radius': 0,
+        }
+
+    keys = np.floor(points / cell_size).astype(np.int64)
+    if max_local_radius is None:
+        radius_limit = max(4, int(np.ceil(np.cbrt(neighbor_count + 1))) * 2)
+    else:
+        radius_limit = max(1, int(max_local_radius))
+    minimum_key = np.min(keys, axis=0)
+    maximum_key = np.max(keys, axis=0)
+    shape = maximum_key - minimum_key + 1
+    max_integer = np.iinfo(np.int64).max
+    if (
+        np.any(shape <= 0)
+        or int(shape[0]) > max_integer // max(1, int(shape[1]))
+        or int(shape[0] * shape[1]) > max_integer // max(1, int(shape[2]))
+    ):
+        linear = None
+    else:
+        normalized_keys = keys - minimum_key
+        linear = (
+            (normalized_keys[:, 0] * shape[1] + normalized_keys[:, 1])
+            * shape[2]
+            + normalized_keys[:, 2]
+        )
+        if len(np.unique(linear)) != count:
+            linear = None
+
+    nearest_squared = np.full((count, neighbor_count), np.inf, dtype=float)
+    distance_evaluations = 0
+    fallback_points = 0
+    maximum_radius = 0
+    active = np.arange(count, dtype=np.int64)
+    if linear is not None:
+        sorted_order = np.argsort(linear)
+        sorted_linear = linear[sorted_order]
+        maximum_batch_entries = 2_000_000
+        for radius in range(1, radius_limit + 1):
+            if active.size == 0:
+                break
+            maximum_radius = radius
+            offsets = np.asarray(
+                [
+                    (dx, dy, dz)
+                    for dx in range(-radius, radius + 1)
+                    for dy in range(-radius, radius + 1)
+                    for dz in range(-radius, radius + 1)
+                    if max(abs(dx), abs(dy), abs(dz)) == radius
+                ],
+                dtype=np.int64,
+            )
+            chunk_size = max(
+                1,
+                maximum_batch_entries // max(1, len(offsets)),
+            )
+            for start in range(0, len(active), chunk_size):
+                chunk = active[start:start + chunk_size]
+                chunk_distances = np.full(
+                    (len(chunk), len(offsets)),
+                    np.inf,
+                    dtype=float,
+                )
+                for offset_index, offset in enumerate(offsets):
+                    query_keys = keys[chunk] + offset
+                    in_bounds = np.all(
+                        (query_keys >= minimum_key)
+                        & (query_keys <= maximum_key),
+                        axis=1,
+                    )
+                    if not np.any(in_bounds):
+                        continue
+                    bounded_rows = np.flatnonzero(in_bounds)
+                    normalized = query_keys[bounded_rows] - minimum_key
+                    query_linear = (
+                        (normalized[:, 0] * shape[1] + normalized[:, 1])
+                        * shape[2]
+                        + normalized[:, 2]
+                    )
+                    positions = np.searchsorted(sorted_linear, query_linear)
+                    valid_positions = positions < len(sorted_linear)
+                    clipped = np.minimum(positions, len(sorted_linear) - 1)
+                    matched = valid_positions & (
+                        sorted_linear[clipped] == query_linear
+                    )
+                    if not np.any(matched):
+                        continue
+                    rows = bounded_rows[matched]
+                    neighbor_indices = sorted_order[positions[matched]]
+                    delta = points[neighbor_indices] - points[chunk[rows]]
+                    chunk_distances[rows, offset_index] = np.einsum(
+                        'ij,ij->i',
+                        delta,
+                        delta,
+                    )
+                    distance_evaluations += int(np.count_nonzero(matched))
+                combined = np.concatenate(
+                    [nearest_squared[chunk], chunk_distances],
+                    axis=1,
+                )
+                nearest_squared[chunk] = np.partition(
+                    combined,
+                    neighbor_count - 1,
+                    axis=1,
+                )[:, :neighbor_count]
+
+            lower_boundary = (keys[active] - radius) * cell_size
+            upper_boundary = (keys[active] + radius + 1) * cell_size
+            outside_lower_bound = np.min(
+                np.concatenate(
+                    [
+                        points[active] - lower_boundary,
+                        upper_boundary - points[active],
+                    ],
+                    axis=1,
+                ),
+                axis=1,
+            )
+            kth_distance = np.sqrt(np.max(nearest_squared[active], axis=1))
+            resolved = np.isfinite(kth_distance) & (
+                kth_distance <= outside_lower_bound + 1e-12
+            )
+            active = active[~resolved]
+
+    fallback_points = int(len(active))
+    for index in active:
+        delta = points - points[index]
+        squared = np.einsum('ij,ij->i', delta, delta)
+        squared[index] = np.inf
+        distance_evaluations += count - 1
+        nearest_squared[index] = np.partition(
+            squared,
+            neighbor_count - 1,
+        )[:neighbor_count]
+
+    mean_distances = np.mean(np.sqrt(nearest_squared), axis=1)
+    return mean_distances, {
+        'bucket_count': int(count if linear is not None else len(np.unique(keys, axis=0))),
+        'distance_evaluations': int(distance_evaluations),
+        'fallback_points': int(fallback_points),
+        'max_radius': int(maximum_radius),
+    }
+
+
+def _neighbor_distance_filter(
+    points,
+    neighbors,
+    std_ratio,
+    cell_size_m=None,
+    return_stats=False,
+):
     points = np.asarray(points, dtype=float).reshape(-1, 3)
     count = len(points)
     neighbor_count = min(max(1, int(neighbors)), max(1, count - 1))
     if count <= neighbor_count + 1:
-        return points
-    mean_distances = np.empty(count, dtype=float)
-    chunk_size = max(1, min(count, 2_000_000 // max(1, count)))
-    for start in range(0, count, chunk_size):
-        stop = min(count, start + chunk_size)
-        delta = points[start:stop, None, :] - points[None, :, :]
-        distances_squared = np.einsum('ijk,ijk->ij', delta, delta)
-        nearest_squared = np.partition(
-            distances_squared,
-            neighbor_count,
-            axis=1,
-        )[:, 1:neighbor_count + 1]
-        mean_distances[start:stop] = np.mean(np.sqrt(nearest_squared), axis=1)
+        stats = {
+            'bucket_count': count,
+            'distance_evaluations': 0,
+            'fallback_points': 0,
+            'max_radius': 0,
+        }
+        return (points, stats) if return_stats else points
+    if cell_size_m is None:
+        spans = np.ptp(points, axis=0)
+        positive_spans = spans[spans > 0.0]
+        scale = float(np.min(positive_spans)) if positive_spans.size else 1.0
+        cell_size_m = max(scale / max(1.0, np.cbrt(count)), 1e-6)
+    mean_distances, stats = _spatial_neighbor_mean_distances(
+        points,
+        neighbor_count,
+        cell_size_m,
+    )
     mean = float(np.mean(mean_distances))
     deviation = float(np.std(mean_distances))
     cutoff = mean + float(std_ratio) * deviation
     if not np.isfinite(cutoff):
         raise ValueError('outlier neighbour distance threshold is non-finite')
-    return points[mean_distances <= cutoff]
+    filtered = points[mean_distances <= cutoff]
+    return (filtered, stats) if return_stats else filtered
 
 
 def _support_basis(normal):
@@ -508,6 +681,7 @@ def estimate_object_geometry(
             object_points,
             neighbor_count,
             neighbor_std_ratio,
+            cell_size_m=voxel_size,
         )
         if len(object_points) < object_minimum:
             raise ValueError(

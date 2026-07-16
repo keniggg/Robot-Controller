@@ -597,6 +597,7 @@ class RemoteGrasp6DNode:
         self._planning_object_msg = None
         self._planning_object_time = None
         self._object_lock = threading.Lock()
+        self._geometry_state_lock = threading.RLock()
         self.last_error = ''
         self._request_lock = threading.Lock()
         self._backoff_until = rospy.Time(0)
@@ -1340,6 +1341,44 @@ class RemoteGrasp6DNode:
             publisher.publish(invalid_plan)
         self.latest_plan = None
 
+    def _geometry_state_guard(self):
+        lock = getattr(self, '_geometry_state_lock', None)
+        if lock is None:
+            lock = threading.RLock()
+            self._geometry_state_lock = lock
+        return lock
+
+    def _capture_geometry_generation(self):
+        with self._geometry_state_guard():
+            return int(getattr(self, '_geometry_invalidation_generation', 0))
+
+    def _geometry_invalidation_state(self, expected_generation):
+        with self._geometry_state_guard():
+            current = int(getattr(self, '_geometry_invalidation_generation', 0))
+            if current == int(expected_generation):
+                return False, ''
+            code = str(
+                getattr(self, '_last_geometry_invalidation_code', 'PLAN_STALE')
+                or 'PLAN_STALE'
+            )
+            return True, code
+
+    def _publish_legacy_plan_if_current(self, plan, expected_generation):
+        with self._geometry_state_guard():
+            current = int(getattr(self, '_geometry_invalidation_generation', 0))
+            if current != int(expected_generation):
+                code = str(
+                    getattr(
+                        self,
+                        '_last_geometry_invalidation_code',
+                        'PLAN_STALE',
+                    )
+                    or 'PLAN_STALE'
+                )
+                return False, code
+            self.plan_pub.publish(plan)
+            return True, ''
+
     def _clear_geometry_cache(self):
         self.latest_target_cloud_base_xyz = None
         self.latest_target_cloud_camera_center = None
@@ -1359,33 +1398,34 @@ class RemoteGrasp6DNode:
         snapshot=None,
         label='',
     ):
-        self._geometry_invalidation_generation = (
-            int(getattr(self, '_geometry_invalidation_generation', 0)) + 1
-        )
-        self._last_geometry_invalidation_code = str(failure_code)
-        source_mode = str(getattr(snapshot, 'source_mode', '') or '')
-        estimate = self._invalid_geometry_estimate(
-            failure_code,
-            failure_reason,
-            source_mode,
-        )
-        if not label:
-            obj = getattr(snapshot, 'object_msg', None)
-            label = str(getattr(obj, 'label', '') or '')
-        message = geometry_estimate_to_message(
-            estimate,
-            snapshot=snapshot,
-            stamp=self._safe_time(stamp),
-            label=label,
-        )
-        publisher = getattr(self, 'geometry_pub', None)
-        if publisher is not None:
-            publisher.publish(message)
-        self.latest_object_geometry = message
-        self.previous_object_axes_base = None
-        self._clear_geometry_cache()
-        self._publish_empty_legacy_plan(stamp)
-        return message
+        with self._geometry_state_guard():
+            self._geometry_invalidation_generation = (
+                int(getattr(self, '_geometry_invalidation_generation', 0)) + 1
+            )
+            self._last_geometry_invalidation_code = str(failure_code)
+            source_mode = str(getattr(snapshot, 'source_mode', '') or '')
+            estimate = self._invalid_geometry_estimate(
+                failure_code,
+                failure_reason,
+                source_mode,
+            )
+            if not label:
+                obj = getattr(snapshot, 'object_msg', None)
+                label = str(getattr(obj, 'label', '') or '')
+            message = geometry_estimate_to_message(
+                estimate,
+                snapshot=snapshot,
+                stamp=self._safe_time(stamp),
+                label=label,
+            )
+            publisher = getattr(self, 'geometry_pub', None)
+            if publisher is not None:
+                publisher.publish(message)
+            self.latest_object_geometry = message
+            self.previous_object_axes_base = None
+            self._clear_geometry_cache()
+            self._publish_empty_legacy_plan(stamp)
+            return message
 
     def _snapshot_geometry_inputs(self, snapshot):
         if snapshot.source_mode == 'instance_mask':
@@ -1439,16 +1479,9 @@ class RemoteGrasp6DNode:
                 [rotation.x, rotation.y, rotation.z, rotation.w],
             )
         else:
-            if pose_estimator is None or not bool(
-                getattr(pose_estimator, 'allow_static_fallback', False)
-            ):
-                raise RuntimeError(
-                    'snapshot-time TF %s <- %s is unavailable'
-                    % (base_frame, source_frame)
-                )
-            base_from_source = transform_matrix(
-                getattr(pose_estimator, 'translation_xyz', [0.0, 0.0, 0.0]),
-                getattr(pose_estimator, 'rotation_xyzw', [0.0, 0.0, 0.0, 1.0]),
+            raise RuntimeError(
+                'snapshot-time TF %s <- %s is unavailable'
+                % (base_frame, source_frame)
             )
         if 'optical' in source_frame.lower():
             return base_from_source
@@ -1526,79 +1559,103 @@ class RemoteGrasp6DNode:
         )
         return estimate, target_depth, transform
 
-    def _activate_geometry(self, estimate, snapshot, stamp, transform):
-        label = str(getattr(getattr(snapshot, 'object_msg', None), 'label', '') or '')
-        message = geometry_estimate_to_message(
-            estimate,
-            snapshot=snapshot,
-            stamp=stamp,
-            label=label,
-        )
-        publisher = getattr(self, 'geometry_pub', None)
-        if publisher is not None:
-            publisher.publish(message)
-        self.latest_object_geometry = message
-        self.previous_object_axes_base = np.asarray(estimate.axes_base, dtype=float).copy()
-        self.latest_target_cloud_base_xyz = np.asarray(
-            estimate.center_base,
-            dtype=float,
-        ).copy()
-        self.latest_target_cloud_time = stamp
-        self.latest_target_cloud_count = len(estimate.object_points_base)
-        self.latest_target_cloud_source = '%s_geometry' % estimate.source_mode
-        self.latest_target_cloud_segmentation = (
-            'support_plane=inliers:%.3f object:%d obb=(%.3f,%.3f,%.3f)m'
-            % (
-                float(estimate.support_inlier_ratio),
-                len(estimate.object_points_base),
-                float(estimate.size_xyz_m[0]),
-                float(estimate.size_xyz_m[1]),
-                float(estimate.size_xyz_m[2]),
+    def _activate_geometry(
+        self,
+        estimate,
+        snapshot,
+        stamp,
+        transform,
+        expected_generation=None,
+    ):
+        with self._geometry_state_guard():
+            if (
+                expected_generation is not None
+                and int(getattr(self, '_geometry_invalidation_generation', 0))
+                != int(expected_generation)
+            ):
+                return False
+            label = str(
+                getattr(getattr(snapshot, 'object_msg', None), 'label', '') or ''
             )
-        )
-        optical_from_base = np.linalg.inv(np.asarray(transform, dtype=float))
-        base_points = np.asarray(estimate.object_points_base, dtype=float)
-        optical_points = (
-            base_points @ optical_from_base[:3, :3].T
-            + optical_from_base[:3, 3]
-        )
-        camera_points = self._project_points_for_camera_frame(optical_points)
-        self.latest_target_cloud_camera_points = np.asarray(
-            camera_points,
-            dtype=np.float32,
-        )
-        center_optical = (
-            np.asarray(estimate.center_base, dtype=float) @ optical_from_base[:3, :3].T
-            + optical_from_base[:3, 3]
-        )
-        self.latest_target_cloud_camera_center = self._project_points_for_camera_frame(
-            center_optical.reshape(1, 3)
-        )[0]
-        support_point_base = (
-            -float(estimate.support_offset_m)
-            * np.asarray(estimate.support_normal_base, dtype=float)
-        )
-        support_point_optical = (
-            support_point_base @ optical_from_base[:3, :3].T
-            + optical_from_base[:3, 3]
-        )
-        support_normal_optical = (
-            optical_from_base[:3, :3]
-            @ np.asarray(estimate.support_normal_base, dtype=float)
-        )
-        self.latest_support_plane_camera_point = self._project_points_for_camera_frame(
-            support_point_optical.reshape(1, 3)
-        )[0]
-        support_normal_camera = self._project_vectors_for_camera_frame(
-            support_normal_optical.reshape(1, 3)
-        )[0]
-        support_normal_camera /= max(
-            float(np.linalg.norm(support_normal_camera)),
-            1e-12,
-        )
-        self.latest_support_plane_camera_normal = support_normal_camera
-        self._target_cloud_request_active = True
-        return message
+            message = geometry_estimate_to_message(
+                estimate,
+                snapshot=snapshot,
+                stamp=stamp,
+                label=label,
+            )
+            publisher = getattr(self, 'geometry_pub', None)
+            if publisher is not None:
+                publisher.publish(message)
+            self.latest_object_geometry = message
+            self.previous_object_axes_base = np.asarray(
+                estimate.axes_base,
+                dtype=float,
+            ).copy()
+            self.latest_target_cloud_base_xyz = np.asarray(
+                estimate.center_base,
+                dtype=float,
+            ).copy()
+            self.latest_target_cloud_time = stamp
+            self.latest_target_cloud_count = len(estimate.object_points_base)
+            self.latest_target_cloud_source = '%s_geometry' % estimate.source_mode
+            self.latest_target_cloud_segmentation = (
+                'support_plane=inliers:%.3f object:%d obb=(%.3f,%.3f,%.3f)m'
+                % (
+                    float(estimate.support_inlier_ratio),
+                    len(estimate.object_points_base),
+                    float(estimate.size_xyz_m[0]),
+                    float(estimate.size_xyz_m[1]),
+                    float(estimate.size_xyz_m[2]),
+                )
+            )
+            optical_from_base = np.linalg.inv(np.asarray(transform, dtype=float))
+            base_points = np.asarray(estimate.object_points_base, dtype=float)
+            optical_points = (
+                base_points @ optical_from_base[:3, :3].T
+                + optical_from_base[:3, 3]
+            )
+            camera_points = self._project_points_for_camera_frame(optical_points)
+            self.latest_target_cloud_camera_points = np.asarray(
+                camera_points,
+                dtype=np.float32,
+            )
+            center_optical = (
+                np.asarray(estimate.center_base, dtype=float)
+                @ optical_from_base[:3, :3].T
+                + optical_from_base[:3, 3]
+            )
+            self.latest_target_cloud_camera_center = (
+                self._project_points_for_camera_frame(
+                    center_optical.reshape(1, 3)
+                )[0]
+            )
+            support_point_base = (
+                -float(estimate.support_offset_m)
+                * np.asarray(estimate.support_normal_base, dtype=float)
+            )
+            support_point_optical = (
+                support_point_base @ optical_from_base[:3, :3].T
+                + optical_from_base[:3, 3]
+            )
+            support_normal_optical = (
+                optical_from_base[:3, :3]
+                @ np.asarray(estimate.support_normal_base, dtype=float)
+            )
+            self.latest_support_plane_camera_point = (
+                self._project_points_for_camera_frame(
+                    support_point_optical.reshape(1, 3)
+                )[0]
+            )
+            support_normal_camera = self._project_vectors_for_camera_frame(
+                support_normal_optical.reshape(1, 3)
+            )[0]
+            support_normal_camera /= max(
+                float(np.linalg.norm(support_normal_camera)),
+                1e-12,
+            )
+            self.latest_support_plane_camera_normal = support_normal_camera
+            self._target_cloud_request_active = True
+            return True
 
     def object_cb(self, msg):
         now = rospy.Time.now()
@@ -1821,9 +1878,7 @@ class RemoteGrasp6DNode:
             return False, message
         color = snapshot.color_bgr
         frame_id = snapshot.frame_id
-        request_invalidation_generation = int(
-            getattr(self, '_geometry_invalidation_generation', 0)
-        )
+        request_invalidation_generation = self._capture_geometry_generation()
         self._planning_snapshot_active = True
         self._planning_object_msg = snapshot.object_msg
         self._planning_object_time = stamp
@@ -1852,7 +1907,23 @@ class RemoteGrasp6DNode:
                 )
                 self._publish_error(message)
                 return False, message
-            self._activate_geometry(estimate, snapshot, stamp, transform)
+            activated = self._activate_geometry(
+                estimate,
+                snapshot,
+                stamp,
+                transform,
+                expected_generation=request_invalidation_generation,
+            )
+            if not activated:
+                _invalidated, failure_code = self._geometry_invalidation_state(
+                    request_invalidation_generation
+                )
+                message = (
+                    '%s: planning request was invalidated during geometry estimation'
+                    % (failure_code or 'PLAN_STALE')
+                )
+                self._publish_error(message)
+                return False, message
             bbox = tuple(snapshot.bbox or (0, 0, 0, 0))
             roi_message = (
                 '%s x=%d y=%d w=%d h=%d target_depth=%d'
@@ -1870,6 +1941,16 @@ class RemoteGrasp6DNode:
                 status += ' ' + roi_message
                 rospy.loginfo('remote 6D request geometry: %s', roi_message)
             self.status_pub.publish(String(status))
+            invalidated, failure_code = self._geometry_invalidation_state(
+                request_invalidation_generation
+            )
+            if invalidated:
+                message = (
+                    '%s: planning request was invalidated before remote inference'
+                    % failure_code
+                )
+                self._publish_error(message)
+                return False, message
             try:
                 candidates = self.client.predict(
                     color,
@@ -1882,9 +1963,25 @@ class RemoteGrasp6DNode:
                     candidate_width_tolerance_m=self.candidate_width_tolerance_m,
                 )
             except Exception as exc:
+                invalidated, concurrent_code = self._geometry_invalidation_state(
+                    request_invalidation_generation
+                )
+                if invalidated:
+                    message = (
+                        '%s: planning request was invalidated during remote inference'
+                        % concurrent_code
+                    )
+                    self._publish_error(message)
+                    return False, message
                 failure_code = remote_prediction_failure_code(exc)
-                message = '%s: %s' % (failure_code, exc)
-                self._publish_empty_legacy_plan(stamp)
+                failure_reason = str(exc)
+                message = '%s: %s' % (failure_code, failure_reason)
+                self._invalidate_geometry(
+                    failure_code,
+                    failure_reason,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
                 self._publish_error(message)
                 if self.failure_backoff_sec > 0.0:
                     self._backoff_until = (
@@ -1892,17 +1989,10 @@ class RemoteGrasp6DNode:
                         + rospy.Duration(self.failure_backoff_sec)
                     )
                 return False, message
-            if int(
-                getattr(self, '_geometry_invalidation_generation', 0)
-            ) != request_invalidation_generation:
-                failure_code = str(
-                    getattr(
-                        self,
-                        '_last_geometry_invalidation_code',
-                        'PLAN_STALE',
-                    )
-                    or 'PLAN_STALE'
-                )
+            invalidated, failure_code = self._geometry_invalidation_state(
+                request_invalidation_generation
+            )
+            if invalidated:
                 message = (
                     '%s: planning request was invalidated during remote inference'
                     % failure_code
@@ -1911,8 +2001,15 @@ class RemoteGrasp6DNode:
                 return False, message
             remote_diagnostics = dict(getattr(self.client, 'last_diagnostics', {}) or {})
             if not candidates:
-                message = 'NO_RAW_CANDIDATE: remote GraspNet returned no candidates'
-                message += self._candidate_failure_diagnostics(remote_diagnostics)
+                failure_reason = 'remote GraspNet returned no candidates'
+                failure_reason += self._candidate_failure_diagnostics(remote_diagnostics)
+                message = 'NO_RAW_CANDIDATE: %s' % failure_reason
+                self._invalidate_geometry(
+                    'NO_RAW_CANDIDATE',
+                    failure_reason,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
                 self._publish_error(message)
                 return False, message
             self._position_only_rejected_count = 0
@@ -1952,17 +2049,10 @@ class RemoteGrasp6DNode:
                 orientation_variant_quaternions=self.orientation_variant_quaternions,
                 model_grasp_to_tool_quaternion=self.model_grasp_to_tool_quaternion,
             )
-            if int(
-                getattr(self, '_geometry_invalidation_generation', 0)
-            ) != request_invalidation_generation:
-                failure_code = str(
-                    getattr(
-                        self,
-                        '_last_geometry_invalidation_code',
-                        'PLAN_STALE',
-                    )
-                    or 'PLAN_STALE'
-                )
+            invalidated, failure_code = self._geometry_invalidation_state(
+                request_invalidation_generation
+            )
+            if invalidated:
                 message = (
                     '%s: planning request was invalidated during candidate selection'
                     % failure_code
@@ -2026,21 +2116,14 @@ class RemoteGrasp6DNode:
                 return False, message
             final_target_delta = self._candidate_target_distance(None, None, grasp_pose)
             plan_msg = make_grasp_plan_pose_array(grasp_pose, stamp, rospy.get_param('/grasp', {}))
-            if int(
-                getattr(self, '_geometry_invalidation_generation', 0)
-            ) != request_invalidation_generation:
-                failure_code = str(
-                    getattr(
-                        self,
-                        '_last_geometry_invalidation_code',
-                        'PLAN_STALE',
-                    )
-                    or 'PLAN_STALE'
-                )
+            published, failure_code = self._publish_legacy_plan_if_current(
+                plan_msg,
+                request_invalidation_generation,
+            )
+            if not published:
                 message = '%s: planning request was invalidated before publication' % failure_code
                 self._publish_error(message)
                 return False, message
-            self.plan_pub.publish(plan_msg)
             selected_target_xyz, target_source = self._target_base_xyz()
             visibility_message = ''
             if bool(getattr(self, 'camera_visibility_diagnostic_enabled', True)) and selected_target_xyz is not None:

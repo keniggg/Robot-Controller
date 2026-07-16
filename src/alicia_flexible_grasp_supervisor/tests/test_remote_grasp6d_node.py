@@ -225,6 +225,9 @@ def make_geometry_estimate(ok=True, code='', reason='', source_mode='instance_ma
 def make_processing_node(client=None):
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node._request_lock = NonBlockingLock()
+    node._geometry_state_lock = threading.RLock()
+    node._geometry_invalidation_generation = 0
+    node._last_geometry_invalidation_code = ''
     node._refresh_runtime_params = lambda: None
     node.plan_pub = RecordingPublisher()
     node.geometry_pub = RecordingPublisher()
@@ -715,6 +718,38 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         np.testing.assert_allclose(transform[:3, :3], remote_node.OPTICAL_TO_ROS_CAMERA)
         np.testing.assert_allclose(transform[:3, 3], [0.1, 0.2, 0.3])
 
+    def test_snapshot_geometry_tf_never_uses_static_fallback(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        stamp = remote_node.rospy.Time(10, 123)
+        node = make_processing_node()
+        node.tf_buffer = None
+        node.pose_estimator.tf_buffer = None
+        node.pose_estimator.allow_static_fallback = True
+        node.pose_estimator.translation_xyz = [9.0, 8.0, 7.0]
+
+        with self.assertRaisesRegex(RuntimeError, 'snapshot-time TF'):
+            node._snapshot_base_optical_transform(snapshot, stamp)
+
+    def test_snapshot_geometry_tf_lookup_failure_reports_tf_unavailable(self):
+        class FailingBuffer:
+            def lookup_transform(self, *_args, **_kwargs):
+                raise RuntimeError('exact transform missing')
+
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient()
+        node = make_processing_node(client)
+        node.tf_buffer = FailingBuffer()
+        node.pose_estimator.tf_buffer = node.tf_buffer
+
+        ok, message = node._process_frame(snapshot, manual=True)
+
+        self.assertFalse(ok)
+        self.assertEqual(message, 'TF_UNAVAILABLE: exact transform missing')
+        self.assertEqual(client.calls, [])
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
+        self.assertIsNone(node.previous_object_axes_base)
+
     def test_process_frame_rejects_insufficient_depth_without_tf_or_predict(self):
         snapshot = make_snapshot(
             np.asarray(
@@ -812,9 +847,11 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(len(client.calls), 1)
         np.testing.assert_array_equal(client.calls[0]['depth'], target_depth)
         self.assertEqual(int(client.calls[0]['depth'][0, 0]), 0)
-        self.assertTrue(node.geometry_pub.messages[-1].valid)
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
         self.assertEqual(node.geometry_pub.messages[-1].source_mode, 'instance_mask')
-        np.testing.assert_allclose(node.previous_object_axes_base, np.eye(3))
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertIsNone(node.latest_target_cloud_base_xyz)
 
     def test_detect_snapshot_uses_bbox_foreground_with_same_geometry_contract(self):
         snapshot = make_snapshot(
@@ -855,6 +892,151 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(captured['source_mode'], 'bbox_depth')
         np.testing.assert_array_equal(client.calls[0]['depth'], expected_depth)
         self.assertEqual(node.geometry_pub.messages[-1].source_mode, 'bbox_depth')
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
+
+    def test_target_loss_during_geometry_estimate_blocks_late_activation(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(candidates=[])
+        node = make_processing_node(client)
+
+        def invalidating_estimator(**_kwargs):
+            node._invalidate_geometry(
+                'TARGET_LOST',
+                'target disappeared during geometry estimation',
+                stamp=remote_node.rospy.Time(10, 123),
+                snapshot=snapshot,
+            )
+            return make_geometry_estimate()
+
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = invalidating_estimator
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('TARGET_LOST: '))
+        self.assertEqual(client.calls, [])
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(
+            node.geometry_pub.messages[-1].failure_reason,
+            'TARGET_LOST: target disappeared during geometry estimation',
+        )
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertIsNone(node.latest_target_cloud_base_xyz)
+
+    def test_target_loss_serializes_with_activation_and_finishes_invalid(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node = make_processing_node()
+
+        class BlockingValidPublisher:
+            def __init__(self):
+                self.messages = []
+                self.valid_started = threading.Event()
+                self.release_valid = threading.Event()
+
+            def publish(self, message):
+                if bool(getattr(message, 'valid', False)):
+                    self.valid_started.set()
+                    self.release_valid.wait(2.0)
+                self.messages.append(message)
+
+        publisher = BlockingValidPublisher()
+        node.geometry_pub = publisher
+        activation_done = threading.Event()
+        invalidation_done = threading.Event()
+
+        def activate():
+            node._activate_geometry(
+                make_geometry_estimate(),
+                snapshot,
+                remote_node.rospy.Time(10, 123),
+                np.eye(4),
+                expected_generation=0,
+            )
+            activation_done.set()
+
+        def invalidate():
+            node._invalidate_geometry(
+                'TARGET_LOST',
+                'concurrent target loss',
+                stamp=remote_node.rospy.Time(10, 123),
+                snapshot=snapshot,
+            )
+            invalidation_done.set()
+
+        activation_thread = threading.Thread(target=activate)
+        activation_thread.start()
+        self.assertTrue(publisher.valid_started.wait(1.0))
+        invalidation_thread = threading.Thread(target=invalidate)
+        invalidation_thread.start()
+        invalidation_done.wait(0.1)
+        publisher.release_valid.set()
+        activation_thread.join(2.0)
+        invalidation_thread.join(2.0)
+
+        self.assertTrue(activation_done.is_set())
+        self.assertTrue(invalidation_done.is_set())
+        self.assertFalse(publisher.messages[-1].valid)
+        self.assertEqual(
+            publisher.messages[-1].failure_reason,
+            'TARGET_LOST: concurrent target loss',
+        )
+        self.assertIsNone(node.previous_object_axes_base)
+        self.assertIsNone(node.latest_target_cloud_base_xyz)
+
+    def test_target_loss_serializes_with_plan_publication_and_clears_legacy_plan(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node = make_processing_node()
+
+        class BlockingPlanPublisher:
+            def __init__(self):
+                self.messages = []
+                self.plan_started = threading.Event()
+                self.release_plan = threading.Event()
+
+            def publish(self, message):
+                if len(getattr(message, 'poses', ())) > 0:
+                    self.plan_started.set()
+                    self.release_plan.wait(2.0)
+                self.messages.append(message)
+
+        publisher = BlockingPlanPublisher()
+        node.plan_pub = publisher
+        plan = remote_node.PoseArray()
+        plan.poses = [PoseStamped().pose]
+        publication_done = threading.Event()
+        invalidation_done = threading.Event()
+
+        def publish_plan():
+            node._publish_legacy_plan_if_current(plan, expected_generation=0)
+            publication_done.set()
+
+        def invalidate():
+            node._invalidate_geometry(
+                'TARGET_LOST',
+                'concurrent target loss',
+                stamp=remote_node.rospy.Time(10, 123),
+                snapshot=snapshot,
+            )
+            invalidation_done.set()
+
+        publication_thread = threading.Thread(target=publish_plan)
+        publication_thread.start()
+        self.assertTrue(publisher.plan_started.wait(1.0))
+        invalidation_thread = threading.Thread(target=invalidate)
+        invalidation_thread.start()
+        invalidation_done.wait(0.1)
+        publisher.release_plan.set()
+        publication_thread.join(2.0)
+        invalidation_thread.join(2.0)
+
+        self.assertTrue(publication_done.is_set())
+        self.assertTrue(invalidation_done.is_set())
+        self.assertEqual(publisher.messages[-1].poses, [])
 
     def test_target_loss_during_predict_cannot_resurrect_a_plan(self):
         target_depth = np.asarray(
@@ -893,6 +1075,39 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertFalse(node.geometry_pub.messages[-1].valid)
         self.assertIsNone(node.previous_object_axes_base)
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
+
+    def test_model_reload_after_activation_finishes_with_invalid_geometry(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node = make_processing_node()
+
+        class ReloadingClient(RecordingClient):
+            def predict(self, color, depth, intrinsics, **kwargs):
+                self.calls.append({'depth': np.asarray(depth).copy()})
+                node._invalidate_geometry(
+                    'MODEL_RELOADED',
+                    'model changed during inference',
+                    stamp=remote_node.rospy.Time(10, 123),
+                    snapshot=snapshot,
+                )
+                return []
+
+        node.client = ReloadingClient()
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('MODEL_RELOADED: '))
+        self.assertFalse(node.geometry_pub.messages[-1].valid)
+        self.assertEqual(
+            node.geometry_pub.messages[-1].failure_reason,
+            'MODEL_RELOADED: model changed during inference',
+        )
+        self.assertIsNone(node.previous_object_axes_base)
 
     def test_remote_prediction_error_codes_follow_exception_cause(self):
         connection = RuntimeError('wrapped connection')
@@ -944,6 +1159,13 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                     self.assertFalse(ok)
                     self.assertTrue(message.startswith(expected_code + ': '))
                     self.assertEqual(node.plan_pub.messages[-1].poses, [])
+                    self.assertFalse(node.geometry_pub.messages[-1].valid)
+                    self.assertEqual(
+                        node.geometry_pub.messages[-1].failure_reason,
+                        message,
+                    )
+                    self.assertIsNone(node.previous_object_axes_base)
+                    self.assertIsNone(node.latest_target_cloud_base_xyz)
         finally:
             remote_node.estimate_object_geometry = original_estimator
 

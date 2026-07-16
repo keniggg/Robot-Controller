@@ -13,6 +13,7 @@ for path in (ROOT, ROOT / 'src'):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from alicia_flexible_grasp.vision import object_geometry as geometry_module
 from alicia_flexible_grasp.vision.object_geometry import (
     GeometryEstimate,
     deproject_depth,
@@ -325,3 +326,59 @@ def test_geometry_estimate_arrays_are_defensive_read_only_copies():
         assert not value.flags.writeable
         with pytest.raises(ValueError):
             value.flat[0] = 0.0
+
+
+def test_spatial_neighbor_means_match_bruteforce_across_bucket_boundaries():
+    rng = np.random.RandomState(7)
+    points = rng.uniform(-0.03, 0.03, size=(96, 3))
+    points[:8, 0] = 0.0025 * np.arange(8) + 0.00249
+    neighbors = 7
+    delta = points[:, None, :] - points[None, :, :]
+    distances = np.linalg.norm(delta, axis=2)
+    np.fill_diagonal(distances, np.inf)
+    brute = np.mean(
+        np.partition(distances, neighbors - 1, axis=1)[:, :neighbors],
+        axis=1,
+    )
+
+    spatial, stats = geometry_module._spatial_neighbor_mean_distances(
+        points,
+        neighbors=neighbors,
+        cell_size_m=0.0025,
+    )
+
+    np.testing.assert_allclose(spatial, brute, atol=1e-12)
+    assert stats['distance_evaluations'] > 0
+
+
+def test_dense_spatial_neighbor_filter_avoids_quadratic_pairwise_work():
+    voxel = 0.0025
+    yy, xx = np.indices((100, 110), dtype=float)
+    dense = np.column_stack(
+        [
+            (xx.reshape(-1) + 0.25) * voxel,
+            (yy.reshape(-1) + 0.25) * voxel,
+            ((xx + yy).reshape(-1) % 3.0) * 0.00005,
+        ]
+    )
+    outliers = np.asarray(
+        [
+            [0.8, 0.8, 0.8],
+            [-0.7, 0.6, 0.9],
+            [0.9, -0.8, 0.7],
+        ],
+        dtype=float,
+    )
+    points = np.vstack([dense, outliers])
+
+    filtered, stats = geometry_module._neighbor_distance_filter(
+        points,
+        neighbors=16,
+        std_ratio=2.0,
+        cell_size_m=voxel,
+        return_stats=True,
+    )
+
+    assert stats['distance_evaluations'] < len(points) ** 2 * 0.05
+    assert stats['fallback_points'] <= len(outliers) + 4
+    assert not np.any(np.linalg.norm(filtered, axis=1) > 0.7)
