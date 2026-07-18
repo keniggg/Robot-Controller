@@ -12,6 +12,7 @@ Run this in the WSL2 conda environment, not inside the ROS VM:
 import argparse
 import base64
 import collections.abc
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
@@ -19,13 +20,35 @@ import math
 from pathlib import Path
 import sys
 import threading
+import time
 import types
 
 import numpy as np
 
 
-GRASP6D_PROTOCOL_VERSION = 2
+GRASP6D_PROTOCOL_VERSION = 3
 CANDIDATE_FIELDS = ['score', 'width_m', 'height_m', 'depth_m', 'translation_m', 'rotation_matrix']
+PERFORMANCE_FIELDS = (
+    'server_receive_sec',
+    'server_send_sec',
+    'preprocess_ms',
+    'inference_ms',
+    'postprocess_ms',
+    'server_total_ms',
+    'gpu_allocated_mb',
+    'gpu_reserved_mb',
+    'gpu_peak_allocated_mb',
+)
+MEBIBYTE = float(1024 * 1024)
+
+
+@dataclass(frozen=True)
+class PredictionBatch:
+    request_id: int
+    snapshot_stamp_sec: float
+    candidates: tuple
+    diagnostics: dict
+    performance: dict
 
 
 def install_torch_six_compat():
@@ -50,6 +73,51 @@ def make_server(host, port, backend):
     return server
 
 
+def _predict_success_response(batch, backend_name):
+    request_id, snapshot_stamp_sec = _validate_request_correlation(
+        {
+            'request_id': getattr(batch, 'request_id', None),
+            'snapshot_stamp_sec': getattr(batch, 'snapshot_stamp_sec', None),
+        }
+    )
+    performance = getattr(batch, 'performance', None)
+    if not isinstance(performance, dict):
+        raise ValueError('prediction batch performance must be a dictionary')
+    normalized_performance = {
+        field: _finite_nonnegative_performance(performance.get(field), field)
+        for field in PERFORMANCE_FIELDS
+    }
+    response = {
+        'ok': True,
+        'backend': str(backend_name),
+        'protocol_version': GRASP6D_PROTOCOL_VERSION,
+        'candidate_fields': list(CANDIDATE_FIELDS),
+        'request_id': request_id,
+        'snapshot_stamp_sec': snapshot_stamp_sec,
+        'candidates': list(batch.candidates),
+        'diagnostics': dict(batch.diagnostics),
+        **normalized_performance,
+    }
+    json.dumps(response, allow_nan=False)
+    return response
+
+
+def _predict_failure_response(backend_name, error, payload=None):
+    request_id, snapshot_stamp_sec = _recover_request_correlation(payload)
+    return {
+        'ok': False,
+        'backend': str(backend_name),
+        'protocol_version': GRASP6D_PROTOCOL_VERSION,
+        'candidate_fields': list(CANDIDATE_FIELDS),
+        'request_id': request_id,
+        'snapshot_stamp_sec': snapshot_stamp_sec,
+        'candidates': [],
+        'diagnostics': {},
+        **{field: 0.0 for field in PERFORMANCE_FIELDS},
+        'error': str(error),
+    }
+
+
 class GraspNetBaselineHTTPHandler(BaseHTTPRequestHandler):
     server_version = 'AliciaGraspNetBaselineHTTP/1.0'
 
@@ -63,32 +131,23 @@ class GraspNetBaselineHTTPHandler(BaseHTTPRequestHandler):
         if self.path != '/predict':
             self._send_json(404, {'ok': False, 'error': 'unknown path'})
             return
+        payload = None
         try:
             length = int(self.headers.get('Content-Length', '0'))
             payload = json.loads(self.rfile.read(length).decode('utf-8'))
-            candidates = self.server.backend.predict(payload)
-            decoded = decode_rgbd_payload(payload)
+            batch = self.server.backend.predict_batch(payload)
+            self._send_json(200, _predict_success_response(batch, self.server.backend.name))
+        except Exception as exc:
             self._send_json(
                 200,
-                {
-                    'ok': True,
-                    'backend': self.server.backend.name,
-                    'protocol_version': GRASP6D_PROTOCOL_VERSION,
-                    'candidate_fields': CANDIDATE_FIELDS,
-                    'frame_id': decoded['frame_id'],
-                    'stamp_sec': decoded['stamp_sec'],
-                    'candidates': candidates,
-                    'diagnostics': getattr(self.server.backend, 'last_diagnostics', {}),
-                },
+                _predict_failure_response(self.server.backend.name, exc, payload),
             )
-        except Exception as exc:
-            self._send_json(200, {'ok': False, 'backend': self.server.backend.name, 'error': str(exc)})
 
     def log_message(self, fmt, *args):
         sys.stderr.write('[%s] %s\n' % (self.log_date_time_string(), fmt % args))
 
     def _send_json(self, status, payload):
-        data = json.dumps(payload).encode('utf-8')
+        data = json.dumps(payload, allow_nan=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(data)))
@@ -107,30 +166,56 @@ class MockGraspNetBackend:
             'candidate_fields': CANDIDATE_FIELDS,
         }
 
-    def predict(self, payload):
+    def predict_batch(self, payload):
+        server_receive_sec = time.time()
+        server_started = time.perf_counter()
+        preprocess_started = time.perf_counter()
         decoded = decode_rgbd_payload(payload)
         depth = decoded['depth_raw'].astype(np.float32)
         intr = decoded['intrinsics']
         valid = depth > 0
+        preprocess_ms = _elapsed_ms(preprocess_started)
+        inference_ms = 0.0
+        postprocess_started = time.perf_counter()
         if not np.any(valid):
-            return []
-        ys, xs = np.nonzero(valid)
-        idx = len(xs) // 2
-        u = float(xs[idx])
-        v = float(ys[idx])
-        z = float(depth[int(v), int(u)]) * float(intr['depth_scale'])
-        x = (u - float(intr['cx'])) * z / float(intr['fx'])
-        y = (v - float(intr['cy'])) * z / float(intr['fy'])
-        return [
-            {
-                'score': 1.0,
-                'width_m': 0.05,
-                'height_m': 0.02,
-                'depth_m': 0.02,
-                'translation_m': [x, y, z],
-                'rotation_matrix': [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-            }
-        ]
+            candidates = ()
+        else:
+            ys, xs = np.nonzero(valid)
+            idx = len(xs) // 2
+            u = float(xs[idx])
+            v = float(ys[idx])
+            z = float(depth[int(v), int(u)]) * float(intr['depth_scale'])
+            x = (u - float(intr['cx'])) * z / float(intr['fx'])
+            y = (v - float(intr['cy'])) * z / float(intr['fy'])
+            candidates = (
+                {
+                    'score': 1.0,
+                    'width_m': 0.05,
+                    'height_m': 0.02,
+                    'depth_m': 0.02,
+                    'translation_m': [x, y, z],
+                    'rotation_matrix': [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                },
+            )
+        diagnostics = {'returned': len(candidates)}
+        postprocess_ms = _elapsed_ms(postprocess_started)
+        performance = _performance_snapshot(
+            server_receive_sec=server_receive_sec,
+            server_started=server_started,
+            preprocess_ms=preprocess_ms,
+            inference_ms=inference_ms,
+            postprocess_ms=postprocess_ms,
+        )
+        return PredictionBatch(
+            request_id=decoded['request_id'],
+            snapshot_stamp_sec=decoded['snapshot_stamp_sec'],
+            candidates=candidates,
+            diagnostics=diagnostics,
+            performance=performance,
+        )
+
+    def predict(self, payload):
+        return list(self.predict_batch(payload).candidates)
 
 
 class GraspNetBaselineBackend:
@@ -231,61 +316,103 @@ class GraspNetBaselineBackend:
         self.loaded = True
         return self
 
-    def predict(self, payload):
+    def predict_batch(self, payload):
         if not self._predict_lock.acquire(False):
             raise RuntimeError('graspnet baseline inference busy; retry after current request')
+        server_receive_sec = time.time()
+        server_started = time.perf_counter()
         try:
             self.load()
+            self.last_diagnostics = {}
+            preprocess_started = time.perf_counter()
             decoded = decode_rgbd_payload(payload)
             model_input, scene_points = self._build_model_input(decoded)
             batch_data = self.collate_fn([model_input])
             batch_data = _to_device(batch_data, self.device)
-            with self.torch.no_grad():
+            preprocess_ms = _elapsed_ms(preprocess_started)
+
+            _synchronize_cuda(self.torch, self.device)
+            inference_started = time.perf_counter()
+            with self.torch.inference_mode():
                 end_points = self.net(batch_data)
                 grasp_preds = self.pred_decode(end_points)
+            _synchronize_cuda(self.torch, self.device)
+            inference_ms = _elapsed_ms(inference_started)
+
+            postprocess_started = time.perf_counter()
             preds = grasp_preds[0].detach().cpu().numpy()
             grasp_group = self.GraspGroup(preds)
             diagnostics = {'raw_candidates': int(len(grasp_group))}
-            if len(grasp_group) == 0:
-                self.last_diagnostics = diagnostics
-                return []
-            grasp_group.nms(
-                translation_thresh=self.nms_translation_thresh_m,
-                rotation_thresh=math.radians(self.nms_rotation_thresh_deg),
-            )
-            diagnostics['after_nms'] = int(len(grasp_group))
-            diagnostics['nms_translation_thresh_m'] = self.nms_translation_thresh_m
-            diagnostics['nms_rotation_thresh_deg'] = self.nms_rotation_thresh_deg
-            if self.collision_thresh >= 0.0:
-                detector = self.ModelFreeCollisionDetector(scene_points, voxel_size=self.collision_voxel_size)
-                collision_mask = detector.detect(grasp_group, collision_thresh=self.collision_thresh)
-                grasp_group = grasp_group[~collision_mask]
-            diagnostics['after_collision'] = int(len(grasp_group))
-            if len(grasp_group) == 0:
-                self.last_diagnostics = diagnostics
-                return []
-            max_width = float(decoded.get('max_gripper_width_m') or 0.0)
-            width_tolerance = max(0.0, float(decoded.get('candidate_width_tolerance_m') or 0.0))
-            if max_width > 0.0:
-                widths = _grasp_group_widths(grasp_group)
-                keep = widths <= (max_width + width_tolerance)
-                diagnostics['width_limit_m'] = max_width
-                diagnostics['width_tolerance_m'] = width_tolerance
-                diagnostics['width_rejected'] = int(np.count_nonzero(~keep))
-                grasp_group = grasp_group[keep]
-                diagnostics['after_width'] = int(len(grasp_group))
-                if len(grasp_group) == 0:
-                    self.last_diagnostics = diagnostics
-                    return []
-            grasp_group.sort_by_score()
+            if len(grasp_group) > 0:
+                grasp_group.nms(
+                    translation_thresh=self.nms_translation_thresh_m,
+                    rotation_thresh=math.radians(self.nms_rotation_thresh_deg),
+                )
+                diagnostics['after_nms'] = int(len(grasp_group))
+                diagnostics['nms_translation_thresh_m'] = self.nms_translation_thresh_m
+                diagnostics['nms_rotation_thresh_deg'] = self.nms_rotation_thresh_deg
+                if len(grasp_group) > 0:
+                    if self.collision_thresh >= 0.0:
+                        detector = self.ModelFreeCollisionDetector(
+                            scene_points,
+                            voxel_size=self.collision_voxel_size,
+                        )
+                        collision_mask = detector.detect(
+                            grasp_group,
+                            collision_thresh=self.collision_thresh,
+                        )
+                        grasp_group = grasp_group[~collision_mask]
+                    diagnostics['after_collision'] = int(len(grasp_group))
+                    max_width = float(decoded.get('max_gripper_width_m') or 0.0)
+                    width_tolerance = max(
+                        0.0,
+                        float(decoded.get('candidate_width_tolerance_m') or 0.0),
+                    )
+                    if max_width > 0.0 and len(grasp_group) > 0:
+                        widths = _grasp_group_widths(grasp_group)
+                        keep = widths <= (max_width + width_tolerance)
+                        diagnostics['width_limit_m'] = max_width
+                        diagnostics['width_tolerance_m'] = width_tolerance
+                        diagnostics['width_rejected'] = int(np.count_nonzero(~keep))
+                        grasp_group = grasp_group[keep]
+                        diagnostics['after_width'] = int(len(grasp_group))
+                grasp_group.sort_by_score()
             max_candidates = max(1, int(decoded['max_candidates']))
             count = min(max_candidates, len(grasp_group))
             diagnostics['returned'] = int(count)
             self.last_diagnostics = diagnostics
-            return [_grasp_to_response(grasp_group[i]) for i in range(count)]
+            candidates = tuple(
+                _grasp_to_response(grasp_group[index])
+                for index in range(count)
+            )
+            postprocess_ms = _elapsed_ms(postprocess_started)
+            performance = _performance_snapshot(
+                server_receive_sec=server_receive_sec,
+                server_started=server_started,
+                preprocess_ms=preprocess_ms,
+                inference_ms=inference_ms,
+                postprocess_ms=postprocess_ms,
+                **_cuda_memory_snapshot(self.torch, self.device)
+            )
+            return PredictionBatch(
+                request_id=decoded['request_id'],
+                snapshot_stamp_sec=decoded['snapshot_stamp_sec'],
+                candidates=candidates,
+                diagnostics=dict(diagnostics),
+                performance=performance,
+            )
+        except Exception as exc:
+            if _is_cuda_out_of_memory(getattr(self, 'torch', None), exc):
+                sys.stderr.write(
+                    'CUDA OOM rejected GraspNet request; clearing allocator cache\n'
+                )
+                _empty_cuda_cache(getattr(self, 'torch', None))
+            raise
         finally:
-            _empty_cuda_cache(getattr(self, 'torch', None))
             self._predict_lock.release()
+
+    def predict(self, payload):
+        return list(self.predict_batch(payload).candidates)
 
     def _build_model_input(self, decoded):
         intr = decoded['intrinsics']
@@ -331,6 +458,7 @@ class GraspNetBaselineBackend:
 
 
 def decode_rgbd_payload(payload):
+    request_id, snapshot_stamp_sec = _validate_request_correlation(payload)
     if payload.get('encoding') != 'npz_base64':
         raise ValueError('unsupported payload encoding: %s' % payload.get('encoding'))
     raw = base64.b64decode(payload['data_npz_b64'].encode('ascii'))
@@ -340,6 +468,8 @@ def decode_rgbd_payload(payload):
     return {
         'color_bgr': color_bgr,
         'depth_raw': depth_raw,
+        'request_id': request_id,
+        'snapshot_stamp_sec': snapshot_stamp_sec,
         'intrinsics': dict(payload.get('intrinsics') or {}),
         'frame_id': str(payload.get('frame_id') or 'camera_link'),
         'stamp_sec': float(payload.get('stamp_sec') or 0.0),
@@ -347,6 +477,121 @@ def decode_rgbd_payload(payload):
         'max_gripper_width_m': float(payload.get('max_gripper_width_m') or 0.0),
         'candidate_width_tolerance_m': float(payload.get('candidate_width_tolerance_m') or 0.0),
     }
+
+
+def _validate_request_correlation(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('request payload must be a JSON object')
+    request_id = payload.get('request_id')
+    if type(request_id) is not int or request_id <= 0:
+        raise ValueError('request_id must be a positive integer')
+    snapshot_stamp_sec = payload.get('snapshot_stamp_sec')
+    if isinstance(snapshot_stamp_sec, (bool, np.bool_)):
+        raise ValueError('snapshot_stamp_sec must be a finite positive number')
+    try:
+        snapshot_stamp_sec = float(snapshot_stamp_sec)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            'snapshot_stamp_sec must be a finite positive number'
+        ) from exc
+    if not math.isfinite(snapshot_stamp_sec) or snapshot_stamp_sec <= 0.0:
+        raise ValueError('snapshot_stamp_sec must be a finite positive number')
+    return request_id, snapshot_stamp_sec
+
+
+def _recover_request_correlation(payload):
+    try:
+        return _validate_request_correlation(payload)
+    except Exception:
+        return None, None
+
+
+def _finite_nonnegative_performance(value, field):
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError('%s must be a finite non-negative number' % field)
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            '%s must be a finite non-negative number' % field
+        ) from exc
+    if not math.isfinite(result) or result < 0.0:
+        raise ValueError('%s must be a finite non-negative number' % field)
+    return result
+
+
+def _elapsed_ms(started):
+    return max(0.0, (time.perf_counter() - started) * 1000.0)
+
+
+def _performance_snapshot(
+    server_receive_sec,
+    server_started,
+    preprocess_ms,
+    inference_ms,
+    postprocess_ms,
+    gpu_allocated_mb=0.0,
+    gpu_reserved_mb=0.0,
+    gpu_peak_allocated_mb=0.0,
+):
+    return {
+        'server_receive_sec': max(0.0, float(server_receive_sec)),
+        'server_send_sec': max(0.0, float(time.time())),
+        'preprocess_ms': max(0.0, float(preprocess_ms)),
+        'inference_ms': max(0.0, float(inference_ms)),
+        'postprocess_ms': max(0.0, float(postprocess_ms)),
+        'server_total_ms': _elapsed_ms(server_started),
+        'gpu_allocated_mb': max(0.0, float(gpu_allocated_mb)),
+        'gpu_reserved_mb': max(0.0, float(gpu_reserved_mb)),
+        'gpu_peak_allocated_mb': max(0.0, float(gpu_peak_allocated_mb)),
+    }
+
+
+def _device_is_cuda(device):
+    return str(device or '').lower().startswith('cuda')
+
+
+def _synchronize_cuda(torch_module, device):
+    if not _device_is_cuda(device):
+        return
+    synchronize = getattr(getattr(torch_module, 'cuda', None), 'synchronize', None)
+    if callable(synchronize):
+        synchronize(device)
+
+
+def _cuda_memory_snapshot(torch_module, device):
+    values = {
+        'gpu_allocated_mb': 0.0,
+        'gpu_reserved_mb': 0.0,
+        'gpu_peak_allocated_mb': 0.0,
+    }
+    if not _device_is_cuda(device):
+        return values
+    cuda = getattr(torch_module, 'cuda', None)
+    for field, function_name in (
+        ('gpu_allocated_mb', 'memory_allocated'),
+        ('gpu_reserved_mb', 'memory_reserved'),
+        ('gpu_peak_allocated_mb', 'max_memory_allocated'),
+    ):
+        function = getattr(cuda, function_name, None)
+        if not callable(function):
+            continue
+        try:
+            value = float(function(device)) / MEBIBYTE
+        except Exception:
+            continue
+        if math.isfinite(value) and value >= 0.0:
+            values[field] = value
+    return values
+
+
+def _is_cuda_out_of_memory(torch_module, error):
+    error_types = []
+    for owner in (torch_module, getattr(torch_module, 'cuda', None)):
+        error_type = getattr(owner, 'OutOfMemoryError', None)
+        if isinstance(error_type, type):
+            error_types.append(error_type)
+    return bool(error_types) and isinstance(error, tuple(error_types))
 
 
 def _sample_indices(point_count, num_points, seed=0):

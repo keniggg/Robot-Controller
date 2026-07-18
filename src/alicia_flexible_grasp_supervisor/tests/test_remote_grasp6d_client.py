@@ -26,6 +26,19 @@ from alicia_flexible_grasp.vision.remote_grasp6d_client import (
 )
 
 
+PERFORMANCE_FIELDS = (
+    'server_receive_sec',
+    'server_send_sec',
+    'preprocess_ms',
+    'inference_ms',
+    'postprocess_ms',
+    'server_total_ms',
+    'gpu_allocated_mb',
+    'gpu_reserved_mb',
+    'gpu_peak_allocated_mb',
+)
+
+
 class RemoteGrasp6DClientTest(unittest.TestCase):
     @staticmethod
     def _predict_with_response(response):
@@ -44,17 +57,30 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
             np.zeros((2, 2, 3), dtype=np.uint8),
             np.full((2, 2), 200, dtype=np.uint16),
             intrinsics,
+            request_id=41,
+            snapshot_stamp_sec=123.25,
         )
         return client, result
 
     @staticmethod
-    def _protocol_response(ok=True):
+    def _protocol_response(ok=True, request_id=41, snapshot_stamp_sec=123.25):
         response = {
             'ok': bool(ok),
             'protocol_version': GRASP6D_PROTOCOL_VERSION,
             'candidate_fields': list(GRASP6D_CANDIDATE_FIELDS),
+            'request_id': request_id,
+            'snapshot_stamp_sec': snapshot_stamp_sec,
             'candidates': [],
-            'diagnostics': {'contract': 'v2'},
+            'diagnostics': {'contract': 'v3'},
+            'server_receive_sec': 200.0,
+            'server_send_sec': 200.25,
+            'preprocess_ms': 1.0,
+            'inference_ms': 2.0,
+            'postprocess_ms': 3.0,
+            'server_total_ms': 6.0,
+            'gpu_allocated_mb': 100.0,
+            'gpu_reserved_mb': 120.0,
+            'gpu_peak_allocated_mb': 110.0,
         }
         if not ok:
             response['error'] = 'checkpoint missing'
@@ -69,6 +95,8 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
             color,
             depth,
             intrinsics,
+            request_id=7,
+            snapshot_stamp_sec=12.25,
             frame_id='camera_link',
             stamp_sec=12.25,
             max_candidates=8,
@@ -77,6 +105,8 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
 
         self.assertEqual(decoded['frame_id'], 'camera_link')
         self.assertAlmostEqual(decoded['stamp_sec'], 12.25)
+        self.assertEqual(decoded['request_id'], 7)
+        self.assertAlmostEqual(decoded['snapshot_stamp_sec'], 12.25)
         self.assertEqual(decoded['max_candidates'], 8)
         self.assertEqual(decoded['intrinsics']['depth_scale'], 0.0001)
         np.testing.assert_array_equal(decoded['color_bgr'], color)
@@ -231,8 +261,99 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
             self._protocol_response(ok=True)
         )
 
+        self.assertEqual(GRASP6D_PROTOCOL_VERSION, 3)
         self.assertEqual(candidates, [])
-        self.assertEqual(client.last_diagnostics, {'contract': 'v2'})
+        self.assertEqual(client.last_diagnostics, {'contract': 'v3'})
+        self.assertEqual(
+            client.last_performance,
+            {
+                field: self._protocol_response()[field]
+                for field in PERFORMANCE_FIELDS
+            },
+        )
+
+    def test_predict_requires_exact_protocol3_request_correlation(self):
+        response = self._protocol_response()
+        response['candidates'] = [
+            {
+                'score': 0.9,
+                'width_m': 0.04,
+                'height_m': 0.02,
+                'depth_m': 0.03,
+                'translation_m': [0.1, 0.2, 0.3],
+                'rotation_matrix': np.eye(3).tolist(),
+            }
+        ]
+
+        client, candidates = self._predict_with_response(response)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertGreaterEqual(client.last_performance['server_total_ms'], 0.0)
+
+    def test_predict_drops_mismatched_request_or_stamp(self):
+        for request_id, snapshot_stamp_sec in (
+            (42, 123.25),
+            (41, 123.5),
+        ):
+            with self.subTest(
+                request_id=request_id,
+                snapshot_stamp_sec=snapshot_stamp_sec,
+            ):
+                response = self._protocol_response(
+                    request_id=request_id,
+                    snapshot_stamp_sec=snapshot_stamp_sec,
+                )
+                with self.assertRaisesRegex(ValueError, 'correlation'):
+                    self._predict_with_response(response)
+
+    def test_predict_rejects_missing_or_invalid_mandatory_performance(self):
+        for field in PERFORMANCE_FIELDS:
+            for label, value in (
+                ('missing', None),
+                ('bool', True),
+                ('negative', -0.1),
+                ('nonfinite', float('nan')),
+            ):
+                with self.subTest(field=field, value=label):
+                    response = self._protocol_response()
+                    if label == 'missing':
+                        response.pop(field)
+                    else:
+                        response[field] = value
+                    with self.assertRaisesRegex(ValueError, field):
+                        self._predict_with_response(response)
+
+    def test_payload_rejects_invalid_request_correlation(self):
+        intrinsics = CameraIntrinsics(
+            width=2,
+            height=2,
+            fx=100.0,
+            fy=100.0,
+            cx=0.5,
+            cy=0.5,
+            depth_scale=0.001,
+        )
+        for request_id, snapshot_stamp_sec in (
+            (True, 1.0),
+            (0, 1.0),
+            (-1, 1.0),
+            (1, 0.0),
+            (1, -1.0),
+            (1, float('nan')),
+            (1, float('inf')),
+        ):
+            with self.subTest(
+                request_id=request_id,
+                snapshot_stamp_sec=snapshot_stamp_sec,
+            ):
+                with self.assertRaisesRegex(ValueError, 'request_id|snapshot_stamp_sec'):
+                    encode_rgbd_payload(
+                        np.zeros((2, 2, 3), dtype=np.uint8),
+                        np.full((2, 2), 200, dtype=np.uint16),
+                        intrinsics,
+                        request_id=request_id,
+                        snapshot_stamp_sec=snapshot_stamp_sec,
+                    )
 
     def test_predict_validates_exact_protocol_before_reporting_backend_failure(self):
         with self.assertRaisesRegex(RuntimeError, 'checkpoint missing'):
@@ -241,6 +362,7 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
     def test_predict_clears_stale_diagnostics_before_transport_failure(self):
         client = RemoteGrasp6DClient('http://127.0.0.1:8000')
         client.last_diagnostics = {'stale': 'previous inference'}
+        client.last_performance = {'server_total_ms': 999.0}
 
         def fail_request(_path, _payload):
             raise RuntimeError('transport unavailable')
@@ -261,9 +383,12 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
                 np.zeros((2, 2, 3), dtype=np.uint8),
                 np.full((2, 2), 200, dtype=np.uint16),
                 intrinsics,
+                request_id=41,
+                snapshot_stamp_sec=123.25,
             )
 
         self.assertEqual(client.last_diagnostics, {})
+        self.assertEqual(client.last_performance, {})
 
     def test_predict_rejects_nonfinite_value_hidden_outside_candidate_fields(self):
         for nonfinite in (float('nan'), float('inf'), float('-inf')):
@@ -299,8 +424,8 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
             for label, version in (
                 ('missing', None),
                 ('old', 1),
-                ('string', '2'),
-                ('float', 2.0),
+                ('string', '3'),
+                ('float', 3.0),
             ):
                 with self.subTest(ok=ok, version=label):
                     response = self._protocol_response(ok=ok)
