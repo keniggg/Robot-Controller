@@ -9,12 +9,19 @@ from dataclasses import dataclass, fields, replace
 import math
 from types import MappingProxyType
 
+import numpy as np
+
 from alicia_flexible_grasp.grasp.grasp6d_stability import StableCandidate
 
 
 _PHYSICAL_MAX_OPEN_WIDTH_M = 0.050
 _PHYSICAL_CONTRACT_MIN_OPEN_WIDTH_M = 0.0495
 _PHYSICAL_CONTRACT_MAX_OPEN_WIDTH_M = 0.0505
+_SAFETY_STAMP_TOLERANCE_SEC = 1e-9
+_SAFETY_POSITION_TOLERANCE_M = 1e-8
+_SAFETY_DIRECTION_TOLERANCE = 1e-8
+_SAFETY_WIDTH_TOLERANCE_M = 1e-9
+_UNIT_NORM_TOLERANCE = 1e-6
 
 
 def _strict_true(value):
@@ -22,6 +29,8 @@ def _strict_true(value):
 
 
 def _finite_float(value):
+    if isinstance(value, (bool, np.bool_)):
+        return None
     try:
         converted = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -30,7 +39,7 @@ def _finite_float(value):
 
 
 def _validated_count(value, name):
-    if isinstance(value, bool):
+    if isinstance(value, (bool, np.bool_)):
         raise ValueError('{} must be a non-negative integer'.format(name))
     try:
         converted = int(value)
@@ -47,6 +56,61 @@ def _validated_code(value):
     return value.strip()
 
 
+def _immutable_vector_evidence(value):
+    if value is None or isinstance(value, (str, bytes)):
+        return value
+    try:
+        return tuple(value)
+    except TypeError:
+        return value
+
+
+def _valid_integer(value, minimum=0):
+    if isinstance(value, (bool, np.bool_)):
+        return False
+    try:
+        converted = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return converted == value and converted >= minimum
+
+
+def _valid_context_revision(value):
+    if isinstance(value, str):
+        return bool(value)
+    return _valid_integer(value)
+
+
+def _vector_values(value, size, require_unit=False):
+    try:
+        converted = tuple(_finite_float(component) for component in value)
+    except TypeError:
+        return None
+    if len(converted) != size or any(item is None for item in converted):
+        return None
+    if require_unit:
+        norm = math.sqrt(math.fsum(item * item for item in converted))
+        if not math.isclose(
+            norm, 1.0, rel_tol=0.0, abs_tol=_UNIT_NORM_TOLERANCE
+        ):
+            return None
+    return converted
+
+
+def _vector_close(first, second, tolerance):
+    if len(first) != len(second):
+        return False
+    return all(abs(a - b) <= tolerance for a, b in zip(first, second))
+
+
+def _quaternion_close(first, second):
+    direct = _vector_close(first, second, _SAFETY_DIRECTION_TOLERANCE)
+    negated = _vector_close(
+        first, tuple(-item for item in second), _SAFETY_DIRECTION_TOLERANCE
+    )
+    return direct or negated
+
+
 @dataclass(frozen=True)
 class SafetyGateInput:
     """Only mandatory physical and identity facts for one latest pose."""
@@ -61,6 +125,29 @@ class SafetyGateInput:
     physical_open_width_m: float
     geometry_valid: bool
     collision_free: bool
+    request_id: object = None
+    snapshot_stamp_sec: object = None
+    target_epoch: object = None
+    target_label: object = None
+    model_choice: object = None
+    track_id: object = None
+    variant_index: object = None
+    center_base_xyz: object = None
+    tool0_position_xyz: object = None
+    quaternion_xyzw: object = None
+    approach_base_xyz: object = None
+    snapshot_context_revision: object = None
+
+    def __post_init__(self):
+        for name in (
+            'center_base_xyz',
+            'tool0_position_xyz',
+            'quaternion_xyzw',
+            'approach_base_xyz',
+        ):
+            object.__setattr__(
+                self, name, _immutable_vector_evidence(getattr(self, name))
+            )
 
 
 @dataclass(frozen=True)
@@ -98,6 +185,40 @@ def mandatory_safety_gate(gate):
         return _gate_failure(
             'TARGET_INSTANCE_MISMATCH',
             'candidate does not belong to the current target instance',
+        )
+
+    if (
+        not _valid_integer(gate.request_id, minimum=1)
+        or (_finite_float(gate.snapshot_stamp_sec) is None)
+        or float(gate.snapshot_stamp_sec) <= 0.0
+        or not _valid_context_revision(gate.snapshot_context_revision)
+    ):
+        return _gate_failure(
+            'SAFETY_EVIDENCE_STALE',
+            'latest safety evidence has invalid request, stamp, or context',
+        )
+    if (
+        not _valid_integer(gate.target_epoch)
+        or not isinstance(gate.target_label, str)
+        or not gate.target_label
+        or not isinstance(gate.model_choice, str)
+        or not gate.model_choice
+        or not _valid_integer(gate.track_id)
+        or not _valid_integer(gate.variant_index)
+    ):
+        return _gate_failure(
+            'SAFETY_BINDING_MISMATCH',
+            'latest safety evidence has invalid candidate identity',
+        )
+    if (
+        _vector_values(gate.center_base_xyz, 3) is None
+        or _vector_values(gate.tool0_position_xyz, 3) is None
+        or _vector_values(gate.quaternion_xyzw, 4, require_unit=True) is None
+        or _vector_values(gate.approach_base_xyz, 3, require_unit=True) is None
+    ):
+        return _gate_failure(
+            'TRANSFORM_INVALID',
+            'latest safety evidence has invalid pose or direction vectors',
         )
 
     absolute_distance = _finite_float(gate.target_absolute_distance_m)
@@ -486,6 +607,10 @@ class MoveItResult:
     joint_path_cost: float
     joint_max_delta_rad: float
     reason: str
+    collision_free: object = None
+    within_joint_limits: object = None
+    ik_valid: object = None
+    planning_success: object = None
 
 
 @dataclass(frozen=True)
@@ -497,7 +622,9 @@ class ScoredStableCandidate:
     latest_safety: SafetyGateInput
     soft_features: SoftCandidateFeatures
     score_weights: SoftScoreWeights
-    pre_moveit_score: float
+    variant_quaternion_xyzw: object = None
+    variant_approach_base_xyz: object = None
+    safety_context_revision: object = None
     moveit_result: object = None
     final_score: object = None
 
@@ -511,9 +638,6 @@ class ScoredStableCandidate:
             raise TypeError('soft_features must be SoftCandidateFeatures')
         if not isinstance(self.score_weights, SoftScoreWeights):
             raise TypeError('score_weights must be SoftScoreWeights')
-        pre_moveit_score = _required_finite(
-            self.pre_moveit_score, 'pre_moveit_score'
-        )
         if self.moveit_result is not None and not isinstance(
             self.moveit_result, MoveItResult
         ):
@@ -524,12 +648,27 @@ class ScoredStableCandidate:
             if self.moveit_result is None:
                 raise ValueError('final_score requires a moveit_result')
         object.__setattr__(self, 'variant_index', variant_index)
-        object.__setattr__(self, 'pre_moveit_score', pre_moveit_score)
         object.__setattr__(self, 'final_score', final_score)
+        object.__setattr__(
+            self,
+            'variant_quaternion_xyzw',
+            _immutable_vector_evidence(self.variant_quaternion_xyzw),
+        )
+        object.__setattr__(
+            self,
+            'variant_approach_base_xyz',
+            _immutable_vector_evidence(self.variant_approach_base_xyz),
+        )
 
     @property
     def track_id(self):
         return self.stable_candidate.track_id
+
+    @property
+    def pre_moveit_score(self):
+        return soft_candidate_cost(
+            self.soft_features, self.score_weights
+        ).total
 
     @property
     def payload(self):
@@ -561,43 +700,99 @@ def _clamped_top_n(value):
     return min(10, max(3, converted))
 
 
-def _finite_vector(value, size, require_nonzero=False):
-    try:
-        converted = tuple(float(component) for component in value)
-    except (TypeError, ValueError, OverflowError):
-        return False
-    if len(converted) != size or not all(math.isfinite(x) for x in converted):
-        return False
-    if require_nonzero and not any(abs(x) > 1e-12 for x in converted):
-        return False
-    return True
-
-
-def _stable_coordinate_gate(candidate):
+def _safety_binding_gate(candidate):
     stable = candidate.stable_candidate
-    vectors = (
-        (stable.center_base_xyz, 3, False),
-        (stable.tool0_position_xyz, 3, False),
-        (stable.quaternion_xyzw, 4, True),
-        (stable.approach_base_xyz, 3, True),
+    safety = candidate.latest_safety
+    center = _vector_values(stable.center_base_xyz, 3)
+    tool0 = _vector_values(stable.tool0_position_xyz, 3)
+    variant_quaternion = _vector_values(
+        candidate.variant_quaternion_xyzw, 4, require_unit=True
     )
-    if not all(_finite_vector(*specification) for specification in vectors):
+    variant_approach = _vector_values(
+        candidate.variant_approach_base_xyz, 3, require_unit=True
+    )
+    if (
+        center is None
+        or tool0 is None
+        or variant_quaternion is None
+        or variant_approach is None
+    ):
         return _gate_failure(
             'TRANSFORM_INVALID',
-            'stable candidate contains invalid or non-finite coordinates',
+            'scored stable variant has invalid pose or direction vectors',
+        )
+
+    evidence_stamp = _finite_float(safety.snapshot_stamp_sec)
+    stable_stamp = _finite_float(stable.snapshot_stamp_sec)
+    if (
+        safety.request_id != stable.request_id
+        or evidence_stamp is None
+        or stable_stamp is None
+        or abs(evidence_stamp - stable_stamp) > _SAFETY_STAMP_TOLERANCE_SEC
+        or safety.snapshot_context_revision
+        != candidate.safety_context_revision
+    ):
+        return _gate_failure(
+            'SAFETY_EVIDENCE_STALE',
+            'safety evidence request, stamp, or context is stale',
+        )
+
+    evidence_center = _vector_values(safety.center_base_xyz, 3)
+    evidence_tool0 = _vector_values(safety.tool0_position_xyz, 3)
+    evidence_quaternion = _vector_values(
+        safety.quaternion_xyzw, 4, require_unit=True
+    )
+    evidence_approach = _vector_values(
+        safety.approach_base_xyz, 3, require_unit=True
+    )
+    stable_width = _finite_float(stable.required_open_width_m)
+    evidence_width = _finite_float(safety.required_open_width_m)
+    identity_matches = (
+        safety.target_epoch == stable.target_epoch
+        and safety.target_label == stable.target_label
+        and safety.model_choice == stable.model_choice
+        and safety.track_id == stable.track_id
+        and safety.variant_index == candidate.variant_index
+    )
+    pose_matches = (
+        evidence_center is not None
+        and evidence_tool0 is not None
+        and evidence_quaternion is not None
+        and evidence_approach is not None
+        and _vector_close(
+            evidence_center, center, _SAFETY_POSITION_TOLERANCE_M
+        )
+        and _vector_close(
+            evidence_tool0, tool0, _SAFETY_POSITION_TOLERANCE_M
+        )
+        and _quaternion_close(evidence_quaternion, variant_quaternion)
+        and _vector_close(
+            evidence_approach,
+            variant_approach,
+            _SAFETY_DIRECTION_TOLERANCE,
+        )
+    )
+    width_matches = (
+        stable_width is not None
+        and evidence_width is not None
+        and abs(stable_width - evidence_width) <= _SAFETY_WIDTH_TOLERANCE_M
+    )
+    if not identity_matches or not pose_matches or not width_matches:
+        return _gate_failure(
+            'SAFETY_BINDING_MISMATCH',
+            'safety evidence does not bind to the exact stable pose variant',
         )
     return GateDecision(ok=True, code='OK', reason='')
 
 
-def _moveit_failure_code(reason):
-    text = reason.strip().lower().replace('_', ' ')
-    if 'collision' in text:
+def _moveit_failure_code(result):
+    if not result.collision_free:
         return 'MOVEIT_COLLISION'
-    if 'joint' in text and 'limit' in text:
+    if not result.within_joint_limits:
         return 'MOVEIT_JOINT_LIMIT'
-    if 'ik' in text or 'inverse kinematic' in text:
+    if not result.ik_valid:
         return 'MOVEIT_IK_FAILED'
-    if 'plan' in text:
+    if not result.planning_success:
         return 'MOVEIT_PLANNING_FAILED'
     return 'MOVEIT_UNREACHABLE'
 
@@ -605,7 +800,15 @@ def _moveit_failure_code(reason):
 def _validated_moveit_result(result):
     if not isinstance(result, MoveItResult):
         return None
-    if not isinstance(result.reachable, bool):
+    hard_states = (
+        result.collision_free,
+        result.within_joint_limits,
+        result.ik_valid,
+        result.planning_success,
+    )
+    if type(result.reachable) is not bool or not all(
+        type(state) is bool for state in hard_states
+    ):
         return None
     if not isinstance(result.reason, str):
         return None
@@ -618,28 +821,17 @@ def _validated_moveit_result(result):
         or joint_max_delta < 0.0
     ):
         return None
+    if result.reachable != all(hard_states):
+        return None
     return MoveItResult(
         reachable=result.reachable,
         joint_path_cost=joint_path,
         joint_max_delta_rad=joint_max_delta,
         reason=result.reason,
-    )
-
-
-def _motion_cost_delta(candidate, result):
-    baseline = soft_candidate_cost(candidate.soft_features, candidate.score_weights)
-    with_motion = soft_candidate_cost(
-        replace(
-            candidate.soft_features,
-            joint_path_cost=result.joint_path_cost,
-            joint_max_delta_rad=result.joint_max_delta_rad,
-        ),
-        candidate.score_weights,
-    )
-    motion_names = ('joint_path', 'joint_max_delta')
-    return math.fsum(
-        with_motion.components[name] - baseline.components[name]
-        for name in motion_names
+        collision_free=result.collision_free,
+        within_joint_limits=result.within_joint_limits,
+        ik_valid=result.ik_valid,
+        planning_success=result.planning_success,
     )
 
 
@@ -662,7 +854,7 @@ def bounded_moveit_select(candidates, checker, top_n=5):
     for candidate in batch:
         decision = mandatory_safety_gate(candidate.latest_safety)
         if decision.ok:
-            decision = _stable_coordinate_gate(candidate)
+            decision = _safety_binding_gate(candidate)
         if decision.ok:
             hard_safe.append(candidate)
         else:
@@ -720,13 +912,18 @@ def bounded_moveit_select(candidates, checker, top_n=5):
         checked.append(evaluated)
         if not result.reachable:
             funnel.record_rejection(
-                _moveit_failure_code(result.reason),
+                _moveit_failure_code(result),
                 stage='moveit_reachable',
             )
             continue
-        final_score = candidate.pre_moveit_score + _motion_cost_delta(
-            candidate, result
-        )
+        final_score = soft_candidate_cost(
+            replace(
+                candidate.soft_features,
+                joint_path_cost=result.joint_path_cost,
+                joint_max_delta_rad=result.joint_max_delta_rad,
+            ),
+            candidate.score_weights,
+        ).total
         evaluated = replace(evaluated, final_score=final_score)
         checked[-1] = evaluated
         reachable.append(evaluated)

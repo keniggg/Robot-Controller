@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from dataclasses import replace
+from dataclasses import fields as dataclass_fields, replace
 import math
 import pathlib
 import sys
@@ -29,6 +29,48 @@ from alicia_flexible_grasp.grasp.grasp6d_stability import (  # noqa: E402
 )
 
 
+def test_safety_interfaces_carry_exact_variant_and_snapshot_evidence():
+    safety_fields = {item.name for item in dataclass_fields(SafetyGateInput)}
+    scored_fields = {item.name for item in dataclass_fields(ScoredStableCandidate)}
+
+    assert {
+        'request_id',
+        'snapshot_stamp_sec',
+        'target_epoch',
+        'target_label',
+        'model_choice',
+        'track_id',
+        'variant_index',
+        'center_base_xyz',
+        'tool0_position_xyz',
+        'quaternion_xyzw',
+        'approach_base_xyz',
+        'snapshot_context_revision',
+    } <= safety_fields
+    assert {
+        'variant_quaternion_xyzw',
+        'variant_approach_base_xyz',
+        'safety_context_revision',
+    } <= scored_fields
+
+
+def test_scored_candidate_has_no_caller_supplied_pre_moveit_score_field():
+    scored_fields = {item.name for item in dataclass_fields(ScoredStableCandidate)}
+
+    assert 'pre_moveit_score' not in scored_fields
+
+
+def test_moveit_result_exposes_structured_strict_hard_states():
+    result_fields = {item.name for item in dataclass_fields(MoveItResult)}
+
+    assert {
+        'collision_free',
+        'within_joint_limits',
+        'ik_valid',
+        'planning_success',
+    } <= result_fields
+
+
 def valid_safety_input(**overrides):
     values = {
         'depth_valid': True,
@@ -41,6 +83,18 @@ def valid_safety_input(**overrides):
         'physical_open_width_m': 0.050,
         'geometry_valid': True,
         'collision_free': True,
+        'request_id': 3,
+        'snapshot_stamp_sec': 10.0,
+        'target_epoch': 7,
+        'target_label': 'carton',
+        'model_choice': 'carton_segmentation',
+        'track_id': 1,
+        'variant_index': 0,
+        'center_base_xyz': (0.1, 0.0, 0.2),
+        'tool0_position_xyz': (0.1, 0.0, 0.2),
+        'quaternion_xyzw': (0.0, 0.0, 0.0, 1.0),
+        'approach_base_xyz': (0.0, 0.0, -1.0),
+        'snapshot_context_revision': 'ctx-3',
     }
     values.update(overrides)
     return SafetyGateInput(**values)
@@ -97,6 +151,23 @@ def weights(**overrides):
     return SoftScoreWeights(**values)
 
 
+def ranking_score_weights():
+    base = weights()
+    zero_weights = {
+        item.name: 0.0
+        for item in dataclass_fields(SoftScoreWeights)
+        if item.name.endswith('_weight')
+    }
+    zero_weights.update(
+        center_distance_weight=1.0,
+        model_score_weight=1.0,
+        joint_path_weight=0.5,
+        joint_max_delta_weight=0.5,
+        center_distance_knee_m=1000.0,
+    )
+    return replace(base, **zero_weights)
+
+
 def stable_candidate(track_id, pre_moveit_score=0.0):
     return StableCandidate(
         track_id=track_id,
@@ -121,6 +192,36 @@ def stable_candidate(track_id, pre_moveit_score=0.0):
     )
 
 
+def safety_for_candidate(
+    stable,
+    variant_index=0,
+    quaternion=None,
+    approach=None,
+    context_revision='ctx-3',
+    **overrides
+):
+    return valid_safety_input(
+        request_id=stable.request_id,
+        snapshot_stamp_sec=stable.snapshot_stamp_sec,
+        target_epoch=stable.target_epoch,
+        target_label=stable.target_label,
+        model_choice=stable.model_choice,
+        track_id=stable.track_id,
+        variant_index=variant_index,
+        center_base_xyz=stable.center_base_xyz,
+        tool0_position_xyz=stable.tool0_position_xyz,
+        quaternion_xyzw=(
+            stable.quaternion_xyzw if quaternion is None else quaternion
+        ),
+        approach_base_xyz=(
+            stable.approach_base_xyz if approach is None else approach
+        ),
+        required_open_width_m=stable.required_open_width_m,
+        snapshot_context_revision=context_revision,
+        **overrides
+    )
+
+
 def scored_candidate(
     track_id,
     score,
@@ -128,18 +229,78 @@ def scored_candidate(
     safety=None,
     features=None,
     score_weights=None,
+    quaternion=None,
+    approach=None,
+    context_revision='ctx-3',
 ):
+    stable = stable_candidate(track_id, pre_moveit_score=score)
+    variant_quaternion = (
+        stable.quaternion_xyzw if quaternion is None else quaternion
+    )
+    variant_approach = stable.approach_base_xyz if approach is None else approach
+    candidate_features = (
+        soft_features(
+            model_score=1.0 if score < 0.0 else 0.0,
+            center_distance_m=max(0.0, float(score)),
+            joint_path_cost=0.0,
+            joint_max_delta_rad=0.0,
+        )
+        if features is None
+        else features
+    )
     return ScoredStableCandidate(
-        stable_candidate=stable_candidate(track_id, pre_moveit_score=score),
+        stable_candidate=stable,
         variant_index=variant_index,
-        latest_safety=valid_safety_input() if safety is None else safety,
-        soft_features=(
-            soft_features(joint_path_cost=0.0, joint_max_delta_rad=0.0)
-            if features is None
-            else features
+        latest_safety=(
+            safety_for_candidate(
+                stable,
+                variant_index=variant_index,
+                quaternion=variant_quaternion,
+                approach=variant_approach,
+                context_revision=context_revision,
+            )
+            if safety is None
+            else safety
         ),
-        score_weights=weights() if score_weights is None else score_weights,
-        pre_moveit_score=score,
+        soft_features=candidate_features,
+        score_weights=(
+            ranking_score_weights()
+            if score_weights is None
+            else score_weights
+        ),
+        variant_quaternion_xyzw=variant_quaternion,
+        variant_approach_base_xyz=variant_approach,
+        safety_context_revision=context_revision,
+    )
+
+
+def reachable_moveit_result(joint_path_cost=0.0, joint_max_delta_rad=0.0):
+    return MoveItResult(
+        reachable=True,
+        joint_path_cost=joint_path_cost,
+        joint_max_delta_rad=joint_max_delta_rad,
+        reason='',
+        collision_free=True,
+        within_joint_limits=True,
+        ik_valid=True,
+        planning_success=True,
+    )
+
+
+def failed_moveit_result(code):
+    states = {
+        'collision_free': True,
+        'within_joint_limits': True,
+        'ik_valid': True,
+        'planning_success': True,
+    }
+    states[code] = False
+    return MoveItResult(
+        reachable=False,
+        joint_path_cost=0.0,
+        joint_max_delta_rad=0.0,
+        reason='ignored diagnostic text',
+        **states
     )
 
 
@@ -193,6 +354,41 @@ def test_mandatory_safety_gate_fails_closed_on_malformed_physical_facts(
     assert result.ok is False
     assert result.code == code
     assert result.reason
+
+
+@pytest.mark.parametrize('boolean_value', [True, np.bool_(True)])
+@pytest.mark.parametrize(
+    ('field', 'code'),
+    [
+        ('snapshot_stamp_sec', 'SAFETY_EVIDENCE_STALE'),
+        ('target_absolute_distance_m', 'TRANSFORM_INVALID'),
+        ('target_absolute_limit_m', 'TRANSFORM_INVALID'),
+        ('required_open_width_m', 'GRIPPER_WIDTH_INVALID'),
+        ('physical_open_width_m', 'GRIPPER_CONTRACT_INVALID'),
+    ],
+)
+def test_hard_numeric_fields_reject_python_and_numpy_bool(
+    field, code, boolean_value
+):
+    result = mandatory_safety_gate(
+        replace(valid_safety_input(), **{field: boolean_value})
+    )
+
+    assert result.ok is False
+    assert result.code == code
+
+
+@pytest.mark.parametrize('boolean_value', [True, np.bool_(True)])
+def test_hard_pose_coordinates_reject_python_and_numpy_bool(boolean_value):
+    result = mandatory_safety_gate(
+        replace(
+            valid_safety_input(),
+            center_base_xyz=(boolean_value, 0.0, 0.2),
+        )
+    )
+
+    assert result.ok is False
+    assert result.code == 'TRANSFORM_INVALID'
 
 
 def test_physical_open_width_cannot_raise_the_fifty_millimetre_limit():
@@ -405,11 +601,10 @@ def test_moveit_checks_only_top_n_stable_candidates():
 
     def check(candidate):
         calls.append(candidate.track_id)
-        return MoveItResult(
-            reachable=candidate.track_id == 3,
-            joint_path_cost=float(candidate.track_id),
-            joint_max_delta_rad=0.1,
-            reason='',
+        return (
+            reachable_moveit_result(float(candidate.track_id), 0.1)
+            if candidate.track_id == 3
+            else failed_moveit_result('ik_valid')
         )
 
     candidates = [
@@ -424,13 +619,81 @@ def test_moveit_checks_only_top_n_stable_candidates():
     assert result.funnel.remaining_by_stage['moveit_reachable'] == 1
 
 
+def test_stable_metadata_score_cannot_override_soft_ranking():
+    soft_best = scored_candidate(1, 0.0)
+    soft_best = replace(
+        soft_best,
+        stable_candidate=replace(
+            soft_best.stable_candidate, pre_moveit_score=999.0
+        ),
+    )
+    soft_worse = scored_candidate(2, 10.0)
+    soft_worse = replace(
+        soft_worse,
+        stable_candidate=replace(
+            soft_worse.stable_candidate, pre_moveit_score=-999.0
+        ),
+    )
+    calls = []
+
+    bounded_moveit_select(
+        [soft_worse, soft_best],
+        lambda candidate: calls.append(candidate.track_id),
+        top_n=3,
+    )
+
+    assert calls == [1, 2]
+    assert soft_best.pre_moveit_score == pytest.approx(
+        soft_candidate_cost(
+            soft_best.soft_features, soft_best.score_weights
+        ).total
+    )
+
+
+def test_final_score_recomputes_full_soft_cost_with_actual_moveit_motion():
+    candidate = scored_candidate(
+        1,
+        0.0,
+        features=soft_features(
+            joint_path_cost=0.2,
+            joint_max_delta_rad=0.3,
+        ),
+        score_weights=weights(),
+    )
+    candidate = replace(
+        candidate,
+        stable_candidate=replace(
+            candidate.stable_candidate, pre_moveit_score=999.0
+        ),
+    )
+    actual_path_cost = 0.7
+    actual_max_delta = 0.8
+
+    result = bounded_moveit_select(
+        [candidate],
+        lambda _candidate: reachable_moveit_result(
+            actual_path_cost, actual_max_delta
+        ),
+    )
+    expected = soft_candidate_cost(
+        replace(
+            candidate.soft_features,
+            joint_path_cost=actual_path_cost,
+            joint_max_delta_rad=actual_max_delta,
+        ),
+        candidate.score_weights,
+    ).total
+
+    assert result.selected.final_score == pytest.approx(expected)
+
+
 @pytest.mark.parametrize(('configured', 'expected'), [(1, 3), (99, 10)])
 def test_moveit_top_n_is_clamped_between_three_and_ten(configured, expected):
     calls = []
 
     def check(candidate):
         calls.append((candidate.track_id, candidate.variant_index))
-        return MoveItResult(False, 0.0, 0.0, 'IK failed')
+        return failed_moveit_result('ik_valid')
 
     candidates = [
         scored_candidate(track_id=i, score=float(i)) for i in range(20)
@@ -448,7 +711,7 @@ def test_latest_hard_recheck_precedes_soft_ranking_and_moveit_calls():
 
     def check(candidate):
         calls.append(candidate.track_id)
-        return MoveItResult(True, 0.1, 0.1, '')
+        return reachable_moveit_result(0.1, 0.1)
 
     candidates = [
         scored_candidate(
@@ -516,12 +779,115 @@ def test_non_finite_fused_coordinates_fail_closed_before_moveit():
     assert result.funnel.rejection_counts == {'TRANSFORM_INVALID': 1}
 
 
+@pytest.mark.parametrize(
+    ('evidence_change', 'expected_code'),
+    [
+        ({'request_id': 2}, 'SAFETY_EVIDENCE_STALE'),
+        ({'snapshot_stamp_sec': 9.5}, 'SAFETY_EVIDENCE_STALE'),
+        ({'snapshot_context_revision': 'ctx-old'}, 'SAFETY_EVIDENCE_STALE'),
+        ({'target_epoch': 8}, 'SAFETY_BINDING_MISMATCH'),
+        ({'target_label': 'other'}, 'SAFETY_BINDING_MISMATCH'),
+        ({'model_choice': 'other-model'}, 'SAFETY_BINDING_MISMATCH'),
+        ({'track_id': 99}, 'SAFETY_BINDING_MISMATCH'),
+        ({'variant_index': 1}, 'SAFETY_BINDING_MISMATCH'),
+        ({'center_base_xyz': (0.1001, 0.0, 0.2)}, 'SAFETY_BINDING_MISMATCH'),
+        ({'tool0_position_xyz': (0.1, 0.0001, 0.2)}, 'SAFETY_BINDING_MISMATCH'),
+        ({'quaternion_xyzw': (0.0, 0.0, 0.1, 0.994987)}, 'SAFETY_BINDING_MISMATCH'),
+        ({'approach_base_xyz': (0.01, 0.0, -0.99995)}, 'SAFETY_BINDING_MISMATCH'),
+        ({'required_open_width_m': 0.039}, 'SAFETY_BINDING_MISMATCH'),
+    ],
+)
+def test_stale_or_mismatched_safety_evidence_never_reaches_moveit(
+    evidence_change, expected_code
+):
+    candidate = scored_candidate(6, 0.0)
+    candidate = replace(
+        candidate,
+        latest_safety=replace(candidate.latest_safety, **evidence_change),
+    )
+    calls = []
+
+    result = bounded_moveit_select(
+        [candidate], lambda item: calls.append(item.track_id)
+    )
+
+    assert calls == []
+    assert result.funnel.rejection_counts == {expected_code: 1}
+
+
+def test_fused_width_cannot_be_replaced_by_narrower_safety_evidence():
+    candidate = scored_candidate(6, 0.0)
+    wider_stable = replace(
+        candidate.stable_candidate,
+        required_open_width_m=0.060,
+    )
+    candidate = replace(candidate, stable_candidate=wider_stable)
+    calls = []
+
+    result = bounded_moveit_select(
+        [candidate], lambda item: calls.append(item.track_id)
+    )
+
+    assert calls == []
+    assert result.funnel.rejection_counts == {'SAFETY_BINDING_MISMATCH': 1}
+
+
+@pytest.mark.parametrize(
+    ('field', 'value'),
+    [
+        ('variant_quaternion_xyzw', (0.0, 0.0, 0.0, 2.0)),
+        ('variant_approach_base_xyz', (0.0, 0.0, -2.0)),
+    ],
+)
+def test_non_unit_variant_directions_fail_before_moveit(field, value):
+    candidate = scored_candidate(6, 0.0)
+    candidate = replace(
+        candidate,
+        **{field: value},
+        latest_safety=replace(
+            candidate.latest_safety,
+            **{
+                'quaternion_xyzw'
+                if field == 'variant_quaternion_xyzw'
+                else 'approach_base_xyz': value
+            }
+        )
+    )
+    calls = []
+
+    result = bounded_moveit_select(
+        [candidate], lambda item: calls.append(item.track_id)
+    )
+
+    assert calls == []
+    assert result.funnel.rejection_counts == {'TRANSFORM_INVALID': 1}
+
+
+def test_safety_evidence_defensively_copies_pose_vectors():
+    center = np.array([0.1, 0.0, 0.2])
+    safety = valid_safety_input(center_base_xyz=center)
+
+    center[0] = 99.0
+
+    assert tuple(safety.center_base_xyz) == pytest.approx((0.1, 0.0, 0.2))
+
+
+@pytest.mark.parametrize('revision', [[], {}, -1, ''])
+def test_safety_context_revision_must_be_an_immutable_scalar(revision):
+    result = mandatory_safety_gate(
+        replace(valid_safety_input(), snapshot_context_revision=revision)
+    )
+
+    assert result.ok is False
+    assert result.code == 'SAFETY_EVIDENCE_STALE'
+
+
 def test_symmetric_variants_each_consume_one_top_n_check_slot():
     calls = []
 
     def check(candidate):
         calls.append((candidate.track_id, candidate.variant_index))
-        return MoveItResult(True, 0.0, 0.0, '')
+        return reachable_moveit_result()
 
     candidates = [
         scored_candidate(1, 0.0, variant_index=1),
@@ -543,10 +909,10 @@ def test_strict_moveit_failures_do_not_stop_the_rest_of_the_shortlist():
     def check(candidate):
         calls.append(candidate.track_id)
         if candidate.track_id == 0:
-            return MoveItResult(False, 0.0, 0.0, 'IK failed')
+            return failed_moveit_result('ik_valid')
         if candidate.track_id == 1:
-            return MoveItResult(False, 0.0, 0.0, 'joint limit')
-        return MoveItResult(True, 0.2, 0.1, '')
+            return failed_moveit_result('within_joint_limits')
+        return reachable_moveit_result(0.2, 0.1)
 
     result = bounded_moveit_select(
         [scored_candidate(i, float(i)) for i in range(3)],
@@ -562,11 +928,93 @@ def test_strict_moveit_failures_do_not_stop_the_rest_of_the_shortlist():
     }
 
 
+@pytest.mark.parametrize(
+    ('failed_state', 'expected_code'),
+    [
+        ('collision_free', 'MOVEIT_COLLISION'),
+        ('within_joint_limits', 'MOVEIT_JOINT_LIMIT'),
+        ('ik_valid', 'MOVEIT_IK_FAILED'),
+        ('planning_success', 'MOVEIT_PLANNING_FAILED'),
+    ],
+)
+def test_structured_moveit_hard_failure_codes_continue_shortlist(
+    failed_state, expected_code
+):
+    calls = []
+
+    def check(candidate):
+        calls.append(candidate.track_id)
+        if candidate.track_id == 0:
+            return failed_moveit_result(failed_state)
+        return reachable_moveit_result()
+
+    result = bounded_moveit_select(
+        [scored_candidate(0, 0.0), scored_candidate(1, 1.0)],
+        check,
+        top_n=3,
+    )
+
+    assert calls == [0, 1]
+    assert result.selected.track_id == 1
+    assert result.funnel.rejection_counts == {expected_code: 1}
+
+
+@pytest.mark.parametrize(
+    'contradictory',
+    [
+        MoveItResult(
+            reachable=True,
+            joint_path_cost=0.0,
+            joint_max_delta_rad=0.0,
+            reason='claims success',
+            collision_free=False,
+            within_joint_limits=True,
+            ik_valid=True,
+            planning_success=True,
+        ),
+        MoveItResult(
+            reachable=False,
+            joint_path_cost=0.0,
+            joint_max_delta_rad=0.0,
+            reason='claims failure',
+            collision_free=True,
+            within_joint_limits=True,
+            ik_valid=True,
+            planning_success=True,
+        ),
+        MoveItResult(
+            reachable=True,
+            joint_path_cost=0.0,
+            joint_max_delta_rad=0.0,
+            reason='missing structured states',
+        ),
+        MoveItResult(
+            reachable=True,
+            joint_path_cost=0.0,
+            joint_max_delta_rad=0.0,
+            reason='numpy bool state',
+            collision_free=np.bool_(True),
+            within_joint_limits=True,
+            ik_valid=True,
+            planning_success=True,
+        ),
+    ],
+)
+def test_contradictory_or_missing_moveit_hard_states_fail_closed(contradictory):
+    result = bounded_moveit_select(
+        [scored_candidate(0, 0.0)],
+        lambda _candidate: contradictory,
+    )
+
+    assert result.selected is None
+    assert result.funnel.rejection_counts == {'MOVEIT_RESULT_INVALID': 1}
+
+
 def test_moveit_motion_cost_can_reorder_reachable_candidates():
     def check(candidate):
         if candidate.track_id == 0:
-            return MoveItResult(True, 10.0, 10.0, '')
-        return MoveItResult(True, 0.0, 0.0, '')
+            return reachable_moveit_result(10.0, 10.0)
+        return reachable_moveit_result()
 
     result = bounded_moveit_select(
         [scored_candidate(0, 0.0), scored_candidate(1, 0.1)],
@@ -575,7 +1023,9 @@ def test_moveit_motion_cost_can_reorder_reachable_candidates():
     )
 
     assert result.selected.track_id == 1
-    assert result.selected.final_score == pytest.approx(0.1)
+    assert result.selected.final_score == pytest.approx(
+        result.selected.pre_moveit_score
+    )
     assert result.reachable[0].final_score > result.reachable[1].final_score
 
 
@@ -585,7 +1035,7 @@ def test_malformed_moveit_result_fails_closed_and_records_dominant_failure():
     def check(candidate):
         calls.append(candidate.track_id)
         if candidate.track_id == 0:
-            return MoveItResult(True, float('nan'), 0.0, '')
+            return reachable_moveit_result(float('nan'), 0.0)
         raise RuntimeError('service unavailable')
 
     result = bounded_moveit_select(
@@ -606,6 +1056,18 @@ def test_malformed_moveit_result_fails_closed_and_records_dominant_failure():
     )
 
 
+@pytest.mark.parametrize('boolean_value', [True, np.bool_(True)])
+def test_moveit_motion_metrics_reject_python_and_numpy_bool(boolean_value):
+    result = bounded_moveit_select(
+        [scored_candidate(0, 0.0)],
+        lambda _candidate: reachable_moveit_result(boolean_value, 0.0),
+        top_n=3,
+    )
+
+    assert result.selected is None
+    assert result.funnel.rejection_counts == {'MOVEIT_RESULT_INVALID': 1}
+
+
 def test_candidates_outside_top_n_are_not_mislabeled_as_hard_rejections():
     candidates = [
         scored_candidate(track_id=i, score=float(i)) for i in range(8)
@@ -613,7 +1075,7 @@ def test_candidates_outside_top_n_are_not_mislabeled_as_hard_rejections():
 
     result = bounded_moveit_select(
         candidates,
-        lambda _candidate: MoveItResult(True, 0.0, 0.0, ''),
+        lambda _candidate: reachable_moveit_result(),
         top_n=3,
     )
 
