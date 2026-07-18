@@ -556,6 +556,38 @@ def test_stream_poll_is_nonblocking_and_only_submits_an_advanced_window(monkeypa
         node.shutdown_streaming_worker()
 
 
+def test_submit_atomically_rejects_snapshot_from_previous_target_identity():
+    node = streaming_node(clock=MutableClock(30.0), start_worker=False)
+    try:
+        node.latest_object = types.SimpleNamespace(detected=True, label='carton')
+        node._last_model_choice = 'carton_segment'
+        node.start_streaming()
+        current_identity = (
+            node.target_instance_epoch,
+            'carton',
+            'carton_segment',
+        )
+        stale = snapshot(29.8)
+        stale.target_epoch = current_identity[0] - 1
+        stale.target_identity = (
+            current_identity[0] - 1,
+            current_identity[1],
+            current_identity[2],
+        )
+
+        assert node.submit_stream_snapshot(stale) is False
+        assert node.inference_coordinator.pending_count == 0
+        assert node.last_submitted_stamp_ns == 0
+
+        fresh = snapshot(29.9)
+        fresh.target_epoch = current_identity[0]
+        fresh.target_identity = current_identity
+        assert node.submit_stream_snapshot(fresh) is True
+        assert node._stream_worker_ticket.snapshot_stamp_sec == 29.9
+    finally:
+        node.shutdown_streaming_worker()
+
+
 def test_preview_publication_never_mutates_execution_publishers():
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node.preview_plan_pub = RecordingPublisher()

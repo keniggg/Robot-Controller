@@ -3663,16 +3663,23 @@ class RemoteGrasp6DNode:
             with self._object_lock:
                 self.latest_object = msg
                 self.latest_object_time = now
+            if bool(getattr(previous, 'detected', False)):
+                self._advance_target_instance_epoch('TARGET_LOST')
             if hasattr(self, 'frames'):
-                self.frames.update_object(msg, source_stamp)
+                self.frames.update_object(
+                    msg,
+                    source_stamp,
+                    target_epoch=int(
+                        getattr(self, 'target_instance_epoch', 0)
+                    ),
+                    target_identity=self._current_stream_target_identity(),
+                )
             self._invalidate_geometry(
                 'TARGET_LOST',
                 'target object is not detected',
                 stamp=source_stamp,
                 label=str(getattr(msg, 'label', '') or ''),
             )
-            if bool(getattr(previous, 'detected', False)):
-                self._advance_target_instance_epoch('TARGET_LOST')
             return
 
         gcfg = rospy.get_param('/grasp', {})
@@ -3713,11 +3720,6 @@ class RemoteGrasp6DNode:
                 )
                 return
 
-        with self._object_lock:
-            self.latest_object = msg
-            self.latest_object_time = now
-        if hasattr(self, 'frames'):
-            self.frames.update_object(msg, source_stamp)
         identity_changed = bool(
             previous is not None
             and bool(getattr(previous, 'detected', False))
@@ -3734,8 +3736,26 @@ class RemoteGrasp6DNode:
                 )
             )
         )
+        with self._object_lock:
+            self.latest_object = msg
+            self.latest_object_time = now
         if identity_changed:
             self._advance_target_instance_epoch('TARGET_INSTANCE_CHANGED')
+        if hasattr(self, 'frames'):
+            self.frames.update_object(
+                msg,
+                source_stamp,
+                target_epoch=int(getattr(self, 'target_instance_epoch', 0)),
+                target_identity=self._current_stream_target_identity(),
+            )
+
+    def _current_stream_target_identity(self):
+        target = getattr(self, 'latest_object', None)
+        return (
+            int(getattr(self, 'target_instance_epoch', 0)),
+            str(getattr(target, 'label', '') or ''),
+            str(getattr(self, '_last_model_choice', '') or ''),
+        )
 
     def _advance_target_instance_epoch(self, reason):
         """Invalidate pending tracking when the observed target identity changes."""
@@ -3755,7 +3775,6 @@ class RemoteGrasp6DNode:
             self.inference_coordinator.reset_target_epoch(
                 self.target_instance_epoch
             )
-            self.last_submitted_stamp_ns = 0
             self._last_target_epoch_reason = str(reason or '')
             condition.notify_all()
         if pending_request_id is not None:
@@ -3822,7 +3841,6 @@ class RemoteGrasp6DNode:
             self.target_instance_epoch += 1
             self.tracker = CandidateTracker(self._tracking_config)
             self._stream_generation = self.inference_coordinator.start()
-            self.last_submitted_stamp_ns = 0
             self.streaming_enabled = True
             self._stream_condition.notify_all()
             return True
@@ -3859,6 +3877,22 @@ class RemoteGrasp6DNode:
         replaced_request_id = None
         with self._stream_condition:
             if not self.streaming_enabled:
+                return False
+            snapshot_identity = tuple(
+                getattr(snapshot, 'target_identity', ()) or ()
+            )
+            snapshot_epoch = getattr(snapshot, 'target_epoch', None)
+            current_identity = self._current_stream_target_identity()
+            if (
+                snapshot_identity
+                and snapshot_identity != current_identity
+            ) or (
+                snapshot_epoch is not None
+                and int(snapshot_epoch) != int(self.target_instance_epoch)
+            ) or (
+                isinstance(snapshot, SnapshotResult)
+                and snapshot_identity != current_identity
+            ):
                 return False
             if stamp_ns <= self.last_submitted_stamp_ns:
                 return False
@@ -4501,6 +4535,11 @@ class RemoteGrasp6DNode:
             )
         except Exception:
             return False
+        with self._stream_condition:
+            if not self.streaming_enabled:
+                return False
+            target_identity = self._current_stream_target_identity()
+            newest_after_ns = self.last_submitted_stamp_ns
         samples = self.frames.wait_for_samples(
             self.planning_snapshot_frames,
             0.0,
@@ -4510,7 +4549,8 @@ class RemoteGrasp6DNode:
             max_inference_latency_sec=(
                 self.planning_snapshot_max_inference_latency_sec
             ),
-            newest_after_ns=self.last_submitted_stamp_ns,
+            newest_after_ns=newest_after_ns,
+            target_identity=target_identity,
         )
         if len(samples) < self.planning_snapshot_frames:
             return False
@@ -5409,13 +5449,15 @@ class RemoteGrasp6DNode:
         model_choice = str(pcfg.get('yolo_model_choice', 'original'))
         previous_choice = getattr(self, '_last_model_choice', None)
         if previous_choice is not None and model_choice != previous_choice:
+            self._last_model_choice = model_choice
             self._invalidate_geometry(
                 'MODEL_RELOADED',
                 'model choice changed from %s to %s'
                 % (previous_choice, model_choice),
             )
             self._advance_target_instance_epoch('MODEL_RELOADED')
-        self._last_model_choice = model_choice
+        else:
+            self._last_model_choice = model_choice
         detector_kind = str(pcfg.get('detector', 'simple_hsv')).strip().lower()
         if detector_kind not in ('yolo', 'yolov8'):
             return False

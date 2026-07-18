@@ -90,6 +90,115 @@ def add_complete_sample(buffer, stamp):
     buffer.update_object(detected, stamp)
 
 
+def add_identity_bound_sample(buffer, stamp, target_identity):
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        label=target_identity[1],
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, stamp, 'camera_link')
+    buffer.update_depth(depth, stamp, 'camera_link')
+    buffer.update_mask(mask, stamp, 'camera_link')
+    buffer.update_object(
+        detected,
+        stamp,
+        target_epoch=target_identity[0],
+        target_identity=target_identity,
+    )
+
+
+def test_zero_timeout_polls_accumulate_low_rate_exact_samples_persistently():
+    source_now_ns = [10_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    identity = (3, 'carton', 'carton_segment')
+
+    for index, stamp_ns in enumerate(
+        (10_000_000_000, 10_670_000_000, 11_340_000_000)
+    ):
+        source_now_ns[0] = stamp_ns
+        monotonic_now[0] = 10.0 + 0.67 * index
+        add_identity_bound_sample(buffer, stamp_ns * 1e-9, identity)
+        samples = buffer.wait_for_samples(
+            3,
+            0.0,
+            require_mask=True,
+            max_age_sec=0.35,
+            collection_span_sec=3.0,
+            max_inference_latency_sec=1.2,
+            target_identity=identity,
+        )
+
+    assert [item.stamp_ns for item in samples] == [
+        10_000_000_000,
+        10_670_000_000,
+        11_340_000_000,
+    ]
+    assert all(item.target_identity == identity for item in samples)
+
+
+def test_persistent_window_never_mixes_target_identity_epochs():
+    source_now_ns = [20_000_000_000]
+    monotonic_now = [20.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    old_identity = (7, 'carton', 'carton_segment')
+    new_identity = (8, 'carton', 'carton_segment')
+
+    for index, identity in enumerate(
+        (old_identity, old_identity, new_identity, new_identity)
+    ):
+        stamp_ns = 20_000_000_000 + index * 400_000_000
+        source_now_ns[0] = stamp_ns
+        monotonic_now[0] = 20.0 + index * 0.4
+        add_identity_bound_sample(buffer, stamp_ns * 1e-9, identity)
+        requested_identity = old_identity if index < 2 else new_identity
+        samples = buffer.wait_for_samples(
+            3,
+            0.0,
+            require_mask=True,
+            max_age_sec=0.35,
+            collection_span_sec=3.0,
+            max_inference_latency_sec=1.2,
+            target_identity=requested_identity,
+        )
+        assert samples == []
+
+    stamp_ns = 21_600_000_000
+    source_now_ns[0] = stamp_ns
+    monotonic_now[0] = 21.6
+    add_identity_bound_sample(buffer, stamp_ns * 1e-9, new_identity)
+    samples = buffer.wait_for_samples(
+        3,
+        0.0,
+        require_mask=True,
+        max_age_sec=0.35,
+        collection_span_sec=3.0,
+        max_inference_latency_sec=1.2,
+        target_identity=new_identity,
+    )
+
+    assert [item.target_identity for item in samples] == [new_identity] * 3
+    assert list(buffer._collection_windows) == [(True, new_identity)]
+    assert [item.stamp_ns for item in samples] == [
+        20_800_000_000,
+        21_200_000_000,
+        21_600_000_000,
+    ]
+
+
 def test_mask_iou_uses_binary_overlap():
     first = np.zeros((4, 5), dtype=np.uint8)
     second = np.zeros((4, 5), dtype=np.uint8)
