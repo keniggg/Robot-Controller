@@ -286,6 +286,10 @@ def test_queued_active_ticket_is_drained_before_new_pending_is_promoted(
         node._stream_worker.start()
 
         wait_until(lambda: len(node._accept_prediction_calls) == 1)
+        wait_until(
+            lambda: bool(node.pipeline_metrics)
+            and node.pipeline_metrics[-1]['request_id'] == 2
+        )
         assert node._accept_prediction_calls[0].ticket.request_id == 2
         assert node.pipeline_metrics[-1]['request_id'] == 2
         assert node.pipeline_metrics[-1]['drop_reason'] == ''
@@ -347,6 +351,98 @@ def test_stop_during_acceptance_does_not_double_drop_or_predict_promoted_ticket(
         prepare_release.set()
         accept_release.set()
         node.shutdown_streaming_worker()
+
+
+def test_worker_records_post_completion_cancellation_as_stale_not_accepted():
+    clock = MutableClock(10.0)
+    accept_entered = threading.Event()
+    accept_release = threading.Event()
+    node = streaming_node(clock=clock)
+
+    def accept(prepared):
+        accept_entered.set()
+        assert accept_release.wait(1.0)
+        node._require_stream_ticket_current(prepared.ticket)
+
+    node._accept_prediction = accept
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(9.8))
+        assert accept_entered.wait(1.0)
+
+        node.stop_streaming()
+        accept_release.set()
+        wait_until(lambda: len(node.pipeline_metrics) == 1)
+
+        terminal = node.pipeline_metrics[0]
+        assert terminal['request_id'] == 1
+        assert terminal['status'] == 'GENERATION_STALE'
+        assert terminal['drop_reason'] == 'GENERATION_STALE'
+        assert terminal['accepted'] == 0
+        assert terminal['stale'] == 1
+        assert terminal['completed'] == terminal['submitted'] == 1
+    finally:
+        accept_release.set()
+        node.shutdown_streaming_worker()
+
+
+def test_shutdown_emits_one_terminal_drop_per_queued_request_without_remote():
+    prepared_ids = []
+    node = streaming_node(
+        clock=MutableClock(10.0),
+        prepare=lambda ticket: prepared_ids.append(ticket.request_id),
+        start_worker=False,
+    )
+    node.start_streaming()
+    node.submit_stream_snapshot(snapshot(9.8))
+    node.submit_stream_snapshot(snapshot(9.9))
+
+    assert node.shutdown_streaming_worker() is True
+
+    assert prepared_ids == []
+    assert sorted(item['request_id'] for item in node.pipeline_metrics) == [1, 2]
+    assert all(
+        item['drop_reason'] == 'GENERATION_STALE'
+        for item in node.pipeline_metrics
+    )
+    assert all(
+        sum(
+            other['request_id'] == item['request_id']
+            for other in node.pipeline_metrics
+        ) == 1
+        for item in node.pipeline_metrics
+    )
+    assert node._pipeline_counters['completed'] == 2
+    assert node._pipeline_counters['submitted'] == 2
+    assert node._pipeline_counters['stale'] == 2
+
+
+def test_streaming_terminal_and_metrics_histories_are_bounded():
+    node = streaming_node(
+        clock=MutableClock(10.0),
+        start_worker=False,
+    )
+    node.pipeline_metrics = []
+    node._initialize_streaming_state(
+        result_max_age_sec=1.2,
+        performance_window_size=3,
+        source_clock=MutableClock(10.0),
+        start_worker=False,
+    )
+
+    for request_id in range(1, 26):
+        node._request_telemetry[request_id] = {
+            'request_id': request_id,
+            'generation': 1,
+            'target_epoch': 1,
+            'snapshot_stamp_sec': 9.5,
+            'submitted_sec': 9.5,
+        }
+        node._emit_pending_drop_metrics(request_id, 'GENERATION_STALE')
+
+    assert len(node.pipeline_metrics) == 3
+    assert len(node._terminal_request_ids) <= 8
+    assert node._request_telemetry == {}
 
 
 def test_remote_prediction_uses_protocol3_ticket_correlation():
@@ -607,6 +703,219 @@ def test_preview_publication_never_mutates_execution_publishers():
     assert node.plan_pub.messages == []
 
 
+def test_stop_barrier_prevents_old_accept_from_committing_tracker_state():
+    node = streaming_node(clock=MutableClock(40.0), start_worker=False)
+
+    class RecordingTracker:
+        def __init__(self):
+            self.calls = []
+
+        def update(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return []
+
+    try:
+        del node._accept_prediction
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(39.8))
+        ticket = node._stream_worker_ticket
+        tracker = RecordingTracker()
+        node.tracker = tracker
+        node._activate_prepared_geometry = lambda _prepared: True
+
+        def stop_during_local_evaluation(_prepared):
+            node.stop_streaming()
+            return (matching_observation(ticket.request_id),), {
+                'stage_counts': {},
+                'rejection_counts': {},
+                'rejection_ratios': {},
+            }
+
+        node._evaluate_local_candidates = stop_during_local_evaluation
+        prepared = prepared_prediction(ticket.request_id)
+        prepared.ticket = ticket
+
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._accept_prediction(prepared)
+
+        assert tracker.calls == []
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_stop_barrier_prevents_each_stale_moveit_call():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        node._stable_variant_runtime = {
+            (3, 1): {
+                'prepared': types.SimpleNamespace(ticket=ticket),
+                'grasp_pose': object(),
+            }
+        }
+        calls = []
+        node._plan_reachable = lambda pose: calls.append(pose) or True
+        node.stop_streaming()
+
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._check_moveit_stable_candidate(
+                types.SimpleNamespace(track_id=3, variant_index=1)
+            )
+
+        assert calls == []
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_stop_barrier_prevents_stale_preview_and_atomic_audit_commit(tmp_path):
+    node = streaming_node(clock=MutableClock(60.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(59.8))
+        ticket = node._stream_worker_ticket
+        node.gate_audit_enabled = True
+        node.gate_audit_output_path = str(tmp_path / 'planning.json')
+        node.mujoco_audit_output_path = str(tmp_path / 'mujoco.json')
+        node.stop_streaming()
+
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._publish_preview_plan(
+                types.SimpleNamespace(plan_id='stale'),
+                types.SimpleNamespace(poses=['stale']),
+                ticket=ticket,
+            )
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._write_gate_audit_report({'rows': []}, ticket=ticket)
+
+        assert node.preview_rich_plan_pub.messages == []
+        assert node.preview_plan_pub.messages == []
+        assert not pathlib.Path(node.gate_audit_output_path).exists()
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_activation_rechecks_cancellation_before_global_geometry_commit():
+    node = streaming_node(clock=MutableClock(70.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(69.8))
+        ticket = node._stream_worker_ticket
+        node._planning_snapshot_active = False
+        node._planning_object_msg = 'original-object'
+        node._planning_object_time = 'original-time'
+        node._current_prepared_prediction = 'original-prepared'
+        cache_clears = []
+        activations = []
+
+        def stop_before_commit(_generation):
+            node.stop_streaming()
+            return False, ''
+
+        node._geometry_invalidation_state = stop_before_commit
+        node._clear_geometry_cache = lambda: cache_clears.append(True)
+        node._activate_geometry = lambda *_args, **_kwargs: (
+            activations.append(True) or True
+        )
+        node.camera_visibility_gate_enabled = False
+        node.camera_visibility_diagnostic_enabled = False
+        prepared = types.SimpleNamespace(
+            ticket=ticket,
+            request_invalidation_generation=3,
+            snapshot=types.SimpleNamespace(object_msg='new-object'),
+            stamp='new-time',
+            geometry=object(),
+            pose_estimator=types.SimpleNamespace(T_base_optical=object()),
+            graspnet_input_audit={},
+        )
+
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._activate_prepared_geometry(prepared)
+
+        assert node._planning_snapshot_active is False
+        assert node._planning_object_msg == 'original-object'
+        assert node._planning_object_time == 'original-time'
+        assert node._current_prepared_prediction == 'original-prepared'
+        assert cache_clears == []
+        assert activations == []
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_preview_publication_and_latest_audit_share_one_token_commit():
+    node = streaming_node(clock=MutableClock(80.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(79.8))
+        ticket = node._stream_worker_ticket
+        commits = []
+
+        node._publish_preview_plan(
+            types.SimpleNamespace(plan_id='preview-current'),
+            types.SimpleNamespace(poses=['preview-current']),
+            ticket=ticket,
+            commit_callback=lambda: commits.append(ticket.request_id),
+        )
+
+        assert commits == [ticket.request_id]
+        assert node.latest_preview_rich_plan.plan_id == 'preview-current'
+        node.stop_streaming()
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._publish_preview_plan(
+                types.SimpleNamespace(plan_id='preview-stale'),
+                types.SimpleNamespace(poses=['preview-stale']),
+                ticket=ticket,
+                commit_callback=lambda: commits.append('stale'),
+            )
+        assert commits == [ticket.request_id]
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_streaming_audit_commits_request_local_report_under_token(tmp_path):
+    node = streaming_node(clock=MutableClock(90.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(89.8))
+        ticket = node._stream_worker_ticket
+        node.gate_audit_enabled = True
+        node.gate_audit_output_path = str(tmp_path / 'planning.json')
+        node.mujoco_audit_output_path = str(tmp_path / 'mujoco.json')
+        node.gate_audit_pub = RecordingPublisher()
+        node._stable_variant_runtime = {}
+        node._active_gate_audit_report = {
+            'marker': 'wrong-shared-report',
+            'summary': {},
+            'rows': [],
+        }
+        base_report = {
+            'marker': 'request-local-report',
+            'summary': {},
+            'rows': [],
+        }
+        prepared = types.SimpleNamespace(ticket=ticket)
+
+        node._finalize_streaming_gate_audit(
+            prepared,
+            None,
+            {'stage_counts': {}, 'rejection_counts': {}},
+            'STABILITY_PENDING',
+            base_report=base_report,
+        )
+
+        written = json.loads(
+            pathlib.Path(node.gate_audit_output_path).read_text()
+        )
+        assert written['marker'] == 'request-local-report'
+        assert node._active_gate_audit_report['marker'] == (
+            'request-local-report'
+        )
+        assert len(node.gate_audit_pub.messages) == 1
+    finally:
+        node.shutdown_streaming_worker()
+
+
 def matching_observation(request_id):
     return CandidateObservation(
         request_id=request_id,
@@ -653,6 +962,10 @@ def test_third_matching_prediction_enters_current_recheck_and_moveit_top_n(
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node.target_instance_epoch = 4
     node._last_model_choice = 'carton_segment'
+    node._stream_condition = threading.Condition(threading.RLock())
+    node._stream_shutdown = threading.Event()
+    node.streaming_enabled = True
+    node._stream_generation = 1
     node.tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
     node.moveit_top_n = 5
     node._activate_prepared_geometry = lambda _prepared: True

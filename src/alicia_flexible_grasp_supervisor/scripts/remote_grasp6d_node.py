@@ -146,6 +146,12 @@ PIPELINE_COUNTER_FIELDS = (
 PIPELINE_METRICS_MAX_BYTES = 12000
 
 
+class StreamResultCancelled(RuntimeError):
+    def __init__(self, code):
+        self.code = str(code or 'GENERATION_STALE')
+        super().__init__(self.code)
+
+
 def _finite_pipeline_number(value, default=0.0):
     try:
         converted = float(value)
@@ -3757,6 +3763,26 @@ class RemoteGrasp6DNode:
             str(getattr(self, '_last_model_choice', '') or ''),
         )
 
+    def _stream_ticket_cancellation_code_locked(self, ticket):
+        if (
+            self._stream_shutdown.is_set()
+            or not self.streaming_enabled
+            or int(ticket.generation) != int(self._stream_generation)
+        ):
+            return 'GENERATION_STALE'
+        if int(ticket.target_epoch) != int(self.target_instance_epoch):
+            return 'TARGET_EPOCH_STALE'
+        return ''
+
+    def _require_stream_ticket_current_locked(self, ticket):
+        code = self._stream_ticket_cancellation_code_locked(ticket)
+        if code:
+            raise StreamResultCancelled(code)
+
+    def _require_stream_ticket_current(self, ticket):
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(ticket)
+
     def _advance_target_instance_epoch(self, reason):
         """Invalidate pending tracking when the observed target identity changes."""
 
@@ -3764,11 +3790,14 @@ class RemoteGrasp6DNode:
         if condition is None:
             return False
         pending_request_id = None
+        pending_terminal_claimed = False
         with condition:
             pending_request_id = self._pending_request_id
             if pending_request_id is not None:
-                self._pipeline_counters['completed'] += 1
-                self._pipeline_counters['stale'] += 1
+                pending_terminal_claimed = self._claim_terminal_request_locked(
+                    pending_request_id,
+                    'TARGET_EPOCH_STALE',
+                )
                 self._pending_request_id = None
             self.target_instance_epoch += 1
             self.tracker = CandidateTracker(self._tracking_config)
@@ -3779,7 +3808,9 @@ class RemoteGrasp6DNode:
             condition.notify_all()
         if pending_request_id is not None:
             self._emit_pending_drop_metrics(
-                pending_request_id, 'TARGET_EPOCH_STALE'
+                pending_request_id,
+                'TARGET_EPOCH_STALE',
+                terminal_claimed=pending_terminal_claimed,
             )
         return True
 
@@ -3823,9 +3854,12 @@ class RemoteGrasp6DNode:
         self._pending_replacements = 0
         self._pending_request_id = None
         self._request_telemetry = {}
+        self._terminal_request_ids = set()
+        self._terminal_request_order = deque()
+        self._terminal_request_limit = max(8, window_size * 2)
         self._stream_generation = 0
         self._latency_history_ms = deque(maxlen=window_size)
-        self.pipeline_metrics = []
+        self.pipeline_metrics = deque(maxlen=window_size)
         if start_worker:
             self._stream_worker = threading.Thread(
                 target=self._stream_worker_main,
@@ -3847,13 +3881,16 @@ class RemoteGrasp6DNode:
 
     def stop_streaming(self):
         pending_request_id = None
+        pending_terminal_claimed = False
         with self._stream_condition:
             if not self.streaming_enabled:
                 return False
             pending_request_id = self._pending_request_id
             if pending_request_id is not None:
-                self._pipeline_counters['completed'] += 1
-                self._pipeline_counters['stale'] += 1
+                pending_terminal_claimed = self._claim_terminal_request_locked(
+                    pending_request_id,
+                    'GENERATION_STALE',
+                )
                 self._pending_request_id = None
             self.streaming_enabled = False
             self.target_instance_epoch += 1
@@ -3862,7 +3899,9 @@ class RemoteGrasp6DNode:
             self._stream_condition.notify_all()
         if pending_request_id is not None:
             self._emit_pending_drop_metrics(
-                pending_request_id, 'GENERATION_STALE'
+                pending_request_id,
+                'GENERATION_STALE',
+                terminal_claimed=pending_terminal_claimed,
             )
         return True
 
@@ -3908,10 +3947,14 @@ class RemoteGrasp6DNode:
                 self._pipeline_counters['busy'] += 1
             if decision.replaced_request_id is not None:
                 self._pipeline_counters['replaced'] += 1
-                self._pipeline_counters['completed'] += 1
-                self._pipeline_counters['stale'] += 1
                 self._pending_replacements += 1
                 replaced_request_id = decision.replaced_request_id
+                replaced_terminal_claimed = (
+                    self._claim_terminal_request_locked(
+                        replaced_request_id,
+                        'PENDING_REPLACED',
+                    )
+                )
             submitted_request_id = (
                 decision.ticket_to_start.request_id
                 if decision.ticket_to_start is not None
@@ -3931,11 +3974,56 @@ class RemoteGrasp6DNode:
                 self._pending_request_id = int(decision.pending_request_id)
         if replaced_request_id is not None:
             self._emit_pending_drop_metrics(
-                replaced_request_id, 'PENDING_REPLACED'
+                replaced_request_id,
+                'PENDING_REPLACED',
+                terminal_claimed=replaced_terminal_claimed,
             )
         return True
 
-    def _emit_pending_drop_metrics(self, request_id, code):
+    def _claim_terminal_request_locked(
+        self,
+        request_id,
+        status,
+        accepted=False,
+    ):
+        request_id = int(request_id)
+        if request_id in self._terminal_request_ids:
+            return False
+        # The coordinator exposes at most one active and one pending request;
+        # once a terminal event is synchronously emitted, no lifecycle owner
+        # retains that request.  Keeping a small recent window is therefore
+        # sufficient for the only possible stop/worker hand-off races.
+        while (
+            len(self._terminal_request_order)
+            >= self._terminal_request_limit
+        ):
+            expired_request_id = self._terminal_request_order.popleft()
+            self._terminal_request_ids.discard(expired_request_id)
+        self._terminal_request_ids.add(request_id)
+        self._terminal_request_order.append(request_id)
+        self._pipeline_counters['completed'] += 1
+        if accepted:
+            self._pipeline_counters['accepted'] += 1
+        elif str(status) == 'RESULT_EXPIRED':
+            self._pipeline_counters['expired'] += 1
+        else:
+            self._pipeline_counters['stale'] += 1
+        return True
+
+    def _emit_pending_drop_metrics(
+        self,
+        request_id,
+        code,
+        terminal_claimed=False,
+    ):
+        request_id = int(request_id)
+        if not terminal_claimed:
+            with self._stream_condition:
+                if not self._claim_terminal_request_locked(
+                    request_id,
+                    code,
+                ):
+                    return None
         metadata = self._request_telemetry.pop(int(request_id), {})
         now_sec = float(self._stream_source_clock())
         end_to_end_ms = max(
@@ -4117,12 +4205,21 @@ class RemoteGrasp6DNode:
         request_id,
         observations,
         target_identity,
+        ticket=None,
     ):
-        return self.tracker.update(
-            int(request_id),
-            tuple(observations),
-            target_identity=tuple(target_identity),
-        )
+        if ticket is None:
+            return self.tracker.update(
+                int(request_id),
+                tuple(observations),
+                target_identity=tuple(target_identity),
+            )
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(ticket)
+            return self.tracker.update(
+                int(request_id),
+                tuple(observations),
+                target_identity=tuple(target_identity),
+            )
 
     @staticmethod
     def _candidate_safety_input(
@@ -4212,35 +4309,43 @@ class RemoteGrasp6DNode:
         )
 
     def _activate_prepared_geometry(self, prepared):
-        invalidated, _code = self._geometry_invalidation_state(
-            prepared.request_invalidation_generation
-        )
-        if invalidated:
-            return False
-        self._planning_snapshot_active = True
-        self._planning_object_msg = prepared.snapshot.object_msg
-        self._planning_object_time = prepared.stamp
-        self._target_cloud_request_active = False
-        self._clear_geometry_cache()
-        activated = self._activate_geometry(
-            prepared.geometry,
-            prepared.snapshot,
-            prepared.stamp,
-            prepared.pose_estimator.T_base_optical,
-            expected_generation=prepared.request_invalidation_generation,
-        )
-        if not activated:
-            return False
-        self._current_prepared_prediction = prepared
-        self._active_graspnet_input_audit = dict(
-            getattr(prepared, 'graspnet_input_audit', {}) or {}
-        )
-        if bool(
-            getattr(self, 'camera_visibility_gate_enabled', False)
-            or getattr(self, 'camera_visibility_diagnostic_enabled', False)
-        ):
-            self._freeze_tool_from_camera_matrix(prepared.stamp)
-        return True
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(prepared.ticket)
+            invalidated, _code = self._geometry_invalidation_state(
+                prepared.request_invalidation_generation
+            )
+            self._require_stream_ticket_current_locked(prepared.ticket)
+            if invalidated:
+                return False
+            self._planning_snapshot_active = True
+            self._planning_object_msg = prepared.snapshot.object_msg
+            self._planning_object_time = prepared.stamp
+            self._target_cloud_request_active = False
+            self._clear_geometry_cache()
+            activated = self._activate_geometry(
+                prepared.geometry,
+                prepared.snapshot,
+                prepared.stamp,
+                prepared.pose_estimator.T_base_optical,
+                expected_generation=prepared.request_invalidation_generation,
+            )
+            self._require_stream_ticket_current_locked(prepared.ticket)
+            if not activated:
+                return False
+            self._current_prepared_prediction = prepared
+            self._active_graspnet_input_audit = dict(
+                getattr(prepared, 'graspnet_input_audit', {}) or {}
+            )
+            if bool(
+                getattr(self, 'camera_visibility_gate_enabled', False)
+                or getattr(
+                    self,
+                    'camera_visibility_diagnostic_enabled',
+                    False,
+                )
+            ):
+                self._freeze_tool_from_camera_matrix(prepared.stamp)
+            return True
 
     def _pose_approach_base_xyz(self, grasp_pose):
         matrix = pose_matrix(grasp_pose)
@@ -4576,14 +4681,31 @@ class RemoteGrasp6DNode:
             graspnet_input_config=input_config,
         )
 
-    def _publish_preview_plan(self, rich_plan, legacy_plan):
+    def _publish_preview_plan(
+        self,
+        rich_plan,
+        legacy_plan,
+        ticket=None,
+        commit_callback=None,
+    ):
         """Publish preview-only copies; never touch execution authority."""
 
         outgoing_rich = deepcopy(rich_plan)
         outgoing_legacy = deepcopy(legacy_plan)
-        self.preview_rich_plan_pub.publish(outgoing_rich)
-        self.preview_plan_pub.publish(outgoing_legacy)
-        self.latest_preview_rich_plan = deepcopy(outgoing_rich)
+        if ticket is None:
+            self.preview_rich_plan_pub.publish(outgoing_rich)
+            self.preview_plan_pub.publish(outgoing_legacy)
+            self.latest_preview_rich_plan = deepcopy(outgoing_rich)
+            if commit_callback is not None:
+                commit_callback()
+            return
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(ticket)
+            self.preview_rich_plan_pub.publish(outgoing_rich)
+            self.preview_plan_pub.publish(outgoing_legacy)
+            self.latest_preview_rich_plan = deepcopy(outgoing_rich)
+            if commit_callback is not None:
+                commit_callback()
 
     @staticmethod
     def _merge_pipeline_funnel(
@@ -4915,6 +5037,8 @@ class RemoteGrasp6DNode:
                 ik_valid=False,
                 planning_success=False,
             )
+        prepared = runtime.get('prepared')
+        self._require_stream_ticket_current(prepared.ticket)
         reachable = bool(self._plan_reachable(grasp_pose))
         metrics = dict(
             getattr(self, '_candidate_plan_metrics', {}).get(
@@ -4971,8 +5095,7 @@ class RemoteGrasp6DNode:
             stable.model_choice,
         )
         legacy_plan = rich_plan_to_legacy(rich_plan)
-        self._publish_preview_plan(rich_plan, legacy_plan)
-        self._latest_streaming_audit = {
+        streaming_audit = {
             'request_id': int(selected.evaluation_request_id),
             'snapshot_stamp_sec': float(
                 selected.evaluation_snapshot_stamp_sec
@@ -4991,7 +5114,9 @@ class RemoteGrasp6DNode:
                 soft_candidate_cost(
                     replace(
                         selected.soft_features,
-                        joint_path_cost=selected.moveit_result.joint_path_cost,
+                        joint_path_cost=(
+                            selected.moveit_result.joint_path_cost
+                        ),
                         joint_max_delta_rad=(
                             selected.moveit_result.joint_max_delta_rad
                         ),
@@ -5001,6 +5126,16 @@ class RemoteGrasp6DNode:
             ),
             'plan_id': str(rich_plan.plan_id),
         }
+
+        def commit_streaming_audit():
+            self._latest_streaming_audit = deepcopy(streaming_audit)
+
+        self._publish_preview_plan(
+            rich_plan,
+            legacy_plan,
+            ticket=prepared.ticket,
+            commit_callback=commit_streaming_audit,
+        )
         return rich_plan
 
     def _finalize_streaming_gate_audit(
@@ -5009,10 +5144,15 @@ class RemoteGrasp6DNode:
         selection,
         funnel,
         status,
+        base_report=None,
     ):
         """Atomically enrich the existing full audit with streaming lineage."""
 
-        report = deepcopy(getattr(self, '_active_gate_audit_report', None))
+        report = deepcopy(base_report)
+        if base_report is None:
+            report = deepcopy(
+                getattr(self, '_active_gate_audit_report', None)
+            )
         if not isinstance(report, dict):
             raise CandidateContractError(
                 PLANNING_AUDIT_FAILED,
@@ -5113,13 +5253,15 @@ class RemoteGrasp6DNode:
             for row in list(report.get('rows', []) or [])
         ]
         report['selected'] = selected_lineage
-        report['plan_id'] = str(
-            getattr(
-                getattr(self, 'latest_preview_rich_plan', None),
-                'plan_id',
-                '',
-            )
-            or ''
+        preview_audit = dict(
+            getattr(self, '_latest_streaming_audit', {}) or {}
+        )
+        report['plan_id'] = (
+            str(preview_audit.get('plan_id', '') or '')
+            if selected is not None
+            and int(preview_audit.get('request_id', -1))
+            == int(prepared.ticket.request_id)
+            else ''
         )
         report['outcome'] = {
             'code': str(status or ''),
@@ -5127,31 +5269,44 @@ class RemoteGrasp6DNode:
             'valid_plan': False,
             'preview_valid': selected is not None,
         }
-        self._active_gate_audit_report = deepcopy(report)
-        self._latest_gate_audit_summary = {
+        summary = {
             'pipeline_funnel': deepcopy(dict(funnel or {})),
             'status': str(status or ''),
         }
-        self._latest_gate_audit_reference = self._write_gate_audit_report(
-            report
+
+        def commit_audit(reference):
+            self._active_gate_audit_report = deepcopy(report)
+            self._latest_gate_audit_summary = deepcopy(summary)
+            self._latest_gate_audit_reference = dict(reference)
+            self._publish_bounded_gate_audit(
+                selected_lineage,
+                summary=summary,
+                reference=reference,
+            )
+
+        self._write_gate_audit_report(
+            report,
+            ticket=prepared.ticket,
+            commit_callback=commit_audit,
         )
-        self._publish_bounded_gate_audit(selected_lineage)
 
     def _accept_prediction(self, prepared):
         """Accept one correlated result into tracking and preview selection."""
 
         ticket = prepared.ticket
-        if int(ticket.target_epoch) != int(self.target_instance_epoch):
-            raise RuntimeError('prepared prediction target epoch is stale')
+        self._require_stream_ticket_current(ticket)
         if not self._activate_prepared_geometry(prepared):
             raise RuntimeError('prepared prediction geometry is stale')
+        base_audit_report = None
         if isinstance(prepared, PreparedPrediction):
-            self._run_candidate_gate_audit(
+            base_audit_report = self._run_candidate_gate_audit(
                 prepared.candidates,
                 prepared.stamp,
                 CANONICAL_CANDIDATE_CAMERA_FRAME,
                 remote_diagnostics=prepared.remote_diagnostics,
                 candidate_pose_estimator=prepared.pose_estimator,
+                commit_state=False,
+                graspnet_input_audit=prepared.graspnet_input_audit,
             )
         target_label = str(
             getattr(prepared.snapshot.object_msg, 'label', '') or ''
@@ -5173,6 +5328,7 @@ class RemoteGrasp6DNode:
             request_id=ticket.request_id,
             observations=observations,
             target_identity=target_identity,
+            ticket=ticket,
         )
         if not stable:
             funnel = self._merge_pipeline_funnel(
@@ -5186,6 +5342,7 @@ class RemoteGrasp6DNode:
                     None,
                     funnel,
                     'STABILITY_PENDING',
+                    base_report=base_audit_report,
                 )
             return {'status': 'STABILITY_PENDING', 'funnel': funnel}
 
@@ -5218,16 +5375,58 @@ class RemoteGrasp6DNode:
                 selection,
                 funnel,
                 status,
+                base_report=base_audit_report,
             )
         return {'status': status, 'funnel': funnel}
 
     def shutdown_streaming_worker(self, timeout_sec=2.0):
+        queued_ticket = None
+        pending_request_id = None
+        queued_terminal_claimed = False
+        pending_terminal_claimed = False
         with self._stream_condition:
+            queued_ticket = self._stream_worker_ticket
+            pending_request_id = self._pending_request_id
             self.streaming_enabled = False
             self.inference_coordinator.stop()
+            if queued_ticket is not None:
+                try:
+                    self.inference_coordinator.complete(
+                        queued_ticket,
+                        now_sec=float(self._stream_source_clock()),
+                        target_epoch=self.target_instance_epoch,
+                    )
+                except Exception:
+                    pass
+                queued_terminal_claimed = (
+                    self._claim_terminal_request_locked(
+                        queued_ticket.request_id,
+                        'GENERATION_STALE',
+                    )
+                )
+            if pending_request_id is not None:
+                pending_terminal_claimed = (
+                    self._claim_terminal_request_locked(
+                        pending_request_id,
+                        'GENERATION_STALE',
+                    )
+                )
             self._stream_worker_ticket = None
+            self._pending_request_id = None
             self._stream_shutdown.set()
             self._stream_condition.notify_all()
+        if queued_ticket is not None:
+            self._emit_pending_drop_metrics(
+                queued_ticket.request_id,
+                'GENERATION_STALE',
+                terminal_claimed=queued_terminal_claimed,
+            )
+        if pending_request_id is not None:
+            self._emit_pending_drop_metrics(
+                pending_request_id,
+                'GENERATION_STALE',
+                terminal_claimed=pending_terminal_claimed,
+            )
         worker = self._stream_worker
         if worker is not None and worker is not threading.current_thread():
             worker.join(max(0.0, float(timeout_sec)))
@@ -5261,26 +5460,19 @@ class RemoteGrasp6DNode:
                 except Exception as exc:
                     error = exc
 
-            now_sec = float(self._stream_source_clock())
-            completion = self.inference_coordinator.complete(
-                ticket,
-                now_sec=now_sec,
-                target_epoch=self.target_instance_epoch,
-            )
-            if completion.next_ticket is not None:
-                with self._stream_condition:
+            with self._stream_condition:
+                completion_now_sec = float(self._stream_source_clock())
+                completion = self.inference_coordinator.complete(
+                    ticket,
+                    now_sec=completion_now_sec,
+                    target_epoch=self.target_instance_epoch,
+                )
+                if completion.next_ticket is not None:
                     self._pending_request_id = None
             self._request_telemetry.pop(int(ticket.request_id), None)
-            self._pipeline_counters['completed'] += 1
-            if completion.accepted:
-                self._pipeline_counters['accepted'] += 1
-            elif completion.code == 'RESULT_EXPIRED':
-                self._pipeline_counters['expired'] += 1
-            else:
-                self._pipeline_counters['stale'] += 1
-
             funnel = {}
             status = completion.code
+            final_accepted = bool(completion.accepted)
             if completion.accepted and prepared is not None and error is None:
                 try:
                     accepted_result = self._accept_prediction(prepared)
@@ -5291,20 +5483,35 @@ class RemoteGrasp6DNode:
                         )
                     else:
                         status = 'ACCEPTED'
+                except StreamResultCancelled as exc:
+                    final_accepted = False
+                    status = exc.code
+                    error = None
                 except Exception as exc:
                     error = exc
                     status = 'ACCEPT_FAILED'
             elif error is not None and completion.accepted:
                 status = 'PREDICT_FAILED'
 
+            final_now_sec = float(self._stream_source_clock())
+            with self._stream_condition:
+                terminal_claimed = self._claim_terminal_request_locked(
+                    ticket.request_id,
+                    status,
+                    accepted=final_accepted,
+                )
             end_to_end_ms = max(
                 0.0,
-                (now_sec - float(ticket.submitted_monotonic_sec)) * 1000.0,
+                (
+                    final_now_sec
+                    - float(ticket.submitted_monotonic_sec)
+                )
+                * 1000.0,
             )
             self._latency_history_ms.append(end_to_end_ms)
             trusted_performance = (
                 dict(getattr(prepared, 'remote_performance', {}) or {})
-                if completion.accepted and prepared is not None
+                if final_accepted and prepared is not None
                 else {}
             )
             metrics = build_pipeline_metrics(
@@ -5314,7 +5521,7 @@ class RemoteGrasp6DNode:
                 target_epoch=ticket.target_epoch,
                 snapshot_stamp_sec=ticket.snapshot_stamp_sec,
                 status=status,
-                drop_reason='' if completion.accepted else completion.code,
+                drop_reason='' if final_accepted else status,
                 counters=self._pipeline_counters,
                 pending_replacements=self._pending_replacements,
                 ros_prepare_ms=getattr(prepared, 'ros_prepare_ms', 0.0),
@@ -5322,7 +5529,14 @@ class RemoteGrasp6DNode:
                 decode_ms=getattr(prepared, 'decode_ms', 0.0),
                 remote_performance=trusted_performance,
                 end_to_end_ms=end_to_end_ms,
-                result_age_ms=max(0.0, completion.result_age_sec * 1000.0),
+                result_age_ms=max(
+                    0.0,
+                    (
+                        final_now_sec
+                        - float(ticket.snapshot_stamp_sec)
+                    )
+                    * 1000.0,
+                ),
                 latency_history_ms=self._latency_history_ms,
                 funnel=funnel,
             )
@@ -5330,7 +5544,7 @@ class RemoteGrasp6DNode:
                 metrics['error'] = str(error)
             active_audit = getattr(self, '_active_gate_audit_report', None)
             if (
-                completion.accepted
+                final_accepted
                 and isinstance(prepared, PreparedPrediction)
                 and isinstance(active_audit, dict)
                 and active_audit.get('mode') == 'continuous_preview'
@@ -5340,15 +5554,52 @@ class RemoteGrasp6DNode:
                 try:
                     active_audit = deepcopy(active_audit)
                     active_audit['pipeline_metrics'] = deepcopy(metrics)
-                    self._active_gate_audit_report = active_audit
-                    self._latest_gate_audit_reference = (
-                        self._write_gate_audit_report(active_audit)
+
+                    def commit_audit_metrics(reference):
+                        self._active_gate_audit_report = deepcopy(
+                            active_audit
+                        )
+                        self._latest_gate_audit_reference = dict(reference)
+
+                    self._write_gate_audit_report(
+                        active_audit,
+                        ticket=ticket,
+                        commit_callback=commit_audit_metrics,
+                    )
+                except StreamResultCancelled as exc:
+                    final_accepted = False
+                    status = exc.code
+                    with self._stream_condition:
+                        self._pipeline_counters['accepted'] = max(
+                            0,
+                            int(self._pipeline_counters['accepted']) - 1,
+                        )
+                        self._pipeline_counters['stale'] += 1
+                    metrics.update(
+                        {
+                            'status': status,
+                            'drop_reason': status,
+                            'accepted': int(
+                                self._pipeline_counters['accepted']
+                            ),
+                            'stale': int(
+                                self._pipeline_counters['stale']
+                            ),
+                        }
                     )
                 except Exception as exc:
                     metrics['audit_metrics_error'] = str(exc)
-            self.pipeline_metrics.append(metrics)
-            publisher = getattr(self, 'pipeline_metrics_pub', None)
-            encoded_metrics = bounded_metrics_json(metrics)
+            with self._stream_condition:
+                if not terminal_claimed:
+                    metrics = None
+                else:
+                    self.pipeline_metrics.append(metrics)
+            if metrics is None:
+                publisher = None
+                encoded_metrics = ''
+            else:
+                publisher = getattr(self, 'pipeline_metrics_pub', None)
+                encoded_metrics = bounded_metrics_json(metrics)
             if publisher is not None:
                 try:
                     publisher.publish(String(encoded_metrics))
@@ -5372,9 +5623,38 @@ class RemoteGrasp6DNode:
 
             with self._stream_condition:
                 self._stream_worker_busy = False
+                cancellation_code = ''
+                next_terminal_claimed = False
                 if completion.next_ticket is not None:
-                    self._stream_worker_ticket = completion.next_ticket
-                    self._stream_condition.notify_all()
+                    cancellation_code = (
+                        self._stream_ticket_cancellation_code_locked(
+                            completion.next_ticket
+                        )
+                    )
+                    if not cancellation_code:
+                        self._stream_worker_ticket = completion.next_ticket
+                        self._stream_condition.notify_all()
+                    else:
+                        try:
+                            self.inference_coordinator.complete(
+                                completion.next_ticket,
+                                now_sec=float(self._stream_source_clock()),
+                                target_epoch=self.target_instance_epoch,
+                            )
+                        except Exception:
+                            pass
+                        next_terminal_claimed = (
+                            self._claim_terminal_request_locked(
+                                completion.next_ticket.request_id,
+                                cancellation_code,
+                            )
+                        )
+            if completion.next_ticket is not None and cancellation_code:
+                self._emit_pending_drop_metrics(
+                    completion.next_ticket.request_id,
+                    cancellation_code,
+                    terminal_claimed=next_terminal_claimed,
+                )
 
     def spin(self):
         rate = rospy.Rate(self.rate_hz)
@@ -7589,7 +7869,13 @@ class RemoteGrasp6DNode:
         finalize_report=False,
         outcome_code='',
         outcome_reason='',
+        commit_state=True,
+        graspnet_input_audit=None,
     ):
+        if bool(finalize_report) and not bool(commit_state):
+            raise ValueError(
+                'finalize_report requires committed audit state'
+            )
         rows = []
         pose_estimator = (
             candidate_pose_estimator
@@ -7700,6 +7986,8 @@ class RemoteGrasp6DNode:
         )
         input_audit = dict(
             getattr(self, '_active_graspnet_input_audit', {}) or {}
+            if graspnet_input_audit is None
+            else graspnet_input_audit
         )
         summary['graspnet_input'] = input_audit
         audit_metadata_fn = getattr(pose_estimator, 'audit_metadata', None)
@@ -7762,8 +8050,9 @@ class RemoteGrasp6DNode:
                 'valid_plan': False,
             },
         }
-        self._latest_gate_audit_summary = summary
-        self._active_gate_audit_report = report
+        if bool(commit_state):
+            self._latest_gate_audit_summary = summary
+            self._active_gate_audit_report = report
         summary_text = self._format_gate_audit_summary(summary)
         if bool(finalize_report):
             self._finalize_gate_audit_report(
@@ -8289,7 +8578,12 @@ class RemoteGrasp6DNode:
             return None
         return number if math.isfinite(number) else None
 
-    def _write_gate_audit_report(self, report):
+    def _write_gate_audit_report(
+        self,
+        report,
+        ticket=None,
+        commit_callback=None,
+    ):
         path, mujoco_path = validate_distinct_audit_paths(
             validate_mandatory_planning_audit(
                 getattr(self, 'gate_audit_enabled', True),
@@ -8323,12 +8617,31 @@ class RemoteGrasp6DNode:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary_path, path)
-            return {
+            reference = {
                 'report_path': path,
                 'report_sha256': hashlib.sha256(payload).hexdigest(),
-                'row_count': int(len(list(report.get('rows', []) or []))),
+                'row_count': int(
+                    len(list(report.get('rows', []) or []))
+                ),
             }
+            if ticket is None:
+                os.replace(temporary_path, path)
+                if commit_callback is not None:
+                    commit_callback(reference)
+            else:
+                with self._stream_condition:
+                    self._require_stream_ticket_current_locked(ticket)
+                    os.replace(temporary_path, path)
+                    if commit_callback is not None:
+                        commit_callback(reference)
+            return reference
+        except StreamResultCancelled:
+            try:
+                if os.path.exists(temporary_path):
+                    os.unlink(temporary_path)
+            except Exception:
+                pass
+            raise
         except Exception as exc:
             try:
                 if os.path.exists(temporary_path):
@@ -8341,12 +8654,23 @@ class RemoteGrasp6DNode:
                 % (path, exc),
             )
 
-    def _publish_bounded_gate_audit(self, selected_row=None):
+    def _publish_bounded_gate_audit(
+        self,
+        selected_row=None,
+        summary=None,
+        reference=None,
+    ):
         reference = dict(
             getattr(self, '_latest_gate_audit_reference', {}) or {}
+            if reference is None
+            else reference
         )
         payload = {
-            'summary': dict(getattr(self, '_latest_gate_audit_summary', {}) or {}),
+            'summary': dict(
+                getattr(self, '_latest_gate_audit_summary', {}) or {}
+                if summary is None
+                else summary
+            ),
             'report_path': str(reference.get('report_path', '') or ''),
             'report_sha256': str(reference.get('report_sha256', '') or ''),
             'row_count': int(reference.get('row_count', 0) or 0),
