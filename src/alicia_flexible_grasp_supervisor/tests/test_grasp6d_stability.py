@@ -259,6 +259,106 @@ def test_mixed_target_identity_batch_is_rejected_without_consuming_request():
     assert stable[0].hit_request_ids == (1, 2)
 
 
+def test_explicit_target_identity_switch_clears_old_stable_on_empty_batch():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    old_identity = (3, 'carton', 'carton_segmentation')
+    new_identity = (4, 'carton', 'carton_segmentation')
+    for request_id in (1, 2, 3):
+        tracker.update(
+            request_id,
+            [observation(request_id)],
+            target_identity=old_identity,
+        )
+    assert len(tracker.stable_candidates()) == 1
+
+    assert tracker.update(4, [], target_identity=new_identity) == []
+    assert tracker.stable_candidates() == []
+    assert tracker.update(
+        5,
+        [observation(5, target_epoch=4)],
+        target_identity=new_identity,
+    ) == []
+
+
+def test_explicit_identity_must_match_nonempty_batch_before_state_changes():
+    tracker = CandidateTracker(two_hit_config())
+    old_identity = (3, 'carton', 'carton_segmentation')
+    new_identity = (4, 'carton', 'carton_segmentation')
+    tracker.update(1, [observation(1)], target_identity=old_identity)
+
+    with pytest.raises(ValueError, match='target_identity'):
+        tracker.update(
+            2,
+            [observation(2)],
+            target_identity=new_identity,
+        )
+
+    stable = tracker.update(
+        2,
+        [observation(2)],
+        target_identity=old_identity,
+    )
+    assert len(stable) == 1
+    assert stable[0].hit_request_ids == (1, 2)
+
+
+@pytest.mark.parametrize(
+    'invalid_identity',
+    [
+        [3, 'carton', 'carton_segmentation'],
+        (3, 'carton'),
+        (True, 'carton', 'carton_segmentation'),
+        (-1, 'carton', 'carton_segmentation'),
+        (3, '', 'carton_segmentation'),
+        (3, 'carton', ''),
+    ],
+)
+def test_explicit_target_identity_validation_is_fail_closed(invalid_identity):
+    tracker = CandidateTracker()
+
+    with pytest.raises(ValueError, match='target_identity'):
+        tracker.update(1, [], target_identity=invalid_identity)
+
+    assert tracker.update(
+        1,
+        [],
+        target_identity=(3, 'carton', 'carton_segmentation'),
+    ) == []
+
+
+def test_track_ids_remain_unique_and_monotonic_across_identity_resets():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=1))
+    first_identity = (3, 'carton', 'carton_segmentation')
+    second_identity = (4, 'carton', 'carton_segmentation')
+    third_identity = (5, 'replacement', 'replacement_model')
+
+    first = tracker.update(
+        1,
+        [observation(1)],
+        target_identity=first_identity,
+    )[0]
+    assert tracker.update(2, [], target_identity=second_identity) == []
+    second = tracker.update(
+        3,
+        [observation(3, target_epoch=4)],
+        target_identity=second_identity,
+    )[0]
+    third = tracker.update(
+        4,
+        [
+            observation(
+                4,
+                target_epoch=5,
+                target_label='replacement',
+                model_choice='replacement_model',
+            )
+        ],
+        target_identity=third_identity,
+    )[0]
+
+    assert [first.track_id, second.track_id, third.track_id] == [1, 2, 3]
+
+
 def test_assignment_is_deterministic_and_each_observation_hits_at_most_one_track():
     tracker = CandidateTracker(two_hit_config(position_threshold_m=0.040))
     tracker.update(
@@ -351,6 +451,27 @@ def test_observation_defensively_copies_normalizes_and_freezes_numpy_inputs():
         assert value.flags.writeable is False
         with pytest.raises(ValueError):
             value[0] = 0.0
+
+
+@pytest.mark.parametrize(
+    ('kwargs', 'attribute'),
+    [
+        (
+            {'quaternion': (1e308, -1e308, 1e308, -1e308)},
+            'quaternion_xyzw',
+        ),
+        (
+            {'approach': (1e308, -1e308, 1e308)},
+            'approach_base_xyz',
+        ),
+    ],
+)
+def test_observation_normalizes_extreme_finite_orientation_vectors(kwargs, attribute):
+    item = observation(1, **kwargs)
+    vector = getattr(item, attribute)
+
+    assert np.all(np.isfinite(vector))
+    assert float(np.linalg.norm(vector)) == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize(
@@ -597,6 +718,65 @@ def test_failed_fusion_rolls_back_update_and_allows_same_request_retry(monkeypat
     assert retried[0].hit_request_ids == (1, 2)
     assert retried[1].hit_request_ids == (2,)
     assert tracker.track_count == 2
+
+
+def test_stable_candidates_public_query_does_not_mutate_continuity_state():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=1))
+    tracker.update(
+        1,
+        [
+            observation(1, center_x=0.100),
+            observation(1, center_x=0.200, quaternion=tool_rz180()),
+        ],
+    )
+    before = {
+        track_id: track._last_fused_quaternion
+        for track_id, track in tracker._tracks.items()
+    }
+
+    stable = tracker.stable_candidates()
+
+    assert [item.track_id for item in stable] == [1, 2]
+    assert all(
+        tracker._tracks[track_id]._last_fused_quaternion is quaternion
+        for track_id, quaternion in before.items()
+    )
+
+
+def test_second_track_query_failure_cannot_partially_commit_first_track(monkeypatch):
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=1))
+    tracker.update(
+        1,
+        [
+            observation(1, center_x=0.100),
+            observation(1, center_x=0.200, quaternion=tool_rz180()),
+        ],
+    )
+    before = {
+        track_id: track._last_fused_quaternion
+        for track_id, track in tracker._tracks.items()
+    }
+    original_fuse = tracker._fuse
+    calls = []
+
+    def fail_second_fusion(track):
+        fused = original_fuse(track)
+        calls.append(track.track_id)
+        if len(calls) == 2:
+            raise RuntimeError('synthetic second-track fusion failure')
+        return fused
+
+    monkeypatch.setattr(tracker, '_fuse', fail_second_fusion)
+    with pytest.raises(RuntimeError, match='second-track fusion failure'):
+        tracker.stable_candidates()
+    monkeypatch.setattr(tracker, '_fuse', original_fuse)
+
+    assert calls == [1, 2]
+    assert all(
+        tracker._tracks[track_id]._last_fused_quaternion is quaternion
+        for track_id, quaternion in before.items()
+    )
+    assert [item.track_id for item in tracker.stable_candidates()] == [1, 2]
 
 
 def test_single_low_side_outlier_stays_below_weighted_median_cutoff():

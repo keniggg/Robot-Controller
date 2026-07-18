@@ -33,6 +33,25 @@ def _validated_finite(value, name, positive=False):
     return converted
 
 
+def _validated_target_identity(value):
+    if not isinstance(value, tuple) or len(value) != 3:
+        raise ValueError(
+            'target_identity must be an (epoch, label, model_choice) tuple'
+        )
+    epoch, label, model_choice = value
+    try:
+        epoch = _validated_integer(epoch, 'target_identity epoch', 0)
+    except ValueError:
+        raise ValueError('target_identity epoch must be a non-negative integer')
+    if not isinstance(label, str) or not label:
+        raise ValueError('target_identity label must be a non-empty string')
+    if not isinstance(model_choice, str) or not model_choice:
+        raise ValueError(
+            'target_identity model_choice must be a non-empty string'
+        )
+    return (epoch, label, model_choice)
+
+
 def _frozen_vector(value, size, name, normalize=False):
     try:
         vector = np.array(value, dtype=np.float64, copy=True)
@@ -41,8 +60,12 @@ def _frozen_vector(value, size, name, normalize=False):
     if vector.shape != (size,) or not np.all(np.isfinite(vector)):
         raise ValueError('{} must be a finite {}-vector'.format(name, size))
     if normalize:
+        scale = float(np.max(np.abs(vector)))
+        if not math.isfinite(scale) or scale <= 0.0:
+            raise ValueError('{} must have non-zero finite norm'.format(name))
+        vector /= scale
         norm = float(np.linalg.norm(vector))
-        if not math.isfinite(norm) or norm <= _NORM_EPSILON:
+        if not math.isfinite(norm) or norm <= 0.0:
             raise ValueError('{} must have non-zero finite norm'.format(name))
         vector /= norm
     vector.setflags(write=False)
@@ -294,10 +317,15 @@ class CandidateTracker:
     def track_count(self):
         return len(self._tracks)
 
-    def update(self, request_id, observations):
+    def update(self, request_id, observations, target_identity=None):
         request_id = _validated_integer(request_id, 'request_id', 1)
         if self._last_request_id is not None and request_id <= self._last_request_id:
             raise ValueError('request_id must be strictly increasing')
+        explicit_identity = (
+            None
+            if target_identity is None
+            else _validated_target_identity(target_identity)
+        )
         batch = tuple(observations)
         for item in batch:
             if not isinstance(item, CandidateObservation):
@@ -313,9 +341,22 @@ class CandidateTracker:
                 raise ValueError(
                     'observations in one request must share a single target identity'
                 )
-            identity = next(iter(identities))
+            observed_identity = next(iter(identities))
         else:
-            identity = None
+            observed_identity = None
+        if (
+            explicit_identity is not None
+            and observed_identity is not None
+            and explicit_identity != observed_identity
+        ):
+            raise ValueError(
+                'target_identity must exactly match every observation'
+            )
+        identity = (
+            explicit_identity
+            if explicit_identity is not None
+            else observed_identity
+        )
 
         snapshot = self._state_snapshot()
         try:
@@ -325,7 +366,6 @@ class CandidateTracker:
                 elif identity != self._active_identity:
                     self._request_ids.clear()
                     self._tracks.clear()
-                    self._next_track_id = 1
                     self._active_identity = identity
 
             pairs = []
@@ -361,7 +401,9 @@ class CandidateTracker:
             self._last_request_id = request_id
             self._request_ids.append(request_id)
             self._evict_old_observations()
-            stable = self.stable_candidates()
+            stable, pending_continuity = self._compute_stable_candidates()
+            for track_id, quaternion in pending_continuity.items():
+                self._tracks[track_id]._last_fused_quaternion = quaternion
         except Exception:
             self._restore_state(snapshot)
             raise
@@ -389,12 +431,19 @@ class CandidateTracker:
         ) = snapshot
 
     def stable_candidates(self):
+        stable, _pending_continuity = self._compute_stable_candidates()
+        return stable
+
+    def _compute_stable_candidates(self):
         stable = []
+        pending_continuity = {}
         for track_id in sorted(self._tracks):
             track = self._tracks[track_id]
             if len(track.observations) >= self.config.min_hits:
-                stable.append(self._fuse(track))
-        return stable
+                fused = self._fuse(track)
+                stable.append(fused)
+                pending_continuity[track_id] = fused.quaternion_xyzw
+        return stable, pending_continuity
 
     def _pair_cost(self, first, second):
         if (
@@ -611,7 +660,6 @@ class CandidateTracker:
             _distance, quaternion_xyzw = parallel_jaw_orientation_distance_rad(
                 track._last_fused_quaternion, quaternion_xyzw
             )
-        track._last_fused_quaternion = quaternion_xyzw
         return StableCandidate(
             track_id=track.track_id,
             hit_count=len(request_ids),
