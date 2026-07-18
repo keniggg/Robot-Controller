@@ -157,6 +157,28 @@ def test_parallel_jaw_symmetry_is_composed_in_the_local_tool_frame():
     assert global_angle > math.radians(90.0)
 
 
+def test_parallel_jaw_fused_representation_stays_continuous_across_window_shift():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    fused_by_request = {}
+
+    for request_id in range(1, 7):
+        quaternion = (
+            identity_quaternion()
+            if request_id % 2 == 1
+            else tool_rz180()
+        )
+        stable = tracker.update(
+            request_id,
+            [observation(request_id, quaternion=quaternion)],
+        )
+        if stable:
+            fused_by_request[request_id] = stable[0].quaternion_xyzw
+
+    assert quaternion_angle_rad(
+        fused_by_request[5], fused_by_request[6]
+    ) < math.radians(2.0)
+
+
 def test_arbitrary_180_degree_rotation_is_not_parallel_jaw_equivalent():
     angle, _aligned = parallel_jaw_orientation_distance_rad(
         identity_quaternion(), tool_rx180()
@@ -191,6 +213,50 @@ def test_target_identity_pose_approach_and_width_are_hard_match_gates(changed):
     tracker.update(1, [observation(1)])
 
     assert tracker.update(2, [observation(2, **changed)]) == []
+
+
+@pytest.mark.parametrize(
+    'changed_identity',
+    [
+        {'target_epoch': 4},
+        {'target_label': 'replacement-carton'},
+        {'model_choice': 'replacement-model'},
+    ],
+)
+def test_active_target_identity_switch_removes_old_stable_tracks(changed_identity):
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    for request_id in (1, 2, 3):
+        tracker.update(request_id, [observation(request_id)])
+    assert len(tracker.stable_candidates()) == 1
+
+    assert tracker.update(4, [observation(4, **changed_identity)]) == []
+    assert tracker.update(5, [observation(5, **changed_identity)]) == []
+    stable = tracker.update(6, [observation(6, **changed_identity)])
+
+    assert len(stable) == 1
+    assert stable[0].request_id == 6
+    assert stable[0].target_epoch == changed_identity.get('target_epoch', 3)
+    assert stable[0].target_label == changed_identity.get(
+        'target_label', 'carton'
+    )
+    assert stable[0].model_choice == changed_identity.get(
+        'model_choice', 'carton_segmentation'
+    )
+
+
+def test_mixed_target_identity_batch_is_rejected_without_consuming_request():
+    tracker = CandidateTracker(two_hit_config())
+    tracker.update(1, [observation(1)])
+
+    with pytest.raises(ValueError, match='single target identity'):
+        tracker.update(
+            2,
+            [observation(2), observation(2, target_epoch=4)],
+        )
+
+    stable = tracker.update(2, [observation(2)])
+    assert len(stable) == 1
+    assert stable[0].hit_request_ids == (1, 2)
 
 
 def test_assignment_is_deterministic_and_each_observation_hits_at_most_one_track():
@@ -471,3 +537,83 @@ def test_fusion_retains_robust_scores_conservative_margin_and_newest_payload():
     assert fused.snapshot_stamp_sec == pytest.approx(103.0)
     assert fused.payload is payloads[2]
     assert fused.moveit_cost is None
+
+
+def test_fusion_scales_extreme_but_finite_model_scores_before_weighting():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+
+    for request_id in (1, 2, 3):
+        stable = tracker.update(
+            request_id,
+            [observation(request_id, model_score=1e200)],
+        )
+
+    assert len(stable) == 1
+    assert stable[0].model_score == pytest.approx(1e200)
+    assert np.all(np.isfinite(stable[0].quaternion_xyzw))
+
+
+def test_failed_fusion_rolls_back_update_and_allows_same_request_retry(monkeypatch):
+    tracker = CandidateTracker(
+        TrackingConfig(window_size=5, min_hits=1)
+    )
+    before = tracker.update(1, [observation(1, center_x=0.100)])[0]
+    previous_fused_orientation = tracker._tracks[1]._last_fused_quaternion
+    original_fuse = tracker._fuse
+    injected_orientation = np.asarray(tool_rz180(), dtype=np.float64)
+    injected_orientation.setflags(write=False)
+
+    def fail_fusion(track):
+        track._last_fused_quaternion = injected_orientation
+        raise RuntimeError('synthetic fusion failure')
+
+    monkeypatch.setattr(tracker, '_fuse', fail_fusion)
+    with pytest.raises(RuntimeError, match='synthetic fusion failure'):
+        tracker.update(
+            2,
+            [
+                observation(2, target_epoch=4, center_x=0.100),
+                observation(2, target_epoch=4, center_x=0.200),
+            ],
+        )
+    monkeypatch.setattr(tracker, '_fuse', original_fuse)
+
+    assert tracker.track_count == 1
+    assert tracker._tracks[1]._last_fused_quaternion is previous_fused_orientation
+    after = tracker.stable_candidates()[0]
+    assert after.hit_request_ids == before.hit_request_ids == (1,)
+    assert after.request_id == before.request_id == 1
+    assert after.target_epoch == before.target_epoch == 3
+    assert after.window_count == before.window_count == 1
+
+    retried = tracker.update(
+        2,
+        [
+            observation(2, center_x=0.100),
+            observation(2, center_x=0.200),
+        ],
+    )
+    assert [item.track_id for item in retried] == [1, 2]
+    assert retried[0].hit_request_ids == (1, 2)
+    assert retried[1].hit_request_ids == (2,)
+    assert tracker.track_count == 2
+
+
+def test_single_low_side_outlier_stays_below_weighted_median_cutoff():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    items = (
+        observation(1, center_x=0.100, tool_x=0.000, model_score=4.0),
+        observation(2, center_x=0.100, tool_x=0.100, model_score=1.0),
+        observation(3, center_x=0.100, tool_x=0.100, model_score=1.0),
+    )
+
+    weights = tracker._fusion_weights(items)
+    assert np.all(np.isfinite(weights))
+    assert np.all(weights > 0.0)
+    assert math.fsum(float(weight) for weight in weights) == pytest.approx(1.0)
+    assert float(np.max(weights)) < 0.5
+
+    for item in items:
+        stable = tracker.update(item.request_id, [item])
+
+    assert stable[0].tool0_position_xyz[0] == pytest.approx(0.100)

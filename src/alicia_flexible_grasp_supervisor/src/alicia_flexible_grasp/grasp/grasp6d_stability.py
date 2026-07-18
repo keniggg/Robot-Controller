@@ -265,10 +265,18 @@ class _CandidateTrack:
     def __init__(self, track_id, first_observation):
         self.track_id = track_id
         self.observations = {first_observation.request_id: first_observation}
+        self._last_fused_quaternion = None
 
     @property
     def latest(self):
         return self.observations[max(self.observations)]
+
+    def clone(self):
+        cloned = object.__new__(_CandidateTrack)
+        cloned.track_id = self.track_id
+        cloned.observations = dict(self.observations)
+        cloned._last_fused_quaternion = self._last_fused_quaternion
+        return cloned
 
 
 class CandidateTracker:
@@ -280,6 +288,7 @@ class CandidateTracker:
         self._tracks: Dict[int, _CandidateTrack] = {}
         self._next_track_id = 1
         self._last_request_id = None
+        self._active_identity = None
 
     @property
     def track_count(self):
@@ -295,36 +304,89 @@ class CandidateTracker:
                 raise TypeError('observations must contain CandidateObservation values')
             if item.request_id != request_id:
                 raise ValueError('observation request_id must match update request_id')
+        if batch:
+            identities = {
+                (item.target_epoch, item.target_label, item.model_choice)
+                for item in batch
+            }
+            if len(identities) != 1:
+                raise ValueError(
+                    'observations in one request must share a single target identity'
+                )
+            identity = next(iter(identities))
+        else:
+            identity = None
 
-        pairs = []
-        for track_id in sorted(self._tracks):
-            track = self._tracks[track_id]
+        snapshot = self._state_snapshot()
+        try:
+            if identity is not None:
+                if self._active_identity is None:
+                    self._active_identity = identity
+                elif identity != self._active_identity:
+                    self._request_ids.clear()
+                    self._tracks.clear()
+                    self._next_track_id = 1
+                    self._active_identity = identity
+
+            pairs = []
+            for track_id in sorted(self._tracks):
+                track = self._tracks[track_id]
+                for candidate_index, item in enumerate(batch):
+                    cost = self._pair_cost(track.latest, item)
+                    if cost is not None:
+                        pairs.append((cost, track_id, candidate_index))
+            pairs.sort(key=lambda pair: (pair[0], pair[1], pair[2]))
+
+            assigned_tracks = set()
+            assigned_candidates = set()
+            for _cost, track_id, candidate_index in pairs:
+                if (
+                    track_id in assigned_tracks
+                    or candidate_index in assigned_candidates
+                ):
+                    continue
+                self._tracks[track_id].observations[request_id] = batch[
+                    candidate_index
+                ]
+                assigned_tracks.add(track_id)
+                assigned_candidates.add(candidate_index)
+
             for candidate_index, item in enumerate(batch):
-                cost = self._pair_cost(track.latest, item)
-                if cost is not None:
-                    pairs.append((cost, track_id, candidate_index))
-        pairs.sort(key=lambda pair: (pair[0], pair[1], pair[2]))
+                if candidate_index in assigned_candidates:
+                    continue
+                track_id = self._next_track_id
+                self._next_track_id += 1
+                self._tracks[track_id] = _CandidateTrack(track_id, item)
 
-        assigned_tracks = set()
-        assigned_candidates = set()
-        for _cost, track_id, candidate_index in pairs:
-            if track_id in assigned_tracks or candidate_index in assigned_candidates:
-                continue
-            self._tracks[track_id].observations[request_id] = batch[candidate_index]
-            assigned_tracks.add(track_id)
-            assigned_candidates.add(candidate_index)
+            self._last_request_id = request_id
+            self._request_ids.append(request_id)
+            self._evict_old_observations()
+            stable = self.stable_candidates()
+        except Exception:
+            self._restore_state(snapshot)
+            raise
+        return stable
 
-        for candidate_index, item in enumerate(batch):
-            if candidate_index in assigned_candidates:
-                continue
-            track_id = self._next_track_id
-            self._next_track_id += 1
-            self._tracks[track_id] = _CandidateTrack(track_id, item)
+    def _state_snapshot(self):
+        return (
+            deque(self._request_ids, maxlen=self.config.window_size),
+            {
+                track_id: track.clone()
+                for track_id, track in self._tracks.items()
+            },
+            self._next_track_id,
+            self._last_request_id,
+            self._active_identity,
+        )
 
-        self._last_request_id = request_id
-        self._request_ids.append(request_id)
-        self._evict_old_observations()
-        return self.stable_candidates()
+    def _restore_state(self, snapshot):
+        (
+            self._request_ids,
+            self._tracks,
+            self._next_track_id,
+            self._last_request_id,
+            self._active_identity,
+        ) = snapshot
 
     def stable_candidates(self):
         stable = []
@@ -397,15 +459,38 @@ class CandidateTracker:
         confidence = np.maximum(
             np.asarray([item.model_score for item in observations]), 0.0
         )
+        maximum_confidence = float(np.max(confidence))
+        if maximum_confidence > 0.0:
+            confidence = confidence / maximum_confidence
         weights = (confidence + 1e-6) * freshness
 
-        total = float(np.sum(weights))
         largest_index = int(np.argmax(weights))
-        other_total = total - float(weights[largest_index])
-        if weights[largest_index] > other_total:
+        other_total = math.fsum(
+            float(weight)
+            for index, weight in enumerate(weights)
+            if index != largest_index
+        )
+        if count > 2 and weights[largest_index] >= other_total:
+            strict_gap = max(
+                other_total * 1e-12,
+                4.0 * abs(float(np.spacing(other_total))),
+            )
+            weights[largest_index] = other_total - strict_gap
+        elif weights[largest_index] > other_total:
             weights[largest_index] = other_total
-        if not np.all(np.isfinite(weights)) or np.any(weights <= 0.0):
-            return np.ones(count, dtype=np.float64)
+        total = math.fsum(float(weight) for weight in weights)
+        weights = weights / total
+        if (
+            not np.all(np.isfinite(weights))
+            or np.any(weights <= 0.0)
+            or not math.isclose(
+                math.fsum(float(weight) for weight in weights),
+                1.0,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError('fusion weights must be positive, finite, and normalized')
         return weights
 
     @staticmethod
@@ -521,6 +606,12 @@ class CandidateTracker:
                 [item.geometry_margin_m for item in observations], 0.25
             )
         )
+        quaternion_xyzw = self._fused_orientation(observations, weights)
+        if track._last_fused_quaternion is not None:
+            _distance, quaternion_xyzw = parallel_jaw_orientation_distance_rad(
+                track._last_fused_quaternion, quaternion_xyzw
+            )
+        track._last_fused_quaternion = quaternion_xyzw
         return StableCandidate(
             track_id=track.track_id,
             hit_count=len(request_ids),
@@ -533,7 +624,7 @@ class CandidateTracker:
             model_choice=newest.model_choice,
             center_base_xyz=center_base_xyz,
             tool0_position_xyz=tool0_position_xyz,
-            quaternion_xyzw=self._fused_orientation(observations, weights),
+            quaternion_xyzw=quaternion_xyzw,
             approach_base_xyz=self._fused_approach(observations, weights),
             required_open_width_m=required_open_width_m,
             model_width_m=model_width_m,
