@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 from copy import deepcopy
+import hashlib
 import io
 import importlib.util
+import json
 import pathlib
 import sys
+import tempfile
 import threading
 import types
 import unittest
@@ -20,6 +23,7 @@ for path in (ROOT, ROOT / 'src'):
         sys.path.insert(0, str(path))
 
 from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGraspCandidate
+from alicia_flexible_grasp.vision import mujoco_digital_twin_client
 from alicia_flexible_grasp.vision.rgbd_snapshot import (
     DepthQuality,
     RgbdSample,
@@ -147,10 +151,22 @@ class SequenceSampleBuffer:
     def __init__(self, windows, mask_timeout_code='MASK_MISSING'):
         self.windows = list(windows)
         self.discarded = []
+        self.collection_spans = []
+        self.inference_latency_limits = []
         self.mask_timeout_code = str(mask_timeout_code)
 
-    def wait_for_samples(self, count, timeout_sec, require_mask, max_age_sec):
+    def wait_for_samples(
+        self,
+        count,
+        timeout_sec,
+        require_mask,
+        max_age_sec,
+        collection_span_sec=0.0,
+        max_inference_latency_sec=None,
+    ):
         del count, timeout_sec, require_mask, max_age_sec
+        self.collection_spans.append(float(collection_span_sec))
+        self.inference_latency_limits.append(float(max_inference_latency_sec))
         return self.windows.pop(0) if self.windows else []
 
     def discard_through(self, stamp_sec):
@@ -159,8 +175,13 @@ class SequenceSampleBuffer:
     def discard_through_ns(self, stamp_ns):
         self.discarded.append(int(stamp_ns))
 
-    def mask_timeout_failure(self, count, max_age_sec):
-        del count, max_age_sec
+    def mask_timeout_failure(
+        self,
+        count,
+        max_age_sec,
+        max_inference_latency_sec=None,
+    ):
+        del count, max_age_sec, max_inference_latency_sec
         reasons = {
             'MASK_MISSING': 'no instance mask has been observed',
             'MASK_EMPTY': 'latest instance mask is empty',
@@ -176,6 +197,13 @@ class FakeTf2Module:
     class TransformListener:
         def __init__(self, buffer):
             self.buffer = buffer
+
+
+def identity_base_camera_snapshot_transform():
+    """Return T_base_optical for an identity base<-camera_link pose."""
+    transform = np.eye(4, dtype=float)
+    transform[:3, :3] = remote_node.OPTICAL_TO_ROS_CAMERA
+    return transform
 
 
 def make_snapshot(target_depth, source_mode='instance_mask', stamp_ns=10_000_000_123):
@@ -267,7 +295,7 @@ def make_selected_candidate(required_width_m=0.044):
         translation_m=np.asarray([0.40, -0.10, 0.22]),
         quaternion_xyzw=np.asarray([0.0, 0.0, 0.0, 1.0]),
         width_m=0.039,
-        depth_m=0.025,
+        depth_m=0.030,
     )
     grasp_pose = PoseStamped()
     grasp_pose.header.frame_id = 'base_link'
@@ -296,6 +324,7 @@ def make_processing_node(client=None):
     node.plan_pub = RecordingPublisher()
     node.rich_plan_pub = RecordingPublisher()
     node.geometry_pub = RecordingPublisher()
+    node.gate_audit_pub = RecordingPublisher()
     node.status_pub = RecordingPublisher()
     node.client = client or RecordingClient()
     node.pose_estimator = types.SimpleNamespace(
@@ -311,6 +340,12 @@ def make_processing_node(client=None):
     node.last_error = ''
     node._backoff_until = remote_node.rospy.Time(0)
     node._cached_tool_from_camera = None
+    node._cached_tool_from_camera_stamp_ns = 0
+    node.handeye_parent_frame = 'tool0'
+    node.handeye_camera_frame = 'camera_link'
+    node.handeye_translation_xyz = [0.0, 0.0, 0.0]
+    node.handeye_rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+    node.handeye_allow_static_fallback = True
     node.previous_object_axes_base = np.eye(3)
     node.latest_object_geometry = None
     node.latest_rich_plan = None
@@ -356,11 +391,38 @@ def make_processing_node(client=None):
     node.candidate_target_gate_enabled = False
     node.camera_visibility_gate_enabled = False
     node.camera_visibility_diagnostic_enabled = False
-    node.require_candidate_depth = False
+    node.require_candidate_depth = True
     node.orientation_variant_quaternions = [np.array([0.0, 0.0, 0.0, 1.0])]
-    node.model_grasp_to_tool_quaternion = np.array([0.0, 0.0, 0.0, 1.0])
+    node.model_grasp_to_tool_quaternion = np.asarray(
+        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+        dtype=float,
+    )
     node.candidate_frame_convention = 'ros_camera_link'
-    node.gate_audit_enabled = False
+    node.gate_audit_enabled = True
+    node.gate_audit_output_path = str(
+        pathlib.Path(tempfile.gettempdir())
+        / ('alicia-remote-grasp6d-test-audit-%x.json' % id(node))
+    )
+    node.mujoco_audit_output_path = str(
+        pathlib.Path(tempfile.gettempdir())
+        / ('alicia-remote-grasp6d-test-mujoco-audit-%x.json' % id(node))
+    )
+    node._latest_gate_audit_summary = {}
+    node._latest_gate_audit_reference = {}
+    node._active_gate_audit_report = None
+    node.camera_depth_scale = 0.0001
+    node.graspnet_input_mode = remote_node.MASKED_TARGET
+    node.graspnet_input_context_margin_px = 1.0
+    node.graspnet_input_context_expand_ratio = 0.0
+    node.graspnet_input_context_max_margin_px = 2.0
+    node.graspnet_input_target_guard_px = 0
+    node.graspnet_input_support_band_m = 0.006
+    node.graspnet_input_min_target_points = 1
+    node.graspnet_input_min_support_points = 1
+    node.graspnet_input_min_total_points = 1
+    # Quality gates are never disabled with zero, including in offline tests.
+    node.graspnet_input_min_target_fraction = 0.01
+    node.graspnet_input_bbox_min_iou = 0.01
     node._camera_intrinsics = lambda: remote_node.CameraIntrinsics(
         width=4,
         height=3,
@@ -371,6 +433,25 @@ def make_processing_node(client=None):
         depth_scale=0.0001,
     )
     return node
+
+
+def frozen_input_config(node, mode=None, **overrides):
+    values = {
+        'mode': str(mode or node.graspnet_input_mode),
+        'context_margin_px': node.graspnet_input_context_margin_px,
+        'context_expand_ratio': node.graspnet_input_context_expand_ratio,
+        'context_max_margin_px': node.graspnet_input_context_max_margin_px,
+        'target_guard_px': node.graspnet_input_target_guard_px,
+        'support_band_m': node.graspnet_input_support_band_m,
+        'min_target_points': node.graspnet_input_min_target_points,
+        'min_support_points': node.graspnet_input_min_support_points,
+        'min_total_points': node.graspnet_input_min_total_points,
+        'min_target_fraction': node.graspnet_input_min_target_fraction,
+        'bbox_min_iou': node.graspnet_input_bbox_min_iou,
+        'candidate_target_gate_enabled': node.candidate_target_gate_enabled,
+    }
+    values.update(overrides)
+    return remote_node.FrozenGraspNetInputConfig(**values)
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
@@ -514,6 +595,32 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         cached = node._latest_rich_plan_copy()
         cached.poses[0].position.x = -99.0
         self.assertNotEqual(node._latest_rich_plan_copy().poses[0].position.x, -99.0)
+
+    def test_legacy_publication_failure_never_exposes_valid_rich_authority(self):
+        class FailingLegacyPublisher(RecordingPublisher):
+            def publish(self, message):
+                super().publish(message)
+                raise RuntimeError('synthetic legacy visualization failure')
+
+        node = make_processing_node()
+        node.plan_pub = FailingLegacyPublisher()
+        geometry = make_geometry_message()
+        plan = remote_node.build_rich_plan(
+            make_selected_candidate(),
+            geometry,
+            deepcopy(geometry.header),
+            'carton_segment',
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            'synthetic legacy visualization failure',
+        ):
+            node._publish_plan_pair_if_current(plan, expected_generation=0)
+
+        self.assertEqual(len(node.plan_pub.messages), 1)
+        self.assertEqual(node.rich_plan_pub.messages, [])
+        self.assertIsNone(node._latest_rich_plan_copy())
 
     def test_geometry_invalidation_publishes_invalid_rich_and_empty_legacy(self):
         node = make_processing_node()
@@ -841,6 +948,8 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node.planning_snapshot_frames = 3
         node.planning_snapshot_timeout_sec = 1.0
         node.planning_snapshot_max_age_sec = 0.35
+        node.planning_snapshot_max_inference_latency_sec = 1.2
+        node.planning_snapshot_max_span_sec = 3.0
         node.planning_mask_min_iou = 0.85
         node.planning_mask_max_centroid_shift_px = 5.0
         node.planning_max_joint_delta_rad = 0.01
@@ -851,7 +960,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node._active_profile_requires_mask = lambda: True
         node._snapshot_depth_config = lambda: (0.0001, 0.03, 2.0)
         processed = []
-        node._process_frame = lambda snapshot, manual=False: (
+        node._process_frame = lambda snapshot, manual=False, **_kwargs: (
             processed.append((snapshot, manual)) or (True, 'planned')
         )
 
@@ -860,6 +969,8 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertTrue(response.success)
         self.assertEqual(response.message, 'planned')
         self.assertEqual(node.frames.discarded, [1_060_000_000])
+        self.assertEqual(node.frames.collection_spans, [3.0, 3.0])
+        self.assertEqual(node.frames.inference_latency_limits, [1.2, 1.2])
         self.assertEqual(len(processed), 1)
         self.assertTrue(processed[0][0].ok)
         self.assertEqual(processed[0][0].object_msg.snapshot_stamp, 1.16)
@@ -893,6 +1004,8 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node.planning_snapshot_frames = 3
         node.planning_snapshot_timeout_sec = 1.0
         node.planning_snapshot_max_age_sec = 0.35
+        node.planning_snapshot_max_inference_latency_sec = 1.2
+        node.planning_snapshot_max_span_sec = 3.0
         node.planning_mask_min_iou = 0.85
         node.planning_mask_max_centroid_shift_px = 5.0
         node.planning_max_joint_delta_rad = 0.01
@@ -925,6 +1038,8 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node.planning_snapshot_frames = 3
         node.planning_snapshot_timeout_sec = 0.0
         node.planning_snapshot_max_age_sec = 0.35
+        node.planning_snapshot_max_inference_latency_sec = 1.2
+        node.planning_snapshot_max_span_sec = 3.0
         node._active_profile_requires_mask = lambda: True
 
         response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
@@ -950,6 +1065,8 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 node.planning_snapshot_frames = 3
                 node.planning_snapshot_timeout_sec = 0.0
                 node.planning_snapshot_max_age_sec = 0.35
+                node.planning_snapshot_max_inference_latency_sec = 1.2
+                node.planning_snapshot_max_span_sec = 3.0
                 node._active_profile_requires_mask = lambda: True
 
                 response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
@@ -1081,6 +1198,170 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(message.header.frame_id, 'base_link')
         self.assertAlmostEqual(message.pose_base.position.x, 0.40)
 
+    def test_derives_base_camera_link_from_nontrivial_frozen_optical_transform(self):
+        base_from_camera = remote_node.transform_matrix(
+            [0.37, -0.21, 0.48],
+            remote_node.quaternion_from_euler(0.23, -0.31, 0.47),
+        )
+        camera_from_optical = np.eye(4, dtype=float)
+        camera_from_optical[:3, :3] = remote_node.OPTICAL_TO_ROS_CAMERA
+        base_from_optical = base_from_camera.dot(camera_from_optical)
+
+        derived = remote_node.derive_base_camera_link_transform(
+            base_from_optical
+        )
+        optical_point = np.asarray([0.13, -0.07, 0.62, 1.0])
+        camera_point = camera_from_optical.dot(optical_point)
+
+        np.testing.assert_allclose(derived, base_from_camera, atol=1e-9)
+        np.testing.assert_allclose(
+            derived.dot(camera_point),
+            base_from_optical.dot(optical_point),
+            atol=1e-9,
+        )
+        self.assertFalse(derived.flags.writeable)
+
+    def test_frozen_snapshot_transform_drives_center_tool0_and_orientation(self):
+        stamp = remote_node.rospy.Time(10, 123)
+        base_from_camera = remote_node.transform_matrix(
+            [0.41, -0.16, 0.29],
+            remote_node.quaternion_from_euler(-0.17, 0.29, 0.38),
+        )
+        camera_from_optical = np.eye(4, dtype=float)
+        camera_from_optical[:3, :3] = remote_node.OPTICAL_TO_ROS_CAMERA
+        base_from_optical = base_from_camera.dot(camera_from_optical)
+        raw_candidate = RemoteGraspCandidate(
+            score=0.93,
+            translation_m=np.asarray([0.08, -0.04, 0.56]),
+            quaternion_xyzw=np.asarray(
+                remote_node.quaternion_from_euler(0.11, -0.22, 0.33)
+            ),
+            width_m=0.04,
+            depth_m=0.03,
+        )
+        camera_candidate = remote_node.convert_candidate_to_camera_link(
+            raw_candidate,
+            'opencv_optical',
+        )
+        camera_candidate = remote_node.align_candidate_to_tool_frame(
+            camera_candidate,
+            remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+        )
+        estimator = remote_node.FrozenSnapshotCandidatePoseEstimator(
+            base_from_optical,
+            stamp,
+            'camera_link',
+        )
+
+        pose, center_base = remote_node.make_candidate_base_pose_and_center(
+            camera_candidate,
+            estimator,
+            stamp,
+            'camera_link',
+        )
+
+        expected_center = base_from_camera.dot(
+            np.r_[camera_candidate.translation_m, 1.0]
+        )[:3]
+        expected_tool0 = base_from_camera.dot(
+            np.r_[remote_node.candidate_tool0_translation(camera_candidate), 1.0]
+        )[:3]
+        expected_rotation = base_from_camera[:3, :3].dot(
+            remote_node.quaternion_matrix(
+                camera_candidate.quaternion_xyzw
+            )[:3, :3]
+        )
+        np.testing.assert_allclose(center_base, expected_center, atol=1e-8)
+        np.testing.assert_allclose(
+            remote_node.pose_matrix(pose)[:3, 3],
+            expected_tool0,
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            remote_node.pose_matrix(pose)[:3, :3],
+            expected_rotation,
+            atol=1e-8,
+        )
+        self.assertEqual(pose.header.stamp.to_nsec(), stamp.to_nsec())
+        self.assertEqual(estimator.audit_metadata()['snapshot_source_frame'], 'camera_link')
+        self.assertEqual(
+            estimator.audit_metadata()['raw_candidate_convention'],
+            'opencv_optical',
+        )
+        self.assertEqual(len(estimator.transform_sha256), 64)
+        with self.assertRaises(ValueError):
+            estimator.T_base_camera_link[0, 0] = 0.0
+        selected, selected_pose = remote_node.select_first_reachable_candidate(
+            [raw_candidate],
+            estimator,
+            lambda _pose: True,
+            stamp=stamp,
+            camera_frame='camera_link',
+            candidate_frame_convention='opencv_optical',
+            model_grasp_to_tool_quaternion=(
+                remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION
+            ),
+            grasp_config={'tool_approach_axis': 'z'},
+            require_candidate_depth=True,
+        )
+        self.assertIsNotNone(selected)
+        np.testing.assert_allclose(
+            selected._center_base_xyz,
+            expected_center,
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            remote_node.pose_matrix(selected_pose),
+            remote_node.pose_matrix(pose),
+            atol=1e-8,
+        )
+        invalid_calls = (
+            {'stamp': remote_node.rospy.Time(11, 123), 'camera_frame': 'camera_link'},
+            {'stamp': stamp, 'camera_frame': 'camera_color_optical_frame'},
+        )
+        for invalid in invalid_calls:
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(remote_node.CandidateContractError) as raised:
+                    estimator.make_base_pose_from_camera_pose(
+                        remote_node.candidate_tool0_translation(camera_candidate),
+                        camera_candidate.quaternion_xyzw,
+                        **invalid
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    'SNAPSHOT_TRANSFORM_INCONSISTENT',
+                )
+
+    def test_frozen_snapshot_transform_rejects_invalid_authority_inputs(self):
+        valid_transform = identity_base_camera_snapshot_transform()
+        valid_stamp = remote_node.rospy.Time(10, 123)
+        non_rigid_transform = np.asarray(valid_transform).copy()
+        non_rigid_transform[0, :3] *= 1.5
+        cases = (
+            ('missing_stamp', valid_transform, None, 'camera_link'),
+            (
+                'zero_stamp',
+                valid_transform,
+                remote_node.rospy.Time(0),
+                'camera_link',
+            ),
+            ('negative_stamp', valid_transform, -1.0, 'camera_link'),
+            ('empty_source_frame', valid_transform, valid_stamp, ''),
+            ('non_rigid_matrix', non_rigid_transform, valid_stamp, 'camera_link'),
+        )
+        for name, transform, stamp, source_frame in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(remote_node.CandidateContractError) as raised:
+                    remote_node.FrozenSnapshotCandidatePoseEstimator(
+                        transform,
+                        stamp,
+                        source_frame,
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    'SNAPSHOT_TRANSFORM_INVALID',
+                )
+
     def test_snapshot_geometry_tf_never_uses_static_fallback(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
         stamp = remote_node.rospy.Time(10, 123)
@@ -1112,6 +1393,184 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertFalse(node.geometry_pub.messages[-1].valid)
         self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
         self.assertIsNone(node.previous_object_axes_base)
+
+    def test_wsl_latency_cannot_switch_audit_or_selector_to_latest_tf(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        stamp = remote_node.RemoteGrasp6DNode._snapshot_ros_stamp(snapshot)
+        base_from_camera = remote_node.transform_matrix(
+            [0.33, -0.19, 0.44],
+            remote_node.quaternion_from_euler(0.18, -0.27, 0.36),
+        )
+
+        class ExactSnapshotBuffer:
+            def __init__(self):
+                self.inference_finished = False
+                self.calls = []
+
+            def lookup_transform(self, target, source, query_stamp, timeout):
+                del timeout
+                self.calls.append(
+                    (target, source, int(query_stamp.to_nsec()))
+                )
+                if self.inference_finished:
+                    raise AssertionError(
+                        'candidate base conversion queried TF after WSL inference'
+                    )
+                quaternion = remote_node._normalize_quaternion(
+                    remote_node.quaternion_from_matrix(base_from_camera)
+                )
+                return types.SimpleNamespace(
+                    transform=types.SimpleNamespace(
+                        translation=types.SimpleNamespace(
+                            x=float(base_from_camera[0, 3]),
+                            y=float(base_from_camera[1, 3]),
+                            z=float(base_from_camera[2, 3]),
+                        ),
+                        rotation=types.SimpleNamespace(
+                            x=float(quaternion[0]),
+                            y=float(quaternion[1]),
+                            z=float(quaternion[2]),
+                            w=float(quaternion[3]),
+                        ),
+                    )
+                )
+
+        buffer = ExactSnapshotBuffer()
+
+        class InferenceClient(RecordingClient):
+            def predict(self, *args, **kwargs):
+                result = super().predict(*args, **kwargs)
+                buffer.inference_finished = True
+                return result
+
+        candidate = RemoteGraspCandidate(
+            score=0.91,
+            translation_m=np.asarray([0.40, -0.10, 0.25]),
+            quaternion_xyzw=np.asarray([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.04,
+            depth_m=0.03,
+        )
+        client = InferenceClient(candidates=[candidate])
+        node = make_processing_node(client)
+        node.tf_buffer = buffer
+        node.pose_estimator.tf_buffer = buffer
+        node.pose_estimator.tf_timeout_sec = 0.2
+        node.gate_audit_enabled = True
+        node.camera_visibility_gate_enabled = True
+        audit_estimators = []
+        selector_estimators = []
+        selected_centers = []
+        original_audit = node._run_candidate_gate_audit
+        original_selector = remote_node.select_first_reachable_candidate
+        original_geometry_estimator = remote_node.estimate_object_geometry
+
+        def audit_with_identity(*args, **kwargs):
+            audit_estimators.append(kwargs['candidate_pose_estimator'])
+            return original_audit(*args, **kwargs)
+
+        def selector_without_moveit(
+            candidates,
+            pose_estimator,
+            _reachability_fn,
+            **kwargs
+        ):
+            selector_estimators.append(pose_estimator)
+            aligned = remote_node.align_candidate_to_tool_frame(
+                remote_node.convert_candidate_to_camera_link(
+                    candidates[0],
+                    kwargs['candidate_frame_convention'],
+                ),
+                kwargs['model_grasp_to_tool_quaternion'],
+            )
+            _pose, center = remote_node.make_candidate_base_pose_and_center(
+                aligned,
+                pose_estimator,
+                kwargs['stamp'],
+                kwargs['camera_frame'],
+            )
+            selected_centers.append(center)
+            return None, None
+
+        node._run_candidate_gate_audit = audit_with_identity
+        remote_node.select_first_reachable_candidate = selector_without_moveit
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.select_first_reachable_candidate = original_selector
+            remote_node.estimate_object_geometry = original_geometry_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('NO_GEOMETRIC_CANDIDATE: '), message)
+        self.assertEqual(
+            buffer.calls,
+            [
+                ('base_link', 'camera_link', int(stamp.to_nsec())),
+                ('tool0', 'camera_link', int(stamp.to_nsec())),
+            ],
+        )
+        self.assertEqual(len(audit_estimators), 1)
+        self.assertEqual(len(selector_estimators), 1)
+        self.assertIs(audit_estimators[0], selector_estimators[0])
+        expected_center = base_from_camera.dot(np.r_[candidate.translation_m, 1.0])[:3]
+        np.testing.assert_allclose(selected_centers[0], expected_center, atol=1e-7)
+        metadata = selector_estimators[0].audit_metadata()
+        self.assertEqual(metadata['snapshot_stamp_ns'], snapshot.stamp_ns)
+        self.assertEqual(metadata['snapshot_source_frame'], 'camera_link')
+        self.assertEqual(metadata['canonical_candidate_frame'], 'camera_link')
+        self.assertEqual(len(metadata['transform_sha256']), 64)
+
+    def test_visibility_transform_accessor_never_falls_back_to_live_latest_tf(self):
+        class ForbiddenBuffer:
+            def __init__(self):
+                self.calls = []
+
+            def lookup_transform(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                raise AssertionError('live/latest TF lookup is forbidden')
+
+        node = make_processing_node()
+        node.tf_buffer = ForbiddenBuffer()
+        node._planning_snapshot_active = True
+        node._cached_tool_from_camera = None
+
+        with self.assertRaises(remote_node.CandidateContractError) as raised:
+            node._tool_from_camera_matrix()
+
+        self.assertEqual(
+            raised.exception.code,
+            'VISIBILITY_TRANSFORM_NOT_FROZEN',
+        )
+        self.assertEqual(node.tf_buffer.calls, [])
+
+    def test_visibility_calibration_fallback_is_finite_rigid_and_read_only(self):
+        node = make_processing_node()
+        node.tf_buffer = None
+        node.handeye_translation_xyz = [0.01, -0.02, 0.03]
+        node.handeye_rotation_xyzw = remote_node.quaternion_from_euler(
+            0.1,
+            -0.2,
+            0.3,
+        )
+        stamp = remote_node.rospy.Time(10, 123)
+
+        matrix = node._freeze_tool_from_camera_matrix(stamp)
+
+        self.assertFalse(matrix.flags.writeable)
+        np.testing.assert_allclose(matrix[3], [0.0, 0.0, 0.0, 1.0])
+        np.testing.assert_allclose(
+            matrix[:3, :3].T.dot(matrix[:3, :3]),
+            np.eye(3),
+            atol=1e-8,
+        )
+        self.assertAlmostEqual(np.linalg.det(matrix[:3, :3]), 1.0)
+        self.assertEqual(node._cached_tool_from_camera_stamp_ns, stamp.to_nsec())
+
+        node._cached_tool_from_camera = None
+        node.handeye_translation_xyz = [np.nan, 0.0, 0.0]
+        with self.assertRaises(remote_node.CandidateContractError) as raised:
+            node._freeze_tool_from_camera_matrix(stamp)
+        self.assertEqual(raised.exception.code, 'VISIBILITY_TRANSFORM_INVALID')
 
     def test_process_frame_rejects_insufficient_depth_without_tf_or_predict(self):
         snapshot = make_snapshot(
@@ -1216,6 +1675,769 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIsNone(node.previous_object_axes_base)
         self.assertIsNone(node.latest_target_cloud_base_xyz)
 
+    def test_masked_target_default_payload_is_byte_exact_and_audited(self):
+        target_depth = np.asarray(
+            [
+                [0, 0, 0, 0],
+                [0, 2200, 2200, 0],
+                [0, 2200, 2200, 0],
+            ],
+            dtype=np.uint16,
+        )
+        snapshot = make_snapshot(target_depth)
+        snapshot.color_bgr.setflags(write=True)
+        snapshot.color_bgr[:] = np.arange(36, dtype=np.uint8).reshape(3, 4, 3)
+        snapshot.color_bgr.setflags(write=False)
+        client = RecordingClient(candidates=[])
+        node = make_processing_node(client)
+        self.assertEqual(node._freeze_graspnet_input_config().mode, 'masked_target')
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('NO_RAW_CANDIDATE: '))
+        expected_color = np.zeros_like(snapshot.color_bgr)
+        expected_color[target_depth > 0] = snapshot.color_bgr[target_depth > 0]
+        self.assertEqual(client.calls[0]['depth'].tobytes(), target_depth.tobytes())
+        self.assertEqual(client.calls[0]['color'].tobytes(), expected_color.tobytes())
+        audit = node._active_graspnet_input_audit
+        self.assertEqual(audit['mode'], 'masked_target')
+        self.assertEqual(
+            audit['depth_sha256'],
+            hashlib.sha256(target_depth.tobytes()).hexdigest(),
+        )
+        self.assertEqual(
+            audit['mask_sha256'],
+            hashlib.sha256(np.asarray(snapshot.object_mask).tobytes()).hexdigest(),
+        )
+
+    def test_context_roi_adds_only_same_snapshot_support_without_polluting_geometry(self):
+        target_depth = np.asarray(
+            [
+                [0, 0, 0, 0],
+                [0, 2200, 2200, 0],
+                [0, 2200, 2200, 0],
+            ],
+            dtype=np.uint16,
+        )
+        snapshot = make_snapshot(target_depth)
+        client = RecordingClient(candidates=[])
+        node = make_processing_node(client)
+        node.candidate_target_gate_enabled = True
+        captured_geometry = {}
+        original_estimator = remote_node.estimate_object_geometry
+
+        def fake_estimator(**kwargs):
+            captured_geometry.update(kwargs)
+            return make_geometry_estimate()
+
+        remote_node.estimate_object_geometry = fake_estimator
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        original_activate = node._activate_geometry
+
+        def activate(*args, **kwargs):
+            activated = original_activate(*args, **kwargs)
+            if activated:
+                node.latest_support_plane_camera_point = np.asarray([0.24, 0.0, 0.0])
+                node.latest_support_plane_camera_normal = np.asarray([1.0, 0.0, 0.0])
+            return activated
+
+        node._activate_geometry = activate
+        config = frozen_input_config(
+            node,
+            remote_node.CONTEXT_ROI,
+            context_margin_px=1.0,
+            context_max_margin_px=2.0,
+            min_support_points=1,
+        )
+        try:
+            ok, message = node._process_frame(
+                snapshot,
+                manual=True,
+                graspnet_input_config=config,
+            )
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('NO_RAW_CANDIDATE: '))
+        np.testing.assert_array_equal(
+            captured_geometry['target_depth_raw'],
+            target_depth,
+        )
+        remote_depth = client.calls[0]['depth']
+        np.testing.assert_array_equal(remote_depth[target_depth > 0], target_depth[target_depth > 0])
+        self.assertGreater(
+            np.count_nonzero((remote_depth > 0) & (target_depth == 0)),
+            0,
+        )
+        self.assertEqual(node._active_graspnet_input_audit['mode'], 'context_roi')
+        self.assertGreater(node._active_graspnet_input_audit['support_points'], 0)
+        self.assertEqual(node._active_graspnet_input_audit['target_points'], 4)
+        self.assertEqual(
+            node._active_graspnet_input_audit['detected_bbox_mask_iou'],
+            1.0,
+        )
+
+    def test_context_roi_prerequisites_and_builder_errors_fail_before_wsl(self):
+        target_depth = np.asarray(
+            [[0, 0, 0, 0], [0, 2200, 2200, 0], [0, 2200, 2200, 0]],
+            dtype=np.uint16,
+        )
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        try:
+            cases = (
+                ('bbox_mask', 'INSTANCE_MASK_REQUIRED'),
+                ('target_gate', 'CANDIDATE_TARGET_GATE_REQUIRED'),
+                ('plane_frame', 'SUPPORT_PLANE_FRAME_INVALID'),
+                ('bad_config', 'CONFIG_INVALID'),
+                ('zero_quality_gate', 'CONFIG_INVALID'),
+                ('support_points', 'SUPPORT_POINTS_INSUFFICIENT'),
+            )
+            for case, expected_code in cases:
+                with self.subTest(case=case):
+                    source_mode = 'bbox_depth' if case == 'bbox_mask' else 'instance_mask'
+                    snapshot = make_snapshot(target_depth, source_mode=source_mode)
+                    client = RecordingClient(candidates=[])
+                    node = make_processing_node(client)
+                    node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+                    original_activate = node._activate_geometry
+
+                    def activate(*args, **kwargs):
+                        activated = original_activate(*args, **kwargs)
+                        if activated:
+                            point = 0.50 if case == 'support_points' else 0.24
+                            node.latest_support_plane_camera_point = np.asarray([point, 0.0, 0.0])
+                            node.latest_support_plane_camera_normal = np.asarray([1.0, 0.0, 0.0])
+                        return activated
+
+                    node._activate_geometry = activate
+                    # context_roi requires this production safety gate.  Only
+                    # the dedicated target_gate case intentionally disables it;
+                    # the generic offline fixture defaults to false so every
+                    # other case must opt into the prerequisite explicitly.
+                    node.candidate_target_gate_enabled = case != 'target_gate'
+                    if case == 'plane_frame':
+                        node.target_projection_frame_convention = 'opencv_optical'
+                    config = frozen_input_config(
+                        node,
+                        remote_node.CONTEXT_ROI,
+                        context_margin_px=(3.0 if case == 'bad_config' else 1.0),
+                        context_max_margin_px=2.0,
+                        min_support_points=(0 if case == 'zero_quality_gate' else 1),
+                    )
+
+                    ok, message = node._process_frame(
+                        snapshot,
+                        manual=True,
+                        graspnet_input_config=config,
+                    )
+
+                    self.assertFalse(ok)
+                    self.assertTrue(message.startswith(expected_code + ': '), message)
+                    self.assertEqual(client.calls, [])
+                    self.assertFalse(node.rich_plan_pub.messages[-1].valid)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+    def test_context_modes_require_instance_mask_before_runtime_geometry_tf_or_wsl(self):
+        snapshot = make_snapshot(
+            np.ones((3, 4), dtype=np.uint16) * 2200,
+            source_mode='bbox_depth',
+        )
+        for mode in (remote_node.CONTEXT_ROI, remote_node.FULL_SCENE):
+            with self.subTest(mode=mode):
+                client = RecordingClient(candidates=[])
+                node = make_processing_node(client)
+                node.candidate_target_gate_enabled = True
+                calls = []
+                node._refresh_runtime_params = lambda: calls.append('runtime')
+                node._prepare_snapshot_geometry = (
+                    lambda *_args, **_kwargs: calls.append('geometry')
+                )
+                node._snapshot_base_optical_transform = (
+                    lambda *_args, **_kwargs: calls.append('tf')
+                )
+
+                ok, message = node._process_frame(
+                    snapshot,
+                    manual=True,
+                    graspnet_input_config=frozen_input_config(node, mode),
+                )
+
+                self.assertFalse(ok)
+                self.assertTrue(message.startswith('INSTANCE_MASK_REQUIRED: '))
+                self.assertEqual(calls, [])
+                self.assertEqual(client.calls, [])
+
+    def test_full_scene_is_always_diagnostic_and_never_enters_selector(self):
+        target_depth = np.asarray(
+            [[0, 0, 0, 0], [0, 2200, 2200, 0], [0, 2200, 2200, 0]],
+            dtype=np.uint16,
+        )
+        snapshot = make_snapshot(target_depth)
+        candidate = RemoteGraspCandidate(
+            score=0.99,
+            translation_m=np.asarray([0.40, -0.10, 0.25]),
+            quaternion_xyzw=np.asarray([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.04,
+            depth_m=0.03,
+        )
+        client = RecordingClient(candidates=[candidate])
+        node = make_processing_node(client)
+        node.pose_estimator = types.SimpleNamespace(
+            camera_frame='camera_link',
+            make_base_pose_from_camera_pose=lambda *_args, **_kwargs: (
+                (_ for _ in ()).throw(
+                    AssertionError('full_scene audit must use frozen snapshot TF')
+                )
+            ),
+        )
+        node.candidate_target_gate_enabled = False
+        node._plan_reachable = lambda _pose: (_ for _ in ()).throw(
+            AssertionError('reachability/MoveIt must not run in full_scene')
+        )
+        original_estimator = remote_node.estimate_object_geometry
+        original_selector = remote_node.select_first_reachable_candidate
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        remote_node.select_first_reachable_candidate = lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(
+                AssertionError('selector must not run in full_scene')
+            )
+        )
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
+        original_activate = node._activate_geometry
+
+        def activate_without_plane(*args, **kwargs):
+            activated = original_activate(*args, **kwargs)
+            node.latest_support_plane_camera_point = None
+            node.latest_support_plane_camera_normal = None
+            return activated
+
+        node._activate_geometry = activate_without_plane
+        captured_reports = []
+        original_write_audit = node._write_gate_audit_report
+
+        def capture_audit(report):
+            captured_reports.append(deepcopy(report))
+            return original_write_audit(report)
+
+        node._write_gate_audit_report = capture_audit
+        config = frozen_input_config(
+            node,
+            remote_node.FULL_SCENE,
+            candidate_target_gate_enabled=False,
+        )
+        try:
+            ok, message = node._process_frame(
+                snapshot,
+                manual=True,
+                graspnet_input_config=config,
+            )
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+            remote_node.select_first_reachable_candidate = original_selector
+
+        self.assertFalse(ok)
+        self.assertTrue(
+            message.startswith(remote_node.FULL_SCENE_DIAGNOSTIC_CODE + ': '),
+            message,
+        )
+        self.assertEqual(len(client.calls), 1)
+        np.testing.assert_array_equal(client.calls[0]['depth'], snapshot.depth_raw)
+        self.assertTrue(all(len(message.poses) == 0 for message in node.plan_pub.messages))
+        self.assertTrue(all(not message.valid for message in node.rich_plan_pub.messages))
+        self.assertEqual(
+            node._latest_gate_audit_summary['graspnet_input']['mode'],
+            'full_scene',
+        )
+        self.assertEqual(node._latest_gate_audit_reference['row_count'], 1)
+        transform_summary = node._latest_gate_audit_summary['snapshot_transform']
+        self.assertEqual(transform_summary['snapshot_stamp_ns'], snapshot.stamp_ns)
+        self.assertEqual(transform_summary['snapshot_source_frame'], 'camera_link')
+        self.assertEqual(transform_summary['canonical_candidate_frame'], 'camera_link')
+        self.assertEqual(len(transform_summary['transform_sha256']), 64)
+        self.assertEqual(len(captured_reports), 1)
+        transform_report = captured_reports[0]['snapshot_transform']
+        self.assertEqual(np.asarray(transform_report['T_base_optical']).shape, (4, 4))
+        self.assertEqual(
+            np.asarray(transform_report['T_base_camera_link']).shape,
+            (4, 4),
+        )
+
+    def test_graspnet_input_mode_and_parameters_are_frozen_for_request(self):
+        target_depth = np.asarray(
+            [[0, 0, 0, 0], [0, 2200, 2200, 0], [0, 2200, 2200, 0]],
+            dtype=np.uint16,
+        )
+        snapshot = make_snapshot(target_depth)
+        client = RecordingClient(candidates=[])
+        node = make_processing_node(client)
+        config = frozen_input_config(node, remote_node.MASKED_TARGET)
+
+        def mutate_runtime_values():
+            node.graspnet_input_mode = remote_node.FULL_SCENE
+            node.graspnet_input_context_margin_px = 99.0
+            node.graspnet_input_min_total_points = 999999
+            node.candidate_target_gate_enabled = False
+
+        node._refresh_runtime_params = mutate_runtime_values
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate()
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        try:
+            ok, message = node._process_frame(
+                snapshot,
+                manual=True,
+                graspnet_input_config=config,
+            )
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('NO_RAW_CANDIDATE: '), message)
+        self.assertEqual(node._active_graspnet_input_audit['mode'], 'masked_target')
+        self.assertEqual(
+            node._active_graspnet_input_audit['frozen_config']['context_margin_px'],
+            1.0,
+        )
+        np.testing.assert_array_equal(client.calls[0]['depth'], target_depth)
+
+    def test_only_known_contract_exceptions_keep_their_stable_code(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+
+        class CodedOrdinaryError(RuntimeError):
+            code = 'MUST_NOT_ESCAPE'
+
+        cases = (
+            (
+                lambda: remote_node.validate_execution_tool0_contract(
+                    False,
+                    remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                    {'tool_approach_axis': 'z'},
+                ),
+                'DEPTH_CONTRACT_DISABLED',
+            ),
+            (
+                lambda: remote_node.validate_execution_tool0_contract(
+                    True,
+                    [0.0, 0.0, 0.0, 1.0],
+                    {'tool_approach_axis': 'z'},
+                ),
+                'TOOL_FRAME_CONTRACT_INVALID',
+            ),
+            (
+                lambda: remote_node.validate_execution_tool0_contract(
+                    True,
+                    remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                    {'tool_approach_axis': 'x'},
+                ),
+                'TOOL_FRAME_CONTRACT_INVALID',
+            ),
+            (lambda: (_ for _ in ()).throw(CodedOrdinaryError('boom')), 'PLAN_FAILED'),
+        )
+        for action, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                node = make_processing_node(RecordingClient(candidates=[]))
+                node._refresh_runtime_params = action
+
+                ok, message = node._process_frame(snapshot, manual=True)
+
+                self.assertFalse(ok)
+                self.assertTrue(message.startswith(expected_code + ': '), message)
+                self.assertEqual(node.client.calls, [])
+
+    def test_production_candidate_convention_rejects_startup_misconfiguration(self):
+        self.assertEqual(
+            remote_node.validate_production_candidate_frame_convention('opencv'),
+            'opencv_optical',
+        )
+        for value in ('ros_camera_link', 'camera_link', 'unknown'):
+            with self.subTest(value=value):
+                with self.assertRaises(remote_node.CandidateContractError) as raised:
+                    remote_node.validate_production_candidate_frame_convention(
+                        value
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    'CANDIDATE_FRAME_CONVENTION_INVALID',
+                )
+
+    def test_mandatory_planning_audit_rejects_non_boolean_or_missing_authority(self):
+        self.assertEqual(
+            remote_node.validate_mandatory_planning_audit(
+                True,
+                '/tmp/grasp6d-audit.json',
+            ),
+            '/tmp/grasp6d-audit.json',
+        )
+        invalid = (
+            (False, '/tmp/grasp6d-audit.json'),
+            ('false', '/tmp/grasp6d-audit.json'),
+            (1, '/tmp/grasp6d-audit.json'),
+            (np.bool_(True), '/tmp/grasp6d-audit.json'),
+            (True, ''),
+            (True, '   '),
+            (True, ['/tmp/grasp6d-audit.json']),
+            (True, None),
+        )
+        for enabled, path in invalid:
+            with self.subTest(enabled=enabled, path=path):
+                with self.assertRaises(
+                    remote_node.CandidateContractError
+                ) as raised:
+                    remote_node.validate_mandatory_planning_audit(
+                        enabled,
+                        path,
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    remote_node.PLANNING_AUDIT_CONFIG_INVALID,
+                )
+
+    def test_planning_and_mujoco_audit_paths_are_canonical_and_distinct(self):
+        planning, mujoco = remote_node.validate_distinct_audit_paths(
+            '/tmp/alicia-audits/../planning.json',
+            '/tmp/alicia-audits/execution.json',
+        )
+        self.assertEqual(planning, '/tmp/planning.json')
+        self.assertEqual(mujoco, '/tmp/alicia-audits/execution.json')
+
+        equivalent_pairs = (
+            ('/tmp/alicia-audit.json', '/tmp/./alicia-audit.json'),
+            (
+                '/tmp/alicia-audits/../alicia-audit.json',
+                '/tmp/alicia-audit.json',
+            ),
+        )
+        for planning_path, mujoco_path in equivalent_pairs:
+            with self.subTest(
+                planning_path=planning_path,
+                mujoco_path=mujoco_path,
+            ):
+                with self.assertRaises(
+                    remote_node.CandidateContractError
+                ) as raised:
+                    remote_node.validate_distinct_audit_paths(
+                        planning_path,
+                        mujoco_path,
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    remote_node.AUDIT_PATH_CONFLICT,
+                )
+
+        for invalid_mujoco_path in ('', '   ', None, []):
+            with self.subTest(invalid_mujoco_path=invalid_mujoco_path):
+                with self.assertRaises(
+                    remote_node.CandidateContractError
+                ) as raised:
+                    remote_node.validate_distinct_audit_paths(
+                        '/tmp/planning.json',
+                        invalid_mujoco_path,
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    remote_node.PLANNING_AUDIT_CONFIG_INVALID,
+                )
+
+    def test_audit_path_conflict_fails_before_geometry_tf_or_wsl(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(candidates=[])
+        node = make_processing_node(client)
+        node.mujoco_audit_output_path = str(node.gate_audit_output_path)
+        node._prepare_snapshot_geometry = lambda *_args: (
+            (_ for _ in ()).throw(
+                AssertionError('audit path conflict must fail before geometry/TF')
+            )
+        )
+
+        ok, message = node._process_frame(snapshot, manual=True)
+
+        self.assertFalse(ok)
+        self.assertTrue(
+            message.startswith(remote_node.AUDIT_PATH_CONFLICT + ': '),
+            message,
+        )
+        self.assertEqual(client.calls, [])
+
+    def test_startup_audit_path_conflict_fails_before_live_node_surfaces(self):
+        shared = '/tmp/alicia-startup-shared-audit.json'
+        original_get_param = remote_node.rospy.get_param
+        original_bridge = remote_node.CvBridge
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/enabled': True,
+            '/grasp_6d/remote': {
+                'gate_audit_enabled': True,
+                'gate_audit_output_path': shared,
+            },
+            '/mujoco_digital_twin': {'audit_output_path': shared},
+        }.get(name, default)
+        remote_node.CvBridge = lambda: (_ for _ in ()).throw(
+            AssertionError('CvBridge must not be created after path conflict')
+        )
+        try:
+            with self.assertRaises(
+                remote_node.CandidateContractError
+            ) as raised:
+                remote_node.RemoteGrasp6DNode()
+        finally:
+            remote_node.rospy.get_param = original_get_param
+            remote_node.CvBridge = original_bridge
+
+        self.assertEqual(raised.exception.code, remote_node.AUDIT_PATH_CONFLICT)
+
+    def test_runtime_audit_path_refresh_rejects_conflict_without_partial_update(self):
+        node = make_processing_node()
+        node._refresh_runtime_params = types.MethodType(
+            remote_node.RemoteGrasp6DNode._refresh_runtime_params,
+            node,
+        )
+        original_planning = node.gate_audit_output_path
+        original_mujoco = node.mujoco_audit_output_path
+        shared = '/tmp/alicia-runtime-shared-audit.json'
+        original_get_param = remote_node.rospy.get_param
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/remote': {
+                'gate_audit_enabled': True,
+                'gate_audit_output_path': shared,
+            },
+            '/mujoco_digital_twin': {'audit_output_path': shared},
+            '/grasp_6d/remote/gate_audit_enabled': True,
+            '/grasp_6d/remote/gate_audit_output_path': shared,
+            '/mujoco_digital_twin/audit_output_path': shared,
+        }.get(name, default)
+        try:
+            with self.assertRaises(
+                remote_node.CandidateContractError
+            ) as raised:
+                node._refresh_runtime_params()
+        finally:
+            remote_node.rospy.get_param = original_get_param
+
+        self.assertEqual(raised.exception.code, remote_node.AUDIT_PATH_CONFLICT)
+        self.assertEqual(node.gate_audit_output_path, original_planning)
+        self.assertEqual(node.mujoco_audit_output_path, original_mujoco)
+
+    def test_runtime_planning_audit_relaxation_fails_before_geometry_tf_or_wsl(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        for enabled, path in (
+            (False, '/tmp/grasp6d-audit.json'),
+            ('false', '/tmp/grasp6d-audit.json'),
+            (True, ''),
+            (True, []),
+        ):
+            with self.subTest(enabled=enabled, path=path):
+                client = RecordingClient(candidates=[])
+                node = make_processing_node(client)
+                node.gate_audit_enabled = enabled
+                node.gate_audit_output_path = path
+                node._prepare_snapshot_geometry = lambda *_args: (
+                    (_ for _ in ()).throw(
+                        AssertionError('audit config must fail before geometry/TF')
+                    )
+                )
+
+                ok, message = node._process_frame(snapshot, manual=True)
+
+                self.assertFalse(ok)
+                self.assertTrue(
+                    message.startswith(
+                        remote_node.PLANNING_AUDIT_CONFIG_INVALID + ': '
+                    ),
+                    message,
+                )
+                self.assertEqual(client.calls, [])
+
+    def test_production_fallback_contract_rejects_startup_relaxation(self):
+        self.assertEqual(
+            remote_node.validate_production_execution_fallback_contract(
+                False,
+                False,
+            ),
+            (False, False),
+        )
+        for position_only, orientation, expected_code in (
+            (True, False, 'POSITION_ONLY_FALLBACK_FORBIDDEN'),
+            (False, True, 'ORIENTATION_FALLBACK_FORBIDDEN'),
+            (True, True, 'POSITION_ONLY_FALLBACK_FORBIDDEN'),
+        ):
+            with self.subTest(
+                position_only=position_only,
+                orientation=orientation,
+            ):
+                with self.assertRaises(
+                    remote_node.CandidateContractError
+                ) as raised:
+                    remote_node.validate_production_execution_fallback_contract(
+                        position_only,
+                        orientation,
+                    )
+                self.assertEqual(raised.exception.code, expected_code)
+
+    def test_production_orientation_variants_are_exact_ordered_unique_symmetries(self):
+        identity = np.asarray([0.0, 0.0, 0.0, -1.0])
+        half_turn = -np.asarray(
+            remote_node.quaternion_from_euler(0.0, 0.0, np.pi),
+            dtype=float,
+        )
+        accepted = remote_node.validate_production_orientation_variant_quaternions(
+            [identity, half_turn]
+        )
+
+        self.assertEqual(len(accepted), 2)
+        self.assertTrue(all(not value.flags.writeable for value in accepted))
+        np.testing.assert_allclose(
+            remote_node.quaternion_matrix(accepted[0])[:3, :3],
+            np.eye(3),
+            atol=1e-7,
+        )
+        np.testing.assert_allclose(
+            remote_node.quaternion_matrix(accepted[1])[:3, :3],
+            remote_node.TOOL_Z_HALF_TURN_ROTATION,
+            atol=1e-7,
+        )
+
+        rz90 = remote_node.quaternion_from_euler(0.0, 0.0, np.pi * 0.5)
+        canonical_identity = np.asarray([0.0, 0.0, 0.0, 1.0])
+        canonical_half_turn = remote_node.quaternion_from_euler(
+            0.0,
+            0.0,
+            np.pi,
+        )
+        invalid = (
+            [canonical_identity],
+            [canonical_identity, canonical_half_turn, canonical_identity],
+            [canonical_identity, canonical_identity],
+            [canonical_half_turn, canonical_identity],
+            [canonical_identity, rz90],
+        )
+        for variants in invalid:
+            with self.subTest(count=len(variants)):
+                with self.assertRaises(
+                    remote_node.CandidateContractError
+                ) as raised:
+                    remote_node.validate_production_orientation_variant_quaternions(
+                        variants
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    'ORIENTATION_VARIANT_CONTRACT_INVALID',
+                )
+
+        with self.assertRaises(remote_node.CandidateContractError) as raised:
+            remote_node.RemoteGrasp6DNode._parse_production_orientation_variant_quaternions(
+                [[0.0, 0.0, 0.0], [0.0, 180.0]]
+            )
+        self.assertEqual(
+            raised.exception.code,
+            'ORIENTATION_VARIANT_CONTRACT_INVALID',
+        )
+
+    def test_runtime_strict_contract_misconfiguration_fails_before_geometry_tf_or_wsl(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        cases = (
+            (
+                {'accept_position_only_fallback': True},
+                'POSITION_ONLY_FALLBACK_FORBIDDEN',
+            ),
+            (
+                {'accept_orientation_fallback': True},
+                'ORIENTATION_FALLBACK_FORBIDDEN',
+            ),
+            (
+                {'orientation_variants_rpy_deg': [[0.0, 0.0, 0.0]]},
+                'ORIENTATION_VARIANT_CONTRACT_INVALID',
+            ),
+            (
+                {
+                    'orientation_variants_rpy_deg': [
+                        [0.0, 0.0, 0.0],
+                        [0.0, 0.0, 180.0],
+                        [0.0, 0.0, 360.0],
+                    ],
+                },
+                'ORIENTATION_VARIANT_CONTRACT_INVALID',
+            ),
+        )
+        for override, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                client = RecordingClient(candidates=[])
+                node = make_processing_node(client)
+                node.candidate_frame_convention = 'opencv_optical'
+                node._refresh_runtime_params = types.MethodType(
+                    remote_node.RemoteGrasp6DNode._refresh_runtime_params,
+                    node,
+                )
+                node._prepare_snapshot_geometry = (
+                    lambda *_args: (_ for _ in ()).throw(
+                        AssertionError(
+                            'geometry/TF must not run after strict contract rejection'
+                        )
+                    )
+                )
+                remote_cfg = {
+                    'candidate_frame_convention': 'opencv_optical',
+                    'orientation_variants_rpy_deg': [
+                        [0.0, 0.0, 0.0],
+                        [0.0, 0.0, 180.0],
+                    ],
+                }
+                remote_cfg.update(override)
+                original_get_param = remote_node.rospy.get_param
+                remote_node.rospy.get_param = lambda name, default=None: {
+                    '/grasp_6d/remote': remote_cfg,
+                }.get(name, default)
+                try:
+                    ok, message = node._process_frame(snapshot, manual=True)
+                finally:
+                    remote_node.rospy.get_param = original_get_param
+
+                self.assertFalse(ok)
+                self.assertTrue(
+                    message.startswith(expected_code + ': '),
+                    message,
+                )
+                self.assertEqual(client.calls, [])
+
+    def test_runtime_candidate_convention_misconfiguration_fails_before_wsl(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(candidates=[])
+        node = make_processing_node(client)
+        node._refresh_runtime_params = types.MethodType(
+            remote_node.RemoteGrasp6DNode._refresh_runtime_params,
+            node,
+        )
+        node._prepare_snapshot_geometry = lambda *_args: (_ for _ in ()).throw(
+            AssertionError('geometry/TF must not run after runtime convention rejection')
+        )
+        original_get_param = remote_node.rospy.get_param
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/remote': {
+                'candidate_frame_convention': 'ros_camera_link',
+            },
+            '/grasp_6d/remote/candidate_frame_convention': 'ros_camera_link',
+        }.get(name, default)
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.rospy.get_param = original_get_param
+
+        self.assertFalse(ok)
+        self.assertTrue(
+            message.startswith('CANDIDATE_FRAME_CONVENTION_INVALID: '),
+            message,
+        )
+        self.assertEqual(client.calls, [])
+
     def test_gripper_contract_mismatch_fails_before_wsl_candidate_request(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
         client = RecordingClient(
@@ -1233,7 +2455,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.08, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.06],
         )
         node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
         try:
@@ -1260,6 +2482,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                     np.array([0.40, -0.10, 0.25]),
                     np.array([0.0, 0.0, 0.0, 1.0]),
                     0.001,
+                    depth_m=0.03,
                 )
             ]
         )
@@ -1273,7 +2496,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             center_base=[0.40, -0.10, 0.25],
             size_xyz_m=[0.08, 0.047, 0.06],
         )
-        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
         try:
             ok, message = node._process_frame(snapshot, manual=True)
         finally:
@@ -1299,12 +2524,14 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                     np.array([0.65, -0.10, 0.25]),
                     np.array([0.0, 0.0, 0.0, 1.0]),
                     0.001,
+                    depth_m=0.03,
                 ),
                 RemoteGraspCandidate(
                     0.40,
                     np.array([0.40, -0.10, 0.25]),
                     np.array([0.0, 0.0, 0.0, 1.0]),
                     0.090,
+                    depth_m=0.03,
                 ),
             ]
         )
@@ -1314,9 +2541,11 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.08, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.06],
         )
-        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
         try:
             ok, message = node._process_frame(snapshot, manual=True)
         finally:
@@ -1346,6 +2575,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                     np.array([0.40, -0.10, 0.25]),
                     np.array([0.0, 0.0, 0.0, 1.0]),
                     0.04,
+                    depth_m=0.03,
                 )
             ]
         )
@@ -1366,9 +2596,11 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.08, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.06],
         )
-        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
         try:
             ok, message = node._process_frame(snapshot, manual=True)
         finally:
@@ -1380,6 +2612,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIsNone(node.selected_required_open_width_m)
         self.assertFalse(node.latest_object_geometry.valid)
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
+        audit = json.loads(pathlib.Path(node.gate_audit_output_path).read_text())
+        self.assertFalse(audit['outcome']['valid_plan'])
+        self.assertEqual(audit['outcome']['code'], 'PLAN_PUBLISH_FAILED')
 
     def test_rich_plan_publish_exception_finishes_with_invalid_rich_and_empty_legacy(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
@@ -1390,6 +2625,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                     np.array([0.40, -0.10, 0.25]),
                     np.array([0.0, 0.0, 0.0, 1.0]),
                     0.04,
+                    depth_m=0.03,
                 )
             ]
         )
@@ -1410,9 +2646,11 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.08, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.06],
         )
-        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
         try:
             ok, message = node._process_frame(snapshot, manual=True)
         finally:
@@ -1423,8 +2661,11 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertFalse(node.rich_plan_pub.messages[-1].valid)
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
         self.assertIsNone(node._latest_rich_plan_copy())
+        audit = json.loads(pathlib.Path(node.gate_audit_output_path).read_text())
+        self.assertFalse(audit['outcome']['valid_plan'])
+        self.assertEqual(audit['outcome']['code'], 'PLAN_PUBLISH_FAILED')
 
-    def test_candidate_rank_exception_invalidates_the_current_geometry_generation(self):
+    def test_concurrent_publication_invalidation_rewrites_ready_audit_as_unpublished(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
         client = RecordingClient(
             candidates=[
@@ -1433,6 +2674,53 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                     np.array([0.40, -0.10, 0.25]),
                     np.array([0.0, 0.0, 0.0, 1.0]),
                     0.04,
+                    depth_m=0.03,
+                )
+            ]
+        )
+        node = make_processing_node(client)
+        node.pose_estimator = RecordingPoseEstimator()
+        node._plan_reachable = lambda _pose: True
+        node._publish_plan_pair_if_current = lambda *_args, **_kwargs: (
+            False,
+            'TARGET_LOST',
+        )
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.04, 0.04, 0.06],
+        )
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
+        try:
+            ok, message = node._process_frame(snapshot, manual=True)
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertFalse(ok)
+        self.assertTrue(message.startswith('TARGET_LOST: '), message)
+        self.assertTrue(
+            all(
+                not bool(getattr(item, 'valid', False))
+                for item in node.rich_plan_pub.messages
+            )
+        )
+        audit = json.loads(pathlib.Path(node.gate_audit_output_path).read_text())
+        self.assertFalse(audit['outcome']['valid_plan'])
+        self.assertEqual(audit['outcome']['code'], 'TARGET_LOST')
+        self.assertRegex(audit['plan_id'], r'^[0-9a-f]{24}$')
+
+    def test_candidate_rank_exception_is_audited_and_invalidates_generation(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        client = RecordingClient(
+            candidates=[
+                RemoteGraspCandidate(
+                    0.90,
+                    np.array([0.40, -0.10, 0.25]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    0.04,
+                    depth_m=0.03,
                 )
             ]
         )
@@ -1445,26 +2733,45 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.08, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.06],
         )
-        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
         try:
             ok, message = node._process_frame(snapshot, manual=True)
         finally:
             remote_node.estimate_object_geometry = original_estimator
 
         self.assertFalse(ok)
-        self.assertEqual(
+        self.assertTrue(
+            message.startswith('NO_EXECUTABLE_CANDIDATE: '),
             message,
-            'PLAN_FAILED: remote 6D planning failed: rank exploded',
         )
-        self.assertEqual(node._last_geometry_invalidation_code, 'PLAN_FAILED')
+        self.assertEqual(
+            node._last_geometry_invalidation_code,
+            'NO_EXECUTABLE_CANDIDATE',
+        )
         self.assertFalse(node.latest_object_geometry.valid)
         self.assertIsNone(node._latest_geometry_estimate)
         self.assertIsNone(node.previous_object_axes_base)
         self.assertIsNone(node._selected_candidate_gate)
         self.assertIsNone(node.selected_required_open_width_m)
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
+        audit = json.loads(pathlib.Path(node.gate_audit_output_path).read_text())
+        self.assertFalse(audit['outcome']['valid_plan'])
+        self.assertEqual(
+            audit['rows'][0]['planning_evaluation']['rank_error'][
+                'failure_code'
+            ],
+            'RANK_EXCEPTION',
+        )
+        self.assertIn(
+            'rank exploded',
+            audit['rows'][0]['planning_evaluation']['rank_error'][
+                'failure_reason'
+            ],
+        )
 
     def test_plan_diagnostics_finish_before_atomic_rich_and_legacy_publication(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
@@ -1475,6 +2782,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                     np.array([0.40, -0.10, 0.25]),
                     np.array([0.0, 0.0, 0.0, 1.0]),
                     0.04,
+                    depth_m=0.03,
                 )
             ]
         )
@@ -1504,16 +2812,19 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.08, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.06],
         )
-        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
         try:
             ok, message = node._process_frame(snapshot, manual=True)
         finally:
             remote_node.estimate_object_geometry = original_estimator
 
         self.assertTrue(ok, message)
-        self.assertEqual(diagnostics_saw_publication, [False])
+        self.assertGreaterEqual(len(diagnostics_saw_publication), 1)
+        self.assertTrue(all(value is False for value in diagnostics_saw_publication))
         self.assertTrue(plan_published.is_set())
         self.assertTrue(node.rich_plan_pub.messages[-1].valid)
         self.assertEqual(len(node.plan_pub.messages[-1].poses), 4)
@@ -1532,6 +2843,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         )
         client = RecordingClient(candidates=[])
         node = make_processing_node(client)
+        node.graspnet_input_bbox_min_iou = 0.50
         node.geometry_min_object_points = 2
         node._foreground_mask_for_roi = (
             lambda _depth, _roi, min_points: (foreground_roi, 4)
@@ -1556,6 +2868,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         np.testing.assert_array_equal(captured['target_depth_raw'], expected_depth)
         self.assertEqual(captured['source_mode'], 'bbox_depth')
         np.testing.assert_array_equal(client.calls[0]['depth'], expected_depth)
+        self.assertIsNone(
+            node._active_graspnet_input_audit['detected_bbox_mask_iou']
+        )
         self.assertEqual(node.geometry_pub.messages[-1].source_mode, 'bbox_depth')
         self.assertFalse(node.geometry_pub.messages[-1].valid)
         self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
@@ -1838,6 +3153,15 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             remote_node.remote_prediction_failure_code(ValueError('bad protocol')),
             'WSL_PREDICT_FAILED',
         )
+        self.assertEqual(
+            remote_node.remote_prediction_failure_code(
+                remote_node.GraspNetInputContextError(
+                    'CONTEXT_TEST_FAILURE',
+                    'synthetic context failure',
+                )
+            ),
+            'CONTEXT_TEST_FAILURE',
+        )
 
     def test_process_frame_publishes_structured_remote_error_codes(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
@@ -2017,8 +3341,8 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
     def test_selects_first_reachable_candidate_after_camera_to_base_transform(self):
         candidates = [
-            RemoteGraspCandidate(0.99, np.array([0.10, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04),
-            RemoteGraspCandidate(0.80, np.array([0.65, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04),
+            RemoteGraspCandidate(0.99, np.array([0.10, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04, depth_m=0.03),
+            RemoteGraspCandidate(0.80, np.array([0.65, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04, depth_m=0.03),
         ]
 
         selected, pose = remote_node.select_first_reachable_candidate(
@@ -2030,13 +3354,14 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             candidate_frame_convention='ros_camera_link',
         )
 
-        self.assertIs(selected, candidates[1])
-        self.assertAlmostEqual(pose.pose.position.x, 1.65)
+        self.assertAlmostEqual(selected.score, candidates[1].score)
+        np.testing.assert_allclose(selected.translation_m, candidates[1].translation_m)
+        self.assertAlmostEqual(pose.pose.position.x, 1.68)
 
     def test_selects_next_candidate_when_target_gate_rejects_first(self):
         candidates = [
-            RemoteGraspCandidate(0.99, np.array([0.10, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04),
-            RemoteGraspCandidate(0.80, np.array([0.20, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04),
+            RemoteGraspCandidate(0.99, np.array([0.10, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04, depth_m=0.03),
+            RemoteGraspCandidate(0.80, np.array([0.20, 0.0, 0.2]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04, depth_m=0.03),
         ]
         seen_x = []
 
@@ -2054,14 +3379,15 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             candidate_filter_fn=candidate_filter,
         )
 
-        self.assertIs(selected, candidates[1])
-        self.assertAlmostEqual(pose.pose.position.x, 1.20)
-        self.assertEqual(seen_x, [1.10, 1.20])
+        self.assertAlmostEqual(selected.score, candidates[1].score)
+        np.testing.assert_allclose(selected.translation_m, candidates[1].translation_m)
+        self.assertAlmostEqual(pose.pose.position.x, 1.23)
+        self.assertEqual(seen_x, [1.13, 1.23])
 
     def test_target_rank_prefers_closest_reachable_candidate_over_higher_score(self):
         candidates = [
-            RemoteGraspCandidate(0.99, np.array([0.035, 0.0, 0.0]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04),
-            RemoteGraspCandidate(0.70, np.array([0.010, 0.0, 0.0]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04),
+            RemoteGraspCandidate(0.99, np.array([0.035, 0.0, 0.0]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04, depth_m=0.03),
+            RemoteGraspCandidate(0.70, np.array([0.010, 0.0, 0.0]), np.array([0.0, 0.0, 0.0, 1.0]), 0.04, depth_m=0.03),
         ]
         target_x = 1.0
 
@@ -2078,8 +3404,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             candidate_rank_fn=rank_by_target_distance,
         )
 
-        self.assertIs(selected, candidates[1])
-        self.assertAlmostEqual(pose.pose.position.x, 1.01)
+        self.assertAlmostEqual(selected.score, candidates[1].score)
+        np.testing.assert_allclose(selected.translation_m, candidates[1].translation_m)
+        self.assertAlmostEqual(pose.pose.position.x, 1.04)
 
     def test_nonfinite_rank_tuple_is_a_candidate_hard_reject(self):
         candidate = RemoteGraspCandidate(
@@ -2087,6 +3414,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             np.array([0.01, 0.0, 0.0]),
             np.array([0.0, 0.0, 0.0, 1.0]),
             0.04,
+            depth_m=0.03,
         )
 
         selected, pose = remote_node.select_first_reachable_candidate(
@@ -2102,24 +3430,31 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertIsNone(pose)
 
-    def test_invalid_rank_tuple_conversion_propagates(self):
+    def test_invalid_rank_tuple_conversion_is_audited_as_candidate_rejection(self):
         candidate = RemoteGraspCandidate(
             0.9,
             np.array([0.01, 0.0, 0.0]),
             np.array([0.0, 0.0, 0.0, 1.0]),
             0.04,
+            depth_m=0.03,
         )
 
-        with self.assertRaises((TypeError, ValueError)):
-            remote_node.select_first_reachable_candidate(
-                [candidate],
-                FakePoseEstimator(),
-                lambda _pose: True,
-                stamp=None,
-                camera_frame='camera_link',
-                candidate_frame_convention='ros_camera_link',
-                candidate_rank_fn=lambda *_args: ('not-a-number',),
-            )
+        records = []
+        selected, pose = remote_node.select_first_reachable_candidate(
+            [candidate],
+            FakePoseEstimator(),
+            lambda _pose: True,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            candidate_rank_fn=lambda *_args: ('not-a-number',),
+            evaluation_record_sink=records.append,
+        )
+
+        self.assertIsNone(selected)
+        self.assertIsNone(pose)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['rank_error']['failure_code'], 'RANK_EXCEPTION')
 
     def test_analytical_geometry_gate_runs_before_reachability_and_high_score(self):
         candidates = [
@@ -2128,12 +3463,14 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 np.array([0.30, 0.0, 0.20]),
                 np.array([0.0, 0.0, 0.0, 1.0]),
                 0.01,
+                depth_m=0.03,
             ),
             RemoteGraspCandidate(
                 0.40,
                 np.array([0.20, 0.0, 0.20]),
                 np.array([0.0, 0.0, 0.0, 1.0]),
                 0.09,
+                depth_m=0.03,
             ),
         ]
         events = []
@@ -2181,15 +3518,144 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertAlmostEqual(selected.score, 0.40)
         self.assertAlmostEqual(selected.width_m, 0.09)
         self.assertAlmostEqual(selected.required_open_width_m, 0.044)
-        self.assertAlmostEqual(pose.pose.position.x, 0.20)
+        self.assertAlmostEqual(pose.pose.position.x, 0.23)
         self.assertEqual(
             events,
             [
                 ('geometry', 0.99, 4),
                 ('geometry', 0.40, 4),
-                ('reachability', 0.20),
+                ('reachability', 0.23),
             ],
         )
+
+    def test_selector_emits_exact_complete_lineage_when_each_key_stage_raises(self):
+        candidate = RemoteGraspCandidate(
+            0.90,
+            np.array([0.20, 0.0, 0.20]),
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            0.04,
+            depth_m=0.03,
+        )
+        variants = [
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            remote_node.quaternion_from_euler(0.0, 0.0, np.pi),
+        ]
+
+        class FailingPoseEstimator:
+            def make_base_pose_from_camera_pose(self, *_args, **_kwargs):
+                raise RuntimeError('synthetic snapshot pose failure')
+
+        def raises(message):
+            def action(*_args, **_kwargs):
+                raise RuntimeError(message)
+
+            return action
+
+        cases = (
+            (
+                'snapshot_pose',
+                FailingPoseEstimator(),
+                {'reachability_fn': lambda _pose: True},
+                lambda row: self.assertEqual(
+                    row['candidate_contract']['stage'],
+                    'snapshot_pose',
+                ),
+            ),
+            (
+                'analytical_geometry',
+                RecordingPoseEstimator(),
+                {
+                    'reachability_fn': lambda _pose: True,
+                    'candidate_geometry_fn': raises(
+                        'synthetic analytical geometry failure'
+                    ),
+                },
+                lambda row: self.assertEqual(
+                    row['analytical_result']['failure_code'],
+                    'ANALYTICAL_GEOMETRY_EXCEPTION',
+                ),
+            ),
+            (
+                'target_filter',
+                RecordingPoseEstimator(),
+                {
+                    'reachability_fn': lambda _pose: True,
+                    'candidate_filter_fn': raises(
+                        'synthetic target filter failure'
+                    ),
+                },
+                lambda row: self.assertEqual(
+                    row['target_filter']['failure_code'],
+                    'TARGET_FILTER_EXCEPTION',
+                ),
+            ),
+            (
+                'strict_reachability',
+                RecordingPoseEstimator(),
+                {
+                    'reachability_fn': raises(
+                        'synthetic strict reachability failure'
+                    ),
+                },
+                lambda row: self.assertEqual(
+                    row['strict_reachability']['failure_code'],
+                    'STRICT_REACHABILITY_EXCEPTION',
+                ),
+            ),
+            (
+                'rank',
+                RecordingPoseEstimator(),
+                {
+                    'reachability_fn': lambda _pose: True,
+                    'candidate_rank_fn': raises('synthetic rank failure'),
+                },
+                lambda row: self.assertEqual(
+                    row['rank_error']['failure_code'],
+                    'RANK_EXCEPTION',
+                ),
+            ),
+        )
+        required_keys = {
+            'candidate_index',
+            'variant_index',
+            'candidate_contract',
+            'analytical_result',
+            'target_filter',
+            'strict_reachability',
+            'rank',
+            'rank_valid',
+            'selected',
+        }
+        for stage, estimator, kwargs, assert_stage in cases:
+            with self.subTest(stage=stage):
+                records = []
+                selected, pose = remote_node.select_first_reachable_candidate(
+                    [candidate],
+                    estimator,
+                    kwargs.pop('reachability_fn'),
+                    stamp=None,
+                    camera_frame='camera_link',
+                    candidate_frame_convention='ros_camera_link',
+                    orientation_variant_quaternions=variants,
+                    evaluation_record_sink=records.append,
+                    grasp_config={'tool_approach_axis': 'z'},
+                    **kwargs,
+                )
+
+                self.assertIsNone(selected)
+                self.assertIsNone(pose)
+                self.assertEqual(len(records), 2)
+                self.assertEqual(
+                    [
+                        (row['candidate_index'], row['variant_index'])
+                        for row in records
+                    ],
+                    [(0, 0), (0, 1)],
+                )
+                for row in records:
+                    self.assertTrue(required_keys.issubset(row))
+                    self.assertFalse(row['selected'])
+                    assert_stage(row)
 
     def test_selector_uses_geometry_tuple_with_motion_before_model_score(self):
         candidates = [
@@ -2198,12 +3664,14 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 np.array([0.10, 0.0, 0.20]),
                 np.array([0.0, 0.0, 0.0, 1.0]),
                 0.04,
+                depth_m=0.03,
             ),
             RemoteGraspCandidate(
                 0.10,
                 np.array([0.20, 0.0, 0.20]),
                 np.array([0.0, 0.0, 0.0, 1.0]),
                 0.04,
+                depth_m=0.03,
             ),
         ]
 
@@ -2235,6 +3703,137 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         )
 
         self.assertAlmostEqual(selected.score, 0.10)
+
+    def test_selector_equal_rank_is_stable_and_preserves_wsl_lineage(self):
+        candidates = [
+            RemoteGraspCandidate(
+                0.90,
+                np.array([0.10, 0.0, 0.20]),
+                np.array([0.0, 0.0, 0.0, 1.0]),
+                0.04,
+                depth_m=0.03,
+            ),
+            RemoteGraspCandidate(
+                0.90,
+                np.array([0.20, 0.0, 0.20]),
+                np.array([0.0, 0.0, 0.0, 1.0]),
+                0.04,
+                depth_m=0.03,
+            ),
+        ]
+        variants = [
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            remote_node.quaternion_from_euler(0.0, 0.0, np.pi),
+        ]
+        reachability_calls = []
+
+        selected, _pose = remote_node.select_first_reachable_candidate(
+            candidates,
+            RecordingPoseEstimator(),
+            lambda pose: reachability_calls.append(pose) or True,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            orientation_variant_quaternions=variants,
+            candidate_rank_fn=lambda *_args: (1.0,),
+            grasp_config={},
+        )
+
+        self.assertEqual(len(reachability_calls), 4)
+        self.assertEqual(selected._raw_candidate_index, 0)
+        self.assertEqual(selected._variant_index, 0)
+        np.testing.assert_array_equal(
+            selected.translation_m,
+            candidates[0].translation_m,
+        )
+        self.assertAlmostEqual(selected.score, candidates[0].score)
+        self.assertAlmostEqual(selected.width_m, candidates[0].width_m)
+        self.assertAlmostEqual(selected.depth_m, candidates[0].depth_m)
+
+        subset, _pose = remote_node.select_first_reachable_candidate(
+            candidates,
+            RecordingPoseEstimator(),
+            lambda _pose: True,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            orientation_variant_quaternions=variants,
+            candidate_filter_fn=lambda raw, *_args: raw is candidates[1],
+            candidate_rank_fn=lambda *_args: (1.0,),
+            grasp_config={},
+        )
+        self.assertEqual(subset._raw_candidate_index, 1)
+        self.assertEqual(subset._variant_index, 0)
+        np.testing.assert_array_equal(subset.translation_m, candidates[1].translation_m)
+
+        # With candidate 0 / variant 0 removed, a stable WSL-lineage tie-break
+        # selects candidate 0 / variant 1 before candidate 1 / variant 0.
+        lineage_tie, _pose = remote_node.select_first_reachable_candidate(
+            candidates,
+            RecordingPoseEstimator(),
+            lambda _pose: True,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            orientation_variant_quaternions=variants,
+            candidate_filter_fn=lambda raw, converted, _pose: not (
+                raw is candidates[0]
+                and int(getattr(converted, '_variant_index', -1)) == 0
+            ),
+            candidate_rank_fn=lambda *_args: (1.0,),
+            grasp_config={},
+        )
+        self.assertEqual(lineage_tie._raw_candidate_index, 0)
+        self.assertEqual(lineage_tie._variant_index, 1)
+
+    def test_selector_missing_axis_defaults_four_stage_path_to_tool_plus_z(self):
+        candidate = RemoteGraspCandidate(
+            0.90,
+            np.array([0.20, 0.0, 0.20]),
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            0.04,
+            depth_m=0.03,
+        )
+        observed = {}
+
+        def geometry_gate(_raw, converted, pose, plan):
+            observed['converted'] = converted
+            observed['pose'] = pose
+            observed['plan'] = plan
+            return remote_node.CandidateGateResult(
+                True, '', '', 0.044, 0.0, 0.01, 1.0, 0.0, 0.0, '', 6
+            )
+
+        selected, pose = remote_node.select_first_reachable_candidate(
+            [candidate],
+            RecordingPoseEstimator(),
+            lambda _pose: True,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            candidate_geometry_fn=geometry_gate,
+            grasp_config={
+                'pregrasp_distance_m': 0.08,
+                'final_approach_offset_m': 0.02,
+                'lift_height_m': 0.05,
+            },
+        )
+
+        self.assertIsNotNone(selected)
+        tool_rotation = remote_node.pose_matrix(pose)[:3, :3]
+        grasp_xyz = remote_node.pose_matrix(observed['plan'].grasp)[:3, 3]
+        pregrasp_xyz = remote_node.pose_matrix(observed['plan'].pregrasp)[:3, 3]
+        approach_xyz = remote_node.pose_matrix(observed['plan'].approach)[:3, 3]
+        np.testing.assert_allclose(
+            grasp_xyz - pregrasp_xyz,
+            0.08 * tool_rotation[:, 2],
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            grasp_xyz - approach_xyz,
+            0.02 * tool_rotation[:, 2],
+            atol=1e-8,
+        )
 
     def test_converts_opencv_optical_candidate_to_ros_camera_link(self):
         candidate = RemoteGraspCandidate(
@@ -2279,7 +3878,103 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIsNotNone(selected)
         np.testing.assert_allclose(rotation[:, 2], [1.0, 0.0, 0.0], atol=1e-7)
         np.testing.assert_allclose(rotation[:, 1], [0.0, 1.0, 0.0], atol=1e-7)
+        np.testing.assert_allclose(selected.translation_m, [0.30, 0.0, 0.0])
+        np.testing.assert_allclose(selected.tool0_translation_m, [0.33, 0.0, 0.0])
+        np.testing.assert_allclose(estimator.calls[0][0], [0.33, 0.0, 0.0])
         self.assertAlmostEqual(selected.depth_m, 0.03)
+
+    def test_execution_tool0_config_rejects_depth_disable_wrong_rotation_and_axis(self):
+        strict = remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION
+        cases = (
+            (False, strict, {'tool_approach_axis': 'z'}, 'DEPTH_CONTRACT_DISABLED'),
+            (True, [0.0, 0.0, 0.0, 1.0], {'tool_approach_axis': 'z'}, 'TOOL_FRAME_CONTRACT_INVALID'),
+            (True, strict, {'tool_approach_axis': 'x'}, 'TOOL_FRAME_CONTRACT_INVALID'),
+            (True, strict, {'tool_approach_axis': '-z'}, 'TOOL_FRAME_CONTRACT_INVALID'),
+        )
+        for require_depth, correction, config, expected_code in cases:
+            with self.subTest(expected_code=expected_code, config=config):
+                with self.assertRaises(remote_node.CandidateContractError) as context:
+                    remote_node.validate_execution_tool0_contract(
+                        require_depth,
+                        correction,
+                        config,
+                    )
+                self.assertEqual(context.exception.code, expected_code)
+
+    def test_depth_offsets_tool0_in_positive_model_x_for_all_graspnet_depth_bins(self):
+        correction = remote_node.quaternion_from_euler(0.0, np.pi * 0.5, 0.0)
+        center = np.array([0.30, -0.02, 0.10])
+
+        for depth in (0.01, 0.02, 0.03, 0.04):
+            with self.subTest(depth=depth):
+                candidate = RemoteGraspCandidate(
+                    score=0.9,
+                    translation_m=center.copy(),
+                    quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+                    width_m=0.04,
+                    depth_m=depth,
+                )
+
+                aligned = remote_node.align_candidate_to_tool_frame(
+                    candidate,
+                    correction,
+                    require_depth=True,
+                )
+                offset = aligned.tool0_translation_m - aligned.translation_m
+                rotation = remote_node.quaternion_matrix(
+                    aligned.quaternion_xyzw
+                )[:3, :3]
+
+                np.testing.assert_allclose(offset, [depth, 0.0, 0.0], atol=1e-9)
+                np.testing.assert_allclose(offset, depth * rotation[:, 2], atol=1e-9)
+                self.assertAlmostEqual(float(np.linalg.norm(offset)), depth)
+
+    def test_existing_consistent_tool0_is_not_offset_by_depth_twice(self):
+        depth = 0.03
+        center = np.array([0.30, 0.0, 0.0])
+        candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=center,
+            quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.04,
+            depth_m=depth,
+            tool0_translation_m=center + np.array([depth, 0.0, 0.0]),
+        )
+        correction = remote_node.quaternion_from_euler(0.0, np.pi * 0.5, 0.0)
+
+        aligned = remote_node.align_candidate_to_tool_frame(
+            candidate,
+            correction,
+            require_depth=True,
+        )
+
+        np.testing.assert_allclose(aligned.tool0_translation_m, [0.33, 0.0, 0.0])
+
+    def test_strict_depth_contract_rejects_missing_nonfinite_and_nonpositive_depth(self):
+        correction = remote_node.quaternion_from_euler(0.0, np.pi * 0.5, 0.0)
+        reached = []
+        for depth in (None, 0.0, -0.01, float('nan'), float('inf')):
+            with self.subTest(depth=depth):
+                candidate = RemoteGraspCandidate(
+                    score=0.9,
+                    translation_m=np.array([0.30, 0.0, 0.0]),
+                    quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+                    width_m=0.04,
+                    depth_m=depth,
+                )
+                selected, pose = remote_node.select_first_reachable_candidate(
+                    [candidate],
+                    RecordingPoseEstimator(),
+                    lambda _pose: reached.append(True) or True,
+                    stamp=None,
+                    camera_frame='camera_link',
+                    candidate_frame_convention='ros_camera_link',
+                    model_grasp_to_tool_quaternion=correction,
+                    require_candidate_depth=True,
+                )
+                self.assertIsNone(selected)
+                self.assertIsNone(pose)
+        self.assertEqual(reached, [])
 
     def test_parallel_jaw_symmetry_preserves_approach_and_swaps_jaw_axis(self):
         candidate = RemoteGraspCandidate(
@@ -2310,11 +4005,738 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertIsNone(pose)
         self.assertEqual(len(estimator.calls), 2)
+        np.testing.assert_allclose(estimator.calls[0][0], [0.33, 0.0, 0.0])
+        np.testing.assert_allclose(estimator.calls[1][0], estimator.calls[0][0])
         first = remote_node.quaternion_matrix(estimator.calls[0][1])[:3, :3]
         symmetric = remote_node.quaternion_matrix(estimator.calls[1][1])[:3, :3]
         np.testing.assert_allclose(symmetric[:, 2], first[:, 2], atol=1e-7)
         np.testing.assert_allclose(symmetric[:, 1], -first[:, 1], atol=1e-7)
         np.testing.assert_allclose(symmetric[:, 0], -first[:, 0], atol=1e-7)
+
+    def test_identity_variants_are_distinct_objects_so_lineage_cannot_be_overwritten(self):
+        candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=np.array([0.30, 0.0, 0.0]),
+            quaternion_xyzw=remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+            width_m=0.04,
+            depth_m=0.03,
+            tool0_translation_m=np.array([0.33, 0.0, 0.0]),
+        )
+        identity = np.asarray([0.0, 0.0, 0.0, 1.0])
+
+        first = remote_node.make_parallel_jaw_variant(candidate, identity)
+        second = remote_node.make_parallel_jaw_variant(candidate, identity)
+        first._raw_candidate_index = 7
+        first._variant_index = 0
+
+        self.assertIsNot(first, candidate)
+        self.assertIsNot(second, candidate)
+        self.assertIsNot(first, second)
+        self.assertFalse(hasattr(second, '_raw_candidate_index'))
+        self.assertFalse(hasattr(second, '_variant_index'))
+        self.assertFalse(
+            np.shares_memory(first.translation_m, second.translation_m)
+        )
+        self.assertFalse(
+            np.shares_memory(
+                first.tool0_translation_m,
+                second.tool0_translation_m,
+            )
+        )
+
+    def test_shared_parallel_jaw_variant_rejects_non_rz180_corrections(self):
+        aligned = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=np.array([0.30, 0.0, 0.0]),
+            quaternion_xyzw=remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+            width_m=0.04,
+            depth_m=0.03,
+            tool0_translation_m=np.array([0.33, 0.0, 0.0]),
+        )
+        for correction in (
+            remote_node.quaternion_from_euler(np.pi, 0.0, 0.0),
+            remote_node.quaternion_from_euler(0.0, np.pi, 0.0),
+            remote_node.quaternion_from_euler(0.0, 0.0, np.pi * 0.5),
+        ):
+            with self.subTest(correction=correction):
+                with self.assertRaises(remote_node.CandidateContractError) as context:
+                    remote_node.make_parallel_jaw_variant(aligned, correction)
+                self.assertEqual(
+                    context.exception.code,
+                    'ORIENTATION_VARIANT_INVALID',
+                )
+
+    def test_center_is_recovered_from_tool0_under_nonidentity_base_transform(self):
+        center_camera = np.array([0.30, 0.10, 0.20])
+        tool_rotation_camera = remote_node.STRICT_MODEL_GRASP_TO_TOOL_ROTATION
+        tool0_camera = center_camera + 0.03 * tool_rotation_camera[:, 2]
+        candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=center_camera,
+            quaternion_xyzw=remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+            width_m=0.04,
+            depth_m=0.03,
+            tool0_translation_m=tool0_camera,
+        )
+        base_from_camera = remote_node.transform_matrix(
+            [1.0, 2.0, 3.0],
+            remote_node.quaternion_from_euler(0.0, 0.0, np.pi * 0.5),
+        )
+        expected_center = (
+            base_from_camera[:3, :3].dot(center_camera)
+            + base_from_camera[:3, 3]
+        )
+
+        for variant in (
+            candidate,
+            remote_node.make_parallel_jaw_variant(
+                candidate,
+                remote_node.quaternion_from_euler(0.0, 0.0, np.pi),
+            ),
+        ):
+            base_from_tool = np.eye(4, dtype=float)
+            base_from_tool[:3, :3] = base_from_camera[:3, :3].dot(
+                remote_node.quaternion_matrix(variant.quaternion_xyzw)[:3, :3]
+            )
+            base_from_tool[:3, 3] = (
+                base_from_camera[:3, :3].dot(tool0_camera)
+                + base_from_camera[:3, 3]
+            )
+            pose = PoseStamped()
+            pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = (
+                base_from_tool[:3, 3]
+            )
+            quaternion = remote_node.quaternion_from_matrix(base_from_tool)
+            pose.pose.orientation.x = quaternion[0]
+            pose.pose.orientation.y = quaternion[1]
+            pose.pose.orientation.z = quaternion[2]
+            pose.pose.orientation.w = quaternion[3]
+
+            recovered = remote_node.candidate_center_base_from_tool0_pose(
+                variant,
+                pose,
+            )
+            np.testing.assert_allclose(recovered, expected_center, atol=1e-8)
+
+    def test_tool0_drives_geometry_reachability_and_four_stage_trajectory(self):
+        candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=np.array([0.30, 0.0, 0.10]),
+            quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.04,
+            depth_m=0.03,
+        )
+        correction = remote_node.quaternion_from_euler(0.0, np.pi * 0.5, 0.0)
+        observed = {}
+
+        def geometry_gate(_raw, converted, pose, plan):
+            observed['center_camera'] = converted.translation_m.copy()
+            observed['tool0_camera'] = converted.tool0_translation_m.copy()
+            observed['center_base'] = converted._center_base_xyz.copy()
+            observed['geometry_pose'] = np.array(
+                [pose.pose.position.x, pose.pose.position.y, pose.pose.position.z]
+            )
+            observed['trajectory_x'] = np.array(
+                [
+                    plan.pregrasp.pose.position.x,
+                    plan.approach.pose.position.x,
+                    plan.grasp.pose.position.x,
+                    plan.lift.pose.position.x,
+                ]
+            )
+            return remote_node.CandidateGateResult(
+                True, '', '', 0.044, 0.0, 0.01, 1.0, 0.0, 0.0, '', 6
+            )
+
+        selected, pose = remote_node.select_first_reachable_candidate(
+            [candidate],
+            RecordingPoseEstimator(),
+            lambda reachable_pose: observed.setdefault(
+                'reachable_x', reachable_pose.pose.position.x
+            ) is not None,
+            stamp=None,
+            camera_frame='camera_link',
+            candidate_frame_convention='ros_camera_link',
+            model_grasp_to_tool_quaternion=correction,
+            candidate_geometry_fn=geometry_gate,
+            grasp_config={
+                'pregrasp_distance_m': 0.08,
+                'final_approach_offset_m': 0.015,
+                'lift_height_m': 0.05,
+                'tool_approach_axis': 'z',
+            },
+            require_candidate_depth=True,
+        )
+
+        self.assertIsNotNone(selected)
+        np.testing.assert_allclose(observed['center_camera'], [0.30, 0.0, 0.10])
+        np.testing.assert_allclose(observed['center_base'], [0.30, 0.0, 0.10])
+        np.testing.assert_allclose(observed['tool0_camera'], [0.33, 0.0, 0.10])
+        np.testing.assert_allclose(observed['geometry_pose'], [0.33, 0.0, 0.10])
+        np.testing.assert_allclose(observed['trajectory_x'], [0.25, 0.315, 0.33, 0.33])
+        self.assertAlmostEqual(observed['reachable_x'], 0.33)
+        self.assertAlmostEqual(pose.pose.position.x, 0.33)
+
+        geometry = make_geometry_message()
+        rich_plan = remote_node.build_rich_plan(
+            selected,
+            geometry,
+            geometry.header,
+            'carton_segment',
+        )
+        payload = mujoco_digital_twin_client.build_mujoco_payload(
+            rich_plan,
+            ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'],
+            [0.0] * 6,
+            {
+                'name': 'Alicia_D_v5_6_gripper_50mm',
+                'max_inner_gap_m': 0.050,
+            },
+        )
+        serialized_x = [
+            item['position_m'][0]
+            for item in payload['trajectory']
+        ]
+        np.testing.assert_allclose(serialized_x, [0.25, 0.315, 0.33, 0.33])
+        self.assertNotIn(0.30, serialized_x)
+
+    def test_target_gate_and_audit_use_center_while_recording_tool0(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.require_candidate_depth = True
+        node.candidate_target_gate_enabled = True
+        node.candidate_max_target_distance_m = 0.005
+        node.candidate_min_relative_z_m = -0.005
+        node.candidate_max_relative_z_m = 0.005
+        node.target_cloud_candidate_max_point_distance_m = 0.0
+        node.target_cloud_candidate_min_support_clearance_m = -0.002
+        node.latest_support_plane_camera_point = None
+        node.latest_support_plane_camera_normal = None
+        node.camera_visibility_gate_enabled = False
+        node._target_gate_rejected_count = 0
+        node._approach_gate_rejected_count = 0
+        node._target_base_xyz = lambda: (np.array([0.30, 0.0, 0.10]), 'test')
+        node._camera_candidate_cloud_distance = lambda _candidate: float('inf')
+        node._candidate_approach_downward_cos = lambda _candidate, _pose: 1.0
+
+        candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=np.array([0.30, 0.0, 0.10]),
+            quaternion_xyzw=remote_node.quaternion_from_euler(
+                0.0, np.pi * 0.5, 0.0
+            ),
+            width_m=0.04,
+            depth_m=0.03,
+            tool0_translation_m=np.array([0.33, 0.0, 0.10]),
+        )
+        candidate._center_base_xyz = np.array([0.30, 0.0, 0.10])
+        tool0_pose = PoseStamped()
+        tool0_pose.pose.position.x = 0.33
+        tool0_pose.pose.position.z = 0.10
+        q = candidate.quaternion_xyzw
+        tool0_pose.pose.orientation.x = q[0]
+        tool0_pose.pose.orientation.y = q[1]
+        tool0_pose.pose.orientation.z = q[2]
+        tool0_pose.pose.orientation.w = q[3]
+
+        self.assertTrue(
+            node._candidate_matches_target(None, candidate, tool0_pose)
+        )
+        row = node._candidate_gate_audit_row(0, 0, candidate, tool0_pose)
+
+        self.assertTrue(row['target_ok'])
+        self.assertAlmostEqual(row['center_distance_m'], 0.0)
+        np.testing.assert_allclose(row['center_camera_m'], [0.30, 0.0, 0.10])
+        np.testing.assert_allclose(row['tool0_camera_m'], [0.33, 0.0, 0.10])
+        np.testing.assert_allclose(row['center_base_m'], [0.30, 0.0, 0.10])
+        np.testing.assert_allclose(row['tool0_base_m'], [0.33, 0.0, 0.10])
+        np.testing.assert_allclose(row['tool0_offset_camera_m'], [0.03, 0.0, 0.0])
+        np.testing.assert_allclose(row['tool0_offset_base_m'], [0.03, 0.0, 0.0])
+        self.assertAlmostEqual(row['tool0_contract_residual_camera_m'], 0.0)
+        self.assertAlmostEqual(row['tool0_contract_residual_base_m'], 0.0)
+        np.testing.assert_allclose(row['translation_camera_m'], row['center_camera_m'])
+        self.assertAlmostEqual(row['depth_offset_m'], 0.03)
+
+    def test_full_gate_audit_is_atomic_on_disk_and_topic_stays_bounded(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.gate_audit_pub = RecordingPublisher()
+        compact_transform = {
+            'snapshot_stamp_ns': 10_000_000_123,
+            'snapshot_source_frame': 'camera_link',
+            'raw_candidate_convention': 'opencv_optical',
+            'canonical_candidate_frame': 'camera_link',
+            'transform_sha256': 'a' * 64,
+        }
+        node._latest_gate_audit_summary = {
+            'base_candidates': 936,
+            'profiles': [],
+            'snapshot_transform': compact_transform,
+        }
+        selected = {
+            'candidate_index': 7,
+            'variant_index': 1,
+            'score': 0.9,
+            'depth_m': 0.03,
+            'center_camera_m': [0.30, 0.0, 0.10],
+            'tool0_camera_m': [0.33, 0.0, 0.10],
+            'center_base_m': [0.40, -0.10, 0.20],
+            'tool0_base_m': [0.43, -0.10, 0.20],
+            'tool0_offset_camera_m': [0.03, 0.0, 0.0],
+            'tool0_offset_base_m': [0.03, 0.0, 0.0],
+            'tool0_contract_residual_camera_m': 0.0,
+            'tool0_contract_residual_base_m': 0.0,
+        }
+        rows = [dict(selected, candidate_index=index) for index in range(64)]
+        report = {
+            'summary': node._latest_gate_audit_summary,
+            'snapshot_transform': dict(
+                compact_transform,
+                T_base_optical=np.eye(4).tolist(),
+                T_base_camera_link=np.eye(4).tolist(),
+            ),
+            'rows': rows,
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'gate-audit.json'
+            node.gate_audit_output_path = str(path)
+            reference = node._write_gate_audit_report(report)
+            node._latest_gate_audit_reference = reference
+            node._publish_bounded_gate_audit(selected)
+
+            payload = path.read_bytes()
+            on_disk = json.loads(payload.decode('utf-8'))
+            topic = json.loads(node.gate_audit_pub.messages[-1])
+
+            self.assertEqual(len(on_disk['rows']), 64)
+            self.assertEqual(on_disk['rows'][0]['center_base_m'], selected['center_base_m'])
+            self.assertEqual(on_disk['rows'][0]['tool0_base_m'], selected['tool0_base_m'])
+            self.assertIn('tool0_contract_residual_base_m', on_disk['rows'][0])
+            self.assertEqual(reference['report_sha256'], hashlib.sha256(payload).hexdigest())
+            self.assertEqual(topic['row_count'], 64)
+            self.assertNotIn('rows', topic)
+            self.assertEqual(topic['selected']['tool0_base_m'], selected['tool0_base_m'])
+            self.assertEqual(topic['selected']['candidate_index'], 7)
+            self.assertEqual(topic['selected']['variant_index'], 1)
+            self.assertEqual(
+                topic['summary']['snapshot_transform']['transform_sha256'],
+                'a' * 64,
+            )
+            self.assertIn('T_base_optical', on_disk['snapshot_transform'])
+            self.assertNotIn('T_base_optical', node.gate_audit_pub.messages[-1])
+            self.assertLess(len(node.gate_audit_pub.messages[-1]), 4096)
+            self.assertEqual(list(path.parent.glob('*.tmp-*')), [])
+
+    def test_valid_plan_requires_complete_final_audit_with_plan_id_before_publish(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        candidate = RemoteGraspCandidate(
+            0.90,
+            np.array([0.40, -0.10, 0.25]),
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            0.04,
+            depth_m=0.03,
+        )
+        node = make_processing_node(RecordingClient(candidates=[candidate]))
+        node.pose_estimator = RecordingPoseEstimator()
+        node._plan_reachable = lambda _pose: True
+        node.orientation_variant_quaternions = [
+            np.asarray([0.0, 0.0, 0.0, 1.0]),
+            remote_node.quaternion_from_euler(0.0, 0.0, np.pi),
+        ]
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.04, 0.04, 0.06],
+        )
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'final-audit.json'
+            node.gate_audit_output_path = str(path)
+
+            class AuditBeforeRichPublisher(RecordingPublisher):
+                def publish(self, message):
+                    if bool(getattr(message, 'valid', False)):
+                        self.assert_audit(message)
+                    super().publish(message)
+
+                @staticmethod
+                def assert_audit(message):
+                    if not path.is_file():
+                        raise AssertionError('audit must exist before rich plan')
+                    payload = json.loads(path.read_text())
+                    if payload.get('plan_id') != message.plan_id:
+                        raise AssertionError('audit plan_id must bind rich plan')
+
+            node.rich_plan_pub = AuditBeforeRichPublisher()
+            try:
+                ok, message = node._process_frame(snapshot, manual=True)
+            finally:
+                remote_node.estimate_object_geometry = original_estimator
+
+            self.assertTrue(ok, message)
+            report = json.loads(path.read_text())
+            self.assertEqual(report['plan_id'], node.rich_plan_pub.messages[-1].plan_id)
+            self.assertTrue(report['outcome']['valid_plan'])
+            self.assertEqual(report['outcome']['code'], 'PLAN_READY')
+            self.assertEqual(len(report['rows']), 2)
+            self.assertEqual(len(report['lineage']), 2)
+            selected = [
+                row for row in report['rows'] if bool(row.get('selected', False))
+            ]
+            self.assertEqual(len(selected), 1)
+            self.assertEqual(
+                report['selected']['candidate_index'],
+                selected[0]['candidate_index'],
+            )
+            self.assertEqual(
+                report['selected']['variant_index'],
+                selected[0]['variant_index'],
+            )
+            for row in report['rows']:
+                evaluation = row['planning_evaluation']
+                self.assertTrue(evaluation['candidate_contract']['ok'])
+                analytical = evaluation['analytical_result']
+                self.assertTrue(analytical['checked'])
+                self.assertEqual(analytical['total_gate_count'], 6)
+                self.assertEqual(analytical['passed_gate_count'], 6)
+                self.assertTrue(evaluation['target_filter']['checked'])
+                self.assertTrue(evaluation['target_filter']['ok'])
+                self.assertTrue(evaluation['strict_reachability']['checked'])
+                self.assertTrue(evaluation['strict_reachability']['ok'])
+
+            bounded = json.loads(node.gate_audit_pub.messages[-1])
+            self.assertNotIn('rows', bounded)
+            self.assertEqual(
+                bounded['report_sha256'],
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(bounded['selected']['candidate_index'], 0)
+
+    def test_audit_finalizer_requires_exact_valid_lineage_and_completes_failures(self):
+        node = make_processing_node()
+        rows = [
+            {'candidate_index': 0, 'variant_index': 0},
+            {'candidate_index': 0, 'variant_index': 1},
+        ]
+
+        def install_base_report():
+            node._active_gate_audit_report = {
+                'report_version': 2,
+                'summary': {},
+                'rows': deepcopy(rows),
+                'lineage': [],
+                'selected': None,
+                'plan_id': '',
+                'outcome': {
+                    'code': '',
+                    'reason': '',
+                    'valid_plan': False,
+                },
+            }
+
+        one_evaluation = remote_node.failed_planning_evaluation(
+            0,
+            0,
+            'SYNTHETIC_FAILURE',
+            'synthetic selector failure',
+        )
+        install_base_report()
+        with self.assertRaises(
+            remote_node.CandidateContractError
+        ) as raised:
+            node._finalize_gate_audit_report(
+                evaluation_records=[one_evaluation],
+                selected_candidate=None,
+                selected_pose=None,
+                plan_id='a' * 24,
+                outcome_code='PLAN_READY',
+                outcome_reason='synthetic ready plan',
+                valid_plan=True,
+            )
+        self.assertEqual(
+            raised.exception.code,
+            remote_node.PLANNING_AUDIT_FAILED,
+        )
+
+        install_base_report()
+        node._finalize_gate_audit_report(
+            evaluation_records=[one_evaluation],
+            selected_candidate=None,
+            selected_pose=None,
+            plan_id='',
+            outcome_code='PLAN_FAILED',
+            outcome_reason='synthetic failed plan',
+            valid_plan=False,
+        )
+        failed_report = node._active_gate_audit_report
+        self.assertFalse(failed_report['outcome']['valid_plan'])
+        self.assertEqual(failed_report['outcome']['code'], 'PLAN_FAILED')
+        self.assertEqual(
+            failed_report['rows'][1]['planning_evaluation'][
+                'candidate_contract'
+            ]['failure_code'],
+            'PLANNING_EVALUATION_MISSING',
+        )
+        self.assertEqual(
+            {
+                (
+                    row['planning_evaluation']['candidate_index'],
+                    row['planning_evaluation']['variant_index'],
+                )
+                for row in failed_report['rows']
+            },
+            {(0, 0), (0, 1)},
+        )
+
+        install_base_report()
+        node._finalize_gate_audit_report(
+            evaluation_records=[one_evaluation, deepcopy(one_evaluation)],
+            selected_candidate=None,
+            selected_pose=None,
+            plan_id='',
+            outcome_code='PLAN_FAILED',
+            outcome_reason='synthetic failed plan',
+            valid_plan=False,
+        )
+        inconsistent_report = node._active_gate_audit_report
+        self.assertFalse(inconsistent_report['outcome']['valid_plan'])
+        self.assertEqual(
+            inconsistent_report['outcome']['code'],
+            remote_node.PLANNING_AUDIT_FAILED,
+        )
+        self.assertIn(
+            'duplicate audit lineage',
+            inconsistent_report['outcome']['reason'],
+        )
+
+        selected_candidate = types.SimpleNamespace(
+            _raw_candidate_index=0,
+            _variant_index=0,
+        )
+        selected_pose = object()
+        complete_evaluations = [
+            remote_node.failed_planning_evaluation(
+                0,
+                variant_index,
+                'SYNTHETIC_FAILURE',
+                'synthetic complete selector row',
+            )
+            for variant_index in (0, 1)
+        ]
+        invalid_selected_cases = []
+        invalid_selected_cases.append(
+            ('zero-selected', deepcopy(complete_evaluations))
+        )
+        multiple = deepcopy(complete_evaluations)
+        multiple[0]['selected'] = True
+        multiple[1]['selected'] = True
+        invalid_selected_cases.append(('multiple-selected', multiple))
+        wrong = deepcopy(complete_evaluations)
+        wrong[1]['selected'] = True
+        invalid_selected_cases.append(('wrong-selected', wrong))
+        non_boolean = deepcopy(complete_evaluations)
+        non_boolean[0]['selected'] = 1
+        invalid_selected_cases.append(('non-boolean-selected', non_boolean))
+
+        for label, evaluations in invalid_selected_cases:
+            with self.subTest(selected_contract=label):
+                install_base_report()
+                with self.assertRaises(
+                    remote_node.CandidateContractError
+                ) as raised:
+                    node._finalize_gate_audit_report(
+                        evaluation_records=evaluations,
+                        selected_candidate=selected_candidate,
+                        selected_pose=selected_pose,
+                        plan_id='a' * 24,
+                        outcome_code='PLAN_READY',
+                        outcome_reason='synthetic ready plan',
+                        valid_plan=True,
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    remote_node.PLANNING_AUDIT_FAILED,
+                )
+
+        valid_evaluations = deepcopy(complete_evaluations)
+        valid_evaluations[0]['selected'] = True
+        install_base_report()
+        node._candidate_gate_audit_row = lambda *_args: {
+            'candidate_index': 0,
+            'variant_index': 0,
+        }
+        node._finalize_gate_audit_report(
+            evaluation_records=valid_evaluations,
+            selected_candidate=selected_candidate,
+            selected_pose=selected_pose,
+            plan_id='a' * 24,
+            outcome_code='PLAN_READY',
+            outcome_reason='synthetic ready plan',
+            valid_plan=True,
+        )
+        valid_report = node._active_gate_audit_report
+        self.assertTrue(valid_report['outcome']['valid_plan'])
+        self.assertEqual(
+            [row['selected'] for row in valid_report['lineage']],
+            [True, False],
+        )
+        self.assertEqual(valid_report['selected']['candidate_index'], 0)
+        self.assertEqual(valid_report['selected']['variant_index'], 0)
+
+    def test_bad_raw_candidate_and_good_candidate_keep_complete_two_variant_lineage(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        bad = RemoteGraspCandidate(
+            0.99,
+            np.array([0.40, -0.10, 0.25]),
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            0.04,
+            depth_m=0.025,
+        )
+        good = RemoteGraspCandidate(
+            0.80,
+            np.array([0.40, -0.10, 0.25]),
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            0.04,
+            depth_m=0.03,
+        )
+        node = make_processing_node(RecordingClient(candidates=[bad, good]))
+        node.pose_estimator = RecordingPoseEstimator()
+        node._plan_reachable = lambda _pose: True
+        node.orientation_variant_quaternions = [
+            np.asarray([0.0, 0.0, 0.0, 1.0]),
+            remote_node.quaternion_from_euler(0.0, 0.0, np.pi),
+        ]
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.04, 0.04, 0.06],
+        )
+        node._snapshot_base_optical_transform = (
+            lambda *_args: identity_base_camera_snapshot_transform()
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'mixed-audit.json'
+            node.gate_audit_output_path = str(path)
+            try:
+                ok, message = node._process_frame(snapshot, manual=True)
+            finally:
+                remote_node.estimate_object_geometry = original_estimator
+
+            self.assertTrue(ok, message)
+            report = json.loads(path.read_text())
+            self.assertEqual(
+                [
+                    (row['candidate_index'], row['variant_index'])
+                    for row in report['rows']
+                ],
+                [(0, 0), (0, 1), (1, 0), (1, 1)],
+            )
+            for row in report['rows'][:2]:
+                contract = row['planning_evaluation']['candidate_contract']
+                self.assertFalse(contract['ok'])
+                self.assertEqual(contract['failure_code'], 'DEPTH_OUT_OF_RANGE')
+            self.assertEqual(report['selected']['candidate_index'], 1)
+            self.assertEqual(
+                node.rich_plan_pub.messages[-1].score,
+                good.score,
+            )
+
+    def test_audit_internal_or_atomic_write_failure_blocks_every_valid_plan(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        candidate = RemoteGraspCandidate(
+            0.90,
+            np.array([0.40, -0.10, 0.25]),
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            0.04,
+            depth_m=0.03,
+        )
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+            center_base=[0.40, -0.10, 0.25],
+            size_xyz_m=[0.04, 0.04, 0.06],
+        )
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                node = make_processing_node(
+                    RecordingClient(candidates=[candidate])
+                )
+                node.gate_audit_output_path = str(
+                    pathlib.Path(directory) / 'audit-failure.json'
+                )
+                node._snapshot_base_optical_transform = (
+                    lambda *_args: identity_base_camera_snapshot_transform()
+                )
+                node._run_candidate_gate_audit = lambda *_args, **_kwargs: (
+                    (_ for _ in ()).throw(RuntimeError('audit exploded'))
+                )
+
+                ok, message = node._process_frame(snapshot, manual=True)
+
+                self.assertFalse(ok)
+                self.assertTrue(
+                    message.startswith(remote_node.PLANNING_AUDIT_FAILED + ': '),
+                    message,
+                )
+                self.assertTrue(
+                    all(
+                        not bool(getattr(item, 'valid', False))
+                        for item in node.rich_plan_pub.messages
+                    )
+                )
+                report = json.loads(
+                    pathlib.Path(node.gate_audit_output_path).read_text()
+                )
+                self.assertEqual(
+                    report['outcome']['code'],
+                    remote_node.PLANNING_AUDIT_FAILED,
+                )
+                self.assertFalse(report['outcome']['valid_plan'])
+
+            with tempfile.TemporaryDirectory() as directory:
+                node = make_processing_node(RecordingClient(candidates=[]))
+                node.gate_audit_output_path = directory
+                node._snapshot_base_optical_transform = (
+                    lambda *_args: identity_base_camera_snapshot_transform()
+                )
+
+                ok, message = node._process_frame(snapshot, manual=True)
+
+                self.assertFalse(ok)
+                self.assertTrue(
+                    message.startswith(
+                        remote_node.PLANNING_AUDIT_WRITE_FAILED + ': '
+                    ),
+                    message,
+                )
+                self.assertTrue(
+                    all(
+                        not bool(getattr(item, 'valid', False))
+                        for item in node.rich_plan_pub.messages
+                    )
+                )
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+    def test_atomic_audit_writer_rejects_non_finite_json(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.gate_audit_enabled = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'strict.json'
+            node.gate_audit_output_path = str(path)
+
+            with self.assertRaises(remote_node.CandidateContractError) as raised:
+                node._write_gate_audit_report(
+                    {'rows': [{'score': float('nan')}]}
+                )
+
+            self.assertEqual(
+                raised.exception.code,
+                remote_node.PLANNING_AUDIT_WRITE_FAILED,
+            )
+            self.assertFalse(path.exists())
 
     def test_reachability_receives_converted_opencv_optical_candidate(self):
         candidate = RemoteGraspCandidate(
@@ -2322,6 +4744,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             translation_m=np.array([0.01, 0.02, 0.30]),
             quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
             width_m=0.05,
+            depth_m=0.03,
         )
         estimator = RecordingPoseEstimator()
 
@@ -2335,7 +4758,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         )
 
         self.assertIsNotNone(selected)
-        np.testing.assert_allclose(estimator.calls[0][0], np.array([0.30, -0.01, -0.02]))
+        np.testing.assert_allclose(estimator.calls[0][0], np.array([0.30, -0.04, -0.02]))
         self.assertAlmostEqual(pose.pose.position.x, 0.30)
         self.assertAlmostEqual(pose.pose.position.z, -0.02)
 
@@ -2359,8 +4782,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         self.assertEqual(array.header.frame_id, 'base_link')
         self.assertEqual(len(array.poses), 4)
-        self.assertAlmostEqual(array.poses[0].position.x, 0.32)
-        self.assertAlmostEqual(array.poses[1].position.x, 0.385)
+        self.assertAlmostEqual(array.poses[0].position.x, 0.4)
+        self.assertAlmostEqual(array.poses[0].position.z, 0.12)
+        self.assertAlmostEqual(array.poses[1].position.x, 0.4)
+        self.assertAlmostEqual(array.poses[1].position.z, 0.185)
         self.assertAlmostEqual(array.poses[2].position.x, 0.4)
         self.assertAlmostEqual(array.poses[3].position.z, 0.25)
 
@@ -2423,6 +4848,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             'pregrasp_distance_m': 0.08,
             'final_approach_offset_m': 0.045,
             'lift_height_m': 0.05,
+            'tool_approach_axis': 'x',
         }
         node.camera_visibility_require_approach = True
         node.camera_visibility_margin_px = 36
@@ -2447,6 +4873,52 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual([item['stage'] for item in metrics], ['pregrasp', 'approach'])
         self.assertAlmostEqual(metrics[0]['depth_m'], 0.08)
         self.assertAlmostEqual(metrics[1]['depth_m'], 0.045)
+
+    def test_visibility_sequence_missing_axis_also_defaults_to_tool_plus_z(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.tf_buffer = None
+        node.handeye_translation_xyz = [0.0, 0.0, 0.0]
+        node.handeye_rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+        node._cached_tool_from_camera = None
+        node.grasp_config = {
+            'pregrasp_distance_m': 0.08,
+            'final_approach_offset_m': 0.02,
+            'lift_height_m': 0.05,
+        }
+        node.camera_visibility_require_approach = False
+        node.camera_visibility_margin_px = 0
+        node.camera_visibility_min_depth_m = 0.0
+        node.camera_visibility_max_depth_m = 2.0
+        node._camera_intrinsics = lambda: remote_node.CameraIntrinsics(
+            width=640,
+            height=480,
+            fx=440.0,
+            fy=440.0,
+            cx=320.0,
+            cy=240.0,
+            depth_scale=0.001,
+        )
+        pose = PoseStamped()
+        pose.pose.orientation.w = 1.0
+        observed = []
+        original_builder = remote_node.make_grasp_sequence_from_grasp_pose
+
+        def recording_builder(*args, **kwargs):
+            observed.append(kwargs.get('tool_approach_axis'))
+            return original_builder(*args, **kwargs)
+
+        remote_node.make_grasp_sequence_from_grasp_pose = recording_builder
+        try:
+            _visible, metrics, _reason = node._candidate_visibility_metrics(
+                pose,
+                [0.5, 0.0, 0.0],
+            )
+        finally:
+            remote_node.make_grasp_sequence_from_grasp_pose = original_builder
+
+        self.assertEqual(observed, ['z'])
+        self.assertEqual(len(metrics), 1)
+        self.assertAlmostEqual(metrics[0]['depth_m'], 0.5)
 
     def test_visibility_margin_scales_with_target_bbox_and_depth(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
@@ -2543,6 +5015,46 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         self.assertEqual(node._position_only_rejected_count, 0)
         self.assertEqual(node._orientation_fallback_rejected_count, 0)
+
+    def test_plan_reachable_never_calls_motion_service_even_if_flags_are_relaxed(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.allow_position_only_fallback = True
+        node.allow_orientation_fallback = True
+        node._position_only_rejected_count = 0
+        node._orientation_fallback_rejected_count = 0
+        service_names = []
+
+        original_wait_for_service = remote_node.rospy.wait_for_service
+        original_service_proxy = remote_node.rospy.ServiceProxy
+        remote_node.rospy.wait_for_service = (
+            lambda name, **_kwargs: service_names.append(('wait', name))
+        )
+
+        def service_proxy(name, *_args, **_kwargs):
+            service_names.append(('proxy', name))
+            return lambda _pose, _execute: FakeServiceResponse(
+                True,
+                'planned: target xyz=(0.1, 0.2, 0.3)',
+            )
+
+        remote_node.rospy.ServiceProxy = service_proxy
+        try:
+            self.assertTrue(node._plan_reachable(PoseStamped()))
+        finally:
+            remote_node.rospy.wait_for_service = original_wait_for_service
+            remote_node.rospy.ServiceProxy = original_service_proxy
+
+        self.assertEqual(
+            service_names,
+            [
+                ('wait', '/supervisor/check_pose_strict'),
+                ('proxy', '/supervisor/check_pose_strict'),
+            ],
+        )
+        self.assertNotIn(
+            '/supervisor/move_to_pose',
+            [name for _kind, name in service_names],
+        )
 
     def test_masks_depth_to_expanded_target_roi(self):
         depth = np.arange(25, dtype=np.uint16).reshape(5, 5)
@@ -2658,7 +5170,15 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         near_cloud.pose.position.x = 1.01
         near_cloud.pose.position.y = 0.0
         near_cloud.pose.position.z = 0.105
-        camera_candidate = types.SimpleNamespace(score=0.9, translation_m=np.array([0.3, 0.0, 0.0]))
+        camera_candidate = RemoteGraspCandidate(
+            score=0.9,
+            translation_m=np.array([0.3, 0.0, 0.0]),
+            quaternion_xyzw=remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+            width_m=0.04,
+            depth_m=0.03,
+            tool0_translation_m=np.array([0.33, 0.0, 0.0]),
+        )
+        camera_candidate._center_base_xyz = np.array([1.01, 0.0, 0.105])
         original_logwarn_throttle = remote_node.rospy.logwarn_throttle
         original_time_now = remote_node.rospy.Time.now
         remote_node.rospy.logwarn_throttle = lambda *args, **kwargs: None
@@ -2699,12 +5219,15 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         grasp_pose.pose.position.x = 0.0
         grasp_pose.pose.position.y = 0.06
         grasp_pose.pose.position.z = 0.10
-        camera_candidate = types.SimpleNamespace(
+        camera_candidate = RemoteGraspCandidate(
             score=0.8,
             width_m=0.05,
             depth_m=0.02,
             translation_m=np.array([0.30, 0.06, 0.0]),
+            quaternion_xyzw=remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+            tool0_translation_m=np.array([0.32, 0.06, 0.0]),
         )
+        camera_candidate._center_base_xyz = np.array([0.0, 0.06, 0.10])
 
         original_logwarn_throttle = remote_node.rospy.logwarn_throttle
         remote_node.rospy.logwarn_throttle = lambda *args, **kwargs: None
@@ -2844,17 +5367,45 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         far_and_low.pose.position.x = -0.107
         far_and_low.pose.position.y = -0.480
         far_and_low.pose.position.z = 0.081
+        far_candidate = RemoteGraspCandidate(
+            score=0.8,
+            translation_m=np.zeros(3),
+            quaternion_xyzw=remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+            width_m=0.04,
+            depth_m=0.03,
+            tool0_translation_m=np.array([0.03, 0.0, 0.0]),
+        )
+        far_candidate._center_base_xyz = np.array([-0.107, -0.480, 0.081])
         original_logwarn_throttle = remote_node.rospy.logwarn_throttle
         remote_node.rospy.logwarn_throttle = lambda *args, **kwargs: None
         try:
-            self.assertFalse(node._candidate_matches_target(None, None, far_and_low))
+            self.assertFalse(
+                node._candidate_matches_target(None, far_candidate, far_and_low)
+            )
             self.assertEqual(node._target_gate_rejected_count, 1)
 
             close_enough = PoseStamped()
             close_enough.pose.position.x = -0.124
             close_enough.pose.position.y = -0.503
             close_enough.pose.position.z = 0.105
-            self.assertTrue(node._candidate_matches_target(None, None, close_enough))
+            close_candidate = RemoteGraspCandidate(
+                score=0.8,
+                translation_m=np.zeros(3),
+                quaternion_xyzw=remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                width_m=0.04,
+                depth_m=0.03,
+                tool0_translation_m=np.array([0.03, 0.0, 0.0]),
+            )
+            close_candidate._center_base_xyz = np.array(
+                [-0.124, -0.503, 0.105]
+            )
+            self.assertTrue(
+                node._candidate_matches_target(
+                    None,
+                    close_candidate,
+                    close_enough,
+                )
+            )
             self.assertEqual(node._target_gate_rejected_count, 1)
         finally:
             remote_node.rospy.logwarn_throttle = original_logwarn_throttle
@@ -2870,7 +5421,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node.target_cloud_enabled = False
         node.target_cloud_candidate_max_point_distance_m = 0.0
         node.camera_visibility_gate_enabled = False
-        node.require_candidate_depth = False
+        node.require_candidate_depth = True
         node._target_gate_rejected_count = 0
         node._approach_gate_rejected_count = 0
         node._object_lock = DummyLock()
@@ -2890,7 +5441,22 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         failed_grasp.pose.orientation.y = 0.489
         failed_grasp.pose.orientation.z = -0.548
         failed_grasp.pose.orientation.w = -0.149
-        camera_candidate = types.SimpleNamespace(score=0.517, width_m=0.078, depth_m=0.030)
+        camera_candidate = RemoteGraspCandidate(
+            score=0.517,
+            translation_m=np.zeros(3),
+            quaternion_xyzw=np.array(
+                [
+                    failed_grasp.pose.orientation.x,
+                    failed_grasp.pose.orientation.y,
+                    failed_grasp.pose.orientation.z,
+                    failed_grasp.pose.orientation.w,
+                ]
+            ),
+            width_m=0.078,
+            depth_m=0.030,
+            tool0_translation_m=np.array([0.03, 0.0, 0.0]),
+        )
+        camera_candidate._center_base_xyz = np.array([-0.148, -0.408, 0.070])
 
         original_logwarn_throttle = remote_node.rospy.logwarn_throttle
         remote_node.rospy.logwarn_throttle = lambda *args, **kwargs: None

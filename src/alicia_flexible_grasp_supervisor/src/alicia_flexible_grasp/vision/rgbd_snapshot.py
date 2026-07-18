@@ -398,6 +398,7 @@ class SynchronizedRgbdBuffer:
         self._latest_mask_is_empty = None
         self._source_clock_ns = source_clock_ns or _wall_clock_ns
         self._monotonic_clock = monotonic_clock or time.monotonic
+        self._update_sequence = 0
 
     def update_color(self, color_bgr, stamp_sec, frame_id):
         self._update_entry(
@@ -428,30 +429,118 @@ class SynchronizedRgbdBuffer:
             self._joint_positions = np.asarray(joint_positions, dtype=float).reshape(-1).copy()
             self._condition.notify_all()
 
-    def wait_for_samples(self, count, timeout_sec, require_mask, max_age_sec):
+    def wait_for_samples(
+        self,
+        count,
+        timeout_sec,
+        require_mask,
+        max_age_sec,
+        collection_span_sec=0.0,
+        max_inference_latency_sec=None,
+    ):
         count = max(1, int(count))
+        collection_span = max(0.0, float(collection_span_sec))
+        collection_span_ns = int(round(collection_span * 1e9))
+        max_inference_latency = max(
+            0.0,
+            float(
+                max_age_sec
+                if max_inference_latency_sec is None
+                else max_inference_latency_sec
+            ),
+        )
         deadline = self._monotonic_clock() + max(0.0, float(timeout_sec))
+        collected = {}
+        invalidated = set()
         with self._condition:
             while True:
                 monotonic_now = self._monotonic_clock()
-                source_now_ns = int(self._source_clock_ns())
                 self._prune_locked(monotonic_now)
                 complete = self._complete_entries_locked(
                     bool(require_mask),
-                    source_now_ns,
+                    monotonic_now,
                     max_age_sec,
+                    max_inference_latency,
                 )
-                if len(complete) >= count:
+                if collection_span > 0.0:
+                    # A low-rate detector cannot keep several frames inside a
+                    # sub-second completion-age window at the same instant.
+                    # Admit each exact synchronized sample only soon after its
+                    # bounded-latency inference completes, then retain an
+                    # independent request-local copy for bounded source-stamp
+                    # and monotonic collection spans.  This also makes
+                    # collection independent of the shared buffer's short
+                    # receive-time retention.
+                    structurally_complete = dict(
+                        self._complete_entries_locked(
+                            bool(require_mask),
+                            monotonic_now,
+                            0.0,
+                            0.0,
+                        )
+                    )
+                    for key in list(collected):
+                        if key not in self._entries:
+                            continue
+                        entry = self._entries[key]
+                        if (
+                            key not in structurally_complete
+                            or int(entry.get('revision', 0)) != collected[key][0]
+                        ):
+                            del collected[key]
+                            invalidated.add(key)
+                    for key, entry in complete:
+                        if key in invalidated:
+                            continue
+                        revision = int(entry.get('revision', 0))
+                        if key not in collected or revision != collected[key][0]:
+                            collected[key] = (
+                                revision,
+                                self._sample_from_entry(entry, bool(require_mask)),
+                                monotonic_now,
+                            )
+                    if collected:
+                        newest_stamp_ns = max(collected)
+                        oldest_allowed_ns = newest_stamp_ns - collection_span_ns
+                        expired_keys = [
+                            key
+                            for key, (_revision, _sample, admitted_at) in collected.items()
+                            if key < oldest_allowed_ns
+                            or monotonic_now - float(admitted_at) > collection_span
+                        ]
+                        for key in expired_keys:
+                            del collected[key]
+                            invalidated.add(key)
+                    if len(collected) >= count:
+                        selected_keys = sorted(collected)[-count:]
+                        return [collected[key][1] for key in selected_keys]
+                elif len(complete) >= count:
                     selected = complete[-count:]
-                    return [self._sample_from_entry(entry, bool(require_mask)) for _key, entry in selected]
+                    return [
+                        self._sample_from_entry(entry, bool(require_mask))
+                        for _key, entry in selected
+                    ]
                 remaining = deadline - monotonic_now
                 if remaining <= 0.0:
                     return []
                 self._condition.wait(remaining)
 
-    def mask_timeout_failure(self, count, max_age_sec):
+    def mask_timeout_failure(
+        self,
+        count,
+        max_age_sec,
+        max_inference_latency_sec=None,
+    ):
         count = max(1, int(count))
         max_age = max(0.0, float(max_age_sec))
+        max_inference_latency = max(
+            0.0,
+            float(
+                max_age_sec
+                if max_inference_latency_sec is None
+                else max_inference_latency_sec
+            ),
+        )
         with self._condition:
             mask_was_observed = self._latest_mask_stamp_ns is not None
             latest_mask_is_empty = self._latest_mask_is_empty
@@ -476,14 +565,16 @@ class SynchronizedRgbdBuffer:
             return (
                 'MASK_STALE',
                 'instance masks were observed but no %s are available; '
-                'source age is unlimited'
-                % sample_requirement,
+                'post-completion age is unlimited and the '
+                'source-to-inference completion limit is %.3f s'
+                % (sample_requirement, max_inference_latency),
             )
         return (
             'MASK_STALE',
             'instance masks were observed but no %s are available '
-            'within the %.3f s source-age limit'
-            % (sample_requirement, max_age),
+            'within the %.3f s post-completion age limit and %.3f s '
+            'source-to-inference completion limit'
+            % (sample_requirement, max_age, max_inference_latency),
         )
 
     def discard_through(self, stamp_sec):
@@ -500,6 +591,7 @@ class SynchronizedRgbdBuffer:
         key = _timestamp_key(stamp)
         stamp_sec = _stamp_seconds(stamp)
         now = self._monotonic_clock()
+        source_now_ns = int(self._source_clock_ns())
         with self._condition:
             self._prune_locked(now)
             if 'object_mask' in values:
@@ -516,9 +608,20 @@ class SynchronizedRgbdBuffer:
                     'created_at': now,
                     'updated_at': now,
                     'joint_positions': self._joint_positions.copy(),
+                    'first_received_at': {},
+                    'latest_received_source_ns': {},
                 },
             )
             entry.update(values)
+            for name in values:
+                # Duplicate components may replace their payload but cannot
+                # renew the entry's completion age.  Their latest receipt is
+                # still used by the inference-latency gate so a late replay
+                # can only make the entry less eligible, never fresher.
+                entry['first_received_at'].setdefault(name, now)
+                entry['latest_received_source_ns'][name] = source_now_ns
+            self._update_sequence += 1
+            entry['revision'] = self._update_sequence
             entry['updated_at'] = now
             if entry['joint_positions'].size == 0 and self._joint_positions.size:
                 entry['joint_positions'] = self._joint_positions.copy()
@@ -533,20 +636,59 @@ class SynchronizedRgbdBuffer:
         ]:
             del self._entries[key]
 
-    def _complete_entries_locked(self, require_mask, source_now_ns, max_age_sec):
+    def _complete_entries_locked(
+        self,
+        require_mask,
+        monotonic_now,
+        max_age_sec,
+        max_inference_latency_sec,
+    ):
         max_age = max(0.0, float(max_age_sec))
-        max_age_ns = int(round(max_age * 1e9))
+        max_inference_latency = max(0.0, float(max_inference_latency_sec))
+        max_inference_latency_ns = int(round(max_inference_latency * 1e9))
         complete = []
         for key, entry in sorted(self._entries.items()):
             stamp_ns = int(entry['stamp_ns'])
-            if stamp_ns > source_now_ns:
-                continue
-            if max_age > 0.0 and source_now_ns - stamp_ns > max_age_ns:
-                continue
             required = ('color_bgr', 'depth_raw', 'object_msg')
+            if require_mask and 'object_mask' not in entry:
+                continue
             if any(name not in entry for name in required):
                 continue
-            if require_mask and 'object_mask' not in entry:
+            if require_mask and not bool(np.any(np.asarray(entry['object_mask']))):
+                continue
+            timing_names = required + (('object_mask',) if require_mask else ())
+            first_received_at = entry.get('first_received_at', {})
+            latest_received_source_ns = entry.get(
+                'latest_received_source_ns',
+                {},
+            )
+            if any(
+                name not in first_received_at
+                or name not in latest_received_source_ns
+                for name in timing_names
+            ):
+                continue
+            component_source_receipts = [
+                int(latest_received_source_ns[name]) for name in timing_names
+            ]
+            # A source stamp that was in the future when any component arrived
+            # is never allowed to become valid merely because a clock later
+            # catches up.
+            if any(received_ns < stamp_ns for received_ns in component_source_receipts):
+                continue
+            completion_source_ns = max(component_source_receipts)
+            if (
+                max_inference_latency > 0.0
+                and completion_source_ns - stamp_ns > max_inference_latency_ns
+            ):
+                continue
+            completion_at = max(
+                float(first_received_at[name]) for name in timing_names
+            )
+            completion_age = float(monotonic_now) - completion_at
+            if completion_age < 0.0:
+                continue
+            if max_age > 0.0 and completion_age > max_age:
                 continue
             if not bool(getattr(entry['object_msg'], 'detected', False)):
                 continue

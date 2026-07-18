@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 from copy import deepcopy
 from dataclasses import dataclass
+import hashlib
+import json
 import math
+import os
+import tempfile
 import threading
 import time
 import rospy
@@ -45,6 +49,329 @@ class PlanValidationResult:
     code: str = ''
     reason: str = ''
     age_sec: float = float('inf')
+
+
+_MUJOCO_AUDIT_SCHEMA_VERSION = 1
+_MUJOCO_AUDIT_DEFAULT_PATH = '~/.ros/grasp6d_mujoco_audit_latest.json'
+_MUJOCO_SAFETY_KEYS = (
+    'simulation_ok',
+    'ik_success',
+    'collision_free',
+    'contact_success',
+    'lift_success',
+)
+_MUJOCO_AUDIT_TEXT_LIMIT = 2048
+_MUJOCO_STATUS_TEXT_LIMIT = 320
+
+
+class AuditPathConflictError(ValueError):
+    pass
+
+
+def _bounded_text(value, limit=_MUJOCO_AUDIT_TEXT_LIMIT):
+    if not isinstance(value, str):
+        return None
+    maximum = max(0, int(limit))
+    return value[:maximum]
+
+
+def _strict_json_number(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _wall_time_sec():
+    value = _strict_json_number(time.time())
+    return 0.0 if value is None else value
+
+
+def _exception_audit_record(exception):
+    if exception is None:
+        return None
+    return {
+        'type': _bounded_text(type(exception).__name__, 128),
+        'message': _bounded_text(str(exception)),
+    }
+
+
+def _new_mujoco_execution_audit(plan):
+    request_plan_id = getattr(plan, 'plan_id', None)
+    return {
+        'schema_version': _MUJOCO_AUDIT_SCHEMA_VERSION,
+        'audit_kind': 'mujoco_rich_plan_execution_gate',
+        'request_plan_id': _bounded_text(request_plan_id, 256),
+        'attempt': {
+            'started_unix_sec': _wall_time_sec(),
+            'completed_unix_sec': None,
+            'duration_sec': None,
+        },
+        'payload': {
+            'built': False,
+            'plan_id': None,
+            'sha256': None,
+            'summary': None,
+            'build_error': None,
+        },
+        'response': {
+            'received': False,
+            'json_object': False,
+            'strict_json_serializable': False,
+            'sha256': None,
+            'raw_echo_plan_id': None,
+            'raw_echo_plan_id_type': None,
+            'score': None,
+            'failure_code': None,
+            'failure_reason': None,
+            'failure_reason_length': None,
+            'network_error': None,
+            **{key: None for key in _MUJOCO_SAFETY_KEYS},
+        },
+        'authority_after_network': {
+            'checked': False,
+            'ok': None,
+            'code': None,
+            'reason': None,
+        },
+        'gate_validation': {
+            'checked': False,
+            'ok': None,
+            'code': None,
+            'reason': None,
+            'score': None,
+        },
+        'final_validation': {
+            'ok': False,
+            'code': None,
+            'reason': None,
+            'score': None,
+            'completed_unix_sec': None,
+        },
+    }
+
+
+def _record_mujoco_payload(audit, payload):
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(',', ':'),
+        sort_keys=True,
+    ).encode('utf-8')
+    trajectory = payload.get('trajectory') if isinstance(payload, dict) else None
+    joint_names = payload.get('joint_names') if isinstance(payload, dict) else None
+    audit['payload'] = {
+        'built': True,
+        'plan_id': _bounded_text(payload.get('plan_id'), 256),
+        'sha256': hashlib.sha256(encoded).hexdigest(),
+        'summary': {
+            'schema_version': payload.get('schema_version'),
+            'snapshot_stamp_sec': _strict_json_number(
+                payload.get('snapshot_stamp_sec')
+            ),
+            'model_choice': _bounded_text(payload.get('model_choice'), 256),
+            'joint_count': len(joint_names) if isinstance(joint_names, list) else None,
+            'trajectory_count': len(trajectory) if isinstance(trajectory, list) else None,
+            'candidate_width_m': _strict_json_number(
+                payload.get('candidate_width_m')
+            ),
+            'required_open_width_m': _strict_json_number(
+                payload.get('required_open_width_m')
+            ),
+            'gripper_model_name': _bounded_text(
+                (payload.get('gripper') or {}).get('model_name')
+                if isinstance(payload.get('gripper'), dict)
+                else None,
+                256,
+            ),
+        },
+        'build_error': None,
+    }
+
+
+def _record_mujoco_response(audit, response):
+    record = audit['response']
+    record['received'] = True
+    record['json_object'] = isinstance(response, dict)
+    try:
+        encoded = json.dumps(
+            response,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(',', ':'),
+            sort_keys=True,
+        ).encode('utf-8')
+    except (TypeError, ValueError, OverflowError):
+        encoded = None
+    if encoded is not None:
+        record['strict_json_serializable'] = True
+        record['sha256'] = hashlib.sha256(encoded).hexdigest()
+    if not isinstance(response, dict):
+        record['raw_echo_plan_id_type'] = type(response).__name__
+        return
+
+    echoed_id = response.get('plan_id')
+    record['raw_echo_plan_id'] = echoed_id if isinstance(echoed_id, str) else None
+    record['raw_echo_plan_id_type'] = type(echoed_id).__name__
+    record['score'] = _strict_json_number(response.get('score'))
+    raw_code = response.get('failure_code')
+    record['failure_code'] = raw_code if isinstance(raw_code, str) else None
+    raw_reason = response.get('failure_reason')
+    record['failure_reason'] = raw_reason if isinstance(raw_reason, str) else None
+    record['failure_reason_length'] = (
+        len(raw_reason) if isinstance(raw_reason, str) else None
+    )
+    for key in _MUJOCO_SAFETY_KEYS:
+        value = response.get(key)
+        record[key] = value if type(value) is bool else None
+
+
+def _validation_audit_record(result, checked=True):
+    return {
+        'checked': bool(checked),
+        'ok': bool(getattr(result, 'ok', False)) if checked else None,
+        'code': _bounded_text(str(getattr(result, 'code', '') or ''), 256)
+        if checked else None,
+        'reason': _bounded_text(str(getattr(result, 'reason', '') or ''))
+        if checked else None,
+        'score': _strict_json_number(getattr(result, 'score', None))
+        if checked else None,
+    }
+
+
+def normalize_audit_output_path(output_path, label='audit_output_path'):
+    if not isinstance(output_path, str) or not output_path.strip():
+        raise ValueError('%s must be a non-empty string' % str(label))
+    return os.path.normcase(
+        os.path.realpath(
+            os.path.abspath(os.path.expanduser(output_path.strip()))
+        )
+    )
+
+
+def validate_distinct_audit_output_paths(
+    mujoco_output_path,
+    planning_output_path,
+):
+    """Return canonical audit paths and reject cross-gate file aliasing."""
+    mujoco_path = normalize_audit_output_path(
+        mujoco_output_path,
+        'MuJoCo audit_output_path',
+    )
+    if planning_output_path is None or (
+        isinstance(planning_output_path, str)
+        and not planning_output_path.strip()
+    ):
+        return mujoco_path, None
+    planning_path = normalize_audit_output_path(
+        planning_output_path,
+        'planning gate_audit_output_path',
+    )
+    same_path = planning_path == mujoco_path
+    if not same_path and os.path.exists(planning_path) and os.path.exists(mujoco_path):
+        try:
+            same_path = os.path.samefile(planning_path, mujoco_path)
+        except OSError:
+            same_path = False
+    if same_path:
+        raise AuditPathConflictError(
+            'MuJoCo and planning gate audits must use distinct canonical paths'
+        )
+    return mujoco_path, planning_path
+
+
+def write_mujoco_execution_audit(output_path, report):
+    """Atomically persist one strict-JSON MuJoCo execution-gate attempt."""
+    path = normalize_audit_output_path(
+        output_path,
+        'MuJoCo audit_output_path',
+    )
+    directory = os.path.dirname(path) or os.curdir
+    payload = json.dumps(
+        report,
+        allow_nan=False,
+        ensure_ascii=True,
+        indent=2,
+        sort_keys=True,
+    ).encode('utf-8')
+    os.makedirs(directory, exist_ok=True)
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix='.%s.tmp-' % os.path.basename(path),
+        dir=directory,
+    )
+    replaced = False
+    try:
+        with os.fdopen(descriptor, 'wb') as handle:
+            descriptor = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        replaced = True
+        directory_descriptor = os.open(
+            directory,
+            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0),
+        )
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if not replaced:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+    return {
+        'path': path,
+        'sha256': hashlib.sha256(payload).hexdigest(),
+        'bytes': len(payload),
+    }
+
+
+def _finalize_mujoco_execution_audit(
+    audit,
+    output_path,
+    ok,
+    code,
+    reason,
+    score=None,
+):
+    completed = _wall_time_sec()
+    started = _strict_json_number(audit['attempt'].get('started_unix_sec'))
+    audit['attempt']['completed_unix_sec'] = completed
+    audit['attempt']['duration_sec'] = (
+        max(0.0, completed - started) if started is not None else None
+    )
+    audit['final_validation'] = {
+        'ok': bool(ok),
+        'code': _bounded_text(str(code or ''), 256),
+        'reason': _bounded_text(str(reason or '')),
+        'score': _strict_json_number(score),
+        'completed_unix_sec': completed,
+    }
+    return write_mujoco_execution_audit(output_path, audit)
+
+
+def _mujoco_audit_reference_text(reference):
+    return 'audit_path=%s audit_sha256=%s' % (
+        _bounded_text(str(reference.get('path', '') or ''), 256),
+        str(reference.get('sha256', '') or ''),
+    )
+
+
+def _bounded_status_reason(reason):
+    return _bounded_text(str(reason or ''), _MUJOCO_STATUS_TEXT_LIMIT) or ''
+
+
+def _bounded_status_code(code):
+    return _bounded_text(str(code or 'MUJOCO_GATE_FAILED'), 128) or 'MUJOCO_GATE_FAILED'
 
 
 def _finite_pose(pose):
@@ -445,13 +772,25 @@ class GraspTaskNode:
         return StopGraspResponse(True, 'stop requested')
 
     def execute(self, grasp6d_plan=None):
-        rospy.wait_for_service('/supervisor/move_to_pose', timeout=10)
+        gcfg = rospy.get_param('/grasp', {})
+        use_grasp6d_plan = bool(gcfg.get('use_grasp6d_plan', False))
+        strict_execute_pose = None
+        if use_grasp6d_plan:
+            rospy.wait_for_service('/supervisor/check_pose_strict', timeout=10)
+            rospy.wait_for_service('/supervisor/execute_pose_strict', timeout=10)
+            move_pose = rospy.ServiceProxy(
+                '/supervisor/check_pose_strict', SetTargetPose
+            )
+            strict_execute_pose = rospy.ServiceProxy(
+                '/supervisor/execute_pose_strict', SetTargetPose
+            )
+        else:
+            rospy.wait_for_service('/supervisor/move_to_pose', timeout=10)
+            move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
         rospy.wait_for_service('/supervisor/move_to_pose_linear', timeout=10)
         rospy.wait_for_service('/supervisor/set_gripper', timeout=10)
-        move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
         move_pose_linear = rospy.ServiceProxy('/supervisor/move_to_pose_linear', SetTargetPose)
         set_gripper = rospy.ServiceProxy('/supervisor/set_gripper', SetFloat)
-        gcfg = rospy.get_param('/grasp', {})
         gripper_cfg = rospy.get_param('/gripper', {})
         close = None
         if bool(gripper_cfg.get('use_compliant_close', True)):
@@ -464,7 +803,7 @@ class GraspTaskNode:
         pregrasp_reached_tolerance = float(gcfg.get('pregrasp_reached_tolerance_m', 0.04))
         open_position = float(gripper_cfg.get('open_position_m', 0.0))
 
-        if bool(gcfg.get('use_grasp6d_plan', False)):
+        if use_grasp6d_plan:
             return self._execute_grasp6d_plan(
                 gcfg,
                 gripper_cfg,
@@ -474,6 +813,7 @@ class GraspTaskNode:
                 set_gripper,
                 close,
                 grasp6d_plan,
+                strict_execute_pose=strict_execute_pose,
             )
 
         self.set_state(GraspStages.SEARCH_OBJECT, 'waiting for object')
@@ -574,6 +914,7 @@ class GraspTaskNode:
         set_gripper,
         close,
         plan,
+        strict_execute_pose=None,
     ):
         validation = validate_execution_plan(
             plan,
@@ -596,6 +937,20 @@ class GraspTaskNode:
             self.set_state(
                 GraspStages.FAILED,
                 '%s: %s' % (drift.code, drift.reason),
+            )
+            return False
+        if self._position_only_execute_globally_enabled():
+            self.set_state(
+                GraspStages.FAILED,
+                'POSITION_ONLY_FALLBACK_FORBIDDEN: rich 6D execution requires '
+                '/robot/position_only_execute_enabled=false',
+            )
+            return False
+        if not callable(strict_execute_pose):
+            self.set_state(
+                GraspStages.FAILED,
+                'STRICT_CACHED_EXECUTOR_UNAVAILABLE: rich 6D execution requires '
+                '/supervisor/execute_pose_strict before simulation or physical action',
             )
             return False
 
@@ -628,6 +983,7 @@ class GraspTaskNode:
             execution_plan_id=plan.plan_id,
             execution_plan=plan,
             gcfg=gcfg,
+            execute_pose=strict_execute_pose,
         ):
             return False
 
@@ -642,6 +998,7 @@ class GraspTaskNode:
             execution_plan_id=plan.plan_id,
             execution_plan=plan,
             gcfg=gcfg,
+            execute_pose=move_pose_linear,
         ):
             return False
 
@@ -656,6 +1013,7 @@ class GraspTaskNode:
             execution_plan_id=plan.plan_id,
             execution_plan=plan,
             gcfg=gcfg,
+            execute_pose=move_pose_linear,
         ):
             return False
 
@@ -685,6 +1043,7 @@ class GraspTaskNode:
             execution_plan_id=plan.plan_id,
             execution_plan=plan,
             gcfg=gcfg,
+            execute_pose=move_pose_linear,
         ):
             return False
         if not self._execution_checkpoint(plan, gcfg, 'success acknowledgement'):
@@ -702,6 +1061,7 @@ class GraspTaskNode:
         execution_plan_id=None,
         execution_plan=None,
         gcfg=None,
+        execute_pose=None,
     ):
         bound_plan = execution_plan
         if bound_plan is None and execution_plan_id is not None:
@@ -731,6 +1091,19 @@ class GraspTaskNode:
                     % (validation.code, validation.reason, label),
                 )
                 return False
+        strict_rich_plan = (
+            bound_plan is not None or execution_plan_id is not None
+        )
+        if (
+            strict_rich_plan
+            and self._position_only_execute_globally_enabled()
+        ):
+            self.set_state(
+                GraspStages.FAILED,
+                'POSITION_ONLY_FALLBACK_FORBIDDEN: rich 6D planning requires '
+                '/robot/position_only_execute_enabled=false',
+            )
+            return False
         self.set_state(stage, 'planning ' + label)
         resp = move_pose(pose, False)
         if not resp.success:
@@ -738,7 +1111,9 @@ class GraspTaskNode:
             return False
         if (
             is_position_only_fallback_message(getattr(resp, 'message', ''))
-            and not self._position_only_execute_allowed()
+            and not self._position_only_execute_allowed(
+                strict_rich_plan=strict_rich_plan
+            )
         ):
             self.set_state(
                 GraspStages.FAILED,
@@ -747,7 +1122,9 @@ class GraspTaskNode:
             return False
         if (
             is_orientation_fallback_message(getattr(resp, 'message', ''))
-            and not self._orientation_fallback_execute_allowed()
+            and not self._orientation_fallback_execute_allowed(
+                strict_rich_plan=strict_rich_plan
+            )
         ):
             self.set_state(
                 GraspStages.FAILED,
@@ -755,12 +1132,20 @@ class GraspTaskNode:
             )
             return False
         self.set_state(stage, 'moving ' + label)
+        if strict_rich_plan and not callable(execute_pose):
+            self.set_state(
+                GraspStages.FAILED,
+                'STRICT_CACHED_EXECUTOR_UNAVAILABLE: %s cannot use the planning '
+                'service or generic move_to_pose as an execution fallback' % label,
+            )
+            return False
+        execute_pose = execute_pose or move_pose
         if bound_plan is not None:
             validation, resp = self._invoke_plan_bound_action(
                 bound_plan,
                 gcfg or {},
                 label,
-                lambda: move_pose(pose, True),
+                lambda: execute_pose(pose, True),
             )
             if not validation.ok:
                 self.set_state(
@@ -770,7 +1155,7 @@ class GraspTaskNode:
                 )
                 return False
         else:
-            resp = move_pose(pose, True)
+            resp = execute_pose(pose, True)
         if not resp.success:
             self.set_state(GraspStages.FAILED, '%s failed: %s' % (label, resp.message))
             return False
@@ -1273,29 +1658,119 @@ class GraspTaskNode:
 
     def _simulate_grasp6d_plan_if_required(self, gcfg, gripper_cfg, plan):
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
-        if not bool(twin_cfg.get('enabled', False)) or not bool(twin_cfg.get('execution_gate_enabled', False)):
-            return True
+        if not isinstance(twin_cfg, dict):
+            self.set_state(
+                GraspStages.FAILED,
+                'MUJOCO_GATE_CONFIG_INVALID: /mujoco_digital_twin must be a mapping',
+            )
+            return False
+        for key in ('enabled', 'execution_gate_enabled'):
+            value = twin_cfg.get(key)
+            if type(value) is not bool or value is not True:
+                self.set_state(
+                    GraspStages.FAILED,
+                    (
+                        'MUJOCO_GATE_CONFIG_INVALID: '
+                        '/mujoco_digital_twin/%s must be the boolean true'
+                    )
+                    % key,
+                )
+                return False
 
         self.set_state(GraspStages.PLAN_PREGRASP, 'MuJoCo digital twin checking 6D plan')
+        raw_audit_path = twin_cfg.get(
+            'audit_output_path', _MUJOCO_AUDIT_DEFAULT_PATH
+        )
+        planning_audit_path = rospy.get_param(
+            '/grasp_6d/remote/gate_audit_output_path',
+            '',
+        )
+        try:
+            audit_path, _planning_audit_path = (
+                validate_distinct_audit_output_paths(
+                    raw_audit_path,
+                    planning_audit_path,
+                )
+            )
+        except AuditPathConflictError as exc:
+            self.set_state(
+                GraspStages.FAILED,
+                'MUJOCO_AUDIT_PATH_CONFLICT: %s' % exc,
+            )
+            return False
+        except (TypeError, ValueError, OSError) as exc:
+            self.set_state(
+                GraspStages.FAILED,
+                'MUJOCO_AUDIT_PATH_INVALID: %s' % exc,
+            )
+            return False
+        audit = _new_mujoco_execution_audit(plan)
+
+        def finish(ok, code, reason, score=None, stage=GraspStages.FAILED):
+            try:
+                reference = _finalize_mujoco_execution_audit(
+                    audit,
+                    audit_path,
+                    ok,
+                    code,
+                    reason,
+                    score=score,
+                )
+            except Exception as audit_error:
+                message = (
+                    '%s: %s; MUJOCO_AUDIT_WRITE_FAILED: %s audit_path=%s'
+                    % (
+                        _bounded_status_code(code),
+                        _bounded_status_reason(reason),
+                        _bounded_status_reason(audit_error),
+                        _bounded_text(str(audit_path), 256),
+                    )
+                )
+                # A passing simulation cannot become motion authority unless
+                # its exact request/response association is durably recorded.
+                self.set_state(
+                    GraspStages.FAILED if ok else stage,
+                    message,
+                )
+                return False
+
+            reference_text = _mujoco_audit_reference_text(reference)
+            if ok:
+                self.set_state(
+                    GraspStages.PLAN_PREGRASP,
+                    'MuJoCo simulation passed score=%.3f; %s'
+                    % (float(score), reference_text),
+                )
+                return True
+            self.set_state(
+                stage,
+                '%s: %s; %s'
+                % (_bounded_status_code(code), _bounded_status_reason(reason), reference_text),
+            )
+            return False
+
         require_object = bool(twin_cfg.get('require_object_pose', True))
         object_pose = self._bound_object_pose_from_plan(plan)
         if require_object and (object_pose is None or not bool(getattr(object_pose, 'detected', False))):
-            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked: rich plan has no valid object geometry')
-            return False
+            return finish(
+                False,
+                'OBB_INVALID',
+                'MuJoCo simulation blocked: rich plan has no valid object geometry',
+            )
 
         if not bool(twin_cfg.get('send_joint_state_in_request', False)):
-            self.set_state(
-                GraspStages.FAILED,
+            return finish(
+                False,
+                'WSL_UNAVAILABLE',
                 'WSL_UNAVAILABLE: strict MuJoCo gate requires current joint state in every request',
             )
-            return False
         joint_state = deepcopy(getattr(self, 'latest_joint_state', None))
         if joint_state is None:
-            self.set_state(
-                GraspStages.FAILED,
+            return finish(
+                False,
+                'WSL_UNAVAILABLE',
                 'WSL_UNAVAILABLE: no /joint_states for strict MuJoCo request payload',
             )
-            return False
         joint_names = list(getattr(joint_state, 'name', ()) or ())
         joint_positions = list(getattr(joint_state, 'position', ()) or ())
 
@@ -1306,12 +1781,23 @@ class GraspTaskNode:
                 joint_positions,
                 twin_cfg,
             )
+            _record_mujoco_payload(audit, payload)
         except Exception as exc:
-            self.set_state(
-                GraspStages.FAILED,
-                'WSL_UNAVAILABLE: invalid MuJoCo request payload: %s' % exc,
+            audit['payload']['build_error'] = _exception_audit_record(exc)
+            return finish(
+                False,
+                'WSL_UNAVAILABLE',
+                'invalid MuJoCo request payload: %s' % exc,
             )
-            return False
+
+        request_plan_id = str(getattr(plan, 'plan_id', '') or '')
+        payload_plan_id = payload.get('plan_id') if isinstance(payload, dict) else None
+        if not strict_plan_id_equal(payload_plan_id, request_plan_id):
+            return finish(
+                False,
+                'PLAN_ID_MISMATCH',
+                'MuJoCo payload plan_id does not exactly match the bound rich plan',
+            )
 
         response = None
         request_error = None
@@ -1323,45 +1809,71 @@ class GraspTaskNode:
             response = client.simulate_grasp(payload)
         except Exception as exc:
             request_error = exc
+            audit['response']['network_error'] = _exception_audit_record(exc)
+        else:
+            _record_mujoco_response(audit, response)
 
         post_network = self._validate_bound_plan(plan, gcfg)
+        audit['authority_after_network'] = _validation_audit_record(post_network)
         if not post_network.ok:
             stage = (
                 GraspStages.IDLE
                 if post_network.code == 'EXECUTION_CANCELLED'
                 else GraspStages.FAILED
             )
-            self.set_state(
-                stage,
-                '%s: %s after MuJoCo network return'
-                % (post_network.code, post_network.reason),
+            return finish(
+                False,
+                post_network.code,
+                '%s after MuJoCo network return' % post_network.reason,
+                stage=stage,
             )
-            return False
 
         if request_error is not None:
-            self.set_state(
-                GraspStages.FAILED,
-                'WSL_UNAVAILABLE: MuJoCo simulation request failed: %s'
-                % request_error,
+            return finish(
+                False,
+                'WSL_UNAVAILABLE',
+                'MuJoCo simulation request failed: %s' % request_error,
             )
-            return False
 
-        gate = validate_mujoco_gate_response(
-            response,
-            str(getattr(plan, 'plan_id', '') or ''),
-            twin_cfg.get('min_score', 80),
-        )
-        if not gate.ok:
-            self.set_state(
-                GraspStages.FAILED,
-                '%s: %s' % (gate.code, gate.reason),
+        if audit['response'].get('strict_json_serializable') is not True:
+            gate = PlanValidationResult(
+                False,
+                'WSL_UNAVAILABLE',
+                'MuJoCo response must be fully strict-JSON serializable',
             )
-            return False
-        self.set_state(
-            GraspStages.PLAN_PREGRASP,
-            'MuJoCo simulation passed score=%.3f' % gate.score,
+            audit['gate_validation'] = _validation_audit_record(gate)
+            return finish(
+                False,
+                gate.code,
+                gate.reason,
+            )
+
+        try:
+            gate = validate_mujoco_gate_response(
+                response,
+                request_plan_id,
+                twin_cfg.get('min_score', 80),
+            )
+        except Exception as exc:
+            gate = PlanValidationResult(
+                False,
+                'WSL_UNAVAILABLE',
+                'MuJoCo response validation failed: %s' % exc,
+            )
+        audit['gate_validation'] = _validation_audit_record(gate)
+        if not gate.ok:
+            return finish(
+                False,
+                gate.code,
+                gate.reason,
+                score=getattr(gate, 'score', None),
+            )
+        return finish(
+            True,
+            'MUJOCO_GATE_PASSED',
+            'MuJoCo response exactly matched the bound rich plan and all gates passed',
+            score=gate.score,
         )
-        return True
 
     @staticmethod
     def _pose_array_item_as_stamped(plan, index):
@@ -1497,11 +2009,19 @@ class GraspTaskNode:
         return False
 
     @staticmethod
-    def _position_only_execute_allowed():
+    def _position_only_execute_globally_enabled():
         return bool(rospy.get_param('/robot/position_only_execute_enabled', False))
 
     @staticmethod
-    def _orientation_fallback_execute_allowed():
+    def _position_only_execute_allowed(strict_rich_plan=False):
+        if bool(strict_rich_plan):
+            return False
+        return GraspTaskNode._position_only_execute_globally_enabled()
+
+    @staticmethod
+    def _orientation_fallback_execute_allowed(strict_rich_plan=False):
+        if bool(strict_rich_plan):
+            return False
         return bool(rospy.get_param('/grasp/accept_orientation_fallback', False))
 
     def _command_gripper_position(

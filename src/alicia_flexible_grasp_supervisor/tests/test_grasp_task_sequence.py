@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
+import hashlib
 import io
 import importlib.util
+import json
+import os
 import pathlib
 import sys
+import tempfile
 import threading
 import types
 import unittest
@@ -24,6 +28,9 @@ SCRIPT = ROOT / 'scripts' / 'grasp_task_node.py'
 spec = importlib.util.spec_from_file_location('grasp_task_node', str(SCRIPT))
 grasp_task_node = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(grasp_task_node)
+
+
+_MISSING_CONFIG_VALUE = object()
 
 
 class FakeServiceResponse:
@@ -49,6 +56,24 @@ class FakeTime:
 
 
 class GraspTaskSequenceTest(unittest.TestCase):
+    def setUp(self):
+        self._mujoco_audit_directory = tempfile.TemporaryDirectory()
+        self._mujoco_audit_sequence = 0
+        self._mujoco_audit_path = os.path.join(
+            self._mujoco_audit_directory.name,
+            'mujoco-audit.json',
+        )
+
+    def tearDown(self):
+        self._mujoco_audit_directory.cleanup()
+
+    def _next_mujoco_audit_path(self):
+        self._mujoco_audit_sequence += 1
+        return os.path.join(
+            self._mujoco_audit_directory.name,
+            'mujoco-audit-%d.json' % self._mujoco_audit_sequence,
+        )
+
     def _pose(self, x, y=0.0, z=0.20):
         pose = PoseStamped()
         pose.header.frame_id = 'base_link'
@@ -140,6 +165,12 @@ class GraspTaskSequenceTest(unittest.TestCase):
         request_error=None,
         during_request=None,
         allow_execution_on_error=False,
+        audit_output_path=None,
+        payload_build_error=None,
+        position_only_execute_enabled=False,
+        mujoco_enabled=True,
+        execution_gate_enabled=True,
+        planning_audit_output_path=None,
     ):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -156,6 +187,19 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.set_state = lambda *args, **kwargs: states.append(args)
         node._command_gripper_position = lambda *args, **kwargs: (
             physical_actions.append('open-gripper') or False
+        )
+        configured_audit_path = (
+            self._next_mujoco_audit_path()
+            if audit_output_path is None
+            else audit_output_path
+        )
+        configured_planning_audit_path = (
+            os.path.join(
+                self._mujoco_audit_directory.name,
+                'planning-gate-audit.json',
+            )
+            if planning_audit_output_path is None
+            else planning_audit_output_path
         )
 
         class TwinClient:
@@ -175,31 +219,46 @@ class GraspTaskSequenceTest(unittest.TestCase):
         original_get_param = grasp_task_node.rospy.get_param
         original_time_now = grasp_task_node.rospy.Time.now
         original_client = grasp_task_node.MujocoDigitalTwinClient
-        grasp_task_node.rospy.get_param = lambda name, default=None: {
-            '/mujoco_digital_twin': {
-                'enabled': True,
-                'execution_gate_enabled': True,
-                'server_url': 'http://172.23.132.97:8000',
-                'timeout_sec': 0.01,
-                'min_score': 80,
-                'allow_execution_on_error': bool(allow_execution_on_error),
-                'require_object_pose': True,
-                'send_joint_state_in_request': True,
-                'object_model': {
-                    'type': 'carton_box',
-                    'mass_kg': 0.08,
-                    'friction': [1.2, 0.08, 0.02],
-                },
-                'gripper_model': {
-                    'name': 'Alicia_D_v5_6_gripper_50mm',
-                    'max_inner_gap_m': 0.050,
-                },
+        original_payload_builder = grasp_task_node.build_mujoco_payload
+        twin_config = {
+            'audit_output_path': configured_audit_path,
+            'server_url': 'http://172.23.132.97:8000',
+            'timeout_sec': 0.01,
+            'min_score': 80,
+            'allow_execution_on_error': bool(allow_execution_on_error),
+            'require_object_pose': True,
+            'send_joint_state_in_request': True,
+            'object_model': {
+                'type': 'carton_box',
+                'mass_kg': 0.08,
+                'friction': [1.2, 0.08, 0.02],
             },
+            'gripper_model': {
+                'name': 'Alicia_D_v5_6_gripper_50mm',
+                'max_inner_gap_m': 0.050,
+            },
+        }
+        if mujoco_enabled is not _MISSING_CONFIG_VALUE:
+            twin_config['enabled'] = mujoco_enabled
+        if execution_gate_enabled is not _MISSING_CONFIG_VALUE:
+            twin_config['execution_gate_enabled'] = execution_gate_enabled
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/robot/position_only_execute_enabled': bool(
+                position_only_execute_enabled
+            ),
+            '/grasp_6d/remote/gate_audit_output_path': (
+                configured_planning_audit_path
+            ),
+            '/mujoco_digital_twin': twin_config,
         }.get(name, default)
         grasp_task_node.rospy.Time.now = staticmethod(
             lambda: FakeTime(1.0)
         )
         grasp_task_node.MujocoDigitalTwinClient = TwinClient
+        if payload_build_error is not None:
+            def fail_payload_build(*_args, **_kwargs):
+                raise payload_build_error
+            grasp_task_node.build_mujoco_payload = fail_payload_build
         try:
             result = node._execute_grasp6d_plan(
                 {'plan_validity_sec': 5.0},
@@ -210,11 +269,27 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 None,
                 None,
                 plan,
+                strict_execute_pose=lambda *_args, **_kwargs: FakeServiceResponse(
+                    True,
+                    'strict cached executed',
+                ),
             )
         finally:
             grasp_task_node.rospy.get_param = original_get_param
             grasp_task_node.rospy.Time.now = original_time_now
             grasp_task_node.MujocoDigitalTwinClient = original_client
+            grasp_task_node.build_mujoco_payload = original_payload_builder
+        node._test_mujoco_audit_path = configured_audit_path
+        node._test_mujoco_audit_bytes = None
+        node._test_mujoco_audit = None
+        if isinstance(configured_audit_path, str) and os.path.isfile(
+            configured_audit_path
+        ):
+            with open(configured_audit_path, 'rb') as handle:
+                node._test_mujoco_audit_bytes = handle.read()
+            node._test_mujoco_audit = json.loads(
+                node._test_mujoco_audit_bytes.decode('utf-8')
+            )
         return result, physical_actions, states, payloads, node, plan
 
     def test_legacy_pose_array_is_never_execution_authority(self):
@@ -1039,9 +1114,11 @@ class GraspTaskSequenceTest(unittest.TestCase):
             return FakeServiceResponse(True, 'ok')
 
         original_now = grasp_task_node.rospy.Time.now
+        original_get_param = grasp_task_node.rospy.get_param
         grasp_task_node.rospy.Time.now = staticmethod(
             lambda: grasp_task_node.rospy.Time.from_sec(10.0)
         )
+        grasp_task_node.rospy.get_param = lambda _name, default=None: default
         try:
             result = node._plan_and_execute_pose(
                 grasp_task_node.GraspStages.MOVE_PREGRASP,
@@ -1054,6 +1131,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             )
         finally:
             grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.get_param = original_get_param
 
         self.assertFalse(result)
         self.assertEqual(calls, [False])
@@ -1210,6 +1288,109 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertFalse(closed)
         self.assertEqual(calls, [])
 
+    def test_direct_rich_execution_requires_cached_strict_executor_before_any_action(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        plan = self._rich_plan(stamp_sec=1.0)
+        states = []
+        actions = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._bound_target_drift_result = lambda *_args: (
+            grasp_task_node.PlanValidationResult(True)
+        )
+        node._simulate_grasp6d_plan_if_required = lambda *_args: (
+            actions.append('simulate') or True
+        )
+        node._command_gripper_position = lambda *_args, **_kwargs: (
+            actions.append('open') or True
+        )
+
+        original_get_param = grasp_task_node.rospy.get_param
+        original_time_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.get_param = lambda _name, default=None: default
+        grasp_task_node.rospy.Time.now = staticmethod(lambda: FakeTime(1.0))
+        try:
+            result = node._execute_grasp6d_plan(
+                {'plan_validity_sec': 5.0},
+                {'use_compliant_close': False},
+                0.05,
+                lambda *_args: actions.append('generic-pose'),
+                lambda *_args: actions.append('linear-pose'),
+                lambda *_args: actions.append('gripper'),
+                None,
+                plan,
+                strict_execute_pose=None,
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_time_now
+
+        self.assertFalse(result)
+        self.assertEqual(actions, [])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('STRICT_CACHED_EXECUTOR_UNAVAILABLE', states[-1][1])
+
+    def test_rich_pregrasp_cache_failure_never_falls_back_to_generic_execute(self):
+        failures = (
+            'no cached pose plan',
+            "cached plan kind 'position-only' is not 'strict pose'",
+        )
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.get_param = lambda _name, default=None: default
+        try:
+            for failure in failures:
+                with self.subTest(failure=failure):
+                    node = grasp_task_node.GraspTaskNode.__new__(
+                        grasp_task_node.GraspTaskNode
+                    )
+                    node.active = True
+                    states = []
+                    calls = []
+                    node.set_state = lambda *args, **kwargs: states.append(args)
+                    node._wait_for_motion_settle = lambda *_args: (
+                        calls.append(('settle', True)) or True
+                    )
+                    node._validate_bound_plan = lambda *_args: (
+                        grasp_task_node.PlanValidationResult(True)
+                    )
+                    node._invoke_plan_bound_action = (
+                        lambda _plan, _gcfg, _label, action: (
+                            grasp_task_node.PlanValidationResult(True),
+                            action(),
+                        )
+                    )
+
+                    def strict_plan(_pose, execute):
+                        calls.append(('strict-plan', bool(execute)))
+                        return FakeServiceResponse(True, 'planned: strict pose')
+
+                    def strict_execute(_pose, execute):
+                        calls.append(('strict-execute', bool(execute)))
+                        return FakeServiceResponse(False, failure)
+
+                    result = node._plan_and_execute_pose(
+                        grasp_task_node.GraspStages.MOVE_PREGRASP,
+                        '6D pregrasp',
+                        self._pose(0.10),
+                        strict_plan,
+                        '6D pregrasp',
+                        execution_plan=types.SimpleNamespace(
+                            plan_id='strict-rich-plan'
+                        ),
+                        gcfg={},
+                        execute_pose=strict_execute,
+                    )
+
+                    self.assertFalse(result)
+                    self.assertEqual(
+                        calls,
+                        [('strict-plan', False), ('strict-execute', True)],
+                    )
+                    self.assertIn(failure, states[-1][1])
+                    self.assertNotIn('fallback', states[-1][1].lower())
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+
     def test_full_grasp_uses_6d_plan_sequence_when_enabled(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = self._object()
@@ -1217,14 +1398,25 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.active = True
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
+        node._simulate_grasp6d_plan_if_required = lambda *_args: True
         node.set_state = lambda *args, **kwargs: None
 
         calls = []
+        proxy_names = []
 
         def fake_service_proxy(name, _srv_type):
-            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
+            proxy_names.append(name)
+            if name in (
+                '/supervisor/check_pose_strict',
+                '/supervisor/execute_pose_strict',
+                '/supervisor/move_to_pose_linear',
+            ):
                 def move_pose(pose, execute):
-                    mode = 'linear' if name.endswith('_linear') else 'joint'
+                    mode = {
+                        '/supervisor/check_pose_strict': 'strict-plan',
+                        '/supervisor/execute_pose_strict': 'strict-execute',
+                        '/supervisor/move_to_pose_linear': 'linear',
+                    }[name]
                     calls.append((mode, pose.pose.position.x, bool(execute)))
                     return FakeServiceResponse(True, 'moved')
                 return move_pose
@@ -1275,17 +1467,22 @@ class GraspTaskSequenceTest(unittest.TestCase):
             grasp_task_node.rospy.Time.now = original_time_now
 
         self.assertEqual(calls[0], ('set_gripper', 0.0))
-        move_calls = [call for call in calls if call[0] in ('joint', 'linear')]
+        move_calls = [
+            call for call in calls
+            if call[0] in ('strict-plan', 'strict-execute', 'linear')
+        ]
         self.assertEqual(
             [(call[0], round(call[1], 2), call[2]) for call in move_calls],
             [
-                ('joint', 0.10, False), ('joint', 0.10, True),
+                ('strict-plan', 0.10, False),
+                ('strict-execute', 0.10, True),
                 ('linear', 0.20, False), ('linear', 0.20, True),
                 ('linear', 0.30, False), ('linear', 0.30, True),
                 ('linear', 0.40, False), ('linear', 0.40, True),
             ],
         )
         self.assertIn(('close', True), calls)
+        self.assertNotIn('/supervisor/move_to_pose', proxy_names)
 
     def test_6d_plan_honors_configured_simple_open_and_close_positions(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
@@ -1294,12 +1491,17 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.active = True
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
+        node._simulate_grasp6d_plan_if_required = lambda *_args: True
         node.set_state = lambda *args, **kwargs: None
 
         calls = []
 
         def fake_service_proxy(name, _srv_type):
-            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
+            if name in (
+                '/supervisor/check_pose_strict',
+                '/supervisor/execute_pose_strict',
+                '/supervisor/move_to_pose_linear',
+            ):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, bool(execute)))
                     return FakeServiceResponse(True, 'planned')
@@ -1389,7 +1591,11 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 }
 
         def fake_service_proxy(name, _srv_type):
-            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
+            if name in (
+                '/supervisor/check_pose_strict',
+                '/supervisor/execute_pose_strict',
+                '/supervisor/move_to_pose_linear',
+            ):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, bool(execute)))
                     return FakeServiceResponse(True, 'planned')
@@ -1423,6 +1629,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             '/mujoco_digital_twin': {
                 'enabled': True,
                 'execution_gate_enabled': True,
+                'audit_output_path': self._mujoco_audit_path,
                 'server_url': 'http://172.23.132.97:8000',
                 'min_score': 80,
                 'require_object_pose': True,
@@ -1454,7 +1661,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertIn('gripper would collide with table', states[-1][1])
 
     def test_strict_mujoco_gate_complete_pass_reaches_first_physical_action_once(self):
-        result, physical, states, payloads, _node, plan = (
+        result, physical, states, payloads, node, plan = (
             self._run_mujoco_gate_to_first_physical_action(
                 response=lambda bound: self._passing_mujoco_response(
                     bound.plan_id
@@ -1469,6 +1676,429 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(payloads[0]['plan_id'], plan.plan_id)
         self.assertEqual(len(payloads[0]['trajectory']), 4)
         self.assertIn('MuJoCo simulation passed', states[-2][1])
+        audit = node._test_mujoco_audit
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit['request_plan_id'], plan.plan_id)
+        self.assertEqual(audit['payload']['plan_id'], plan.plan_id)
+        self.assertEqual(audit['payload']['summary']['trajectory_count'], 4)
+        self.assertEqual(audit['response']['raw_echo_plan_id'], plan.plan_id)
+        self.assertTrue(audit['response']['strict_json_serializable'])
+        for key in grasp_task_node._MUJOCO_SAFETY_KEYS:
+            self.assertIs(audit['response'][key], True)
+        self.assertEqual(audit['response']['score'], 95.0)
+        self.assertTrue(audit['authority_after_network']['ok'])
+        self.assertTrue(audit['gate_validation']['ok'])
+        self.assertTrue(audit['final_validation']['ok'])
+        self.assertEqual(
+            audit['final_validation']['code'],
+            'MUJOCO_GATE_PASSED',
+        )
+        self.assertGreaterEqual(audit['attempt']['duration_sec'], 0.0)
+        expected_hash = hashlib.sha256(node._test_mujoco_audit_bytes).hexdigest()
+        self.assertIn('audit_path=' + node._test_mujoco_audit_path, states[-2][1])
+        self.assertIn('audit_sha256=' + expected_hash, states[-2][1])
+
+    def test_strict_mujoco_gate_requires_exact_boolean_true_authority_flags(self):
+        cases = (
+            ('enabled-false', {'mujoco_enabled': False}, 'enabled'),
+            (
+                'enabled-missing',
+                {'mujoco_enabled': _MISSING_CONFIG_VALUE},
+                'enabled',
+            ),
+            ('enabled-none', {'mujoco_enabled': None}, 'enabled'),
+            ('enabled-integer', {'mujoco_enabled': 1}, 'enabled'),
+            (
+                'execution-false',
+                {'execution_gate_enabled': False},
+                'execution_gate_enabled',
+            ),
+            (
+                'execution-missing',
+                {'execution_gate_enabled': _MISSING_CONFIG_VALUE},
+                'execution_gate_enabled',
+            ),
+            (
+                'execution-string',
+                {'execution_gate_enabled': 'true'},
+                'execution_gate_enabled',
+            ),
+        )
+        for label, kwargs, parameter in cases:
+            with self.subTest(case=label):
+                _result, physical, states, payloads, _node, _plan = (
+                    self._run_mujoco_gate_to_first_physical_action(**kwargs)
+                )
+                self.assertEqual(payloads, [])
+                self.assertEqual(physical, [])
+                self.assertEqual(
+                    states[-1][0], grasp_task_node.GraspStages.FAILED
+                )
+                self.assertIn('MUJOCO_GATE_CONFIG_INVALID', states[-1][1])
+                self.assertIn(parameter, states[-1][1])
+
+    def test_mujoco_and_planning_audit_canonical_path_conflict_blocks_before_network(self):
+        shared_path = os.path.join(
+            self._mujoco_audit_directory.name,
+            'shared-audit.json',
+        )
+        alias_path = os.path.join(
+            self._mujoco_audit_directory.name,
+            'not-created',
+            '..',
+            'shared-audit.json',
+        )
+
+        _result, physical, states, payloads, _node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                audit_output_path=alias_path,
+                planning_audit_output_path=shared_path,
+            )
+        )
+
+        self.assertEqual(payloads, [])
+        self.assertEqual(physical, [])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('MUJOCO_AUDIT_PATH_CONFLICT', states[-1][1])
+        self.assertFalse(os.path.exists(shared_path))
+
+        with open(shared_path, 'wb') as handle:
+            handle.write(b'{"planning_audit":"evidence"}')
+        hardlink_path = os.path.join(
+            self._mujoco_audit_directory.name,
+            'hardlinked-mujoco-audit.json',
+        )
+        os.link(shared_path, hardlink_path)
+        _result, physical, states, payloads, _node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                audit_output_path=hardlink_path,
+                planning_audit_output_path=shared_path,
+            )
+        )
+
+        self.assertEqual(payloads, [])
+        self.assertEqual(physical, [])
+        self.assertIn('MUJOCO_AUDIT_PATH_CONFLICT', states[-1][1])
+        with open(shared_path, 'rb') as handle:
+            self.assertEqual(
+                handle.read(),
+                b'{"planning_audit":"evidence"}',
+            )
+
+    def test_strict_mujoco_gate_rejects_nonfinite_value_hidden_in_response(self):
+        for label, nonfinite in (
+            ('nan', float('nan')),
+            ('positive-infinity', float('inf')),
+            ('negative-infinity', float('-inf')),
+        ):
+            with self.subTest(case=label):
+                def non_strict_response(bound, value=nonfinite):
+                    response = self._passing_mujoco_response(bound.plan_id)
+                    response['unexpected_diagnostic'] = value
+                    return response
+
+                _result, physical, states, _payloads, node, _plan = (
+                    self._run_mujoco_gate_to_first_physical_action(
+                        response=non_strict_response,
+                    )
+                )
+
+                self.assertEqual(physical, [])
+                self.assertIn('WSL_UNAVAILABLE', states[-1][1])
+                self.assertFalse(
+                    node._test_mujoco_audit['response'][
+                        'strict_json_serializable'
+                    ]
+                )
+                self.assertFalse(
+                    node._test_mujoco_audit['gate_validation']['ok']
+                )
+                self.assertIn(
+                    'strict-JSON',
+                    node._test_mujoco_audit['gate_validation']['reason'],
+                )
+
+    def test_mujoco_audit_writer_is_atomic_fsynced_strict_json_in_temporary_directory(self):
+        path = self._next_mujoco_audit_path()
+        with open(path, 'wb') as handle:
+            handle.write(b'old-audit')
+        report = grasp_task_node._new_mujoco_execution_audit(
+            types.SimpleNamespace(plan_id='audit-plan')
+        )
+        reference = grasp_task_node._finalize_mujoco_execution_audit(
+            report,
+            path,
+            True,
+            'MUJOCO_GATE_PASSED',
+            'passed',
+            score=95.0,
+        )
+
+        with open(path, 'rb') as handle:
+            encoded = handle.read()
+        parsed = json.loads(
+            encoded.decode('utf-8'),
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                AssertionError('non-strict JSON constant %s' % value)
+            ),
+        )
+        self.assertEqual(parsed['request_plan_id'], 'audit-plan')
+        self.assertTrue(parsed['final_validation']['ok'])
+        self.assertEqual(reference['path'], os.path.abspath(path))
+        self.assertEqual(reference['sha256'], hashlib.sha256(encoded).hexdigest())
+        self.assertEqual(
+            [name for name in os.listdir(os.path.dirname(path)) if '.tmp-' in name],
+            [],
+        )
+
+        invalid_path = self._next_mujoco_audit_path()
+        with self.assertRaises(ValueError):
+            grasp_task_node.write_mujoco_execution_audit(
+                invalid_path,
+                {'not_strict': float('nan')},
+            )
+        self.assertFalse(os.path.exists(invalid_path))
+
+    def test_strict_mujoco_gate_rejection_audit_preserves_bounded_response_evidence(self):
+        def rejected(bound):
+            return dict(
+                self._passing_mujoco_response(bound.plan_id),
+                collision_free=False,
+                failure_code='MUJOCO_COLLISION',
+                failure_reason='gripper would collide with table',
+            )
+
+        _result, physical, states, _payloads, node, plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=rejected,
+            )
+        )
+
+        self.assertEqual(physical, [])
+        self.assertIn('MUJOCO_COLLISION', states[-1][1])
+        audit = node._test_mujoco_audit
+        self.assertEqual(audit['request_plan_id'], plan.plan_id)
+        self.assertEqual(audit['response']['raw_echo_plan_id'], plan.plan_id)
+        self.assertIs(audit['response']['collision_free'], False)
+        self.assertEqual(audit['response']['failure_code'], 'MUJOCO_COLLISION')
+        self.assertEqual(
+            audit['response']['failure_reason'],
+            'gripper would collide with table',
+        )
+        self.assertFalse(audit['gate_validation']['ok'])
+        self.assertEqual(
+            audit['final_validation']['code'],
+            'MUJOCO_COLLISION',
+        )
+
+    def test_strict_mujoco_gate_keeps_full_reason_in_file_but_bounds_ros_state(self):
+        full_reason = 'collision:' + ('x' * 5000) + ':response-tail'
+
+        def rejected(bound):
+            return dict(
+                self._passing_mujoco_response(bound.plan_id),
+                collision_free=False,
+                failure_code='MUJOCO_COLLISION',
+                failure_reason=full_reason,
+            )
+
+        _result, physical, states, _payloads, node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(response=rejected)
+        )
+
+        self.assertEqual(physical, [])
+        self.assertEqual(
+            node._test_mujoco_audit['response']['failure_reason'],
+            full_reason,
+        )
+        self.assertEqual(
+            node._test_mujoco_audit['response']['failure_reason_length'],
+            len(full_reason),
+        )
+        self.assertNotIn('response-tail', states[-1][1])
+        self.assertLess(len(states[-1][1]), 900)
+
+    def test_strict_mujoco_gate_audits_build_and_network_failures(self):
+        cases = (
+            (
+                'build',
+                {'payload_build_error': ValueError('payload rejected')},
+                ('payload', 'build_error'),
+                'ValueError',
+            ),
+            (
+                'network',
+                {'request_error': TimeoutError('request timed out')},
+                ('response', 'network_error'),
+                'TimeoutError',
+            ),
+        )
+        for label, kwargs, location, expected_type in cases:
+            with self.subTest(case=label):
+                _result, physical, states, _payloads, node, _plan = (
+                    self._run_mujoco_gate_to_first_physical_action(**kwargs)
+                )
+                self.assertEqual(physical, [])
+                self.assertIn('WSL_UNAVAILABLE', states[-1][1])
+                evidence = node._test_mujoco_audit[location[0]][location[1]]
+                self.assertEqual(evidence['type'], expected_type)
+                self.assertFalse(
+                    node._test_mujoco_audit['final_validation']['ok']
+                )
+                if label == 'network':
+                    self.assertTrue(
+                        node._test_mujoco_audit[
+                            'authority_after_network'
+                        ]['checked']
+                    )
+
+    def test_strict_mujoco_gate_plan_id_mismatch_is_audited_and_blocks_motion(self):
+        _result, physical, states, _payloads, node, plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=lambda bound: dict(
+                    self._passing_mujoco_response(bound.plan_id),
+                    plan_id='different-plan-id',
+                )
+            )
+        )
+
+        self.assertEqual(physical, [])
+        self.assertIn('PLAN_ID_MISMATCH', states[-1][1])
+        audit = node._test_mujoco_audit
+        self.assertEqual(audit['request_plan_id'], plan.plan_id)
+        self.assertEqual(audit['payload']['plan_id'], plan.plan_id)
+        self.assertEqual(
+            audit['response']['raw_echo_plan_id'],
+            'different-plan-id',
+        )
+        self.assertEqual(
+            audit['final_validation']['code'],
+            'PLAN_ID_MISMATCH',
+        )
+
+    def test_strict_mujoco_gate_nan_response_still_writes_strict_json_audit(self):
+        def non_strict_response(bound):
+            response = self._passing_mujoco_response(bound.plan_id)
+            response['score'] = float('nan')
+            return response
+
+        _result, physical, states, _payloads, node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=non_strict_response,
+            )
+        )
+
+        self.assertEqual(physical, [])
+        self.assertIn('WSL_UNAVAILABLE', states[-1][1])
+        self.assertIsNone(node._test_mujoco_audit['response']['score'])
+        self.assertFalse(
+            node._test_mujoco_audit['response']['strict_json_serializable']
+        )
+        parsed = json.loads(
+            node._test_mujoco_audit_bytes.decode('utf-8'),
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                AssertionError('non-strict JSON constant %s' % value)
+            ),
+        )
+        self.assertIsNone(parsed['response']['score'])
+
+    def test_strict_mujoco_gate_huge_integer_score_is_audited_fail_closed(self):
+        def huge_score_response(bound):
+            response = self._passing_mujoco_response(bound.plan_id)
+            response['score'] = 10 ** 400
+            return response
+
+        _result, physical, states, _payloads, node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=huge_score_response,
+            )
+        )
+
+        self.assertEqual(physical, [])
+        self.assertIn('WSL_UNAVAILABLE', states[-1][1])
+        audit = node._test_mujoco_audit
+        self.assertTrue(audit['response']['strict_json_serializable'])
+        self.assertIsNone(audit['response']['score'])
+        self.assertTrue(audit['gate_validation']['checked'])
+        self.assertFalse(audit['gate_validation']['ok'])
+        self.assertIn(
+            'response validation failed',
+            audit['gate_validation']['reason'],
+        )
+        self.assertEqual(
+            audit['final_validation']['code'],
+            'WSL_UNAVAILABLE',
+        )
+
+    def test_strict_mujoco_gate_non_object_response_keeps_exact_strict_json_hash(self):
+        _result, physical, states, _payloads, node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(response=[])
+        )
+
+        self.assertEqual(physical, [])
+        self.assertIn('WSL_UNAVAILABLE', states[-1][1])
+        response_audit = node._test_mujoco_audit['response']
+        self.assertTrue(response_audit['received'])
+        self.assertFalse(response_audit['json_object'])
+        self.assertTrue(response_audit['strict_json_serializable'])
+        self.assertEqual(
+            response_audit['sha256'],
+            hashlib.sha256(b'[]').hexdigest(),
+        )
+
+    def test_strict_mujoco_gate_passing_response_audit_write_failure_blocks_motion(self):
+        _result, physical, states, payloads, node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=lambda bound: self._passing_mujoco_response(
+                    bound.plan_id
+                ),
+                # Replacing an existing directory with the audit file fails.
+                audit_output_path=self._mujoco_audit_directory.name,
+            )
+        )
+
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(physical, [])
+        self.assertIsNone(node._test_mujoco_audit)
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('MUJOCO_AUDIT_WRITE_FAILED', states[-1][1])
+        self.assertIn('MUJOCO_GATE_PASSED', states[-1][1])
+
+    def test_strict_mujoco_gate_rejection_audit_write_failure_is_visible(self):
+        def rejected(bound):
+            return dict(
+                self._passing_mujoco_response(bound.plan_id),
+                collision_free=False,
+                failure_code='MUJOCO_COLLISION',
+                failure_reason='collision evidence',
+            )
+
+        _result, physical, states, _payloads, _node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=rejected,
+                audit_output_path=self._mujoco_audit_directory.name,
+            )
+        )
+
+        self.assertEqual(physical, [])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('MUJOCO_COLLISION', states[-1][1])
+        self.assertIn('MUJOCO_AUDIT_WRITE_FAILED', states[-1][1])
+
+    def test_strict_mujoco_gate_empty_audit_path_fails_before_network(self):
+        _result, physical, states, payloads, _node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=lambda bound: self._passing_mujoco_response(
+                    bound.plan_id
+                ),
+                audit_output_path='   ',
+            )
+        )
+
+        self.assertEqual(payloads, [])
+        self.assertEqual(physical, [])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('MUJOCO_AUDIT_PATH_INVALID', states[-1][1])
 
     def test_strict_mujoco_gate_revalidates_bound_plan_after_network_return(self):
         def replace_plan(node, _bound):
@@ -1617,7 +2247,11 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.set_state = lambda *args, **kwargs: states.append(args)
 
         def fake_service_proxy(name, _srv_type):
-            if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
+            if name in (
+                '/supervisor/check_pose_strict',
+                '/supervisor/execute_pose_strict',
+                '/supervisor/move_to_pose_linear',
+            ):
                 def move_pose(pose, execute):
                     calls.append(('move', bool(execute)))
                     return FakeServiceResponse(True, 'planned')
@@ -1647,6 +2281,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             '/mujoco_digital_twin': {
                 'enabled': True,
                 'execution_gate_enabled': True,
+                'audit_output_path': self._mujoco_audit_path,
                 'server_url': 'http://172.23.132.97:8000',
                 'require_object_pose': True,
                 'send_joint_state_in_request': True,
@@ -1799,6 +2434,110 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('position-only fallback', states[-1][1])
 
+    def test_rich_6d_sequence_global_position_only_true_fails_before_simulation_or_action(self):
+        _result, physical, states, payloads, node, _plan = (
+            self._run_mujoco_gate_to_first_physical_action(
+                response=lambda bound: self._passing_mujoco_response(
+                    bound.plan_id
+                ),
+                position_only_execute_enabled=True,
+            )
+        )
+
+        self.assertEqual(payloads, [])
+        self.assertEqual(physical, [])
+        self.assertIsNone(node._test_mujoco_audit)
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('POSITION_ONLY_FALLBACK_FORBIDDEN', states[-1][1])
+
+    def test_rich_6d_plan_rejects_position_only_fallback_even_when_global_compatibility_is_enabled(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        states = []
+        calls = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._validate_bound_plan = lambda *_args: (
+            grasp_task_node.PlanValidationResult(True)
+        )
+        node._wait_for_motion_settle = lambda reason='motion': calls.append(
+            ('settle', reason)
+        )
+
+        def move_pose(_pose, execute):
+            calls.append(('move', bool(execute)))
+            return FakeServiceResponse(
+                True,
+                'planned with position-only fallback: target xyz=(0.1, 0.2, 0.3)',
+            )
+
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/robot/position_only_execute_enabled': True,
+        }.get(name, default)
+        try:
+            result = grasp_task_node.GraspTaskNode._plan_and_execute_pose(
+                node,
+                grasp_task_node.GraspStages.MOVE_PREGRASP,
+                '6D pregrasp',
+                self._pose(0.10),
+                move_pose,
+                '6D pregrasp',
+                execution_plan=types.SimpleNamespace(plan_id='strict-rich-plan'),
+                gcfg={},
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+
+        self.assertFalse(result)
+        self.assertEqual(calls, [])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('POSITION_ONLY_FALLBACK_FORBIDDEN', states[-1][1])
+
+    def test_non_6d_motion_keeps_explicit_position_only_compatibility(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        states = []
+        calls = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._wait_for_motion_settle = lambda reason='motion': (
+            calls.append(('settle', reason)) or True
+        )
+
+        def move_pose(_pose, execute):
+            calls.append(('move', bool(execute)))
+            message = (
+                'planned with position-only fallback: target xyz=(0.1, 0.2, 0.3)'
+                if not execute
+                else 'executed'
+            )
+            return FakeServiceResponse(True, message)
+
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/robot/position_only_execute_enabled': True,
+        }.get(name, default)
+        try:
+            result = grasp_task_node.GraspTaskNode._plan_and_execute_pose(
+                node,
+                grasp_task_node.GraspStages.MOVE_PREGRASP,
+                'legacy pregrasp',
+                self._pose(0.10),
+                move_pose,
+                'legacy pregrasp',
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+
+        self.assertTrue(result)
+        self.assertEqual(
+            calls,
+            [
+                ('move', False),
+                ('move', True),
+                ('settle', 'legacy pregrasp'),
+            ],
+        )
+
     def test_6d_plan_rejects_orientation_fallback_before_execute(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True
@@ -1834,6 +2573,94 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(calls, [('move', False)])
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('candidate orientation', states[-1][1])
+
+    def test_rich_6d_plan_rejects_orientation_fallback_even_when_global_compatibility_is_enabled(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        states = []
+        calls = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._validate_bound_plan = lambda *_args: (
+            grasp_task_node.PlanValidationResult(True)
+        )
+        node._wait_for_motion_settle = lambda reason='motion': calls.append(
+            ('settle', reason)
+        )
+
+        def move_pose(_pose, execute):
+            calls.append(('move', bool(execute)))
+            return FakeServiceResponse(
+                True,
+                'planned with candidate orientation current: target xyz=(0.1, 0.2, 0.3)',
+            )
+
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp/accept_orientation_fallback': True,
+        }.get(name, default)
+        try:
+            result = grasp_task_node.GraspTaskNode._plan_and_execute_pose(
+                node,
+                grasp_task_node.GraspStages.MOVE_PREGRASP,
+                '6D pregrasp',
+                self._pose(0.10),
+                move_pose,
+                '6D pregrasp',
+                execution_plan=types.SimpleNamespace(plan_id='strict-rich-plan'),
+                gcfg={},
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+
+        self.assertFalse(result)
+        self.assertEqual(calls, [('move', False)])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('candidate orientation', states[-1][1])
+
+    def test_non_6d_motion_keeps_explicit_orientation_fallback_compatibility(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        states = []
+        calls = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._wait_for_motion_settle = lambda reason='motion': (
+            calls.append(('settle', reason)) or True
+        )
+
+        def move_pose(_pose, execute):
+            calls.append(('move', bool(execute)))
+            message = (
+                'planned with candidate orientation current: target xyz=(0.1, 0.2, 0.3)'
+                if not execute
+                else 'executed'
+            )
+            return FakeServiceResponse(True, message)
+
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp/accept_orientation_fallback': True,
+        }.get(name, default)
+        try:
+            result = grasp_task_node.GraspTaskNode._plan_and_execute_pose(
+                node,
+                grasp_task_node.GraspStages.MOVE_PREGRASP,
+                'legacy pregrasp',
+                self._pose(0.10),
+                move_pose,
+                'legacy pregrasp',
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+
+        self.assertTrue(result)
+        self.assertEqual(
+            calls,
+            [
+                ('move', False),
+                ('move', True),
+                ('settle', 'legacy pregrasp'),
+            ],
+        )
 
     def test_6d_motion_stops_when_real_joint_feedback_does_not_settle(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)

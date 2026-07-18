@@ -30,6 +30,10 @@ class FakePlanner:
         self.calls.append(('linear', target, execute))
         return True, 'linear executed'
 
+    def execute_cached_strict_pose(self, target):
+        self.calls.append(('strict_cached', target))
+        return True, 'strict cached executed'
+
 
 class FakeJogger:
     def __init__(self, planner):
@@ -42,7 +46,13 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
         gateway.planner = FakePlanner()
         gateway._ensure_planner = lambda: gateway.planner
         gateway._log_pose_request = lambda req, *args, **kwargs: None
-        gateway._ensure_trajectory_controllers_started = lambda: controller_result
+        gateway.controller_checks = 0
+
+        def check_controllers():
+            gateway.controller_checks += 1
+            return controller_result
+
+        gateway._ensure_trajectory_controllers_started = check_controllers
         return gateway
 
     def test_execute_pose_starts_trajectory_controllers_before_moveit(self):
@@ -118,6 +128,57 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
         self.assertFalse(res.success)
         self.assertIn('planning-only', res.message)
         self.assertEqual(gateway.planner.calls, [])
+
+    def test_cached_strict_execute_requires_execute_true(self):
+        gateway = self.make_gateway()
+        req = types.SimpleNamespace(target='pose', execute=False)
+
+        res = MotionGateway.handle_pose_strict_execute(gateway, req)
+
+        self.assertFalse(res.success)
+        self.assertIn('requires execute=true', res.message)
+        self.assertEqual(gateway.controller_checks, 0)
+        self.assertEqual(gateway.planner.calls, [])
+
+    def test_cached_strict_execute_checks_controllers_then_uses_cached_only_api(self):
+        gateway = self.make_gateway()
+        req = types.SimpleNamespace(target='pose', execute=True)
+
+        res = MotionGateway.handle_pose_strict_execute(gateway, req)
+
+        self.assertTrue(res.success)
+        self.assertEqual(gateway.controller_checks, 1)
+        self.assertEqual(gateway.planner.calls, [('strict_cached', 'pose')])
+
+    def test_cached_strict_execute_stops_before_planner_on_controller_failure(self):
+        gateway = self.make_gateway((False, 'controllers stopped'))
+        req = types.SimpleNamespace(target='pose', execute=True)
+
+        res = MotionGateway.handle_pose_strict_execute(gateway, req)
+
+        self.assertFalse(res.success)
+        self.assertIn('controllers stopped', res.message)
+        self.assertEqual(gateway.controller_checks, 1)
+        self.assertEqual(gateway.planner.calls, [])
+
+    def test_cached_strict_execute_reports_moveit_not_ready(self):
+        gateway = self.make_gateway()
+        gateway.planner = None
+        gateway._ensure_planner = lambda: None
+        gateway._moveit_not_ready_message = lambda: 'MoveIt not ready: unavailable'
+        req = types.SimpleNamespace(target='pose', execute=True)
+
+        res = MotionGateway.handle_pose_strict_execute(gateway, req)
+
+        self.assertFalse(res.success)
+        self.assertIn('MoveIt not ready', res.message)
+        self.assertEqual(gateway.controller_checks, 0)
+
+    def test_cached_strict_service_name_is_registered(self):
+        self.assertIn(
+            '/supervisor/execute_pose_strict',
+            MotionGateway.__init__.__code__.co_consts,
+        )
 
     def test_execute_linear_pose_starts_controllers_and_uses_linear_planner(self):
         gateway = self.make_gateway()

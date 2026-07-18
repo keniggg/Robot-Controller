@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import math
 import os
@@ -8,11 +9,12 @@ import threading
 import time
 import urllib.error
 from copy import deepcopy
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import rospy
 from cv_bridge import CvBridge
-from geometry_msgs.msg import PoseArray
+from geometry_msgs.msg import PoseArray, PoseStamped
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import String
 from tf.transformations import quaternion_from_euler, quaternion_from_matrix, quaternion_matrix, quaternion_multiply
@@ -42,13 +44,36 @@ from alicia_flexible_grasp.robot.planning_feedback import (
     is_position_only_fallback_message,
 )
 from alicia_flexible_grasp.vision.grasp6d_adapter import CameraIntrinsics
+from alicia_flexible_grasp.vision.graspnet_input_context import (
+    CONTEXT_ROI,
+    DEFAULT_CONTEXT_EXPAND_RATIO,
+    DEFAULT_CONTEXT_MARGIN_PX,
+    DEFAULT_CONTEXT_MAX_MARGIN_PX,
+    DEFAULT_CONTEXT_PLANE_DISTANCE_M,
+    DEFAULT_DETECTED_BBOX_MIN_IOU,
+    DEFAULT_MIN_SUPPORT_POINTS,
+    DEFAULT_MIN_TARGET_FRACTION,
+    DEFAULT_MIN_TARGET_POINTS,
+    DEFAULT_MIN_TOTAL_POINTS,
+    DEFAULT_TARGET_GUARD_PX,
+    FULL_SCENE,
+    MASKED_TARGET,
+    VALID_MODES,
+    GraspNetInputContextError,
+    build_graspnet_input_context,
+)
 from alicia_flexible_grasp.vision.model_selection import select_yolo_model
 from alicia_flexible_grasp.vision.object_geometry import (
     GeometryEstimate,
     estimate_object_geometry,
 )
 from alicia_flexible_grasp.vision.pose_estimator import PoseEstimator
-from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClient, RemoteGraspCandidate
+from alicia_flexible_grasp.vision.remote_grasp6d_client import (
+    CandidateContractError,
+    RemoteGrasp6DClient,
+    RemoteGraspCandidate,
+    validate_graspnet_depth_m,
+)
 from alicia_flexible_grasp.vision.rgbd_snapshot import (
     SnapshotResult,
     SynchronizedRgbdBuffer,
@@ -66,6 +91,274 @@ OPTICAL_TO_ROS_CAMERA = np.asarray(
     ],
     dtype=float,
 )
+PRODUCTION_CANDIDATE_FRAME_CONVENTION = 'opencv_optical'
+CANONICAL_CANDIDATE_CAMERA_FRAME = 'camera_link'
+STRICT_MODEL_GRASP_TO_TOOL_QUATERNION = np.asarray(
+    quaternion_from_euler(0.0, math.pi * 0.5, 0.0),
+    dtype=float,
+)
+STRICT_MODEL_GRASP_TO_TOOL_ROTATION = quaternion_matrix(
+    STRICT_MODEL_GRASP_TO_TOOL_QUATERNION
+)[:3, :3]
+TOOL_Z_HALF_TURN_ROTATION = quaternion_matrix(
+    quaternion_from_euler(0.0, 0.0, math.pi)
+)[:3, :3]
+STRICT_ORIENTATION_VARIANTS_RPY_DEG = (
+    (0.0, 0.0, 0.0),
+    (0.0, 0.0, 180.0),
+)
+
+
+@dataclass(frozen=True)
+class FrozenGraspNetInputConfig:
+    """One request's immutable GraspNet RGB-D input contract."""
+
+    mode: str = MASKED_TARGET
+    context_margin_px: object = DEFAULT_CONTEXT_MARGIN_PX
+    context_expand_ratio: object = DEFAULT_CONTEXT_EXPAND_RATIO
+    context_max_margin_px: object = DEFAULT_CONTEXT_MAX_MARGIN_PX
+    target_guard_px: object = DEFAULT_TARGET_GUARD_PX
+    support_band_m: object = DEFAULT_CONTEXT_PLANE_DISTANCE_M
+    min_target_points: object = DEFAULT_MIN_TARGET_POINTS
+    min_support_points: object = DEFAULT_MIN_SUPPORT_POINTS
+    min_total_points: object = DEFAULT_MIN_TOTAL_POINTS
+    min_target_fraction: object = DEFAULT_MIN_TARGET_FRACTION
+    bbox_min_iou: object = DEFAULT_DETECTED_BBOX_MIN_IOU
+    candidate_target_gate_enabled: bool = True
+
+    @property
+    def requires_instance_mask(self):
+        return self.mode in (CONTEXT_ROI, FULL_SCENE)
+
+    @property
+    def requires_support_plane(self):
+        return self.mode == CONTEXT_ROI
+
+    @property
+    def requires_candidate_target_gate(self):
+        return self.mode == CONTEXT_ROI
+
+
+FULL_SCENE_DIAGNOSTIC_CODE = 'GRASPNET_FULL_SCENE_DIAGNOSTIC_ONLY'
+PLANNING_AUDIT_CONFIG_INVALID = 'PLANNING_AUDIT_CONFIG_INVALID'
+PLANNING_AUDIT_FAILED = 'PLANNING_AUDIT_FAILED'
+PLANNING_AUDIT_WRITE_FAILED = 'PLANNING_AUDIT_WRITE_FAILED'
+AUDIT_PATH_CONFLICT = 'AUDIT_PATH_CONFLICT'
+MUJOCO_AUDIT_DEFAULT_PATH = '~/.ros/grasp6d_mujoco_audit_latest.json'
+
+
+def validate_mandatory_planning_audit(enabled, output_path):
+    """Validate the production planning-audit authority contract."""
+    if type(enabled) is not bool or enabled is not True:
+        raise CandidateContractError(
+            PLANNING_AUDIT_CONFIG_INVALID,
+            'gate_audit_enabled must be the boolean true',
+        )
+    if not isinstance(output_path, str):
+        raise CandidateContractError(
+            PLANNING_AUDIT_CONFIG_INVALID,
+            'gate_audit_output_path must be a string',
+        )
+    path = os.path.expanduser(output_path.strip())
+    if not path:
+        raise CandidateContractError(
+            PLANNING_AUDIT_CONFIG_INVALID,
+            'gate_audit_output_path must be non-empty',
+        )
+    return path
+
+
+def validate_distinct_audit_paths(planning_output_path, mujoco_output_path):
+    """Return canonical audit paths and reject shared file authority."""
+    planning_path = validate_mandatory_planning_audit(
+        True,
+        planning_output_path,
+    )
+    if not isinstance(mujoco_output_path, str) or not mujoco_output_path.strip():
+        raise CandidateContractError(
+            PLANNING_AUDIT_CONFIG_INVALID,
+            'mujoco_digital_twin.audit_output_path must be a non-empty string',
+        )
+    mujoco_path = os.path.expanduser(mujoco_output_path.strip())
+    planning_path = os.path.realpath(os.path.abspath(planning_path))
+    mujoco_path = os.path.realpath(os.path.abspath(mujoco_path))
+    same_path = os.path.normcase(planning_path) == os.path.normcase(mujoco_path)
+    if not same_path and os.path.exists(planning_path) and os.path.exists(mujoco_path):
+        try:
+            same_path = os.path.samefile(planning_path, mujoco_path)
+        except OSError:
+            same_path = False
+    if same_path:
+        raise CandidateContractError(
+            AUDIT_PATH_CONFLICT,
+            'planning and MuJoCo execution audits must use different files: %s'
+            % planning_path,
+        )
+    return planning_path, mujoco_path
+
+
+def candidate_gate_result_audit(result):
+    """Return the complete six-stage analytical result as JSON data."""
+    stage_names = (
+        'transform',
+        'center',
+        'jaw_width',
+        'finger_reach',
+        'static_envelope',
+        'swept_envelope',
+    )
+    if not isinstance(result, CandidateGateResult):
+        return {
+            'checked': False,
+            'ok': False,
+            'failure_code': '',
+            'failure_reason': '',
+            'failed_gate': '',
+            'passed_gate_count': 0,
+            'total_gate_count': 6,
+            'stages': [
+                {'name': name, 'status': 'not_checked'}
+                for name in stage_names
+            ],
+        }
+    passed = int(result.passed_gate_count)
+    stages = []
+    for index, name in enumerate(stage_names):
+        if index < passed:
+            status = 'passed'
+        elif not bool(result.ok) and (
+            name == str(result.failed_gate or '') or index == passed
+        ):
+            status = 'failed'
+        else:
+            status = 'not_checked'
+        stages.append({'name': name, 'status': status})
+    return {
+        'checked': True,
+        'ok': bool(result.ok),
+        'failure_code': str(result.failure_code or ''),
+        'failure_reason': str(result.failure_reason or ''),
+        'failed_gate': str(result.failed_gate or ''),
+        'passed_gate_count': passed,
+        'total_gate_count': 6,
+        'stages': stages,
+        'required_open_width_m': float(result.required_open_width_m),
+        'center_distance_m': float(result.center_distance_m),
+        'support_clearance_m': float(result.support_clearance_m),
+        'jaw_alignment': float(result.jaw_alignment),
+        'motion_cost': float(result.motion_cost),
+        'geometry_cost': float(result.geometry_cost),
+    }
+
+
+def failed_planning_evaluation(
+    candidate_index,
+    variant_index,
+    failure_code,
+    failure_reason,
+    stage='audit_finalization',
+):
+    """Build one complete fail-closed selector evaluation record."""
+    return {
+        'candidate_index': int(candidate_index),
+        'variant_index': int(variant_index),
+        'candidate_contract': {
+            'ok': False,
+            'stage': str(stage),
+            'failure_code': str(failure_code),
+            'failure_reason': str(failure_reason),
+        },
+        'analytical_result': candidate_gate_result_audit(None),
+        'target_filter': {
+            'checked': False,
+            'ok': False,
+            'failure_code': '',
+            'failure_reason': '',
+        },
+        'strict_reachability': {
+            'checked': False,
+            'ok': False,
+            'failure_code': '',
+            'failure_reason': '',
+        },
+        'rank': None,
+        'rank_valid': False,
+        'selected': False,
+    }
+
+
+def planning_evaluation_schema_error(evaluation, expected_key):
+    """Return an empty string only for a complete lineage-bound record."""
+    if not isinstance(evaluation, dict):
+        return 'planning evaluation is not a dictionary'
+    required = {
+        'candidate_index',
+        'variant_index',
+        'candidate_contract',
+        'analytical_result',
+        'target_filter',
+        'strict_reachability',
+        'rank',
+        'rank_valid',
+        'selected',
+    }
+    missing = sorted(required - set(evaluation))
+    if missing:
+        return 'planning evaluation is missing fields %s' % missing
+    try:
+        actual_key = (
+            int(evaluation.get('candidate_index')),
+            int(evaluation.get('variant_index')),
+        )
+    except (TypeError, ValueError, OverflowError):
+        return 'planning evaluation has non-integral lineage indices'
+    if actual_key != tuple(expected_key):
+        return 'planning evaluation lineage %s does not match row %s' % (
+            actual_key,
+            tuple(expected_key),
+        )
+    nested_required = {
+        'candidate_contract': {'ok', 'stage', 'failure_code', 'failure_reason'},
+        'analytical_result': {
+            'checked',
+            'ok',
+            'failure_code',
+            'failure_reason',
+            'failed_gate',
+            'passed_gate_count',
+            'total_gate_count',
+            'stages',
+        },
+        'target_filter': {
+            'checked',
+            'ok',
+            'failure_code',
+            'failure_reason',
+        },
+        'strict_reachability': {
+            'checked',
+            'ok',
+            'failure_code',
+            'failure_reason',
+        },
+    }
+    for name, fields in nested_required.items():
+        value = evaluation.get(name)
+        if not isinstance(value, dict):
+            return '%s is not a dictionary' % name
+        missing_nested = sorted(fields - set(value))
+        if missing_nested:
+            return '%s is missing fields %s' % (name, missing_nested)
+    if type(evaluation.get('selected')) is not bool:
+        return 'selected must be an exact boolean'
+    if type(evaluation.get('rank_valid')) is not bool:
+        return 'rank_valid must be an exact boolean'
+    return ''
+
+
+def array_sha256(value):
+    """Hash exact C-order payload bytes for the gate audit."""
+    return hashlib.sha256(np.ascontiguousarray(value).tobytes(order='C')).hexdigest()
 
 
 def segment_foreground_above_support_plane(
@@ -185,6 +478,11 @@ def remote_prediction_failure_code(exception):
     visited = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
+        if isinstance(
+            current,
+            (CandidateContractError, GraspNetInputContextError),
+        ):
+            return str(current.code)
         if isinstance(current, urllib.error.HTTPError):
             return 'WSL_PREDICT_FAILED'
         if isinstance(
@@ -216,6 +514,132 @@ def normalize_candidate_frame_convention(convention):
     return aliases.get(value, value)
 
 
+def validate_production_candidate_frame_convention(convention):
+    """Keep the GraspNet wire result in its one production coordinate frame."""
+    normalized = normalize_candidate_frame_convention(convention)
+    if normalized != PRODUCTION_CANDIDATE_FRAME_CONVENTION:
+        raise CandidateContractError(
+            'CANDIDATE_FRAME_CONVENTION_INVALID',
+            (
+                'production GraspNet candidates are fixed to opencv_optical; '
+                'got %s'
+            )
+            % normalized,
+        )
+    return PRODUCTION_CANDIDATE_FRAME_CONVENTION
+
+
+def validate_production_execution_fallback_contract(
+    accept_position_only_fallback,
+    accept_orientation_fallback,
+):
+    """Forbid pose replacement in the production remote 6D path."""
+    if bool(accept_position_only_fallback):
+        raise CandidateContractError(
+            'POSITION_ONLY_FALLBACK_FORBIDDEN',
+            (
+                'production remote 6D planning cannot enable '
+                'accept_position_only_fallback'
+            ),
+        )
+    if bool(accept_orientation_fallback):
+        raise CandidateContractError(
+            'ORIENTATION_FALLBACK_FORBIDDEN',
+            (
+                'production remote 6D planning cannot enable '
+                'accept_orientation_fallback'
+            ),
+        )
+    return False, False
+
+
+def validate_production_orientation_variant_quaternions(variants):
+    """Freeze the one exact ordered parallel-jaw symmetry contract."""
+    try:
+        values = list([] if variants is None else variants)
+    except Exception as exc:
+        raise CandidateContractError(
+            'ORIENTATION_VARIANT_CONTRACT_INVALID',
+            'orientation variants must be an ordered two-item sequence',
+        ) from exc
+    if len(values) != 2:
+        raise CandidateContractError(
+            'ORIENTATION_VARIANT_CONTRACT_INVALID',
+            (
+                'production orientation variants must contain exactly two '
+                'items: identity followed by tool Rz(180 deg)'
+            ),
+        )
+    try:
+        normalized = tuple(
+            _normalize_quaternion(np.asarray(value, dtype=float))
+            for value in values
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise CandidateContractError(
+            'ORIENTATION_VARIANT_CONTRACT_INVALID',
+            'orientation variants must be finite non-zero quaternions',
+        ) from exc
+
+    rotations = tuple(
+        quaternion_matrix(quaternion)[:3, :3]
+        for quaternion in normalized
+    )
+    expected = (np.eye(3, dtype=float), TOOL_Z_HALF_TURN_ROTATION)
+    if not all(
+        np.allclose(actual, required, atol=1e-7)
+        for actual, required in zip(rotations, expected)
+    ):
+        raise CandidateContractError(
+            'ORIENTATION_VARIANT_CONTRACT_INVALID',
+            (
+                'production orientation variants must be unique and ordered '
+                'as identity, tool Rz(180 deg); no other wrist rotations are allowed'
+            ),
+        )
+
+    frozen = []
+    for quaternion in normalized:
+        item = np.array(quaternion, dtype=float, copy=True)
+        item.setflags(write=False)
+        frozen.append(item)
+    return tuple(frozen)
+
+
+def validate_execution_tool0_contract(
+    require_candidate_depth,
+    model_grasp_to_tool_quaternion,
+    grasp_config,
+):
+    """Reject any runtime configuration that can reinterpret center as tool0."""
+    if not bool(require_candidate_depth):
+        raise CandidateContractError(
+            'DEPTH_CONTRACT_DISABLED',
+            'production remote 6D planning cannot disable candidate depth',
+        )
+    correction = _normalize_quaternion(
+        np.asarray(model_grasp_to_tool_quaternion, dtype=float)
+    )
+    if not np.allclose(
+        quaternion_matrix(correction)[:3, :3],
+        STRICT_MODEL_GRASP_TO_TOOL_ROTATION,
+        atol=1e-7,
+    ):
+        raise CandidateContractError(
+            'TOOL_FRAME_CONTRACT_INVALID',
+            'production model_grasp_to_tool must be exactly Ry(+90 deg)',
+        )
+    approach_axis = str(
+        dict(grasp_config or {}).get('tool_approach_axis', 'z') or 'z'
+    ).strip().lower()
+    if approach_axis not in ('z', '+z'):
+        raise CandidateContractError(
+            'TOOL_FRAME_CONTRACT_INVALID',
+            'production grasp tool_approach_axis must be +Z',
+        )
+    return correction
+
+
 def convert_candidate_to_camera_link(candidate, convention='opencv_optical'):
     convention = normalize_candidate_frame_convention(convention)
     if convention == 'ros_camera_link':
@@ -223,7 +647,14 @@ def convert_candidate_to_camera_link(candidate, convention='opencv_optical'):
     if convention != 'opencv_optical':
         raise ValueError('unknown remote grasp candidate frame convention: %s' % convention)
 
-    translation = OPTICAL_TO_ROS_CAMERA.dot(np.asarray(candidate.translation_m, dtype=float))
+    translation = OPTICAL_TO_ROS_CAMERA.dot(
+        _finite_vector3(candidate.translation_m, 'candidate center')
+    )
+    tool0_translation = getattr(candidate, 'tool0_translation_m', None)
+    if tool0_translation is not None:
+        tool0_translation = OPTICAL_TO_ROS_CAMERA.dot(
+            _finite_vector3(tool0_translation, 'candidate tool0')
+        )
     optical_from_grasp = quaternion_matrix(np.asarray(candidate.quaternion_xyzw, dtype=float))
     camera_from_grasp = np.eye(4, dtype=float)
     camera_from_grasp[:3, :3] = OPTICAL_TO_ROS_CAMERA.dot(optical_from_grasp[:3, :3])
@@ -235,30 +666,114 @@ def convert_candidate_to_camera_link(candidate, convention='opencv_optical'):
         width_m=float(candidate.width_m),
         height_m=getattr(candidate, 'height_m', None),
         depth_m=getattr(candidate, 'depth_m', None),
+        tool0_translation_m=tool0_translation,
     )
 
 
-def align_candidate_to_tool_frame(candidate, model_grasp_to_tool_quaternion=None):
-    """Convert GraspNet's grasp-frame orientation into the MoveIt tool frame."""
+def align_candidate_to_tool_frame(
+    candidate,
+    model_grasp_to_tool_quaternion=None,
+    require_depth=True,
+    legacy_nonexecuting=False,
+):
+    """Convert model orientation and derive tool0 without consuming depth twice.
+
+    ``translation_m`` remains GraspNet's grasp center.  GraspNet insertion
+    depth is measured along model +X, so the physical Alicia tool0 origin is
+    ``center + depth * R_model[:, 0]``.  With the configured Ry(+90 deg)
+    model-to-tool correction this is also ``center + depth * R_tool[:, 2]``.
+    """
     correction = np.asarray(
         model_grasp_to_tool_quaternion
         if model_grasp_to_tool_quaternion is not None
-        else [0.0, 0.0, 0.0, 1.0],
+        else STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
         dtype=float,
     )
     correction = _normalize_quaternion(correction)
-    if np.allclose(correction, np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)):
-        return candidate
+    strict = not bool(legacy_nonexecuting)
+    if strict and not bool(require_depth):
+        raise CandidateContractError(
+            'DEPTH_CONTRACT_DISABLED',
+            'execution candidates cannot disable the GraspNet depth contract',
+        )
+    if strict:
+        correction_rotation = quaternion_matrix(correction)[:3, :3]
+        if not np.allclose(
+            correction_rotation,
+            STRICT_MODEL_GRASP_TO_TOOL_ROTATION,
+            atol=1e-7,
+        ):
+            raise CandidateContractError(
+                'TOOL_FRAME_CONTRACT_INVALID',
+                'model_grasp_to_tool must be exactly Ry(+90 deg)',
+            )
+    center = _finite_vector3(candidate.translation_m, 'candidate center')
+    model_rotation = quaternion_matrix(
+        _normalize_quaternion(np.asarray(candidate.quaternion_xyzw, dtype=float))
+    )[:3, :3]
     quaternion = _normalize_quaternion(
         np.asarray(quaternion_multiply(candidate.quaternion_xyzw, correction), dtype=float)
     )
+    tool_rotation = quaternion_matrix(quaternion)[:3, :3]
+
+    depth = validate_graspnet_depth_m(
+        getattr(candidate, 'depth_m', None),
+        required=bool(require_depth),
+    )
+    existing_tool0 = getattr(candidate, 'tool0_translation_m', None)
+    if depth is None:
+        if strict:
+            raise CandidateContractError(
+                'DEPTH_MISSING',
+                'execution candidate is missing GraspNet depth_m',
+            )
+        tool0_translation = (
+            center.copy()
+            if existing_tool0 is None
+            else _finite_vector3(existing_tool0, 'candidate tool0')
+        )
+    else:
+        expected_model_tool0 = _finite_vector3(
+            center + depth * model_rotation[:, 0],
+            'derived candidate tool0 from model +X',
+        )
+        expected_tool_tool0 = _finite_vector3(
+            center + depth * tool_rotation[:, 2],
+            'derived candidate tool0 from tool +Z',
+        )
+        if strict and not np.allclose(
+            expected_model_tool0,
+            expected_tool_tool0,
+            atol=1e-7,
+        ):
+            raise CandidateContractError(
+                'TOOL_FRAME_CONTRACT_INVALID',
+                'Ry(+90 deg) must map Alicia tool +Z to GraspNet model +X',
+            )
+        if existing_tool0 is None:
+            tool0_translation = expected_model_tool0
+        else:
+            tool0_translation = _finite_vector3(
+                existing_tool0,
+                'candidate tool0',
+            )
+            if not np.allclose(
+                tool0_translation,
+                expected_model_tool0,
+                atol=1e-7,
+            ):
+                raise CandidateContractError(
+                    'TOOL0_INCONSISTENT',
+                    'candidate tool0 is inconsistent with center/depth/model approach'
+                )
     return RemoteGraspCandidate(
         score=float(candidate.score),
-        translation_m=np.asarray(candidate.translation_m, dtype=float),
+        translation_m=center,
         quaternion_xyzw=quaternion,
         width_m=float(candidate.width_m),
         height_m=getattr(candidate, 'height_m', None),
-        depth_m=getattr(candidate, 'depth_m', None),
+        depth_m=depth,
+        tool0_translation_m=tool0_translation,
     )
 
 
@@ -370,6 +885,9 @@ def summarize_candidate_gate_audit(
 
 
 def _normalize_quaternion(quaternion):
+    quaternion = np.asarray(quaternion, dtype=float)
+    if quaternion.shape != (4,) or not np.all(np.isfinite(quaternion)):
+        raise ValueError('remote grasp candidate quaternion must contain 4 finite values')
     norm = float(np.linalg.norm(quaternion))
     if norm <= 1e-12:
         raise ValueError('remote grasp candidate quaternion has zero norm')
@@ -377,6 +895,98 @@ def _normalize_quaternion(quaternion):
     if quaternion[3] < 0.0:
         quaternion = -quaternion
     return quaternion
+
+
+def _finite_vector3(values, name):
+    vector = np.asarray(values, dtype=float)
+    if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+        raise ValueError('%s must contain 3 finite values' % str(name))
+    return vector.copy()
+
+
+def candidate_tool0_translation(candidate, legacy_nonexecuting=False):
+    """Return an explicit derived tool0 origin without reinterpreting center."""
+    tool0 = getattr(candidate, 'tool0_translation_m', None)
+    if tool0 is None:
+        if not bool(legacy_nonexecuting):
+            raise CandidateContractError(
+                'TOOL0_MISSING',
+                'candidate tool0 must be derived from center and GraspNet depth',
+            )
+        tool0 = getattr(candidate, 'translation_m', None)
+    return _finite_vector3(tool0, 'candidate tool0')
+
+
+def candidate_center_base_from_tool0_pose(candidate, tool0_pose):
+    """Recover the base-frame GraspNet center from one transformed tool0 pose."""
+    center_camera = _finite_vector3(candidate.translation_m, 'candidate center')
+    tool0_camera = candidate_tool0_translation(candidate)
+    camera_from_tool = quaternion_matrix(
+        _normalize_quaternion(np.asarray(candidate.quaternion_xyzw, dtype=float))
+    )[:3, :3]
+    base_from_tool = pose_matrix(tool0_pose)[:3, :3]
+    base_from_camera = base_from_tool.dot(camera_from_tool.T)
+    tool_position = pose_matrix(tool0_pose)[:3, 3]
+    center_base = tool_position + base_from_camera.dot(center_camera - tool0_camera)
+    return _finite_vector3(center_base, 'candidate center in base')
+
+
+def make_parallel_jaw_variant(candidate, correction):
+    """Build only identity/Rz(180) variants while preserving one tool0."""
+    correction_quaternion = _normalize_quaternion(
+        np.asarray(correction, dtype=float)
+    )
+    correction_rotation = quaternion_matrix(correction_quaternion)[:3, :3]
+    identity = np.eye(3, dtype=float)
+    is_identity = np.allclose(correction_rotation, identity, atol=1e-7)
+    if not is_identity and not np.allclose(
+        correction_rotation, TOOL_Z_HALF_TURN_ROTATION, atol=1e-7
+    ):
+        raise CandidateContractError(
+            'ORIENTATION_VARIANT_INVALID',
+            'only identity and Rz(180 deg) are valid parallel-jaw variants',
+        )
+    depth = validate_graspnet_depth_m(
+        getattr(candidate, 'depth_m', None),
+        required=True,
+    )
+    center = _finite_vector3(candidate.translation_m, 'candidate center')
+    tool0 = candidate_tool0_translation(candidate)
+    source_quaternion = _normalize_quaternion(
+        np.asarray(candidate.quaternion_xyzw, dtype=float)
+    )
+    quaternion = (
+        source_quaternion
+        if is_identity
+        else _normalize_quaternion(
+            np.asarray(
+                quaternion_multiply(
+                    source_quaternion,
+                    correction_quaternion,
+                ),
+                dtype=float,
+            )
+        )
+    )
+    expected_offset = depth * quaternion_matrix(quaternion)[:3, 2]
+    actual_offset = tool0 - center
+    if not np.allclose(actual_offset, expected_offset, atol=1e-7):
+        raise CandidateContractError(
+            'TOOL0_INCONSISTENT',
+            'orientation variant changed the physical insertion axis',
+        )
+    # Always allocate a fresh candidate, including for identity.  Variant
+    # lineage is attached later; sharing the identity object with another
+    # variant would let a later setattr overwrite the earlier audit indices.
+    return RemoteGraspCandidate(
+        score=float(candidate.score),
+        translation_m=center,
+        quaternion_xyzw=quaternion,
+        width_m=float(candidate.width_m),
+        height_m=getattr(candidate, 'height_m', None),
+        depth_m=depth,
+        tool0_translation_m=tool0,
+    )
 
 
 def expanded_bbox_roi(image_shape, bbox_x, bbox_y, bbox_width, bbox_height, margin_px=0):
@@ -417,6 +1027,281 @@ def pose_matrix(pose_stamped):
         [pose.position.x, pose.position.y, pose.position.z],
         [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w],
     )
+
+
+def _readonly_rigid_transform(value, name):
+    matrix = np.asarray(value, dtype=float)
+    if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+        raise CandidateContractError(
+            'SNAPSHOT_TRANSFORM_INVALID',
+            '%s must be a finite 4x4 rigid transform' % name,
+        )
+    if not np.allclose(matrix[3], [0.0, 0.0, 0.0, 1.0], atol=1e-9):
+        raise CandidateContractError(
+            'SNAPSHOT_TRANSFORM_INVALID',
+            '%s has an invalid homogeneous last row' % name,
+        )
+    rotation = matrix[:3, :3]
+    if (
+        not np.allclose(rotation.T.dot(rotation), np.eye(3), atol=1e-7)
+        or not math.isclose(float(np.linalg.det(rotation)), 1.0, abs_tol=1e-7)
+    ):
+        raise CandidateContractError(
+            'SNAPSHOT_TRANSFORM_INVALID',
+            '%s rotation is not orthonormal with determinant +1' % name,
+        )
+    frozen = np.array(matrix, dtype=float, copy=True, order='C')
+    frozen.setflags(write=False)
+    return frozen
+
+
+def derive_base_camera_link_transform(T_base_optical):
+    """Derive base<-camera_link from one frozen base<-optical snapshot TF."""
+    base_from_optical = _readonly_rigid_transform(
+        T_base_optical,
+        'T_base_optical',
+    )
+    camera_link_from_optical = np.eye(4, dtype=float)
+    camera_link_from_optical[:3, :3] = OPTICAL_TO_ROS_CAMERA
+    base_from_camera_link = base_from_optical.dot(
+        np.linalg.inv(camera_link_from_optical)
+    )
+    return _readonly_rigid_transform(
+        base_from_camera_link,
+        'T_base_camera_link',
+    )
+
+
+def _stamp_to_nsec(stamp):
+    if stamp is None:
+        return 0
+    if hasattr(stamp, 'to_nsec'):
+        return int(stamp.to_nsec())
+    return int(round(float(stamp) * 1.0e9))
+
+
+class FrozenSnapshotCandidatePoseEstimator:
+    """Transform one candidate batch without any live/latest TF lookup."""
+
+    def __init__(
+        self,
+        T_base_optical,
+        snapshot_stamp,
+        snapshot_source_frame,
+        raw_candidate_convention=PRODUCTION_CANDIDATE_FRAME_CONVENTION,
+        camera_frame=CANONICAL_CANDIDATE_CAMERA_FRAME,
+        base_frame='base_link',
+    ):
+        self._T_base_optical = _readonly_rigid_transform(
+            T_base_optical,
+            'T_base_optical',
+        )
+        self._T_base_camera_link = derive_base_camera_link_transform(
+            self._T_base_optical
+        )
+        if snapshot_stamp is None:
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INVALID',
+                'frozen snapshot stamp is missing',
+            )
+        try:
+            snapshot_stamp_ns = _stamp_to_nsec(snapshot_stamp)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INVALID',
+                'frozen snapshot stamp is invalid: %s' % exc,
+            )
+        if snapshot_stamp_ns <= 0:
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INVALID',
+                (
+                    'frozen snapshot stamp must be strictly positive; '
+                    'ROS Time(0) is forbidden because it means latest TF'
+                ),
+            )
+        self.snapshot_stamp = snapshot_stamp
+        self.snapshot_stamp_ns = int(snapshot_stamp_ns)
+        self.snapshot_source_frame = str(snapshot_source_frame or '')
+        if not self.snapshot_source_frame:
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INVALID',
+                'snapshot source frame is empty',
+            )
+        self.raw_candidate_convention = normalize_candidate_frame_convention(
+            raw_candidate_convention
+        )
+        self.camera_frame = str(camera_frame)
+        self.base_frame = str(base_frame)
+        if self.camera_frame != CANONICAL_CANDIDATE_CAMERA_FRAME:
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INVALID',
+                'frozen candidate frame must be camera_link',
+            )
+        if self.base_frame != 'base_link':
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INVALID',
+                'frozen candidate base frame must be base_link',
+            )
+        transform_payload = {
+            'snapshot_stamp_ns': int(self.snapshot_stamp_ns),
+            'snapshot_source_frame': self.snapshot_source_frame,
+            'canonical_candidate_frame': self.camera_frame,
+            'T_base_optical': self._T_base_optical.tolist(),
+            'T_base_camera_link': self._T_base_camera_link.tolist(),
+        }
+        encoded = json.dumps(
+            transform_payload,
+            ensure_ascii=True,
+            separators=(',', ':'),
+            sort_keys=True,
+        ).encode('utf-8')
+        self.transform_sha256 = hashlib.sha256(encoded).hexdigest()
+
+    @property
+    def T_base_optical(self):
+        return self._T_base_optical
+
+    @property
+    def T_base_camera_link(self):
+        return self._T_base_camera_link
+
+    def _validate_call(self, stamp, camera_frame):
+        requested_frame = str(camera_frame or self.camera_frame)
+        if requested_frame != self.camera_frame:
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INCONSISTENT',
+                'candidate frame %s does not match frozen %s'
+                % (requested_frame, self.camera_frame),
+            )
+        requested_stamp_ns = _stamp_to_nsec(
+            self.snapshot_stamp if stamp is None else stamp
+        )
+        if requested_stamp_ns != self.snapshot_stamp_ns:
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INCONSISTENT',
+                'candidate stamp does not match frozen planning snapshot',
+            )
+
+    def transform_camera_point_to_base(self, xyz):
+        point = np.ones(4, dtype=float)
+        point[:3] = _finite_vector3(xyz, 'candidate camera point')
+        return _finite_vector3(
+            self._T_base_camera_link.dot(point)[:3],
+            'candidate base point',
+        )
+
+    def transform_camera_rotation_to_base(self, rotation):
+        camera_rotation = np.asarray(rotation, dtype=float)
+        if camera_rotation.shape != (3, 3) or not np.all(np.isfinite(camera_rotation)):
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INCONSISTENT',
+                'candidate camera rotation must be finite 3x3',
+            )
+        return self._T_base_camera_link[:3, :3].dot(camera_rotation)
+
+    def make_base_pose_from_camera_pose(
+        self,
+        xyz,
+        quaternion_xyzw,
+        stamp=None,
+        camera_frame=None,
+    ):
+        self._validate_call(stamp, camera_frame)
+        camera_from_tool = transform_matrix(
+            _finite_vector3(xyz, 'candidate tool0'),
+            _normalize_quaternion(np.asarray(quaternion_xyzw, dtype=float)),
+        )
+        base_from_tool = self._T_base_camera_link.dot(camera_from_tool)
+        quaternion = _normalize_quaternion(
+            np.asarray(quaternion_from_matrix(base_from_tool), dtype=float)
+        )
+        pose = PoseStamped()
+        pose.header.frame_id = self.base_frame
+        pose.header.stamp = self.snapshot_stamp
+        pose.pose.position.x = float(base_from_tool[0, 3])
+        pose.pose.position.y = float(base_from_tool[1, 3])
+        pose.pose.position.z = float(base_from_tool[2, 3])
+        pose.pose.orientation.x = float(quaternion[0])
+        pose.pose.orientation.y = float(quaternion[1])
+        pose.pose.orientation.z = float(quaternion[2])
+        pose.pose.orientation.w = float(quaternion[3])
+        return pose
+
+    def audit_metadata(self, include_matrices=False):
+        metadata = {
+            'snapshot_stamp_ns': int(self.snapshot_stamp_ns),
+            'snapshot_source_frame': self.snapshot_source_frame,
+            'raw_candidate_convention': self.raw_candidate_convention,
+            'canonical_candidate_frame': self.camera_frame,
+            'base_frame': self.base_frame,
+            'transform_sha256': self.transform_sha256,
+        }
+        if include_matrices:
+            metadata['T_base_optical'] = self._T_base_optical.tolist()
+            metadata['T_base_camera_link'] = self._T_base_camera_link.tolist()
+        return metadata
+
+
+def make_candidate_base_pose_and_center(
+    candidate,
+    pose_estimator,
+    stamp,
+    camera_frame,
+):
+    """Transform candidate tool0/center with one estimator and cross-check it."""
+    pose = pose_estimator.make_base_pose_from_camera_pose(
+        candidate_tool0_translation(candidate),
+        candidate.quaternion_xyzw,
+        stamp=stamp,
+        camera_frame=camera_frame,
+    )
+    recovered_center = candidate_center_base_from_tool0_pose(candidate, pose)
+    point_transform = getattr(
+        pose_estimator,
+        'transform_camera_point_to_base',
+        None,
+    )
+    if not callable(point_transform):
+        return pose, recovered_center
+
+    direct_center = _finite_vector3(
+        point_transform(candidate.translation_m),
+        'direct candidate center in base',
+    )
+    direct_tool0 = _finite_vector3(
+        point_transform(candidate_tool0_translation(candidate)),
+        'direct candidate tool0 in base',
+    )
+    actual_tool0 = pose_matrix(pose)[:3, 3]
+    if (
+        not np.allclose(direct_center, recovered_center, atol=1e-7)
+        or not np.allclose(direct_tool0, actual_tool0, atol=1e-7)
+    ):
+        raise CandidateContractError(
+            'SNAPSHOT_TRANSFORM_INCONSISTENT',
+            'candidate center/tool0 disagree under the frozen snapshot transform',
+        )
+    rotation_transform = getattr(
+        pose_estimator,
+        'transform_camera_rotation_to_base',
+        None,
+    )
+    if callable(rotation_transform):
+        camera_rotation = quaternion_matrix(candidate.quaternion_xyzw)[:3, :3]
+        direct_rotation = np.asarray(
+            rotation_transform(camera_rotation),
+            dtype=float,
+        )
+        if not np.allclose(
+            direct_rotation,
+            pose_matrix(pose)[:3, :3],
+            atol=1e-7,
+        ):
+            raise CandidateContractError(
+                'SNAPSHOT_TRANSFORM_INCONSISTENT',
+                'candidate orientation disagrees under the frozen snapshot transform',
+            )
+    return pose, direct_center
 
 
 def project_base_target_at_tool_pose(tool_pose, target_base_xyz, tool_from_camera, intrinsics):
@@ -474,66 +1359,219 @@ def select_first_reachable_candidate(
     model_grasp_to_tool_quaternion=None,
     candidate_geometry_fn=None,
     grasp_config=None,
+    require_candidate_depth=True,
+    candidate_rejection_fn=None,
+    evaluation_record_sink=None,
 ):
+    evaluation_records = []
+
+    def record(evaluation):
+        evaluation_records.append(evaluation)
+
+    def emit_all():
+        if callable(evaluation_record_sink):
+            for evaluation in evaluation_records:
+                evaluation_record_sink(evaluation)
+
+    def failure_details(exc, default_code):
+        return (
+            str(getattr(exc, 'code', default_code) or default_code),
+            str(exc),
+        )
+
+    def base_evaluation(candidate_index, variant_index):
+        return {
+            'candidate_index': int(candidate_index),
+            'variant_index': int(variant_index),
+            'candidate_contract': {
+                'ok': True,
+                'stage': 'tool0_and_parallel_jaw_variant',
+                'failure_code': '',
+                'failure_reason': '',
+            },
+            'analytical_result': candidate_gate_result_audit(None),
+            'target_filter': {
+                'checked': False,
+                'ok': False,
+                'failure_code': '',
+                'failure_reason': '',
+            },
+            'strict_reachability': {
+                'checked': False,
+                'ok': False,
+                'failure_code': '',
+                'failure_reason': '',
+            },
+            'rank': None,
+            'rank_valid': False,
+            'selected': False,
+        }
+
+    def contract_failure_record(candidate_index, variant_index, exc, stage):
+        evaluation = base_evaluation(candidate_index, variant_index)
+        code, reason = failure_details(exc, 'CANDIDATE_CONTRACT_INVALID')
+        evaluation['candidate_contract'] = {
+            'ok': False,
+            'stage': str(stage),
+            'failure_code': code,
+            'failure_reason': reason,
+        }
+        return evaluation
+
+    def safely_record_rejection(candidate, variant_index, exc, stage):
+        if callable(candidate_rejection_fn):
+            try:
+                candidate_rejection_fn(candidate, variant_index, exc, stage)
+            except Exception:
+                # Rejection counters are diagnostic-only.  They cannot be
+                # allowed to suppress the authoritative per-lineage record.
+                pass
+
+    normalized_convention = normalize_candidate_frame_convention(
+        candidate_frame_convention
+    )
+    if normalized_convention not in ('opencv_optical', 'ros_camera_link'):
+        raise ValueError(
+            'unknown remote grasp candidate frame convention: %s'
+            % normalized_convention
+        )
     variants = list(orientation_variant_quaternions or [])
     if not variants:
         variants = [np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)]
+    model_to_tool = validate_execution_tool0_contract(
+        require_candidate_depth,
+        (
+            model_grasp_to_tool_quaternion
+            if model_grasp_to_tool_quaternion is not None
+            else STRICT_MODEL_GRASP_TO_TOOL_QUATERNION
+        ),
+        grasp_config,
+    )
     ranked = []
-    for candidate in candidates:
-        camera_candidate = convert_candidate_to_camera_link(candidate, candidate_frame_convention)
-        camera_candidate = align_candidate_to_tool_frame(
-            camera_candidate,
-            model_grasp_to_tool_quaternion,
-        )
+    unranked_reachable = []
+    for candidate_index, candidate in enumerate(candidates):
+        try:
+            camera_candidate = convert_candidate_to_camera_link(
+                candidate,
+                normalized_convention,
+            )
+            camera_candidate = align_candidate_to_tool_frame(
+                camera_candidate,
+                model_to_tool,
+                require_depth=require_candidate_depth,
+            )
+        except Exception as exc:
+            # A malformed candidate must never fall back to treating its cloud
+            # center as tool0.  Other candidates from the immutable batch may
+            # still be evaluated normally.
+            safely_record_rejection(candidate, None, exc, 'alignment')
+            for variant_index in range(len(variants)):
+                record(
+                    contract_failure_record(
+                        candidate_index,
+                        variant_index,
+                        exc,
+                        'alignment',
+                    )
+                )
+            continue
         for variant_index, correction in enumerate(variants):
-            if np.allclose(np.asarray(correction, dtype=float), np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)):
-                variant_candidate = camera_candidate
-            else:
-                variant_quat = _normalize_quaternion(
-                    np.asarray(quaternion_multiply(camera_candidate.quaternion_xyzw, correction), dtype=float)
+            evaluation = base_evaluation(candidate_index, variant_index)
+            try:
+                variant_candidate = make_parallel_jaw_variant(
+                    camera_candidate,
+                    correction,
                 )
-                variant_candidate = RemoteGraspCandidate(
-                    score=float(camera_candidate.score),
-                    translation_m=np.asarray(camera_candidate.translation_m, dtype=float),
-                    quaternion_xyzw=variant_quat,
-                    width_m=float(camera_candidate.width_m),
-                    height_m=getattr(camera_candidate, 'height_m', None),
-                    depth_m=getattr(camera_candidate, 'depth_m', None),
+            except Exception as exc:
+                safely_record_rejection(
+                    candidate,
+                    variant_index,
+                    exc,
+                    'orientation_variant',
                 )
-            pose = pose_estimator.make_base_pose_from_camera_pose(
-                variant_candidate.translation_m,
-                variant_candidate.quaternion_xyzw,
-                stamp=stamp,
-                camera_frame=camera_frame,
+                evaluation = contract_failure_record(
+                    candidate_index,
+                    variant_index,
+                    exc,
+                    'orientation_variant',
+                )
+                record(evaluation)
+                continue
+            setattr(variant_candidate, '_raw_candidate_index', int(candidate_index))
+            setattr(variant_candidate, '_variant_index', int(variant_index))
+            try:
+                pose, center_base = make_candidate_base_pose_and_center(
+                    variant_candidate,
+                    pose_estimator,
+                    stamp,
+                    camera_frame,
+                )
+            except Exception as exc:
+                safely_record_rejection(
+                    candidate,
+                    variant_index,
+                    exc,
+                    'snapshot_pose',
+                )
+                evaluation = contract_failure_record(
+                    candidate_index,
+                    variant_index,
+                    exc,
+                    'snapshot_pose',
+                )
+                record(evaluation)
+                continue
+            setattr(
+                variant_candidate,
+                '_center_base_xyz',
+                center_base,
             )
             gate_result = None
             if candidate_geometry_fn is not None:
-                config = dict(grasp_config or {})
-                plan = make_grasp_sequence_from_grasp_pose(
-                    pose,
-                    pregrasp_distance_m=float(
-                        config.get('pregrasp_distance_m', 0.08)
-                    ),
-                    approach_offset_m=float(
-                        config.get('final_approach_offset_m', 0.015)
-                    ),
-                    lift_height_m=float(
-                        config.get('lift_height_m', 0.05)
-                    ),
-                    tool_approach_axis=str(
-                        config.get('tool_approach_axis', 'x')
-                    ),
-                )
-                gate_result = candidate_geometry_fn(
-                    candidate,
-                    variant_candidate,
-                    pose,
-                    plan,
-                )
-                if not isinstance(gate_result, CandidateGateResult):
-                    raise ValueError(
-                        'candidate_geometry_fn must return CandidateGateResult'
+                try:
+                    config = dict(grasp_config or {})
+                    plan = make_grasp_sequence_from_grasp_pose(
+                        pose,
+                        pregrasp_distance_m=float(
+                            config.get('pregrasp_distance_m', 0.08)
+                        ),
+                        approach_offset_m=float(
+                            config.get('final_approach_offset_m', 0.015)
+                        ),
+                        lift_height_m=float(
+                            config.get('lift_height_m', 0.05)
+                        ),
+                        tool_approach_axis=str(
+                            config.get('tool_approach_axis', 'z')
+                        ),
                     )
+                    gate_result = candidate_geometry_fn(
+                        candidate,
+                        variant_candidate,
+                        pose,
+                        plan,
+                    )
+                    if not isinstance(gate_result, CandidateGateResult):
+                        raise ValueError(
+                            'candidate_geometry_fn must return CandidateGateResult'
+                        )
+                except Exception as exc:
+                    code, reason = failure_details(
+                        exc,
+                        'ANALYTICAL_GEOMETRY_EXCEPTION',
+                    )
+                    analytical = candidate_gate_result_audit(None)
+                    analytical.update(
+                        {
+                            'checked': True,
+                            'failure_code': code,
+                            'failure_reason': reason,
+                            'failed_gate': 'exception',
+                        }
+                    )
+                    evaluation['analytical_result'] = analytical
+                    record(evaluation)
+                    continue
                 setattr(variant_candidate, '_geometry_gate_result', gate_result)
                 setattr(variant_candidate, '_grasp_sequence', plan)
                 setattr(
@@ -541,42 +1579,159 @@ def select_first_reachable_candidate(
                     'required_open_width_m',
                     float(gate_result.required_open_width_m),
                 )
+                evaluation['analytical_result'] = candidate_gate_result_audit(
+                    gate_result
+                )
                 if not gate_result.ok:
+                    record(evaluation)
                     continue
-            if candidate_filter_fn is not None and not bool(candidate_filter_fn(candidate, variant_candidate, pose)):
+            filter_ok = True
+            if candidate_filter_fn is not None:
+                try:
+                    filter_ok = bool(
+                        candidate_filter_fn(candidate, variant_candidate, pose)
+                    )
+                except Exception as exc:
+                    code, reason = failure_details(exc, 'TARGET_FILTER_EXCEPTION')
+                    evaluation['target_filter'] = {
+                        'checked': True,
+                        'ok': False,
+                        'failure_code': code,
+                        'failure_reason': reason,
+                    }
+                    record(evaluation)
+                    continue
+            evaluation['target_filter'] = {
+                'checked': candidate_filter_fn is not None,
+                'ok': bool(filter_ok),
+                'failure_code': '',
+                'failure_reason': '',
+            }
+            if not filter_ok:
+                record(evaluation)
                 continue
-            if bool(reachability_fn(pose)):
+            try:
+                reachable = bool(reachability_fn(pose))
+            except Exception as exc:
+                code, reason = failure_details(
+                    exc,
+                    'STRICT_REACHABILITY_EXCEPTION',
+                )
+                evaluation['strict_reachability'] = {
+                    'checked': True,
+                    'ok': False,
+                    'failure_code': code,
+                    'failure_reason': reason,
+                }
+                record(evaluation)
+                continue
+            evaluation['strict_reachability'] = {
+                'checked': True,
+                'ok': bool(reachable),
+                'failure_code': '',
+                'failure_reason': '',
+            }
+            if reachable:
                 if candidate_rank_fn is None and gate_result is None:
-                    return variant_candidate, pose
-                if candidate_rank_fn is None:
-                    rank = candidate_rank_key(
-                        gate_result,
-                        float(getattr(variant_candidate, 'score', 0.0)),
+                    evaluation['rank'] = []
+                    evaluation['rank_valid'] = True
+                    unranked_reachable.append(
+                        (
+                            int(candidate_index),
+                            int(variant_index),
+                            variant_candidate,
+                            pose,
+                            evaluation,
+                        )
                     )
-                else:
-                    rank = candidate_rank_fn(
-                        candidate,
-                        variant_candidate,
-                        pose,
-                    )
-                if np.isscalar(rank):
-                    rank = (float(rank),)
-                else:
-                    rank = tuple(float(value) for value in rank)
-                if not rank or not all(math.isfinite(value) for value in rank):
                     continue
+                try:
+                    if candidate_rank_fn is None:
+                        rank = candidate_rank_key(
+                            gate_result,
+                            float(getattr(variant_candidate, 'score', 0.0)),
+                        )
+                    else:
+                        rank = candidate_rank_fn(
+                            candidate,
+                            variant_candidate,
+                            pose,
+                        )
+                    if np.isscalar(rank):
+                        rank = (float(rank),)
+                    else:
+                        rank = tuple(float(value) for value in rank)
+                except Exception as exc:
+                    code, reason = failure_details(exc, 'RANK_EXCEPTION')
+                    evaluation['rank_error'] = {
+                        'failure_code': code,
+                        'failure_reason': reason,
+                    }
+                    record(evaluation)
+                    continue
+                # The rank function may add strict joint-motion cost to the
+                # immutable analytical result.  Audit the final result that
+                # actually participated in selection.
+                evaluation['analytical_result'] = candidate_gate_result_audit(
+                    getattr(
+                        variant_candidate,
+                        '_geometry_gate_result',
+                        gate_result,
+                    )
+                )
+                if not rank or not all(math.isfinite(value) for value in rank):
+                    evaluation['rank'] = None
+                    evaluation['rank_valid'] = False
+                    evaluation['rank_error'] = {
+                        'failure_code': 'RANK_INVALID',
+                        'failure_reason': 'rank must contain only finite values',
+                    }
+                    record(evaluation)
+                    continue
+                evaluation['rank'] = [float(value) for value in rank]
+                evaluation['rank_valid'] = True
                 ranked.append(
                     (
                         rank,
-                        variant_index,
                         -float(getattr(variant_candidate, 'score', 0.0)),
+                        int(candidate_index),
+                        int(variant_index),
                         variant_candidate,
                         pose,
+                        evaluation,
                     )
                 )
+            else:
+                record(evaluation)
+    selected_item = None
     if ranked:
-        ranked.sort(key=lambda item: (item[0], item[1], item[2]))
-        return ranked[0][3], ranked[0][4]
+        # Equal analytical/model ranks preserve the immutable WSL batch order,
+        # then the identity/Rz(180) symmetry order.  These indices are also
+        # carried into the selected audit row as end-to-end lineage evidence.
+        ranked.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+        selected_item = (ranked[0][4], ranked[0][5], ranked[0][6])
+        for item in ranked:
+            record(item[6])
+    elif unranked_reachable:
+        unranked_reachable.sort(key=lambda item: (item[0], item[1]))
+        selected_item = (
+            unranked_reachable[0][2],
+            unranked_reachable[0][3],
+            unranked_reachable[0][4],
+        )
+        for item in unranked_reachable:
+            record(item[4])
+    if selected_item is not None:
+        selected_item[2]['selected'] = True
+    evaluation_records.sort(
+        key=lambda item: (
+            int(item.get('candidate_index', -1)),
+            int(item.get('variant_index', -1)),
+        )
+    )
+    emit_all()
+    if selected_item is not None:
+        return selected_item[0], selected_item[1]
     return None, None
 
 
@@ -586,7 +1741,7 @@ def make_grasp_plan_pose_array(grasp_pose, stamp, grasp_config):
         pregrasp_distance_m=float(grasp_config.get('pregrasp_distance_m', 0.08)),
         approach_offset_m=float(grasp_config.get('final_approach_offset_m', 0.015)),
         lift_height_m=float(grasp_config.get('lift_height_m', 0.05)),
-        tool_approach_axis=str(grasp_config.get('tool_approach_axis', 'x')),
+        tool_approach_axis=str(grasp_config.get('tool_approach_axis', 'z')),
     )
     msg = PoseArray()
     msg.header.frame_id = grasp_pose.header.frame_id
@@ -725,6 +1880,29 @@ def geometry_estimate_to_message(estimate, snapshot=None, stamp=None, label=''):
 class RemoteGrasp6DNode:
     def __init__(self):
         self.enabled = bool(rospy.get_param('/grasp_6d/enabled', True))
+        # Audit-file authority is a startup prerequisite.  Resolve it before
+        # constructing publishers, subscribers, clients, or any other live
+        # node surface so a shared planning/execution path cannot start.
+        remote_cfg = rospy.get_param('/grasp_6d/remote', {})
+        twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        startup_gate_audit_enabled = remote_cfg.get(
+            'gate_audit_enabled',
+            True,
+        )
+        startup_gate_audit_path = validate_mandatory_planning_audit(
+            startup_gate_audit_enabled,
+            remote_cfg.get(
+                'gate_audit_output_path',
+                '~/.ros/grasp6d_gate_audit_latest.json',
+            ),
+        )
+        (
+            startup_gate_audit_path,
+            startup_mujoco_audit_path,
+        ) = validate_distinct_audit_paths(
+            startup_gate_audit_path,
+            twin_cfg.get('audit_output_path', MUJOCO_AUDIT_DEFAULT_PATH),
+        )
         self.bridge = CvBridge()
         self.frames = SynchronizedRgbdBuffer(source_clock_ns=self._ros_source_clock_ns)
         self.latest_object = None
@@ -765,9 +1943,8 @@ class RemoteGrasp6DNode:
         pcfg = rospy.get_param('/perception', {})
         hcfg = rospy.get_param('/handeye', {})
         gcfg = rospy.get_param('/grasp', {})
-        remote_cfg = rospy.get_param('/grasp_6d/remote', {})
         gripper_cfg = rospy.get_param('/gripper', {})
-        twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        self.camera_depth_scale = float(cam_cfg.get('depth_scale', 0.001))
         gripper_geometry_cfg = dict(remote_cfg.get('gripper_geometry', {}) or {})
         self.gripper_geometry = GripperGeometry(
             max_inner_gap_m=float(
@@ -833,7 +2010,7 @@ class RemoteGrasp6DNode:
             float(
                 rospy.get_param(
                     '/grasp_6d/remote/planning_snapshot_timeout_sec',
-                    remote_cfg.get('planning_snapshot_timeout_sec', 1.0),
+                    remote_cfg.get('planning_snapshot_timeout_sec', 4.0),
                 )
             ),
         )
@@ -843,6 +2020,27 @@ class RemoteGrasp6DNode:
                 rospy.get_param(
                     '/grasp_6d/remote/planning_snapshot_max_age_sec',
                     remote_cfg.get('planning_snapshot_max_age_sec', 0.35),
+                )
+            ),
+        )
+        self.planning_snapshot_max_inference_latency_sec = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/planning_snapshot_max_inference_latency_sec',
+                    remote_cfg.get(
+                        'planning_snapshot_max_inference_latency_sec',
+                        1.2,
+                    ),
+                )
+            ),
+        )
+        self.planning_snapshot_max_span_sec = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/planning_snapshot_max_span_sec',
+                    remote_cfg.get('planning_snapshot_max_span_sec', 3.0),
                 )
             ),
         )
@@ -956,54 +2154,153 @@ class RemoteGrasp6DNode:
             self.geometry_min_size_m,
             float(remote_cfg.get('geometry_max_height_m', 0.500)),
         )
-        self.gate_audit_enabled = bool(remote_cfg.get('gate_audit_enabled', True))
-        self.gate_audit_output_path = os.path.expanduser(
-            str(remote_cfg.get('gate_audit_output_path', '~/.ros/grasp6d_gate_audit_latest.json'))
-        )
+        self.gate_audit_enabled = startup_gate_audit_enabled
+        self.gate_audit_output_path = startup_gate_audit_path
+        self.mujoco_audit_output_path = startup_mujoco_audit_path
+        self.gate_audit_enabled = True
         self._latest_gate_audit_summary = {}
+        self._latest_gate_audit_reference = {}
+        self._active_gate_audit_report = None
+        # These values are copied into FrozenGraspNetInputConfig at the very
+        # start of each request.  Keep them uncoerced here so the pure builder
+        # can reject bool/non-finite/non-integral ROS values fail-closed.
+        self.graspnet_input_mode = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_mode',
+            remote_cfg.get('graspnet_input_mode', MASKED_TARGET),
+        )
+        self.graspnet_input_context_margin_px = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_context_margin_px',
+            remote_cfg.get(
+                'graspnet_input_context_margin_px',
+                DEFAULT_CONTEXT_MARGIN_PX,
+            ),
+        )
+        self.graspnet_input_context_expand_ratio = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_context_expand_ratio',
+            remote_cfg.get(
+                'graspnet_input_context_expand_ratio',
+                DEFAULT_CONTEXT_EXPAND_RATIO,
+            ),
+        )
+        self.graspnet_input_context_max_margin_px = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_context_max_margin_px',
+            remote_cfg.get(
+                'graspnet_input_context_max_margin_px',
+                DEFAULT_CONTEXT_MAX_MARGIN_PX,
+            ),
+        )
+        self.graspnet_input_target_guard_px = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_target_guard_px',
+            remote_cfg.get(
+                'graspnet_input_target_guard_px',
+                DEFAULT_TARGET_GUARD_PX,
+            ),
+        )
+        self.graspnet_input_support_band_m = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_support_band_m',
+            remote_cfg.get(
+                'graspnet_input_support_band_m',
+                DEFAULT_CONTEXT_PLANE_DISTANCE_M,
+            ),
+        )
+        self.graspnet_input_min_target_points = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_min_target_points',
+            remote_cfg.get(
+                'graspnet_input_min_target_points',
+                DEFAULT_MIN_TARGET_POINTS,
+            ),
+        )
+        self.graspnet_input_min_support_points = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_min_support_points',
+            remote_cfg.get(
+                'graspnet_input_min_support_points',
+                DEFAULT_MIN_SUPPORT_POINTS,
+            ),
+        )
+        self.graspnet_input_min_total_points = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_min_total_points',
+            remote_cfg.get(
+                'graspnet_input_min_total_points',
+                DEFAULT_MIN_TOTAL_POINTS,
+            ),
+        )
+        self.graspnet_input_min_target_fraction = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_min_target_fraction',
+            remote_cfg.get(
+                'graspnet_input_min_target_fraction',
+                DEFAULT_MIN_TARGET_FRACTION,
+            ),
+        )
+        self.graspnet_input_bbox_min_iou = rospy.get_param(
+            '/grasp_6d/remote/graspnet_input_bbox_min_iou',
+            remote_cfg.get(
+                'graspnet_input_bbox_min_iou',
+                DEFAULT_DETECTED_BBOX_MIN_IOU,
+            ),
+        )
+        self._active_graspnet_input_audit = {}
         self.grasp_config = dict(gcfg or {})
         self.handeye_parent_frame = str(hcfg.get('parent_frame', 'tool0'))
         self.handeye_camera_frame = str(hcfg.get('camera_frame', cam_cfg.get('frame_id', 'camera_link')))
         self.handeye_translation_xyz = list(hcfg.get('translation_xyz', [0.0, 0.0, 0.0]))
         self.handeye_rotation_xyzw = list(hcfg.get('rotation_xyzw', [0.0, 0.0, 0.0, 1.0]))
+        self.handeye_allow_static_fallback = bool(
+            hcfg.get('allow_static_fallback', True)
+        )
         self._cached_tool_from_camera = None
+        self._cached_tool_from_camera_stamp_ns = 0
         server_url = rospy.get_param('/grasp_6d/remote/server_url', remote_cfg.get('server_url', 'http://172.23.132.97:8000'))
         timeout_sec = float(rospy.get_param('/grasp_6d/remote/timeout_sec', remote_cfg.get('timeout_sec', 3.0)))
         self.max_candidates = int(rospy.get_param('/grasp_6d/remote/max_candidates', remote_cfg.get('max_candidates', 20)))
         self.auto_request = bool(rospy.get_param('/grasp_6d/remote/auto_request', remote_cfg.get('auto_request', False)))
         self.failure_backoff_sec = max(0.0, float(rospy.get_param('/grasp_6d/remote/failure_backoff_sec', remote_cfg.get('failure_backoff_sec', 8.0))))
-        self.candidate_frame_convention = normalize_candidate_frame_convention(
+        self.candidate_frame_convention = validate_production_candidate_frame_convention(
             rospy.get_param('/grasp_6d/remote/candidate_frame_convention', remote_cfg.get('candidate_frame_convention', 'opencv_optical'))
         )
-        self.orientation_variant_quaternions = self._parse_orientation_variant_quaternions(
-            rospy.get_param('/grasp_6d/remote/orientation_variants_rpy_deg', remote_cfg.get('orientation_variants_rpy_deg', [[0.0, 0.0, 0.0]]))
+        self.orientation_variant_quaternions = self._parse_production_orientation_variant_quaternions(
+            rospy.get_param(
+                '/grasp_6d/remote/orientation_variants_rpy_deg',
+                remote_cfg.get(
+                    'orientation_variants_rpy_deg',
+                    STRICT_ORIENTATION_VARIANTS_RPY_DEG,
+                ),
+            )
         )
         self.model_grasp_to_tool_quaternion = self._parse_orientation_variant_quaternions(
             [rospy.get_param(
                 '/grasp_6d/remote/model_grasp_to_tool_rpy_deg',
-                remote_cfg.get('model_grasp_to_tool_rpy_deg', [0.0, 0.0, 0.0]),
+                remote_cfg.get('model_grasp_to_tool_rpy_deg', [0.0, 90.0, 0.0]),
             )]
         )[0]
         self.require_candidate_depth = bool(
             rospy.get_param(
                 '/grasp_6d/remote/require_candidate_depth',
-                remote_cfg.get('require_candidate_depth', False),
+                remote_cfg.get('require_candidate_depth', True),
             )
         )
-        self.allow_position_only_fallback = bool(
+        self.model_grasp_to_tool_quaternion = validate_execution_tool0_contract(
+            self.require_candidate_depth,
+            self.model_grasp_to_tool_quaternion,
+            self.grasp_config,
+        )
+        accept_position_only_fallback = bool(
             rospy.get_param(
                 '/grasp_6d/remote/accept_position_only_fallback',
-                remote_cfg.get(
-                    'accept_position_only_fallback',
-                    rospy.get_param('/robot/position_only_execute_enabled', False),
-                ),
+                remote_cfg.get('accept_position_only_fallback', False),
             )
         )
-        self.allow_orientation_fallback = bool(
+        accept_orientation_fallback = bool(
             rospy.get_param(
                 '/grasp_6d/remote/accept_orientation_fallback',
                 remote_cfg.get('accept_orientation_fallback', False),
             )
+        )
+        (
+            self.allow_position_only_fallback,
+            self.allow_orientation_fallback,
+        ) = validate_production_execution_fallback_contract(
+            accept_position_only_fallback,
+            accept_orientation_fallback,
         )
         self._position_only_rejected_count = 0
         self._orientation_fallback_rejected_count = 0
@@ -1429,7 +2726,11 @@ class RemoteGrasp6DNode:
         self._depth_gate_rejected_count = 0
         self._width_gate_rejected_keys = set()
         try:
-            self.client = RemoteGrasp6DClient(server_url, timeout_sec=timeout_sec)
+            self.client = RemoteGrasp6DClient(
+                server_url,
+                timeout_sec=timeout_sec,
+                require_candidate_depth=True,
+            )
         except ValueError as exc:
             rospy.logfatal('invalid remote 6D grasp server URL: %s', exc)
             raise
@@ -1711,8 +3012,12 @@ class RemoteGrasp6DNode:
             rich_publisher = getattr(self, 'rich_plan_pub', None)
             if rich_publisher is None:
                 return False, 'RICH_PLAN_PUBLISHER_UNAVAILABLE'
-            rich_publisher.publish(deepcopy(outgoing_rich))
+            # The legacy PoseArray is visualization-only.  Publish it first,
+            # then commit the latched rich plan as the sole execution
+            # authority.  A legacy publisher failure can therefore never
+            # leave a valid rich command visible to an executor.
             self.plan_pub.publish(deepcopy(outgoing_legacy))
+            rich_publisher.publish(deepcopy(outgoing_rich))
             self.latest_rich_plan = cached
             self.latest_plan = deepcopy(outgoing_legacy)
             return True, ''
@@ -2098,7 +3403,16 @@ class RemoteGrasp6DNode:
         if not self.enabled:
             return TriggerZeroResponse(False, 'remote 6D disabled')
         try:
-            require_mask = self._active_profile_requires_mask()
+            input_config = self._freeze_graspnet_input_config()
+            require_mask = bool(
+                self._active_profile_requires_mask()
+                or input_config.requires_instance_mask
+            )
+        except GraspNetInputContextError as exc:
+            message = '%s: %s' % (exc.code, exc.reason)
+            self._invalidate_geometry(exc.code, exc.reason)
+            self.status_pub.publish(String(message))
+            return TriggerZeroResponse(False, message)
         except Exception as exc:
             message = 'MODEL_TASK_MISMATCH: %s' % exc
             self._invalidate_geometry('MODEL_TASK_MISMATCH', str(exc))
@@ -2120,14 +3434,26 @@ class RemoteGrasp6DNode:
             )
             self.status_pub.publish(String(message))
             return TriggerZeroResponse(False, message)
-        ok, message = self._process_frame(snapshot, manual=True)
+        ok, message = self._process_frame(
+            snapshot,
+            manual=True,
+            graspnet_input_config=input_config,
+        )
         return TriggerZeroResponse(bool(ok), str(message))
 
     def _process_latest_frame(self):
         if rospy.Time.now() < self._backoff_until:
             return
         try:
-            require_mask = self._active_profile_requires_mask()
+            input_config = self._freeze_graspnet_input_config()
+            require_mask = bool(
+                self._active_profile_requires_mask()
+                or input_config.requires_instance_mask
+            )
+        except GraspNetInputContextError as exc:
+            self._invalidate_geometry(exc.code, exc.reason)
+            self.status_pub.publish(String('%s: %s' % (exc.code, exc.reason)))
+            return
         except Exception as exc:
             self._invalidate_geometry('MODEL_TASK_MISMATCH', str(exc))
             self.status_pub.publish(String('MODEL_TASK_MISMATCH: %s' % exc))
@@ -2147,7 +3473,11 @@ class RemoteGrasp6DNode:
             )
             self.status_pub.publish(String('%s: %s' % (failure_code, failure_reason)))
             return
-        self._process_frame(snapshot, manual=False)
+        self._process_frame(
+            snapshot,
+            manual=False,
+            graspnet_input_config=input_config,
+        )
 
     def _active_profile_requires_mask(self):
         pcfg = rospy.get_param('/perception', {})
@@ -2170,14 +3500,248 @@ class RemoteGrasp6DNode:
         )
         return bool(profile.get('require_instance_mask', False))
 
-    @staticmethod
-    def _snapshot_depth_config():
+    def _snapshot_depth_config(self):
+        if not bool(rospy.core.is_initialized()):
+            return float(getattr(self, 'camera_depth_scale', 0.001)), 0.03, 2.0
         cam_cfg = rospy.get_param('/camera', {})
         pcfg = rospy.get_param('/perception', {})
         depth_scale = float(cam_cfg.get('depth_scale', 0.001))
         depth_min_m = float(pcfg.get('depth_min_m', 0.03))
         depth_max_m = float(pcfg.get('depth_max_m', 2.0))
         return depth_scale, depth_min_m, depth_max_m
+
+    def _freeze_graspnet_input_config(self):
+        """Read every input-mode parameter once for one planning request."""
+        def request_param(name, default):
+            # Offline unit tests construct the node without rospy.init_node;
+            # production always reads the live parameter server here.
+            if not bool(rospy.core.is_initialized()):
+                return default
+            return rospy.get_param(name, default)
+
+        mode = str(
+            request_param(
+                '/grasp_6d/remote/graspnet_input_mode',
+                getattr(self, 'graspnet_input_mode', MASKED_TARGET),
+            )
+            or ''
+        ).strip().lower()
+        if mode not in VALID_MODES:
+            raise GraspNetInputContextError(
+                'MODE_INVALID',
+                'graspnet_input_mode must be one of %s, got %r'
+                % (', '.join(sorted(VALID_MODES)), mode),
+            )
+
+        def read(suffix, attribute, default):
+            return request_param(
+                '/grasp_6d/remote/' + suffix,
+                getattr(self, attribute, default),
+            )
+
+        return FrozenGraspNetInputConfig(
+            mode=mode,
+            context_margin_px=read(
+                'graspnet_input_context_margin_px',
+                'graspnet_input_context_margin_px',
+                DEFAULT_CONTEXT_MARGIN_PX,
+            ),
+            context_expand_ratio=read(
+                'graspnet_input_context_expand_ratio',
+                'graspnet_input_context_expand_ratio',
+                DEFAULT_CONTEXT_EXPAND_RATIO,
+            ),
+            context_max_margin_px=read(
+                'graspnet_input_context_max_margin_px',
+                'graspnet_input_context_max_margin_px',
+                DEFAULT_CONTEXT_MAX_MARGIN_PX,
+            ),
+            target_guard_px=read(
+                'graspnet_input_target_guard_px',
+                'graspnet_input_target_guard_px',
+                DEFAULT_TARGET_GUARD_PX,
+            ),
+            support_band_m=read(
+                'graspnet_input_support_band_m',
+                'graspnet_input_support_band_m',
+                DEFAULT_CONTEXT_PLANE_DISTANCE_M,
+            ),
+            min_target_points=read(
+                'graspnet_input_min_target_points',
+                'graspnet_input_min_target_points',
+                DEFAULT_MIN_TARGET_POINTS,
+            ),
+            min_support_points=read(
+                'graspnet_input_min_support_points',
+                'graspnet_input_min_support_points',
+                DEFAULT_MIN_SUPPORT_POINTS,
+            ),
+            min_total_points=read(
+                'graspnet_input_min_total_points',
+                'graspnet_input_min_total_points',
+                DEFAULT_MIN_TOTAL_POINTS,
+            ),
+            min_target_fraction=read(
+                'graspnet_input_min_target_fraction',
+                'graspnet_input_min_target_fraction',
+                DEFAULT_MIN_TARGET_FRACTION,
+            ),
+            bbox_min_iou=read(
+                'graspnet_input_bbox_min_iou',
+                'graspnet_input_bbox_min_iou',
+                DEFAULT_DETECTED_BBOX_MIN_IOU,
+            ),
+            candidate_target_gate_enabled=bool(
+                request_param(
+                    '/grasp_6d/remote/candidate_target_gate_enabled',
+                    getattr(self, 'candidate_target_gate_enabled', True),
+                )
+            ),
+        )
+
+    @staticmethod
+    def _require_graspnet_input_prerequisites(snapshot, config):
+        if not isinstance(config, FrozenGraspNetInputConfig):
+            raise GraspNetInputContextError(
+                'CONFIG_INVALID',
+                'request has no frozen GraspNet input configuration',
+            )
+        if config.requires_instance_mask:
+            if str(getattr(snapshot, 'source_mode', '') or '') != 'instance_mask':
+                raise GraspNetInputContextError(
+                    'INSTANCE_MASK_REQUIRED',
+                    '%s requires an instance-mask planning snapshot'
+                    % config.mode,
+                )
+            mask = np.asarray(getattr(snapshot, 'object_mask', ()))
+            if mask.ndim != 2 or not np.any(mask > 0):
+                raise GraspNetInputContextError(
+                    'INSTANCE_MASK_REQUIRED',
+                    '%s requires a non-empty instance mask' % config.mode,
+                )
+            if (
+                config.requires_candidate_target_gate
+                and not bool(config.candidate_target_gate_enabled)
+            ):
+                raise GraspNetInputContextError(
+                    'CANDIDATE_TARGET_GATE_REQUIRED',
+                    '%s requires candidate_target_gate_enabled=true'
+                    % config.mode,
+                )
+
+    def _build_frozen_graspnet_input(
+        self,
+        snapshot,
+        target_depth,
+        config,
+    ):
+        self._require_graspnet_input_prerequisites(snapshot, config)
+        if config.requires_support_plane:
+            convention = normalize_candidate_frame_convention(
+                getattr(
+                    self,
+                    'target_projection_frame_convention',
+                    'ros_camera_link',
+                )
+            )
+            if convention != 'ros_camera_link':
+                raise GraspNetInputContextError(
+                    'SUPPORT_PLANE_FRAME_INVALID',
+                    'context_roi support plane must be expressed in '
+                    'ros_camera_link, got %s' % convention,
+                )
+            plane_point = getattr(
+                self,
+                'latest_support_plane_camera_point',
+                None,
+            )
+            plane_normal = getattr(
+                self,
+                'latest_support_plane_camera_normal',
+                None,
+            )
+            try:
+                point = np.asarray(plane_point, dtype=float)
+                normal = np.asarray(plane_normal, dtype=float)
+                plane_valid = (
+                    point.shape == (3,)
+                    and normal.shape == (3,)
+                    and np.all(np.isfinite(point))
+                    and np.all(np.isfinite(normal))
+                    and float(np.linalg.norm(normal)) > 1e-12
+                )
+            except Exception:
+                plane_valid = False
+            if not plane_valid:
+                raise GraspNetInputContextError(
+                    'SUPPORT_PLANE_INVALID',
+                    '%s requires the valid support plane from this snapshot'
+                    % config.mode,
+                )
+        else:
+            plane_point = None
+            plane_normal = None
+
+        depth_scale, depth_min_m, depth_max_m = self._snapshot_depth_config()
+        effective_mask = np.asarray(snapshot.object_mask)
+        if str(getattr(snapshot, 'source_mode', '') or '') == 'bbox_depth':
+            # Legacy detect snapshots have no instance mask; masked_target
+            # still uses the fail-closed foreground isolated by the existing
+            # bbox/support-depth geometry path.
+            effective_mask = np.where(
+                np.asarray(target_depth) > 0,
+                255,
+                0,
+            ).astype(np.uint8)
+        result = build_graspnet_input_context(
+            mode=config.mode,
+            target_depth_raw=target_depth,
+            object_mask=effective_mask,
+            full_depth_raw=snapshot.depth_raw,
+            color_bgr=snapshot.color_bgr,
+            intrinsics=self._camera_intrinsics(),
+            support_plane_point_camera=plane_point,
+            support_plane_normal_camera=plane_normal,
+            depth_scale=depth_scale,
+            depth_min_m=depth_min_m,
+            depth_max_m=depth_max_m,
+            context_plane_distance_m=config.support_band_m,
+            context_margin_px=config.context_margin_px,
+            context_expand_ratio=config.context_expand_ratio,
+            context_max_margin_px=config.context_max_margin_px,
+            target_guard_px=config.target_guard_px,
+            detected_bbox_xywh=(
+                snapshot.bbox
+                if str(getattr(snapshot, 'source_mode', '') or '')
+                == 'instance_mask'
+                else None
+            ),
+            detected_bbox_min_iou=config.bbox_min_iou,
+            min_target_points=config.min_target_points,
+            min_support_points=config.min_support_points,
+            min_total_points=config.min_total_points,
+            min_target_fraction=config.min_target_fraction,
+        )
+        audit = asdict(result.audit)
+        depth_hash = array_sha256(result.depth_raw)
+        mask_hash = array_sha256(np.asarray(effective_mask, dtype=np.uint8))
+        audit.update(
+            {
+                'input_depth_sha256': depth_hash,
+                'object_mask_sha256': mask_hash,
+                # Concise aliases used by offline gate-report tooling.
+                'depth_sha256': depth_hash,
+                'mask_sha256': mask_hash,
+                'input_depth_shape': list(result.depth_raw.shape),
+                'input_depth_dtype': str(result.depth_raw.dtype),
+                'candidate_target_gate_enabled': bool(
+                    config.candidate_target_gate_enabled
+                ),
+                'frozen_config': asdict(config),
+            }
+        )
+        self._active_graspnet_input_audit = audit
+        return result
 
     def _wait_for_stable_snapshot(self, require_mask):
         deadline = time.monotonic() + max(0.0, float(self.planning_snapshot_timeout_sec))
@@ -2191,6 +3755,10 @@ class RemoteGrasp6DNode:
                 remaining,
                 require_mask=bool(require_mask),
                 max_age_sec=self.planning_snapshot_max_age_sec,
+                collection_span_sec=self.planning_snapshot_max_span_sec,
+                max_inference_latency_sec=(
+                    self.planning_snapshot_max_inference_latency_sec
+                ),
             )
             if len(samples) < self.planning_snapshot_frames:
                 break
@@ -2222,11 +3790,17 @@ class RemoteGrasp6DNode:
             failure_code, failure_reason = self.frames.mask_timeout_failure(
                 self.planning_snapshot_frames,
                 self.planning_snapshot_max_age_sec,
+                self.planning_snapshot_max_inference_latency_sec,
             )
             return None, failure_code, failure_reason
         return None, 'DEPTH_UNSTABLE', 'no three fresh timestamp-matched RGB-D-object samples'
 
-    def _process_frame(self, snapshot, manual=False):
+    def _process_frame(
+        self,
+        snapshot,
+        manual=False,
+        graspnet_input_config=None,
+    ):
         if not self._request_lock.acquire(False):
             message = 'remote 6D request already running'
             if manual:
@@ -2236,6 +3810,20 @@ class RemoteGrasp6DNode:
             self._request_lock.release()
             return False, 'remote 6D request requires a valid planning snapshot'
         stamp = self._snapshot_ros_stamp(snapshot)
+        if graspnet_input_config is None:
+            try:
+                graspnet_input_config = self._freeze_graspnet_input_config()
+            except GraspNetInputContextError as exc:
+                message = '%s: %s' % (exc.code, exc.reason)
+                self._invalidate_geometry(
+                    exc.code,
+                    exc.reason,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
+                self._publish_error(message)
+                self._request_lock.release()
+                return False, message
         if not bool(getattr(snapshot.object_msg, 'detected', False)):
             message = 'TARGET_LOST: locked planning snapshot target is not detected'
             self._invalidate_geometry(
@@ -2247,15 +3835,44 @@ class RemoteGrasp6DNode:
             self._publish_error(message)
             self._request_lock.release()
             return False, message
-        color = snapshot.color_bgr
         frame_id = snapshot.frame_id
         request_invalidation_generation = self._capture_geometry_generation()
         self._planning_snapshot_active = True
         self._planning_object_msg = snapshot.object_msg
         self._planning_object_time = stamp
         try:
+            self._active_graspnet_input_audit = {}
+            # The mode-specific mask/gate contract is request-local and must
+            # fail before runtime refresh, geometry estimation, TF lookup, or
+            # a WSL request.  In particular, bbox_depth can never masquerade
+            # as an instance mask in context_roi/full_scene.
+            self._require_graspnet_input_prerequisites(
+                snapshot,
+                graspnet_input_config,
+            )
             self._refresh_runtime_params()
+            (
+                self.gate_audit_output_path,
+                self.mujoco_audit_output_path,
+            ) = validate_distinct_audit_paths(
+                validate_mandatory_planning_audit(
+                    getattr(self, 'gate_audit_enabled', True),
+                    getattr(self, 'gate_audit_output_path', ''),
+                ),
+                getattr(
+                    self,
+                    'mujoco_audit_output_path',
+                    MUJOCO_AUDIT_DEFAULT_PATH,
+                ),
+            )
+            # Runtime refresh may observe newer ROS values, but this request
+            # must keep the gate state captured before snapshot collection.
+            self.candidate_target_gate_enabled = bool(
+                graspnet_input_config.candidate_target_gate_enabled
+            )
             self._cached_tool_from_camera = None
+            self._cached_tool_from_camera_stamp_ns = 0
+            self._active_gate_audit_report = None
             self._publish_invalid_plan_pair(
                 'PLAN_PENDING',
                 'a new RGB-D planning snapshot is being processed',
@@ -2282,6 +3899,12 @@ class RemoteGrasp6DNode:
                 )
                 self._publish_error(message)
                 return False, message
+            frozen_candidate_pose_estimator = FrozenSnapshotCandidatePoseEstimator(
+                transform,
+                stamp,
+                frame_id,
+                raw_candidate_convention=self.candidate_frame_convention,
+            )
             activated = self._activate_geometry(
                 estimate,
                 snapshot,
@@ -2310,16 +3933,32 @@ class RemoteGrasp6DNode:
                 )
                 self._publish_error(message)
                 return False, message
+            graspnet_input = self._build_frozen_graspnet_input(
+                snapshot,
+                depth_for_remote,
+                graspnet_input_config,
+            )
+            if bool(
+                getattr(self, 'camera_visibility_gate_enabled', False)
+                or getattr(self, 'camera_visibility_diagnostic_enabled', False)
+            ):
+                # Eye-in-hand visibility is part of candidate filtering and
+                # audit.  Resolve it once at the same strictly-positive
+                # planning snapshot stamp before WSL inference; after this
+                # boundary every consumer is cache-only.
+                self._freeze_tool_from_camera_matrix(stamp)
             bbox = tuple(snapshot.bbox or (0, 0, 0, 0))
             roi_message = (
-                '%s x=%d y=%d w=%d h=%d target_depth=%d'
+                '%s input=%s x=%d y=%d w=%d h=%d target_depth=%d remote_depth=%d'
                 % (
                     snapshot.source_mode,
+                    graspnet_input.mode,
                     int(bbox[0]) if len(bbox) > 0 else 0,
                     int(bbox[1]) if len(bbox) > 1 else 0,
                     int(bbox[2]) if len(bbox) > 2 else 0,
                     int(bbox[3]) if len(bbox) > 3 else 0,
                     valid_depth_count(depth_for_remote),
+                    valid_depth_count(graspnet_input.depth_raw),
                 )
             )
             status = 'remote 6D requesting candidates...'
@@ -2339,8 +3978,8 @@ class RemoteGrasp6DNode:
                 return False, message
             try:
                 candidates = self.client.predict(
-                    color,
-                    depth_for_remote,
+                    graspnet_input.color_bgr,
+                    graspnet_input.depth_raw,
                     self._camera_intrinsics(),
                     frame_id=frame_id or self.pose_estimator.camera_frame,
                     stamp_sec=float(snapshot.stamp_sec),
@@ -2353,6 +3992,21 @@ class RemoteGrasp6DNode:
             except Exception as exc:
                 failure_code = remote_prediction_failure_code(exc)
                 failure_reason = str(exc)
+                try:
+                    self._write_planning_audit_failure_report(
+                        (),
+                        stamp,
+                        CANONICAL_CANDIDATE_CAMERA_FRAME,
+                        frozen_candidate_pose_estimator,
+                        dict(
+                            getattr(self.client, 'last_diagnostics', {}) or {}
+                        ),
+                        failure_code,
+                        failure_reason,
+                    )
+                except CandidateContractError as audit_exc:
+                    failure_code = str(audit_exc.code)
+                    failure_reason = str(audit_exc)
                 applied, message = self._invalidate_geometry_if_current(
                     request_invalidation_generation,
                     failure_code,
@@ -2368,18 +4022,6 @@ class RemoteGrasp6DNode:
                     )
                 return False, message
             remote_diagnostics = dict(getattr(self.client, 'last_diagnostics', {}) or {})
-            if not candidates:
-                failure_reason = 'remote GraspNet returned no candidates'
-                failure_reason += self._candidate_failure_diagnostics(remote_diagnostics)
-                _applied, message = self._invalidate_geometry_if_current(
-                    request_invalidation_generation,
-                    'NO_RAW_CANDIDATE',
-                    failure_reason,
-                    stamp=stamp,
-                    snapshot=snapshot,
-                )
-                self._publish_error(message)
-                return False, message
             invalidated, failure_code = self._geometry_invalidation_state(
                 request_invalidation_generation
             )
@@ -2390,6 +4032,56 @@ class RemoteGrasp6DNode:
                 )
                 self._publish_error(message)
                 return False, message
+
+            if bool(graspnet_input.diagnostic_only):
+                # full_scene is useful only for controlled WSL diagnostics.
+                # It may decode and audit the exact WSL batch, but it must stop
+                # before selector/reachability/MoveIt and never publish a plan.
+                self._reset_geometry_gate_audit(len(candidates))
+                failure_reason = (
+                    'full_scene is permanently diagnostic-only; '
+                    'WSL candidates=%d and no reachability, MoveIt, MuJoCo, '
+                    'or valid plan publication was attempted'
+                    % len(candidates)
+                )
+                try:
+                    self._run_candidate_gate_audit(
+                        candidates,
+                        stamp=stamp,
+                        camera_frame=CANONICAL_CANDIDATE_CAMERA_FRAME,
+                        remote_diagnostics=remote_diagnostics,
+                        candidate_pose_estimator=frozen_candidate_pose_estimator,
+                        finalize_report=True,
+                        outcome_code=FULL_SCENE_DIAGNOSTIC_CODE,
+                        outcome_reason=failure_reason,
+                    )
+                except Exception as exc:
+                    audit_reason = (
+                        'full-scene planning audit failed: %s' % exc
+                    )
+                    self._write_planning_audit_failure_report(
+                        candidates,
+                        stamp,
+                        CANONICAL_CANDIDATE_CAMERA_FRAME,
+                        frozen_candidate_pose_estimator,
+                        remote_diagnostics,
+                        PLANNING_AUDIT_FAILED,
+                        audit_reason,
+                    )
+                    raise CandidateContractError(
+                        PLANNING_AUDIT_FAILED,
+                        audit_reason,
+                    )
+                _applied, message = self._invalidate_geometry_if_current(
+                    request_invalidation_generation,
+                    FULL_SCENE_DIAGNOSTIC_CODE,
+                    failure_reason,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
+                self._publish_error(message)
+                return False, message
+
             self._position_only_rejected_count = 0
             self._orientation_fallback_rejected_count = 0
             self._target_gate_rejected_count = 0
@@ -2405,31 +4097,88 @@ class RemoteGrasp6DNode:
             self._closest_candidate_cloud_distance = float('inf')
             self._closest_candidate_center_distance = float('inf')
             self._reset_geometry_gate_audit(len(candidates))
-            if bool(getattr(self, 'gate_audit_enabled', True)):
-                try:
-                    self._run_candidate_gate_audit(
-                        candidates,
-                        stamp=stamp,
-                        camera_frame=frame_id or self.pose_estimator.camera_frame,
-                        remote_diagnostics=remote_diagnostics,
-                    )
-                except Exception as exc:
-                    self._latest_gate_audit_summary = {}
-                    rospy.logwarn('remote 6D gate audit skipped after internal error: %s', exc)
-            selected, grasp_pose = select_first_reachable_candidate(
-                candidates,
-                self.pose_estimator,
-                self._plan_reachable,
-                stamp=stamp,
-                camera_frame=frame_id or self.pose_estimator.camera_frame,
-                candidate_frame_convention=self.candidate_frame_convention,
-                candidate_filter_fn=self._candidate_matches_target,
-                candidate_rank_fn=self._candidate_rank,
-                orientation_variant_quaternions=self.orientation_variant_quaternions,
-                model_grasp_to_tool_quaternion=self.model_grasp_to_tool_quaternion,
-                candidate_geometry_fn=self._evaluate_candidate_geometry,
-                grasp_config=self.grasp_config,
-            )
+            try:
+                self._run_candidate_gate_audit(
+                    candidates,
+                    stamp=stamp,
+                    camera_frame=CANONICAL_CANDIDATE_CAMERA_FRAME,
+                    remote_diagnostics=remote_diagnostics,
+                    candidate_pose_estimator=frozen_candidate_pose_estimator,
+                    finalize_report=False,
+                )
+            except Exception as exc:
+                if (
+                    isinstance(exc, CandidateContractError)
+                    and exc.code == PLANNING_AUDIT_WRITE_FAILED
+                ):
+                    raise
+                audit_reason = 'candidate planning audit failed: %s' % exc
+                self._write_planning_audit_failure_report(
+                    candidates,
+                    stamp,
+                    CANONICAL_CANDIDATE_CAMERA_FRAME,
+                    frozen_candidate_pose_estimator,
+                    remote_diagnostics,
+                    PLANNING_AUDIT_FAILED,
+                    audit_reason,
+                )
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    audit_reason,
+                )
+
+            if not candidates:
+                failure_reason = 'remote GraspNet returned no candidates'
+                failure_reason += self._candidate_failure_diagnostics(remote_diagnostics)
+                self._finalize_gate_audit_report(
+                    evaluation_records=(),
+                    selected_candidate=None,
+                    selected_pose=None,
+                    plan_id='',
+                    outcome_code='NO_RAW_CANDIDATE',
+                    outcome_reason=failure_reason,
+                    valid_plan=False,
+                )
+                _applied, message = self._invalidate_geometry_if_current(
+                    request_invalidation_generation,
+                    'NO_RAW_CANDIDATE',
+                    failure_reason,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
+                self._publish_error(message)
+                return False, message
+            planning_evaluation_records = []
+            try:
+                selected, grasp_pose = select_first_reachable_candidate(
+                    candidates,
+                    frozen_candidate_pose_estimator,
+                    self._plan_reachable,
+                    stamp=stamp,
+                    camera_frame=CANONICAL_CANDIDATE_CAMERA_FRAME,
+                    candidate_frame_convention=self.candidate_frame_convention,
+                    candidate_filter_fn=self._candidate_matches_target,
+                    candidate_rank_fn=self._candidate_rank,
+                    orientation_variant_quaternions=self.orientation_variant_quaternions,
+                    model_grasp_to_tool_quaternion=self.model_grasp_to_tool_quaternion,
+                    candidate_geometry_fn=self._evaluate_candidate_geometry,
+                    grasp_config=self.grasp_config,
+                    require_candidate_depth=self.require_candidate_depth,
+                    candidate_rejection_fn=self._record_candidate_contract_rejection,
+                    evaluation_record_sink=planning_evaluation_records.append,
+                )
+            except Exception as exc:
+                selection_reason = 'candidate selection failed: %s' % exc
+                self._finalize_gate_audit_report(
+                    evaluation_records=planning_evaluation_records,
+                    selected_candidate=None,
+                    selected_pose=None,
+                    plan_id='',
+                    outcome_code='PLAN_FAILED',
+                    outcome_reason=selection_reason,
+                    valid_plan=False,
+                )
+                raise
             invalidated, failure_code = self._geometry_invalidation_state(
                 request_invalidation_generation
             )
@@ -2451,6 +4200,15 @@ class RemoteGrasp6DNode:
                     failure_reason = (
                         'raw candidates were all rejected by analytical gripper geometry; '
                         + self._geometry_gate_diagnostics()
+                    )
+                    self._finalize_gate_audit_report(
+                        evaluation_records=planning_evaluation_records,
+                        selected_candidate=None,
+                        selected_pose=None,
+                        plan_id='',
+                        outcome_code='NO_GEOMETRIC_CANDIDATE',
+                        outcome_reason=failure_reason,
+                        valid_plan=False,
                     )
                     _applied, message = self._invalidate_geometry_if_current(
                         request_invalidation_generation,
@@ -2513,12 +4271,41 @@ class RemoteGrasp6DNode:
                     message = 'remote 6D returned %d candidates, none reachable' % len(candidates)
                 message += self._candidate_failure_diagnostics(remote_diagnostics)
                 message += self._candidate_gate_audit_diagnostics()
+                self._finalize_gate_audit_report(
+                    evaluation_records=planning_evaluation_records,
+                    selected_candidate=None,
+                    selected_pose=None,
+                    plan_id='',
+                    outcome_code='NO_EXECUTABLE_CANDIDATE',
+                    outcome_reason=message,
+                    valid_plan=False,
+                )
+                _applied, message = self._invalidate_geometry_if_current(
+                    request_invalidation_generation,
+                    'NO_EXECUTABLE_CANDIDATE',
+                    message,
+                    stamp=stamp,
+                    snapshot=snapshot,
+                )
                 self._publish_error(message)
                 return False, message
-            final_target_delta = self._candidate_target_distance(None, None, grasp_pose)
+            final_target_delta = self._candidate_target_distance(
+                None,
+                selected,
+                grasp_pose,
+            )
             selected_gate = getattr(selected, '_geometry_gate_result', None)
             if not isinstance(selected_gate, CandidateGateResult) or not selected_gate.ok:
                 failure_reason = 'selected candidate has no valid analytical gripper result'
+                self._finalize_gate_audit_report(
+                    evaluation_records=planning_evaluation_records,
+                    selected_candidate=None,
+                    selected_pose=None,
+                    plan_id='',
+                    outcome_code='NO_GEOMETRIC_CANDIDATE',
+                    outcome_reason=failure_reason,
+                    valid_plan=False,
+                )
                 _applied, message = self._invalidate_geometry_if_current(
                     request_invalidation_generation,
                     'NO_GEOMETRIC_CANDIDATE',
@@ -2568,6 +4355,17 @@ class RemoteGrasp6DNode:
                 selected_gate,
                 request_invalidation_generation,
             ):
+                self._finalize_gate_audit_report(
+                    evaluation_records=planning_evaluation_records,
+                    selected_candidate=None,
+                    selected_pose=None,
+                    plan_id='',
+                    outcome_code='PLAN_STALE',
+                    outcome_reason=(
+                        'planning request was invalidated before selected gate commit'
+                    ),
+                    valid_plan=False,
+                )
                 _applied, message = self._invalidate_geometry_if_current(
                     request_invalidation_generation,
                     'PLAN_STALE',
@@ -2583,20 +4381,68 @@ class RemoteGrasp6DNode:
                 deepcopy(self.latest_object_geometry.header),
                 str(getattr(self, '_last_model_choice', '') or ''),
             )
-            published, failure_code = self._publish_plan_pair_if_current(
-                rich_plan,
-                request_invalidation_generation,
+            # The final atomic report is a publication prerequisite.  It
+            # binds every evaluated lineage row and the selected row to the
+            # immutable rich-plan ID before either executable topic is sent.
+            self._finalize_gate_audit_report(
+                evaluation_records=planning_evaluation_records,
+                selected_candidate=selected,
+                selected_pose=grasp_pose,
+                plan_id=rich_plan.plan_id,
+                outcome_code='PLAN_READY',
+                outcome_reason=message,
+                valid_plan=True,
             )
+            try:
+                published, failure_code = self._publish_plan_pair_if_current(
+                    rich_plan,
+                    request_invalidation_generation,
+                )
+            except Exception as exc:
+                publish_reason = 'rich/legacy plan publication failed: %s' % exc
+                self._finalize_gate_audit_report(
+                    evaluation_records=planning_evaluation_records,
+                    selected_candidate=selected,
+                    selected_pose=grasp_pose,
+                    plan_id=rich_plan.plan_id,
+                    outcome_code='PLAN_PUBLISH_FAILED',
+                    outcome_reason=publish_reason,
+                    valid_plan=False,
+                )
+                raise
             if not published:
                 message = (
                     '%s: planning request was invalidated before publication'
                     % failure_code
+                )
+                self._finalize_gate_audit_report(
+                    evaluation_records=planning_evaluation_records,
+                    selected_candidate=selected,
+                    selected_pose=grasp_pose,
+                    plan_id=rich_plan.plan_id,
+                    outcome_code=failure_code,
+                    outcome_reason=message,
+                    valid_plan=False,
                 )
                 self._publish_error(message)
                 return False, message
             self.last_error = ''
             self._backoff_until = rospy.Time(0)
             return True, message
+        except (CandidateContractError, GraspNetInputContextError) as exc:
+            failure_code = str(exc.code)
+            failure_reason = str(getattr(exc, 'reason', '') or str(exc))
+            applied, message = self._invalidate_geometry_if_current(
+                request_invalidation_generation,
+                failure_code,
+                failure_reason,
+                stamp=stamp,
+                snapshot=snapshot,
+            )
+            self._publish_error(message)
+            if applied and self.failure_backoff_sec > 0.0:
+                self._backoff_until = rospy.Time.now() + rospy.Duration(self.failure_backoff_sec)
+            return False, message
         except Exception as exc:
             failure_reason = 'remote 6D planning failed: %s' % exc
             applied, message = self._invalidate_geometry_if_current(
@@ -2675,7 +4521,121 @@ class RemoteGrasp6DNode:
 
     def _refresh_runtime_params(self):
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
-        self.grasp_config = dict(rospy.get_param('/grasp', getattr(self, 'grasp_config', {})) or {})
+        twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        gate_audit_enabled = rospy.get_param(
+            '/grasp_6d/remote/gate_audit_enabled',
+            remote_cfg.get(
+                'gate_audit_enabled',
+                getattr(self, 'gate_audit_enabled', True),
+            ),
+        )
+        gate_audit_output_path = validate_mandatory_planning_audit(
+            gate_audit_enabled,
+            rospy.get_param(
+                '/grasp_6d/remote/gate_audit_output_path',
+                remote_cfg.get(
+                    'gate_audit_output_path',
+                    getattr(self, 'gate_audit_output_path', ''),
+                ),
+            ),
+        )
+        (
+            gate_audit_output_path,
+            mujoco_audit_output_path,
+        ) = validate_distinct_audit_paths(
+            gate_audit_output_path,
+            rospy.get_param(
+                '/mujoco_digital_twin/audit_output_path',
+                twin_cfg.get(
+                    'audit_output_path',
+                    getattr(
+                        self,
+                        'mujoco_audit_output_path',
+                        MUJOCO_AUDIT_DEFAULT_PATH,
+                    ),
+                ),
+            ),
+        )
+        refreshed_grasp_config = dict(
+            rospy.get_param('/grasp', getattr(self, 'grasp_config', {})) or {}
+        )
+        candidate_frame_convention = validate_production_candidate_frame_convention(
+            rospy.get_param(
+                '/grasp_6d/remote/candidate_frame_convention',
+                remote_cfg.get(
+                    'candidate_frame_convention',
+                    getattr(
+                        self,
+                        'candidate_frame_convention',
+                        PRODUCTION_CANDIDATE_FRAME_CONVENTION,
+                    ),
+                ),
+            )
+        )
+        orientation_variant_quaternions = (
+            self._parse_production_orientation_variant_quaternions(
+                rospy.get_param(
+                    '/grasp_6d/remote/orientation_variants_rpy_deg',
+                    remote_cfg.get(
+                        'orientation_variants_rpy_deg',
+                        STRICT_ORIENTATION_VARIANTS_RPY_DEG,
+                    ),
+                )
+            )
+        )
+        model_grasp_to_tool_quaternion = self._parse_orientation_variant_quaternions(
+            [rospy.get_param(
+                '/grasp_6d/remote/model_grasp_to_tool_rpy_deg',
+                remote_cfg.get('model_grasp_to_tool_rpy_deg', [0.0, 90.0, 0.0]),
+            )]
+        )[0]
+        require_candidate_depth = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/require_candidate_depth',
+                remote_cfg.get(
+                    'require_candidate_depth',
+                    getattr(self, 'require_candidate_depth', True),
+                ),
+            )
+        )
+        model_grasp_to_tool_quaternion = validate_execution_tool0_contract(
+            require_candidate_depth,
+            model_grasp_to_tool_quaternion,
+            refreshed_grasp_config,
+        )
+        accept_position_only_fallback = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/accept_position_only_fallback',
+                remote_cfg.get('accept_position_only_fallback', False),
+            )
+        )
+        accept_orientation_fallback = bool(
+            rospy.get_param(
+                '/grasp_6d/remote/accept_orientation_fallback',
+                remote_cfg.get('accept_orientation_fallback', False),
+            )
+        )
+        (
+            allow_position_only_fallback,
+            allow_orientation_fallback,
+        ) = validate_production_execution_fallback_contract(
+            accept_position_only_fallback,
+            accept_orientation_fallback,
+        )
+
+        # Publish the refreshed critical contract only after every field has
+        # passed.  A bad runtime override cannot leave a partially relaxed
+        # production policy behind for the next request.
+        self.grasp_config = refreshed_grasp_config
+        self.candidate_frame_convention = candidate_frame_convention
+        self.orientation_variant_quaternions = orientation_variant_quaternions
+        self.model_grasp_to_tool_quaternion = model_grasp_to_tool_quaternion
+        self.require_candidate_depth = require_candidate_depth
+        self.allow_position_only_fallback = allow_position_only_fallback
+        self.allow_orientation_fallback = allow_orientation_fallback
+        self.gate_audit_enabled = gate_audit_enabled
+        self.gate_audit_output_path = gate_audit_output_path
+        self.mujoco_audit_output_path = mujoco_audit_output_path
         self.geometry_support_bbox_expand_ratio = max(
             0.0,
             float(
@@ -2772,44 +4732,8 @@ class RemoteGrasp6DNode:
                 )
             ),
         )
-        self.candidate_frame_convention = normalize_candidate_frame_convention(
-            rospy.get_param(
-                '/grasp_6d/remote/candidate_frame_convention',
-                remote_cfg.get('candidate_frame_convention', self.candidate_frame_convention),
-            )
-        )
-        self.orientation_variant_quaternions = self._parse_orientation_variant_quaternions(
-            rospy.get_param(
-                '/grasp_6d/remote/orientation_variants_rpy_deg',
-                remote_cfg.get('orientation_variants_rpy_deg', [[0.0, 0.0, 0.0]]),
-            )
-        )
-        self.model_grasp_to_tool_quaternion = self._parse_orientation_variant_quaternions(
-            [rospy.get_param(
-                '/grasp_6d/remote/model_grasp_to_tool_rpy_deg',
-                remote_cfg.get('model_grasp_to_tool_rpy_deg', [0.0, 0.0, 0.0]),
-            )]
-        )[0]
-        self.require_candidate_depth = bool(
-            rospy.get_param(
-                '/grasp_6d/remote/require_candidate_depth',
-                remote_cfg.get('require_candidate_depth', getattr(self, 'require_candidate_depth', False)),
-            )
-        )
         self.max_candidates = int(
             rospy.get_param('/grasp_6d/remote/max_candidates', remote_cfg.get('max_candidates', self.max_candidates))
-        )
-        self.allow_position_only_fallback = bool(
-            rospy.get_param(
-                '/grasp_6d/remote/accept_position_only_fallback',
-                remote_cfg.get('accept_position_only_fallback', self.allow_position_only_fallback),
-            )
-        )
-        self.allow_orientation_fallback = bool(
-            rospy.get_param(
-                '/grasp_6d/remote/accept_orientation_fallback',
-                remote_cfg.get('accept_orientation_fallback', self.allow_orientation_fallback),
-            )
         )
         self.candidate_target_gate_enabled = bool(
             rospy.get_param(
@@ -3305,6 +5229,19 @@ class RemoteGrasp6DNode:
         return variants
 
     @staticmethod
+    def _parse_production_orientation_variant_quaternions(value):
+        try:
+            variants = RemoteGrasp6DNode._parse_orientation_variant_quaternions(
+                value
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CandidateContractError(
+                'ORIENTATION_VARIANT_CONTRACT_INVALID',
+                'orientation_variants_rpy_deg must contain finite RPY triples',
+            ) from exc
+        return validate_production_orientation_variant_quaternions(variants)
+
+    @staticmethod
     def _object_pose_distance(first, second):
         try:
             a = first.pose_base.pose.position
@@ -3482,8 +5419,30 @@ class RemoteGrasp6DNode:
             'after_swept_envelope': 0,
         }
         self._geometry_rejection_counts = {}
+        self._candidate_contract_rejection_counts = {}
         self._selected_candidate_gate = None
         self.selected_required_open_width_m = None
+
+    def _record_candidate_contract_rejection(
+        self,
+        _candidate,
+        _variant_index,
+        exception,
+        _stage,
+    ):
+        code = str(
+            getattr(exception, 'code', 'CANDIDATE_CONTRACT_INVALID')
+            or 'CANDIDATE_CONTRACT_INVALID'
+        )
+        counts = getattr(self, '_candidate_contract_rejection_counts', None)
+        if not isinstance(counts, dict):
+            counts = {}
+            self._candidate_contract_rejection_counts = counts
+        counts[code] = int(counts.get(code, 0)) + 1
+        if code.startswith('DEPTH_'):
+            self._depth_gate_rejected_count = int(
+                getattr(self, '_depth_gate_rejected_count', 0)
+            ) + 1
 
     def _record_geometry_gate_result(self, result):
         if not isinstance(result, CandidateGateResult):
@@ -3537,7 +5496,18 @@ class RemoteGrasp6DNode:
             '%s=%d' % (code, int(rejections[code]))
             for code in sorted(rejections)
         ) or 'none'
-        return '%s rejected=%s' % (count_text, rejection_text)
+        contract_rejections = dict(
+            getattr(self, '_candidate_contract_rejection_counts', {}) or {}
+        )
+        contract_text = ','.join(
+            '%s=%d' % (code, int(contract_rejections[code]))
+            for code in sorted(contract_rejections)
+        ) or 'none'
+        return '%s rejected=%s contract-rejected=%s' % (
+            count_text,
+            rejection_text,
+            contract_text,
+        )
 
     def _gripper_contract_mismatch_reason(self):
         validator = getattr(self, 'gripper_contract_validator', None)
@@ -3591,9 +5561,20 @@ class RemoteGrasp6DNode:
             self._record_geometry_gate_result(result)
             return result
         grasp_transform = pose_matrix(grasp_pose)
+        candidate_center_base = self._candidate_center_base_xyz(
+            camera_candidate,
+            grasp_pose,
+        )
         result = evaluate_candidate(
             gripper=self.gripper_geometry,
-            candidate_center_base=grasp_transform[:3, 3],
+            # Grasp center drives OBB/jaw-line gates; the four transforms are
+            # physical tool0 poses used for static and swept boxes.
+            candidate_center_base=candidate_center_base,
+            candidate_tool0_base=grasp_transform[:3, 3],
+            candidate_depth_m=validate_graspnet_depth_m(
+                getattr(camera_candidate, 'depth_m', None),
+                required=True,
+            ),
             R_base_tool=grasp_transform[:3, :3],
             candidate_width_m=float(
                 getattr(camera_candidate, 'width_m', 0.0) or 0.0
@@ -3630,44 +5611,86 @@ class RemoteGrasp6DNode:
             )
         return result
 
-    def _run_candidate_gate_audit(self, candidates, stamp, camera_frame, remote_diagnostics=None):
+    def _run_candidate_gate_audit(
+        self,
+        candidates,
+        stamp,
+        camera_frame,
+        remote_diagnostics=None,
+        candidate_pose_estimator=None,
+        finalize_report=False,
+        outcome_code='',
+        outcome_reason='',
+    ):
         rows = []
+        pose_estimator = (
+            candidate_pose_estimator
+            if candidate_pose_estimator is not None
+            else self.pose_estimator
+        )
         variants = list(getattr(self, 'orientation_variant_quaternions', []) or [])
         if not variants:
             variants = [np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)]
         for candidate_index, candidate in enumerate(candidates):
-            camera_candidate = convert_candidate_to_camera_link(
-                candidate,
-                self.candidate_frame_convention,
-            )
-            camera_candidate = align_candidate_to_tool_frame(
-                camera_candidate,
-                self.model_grasp_to_tool_quaternion,
-            )
-            for variant_index, correction in enumerate(variants):
-                variant_candidate = camera_candidate
-                if not np.allclose(
-                    np.asarray(correction, dtype=float),
-                    np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float),
-                ):
-                    variant_candidate = RemoteGraspCandidate(
-                        score=float(camera_candidate.score),
-                        translation_m=np.asarray(camera_candidate.translation_m, dtype=float),
-                        quaternion_xyzw=_normalize_quaternion(
-                            np.asarray(
-                                quaternion_multiply(camera_candidate.quaternion_xyzw, correction),
-                                dtype=float,
-                            )
-                        ),
-                        width_m=float(camera_candidate.width_m),
-                        height_m=getattr(camera_candidate, 'height_m', None),
-                        depth_m=getattr(camera_candidate, 'depth_m', None),
+            try:
+                camera_candidate = convert_candidate_to_camera_link(
+                    candidate,
+                    self.candidate_frame_convention,
+                )
+                camera_candidate = align_candidate_to_tool_frame(
+                    camera_candidate,
+                    self.model_grasp_to_tool_quaternion,
+                    require_depth=bool(
+                        getattr(self, 'require_candidate_depth', False)
+                    ),
+                )
+            except (TypeError, ValueError, OverflowError) as exc:
+                for variant_index in range(len(variants)):
+                    rows.append(
+                        self._invalid_candidate_gate_audit_row(
+                            candidate_index,
+                            variant_index,
+                            candidate,
+                            exc,
+                        )
                     )
-                pose = self.pose_estimator.make_base_pose_from_camera_pose(
-                    variant_candidate.translation_m,
-                    variant_candidate.quaternion_xyzw,
-                    stamp=stamp,
-                    camera_frame=camera_frame,
+                continue
+            for variant_index, correction in enumerate(variants):
+                try:
+                    variant_candidate = make_parallel_jaw_variant(
+                        camera_candidate,
+                        correction,
+                    )
+                except (TypeError, ValueError, OverflowError) as exc:
+                    rows.append(
+                        self._invalid_candidate_gate_audit_row(
+                            candidate_index,
+                            variant_index,
+                            camera_candidate,
+                            exc,
+                        )
+                    )
+                    continue
+                pose, center_base = make_candidate_base_pose_and_center(
+                    variant_candidate,
+                    pose_estimator,
+                    stamp,
+                    camera_frame,
+                )
+                setattr(
+                    variant_candidate,
+                    '_center_base_xyz',
+                    center_base,
+                )
+                setattr(
+                    variant_candidate,
+                    '_raw_candidate_index',
+                    int(candidate_index),
+                )
+                setattr(
+                    variant_candidate,
+                    '_variant_index',
+                    int(variant_index),
                 )
                 rows.append(
                     self._candidate_gate_audit_row(
@@ -3707,9 +5730,35 @@ class RemoteGrasp6DNode:
         summary['baseline_approach_cos'] = float(
             getattr(self, 'candidate_min_downward_approach_cos', 0.45)
         )
+        input_audit = dict(
+            getattr(self, '_active_graspnet_input_audit', {}) or {}
+        )
+        summary['graspnet_input'] = input_audit
+        audit_metadata_fn = getattr(pose_estimator, 'audit_metadata', None)
+        if callable(audit_metadata_fn):
+            snapshot_transform_summary = dict(
+                audit_metadata_fn(include_matrices=False)
+            )
+            snapshot_transform_report = dict(
+                audit_metadata_fn(include_matrices=True)
+            )
+        else:
+            snapshot_transform_summary = {
+                'snapshot_stamp_ns': _stamp_to_nsec(stamp),
+                'snapshot_source_frame': str(camera_frame),
+                'raw_candidate_convention': normalize_candidate_frame_convention(
+                    self.candidate_frame_convention
+                ),
+                'canonical_candidate_frame': str(camera_frame),
+                'transform_sha256': '',
+            }
+            snapshot_transform_report = dict(snapshot_transform_summary)
+        summary['snapshot_transform'] = snapshot_transform_summary
         report = {
+            'report_version': 2,
             'stamp_sec': float(stamp.to_sec()) if stamp is not None else 0.0,
             'camera_frame': str(camera_frame),
+            'snapshot_transform': snapshot_transform_report,
             'target_cloud_segmentation': str(
                 getattr(self, 'latest_target_cloud_segmentation', 'unknown')
             ),
@@ -3726,14 +5775,354 @@ class RemoteGrasp6DNode:
                 getattr(self, 'latest_target_cloud_base_xyz', None)
             ),
             'remote_diagnostics': dict(remote_diagnostics or {}),
+            'graspnet_input': input_audit,
             'summary': summary,
             'rows': rows,
+            'selected': None,
+            'lineage': [
+                {
+                    'candidate_index': int(row.get('candidate_index', -1)),
+                    'variant_index': int(row.get('variant_index', -1)),
+                    'selected': False,
+                }
+                for row in rows
+            ],
+            'plan_id': '',
+            'outcome': {
+                'code': str(outcome_code or ''),
+                'reason': str(outcome_reason or ''),
+                'valid_plan': False,
+            },
         }
         self._latest_gate_audit_summary = summary
+        self._active_gate_audit_report = report
         summary_text = self._format_gate_audit_summary(summary)
-        self.gate_audit_pub.publish(String(json.dumps(summary, ensure_ascii=True, sort_keys=True)))
+        if bool(finalize_report):
+            self._finalize_gate_audit_report(
+                evaluation_records=(),
+                selected_candidate=None,
+                selected_pose=None,
+                plan_id='',
+                outcome_code=outcome_code,
+                outcome_reason=outcome_reason,
+                valid_plan=False,
+            )
         rospy.logwarn('remote 6D controlled gate audit: %s', summary_text)
-        self._write_gate_audit_report(report)
+        return report
+
+    def _finalize_gate_audit_report(
+        self,
+        evaluation_records,
+        selected_candidate,
+        selected_pose,
+        plan_id,
+        outcome_code,
+        outcome_reason,
+        valid_plan,
+    ):
+        report = deepcopy(getattr(self, '_active_gate_audit_report', None))
+        if not isinstance(report, dict):
+            raise CandidateContractError(
+                PLANNING_AUDIT_FAILED,
+                'planning audit has no request-local base report',
+            )
+        rows = list(report.get('rows', []) or [])
+        rows_by_lineage = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    'planning audit contains a non-dictionary candidate row',
+                )
+            key = (
+                int(row.get('candidate_index', -1)),
+                int(row.get('variant_index', -1)),
+            )
+            if key in rows_by_lineage:
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    'planning audit contains duplicate candidate row %s' % (key,),
+                )
+            rows_by_lineage[key] = row
+
+        expected_keys = set(rows_by_lineage)
+        emitted_keys = set()
+        consistency_errors = []
+        for evaluation in list(evaluation_records or []):
+            if not isinstance(evaluation, dict):
+                consistency_errors.append(
+                    'selector emitted a non-dictionary audit record'
+                )
+                continue
+            try:
+                candidate_index = int(evaluation.get('candidate_index', -1))
+                variant_index = int(evaluation.get('variant_index', -1))
+            except (TypeError, ValueError, OverflowError):
+                consistency_errors.append(
+                    'selector emitted non-integral lineage indices'
+                )
+                continue
+            key = (candidate_index, variant_index)
+            row = rows_by_lineage.get(key)
+            if row is None:
+                consistency_errors.append(
+                    'selector audit lineage %s has no candidate row' % (key,)
+                )
+                continue
+            if key in emitted_keys:
+                consistency_errors.append(
+                    'selector emitted duplicate audit lineage %s' % (key,)
+                )
+                continue
+            emitted_keys.add(key)
+            row['planning_evaluation'] = deepcopy(evaluation)
+
+        for key, row in rows_by_lineage.items():
+            schema_error = planning_evaluation_schema_error(
+                row.get('planning_evaluation'),
+                key,
+            )
+            if not schema_error:
+                continue
+            if bool(valid_plan):
+                consistency_errors.append(
+                    'selector audit lineage %s is incomplete: %s'
+                    % (key, schema_error)
+                )
+            else:
+                row['planning_evaluation'] = failed_planning_evaluation(
+                    key[0],
+                    key[1],
+                    'PLANNING_EVALUATION_MISSING',
+                    schema_error,
+                )
+
+        if bool(valid_plan) and (
+            consistency_errors or emitted_keys != expected_keys
+        ):
+            missing = sorted(expected_keys - emitted_keys)
+            extra = sorted(emitted_keys - expected_keys)
+            details = list(consistency_errors)
+            if missing:
+                details.append('missing selector lineages=%s' % missing)
+            if extra:
+                details.append('extra selector lineages=%s' % extra)
+            raise CandidateContractError(
+                PLANNING_AUDIT_FAILED,
+                'valid planning audit requires exactly one evaluation for '
+                'every candidate row: %s' % '; '.join(details),
+            )
+
+        selected_key = None
+        if selected_candidate is not None or selected_pose is not None:
+            if selected_candidate is None or selected_pose is None:
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    'selected audit candidate and pose must be provided together',
+                )
+            selected_key = (
+                int(getattr(selected_candidate, '_raw_candidate_index', -1)),
+                int(getattr(selected_candidate, '_variant_index', -1)),
+            )
+            if selected_key not in rows_by_lineage:
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    'selected candidate lineage %s is absent from audit rows'
+                    % (selected_key,),
+                )
+
+        if bool(valid_plan):
+            if selected_key is None:
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    'valid planning audit requires one selected candidate lineage',
+                )
+            selected_evaluation_keys = {
+                key
+                for key, row in rows_by_lineage.items()
+                if row.get('planning_evaluation', {}).get('selected') is True
+            }
+            if selected_evaluation_keys != {selected_key}:
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    'valid planning audit selected evaluation lineages %s '
+                    'must exactly match selected candidate lineage %s'
+                    % (sorted(selected_evaluation_keys), selected_key),
+                )
+
+        if not bool(valid_plan):
+            if consistency_errors:
+                original_code = str(outcome_code or '')
+                original_reason = str(outcome_reason or '')
+                outcome_code = PLANNING_AUDIT_FAILED
+                outcome_reason = (
+                    '%s%sselector audit consistency failure: %s'
+                    % (
+                        original_reason,
+                        '; ' if original_reason else '',
+                        '; '.join(consistency_errors),
+                    )
+                )
+                if original_code and original_code != PLANNING_AUDIT_FAILED:
+                    outcome_reason += ' (original outcome=%s)' % original_code
+                selected_candidate = None
+                selected_pose = None
+                selected_key = None
+                plan_id = ''
+
+        lineage = [
+            {
+                'candidate_index': int(key[0]),
+                'variant_index': int(key[1]),
+                'selected': bool(
+                    row.get('planning_evaluation', {}).get('selected', False)
+                ),
+            }
+            for key, row in rows_by_lineage.items()
+        ]
+
+        selected_row = None
+        if selected_key is not None:
+            selected_row = rows_by_lineage.get(selected_key)
+            # Recompute the selected row after ranking so its analytical
+            # result and motion cost match the executable rich plan.
+            refreshed = self._candidate_gate_audit_row(
+                selected_key[0],
+                selected_key[1],
+                selected_candidate,
+                selected_pose,
+            )
+            planning_evaluation = selected_row.get('planning_evaluation')
+            selected_row.clear()
+            selected_row.update(refreshed)
+            if planning_evaluation is not None:
+                selected_row['planning_evaluation'] = planning_evaluation
+            selected_row['selected'] = True
+
+        normalized_plan_id = str(plan_id or '')
+        if bool(valid_plan) and not normalized_plan_id:
+            raise CandidateContractError(
+                PLANNING_AUDIT_FAILED,
+                'valid planning audit requires the final plan_id',
+            )
+        report['rows'] = rows
+        report['lineage'] = lineage
+        report['selected'] = deepcopy(selected_row)
+        report['plan_id'] = normalized_plan_id
+        report['outcome'] = {
+            'code': str(outcome_code or ''),
+            'reason': str(outcome_reason or ''),
+            'valid_plan': bool(valid_plan),
+        }
+        self._active_gate_audit_report = deepcopy(report)
+        self._latest_gate_audit_reference = self._write_gate_audit_report(report)
+        self._publish_bounded_gate_audit(selected_row)
+        return deepcopy(self._latest_gate_audit_reference)
+
+    def _write_planning_audit_failure_report(
+        self,
+        candidates,
+        stamp,
+        camera_frame,
+        pose_estimator,
+        remote_diagnostics,
+        failure_code,
+        failure_reason,
+    ):
+        """Best-effort complete atomic evidence for a failed WSL request."""
+        variants = list(
+            getattr(self, 'orientation_variant_quaternions', []) or []
+        )
+        if not variants:
+            variants = [np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)]
+        rows = []
+        for candidate_index, candidate in enumerate(list(candidates or [])):
+            try:
+                center = self._json_vector(
+                    getattr(candidate, 'translation_m', None)
+                )
+            except Exception:
+                center = None
+            for variant_index in range(len(variants)):
+                rows.append(
+                    {
+                        'candidate_index': int(candidate_index),
+                        'variant_index': int(variant_index),
+                        'score': self._finite_json_number(
+                            getattr(candidate, 'score', None)
+                        ),
+                        'width_m': self._finite_json_number(
+                            getattr(candidate, 'width_m', None)
+                        ),
+                        'depth_m': self._finite_json_number(
+                            getattr(candidate, 'depth_m', None)
+                        ),
+                        'center_camera_m': center,
+                        'planning_evaluation': failed_planning_evaluation(
+                            candidate_index,
+                            variant_index,
+                            failure_code,
+                            failure_reason,
+                            stage='planning_audit',
+                        ),
+                    }
+                )
+        metadata_fn = getattr(pose_estimator, 'audit_metadata', None)
+        if callable(metadata_fn):
+            transform_summary = dict(metadata_fn(include_matrices=False))
+            transform_report = dict(metadata_fn(include_matrices=True))
+        else:
+            transform_summary = {
+                'snapshot_stamp_ns': _stamp_to_nsec(stamp),
+                'snapshot_source_frame': str(camera_frame),
+                'transform_sha256': '',
+            }
+            transform_report = dict(transform_summary)
+        summary = {
+            'base_candidates': int(len(list(candidates or []))),
+            'graspnet_input': dict(
+                getattr(self, '_active_graspnet_input_audit', {}) or {}
+            ),
+            'snapshot_transform': transform_summary,
+            'audit_error': str(failure_reason),
+        }
+        self._latest_gate_audit_summary = summary
+        self._active_gate_audit_report = {
+            'report_version': 2,
+            'stamp_sec': float(stamp.to_sec()) if stamp is not None else 0.0,
+            'camera_frame': str(camera_frame),
+            'snapshot_transform': transform_report,
+            'remote_diagnostics': dict(remote_diagnostics or {}),
+            'graspnet_input': dict(
+                getattr(self, '_active_graspnet_input_audit', {}) or {}
+            ),
+            'summary': summary,
+            'rows': rows,
+            'selected': None,
+            'lineage': [
+                {
+                    'candidate_index': int(row['candidate_index']),
+                    'variant_index': int(row['variant_index']),
+                    'selected': False,
+                }
+                for row in rows
+            ],
+            'plan_id': '',
+            'outcome': {
+                'code': str(failure_code),
+                'reason': str(failure_reason),
+                'valid_plan': False,
+            },
+        }
+        return self._finalize_gate_audit_report(
+            evaluation_records=(),
+            selected_candidate=None,
+            selected_pose=None,
+            plan_id='',
+            outcome_code=failure_code,
+            outcome_reason=failure_reason,
+            valid_plan=False,
+        )
 
     def _candidate_gate_audit_row(self, candidate_index, variant_index, candidate, grasp_pose):
         try:
@@ -3748,17 +6137,30 @@ class RemoteGrasp6DNode:
         # The model width is diagnostic only. The mandatory physical width
         # result comes from the base-frame OBB and fixed 50 mm gripper.
         width_ok = True
+        center_base = self._candidate_center_base_xyz(candidate, grasp_pose)
+        tool0_base = pose_matrix(grasp_pose)[:3, 3]
+        center_camera = _finite_vector3(
+            candidate.translation_m,
+            'candidate center',
+        )
+        tool0_camera = candidate_tool0_translation(candidate)
+        camera_offset = tool0_camera - center_camera
+        base_offset = tool0_base - center_base
+        camera_rotation = quaternion_matrix(candidate.quaternion_xyzw)[:3, :3]
+        base_rotation = pose_matrix(grasp_pose)[:3, :3]
+        camera_contract_residual = float(
+            np.linalg.norm(camera_offset - depth * camera_rotation[:, 2])
+        )
+        base_contract_residual = float(
+            np.linalg.norm(base_offset - depth * base_rotation[:, 2])
+        )
 
         target_xyz, target_source = self._target_base_xyz()
         target_ok = target_xyz is not None
         center_distance = float('inf')
         relative_z = float('nan')
         if target_xyz is not None:
-            position = grasp_pose.pose.position
-            delta = np.asarray(
-                [float(position.x), float(position.y), float(position.z)],
-                dtype=float,
-            ) - np.asarray(target_xyz, dtype=float)
+            delta = center_base - np.asarray(target_xyz, dtype=float)
             center_distance = float(np.linalg.norm(delta))
             relative_z = float(delta[2])
 
@@ -3811,6 +6213,16 @@ class RemoteGrasp6DNode:
             'score': float(getattr(candidate, 'score', 0.0) or 0.0),
             'width_m': width,
             'depth_m': depth if np.isfinite(depth) else None,
+            'center_camera_m': self._json_vector(center_camera),
+            'tool0_camera_m': self._json_vector(tool0_camera),
+            'center_base_m': self._json_vector(center_base),
+            'tool0_base_m': self._json_vector(tool0_base),
+            'tool0_offset_camera_m': self._json_vector(camera_offset),
+            'tool0_offset_base_m': self._json_vector(base_offset),
+            'depth_offset_m': float(np.linalg.norm(camera_offset)),
+            'tool0_contract_residual_camera_m': camera_contract_residual,
+            'tool0_contract_residual_base_m': base_contract_residual,
+            # Backward-compatible alias; this remains the model center.
             'translation_camera_m': self._json_vector(candidate.translation_m),
             'quaternion_camera_xyzw': self._json_vector(candidate.quaternion_xyzw),
             'depth_ok': bool(depth_ok),
@@ -3833,6 +6245,63 @@ class RemoteGrasp6DNode:
             'visibility_reason': str(visibility_reason),
         }
 
+    def _invalid_candidate_gate_audit_row(
+        self,
+        candidate_index,
+        variant_index,
+        candidate,
+        exception,
+    ):
+        try:
+            depth = float(getattr(candidate, 'depth_m', float('nan')))
+        except (TypeError, ValueError, OverflowError):
+            depth = float('nan')
+        try:
+            center = self._json_vector(candidate.translation_m)
+        except Exception:
+            center = None
+        return {
+            'candidate_index': int(candidate_index),
+            'variant_index': int(variant_index),
+            'score': float(getattr(candidate, 'score', 0.0) or 0.0),
+            'width_m': float(getattr(candidate, 'width_m', 0.0) or 0.0),
+            'depth_m': depth if np.isfinite(depth) else None,
+            'center_camera_m': center,
+            'tool0_camera_m': None,
+            'center_base_m': None,
+            'tool0_base_m': None,
+            'tool0_offset_camera_m': None,
+            'tool0_offset_base_m': None,
+            'depth_offset_m': None,
+            'tool0_contract_residual_camera_m': None,
+            'tool0_contract_residual_base_m': None,
+            'translation_camera_m': center,
+            'quaternion_camera_xyzw': None,
+            'depth_ok': False,
+            'width_ok': True,
+            'target_ok': False,
+            'target_source': 'none',
+            'cloud_distance_m': None,
+            'center_distance_m': None,
+            'relative_z_m': None,
+            'center_clearance_m': None,
+            'finger_clearance_m': None,
+            'jaw_normal_cos': None,
+            'approach_cos': None,
+            'visibility_ok': False,
+            'visibility_reason': '%s: %s'
+            % (
+                str(
+                    getattr(
+                        exception,
+                        'code',
+                        'CANDIDATE_CONTRACT_INVALID',
+                    )
+                ),
+                exception,
+            ),
+        }
+
     @staticmethod
     def _audit_thresholds(primary, defaults):
         values = [float(primary)] + [float(value) for value in defaults]
@@ -3844,18 +6313,115 @@ class RemoteGrasp6DNode:
             return None
         return [float(value) for value in np.asarray(values, dtype=float).reshape(-1)]
 
+    @staticmethod
+    def _finite_json_number(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) else None
+
     def _write_gate_audit_report(self, report):
-        path = str(getattr(self, 'gate_audit_output_path', '') or '').strip()
-        if not path:
-            return
+        path, mujoco_path = validate_distinct_audit_paths(
+            validate_mandatory_planning_audit(
+                getattr(self, 'gate_audit_enabled', True),
+                getattr(self, 'gate_audit_output_path', ''),
+            ),
+            getattr(
+                self,
+                'mujoco_audit_output_path',
+                MUJOCO_AUDIT_DEFAULT_PATH,
+            ),
+        )
+        self.gate_audit_output_path = path
+        self.mujoco_audit_output_path = mujoco_path
+        temporary_path = '%s.tmp-%d-%d' % (
+            path,
+            int(os.getpid()),
+            int(threading.get_ident()),
+        )
         try:
             directory = os.path.dirname(path)
             if directory:
                 os.makedirs(directory, exist_ok=True)
-            with open(path, 'w', encoding='utf-8') as handle:
-                json.dump(report, handle, ensure_ascii=True, indent=2, sort_keys=True)
+            payload = json.dumps(
+                report,
+                allow_nan=False,
+                ensure_ascii=True,
+                indent=2,
+                sort_keys=True,
+            ).encode('utf-8')
+            with open(temporary_path, 'wb') as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, path)
+            return {
+                'report_path': path,
+                'report_sha256': hashlib.sha256(payload).hexdigest(),
+                'row_count': int(len(list(report.get('rows', []) or []))),
+            }
         except Exception as exc:
-            rospy.logwarn('remote 6D could not write gate audit %s: %s', path, exc)
+            try:
+                if os.path.exists(temporary_path):
+                    os.unlink(temporary_path)
+            except Exception:
+                pass
+            raise CandidateContractError(
+                PLANNING_AUDIT_WRITE_FAILED,
+                'could not atomically write planning audit %s: %s'
+                % (path, exc),
+            )
+
+    def _publish_bounded_gate_audit(self, selected_row=None):
+        reference = dict(
+            getattr(self, '_latest_gate_audit_reference', {}) or {}
+        )
+        payload = {
+            'summary': dict(getattr(self, '_latest_gate_audit_summary', {}) or {}),
+            'report_path': str(reference.get('report_path', '') or ''),
+            'report_sha256': str(reference.get('report_sha256', '') or ''),
+            'row_count': int(reference.get('row_count', 0) or 0),
+            'selected': None,
+        }
+        if isinstance(selected_row, dict):
+            selected_keys = (
+                'candidate_index',
+                'variant_index',
+                'score',
+                'depth_m',
+                'center_camera_m',
+                'tool0_camera_m',
+                'center_base_m',
+                'tool0_base_m',
+                'tool0_offset_camera_m',
+                'tool0_offset_base_m',
+                'tool0_contract_residual_camera_m',
+                'tool0_contract_residual_base_m',
+            )
+            payload['selected'] = {
+                key: selected_row.get(key)
+                for key in selected_keys
+            }
+        publisher = getattr(self, 'gate_audit_pub', None)
+        if publisher is not None:
+            try:
+                publisher.publish(
+                    String(
+                        json.dumps(
+                            payload,
+                            allow_nan=False,
+                            ensure_ascii=True,
+                            sort_keys=True,
+                        )
+                    )
+                )
+            except Exception as exc:
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    'could not publish bounded planning audit reference: %s'
+                    % exc,
+                )
 
     @staticmethod
     def _profile_from_summary(summary, clearance, approach):
@@ -4019,10 +6585,13 @@ class RemoteGrasp6DNode:
             rospy.logwarn_throttle(1.0, 'remote 6D candidate rejected: no locked detection target')
             return False
         try:
-            grasp = grasp_pose.pose.position
-            dx = float(grasp.x) - float(target_xyz[0])
-            dy = float(grasp.y) - float(target_xyz[1])
-            dz = float(grasp.z) - float(target_xyz[2])
+            center_base = self._candidate_center_base_xyz(
+                _camera_candidate,
+                grasp_pose,
+            )
+            dx = float(center_base[0]) - float(target_xyz[0])
+            dy = float(center_base[1]) - float(target_xyz[1])
+            dz = float(center_base[2]) - float(target_xyz[2])
             distance = math.sqrt(dx * dx + dy * dy + dz * dz)
         except Exception as exc:
             self._target_gate_rejected_count += 1
@@ -4127,9 +6696,9 @@ class RemoteGrasp6DNode:
                     'candidate=(%.3f, %.3f, %.3f) target=(%.3f, %.3f, %.3f) '
                     'delta=(%.3f, %.3f, %.3f) dist=%.3f limits dist<=%.3f z=[%.3f, %.3f] source=%s'
                 ),
-                float(grasp.x),
-                float(grasp.y),
-                float(grasp.z),
+                float(center_base[0]),
+                float(center_base[1]),
+                float(center_base[2]),
                 float(target_xyz[0]),
                 float(target_xyz[1]),
                 float(target_xyz[2]),
@@ -4352,6 +6921,22 @@ class RemoteGrasp6DNode:
         return float(support_metrics['min_finger_clearance_m']) < minimum
 
     @staticmethod
+    def _candidate_center_base_xyz(camera_candidate, tool0_pose):
+        """Return the immutable GraspNet center, never the offset tool0 origin."""
+        center = getattr(camera_candidate, '_center_base_xyz', None)
+        if center is not None:
+            return _finite_vector3(center, 'candidate center in base')
+        if camera_candidate is None:
+            raise CandidateContractError(
+                'CENTER_TRANSFORM_MISSING',
+                'candidate is required to recover center from tool0 pose',
+            )
+        return candidate_center_base_from_tool0_pose(
+            camera_candidate,
+            tool0_pose,
+        )
+
+    @staticmethod
     def _pose_key(pose_stamped):
         try:
             pose = pose_stamped.pose
@@ -4389,7 +6974,7 @@ class RemoteGrasp6DNode:
                 pregrasp_distance_m=float(self.grasp_config.get('pregrasp_distance_m', 0.08)),
                 approach_offset_m=float(self.grasp_config.get('final_approach_offset_m', 0.015)),
                 lift_height_m=float(self.grasp_config.get('lift_height_m', 0.05)),
-                tool_approach_axis=str(self.grasp_config.get('tool_approach_axis', 'x')),
+                tool_approach_axis=str(self.grasp_config.get('tool_approach_axis', 'z')),
             )
             stages = [('pregrasp', plan.pregrasp)]
             if bool(getattr(self, 'camera_visibility_require_approach', True)):
@@ -4489,37 +7074,147 @@ class RemoteGrasp6DNode:
         margin_y = max(margin, int(math.ceil(0.5 * bbox_height * scale)) + padding)
         return margin_x, margin_y
 
-    def _tool_from_camera_matrix(self):
+    def _configured_tool_from_camera_matrix(self):
+        try:
+            translation = _finite_vector3(
+                self.handeye_translation_xyz,
+                'configured handeye translation',
+            )
+            quaternion = _normalize_quaternion(
+                np.asarray(self.handeye_rotation_xyzw, dtype=float)
+            )
+            return _readonly_rigid_transform(
+                transform_matrix(translation, quaternion),
+                'configured tool_from_camera',
+            )
+        except Exception as exc:
+            raise CandidateContractError(
+                'VISIBILITY_TRANSFORM_INVALID',
+                'configured handeye transform is not a finite rigid transform: %s'
+                % exc,
+            )
+
+    def _freeze_tool_from_camera_matrix(self, snapshot_stamp):
+        try:
+            stamp_ns = _stamp_to_nsec(snapshot_stamp)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CandidateContractError(
+                'VISIBILITY_TRANSFORM_INVALID',
+                'visibility snapshot stamp is invalid: %s' % exc,
+            )
+        if stamp_ns <= 0:
+            raise CandidateContractError(
+                'VISIBILITY_TRANSFORM_INVALID',
+                'visibility TF requires a strictly positive snapshot stamp',
+            )
         cached = getattr(self, '_cached_tool_from_camera', None)
-        if cached is not None:
+        if (
+            cached is not None
+            and int(getattr(self, '_cached_tool_from_camera_stamp_ns', 0))
+            == int(stamp_ns)
+        ):
             return cached
+
         matrix = None
+        lookup_error = None
         tf_buffer = getattr(self, 'tf_buffer', None)
         if tf_buffer is not None:
             try:
                 transform = tf_buffer.lookup_transform(
                     self.handeye_parent_frame,
                     self.handeye_camera_frame,
-                    rospy.Time(0),
-                    rospy.Duration(0.1),
-                )
-                translation = transform.transform.translation
-                rotation = transform.transform.rotation
-                matrix = transform_matrix(
-                    [translation.x, translation.y, translation.z],
-                    [rotation.x, rotation.y, rotation.z, rotation.w],
+                    snapshot_stamp,
+                    rospy.Duration(
+                        float(
+                            getattr(
+                                getattr(self, 'pose_estimator', None),
+                                'tf_timeout_sec',
+                                0.2,
+                            )
+                        )
+                    ),
                 )
             except Exception as exc:
+                lookup_error = exc
+            else:
+                translation = transform.transform.translation
+                rotation = transform.transform.rotation
+                try:
+                    matrix = _readonly_rigid_transform(
+                        transform_matrix(
+                            [translation.x, translation.y, translation.z],
+                            _normalize_quaternion(
+                                np.asarray(
+                                    [
+                                        rotation.x,
+                                        rotation.y,
+                                        rotation.z,
+                                        rotation.w,
+                                    ],
+                                    dtype=float,
+                                )
+                            ),
+                        ),
+                        'snapshot tool_from_camera',
+                    )
+                except Exception as exc:
+                    raise CandidateContractError(
+                        'VISIBILITY_TRANSFORM_INVALID',
+                        'snapshot handeye TF is not a finite rigid transform: %s'
+                        % exc,
+                    )
+
+        if matrix is None:
+            allow_fallback = bool(
+                getattr(
+                    self,
+                    'handeye_allow_static_fallback',
+                    getattr(
+                        getattr(self, 'pose_estimator', None),
+                        'allow_static_fallback',
+                        True,
+                    ),
+                )
+            )
+            if tf_buffer is not None and not allow_fallback:
+                raise CandidateContractError(
+                    'VISIBILITY_TRANSFORM_UNAVAILABLE',
+                    'exact snapshot handeye TF is unavailable: %s'
+                    % lookup_error,
+                )
+            if lookup_error is not None:
                 rospy.logwarn_throttle(
                     2.0,
-                    'eye-in-hand visibility TF %s <- %s unavailable; using calibrated fallback: %s',
+                    (
+                        'snapshot eye-in-hand TF %s <- %s unavailable; '
+                        'freezing calibrated fallback: %s'
+                    ),
                     self.handeye_parent_frame,
                     self.handeye_camera_frame,
-                    exc,
+                    lookup_error,
                 )
-        if matrix is None:
-            matrix = transform_matrix(self.handeye_translation_xyz, self.handeye_rotation_xyzw)
+            matrix = self._configured_tool_from_camera_matrix()
+
         self._cached_tool_from_camera = matrix
+        self._cached_tool_from_camera_stamp_ns = int(stamp_ns)
+        return matrix
+
+    def _tool_from_camera_matrix(self):
+        """Return a frozen visibility transform without querying live TF."""
+        cached = getattr(self, '_cached_tool_from_camera', None)
+        if cached is not None:
+            return cached
+        if bool(getattr(self, '_planning_snapshot_active', False)):
+            raise CandidateContractError(
+                'VISIBILITY_TRANSFORM_NOT_FROZEN',
+                'planning visibility transform was not frozen before WSL inference',
+            )
+        # Non-planning diagnostics may use the configured calibration, but it
+        # is still copied, rigid-validated, and made immutable.  This method
+        # intentionally contains no TF lookup and can never request latest.
+        matrix = self._configured_tool_from_camera_matrix()
+        self._cached_tool_from_camera = matrix
+        self._cached_tool_from_camera_stamp_ns = 0
         return matrix
 
     def _candidate_target_distance(self, _candidate, _camera_candidate, grasp_pose):
@@ -4527,10 +7222,13 @@ class RemoteGrasp6DNode:
         if target_xyz is None:
             return float('inf')
         try:
-            grasp = grasp_pose.pose.position
-            dx = float(grasp.x) - float(target_xyz[0])
-            dy = float(grasp.y) - float(target_xyz[1])
-            dz = float(grasp.z) - float(target_xyz[2])
+            center_base = self._candidate_center_base_xyz(
+                _camera_candidate,
+                grasp_pose,
+            )
+            dx = float(center_base[0]) - float(target_xyz[0])
+            dy = float(center_base[1]) - float(target_xyz[1])
+            dz = float(center_base[2]) - float(target_xyz[2])
             base_distance = math.sqrt(dx * dx + dy * dy + dz * dz)
         except Exception:
             return float('inf')
@@ -4697,11 +7395,11 @@ class RemoteGrasp6DNode:
 
     def _plan_reachable(self, grasp_pose):
         try:
-            strict_pose = (
-                not bool(getattr(self, 'allow_position_only_fallback', False))
-                and not bool(getattr(self, 'allow_orientation_fallback', False))
-            )
-            service_name = '/supervisor/check_pose_strict' if strict_pose else '/supervisor/move_to_pose'
+            # Production remote 6D reachability is always a read-only strict
+            # check.  Configuration is validated earlier, but this hard-coded
+            # endpoint prevents a partially constructed/test node from ever
+            # turning candidate screening into a motion-capable service call.
+            service_name = '/supervisor/check_pose_strict'
             rospy.wait_for_service(service_name, timeout=0.25)
             move_pose = rospy.ServiceProxy(service_name, SetTargetPose)
             response = move_pose(grasp_pose, False)
@@ -4711,7 +7409,7 @@ class RemoteGrasp6DNode:
             if not hasattr(self, '_candidate_plan_metrics'):
                 self._candidate_plan_metrics = {}
             self._candidate_plan_metrics[self._pose_key(grasp_pose)] = metrics
-            if is_position_only_fallback_message(getattr(response, 'message', '')) and not self.allow_position_only_fallback:
+            if is_position_only_fallback_message(getattr(response, 'message', '')):
                 self._position_only_rejected_count += 1
                 rospy.logwarn_throttle(
                     2.0,
@@ -4719,7 +7417,7 @@ class RemoteGrasp6DNode:
                     getattr(response, 'message', ''),
                 )
                 return False
-            if is_orientation_fallback_message(getattr(response, 'message', '')) and not self.allow_orientation_fallback:
+            if is_orientation_fallback_message(getattr(response, 'message', '')):
                 self._orientation_fallback_rejected_count += 1
                 rospy.logwarn_throttle(
                     2.0,

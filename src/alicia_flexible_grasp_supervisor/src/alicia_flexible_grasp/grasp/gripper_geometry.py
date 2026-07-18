@@ -12,15 +12,54 @@ ANALYTICAL_FINGER_SIZE_XYZ_M = np.asarray(
     [0.0434, 0.0286, 0.0600],
     dtype=float,
 )
+# The common center of the Link7/Link8 CAD AABBs in the fixed Alicia tool0
+# frame.  Individual finger centers add/subtract the commanded opening along
+# tool +Y.  The offset is intentionally independent of the GraspNet contact
+# center and was measured from the checked-in 50 mm gripper URDF/STL pair.
+ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M = np.asarray(
+    [0.0004, 0.0003, -0.0302],
+    dtype=float,
+)
+# Total (not per-face) expansion applied to the configured CAD envelope.  It
+# leaves at least GRIPPER_CONTRACT_TOLERANCE_M around every Link7/Link8 STL
+# face at both the fully open and fully closed joint limits.
+ANALYTICAL_FINGER_BOX_PADDING_XYZ_M = np.asarray(
+    [0.0012, 0.0012, 0.0012],
+    dtype=float,
+)
 ANALYTICAL_PALM_SIZE_XYZ_M = np.asarray(
     [0.1175, 0.1550, 0.0774],
     dtype=float,
 )
+# Link6.STL AABB center expressed in the fixed Alicia tool0 frame.  The
+# conservative analytical size above surrounds the CAD mesh with at least the
+# gripper contract tolerance on every face.
+ANALYTICAL_PALM_CENTER_TOOL_XYZ_M = np.asarray(
+    [-0.0393, 0.0003, -0.09344],
+    dtype=float,
+)
 ANALYTICAL_SUPPORT_CLEARANCE_M = 0.003
+ANALYTICAL_GRASPNET_DEPTH_BINS_M = (0.01, 0.02, 0.03, 0.04)
+ANALYTICAL_GRASPNET_DEPTH_TOLERANCE_M = 1.0e-6
 GRIPPER_CONTRACT_TOLERANCE_M = 0.0005
+# The physical opening is a measured quantity (49.9375 mm on the current
+# gripper), not a collision-envelope knob.  Keep its symmetric tolerance
+# independent from the directional envelope comparison below.
+PHYSICAL_OPEN_GAP_TOLERANCE_M = 0.0005
+# Conservative collision envelopes are directional contracts.  A configured
+# box or safety clearance may grow by the contract tolerance, but it must not
+# shrink by more than this epsilon.  This deliberately does not replace the
+# symmetric 0.5 mm tolerance used for the independently measured open gap.
+_CONSERVATIVE_ENVELOPE_FLOAT_EPSILON_M = 1.0e-9
 _CENTER_TOLERANCE_M = 0.003
 _GATE_COUNT = 6
 _INTERPOLATION_SAMPLES = 11
+
+
+class AnalyticalGripperContractError(ValueError):
+    def __init__(self, code, message):
+        self.code = str(code or 'TOOL0_CONTRACT_INVALID')
+        super().__init__(str(message))
 
 
 def _readonly_vector(value, name):
@@ -236,23 +275,20 @@ def gripper_box_centers(
     if opening < 0.0 or opening > physical_gap:
         raise ValueError('required_open_width_m is outside the gripper range')
     jaw_local, jaw_index = parse_tool_axis(tool_jaw_axis)
-    finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
+    _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
     if jaw_index == finger_index:
         raise ValueError('jaw and finger length axes must be different')
     jaw_axis = rotation @ jaw_local
-    finger_axis = rotation @ finger_local
-    finger_length = float(gripper.finger_size_xyz_m[finger_index])
     finger_thickness = float(gripper.finger_size_xyz_m[jaw_index])
-    palm_length = float(gripper.palm_size_xyz_m[finger_index])
-    finger_back = center - 0.5 * finger_length * finger_axis
+    finger_pair_center = (
+        center + rotation @ ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M
+    )
     finger_offset = 0.5 * (opening + finger_thickness) * jaw_axis
-    palm_center = center - (
-        finger_length + 0.5 * palm_length
-    ) * finger_axis
+    palm_center = center + rotation @ ANALYTICAL_PALM_CENTER_TOOL_XYZ_M
     return {
         'grasp_center': center.copy(),
-        'left_finger': finger_back + finger_offset,
-        'right_finger': finger_back - finger_offset,
+        'left_finger': finger_pair_center + finger_offset,
+        'right_finger': finger_pair_center - finger_offset,
         'palm': palm_center,
     }
 
@@ -391,9 +427,12 @@ def _stage_boxes(
         tool_jaw_axis,
         tool_finger_length_axis,
     )
+    finger_box_size = (
+        gripper.finger_size_xyz_m + ANALYTICAL_FINGER_BOX_PADDING_XYZ_M
+    )
     return (
-        ('left_finger', centers['left_finger'], gripper.finger_size_xyz_m),
-        ('right_finger', centers['right_finger'], gripper.finger_size_xyz_m),
+        ('left_finger', centers['left_finger'], finger_box_size),
+        ('right_finger', centers['right_finger'], finger_box_size),
         ('palm', centers['palm'], gripper.palm_size_xyz_m),
     )
 
@@ -525,6 +564,8 @@ def _evaluate_candidate_impl(
     *,
     gripper,
     candidate_center_base,
+    candidate_tool0_base,
+    candidate_depth_m,
     R_base_tool,
     candidate_width_m,
     obb_center_base,
@@ -551,7 +592,40 @@ def _evaluate_candidate_impl(
         if not isinstance(gripper, GripperGeometry):
             raise ValueError('gripper must be a GripperGeometry')
         center = _readonly_vector(candidate_center_base, 'candidate_center_base')
+        tool0 = _readonly_vector(candidate_tool0_base, 'candidate_tool0_base')
         tool_rotation = _validated_rotation(R_base_tool, 'R_base_tool')
+        if isinstance(candidate_depth_m, (bool, np.bool_)):
+            raise AnalyticalGripperContractError(
+                'DEPTH_INVALID',
+                'candidate_depth_m must be a numeric GraspNet depth bin',
+            )
+        try:
+            depth = _finite_number(candidate_depth_m, 'candidate_depth_m')
+        except Exception as exc:
+            raise AnalyticalGripperContractError(
+                'DEPTH_INVALID',
+                'candidate_depth_m must be finite',
+            ) from exc
+        nearest_depth = min(
+            ANALYTICAL_GRASPNET_DEPTH_BINS_M,
+            key=lambda item: abs(depth - item),
+        )
+        if abs(depth - nearest_depth) > ANALYTICAL_GRASPNET_DEPTH_TOLERANCE_M:
+            raise AnalyticalGripperContractError(
+                'DEPTH_OUT_OF_RANGE',
+                'candidate_depth_m %.9g is not a GraspNet depth bin' % depth,
+            )
+        expected_tool0 = center + float(nearest_depth) * tool_rotation[:, 2]
+        if not np.all(np.isfinite(expected_tool0)):
+            raise AnalyticalGripperContractError(
+                'TOOL0_INVALID',
+                'derived candidate tool0 is non-finite',
+            )
+        if not np.allclose(tool0, expected_tool0, atol=1e-7):
+            raise AnalyticalGripperContractError(
+                'TOOL0_INCONSISTENT',
+                'candidate tool0 must equal center + depth * tool +Z',
+            )
         obb_center = _readonly_vector(obb_center_base, 'obb_center_base')
         obb_rotation = _validated_rotation(R_base_obb, 'R_base_obb')
         obb_size = _readonly_vector(obb_size_xyz_m, 'obb_size_xyz_m')
@@ -582,9 +656,20 @@ def _evaluate_candidate_impl(
             _validated_transform(grasp_T_base_tool, 'grasp_T_base_tool'),
             _validated_transform(lift_T_base_tool, 'lift_T_base_tool'),
         ]
-        if not np.allclose(transforms[2][:3, 3], center, atol=1e-7):
-            raise ValueError('candidate center does not match grasp transform')
-        if not np.allclose(transforms[2][:3, :3], tool_rotation, atol=1e-7):
+        # ``center`` is GraspNet's jaw/contact center.  The transforms are the
+        # physical Alicia tool0 trajectory and differ from the center by the
+        # model insertion depth.  Keeping the two positions distinct lets the
+        # OBB and jaw-line gates use the model center while static/swept boxes
+        # remain anchored to the real robot tool frame.
+        if not np.allclose(transforms[2][:3, 3], tool0, atol=1e-7):
+            raise AnalyticalGripperContractError(
+                'TOOL0_INCONSISTENT',
+                'candidate tool0 does not match grasp transform translation',
+            )
+        if not all(
+            np.allclose(transform[:3, :3], tool_rotation, atol=1e-7)
+            for transform in transforms
+        ):
             raise ValueError('candidate rotation does not match grasp transform')
         jaw_local, jaw_index = parse_tool_axis(tool_jaw_axis)
         _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
@@ -612,9 +697,14 @@ def _evaluate_candidate_impl(
         ):
             raise ValueError('derived analytical candidate metrics are non-finite')
     except Exception as exc:
+        failure_code = (
+            str(exc.code)
+            if isinstance(exc, AnalyticalGripperContractError)
+            else 'GRIPPER_SWEEP_COLLISION'
+        )
         return _failed_result(
             'transform',
-            'GRIPPER_SWEEP_COLLISION',
+            failure_code,
             'invalid analytical gripper input: %s' % exc,
             0,
             required_width,
@@ -845,6 +935,8 @@ def evaluate_candidate(
     *,
     gripper,
     candidate_center_base,
+    candidate_tool0_base,
+    candidate_depth_m,
     R_base_tool,
     candidate_width_m,
     obb_center_base,
@@ -865,6 +957,8 @@ def evaluate_candidate(
         return _evaluate_candidate_impl(
             gripper=gripper,
             candidate_center_base=candidate_center_base,
+            candidate_tool0_base=candidate_tool0_base,
+            candidate_depth_m=candidate_depth_m,
             R_base_tool=R_base_tool,
             candidate_width_m=candidate_width_m,
             obb_center_base=obb_center_base,
@@ -927,16 +1021,32 @@ def gripper_contract_mismatch_reason(
     tool_jaw_axis='y',
     tool_finger_length_axis='z',
 ):
-    """Validate configuration only; Task 11 remains the MJCF endpoint authority."""
+    """Validate configuration only; Task 11 remains the MJCF endpoint authority.
+
+    The measured physical open gap retains an independent symmetric 0.5 mm
+    comparison.  Collision box sizes and jaw/support safety clearances use a
+    one-sided conservative contract instead: they may grow by at most
+    ``tolerance_m`` (itself capped at the fixed contract tolerance), while
+    shrinking is allowed only within floating-point epsilon.
+    """
     if not isinstance(gripper, GripperGeometry):
         return 'analytical gripper geometry is unavailable'
     tolerance = _finite_number(tolerance_m, 'tolerance_m')
     if tolerance < 0.0:
         return 'gripper contract tolerance is negative'
+    if (
+        tolerance
+        > GRIPPER_CONTRACT_TOLERANCE_M
+        + _CONSERVATIVE_ENVELOPE_FLOAT_EPSILON_M
+    ):
+        return (
+            'gripper contract tolerance %.9fm exceeds fixed %.9fm maximum'
+            % (tolerance, GRIPPER_CONTRACT_TOLERANCE_M)
+        )
+    tolerance = min(tolerance, GRIPPER_CONTRACT_TOLERANCE_M)
     checks = (
         ('analytical max inner gap', gripper.max_inner_gap_m),
         ('remote max inner gap', remote_max_inner_gap_m),
-        ('physical open width', physical_open_width_m),
         ('digital-twin max inner gap', twin_max_inner_gap_m),
     )
     for label, value in checks:
@@ -944,11 +1054,31 @@ def gripper_contract_mismatch_reason(
             number = _finite_number(value, label)
         except Exception as exc:
             return str(exc)
-        if abs(number - ANALYTICAL_MAX_INNER_GAP_M) > tolerance:
+        if (
+            abs(number - ANALYTICAL_MAX_INNER_GAP_M)
+            > tolerance + _CONSERVATIVE_ENVELOPE_FLOAT_EPSILON_M
+        ):
             return (
                 '%s %.6fm differs from fixed analytical 50 mm contract'
                 % (label, number)
             )
+    try:
+        physical_open_width = _finite_number(
+            physical_open_width_m,
+            'physical open width',
+        )
+    except Exception as exc:
+        return str(exc)
+    if (
+        abs(physical_open_width - ANALYTICAL_MAX_INNER_GAP_M)
+        > PHYSICAL_OPEN_GAP_TOLERANCE_M
+        + _CONSERVATIVE_ENVELOPE_FLOAT_EPSILON_M
+    ):
+        return (
+            'physical open width %.6fm differs from fixed analytical '
+            '50 mm contract'
+            % physical_open_width
+        )
     scalar_geometry = (
         (
             'jaw clearance each side',
@@ -962,10 +1092,18 @@ def gripper_contract_mismatch_reason(
         ),
     )
     for label, actual, expected in scalar_geometry:
-        if abs(float(actual) - float(expected)) > tolerance:
+        difference = float(actual) - float(expected)
+        if difference < -_CONSERVATIVE_ENVELOPE_FLOAT_EPSILON_M:
             return (
-                '%s %.6fm differs from fixed analytical %.6fm envelope'
+                '%s %.9fm is below fixed analytical %.9fm '
+                'conservative envelope'
                 % (label, actual, expected)
+            )
+        if difference > tolerance + _CONSERVATIVE_ENVELOPE_FLOAT_EPSILON_M:
+            return (
+                '%s %.9fm exceeds fixed analytical %.9fm envelope plus '
+                'the %.9fm conservative growth tolerance'
+                % (label, actual, expected, tolerance)
             )
     vector_geometry = (
         (
@@ -980,13 +1118,32 @@ def gripper_contract_mismatch_reason(
         ),
     )
     for label, actual, expected in vector_geometry:
-        if not np.allclose(actual, expected, rtol=0.0, atol=tolerance):
+        actual_array = np.asarray(actual, dtype=float)
+        expected_array = np.asarray(expected, dtype=float)
+        difference = actual_array - expected_array
+        if np.any(
+            difference < -_CONSERVATIVE_ENVELOPE_FLOAT_EPSILON_M
+        ):
             return (
-                '%s %s differs from fixed analytical %s envelope'
+                '%s %s is below fixed analytical %s conservative envelope'
                 % (
                     label,
-                    np.asarray(actual, dtype=float).tolist(),
-                    np.asarray(expected, dtype=float).tolist(),
+                    actual_array.tolist(),
+                    expected_array.tolist(),
+                )
+            )
+        if np.any(
+            difference
+            > tolerance + _CONSERVATIVE_ENVELOPE_FLOAT_EPSILON_M
+        ):
+            return (
+                '%s %s exceeds fixed analytical %s envelope plus the '
+                '%.9fm conservative growth tolerance'
+                % (
+                    label,
+                    actual_array.tolist(),
+                    expected_array.tolist(),
+                    tolerance,
                 )
             )
     try:

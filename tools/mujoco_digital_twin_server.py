@@ -27,6 +27,8 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from graspnet_baseline_server import (  # noqa: E402
+    CANDIDATE_FIELDS,
+    GRASP6D_PROTOCOL_VERSION,
     GraspNetBaselineBackend,
     MockGraspNetBackend as _BaselineMockGraspNetBackend,
 )
@@ -771,6 +773,45 @@ def make_server(host, port, grasp_backend, sim_backend):
     return server
 
 
+def _grasp_backend_name(grasp_backend):
+    try:
+        name = getattr(grasp_backend, 'name', 'unknown')
+        return str(name)
+    except Exception:
+        return 'unknown'
+
+
+def _snapshot_grasp_diagnostics(grasp_backend):
+    """Return a detached, strict-JSON diagnostics dictionary.
+
+    Diagnostics are audit metadata, not inference input.  An unsafe value must
+    therefore never make an otherwise valid prediction response unserializable
+    or retain a live reference that a later inference can mutate.
+    """
+    try:
+        diagnostics = getattr(grasp_backend, 'last_diagnostics', {})
+        if not isinstance(diagnostics, dict):
+            return {}
+        diagnostics = copy.deepcopy(diagnostics)
+        encoded = json.dumps(diagnostics, allow_nan=False)
+        diagnostics = json.loads(encoded)
+    except Exception:
+        return {}
+    return diagnostics if isinstance(diagnostics, dict) else {}
+
+
+def _predict_failure_response(grasp_backend, error):
+    return {
+        'ok': False,
+        'backend': _grasp_backend_name(grasp_backend),
+        'protocol_version': GRASP6D_PROTOCOL_VERSION,
+        'candidate_fields': list(CANDIDATE_FIELDS),
+        'candidates': [],
+        'diagnostics': {},
+        'error': str(error),
+    }
+
+
 class MujocoDigitalTwinHTTPHandler(BaseHTTPRequestHandler):
     server_version = 'AliciaMujocoDigitalTwinHTTP/1.0'
 
@@ -785,6 +826,8 @@ class MujocoDigitalTwinHTTPHandler(BaseHTTPRequestHandler):
             {
                 'ok': bool(grasp_health.get('ok', False)) and bool(sim_health.get('ok', False)),
                 'backend': grasp_health.get('backend', 'unknown'),
+                'protocol_version': GRASP6D_PROTOCOL_VERSION,
+                'candidate_fields': list(CANDIDATE_FIELDS),
                 'loaded': grasp_health.get('loaded', False),
                 'grasp_backend': grasp_health,
                 'digital_twin': sim_health,
@@ -819,14 +862,27 @@ class MujocoDigitalTwinHTTPHandler(BaseHTTPRequestHandler):
                 result['ok'] = False
                 self._send_json(200, result)
                 return
+            if self.path == '/predict':
+                self._send_json(
+                    200,
+                    _predict_failure_response(self.server.grasp_backend, exc),
+                )
+                return
             self._send_json(200, {'ok': False, 'error': str(exc)})
 
     def _handle_predict(self, payload):
-        candidates = self.server.grasp_backend.predict(payload)
+        grasp_backend = self.server.grasp_backend
+        try:
+            candidates = grasp_backend.predict(payload)
+        except Exception as exc:
+            return _predict_failure_response(grasp_backend, exc)
         return {
             'ok': True,
-            'backend': self.server.grasp_backend.name,
+            'backend': _grasp_backend_name(grasp_backend),
+            'protocol_version': GRASP6D_PROTOCOL_VERSION,
+            'candidate_fields': list(CANDIDATE_FIELDS),
             'candidates': candidates,
+            'diagnostics': _snapshot_grasp_diagnostics(grasp_backend),
         }
 
     def _handle_sync_joint_state(self, payload):

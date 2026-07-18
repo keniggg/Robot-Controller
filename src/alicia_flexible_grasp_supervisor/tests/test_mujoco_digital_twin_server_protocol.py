@@ -1125,6 +1125,198 @@ class PassingBackend(server_module.MockDigitalTwinBackend):
         )
 
 
+class DiagnosticGraspBackend:
+    name = 'diagnostic_graspnet'
+
+    def __init__(self):
+        self.last_diagnostics = {}
+
+    def health(self):
+        return {
+            'ok': True,
+            'backend': self.name,
+            'loaded': True,
+            'protocol_version': server_module.GRASP6D_PROTOCOL_VERSION,
+            'candidate_fields': list(server_module.CANDIDATE_FIELDS),
+        }
+
+    def predict(self, _payload):
+        self.last_diagnostics = {
+            'raw_candidates': 280,
+            'after_nms': 41,
+            'after_collision': 17,
+            'returned': 12,
+            'stages': {'width_rejected': 5},
+        }
+        return [{'score': 0.99}]
+
+
+def _direct_predict(grasp_backend, payload=None):
+    handler = types.SimpleNamespace(
+        server=types.SimpleNamespace(grasp_backend=grasp_backend)
+    )
+    return server_module.MujocoDigitalTwinHTTPHandler._handle_predict(
+        handler,
+        {} if payload is None else payload,
+    )
+
+
+def test_unified_predict_contract_snapshots_complete_grasp_diagnostics():
+    backend = DiagnosticGraspBackend()
+    response = _direct_predict(backend)
+
+    assert response['ok'] is True
+    assert response['backend'] == backend.name
+    assert response['protocol_version'] == 2
+    assert response['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
+    assert response['candidates'] == [{'score': 0.99}]
+    assert response['diagnostics'] == {
+        'raw_candidates': 280,
+        'after_nms': 41,
+        'after_collision': 17,
+        'returned': 12,
+        'stages': {'width_rejected': 5},
+    }
+
+    backend.last_diagnostics['raw_candidates'] = 0
+    backend.last_diagnostics['stages']['width_rejected'] = 0
+    assert response['diagnostics']['raw_candidates'] == 280
+    assert response['diagnostics']['stages']['width_rejected'] == 5
+
+
+@pytest.mark.parametrize(
+    'unsafe_diagnostics',
+    [
+        None,
+        ['raw_candidates', 280],
+        {'raw_candidates': float('nan')},
+        {'raw_candidates': object()},
+    ],
+    ids=('none', 'non-dict', 'nan', 'non-json-value'),
+)
+def test_unified_predict_normalizes_unsafe_diagnostics_to_empty_dict(unsafe_diagnostics):
+    class UnsafeDiagnosticsBackend(DiagnosticGraspBackend):
+        def predict(self, _payload):
+            self.last_diagnostics = unsafe_diagnostics
+            return []
+
+    response = _direct_predict(UnsafeDiagnosticsBackend())
+
+    assert response['ok'] is True
+    assert response['candidates'] == []
+    assert response['diagnostics'] == {}
+    json.dumps(response, allow_nan=False)
+
+
+def test_unified_predict_normalizes_diagnostics_property_exception():
+    class ExplodingDiagnosticsBackend:
+        name = 'exploding_diagnostics'
+
+        @property
+        def last_diagnostics(self):
+            raise RuntimeError('diagnostics unavailable')
+
+        def predict(self, _payload):
+            return []
+
+    response = _direct_predict(ExplodingDiagnosticsBackend())
+
+    assert response['ok'] is True
+    assert response['diagnostics'] == {}
+
+
+def test_unified_predict_backend_exception_returns_complete_fail_closed_contract():
+    class ExplodingGraspBackend:
+        name = 'exploding_graspnet'
+
+        def predict(self, _payload):
+            raise RuntimeError('synthetic inference failure')
+
+    response = _direct_predict(ExplodingGraspBackend())
+
+    assert response['ok'] is False
+    assert response['backend'] == 'exploding_graspnet'
+    assert response['protocol_version'] == 2
+    assert response['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
+    assert response['candidates'] == []
+    assert response['diagnostics'] == {}
+    assert response['error'] == 'synthetic inference failure'
+
+
+def test_unified_http_predict_transports_grasp_diagnostics_contract():
+    grasp_backend = DiagnosticGraspBackend()
+    http_server = server_module.make_server(
+        '127.0.0.1',
+        0,
+        grasp_backend=grasp_backend,
+        sim_backend=PassingBackend(),
+    )
+    thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        response = _json_post(
+            'http://127.0.0.1:%d/predict' % http_server.server_port,
+            {'encoding': 'contract-test'},
+        )
+    finally:
+        http_server.shutdown()
+        http_server.server_close()
+        thread.join(timeout=2.0)
+
+    assert response['ok'] is True
+    assert response['backend'] == grasp_backend.name
+    assert response['protocol_version'] == 2
+    assert response['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
+    assert response['candidates'] == [{'score': 0.99}]
+    assert response['diagnostics']['raw_candidates'] == 280
+    assert response['diagnostics']['after_nms'] == 41
+    assert response['diagnostics']['after_collision'] == 17
+    assert response['diagnostics']['returned'] == 12
+
+
+@pytest.mark.parametrize(
+    ('body', 'content_length'),
+    [
+        (b'{"encoding":"broken",', None),
+        (b'{}', 'not-an-integer'),
+    ],
+    ids=('malformed-json', 'invalid-content-length'),
+)
+def test_unified_http_predict_parse_failures_return_complete_fail_closed_contract(
+    body,
+    content_length,
+):
+    grasp_backend = DiagnosticGraspBackend()
+    http_server = server_module.make_server(
+        '127.0.0.1',
+        0,
+        grasp_backend=grasp_backend,
+        sim_backend=PassingBackend(),
+    )
+    thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        raw, response = _raw_post(
+            http_server.server_port,
+            '/predict',
+            body,
+            content_length=content_length,
+        )
+    finally:
+        http_server.shutdown()
+        http_server.server_close()
+        thread.join(timeout=2.0)
+
+    assert b'NaN' not in raw and b'Infinity' not in raw
+    assert response['ok'] is False
+    assert response['backend'] == grasp_backend.name
+    assert response['protocol_version'] == server_module.GRASP6D_PROTOCOL_VERSION
+    assert response['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
+    assert response['candidates'] == []
+    assert response['diagnostics'] == {}
+    assert isinstance(response['error'], str) and response['error']
+
+
 def test_server_serves_schema_v2_health_sync_predict_and_simulate():
     http_server = server_module.make_server(
         '127.0.0.1',
@@ -1138,6 +1330,8 @@ def test_server_serves_schema_v2_health_sync_predict_and_simulate():
         base_url = 'http://127.0.0.1:%d' % http_server.server_port
         health = _json_get(base_url + '/health')
         assert health['ok'] is True
+        assert health['protocol_version'] == 2
+        assert health['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
         assert health['grasp_backend']['backend'] == 'mock'
         assert health['digital_twin']['backend'] == 'test_passing_mujoco'
         assert health['digital_twin']['joint_state_age_sec'] is None
@@ -1153,7 +1347,11 @@ def test_server_serves_schema_v2_health_sync_predict_and_simulate():
             {'encoding': 'mock', 'max_candidates': 1},
         )
         assert predict['ok'] is True
+        assert predict['backend'] == 'mock'
+        assert predict['protocol_version'] == 2
+        assert predict['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
         assert len(predict['candidates']) == 1
+        assert predict['diagnostics'] == {}
 
         sim = _json_post(
             base_url + '/simulate_grasp',

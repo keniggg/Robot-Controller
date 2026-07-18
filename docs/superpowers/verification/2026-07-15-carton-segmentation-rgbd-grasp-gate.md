@@ -216,12 +216,12 @@ contact/lift log, or viewer output is claimed.
 
 Run these commands only after the combined code is present on WSL. Do not add any mock flag.
 
-### 8.1 Synchronize the old WSL checkout and start the combined server
+### 8.1 Verify/synchronize the WSL checkout and start the combined server
 
-The currently reachable WSL endpoint is confirmed to be the old GraspNet-only service.
-Before starting acceptance, preserve any unknown WSL-local changes and synchronize the
-complete checkout to the approved feature version. Do not copy only the HTTP server file.
-Record the exact WSL commit and dirty status:
+Before every acceptance, preserve any unknown WSL-local changes and verify the complete
+checkout against the approved feature version. If the health/routes check identifies an old
+GraspNet-only service, synchronize the complete checkout first; do not copy only the HTTP
+server file. Record the exact WSL commit and dirty status:
 
 ```bash
 cd ~/grasp6d_ws/Robot-Controller
@@ -533,3 +533,88 @@ Until all five are recorded, keep the arm powered off or motion-disabled, keep
 `allow_execution_on_error=false`, and do not call the real-arm execution service.
 
 **REAL-ARM AUTHORIZATION: BLOCKED**
+
+## 12. 2026-07-17 offline enhancement addendum
+
+This addendum records the approved pure-GraspNet input enhancement and strict pose-contract
+hardening performed after the historical evidence above. The tested baseline was feature
+worktree HEAD `53c7d81` plus the reviewed working-tree changes. The arm remained powered
+off, hardware serial devices remained disconnected, and no ROS graph, camera, WSL endpoint
+or real-arm service was started or contacted during this acceptance.
+
+The focused regression used the isolated offline Catkin overlay and disabled bytecode/cache
+output:
+
+```bash
+source /tmp/alicia-offline-catkin-20260717/devel/setup.bash
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m pytest -p no:cacheprovider \
+  src/alicia_flexible_grasp_supervisor/tests/test_remote_grasp6d_client.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_gripper_geometry.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_remote_grasp6d_node.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_grasp_task_sequence.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_moveit_planner_pose_feedback.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_motion_gateway_controller_start.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_mujoco_digital_twin_client.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_graspnet_baseline_server_protocol.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_mujoco_digital_twin_server_protocol.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_rgbd_snapshot.py \
+  src/alicia_flexible_grasp_supervisor/tests/test_graspnet_input_context.py -q
+```
+
+Result: `652 passed, 1 skipped, 3 warnings in 8.47 seconds`. The full package command was:
+
+```bash
+source /tmp/alicia-offline-catkin-20260717/devel/setup.bash
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m pytest -p no:cacheprovider \
+  src/alicia_flexible_grasp_supervisor/tests -q
+```
+
+Result: `868 passed, 1 skipped, 3 warnings in 16.17 seconds`. The skip remains the explicit
+real-MuJoCo smoke case; the three warnings are existing `rospy.warn` deprecation warnings.
+HTTP protocol cases used temporary `127.0.0.1` listeners only and did not contact WSL or an
+external network. `grasp_params.yaml` safe-load/default assertions and `git diff --check`
+also passed.
+
+The new offline evidence covers:
+
+- immutable three-frame RGB-D-mask-object snapshots, bounded inference/completion age,
+  replay/future rejection, median/MAD filtering and restricted internal-hole filling;
+- pure GraspNet `masked_target`, `context_roi`, and permanently diagnostic-only
+  `full_scene` inputs with no automatic fallback or OBB/PCA/top-down candidate synthesis;
+- exact identity/`Rz(180°)` parallel-jaw symmetry and end-to-end candidate/variant lineage;
+- startup and runtime lockout of position/orientation fallback, non-exact symmetry lists,
+  zero-point or zero-fraction input gates, and non-`opencv_optical` candidate frames;
+- strict finite/right-handed orientation, discrete depth bins, fixed `Ry(+90°)`, and
+  `tool0 = center + depth * tool(+Z)` across all four execution stages;
+- a single exact snapshot `T_base_optical`, derived immutable `T_base_camera_link`, shared
+  audit/selection transforms, and production `opencv_optical` convention lockout;
+- CAD-backed Link6 palm and Link7/Link8 finger boxes with conservative six-face margins;
+- mandatory strict-JSON planning audit with atomic replacement, SHA-256, every raw
+  candidate/identity/`Rz(180°)` row, selected lineage and a bounded ROS summary;
+- exception-complete per-variant audit rows for snapshot pose, analytical geometry, target
+  filter, strict reachability and rank failures, with exact lineage and exactly one matching
+  selected candidate required for valid plans;
+- a cached-only strict-pose execution service for rich-plan pregrasp, with no `plan()`,
+  `go()` or orientation/position fallback on cache absence or mismatch;
+- mandatory MuJoCo execution audit binding request, payload, response and echoed `plan_id`,
+  with both gate flags required to be exact boolean `true`, strict JSON required throughout,
+  audit-path aliasing forbidden, and write failures blocking physical motion;
+- the combined WSL server's self-describing `/health` and `/predict` protocol, including
+  exact v2 candidate fields, complete malformed-request envelopes, detached
+  raw/NMS/collision/returned diagnostics, and client-side rejection of old/malformed
+  protocol envelopes or hidden non-standard JSON constants;
+- legacy visualization publication before the latched rich execution authority, so a legacy
+  publisher failure cannot transiently expose a valid executable plan.
+
+This addendum does not accept `context_roi` for production. A same-scene real D405 + updated
+WSL GraspNet A/B against the default `masked_target`, followed by the existing real MuJoCo
+gates, is still mandatory. `full_scene` remains diagnostic-only. No real-arm execution is
+authorized by these offline results.
+
+Sections 6 and 8.1 above preserve the 2026-07-16 old-endpoint checkpoint. The user later
+reported synchronizing the approved WSL server files and supplied a startup line identifying
+both `graspnet_baseline` and `mujoco` backends. That startup log supersedes the manual's old
+endpoint wording but is not a replacement for a freshly recorded combined `/health`, matched
+plan simulation, deliberate failure matrix, or the real-camera A/B acceptance.
+
+**2026-07-17 REAL-ARM AUTHORIZATION: BLOCKED**

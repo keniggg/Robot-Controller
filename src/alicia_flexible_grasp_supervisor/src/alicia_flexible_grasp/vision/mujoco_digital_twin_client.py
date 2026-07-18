@@ -305,6 +305,18 @@ def validate_mujoco_gate_response(response, expected_plan_id, min_score):
             'WSL_UNAVAILABLE',
             'MuJoCo response must be a JSON object',
         )
+    try:
+        # Python's JSON decoder accepts NaN/Infinity by default.  Re-check the
+        # complete response here as a second trust boundary so an in-process
+        # client, test double, or future transport cannot authorize motion
+        # with a non-standard JSON value hidden in an otherwise valid object.
+        json.dumps(response, allow_nan=False)
+    except (TypeError, ValueError, OverflowError):
+        return MujocoGateValidationResult(
+            False,
+            'WSL_UNAVAILABLE',
+            'MuJoCo response must be fully strict-JSON serializable',
+        )
     echoed_id = response.get('plan_id')
     if (
         not isinstance(expected_plan_id, str)
@@ -400,6 +412,12 @@ def validate_mujoco_digital_twin_url(server_url):
     return normalized
 
 
+def _reject_nonstandard_json_constant(value):
+    raise ValueError(
+        'MuJoCo response contains non-standard JSON constant %s' % value
+    )
+
+
 class MujocoDigitalTwinClient:
     def __init__(self, server_url, timeout_sec=5.0):
         self.server_url = validate_mujoco_digital_twin_url(server_url)
@@ -427,7 +445,10 @@ class MujocoDigitalTwinClient:
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:
-                return json.loads(response.read().decode('utf-8'))
+                return json.loads(
+                    response.read().decode('utf-8'),
+                    parse_constant=_reject_nonstandard_json_constant,
+                )
         except urllib.error.HTTPError as exc:
             body = exc.read().decode('utf-8', errors='replace')
             raise RuntimeError('mujoco digital twin HTTP %s: %s' % (exc.code, body)) from exc

@@ -439,5 +439,61 @@ def test_validate_mujoco_gate_response_rejects_malformed_response(response):
     assert result.code == 'WSL_UNAVAILABLE'
 
 
+@pytest.mark.parametrize(
+    'nonfinite',
+    [float('nan'), float('inf'), float('-inf')],
+    ids=('nan', 'positive-infinity', 'negative-infinity'),
+)
+def test_validate_mujoco_gate_response_rejects_nonfinite_hidden_extra(
+    nonfinite,
+):
+    response = _passing_response()
+    response['unexpected_diagnostic'] = nonfinite
+
+    result = client_module.validate_mujoco_gate_response(
+        response,
+        '0123456789abcdef01234567',
+        80,
+    )
+
+    assert not result.ok
+    assert result.code == 'WSL_UNAVAILABLE'
+    assert 'strict-JSON' in result.reason
+
+
+@pytest.mark.parametrize(
+    'constant',
+    ('NaN', 'Infinity', '-Infinity'),
+)
+def test_http_client_rejects_nonstandard_json_constants(monkeypatch, constant):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return (
+                '{"plan_id":"plan","score":95,'
+                '"simulation_ok":true,"ik_success":true,'
+                '"collision_free":true,"contact_success":true,'
+                '"lift_success":true,"unexpected":%s}' % constant
+            ).encode('utf-8')
+
+    monkeypatch.setattr(
+        client_module.urllib.request,
+        'urlopen',
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    client = client_module.MujocoDigitalTwinClient(
+        'http://127.0.0.1:8000',
+        timeout_sec=0.01,
+    )
+
+    with pytest.raises(ValueError, match='non-standard JSON constant'):
+        client.simulate_grasp({'schema_version': 2})
+
+
 if __name__ == '__main__':
     unittest.main()

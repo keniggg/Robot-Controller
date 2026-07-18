@@ -456,6 +456,366 @@ def test_wait_for_samples_blocks_until_three_complete_entries_arrive():
     assert len(samples) == 3
 
 
+def test_request_collector_accumulates_three_fresh_one_hz_samples_past_shared_retention():
+    source_now_ns = [1_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    admitted = [threading.Event() for _index in range(3)]
+    sample_from_entry = buffer._sample_from_entry
+
+    def record_admission(entry, require_mask):
+        result = sample_from_entry(entry, require_mask)
+        admitted[(int(entry['stamp_ns']) - 1_000_000_000) // 1_000_000_000].set()
+        return result
+
+    buffer._sample_from_entry = record_admission
+
+    def publish():
+        for index in range(3):
+            stamp_ns = 1_000_000_000 + index * 1_000_000_000
+            source_now_ns[0] = stamp_ns
+            monotonic_now[0] = 10.0 + index
+            stamp = stamp_ns * 1e-9
+            buffer.update_color(color, stamp, 'camera_link')
+            buffer.update_depth(depth, stamp, 'camera_link')
+            source_now_ns[0] = stamp_ns + 800_000_000
+            monotonic_now[0] = 10.8 + index
+            buffer.update_mask(mask, stamp, 'camera_link')
+            buffer.update_object(detected, stamp)
+            assert admitted[index].wait(1.0)
+
+    thread = threading.Thread(target=publish)
+    thread.start()
+    samples = buffer.wait_for_samples(
+        3,
+        4.0,
+        require_mask=True,
+        max_age_sec=0.35,
+        collection_span_sec=3.0,
+        max_inference_latency_sec=1.2,
+    )
+    thread.join()
+
+    assert [item.stamp_ns for item in samples] == [
+        1_000_000_000,
+        2_000_000_000,
+        3_000_000_000,
+    ]
+    assert 1_000_000_000 not in buffer._entries
+
+
+def test_request_collector_enforces_bounded_source_stamp_span():
+    source_now_ns = [1_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    offsets_ns = (0, 1_700_000_000, 3_400_000_000)
+    admitted = [threading.Event() for _offset in offsets_ns]
+    sample_from_entry = buffer._sample_from_entry
+
+    def record_admission(entry, require_mask):
+        result = sample_from_entry(entry, require_mask)
+        stamp_offset_ns = int(entry['stamp_ns']) - 1_000_000_000
+        admitted[offsets_ns.index(stamp_offset_ns)].set()
+        return result
+
+    buffer._sample_from_entry = record_admission
+
+    def publish():
+        for index, offset_ns in enumerate(offsets_ns):
+            stamp_ns = 1_000_000_000 + offset_ns
+            source_now_ns[0] = stamp_ns
+            monotonic_now[0] = 10.0 + index * 1.7
+            stamp = stamp_ns * 1e-9
+            buffer.update_color(color, stamp, 'camera_link')
+            buffer.update_depth(depth, stamp, 'camera_link')
+            buffer.update_object(detected, stamp)
+            assert admitted[index].wait(1.0)
+        monotonic_now[0] = 14.1
+        buffer.update_joints([0.0] * 6)
+
+    thread = threading.Thread(target=publish)
+    thread.start()
+    samples = buffer.wait_for_samples(
+        3,
+        4.0,
+        require_mask=False,
+        max_age_sec=0.35,
+        collection_span_sec=3.0,
+    )
+    thread.join()
+
+    assert samples == []
+
+
+def test_request_collector_invalidates_same_stamp_mask_updated_to_empty():
+    source_now_ns = [1_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    color = np.zeros((20, 30, 3), dtype=np.uint8)
+    depth = np.full((20, 30), 2200, dtype=np.uint16)
+    mask = stable_mask()
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=5,
+        bbox_y=4,
+        bbox_width=20,
+        bbox_height=12,
+    )
+    buffer.update_joints([0.0] * 6)
+    first_admitted = threading.Event()
+    second_admitted = threading.Event()
+    sample_from_entry = buffer._sample_from_entry
+
+    def record_admission(entry, require_mask):
+        result = sample_from_entry(entry, require_mask)
+        if int(entry['stamp_ns']) == 1_000_000_000:
+            first_admitted.set()
+        if int(entry['stamp_ns']) == 2_000_000_000:
+            second_admitted.set()
+        return result
+
+    buffer._sample_from_entry = record_admission
+
+    def publish():
+        buffer.update_color(color, 1.0, 'camera_link')
+        buffer.update_depth(depth, 1.0, 'camera_link')
+        buffer.update_mask(mask, 1.0, 'camera_link')
+        buffer.update_object(detected, 1.0)
+        assert first_admitted.wait(1.0)
+        monotonic_now[0] = 10.1
+        buffer.update_mask(np.zeros_like(mask), 1.0, 'camera_link')
+        source_now_ns[0] = 2_000_000_000
+        monotonic_now[0] = 11.0
+        buffer.update_color(color, 2.0, 'camera_link')
+        buffer.update_depth(depth, 2.0, 'camera_link')
+        buffer.update_mask(mask, 2.0, 'camera_link')
+        buffer.update_object(detected, 2.0)
+        assert second_admitted.wait(1.0)
+        source_now_ns[0] = 3_000_000_000
+        monotonic_now[0] = 12.0
+        buffer.update_color(color, 3.0, 'camera_link')
+        buffer.update_depth(depth, 3.0, 'camera_link')
+        buffer.update_mask(mask, 3.0, 'camera_link')
+        buffer.update_object(detected, 3.0)
+
+    thread = threading.Thread(target=publish)
+    thread.start()
+    samples = buffer.wait_for_samples(
+        2,
+        3.0,
+        require_mask=True,
+        max_age_sec=0.35,
+        collection_span_sec=3.0,
+    )
+    thread.join()
+
+    assert [item.stamp_ns for item in samples] == [2_000_000_000, 3_000_000_000]
+    assert all(np.any(item.object_mask) for item in samples)
+
+
+def test_buffer_accepts_bounded_delayed_inference_immediately_after_completion():
+    source_now_ns = [1_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, 1.0, 'camera_link')
+    buffer.update_depth(depth, 1.0, 'camera_link')
+    source_now_ns[0] = 1_890_000_000
+    monotonic_now[0] = 10.89
+    buffer.update_mask(mask, 1.0, 'camera_link')
+    buffer.update_object(detected, 1.0)
+
+    samples = buffer.wait_for_samples(
+        1,
+        0.01,
+        require_mask=True,
+        max_age_sec=0.35,
+        max_inference_latency_sec=1.2,
+    )
+
+    assert [item.stamp_ns for item in samples] == [1_000_000_000]
+
+
+def test_complete_empty_mask_is_never_admitted_as_a_sample():
+    source_now_ns = [1_100_000_000]
+    monotonic_now = [10.1]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, 1.0, 'camera_link')
+    buffer.update_depth(depth, 1.0, 'camera_link')
+    buffer.update_mask(np.zeros((3, 4), dtype=np.uint8), 1.0, 'camera_link')
+    buffer.update_object(detected, 1.0)
+
+    assert buffer.wait_for_samples(
+        1,
+        0.0,
+        require_mask=True,
+        max_age_sec=0.35,
+        max_inference_latency_sec=1.2,
+    ) == []
+    assert buffer.mask_timeout_failure(1, 0.35, 1.2)[0] == 'MASK_EMPTY'
+
+
+def test_pre_request_duplicate_does_not_refresh_completion_age():
+    source_now_ns = [1_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, 1.0, 'camera_link')
+    buffer.update_depth(depth, 1.0, 'camera_link')
+    buffer.update_mask(mask, 1.0, 'camera_link')
+    buffer.update_object(detected, 1.0)
+    source_now_ns[0] = 1_300_000_000
+    monotonic_now[0] = 10.3
+    buffer.update_mask(mask, 1.0, 'camera_link')
+    monotonic_now[0] = 10.351
+
+    assert buffer.wait_for_samples(
+        1,
+        0.0,
+        require_mask=True,
+        max_age_sec=0.35,
+        max_inference_latency_sec=1.2,
+    ) == []
+
+
+def test_buffer_rejects_inference_that_completes_over_latency_limit():
+    source_now_ns = [1_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, 1.0, 'camera_link')
+    buffer.update_depth(depth, 1.0, 'camera_link')
+    source_now_ns[0] = 2_210_000_000
+    monotonic_now[0] = 11.21
+    buffer.update_mask(mask, 1.0, 'camera_link')
+    buffer.update_object(detected, 1.0)
+
+    assert buffer.wait_for_samples(
+        1,
+        0.0,
+        require_mask=True,
+        max_age_sec=0.35,
+        max_inference_latency_sec=1.2,
+    ) == []
+
+
+def test_buffer_rejects_completed_sample_after_post_completion_age_limit():
+    source_now_ns = [1_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, 1.0, 'camera_link')
+    buffer.update_depth(depth, 1.0, 'camera_link')
+    source_now_ns[0] = 1_800_000_000
+    monotonic_now[0] = 10.8
+    buffer.update_mask(mask, 1.0, 'camera_link')
+    buffer.update_object(detected, 1.0)
+    monotonic_now[0] = 11.151
+
+    assert buffer.wait_for_samples(
+        1,
+        0.0,
+        require_mask=True,
+        max_age_sec=0.35,
+        max_inference_latency_sec=1.2,
+    ) == []
+
+
 def test_buffer_keeps_adjacent_large_epoch_nanosecond_stamps_distinct():
     class Stamp:
         def __init__(self, secs, nsecs):
@@ -544,12 +904,26 @@ def test_buffer_rejects_replayed_source_stamp_received_now():
         bbox_height=3,
     )
     buffer.update_joints([0.0] * 6)
-    stale_stamp = (now_ns - 500_000_000) * 1e-9
+    stale_stamp = (now_ns - 1_210_000_000) * 1e-9
     buffer.update_color(color, stale_stamp, 'camera_link')
     buffer.update_depth(depth, stale_stamp, 'camera_link')
     buffer.update_object(detected, stale_stamp)
 
-    assert buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=0.35) == []
+    assert buffer.wait_for_samples(
+        1,
+        0.01,
+        require_mask=False,
+        max_age_sec=0.35,
+        max_inference_latency_sec=1.2,
+    ) == []
+    assert buffer.wait_for_samples(
+        1,
+        0.01,
+        require_mask=False,
+        max_age_sec=0.35,
+        collection_span_sec=3.0,
+        max_inference_latency_sec=1.2,
+    ) == []
 
 
 def test_mask_timeout_is_missing_when_buffer_has_never_observed_a_mask():
@@ -614,15 +988,15 @@ def test_nonempty_mask_timeout_marker_survives_monotonic_prune():
     assert buffer.mask_timeout_failure(3, max_age_sec=0.35)[0] == 'MASK_STALE'
 
 
-def test_unlimited_source_age_timeout_reason_does_not_claim_zero_second_limit():
+def test_unlimited_completion_age_timeout_reason_does_not_claim_zero_second_limit():
     buffer = synchronized_buffer_at(1_700_000_000_500_000_000)
     buffer.update_mask(np.ones((3, 4), dtype=np.uint8) * 255, 1.0, 'camera_link')
 
     code, reason = buffer.mask_timeout_failure(3, max_age_sec=0.0)
 
     assert code == 'MASK_STALE'
-    assert '0.000 s source-age limit' not in reason
-    assert 'source age is unlimited' in reason
+    assert '0.000 s post-completion age limit' not in reason
+    assert 'post-completion age is unlimited' in reason
 
 
 def test_buffer_accepts_fresh_source_stamp_from_injected_clock():
