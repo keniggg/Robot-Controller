@@ -618,6 +618,15 @@ def test_51_mm_required_opening_is_rejected_even_when_model_width_is_small():
     assert result.required_open_width_m == pytest.approx(0.051)
 
 
+def test_exactly_50_mm_required_opening_remains_inside_physical_limit():
+    args = candidate_fixture(obb_size_xyz_m=np.array([0.040, 0.046, 0.060]))
+
+    result = evaluate_candidate(**args)
+
+    assert result.ok
+    assert result.required_open_width_m == pytest.approx(0.050)
+
+
 def test_fixed_50_mm_limit_cannot_be_bypassed_by_config_tolerance():
     configured_above_physical_limit = GripperGeometry(
         max_inner_gap_m=0.0504,

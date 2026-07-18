@@ -9,7 +9,11 @@ for path in (ROOT, ROOT / 'src'):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from alicia_flexible_grasp.grasp.grasp6d_candidate_selector import Grasp6DCandidate, select_best_grasp6d_candidate
+from alicia_flexible_grasp.grasp.grasp6d_candidate_selector import (
+    Grasp6DCandidate,
+    rank_grasp6d_candidates_for_strict_check,
+    select_best_grasp6d_candidate,
+)
 from alicia_flexible_grasp.grasp.gripper_geometry import (
     CandidateGateResult,
     candidate_rank_key,
@@ -37,6 +41,43 @@ class Grasp6DCandidateSelectionTest(unittest.TestCase):
         selected = select_best_grasp6d_candidate(candidates, tactile_weight=0.35)
 
         self.assertIs(selected, candidates[1])
+
+    def test_pre_moveit_ranking_keeps_unreachable_candidates_for_strict_check(self):
+        candidates = [
+            Grasp6DCandidate(
+                score=0.95,
+                collision_free=True,
+                reachable=False,
+                tactile_score=1.0,
+            ),
+            Grasp6DCandidate(
+                score=0.80,
+                collision_free=True,
+                reachable=True,
+                tactile_score=1.0,
+            ),
+            Grasp6DCandidate(
+                score=0.99,
+                collision_free=False,
+                reachable=True,
+                tactile_score=1.0,
+            ),
+        ]
+
+        ranked = rank_grasp6d_candidates_for_strict_check(candidates)
+
+        self.assertEqual(ranked, (candidates[0], candidates[1]))
+
+    def test_pre_moveit_ranking_uses_input_order_as_deterministic_tie_break(self):
+        candidates = [
+            Grasp6DCandidate(score=0.8, tactile_score=0.5),
+            Grasp6DCandidate(score=0.8, tactile_score=0.5),
+        ]
+
+        ranked = rank_grasp6d_candidates_for_strict_check(candidates)
+
+        self.assertIs(ranked[0], candidates[0])
+        self.assertIs(ranked[1], candidates[1])
 
     def test_analytical_rank_places_motion_before_model_score(self):
         slow_high_score = CandidateGateResult(
