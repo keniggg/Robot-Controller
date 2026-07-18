@@ -49,7 +49,7 @@ class FakeRate:
 
 
 class FakeRospy:
-    def __init__(self, camera_cfg=None):
+    def __init__(self, camera_cfg=None, perception_cfg=None):
         self.shutdown = False
         self.sleep_count = 0
         self.publishers = []
@@ -57,7 +57,15 @@ class FakeRospy:
         self.errors = []
         self.warnings = []
         self.infos = []
-        self.Time = type('FakeTime', (), {'now': staticmethod(lambda: 'now')})
+        self.time_values = ['now']
+        self.time_calls = 0
+
+        def now():
+            index = min(self.time_calls, len(self.time_values) - 1)
+            self.time_calls += 1
+            return self.time_values[index]
+
+        self.Time = type('FakeTime', (), {'now': staticmethod(now)})
         self.camera_cfg = {
             'width': 4,
             'height': 3,
@@ -68,9 +76,18 @@ class FakeRospy:
         }
         if camera_cfg:
             self.camera_cfg.update(camera_cfg)
+        self.perception_cfg = {
+            'depth_min_m': 0.03,
+            'depth_max_m': 2.0,
+        }
+        if perception_cfg:
+            self.perception_cfg.update(perception_cfg)
 
     def get_param(self, name, default=None):
-        return {'/camera': self.camera_cfg}.get(name, default)
+        return {
+            '/camera': self.camera_cfg,
+            '/perception': self.perception_cfg,
+        }.get(name, default)
 
     def set_param(self, name, value):
         self.params[name] = value
@@ -102,10 +119,19 @@ class FakeRospy:
 class FailingThenSimulatedCamera:
     created = []
 
-    def __init__(self, width, height, fps, align_depth_to_color, simulate=False):
+    def __init__(
+        self,
+        width,
+        height,
+        fps,
+        align_depth_to_color,
+        simulate=False,
+        depth_filter_cfg=None,
+    ):
         self.width = int(width)
         self.height = int(height)
         self.simulate = bool(simulate)
+        self.depth_filter_cfg = dict(depth_filter_cfg or {})
         self.started = False
         self.stopped = False
         FailingThenSimulatedCamera.created.append(self)
@@ -128,10 +154,19 @@ class FailingThenSimulatedCamera:
 class FailingThenRestartedCamera:
     created = []
 
-    def __init__(self, width, height, fps, align_depth_to_color, simulate=False):
+    def __init__(
+        self,
+        width,
+        height,
+        fps,
+        align_depth_to_color,
+        simulate=False,
+        depth_filter_cfg=None,
+    ):
         self.width = int(width)
         self.height = int(height)
         self.simulate = bool(simulate)
+        self.depth_filter_cfg = dict(depth_filter_cfg or {})
         self.index = len(FailingThenRestartedCamera.created)
         self.started = False
         self.stopped = False
@@ -157,10 +192,19 @@ class FailingThenRestartedCamera:
 class StartupFailThenRestartedCamera:
     created = []
 
-    def __init__(self, width, height, fps, align_depth_to_color, simulate=False):
+    def __init__(
+        self,
+        width,
+        height,
+        fps,
+        align_depth_to_color,
+        simulate=False,
+        depth_filter_cfg=None,
+    ):
         self.width = int(width)
         self.height = int(height)
         self.simulate = bool(simulate)
+        self.depth_filter_cfg = dict(depth_filter_cfg or {})
         self.index = len(StartupFailThenRestartedCamera.created)
         self.started = False
         self.stopped = False
@@ -184,10 +228,19 @@ class StartupFailThenRestartedCamera:
 class CameraWithDepthScale:
     created = []
 
-    def __init__(self, width, height, fps, align_depth_to_color, simulate=False):
+    def __init__(
+        self,
+        width,
+        height,
+        fps,
+        align_depth_to_color,
+        simulate=False,
+        depth_filter_cfg=None,
+    ):
         self.width = int(width)
         self.height = int(height)
         self.simulate = bool(simulate)
+        self.depth_filter_cfg = dict(depth_filter_cfg or {})
         self.depth_scale = 0.0001
         self.started = False
         CameraWithDepthScale.created.append(self)
@@ -198,6 +251,19 @@ class CameraWithDepthScale:
 
     def stop(self):
         pass
+
+
+class SinglePairCamera(CameraWithDepthScale):
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        SinglePairCamera.created.append(self)
+
+    def read(self):
+        color = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        depth = np.ones((self.height, self.width), dtype=np.uint16)
+        return color, depth
 
 
 class CameraNodeRecoveryTest(unittest.TestCase):
@@ -212,6 +278,45 @@ class CameraNodeRecoveryTest(unittest.TestCase):
         module.CameraNode()
 
         self.assertEqual(fake_rospy.params['/camera/depth_scale'], 0.0001)
+
+    def test_camera_node_passes_filter_and_perception_depth_limits(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(
+            camera_cfg={'depth_filter': {
+                'spatial_magnitude': 1,
+                'depth_min_m': 0.05,
+            }},
+            perception_cfg={'depth_min_m': 0.04, 'depth_max_m': 1.5},
+        )
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = CameraWithDepthScale
+
+        module.CameraNode()
+
+        self.assertEqual(CameraWithDepthScale.created[-1].depth_filter_cfg, {
+            'spatial_magnitude': 1,
+            'depth_min_m': 0.05,
+            'depth_max_m': 1.5,
+        })
+
+    def test_published_color_and_depth_share_one_acquisition_stamp(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        fake_rospy.time_values = ['pair-stamp', 'separate-stamp']
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        node.spin()
+
+        self.assertEqual(node.pub_color.messages[-1].header.stamp, 'pair-stamp')
+        self.assertEqual(node.pub_depth.messages[-1].header.stamp, 'pair-stamp')
+        self.assertEqual(fake_rospy.time_calls, 1)
 
     def test_read_timeout_falls_back_without_exiting(self):
         module = load_camera_node()

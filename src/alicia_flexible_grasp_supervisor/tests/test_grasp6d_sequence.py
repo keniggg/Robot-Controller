@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
+import importlib.util
 import math
 import pathlib
 import sys
 import unittest
 
 from geometry_msgs.msg import PoseStamped
+from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan
 from tf.transformations import quaternion_from_euler
 
 
@@ -14,6 +16,13 @@ for path in (ROOT, ROOT / 'src'):
         sys.path.insert(0, str(path))
 
 from alicia_flexible_grasp.grasp.grasp6d_sequence import make_grasp_sequence_from_grasp_pose
+
+TASK_SCRIPT = ROOT / 'scripts' / 'grasp_task_node.py'
+task_spec = importlib.util.spec_from_file_location(
+    'grasp_task_node_for_sequence', str(TASK_SCRIPT)
+)
+grasp_task_node = importlib.util.module_from_spec(task_spec)
+task_spec.loader.exec_module(grasp_task_node)
 
 
 class Grasp6DSequenceTest(unittest.TestCase):
@@ -75,6 +84,27 @@ class Grasp6DSequenceTest(unittest.TestCase):
         self.assertAlmostEqual(plan.pregrasp.pose.position.x, 0.4)
         self.assertAlmostEqual(plan.pregrasp.pose.position.z, 0.12)
         self.assertAlmostEqual(plan.approach.pose.position.z, 0.185)
+
+    def test_rich_plan_fixed_order_is_split_into_independent_stamped_poses(self):
+        plan = Grasp6DPlan()
+        plan.header.frame_id = 'base_link'
+        plan.valid = True
+        plan.plan_id = 'fixed-order'
+        plan.poses = [self._pose(x=float(index)).pose for index in range(4)]
+
+        pregrasp, approach, grasp, lift = grasp_task_node.split_rich_plan_poses(plan)
+
+        self.assertEqual(
+            [
+                pregrasp.pose.position.x,
+                approach.pose.position.x,
+                grasp.pose.position.x,
+                lift.pose.position.x,
+            ],
+            [0.0, 1.0, 2.0, 3.0],
+        )
+        pregrasp.pose.position.x = 99.0
+        self.assertEqual(plan.poses[0].position.x, 0.0)
 
 
 if __name__ == '__main__':

@@ -27,6 +27,40 @@ class CameraOverlayTest(unittest.TestCase):
         self.assertTrue(np.any(drawn[15:40, 20] != 0))
         self.assertTrue(np.all(rgb == 0))
 
+    def test_detection_overlay_draws_two_pixel_instance_contour(self):
+        rgb = np.zeros((60, 80, 3), dtype=np.uint8)
+        contour = np.array([[20, 15], [50, 15], [50, 40], [20, 40]], dtype=np.int32)
+        drawn = CameraWidget._draw_detection_overlay(
+            rgb,
+            {
+                'bbox': (20, 15, 30, 25),
+                'label': 'carton',
+                'color': (80, 255, 120),
+                'contour_xy': contour,
+            },
+        )
+        self.assertTrue(np.any(drawn[15, 20:51] != 0))
+        self.assertTrue(np.any(drawn[16, 20:51] != 0))
+        self.assertTrue(np.all(rgb == 0))
+
+    def test_detection_overlay_draws_contour_away_from_bbox(self):
+        rgb = np.zeros((60, 80, 3), dtype=np.uint8)
+        contour = np.array([[20, 15], [50, 15], [50, 40], [20, 40]], dtype=np.int32)
+
+        drawn = CameraWidget._draw_detection_overlay(
+            rgb,
+            {
+                'bbox': (5, 5, 70, 50),
+                'label': '',
+                'color': (80, 255, 120),
+                'contour_xy': contour,
+            },
+        )
+
+        self.assertTrue(np.any(drawn[15, 20:51] != 0))
+        self.assertTrue(np.any(drawn[16, 20:51] != 0))
+        self.assertTrue(np.all(rgb == 0))
+
     def test_overlay_change_rebuilds_cached_color_pixmap(self):
         widget = CameraWidget.__new__(CameraWidget)
         widget._alive = True
@@ -43,6 +77,26 @@ class CameraOverlayTest(unittest.TestCase):
         )
 
         self.assertEqual(refreshed, [True])
+
+    def test_detection_overlay_copies_contour_points(self):
+        widget = CameraWidget.__new__(CameraWidget)
+        widget._alive = True
+        widget._last_color_rgb = None
+        widget._render_pixmaps = lambda: None
+        contour = np.array([[20, 15], [50, 15], [50, 40]], dtype=np.int64)
+
+        CameraWidget.set_detection_overlay(
+            widget,
+            (20, 15, 30, 25),
+            'carton',
+            (80, 255, 120),
+            contour,
+        )
+        contour[0] = (0, 0)
+
+        stored = widget._detection_overlay['contour_xy']
+        self.assertEqual(stored.dtype, np.int32)
+        self.assertEqual(tuple(stored[0]), (20, 15))
 
     def test_color_display_rgb_redraws_overlay_from_raw_frame(self):
         widget = CameraWidget.__new__(CameraWidget)

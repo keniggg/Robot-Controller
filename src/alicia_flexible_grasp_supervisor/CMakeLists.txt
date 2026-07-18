@@ -23,6 +23,8 @@ add_message_files(
   TactileFrame.msg
   TactileState.msg
   ObjectPose.msg
+  ObjectGeometry.msg
+  Grasp6DPlan.msg
   GraspState.msg
   SafetyState.msg
 )

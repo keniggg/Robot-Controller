@@ -64,7 +64,7 @@ class GraspTaskWidget(QtWidgets.QWidget):
     def start(self):
         try:
             rospy.wait_for_service('/grasp/start', timeout=1)
-            r=rospy.ServiceProxy('/grasp/start', StartGrasp)(True)
+            r=rospy.ServiceProxy('/grasp/start', StartGrasp)(execute=True)
             self.state.setText('启动结果：%s %s'%(r.success,r.message))
         except Exception as e:
             self.state.setText(str(e))

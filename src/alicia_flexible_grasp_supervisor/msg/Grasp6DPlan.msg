@@ -1,0 +1,10 @@
+std_msgs/Header header
+bool valid
+geometry_msgs/Pose[] poses
+float32 score
+float32 candidate_width_m
+float32 required_open_width_m
+alicia_flexible_grasp_supervisor/ObjectGeometry object_geometry
+string model_choice
+string plan_id
+string diagnostic

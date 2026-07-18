@@ -10,6 +10,10 @@ for path in (ROOT, ROOT / 'src'):
         sys.path.insert(0, str(path))
 
 from alicia_flexible_grasp.grasp.grasp6d_candidate_selector import Grasp6DCandidate, select_best_grasp6d_candidate
+from alicia_flexible_grasp.grasp.gripper_geometry import (
+    CandidateGateResult,
+    candidate_rank_key,
+)
 
 
 class Grasp6DCandidateSelectionTest(unittest.TestCase):
@@ -33,6 +37,37 @@ class Grasp6DCandidateSelectionTest(unittest.TestCase):
         selected = select_best_grasp6d_candidate(candidates, tactile_weight=0.35)
 
         self.assertIs(selected, candidates[1])
+
+    def test_analytical_rank_places_motion_before_model_score(self):
+        slow_high_score = CandidateGateResult(
+            True, '', '', 0.044, 0.002, 0.010, 1.0, 2.0, 0.002, '', 6
+        )
+        fast_low_score = CandidateGateResult(
+            True, '', '', 0.044, 0.002, 0.010, 1.0, 1.0, 0.002, '', 6
+        )
+
+        self.assertLess(
+            candidate_rank_key(fast_low_score, 0.10),
+            candidate_rank_key(slow_high_score, 0.99),
+        )
+
+    def test_failed_geometry_cannot_be_ranked_back_by_high_model_score(self):
+        failed = CandidateGateResult(
+            False,
+            'GRIPPER_TOO_NARROW',
+            'required opening exceeds 50 mm',
+            0.060,
+            0.0,
+            0.010,
+            1.0,
+            0.0,
+            0.0,
+            'jaw_width',
+            2,
+        )
+
+        with self.assertRaises(ValueError):
+            candidate_rank_key(failed, 1.0)
 
 
 if __name__ == '__main__':

@@ -178,6 +178,9 @@ class MoveItPlanner:
                     return cached_ok, cached_message
                 return False, 'linear execute failed: no matching Cartesian plan; %s' % target_text
 
+            # A new planning request supersedes every previously cached pose
+            # trajectory even when validation or planning below fails.
+            self._last_pose_plan = None
             current = self.manipulator.get_current_pose()
             current_pose = getattr(current, 'pose', current)
             distance = self._pose_position_distance(current_pose, pose)
@@ -207,6 +210,43 @@ class MoveItPlanner:
         except Exception as exc:
             self._last_pose_plan = None
             return False, 'Cartesian move exception: %s; %s' % (exc, target_text)
+
+    def execute_cached_strict_pose(self, pose_stamped_or_pose):
+        """Execute only the matching trajectory produced by strict pose planning.
+
+        This is deliberately separate from ``move_to_pose(execute=True)``.  It
+        never plans, calls ``go()``, or tries any fallback.  Callers must first
+        create the cache with ``move_to_pose(..., execute=False,
+        allow_fallbacks=False)``.
+        """
+        if not self.ready:
+            return False, self.error or 'MoveIt not ready'
+        pose = getattr(pose_stamped_or_pose, 'pose', pose_stamped_or_pose)
+        target_text = self._pose_xyz_text(pose)
+        try:
+            _cached, mismatch = self._matching_cached_strict_pose_plan(pose)
+            if mismatch:
+                return False, 'strict cached execute blocked: %s; %s' % (
+                    mismatch,
+                    target_text,
+                )
+            ok, message = self._execute_cached_pose_plan(
+                pose,
+                target_text,
+                required_kind='strict pose',
+            )
+            if message:
+                return ok, message
+            # The strict matcher above succeeded, so reaching this branch can
+            # only mean the cache changed before it could be claimed.
+            return False, (
+                'strict cached execute blocked: cached plan changed before execution; %s'
+                % target_text
+            )
+        except Exception as exc:
+            return False, 'strict cached execute exception: %s; %s' % (exc, target_text)
+        finally:
+            self._clear_targets()
 
     def _compute_cartesian_plan(self, pose):
         compute_path = self.manipulator.compute_cartesian_path
@@ -268,6 +308,8 @@ class MoveItPlanner:
         try:
             self.manipulator.set_joint_value_target(list(joints[:6]))
             if execute:
+                # Any arm motion invalidates the start state of a pose plan.
+                self._last_pose_plan = None
                 ok = self.manipulator.go(wait=True)
                 self.manipulator.stop()
                 gripper_ok = True
@@ -323,6 +365,10 @@ class MoveItPlanner:
             if ok:
                 self._last_pose_plan = None
             return bool(ok)
+        # Never retain an older trajectory after a newer plan attempt.  In
+        # particular, a failed strict re-check must not leave its predecessor
+        # executable.
+        self._last_pose_plan = None
         plan = self.manipulator.plan()
         ok = self._plan_success(plan)
         if ok and pose is not None:
@@ -397,6 +443,62 @@ class MoveItPlanner:
                 return None
         return cached
 
+    def _matching_cached_strict_pose_plan(self, pose):
+        cached = getattr(self, '_last_pose_plan', None)
+        if not cached:
+            return None, 'no cached pose plan'
+
+        kind = cached.get('kind')
+        if kind != 'strict pose':
+            return None, "cached plan kind %r is not 'strict pose'" % kind
+
+        plan = cached.get('plan')
+        if plan is None or not self._plan_success(plan):
+            return None, 'cached strict pose trajectory is empty'
+
+        target_xyz = self._pose_xyz_tuple(pose)
+        if target_xyz is None:
+            return None, 'target position is invalid'
+        cached_xyz = cached.get('xyz')
+        if not self._finite_tuple(cached_xyz, 3):
+            return None, 'cached strict pose position is invalid'
+
+        position_tolerance = max(
+            0.0,
+            float(getattr(self, 'cached_plan_position_tolerance_m', 0.002)),
+        )
+        position_delta = max(
+            abs(float(target) - float(planned))
+            for target, planned in zip(target_xyz, cached_xyz)
+        )
+        if position_delta > position_tolerance:
+            return None, (
+                'cached strict pose position mismatch %.6fm > %.6fm'
+                % (position_delta, position_tolerance)
+            )
+
+        target_quaternion = self._pose_quaternion_tuple(pose)
+        if target_quaternion is None:
+            return None, 'target orientation is invalid'
+        cached_quaternion = cached.get('quaternion')
+        if not self._finite_tuple(cached_quaternion, 4):
+            return None, 'cached strict pose orientation is invalid'
+        cached_norm = math.sqrt(sum(float(value) ** 2 for value in cached_quaternion))
+        if cached_norm <= 1e-9:
+            return None, 'cached strict pose orientation is invalid'
+        cached_quaternion = tuple(float(value) / cached_norm for value in cached_quaternion)
+        orientation_delta = self._quaternion_angle(cached_quaternion, target_quaternion)
+        orientation_tolerance = max(
+            0.0,
+            float(getattr(self, 'cached_plan_orientation_tolerance_rad', 0.02)),
+        )
+        if orientation_delta > orientation_tolerance:
+            return None, (
+                'cached strict pose orientation mismatch %.6frad > %.6frad'
+                % (orientation_delta, orientation_tolerance)
+            )
+        return cached, None
+
     def _cached_plan_metrics_text(self):
         cached = getattr(self, '_last_pose_plan', None) or {}
         metrics = cached.get('metrics') or {}
@@ -438,6 +540,8 @@ class MoveItPlanner:
         try:
             q = pose.orientation
             values = [float(q.x), float(q.y), float(q.z), float(q.w)]
+            if not all(math.isfinite(value) for value in values):
+                return None
             norm = math.sqrt(sum(value * value for value in values))
             if norm <= 1e-9:
                 return None
@@ -585,6 +689,15 @@ class MoveItPlanner:
     def _pose_xyz_tuple(pose):
         try:
             p = pose.position
-            return (float(p.x), float(p.y), float(p.z))
+            values = (float(p.x), float(p.y), float(p.z))
+            return values if all(math.isfinite(value) for value in values) else None
         except Exception:
             return None
+
+    @staticmethod
+    def _finite_tuple(values, expected_size):
+        try:
+            items = tuple(float(value) for value in values)
+        except (TypeError, ValueError):
+            return False
+        return len(items) == int(expected_size) and all(math.isfinite(value) for value in items)

@@ -6,13 +6,23 @@ DEFAULT_MODEL_PROFILES = {
     'original': {
         'display_name': 'YOLOv8 原模型',
         'model_path': 'yolov8n.pt',
+        'task': 'detect',
         'target_class_mode': 'description',
     },
     'carton': {
         'display_name': 'Carton 模型',
         'model_path': 'carton_model/best.pt',
+        'task': 'detect',
         'target_class_mode': 'fixed',
         'target_class': 'carton',
+    },
+    'carton_segment': {
+        'display_name': 'Carton 分割模型',
+        'model_path': 'carton_segment_model/best.pt',
+        'task': 'segment',
+        'target_class_mode': 'fixed',
+        'target_class': 'carton',
+        'require_instance_mask': True,
     },
 }
 
@@ -25,6 +35,12 @@ def normalize_model_profiles(perception_cfg):
         profile = deepcopy(dict(raw_profile or {}))
         mode = str(profile.get('target_class_mode', '')).strip().lower()
         model_path = str(profile.get('model_path', '')).strip()
+        task = str(profile.get('task', 'detect')).strip().lower()
+        if task not in ('detect', 'segment'):
+            raise ValueError('Invalid YOLO task for %s: %s' % (choice, task))
+        require_mask = bool(profile.get('require_instance_mask', task == 'segment'))
+        if require_mask and task != 'segment':
+            raise ValueError('require_instance_mask needs segment task for %s' % choice)
         if mode not in ('description', 'fixed'):
             raise ValueError('Invalid target_class_mode for %s: %s' % (choice, mode))
         if not model_path:
@@ -33,6 +49,8 @@ def normalize_model_profiles(perception_cfg):
             raise ValueError('Missing fixed target_class for %s' % choice)
         profile['display_name'] = str(profile.get('display_name', choice))
         profile['model_path'] = model_path
+        profile['task'] = task
+        profile['require_instance_mask'] = require_mask
         profile['target_class_mode'] = mode
         profile['target_class'] = str(profile.get('target_class', '')).strip()
         profiles[str(choice)] = profile

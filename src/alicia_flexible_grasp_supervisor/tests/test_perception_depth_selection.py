@@ -102,6 +102,19 @@ class PerceptionDepthSelectionTest(unittest.TestCase):
         self.assertAlmostEqual(z, 0.22, places=3)
         self.assertEqual(node._last_depth_source, 'center_roi')
 
+    def test_instance_mask_depth_excludes_nearer_bbox_background(self):
+        module = load_perception_node()
+        depth = np.full((40, 60), 5000, dtype=np.uint16)
+        depth[10:30, 20:40] = 2200
+        mask = np.zeros((40, 60), dtype=np.uint8)
+        mask[10:30, 20:40] = 255
+        node = make_node(module, depth)
+
+        z = module.PerceptionNode.depth_m_at_mask(node, mask)
+
+        self.assertAlmostEqual(z, 0.22, places=3)
+        self.assertEqual(node._last_depth_source, 'instance_mask')
+
     def test_ros_camera_link_projection_converts_from_opencv_optical(self):
         module = load_perception_node()
         node = module.PerceptionNode.__new__(module.PerceptionNode)

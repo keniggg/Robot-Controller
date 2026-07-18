@@ -1,10 +1,7 @@
 grasp:
   use_grasp6d_plan: true
   grasp6d_plan_topic: "/grasp_6d/plan"
-  # Manual 6D debugging needs time for operator/log confirmation. Execution
-  # still rejects the plan if the tracked object drifts too far.
-  grasp6d_plan_max_age_sec: 600.0
-  grasp6d_plan_max_object_drift_m: 0.02
+  grasp6d_enriched_plan_topic: "/grasp_6d/plan_enriched"
   pregrasp_distance_m: 0.08
   # The Alicia tool0 frame points through the fingertips along +Z. After the
   # GraspNet grasp frame is aligned to tool0, all approach offsets must use Z.
@@ -30,9 +27,9 @@ grasp:
   max_object_jump_m: 0.12
   object_jump_filter_window_sec: 4.0
   max_locked_target_refine_m: 0.06
-  # Eye-in-hand closed loop: reobserve the target at pregrasp, translate the
-  # remaining path from live RGB-D, and preserve the model-predicted 6D rotation.
-  visual_retarget_enabled: true
+  # Rich 6D poses are bound to one mask/OBB snapshot. Live perception is only
+  # a drift guard and must never translate or retarget the four execution poses.
+  visual_retarget_enabled: false
   visual_retarget_require_start_detection: true
   # Close-range YOLO confidence falls as the wrist partially occludes the
   # object. Keep the initial 0.50 gate for candidate generation, but allow the
@@ -84,6 +81,10 @@ gripper:
 
 grasp_6d:
   enabled: true
+  use_remote_grasp6d: true
+  plan_validity_sec: 2.0
+  target_max_drift_m: 0.02
+  target_observation_validity_sec: 1.5
   backend: "remote_graspnet_baseline"
   root: ""
   checkpoint_path: ""
@@ -97,6 +98,8 @@ grasp_6d:
   tactile_weight: 0.2
   remote:
     # Record independent gate results for the exact same WSL candidate batch.
+    # Full per-candidate rows are atomically written to this file.  The ROS
+    # topic stays bounded and carries only summary/path/hash/selected evidence.
     # This is planning-only diagnostics and never sends a motion command.
     gate_audit_enabled: true
     gate_audit_output_path: ~/.ros/grasp6d_gate_audit_latest.json
@@ -104,12 +107,59 @@ grasp_6d:
     timeout_sec: 30.0
     auto_request: false
     request_hz: 0.05
+    planning_snapshot_frames: 3
+    planning_snapshot_timeout_sec: 4.0
+    # A synchronized frame may spend bounded time in YOLO inference, but once
+    # RGB-D-mask-object is complete it must be admitted promptly.  Admitted
+    # frames may then accumulate within max_span for a 1-2 Hz three-frame window.
+    planning_snapshot_max_inference_latency_sec: 1.2
+    planning_snapshot_max_age_sec: 0.35
+    planning_snapshot_max_span_sec: 3.0
+    planning_mask_min_iou: 0.85
+    planning_mask_max_centroid_shift_px: 5.0
+    planning_max_joint_delta_rad: 0.01
+    mask_erosion_px: 2
+    mask_internal_hole_max_area_px: 25
+    depth_mad_scale: 3.5
+    depth_mad_absolute_floor_m: 0.002
+    # Pure-GraspNet input A/B switch. These modes only change the RGB-D points
+    # sent to the existing GraspNet server; they never synthesize OBB/top-down
+    # candidates. Keep masked_target as the production default until
+    # context_roi has passed live A/B acceptance. There is no automatic mode
+    # fallback. full_scene is permanently diagnostic-only and can never
+    # publish an executable plan.
+    graspnet_input_mode: "masked_target" # masked_target | context_roi | full_scene
+    graspnet_input_context_margin_px: 24.0
+    graspnet_input_context_expand_ratio: 0.30
+    graspnet_input_context_max_margin_px: 64.0
+    graspnet_input_target_guard_px: 2
+    graspnet_input_support_band_m: 0.006
+    graspnet_input_min_target_points: 120
+    graspnet_input_min_support_points: 200
+    graspnet_input_min_total_points: 320
+    graspnet_input_min_target_fraction: 0.15
+    graspnet_input_bbox_min_iou: 0.50
+    target_cloud_voxel_size_m: 0.0025
+    target_cloud_outlier_neighbors: 16
+    target_cloud_outlier_std_ratio: 2.0
+    max_gripper_width_m: 0.05
+    candidate_width_tolerance_m: 0.0
+    gripper_geometry:
+      max_inner_gap_m: 0.05
+      width_safety_margin_per_side_m: 0.002
+      tool_jaw_axis: "y"
+      tool_finger_length_axis: "z"
+      finger_box_xyz_m: [0.0434, 0.0286, 0.0600]
+      palm_box_xyz_m: [0.1175, 0.1550, 0.0774]
     # Return a broader score-ranked set so strict target, support-plane and
     # approach gates can find a safe pose instead of seeing only side grasps.
     max_candidates: 300
     failure_backoff_sec: 10.0
-    # GraspNet baseline predicts in OpenCV optical camera coordinates:
-    # x right, y down, z forward. ROS-side planning uses camera_link.
+    # GraspNet baseline always predicts in OpenCV optical coordinates:
+    # x right, y down, z forward. This is a production assertion, not a switch:
+    # any runtime value that normalizes to ros_camera_link fails closed with
+    # CANDIDATE_FRAME_CONVENTION_INVALID. ROS-side planning converts once to
+    # canonical camera_link and uses the frozen planning-snapshot transform.
     candidate_frame_convention: "opencv_optical"
     # GraspNet: +X approach, +Y jaw closing. Alicia tool0: +Z approach,
     # +Y jaw closing. Right-multiplying Ry(+90 deg) maps model axes to tool0.
@@ -119,14 +169,19 @@ grasp_6d:
     # identical fingers exchange sides. GraspNet NMS collapses this symmetry,
     # so restore both wrist solutions for the asymmetric eye-in-hand camera.
     # This is an exact grasp symmetry, not an orientation fallback.
+    # Production startup and every runtime refresh require exactly this ordered
+    # pair (identity, tool Rz180); duplicate/missing/extra rotations fail closed.
     orientation_variants_rpy_deg:
       - [0.0, 0.0, 0.0]
       - [0.0, 0.0, 180.0]
-    # Baseline predictions contain insertion depth. Refuse an old WSL server
-    # that silently drops it, because that hides an incomplete grasp geometry.
+    # Baseline translation_m remains the jaw/contact center.  Its discrete
+    # depth_m (0.01/0.02/0.03/0.04 m) is consumed exactly once:
+    # tool0 = center + depth * model +X = center + depth * tool +Z.
+    # Production planning refuses startup/runtime override to false.
     require_candidate_depth: true
-    # Strict 6D mode: reject candidates that are only reachable after replacing
-    # the model-predicted orientation.
+    # Production pure-GraspNet reachability always uses the read-only strict
+    # service. Neither position nor orientation may be replaced by a fallback.
+    accept_position_only_fallback: false
     accept_orientation_fallback: false
     # Use the current perception target bbox to mask RGB-D before remote 6D
     # inference; otherwise GraspNet may propose grasps on the table/background.
@@ -220,33 +275,28 @@ grasp_6d:
     camera_visibility_min_depth_m: 0.035
     camera_visibility_max_depth_m: 1.20
     camera_visibility_rank_weight_m: 0.012
-    # Diagnostic mode: GraspNet predicted width is kept as information only.
-    # Set this >0 later to reject poses wider than the real gripper.
-    # The real gripper opening is still limited by /gripper/open_position_m.
-    max_gripper_width_m: 0.0
-    candidate_width_tolerance_m: 0.0
-
 mujoco_digital_twin:
   enabled: true
-  # Diagnostic mode: keep the WSL MuJoCo endpoint available, but do not block
-  # real-arm execution while the digital twin IK is being tuned.
-  execution_gate_enabled: false
+  execution_gate_enabled: true
+  # Every rich-plan simulation attempt is bound to its request/payload/echoed
+  # plan_id in one strict-JSON, fsync+replace audit. An empty path, or a write
+  # failure after an otherwise passing response, blocks physical motion.
+  audit_output_path: ~/.ros/grasp6d_mujoco_audit_latest.json
   server_url: "http://172.23.132.97:8000"
   timeout_sec: 20.0
   min_score: 80
+  # Safety invariant: network/protocol failures never bypass the execution gate.
   allow_execution_on_error: false
   require_object_pose: true
   # Route A: WSL 自己推理、自己仿真；ROS 端在 /simulate_grasp
   # 请求里携带当前 /joint_states，WSL 不需要加入 ROS 网络。
   send_joint_state_in_request: true
   open_width_m: 0.05
-  close_width_m: 0.0
   object_model:
-    type: "mouse_compound"
-    label: "mouse"
-    size_xyz_m: [0.10, 0.06, 0.035]
+    type: "carton_box"
+    label: "carton"
     mass_kg: 0.08
-    # 如果你有低面数鼠标 mesh，可改成：
-    # type: "mouse_mesh"
-    # mesh_path: "/home/lv/grasp6d_ws/assets/mouse_collision.obj"
-    # mesh_scale: [1.0, 1.0, 1.0]
+    friction: [1.2, 0.08, 0.02]
+  gripper_model:
+    name: "Alicia_D_v5_6_gripper_50mm"
+    max_inner_gap_m: 0.05

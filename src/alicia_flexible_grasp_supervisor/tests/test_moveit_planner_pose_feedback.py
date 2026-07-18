@@ -57,6 +57,7 @@ class FakeManipulator:
         self.position_targets = []
         self.executed_plans = []
         self.go_calls = 0
+        self.plan_calls = 0
         self.stopped = False
         self.cleared = False
         self.planning_time = 2.0
@@ -77,6 +78,7 @@ class FakeManipulator:
         return self.go_results[0]
 
     def plan(self):
+        self.plan_calls += 1
         if len(self.plan_results) > 1:
             return self.plan_results.pop(0)
         return self.plan_results[0]
@@ -179,6 +181,140 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertEqual(len(manipulator.pose_targets), 1)
         self.assertEqual(manipulator.position_targets, [])
         self.assertEqual(manipulator.planning_time_updates, [0.25, 2.0])
+
+    def test_strict_plan_then_cached_only_execute_uses_exact_planned_trajectory(self):
+        planned = SuccessfulPlan()
+        manipulator = FakeManipulator(plan_result=planned, execute_result=True)
+        planner = self.make_planner(manipulator)
+        target = make_pose(q=(0.0, 0.7071, 0.0, 0.7071))
+
+        plan_ok, plan_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(target)
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        self.assertIn('strict pose', execute_message)
+        self.assertEqual(manipulator.executed_plans, [planned])
+        self.assertEqual(manipulator.plan_calls, 1)
+        self.assertEqual(manipulator.go_calls, 0)
+        self.assertIsNone(planner._last_pose_plan)
+
+    def test_cached_only_strict_execute_reports_missing_cache_without_planning(self):
+        manipulator = FakeManipulator(plan_result=SuccessfulPlan())
+        planner = self.make_planner(manipulator)
+
+        ok, message = planner.execute_cached_strict_pose(make_pose())
+
+        self.assertFalse(ok)
+        self.assertIn('no cached pose plan', message)
+        self.assertEqual(manipulator.plan_calls, 0)
+        self.assertEqual(manipulator.go_calls, 0)
+        self.assertEqual(manipulator.executed_plans, [])
+
+    def test_cached_only_strict_execute_rejects_position_and_orientation_mismatch(self):
+        planned = SuccessfulPlan()
+        manipulator = FakeManipulator(plan_result=planned)
+        planner = self.make_planner(manipulator)
+        target = make_pose(q=(0.0, 0.0, 0.0, 1.0))
+        plan_ok, plan_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        self.assertTrue(plan_ok, plan_message)
+
+        position_ok, position_message = planner.execute_cached_strict_pose(
+            make_pose(x=0.130, q=(0.0, 0.0, 0.0, 1.0))
+        )
+        orientation_ok, orientation_message = planner.execute_cached_strict_pose(
+            make_pose(q=(0.0, 0.7071, 0.0, 0.7071))
+        )
+
+        self.assertFalse(position_ok)
+        self.assertIn('position mismatch', position_message)
+        self.assertFalse(orientation_ok)
+        self.assertIn('orientation mismatch', orientation_message)
+        self.assertEqual(manipulator.plan_calls, 1)
+        self.assertEqual(manipulator.go_calls, 0)
+        self.assertEqual(manipulator.executed_plans, [])
+
+    def test_cached_only_strict_execute_rejects_every_non_strict_cache_kind(self):
+        manipulator = FakeManipulator()
+        planner = self.make_planner(manipulator)
+        target = make_pose()
+
+        for kind in ('position-only', 'candidate orientation current', 'cartesian'):
+            with self.subTest(kind=kind):
+                planner._remember_pose_plan(target, SuccessfulPlan(), kind)
+
+                ok, message = planner.execute_cached_strict_pose(target)
+
+                self.assertFalse(ok)
+                self.assertIn("is not 'strict pose'", message)
+                self.assertIn(kind, message)
+        self.assertEqual(manipulator.plan_calls, 0)
+        self.assertEqual(manipulator.go_calls, 0)
+        self.assertEqual(manipulator.executed_plans, [])
+
+    def test_position_only_plan_overwrites_and_blocks_previous_strict_cache(self):
+        strict_plan = SuccessfulPlan()
+        position_plan = SuccessfulPlan()
+        manipulator = FakeManipulator(
+            plan_result=[strict_plan, EmptyPlan(), position_plan],
+        )
+        planner = self.make_planner(manipulator)
+        planner.orientation_fallback_enabled = False
+        target = make_pose()
+
+        strict_ok, strict_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        replacement_ok, replacement_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=True,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(target)
+
+        self.assertTrue(strict_ok, strict_message)
+        self.assertTrue(replacement_ok, replacement_message)
+        self.assertIn('position-only', replacement_message)
+        self.assertFalse(execute_ok)
+        self.assertIn('position-only', execute_message)
+        self.assertEqual(manipulator.executed_plans, [])
+        self.assertEqual(manipulator.go_calls, 0)
+
+    def test_failed_new_strict_plan_invalidates_previous_strict_cache(self):
+        manipulator = FakeManipulator(
+            plan_result=[SuccessfulPlan(), EmptyPlan()],
+        )
+        planner = self.make_planner(manipulator)
+        target = make_pose()
+
+        first_ok, first_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        second_ok, second_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(target)
+
+        self.assertTrue(first_ok, first_message)
+        self.assertFalse(second_ok, second_message)
+        self.assertFalse(execute_ok)
+        self.assertIn('no cached pose plan', execute_message)
+        self.assertEqual(manipulator.executed_plans, [])
+        self.assertEqual(manipulator.go_calls, 0)
 
     def test_plan_falls_back_to_position_only_when_pose_orientations_are_unreachable(self):
         manipulator = FakeManipulator(plan_result=[EmptyPlan(), SuccessfulPlan()])

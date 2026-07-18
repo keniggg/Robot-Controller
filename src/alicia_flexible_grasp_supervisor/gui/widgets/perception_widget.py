@@ -4,8 +4,12 @@ import threading
 import time
 
 from PyQt5 import QtWidgets, QtCore
+import cv2
+from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseStamped
+import numpy as np
 import rospy
+from sensor_msgs.msg import Image
 from std_msgs.msg import String
 try:
     import tf2_ros
@@ -39,6 +43,7 @@ def perception_grasp_action_mode(use_grasp6d_plan):
 
 class PerceptionWidget(QtWidgets.QWidget):
     object_signal = QtCore.pyqtSignal(object)
+    mask_signal = QtCore.pyqtSignal(object)
     detector_status_signal = QtCore.pyqtSignal(str)
     plan_result_signal = QtCore.pyqtSignal(int, bool, bool, str)
     grasp_result_signal = QtCore.pyqtSignal(bool, str)
@@ -116,8 +121,15 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._alive = True
         self._subscriber = None
         self._detector_status_subscriber = None
+        self._mask_subscriber = None
+        self.bridge = CvBridge()
         self.topic = topic
         self.last_object = None
+        self._current_object_stamp = None
+        self._current_object_detected = False
+        self._latest_mask = None
+        self._latest_mask_stamp = None
+        self._mask_status = 'mask waiting'
         self.pregrasp_pose = None
         self._planned_pregrasp_pose = None
         self._planned_pregrasp_executable = False
@@ -185,6 +197,8 @@ class PerceptionWidget(QtWidgets.QWidget):
         body.addLayout(model_row)
         self.model_status_chip = metric_chip('等待模型状态', accent=True)
         body.addWidget(self.model_status_chip)
+        self.mask_status_chip = metric_chip('mask waiting', accent=True)
+        body.addWidget(self.mask_status_chip)
 
         command_row = QtWidgets.QGridLayout()
         command_row.setHorizontalSpacing(10)
@@ -340,9 +354,11 @@ class PerceptionWidget(QtWidgets.QWidget):
         layout.addLayout(controls, 4)
         if color_topic and depth_topic:
             self.camera_preview = CameraWidget(color_topic, depth_topic, compact=True, default_mode='split')
+            self.camera_preview.color_frame_updated.connect(self._on_camera_color_frame)
             layout.addWidget(self.camera_preview, 3)
 
         self.object_signal.connect(self.update_object)
+        self.mask_signal.connect(self.update_mask)
         self.detector_status_signal.connect(self._update_detector_status)
         self.plan_result_signal.connect(self._finish_pregrasp_worker)
         self.grasp_result_signal.connect(self._finish_grasp_worker)
@@ -351,6 +367,12 @@ class PerceptionWidget(QtWidgets.QWidget):
             '/perception/detector_status',
             String,
             self._emit_detector_status_if_alive,
+            queue_size=1,
+        )
+        self._mask_subscriber = rospy.Subscriber(
+            '/perception/object_mask',
+            Image,
+            self._emit_mask_if_alive,
             queue_size=1,
         )
         self.destroyed.connect(lambda *_: self._shutdown_ros())
@@ -371,6 +393,131 @@ class PerceptionWidget(QtWidgets.QWidget):
         except RuntimeError:
             self._shutdown_ros()
 
+    def _emit_mask_if_alive(self, msg):
+        if not self.__dict__.get('_alive', False):
+            return
+        try:
+            self.mask_signal.emit(msg)
+        except RuntimeError:
+            self._shutdown_ros()
+
+    def _on_camera_color_frame(self, _rgb):
+        if not self.__dict__.get('_alive', False):
+            return
+        self._refresh_detection_overlay()
+
+    def update_mask(self, msg):
+        if not self.__dict__.get('_alive', False):
+            return
+        try:
+            mask = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
+            binary = np.where(np.asarray(mask) > 0, 255, 0).astype(np.uint8)
+            if binary.size == 0 or not np.any(binary):
+                self._latest_mask = None
+                self._latest_mask_stamp = None
+                self._set_mask_status('mask empty')
+                self._refresh_detection_overlay()
+                return
+            declared_shape = (int(getattr(msg, 'height', 0)), int(getattr(msg, 'width', 0)))
+            camera_preview = self.__dict__.get('camera_preview', None)
+            camera_rgb = getattr(camera_preview, '_last_color_rgb', None) if camera_preview is not None else None
+            camera_shape = tuple(camera_rgb.shape[:2]) if camera_rgb is not None else None
+            if (
+                binary.ndim != 2
+                or (all(declared_shape) and tuple(binary.shape) != declared_shape)
+                or (camera_shape is not None and tuple(binary.shape) != camera_shape)
+            ):
+                self._latest_mask = None
+                self._latest_mask_stamp = None
+                self._set_mask_status('mask size mismatch')
+                self._refresh_detection_overlay()
+                return
+            self._latest_mask = binary
+            self._latest_mask_stamp = self._stamp_key(getattr(msg, 'header', None))
+            self._refresh_detection_overlay()
+        except Exception as exc:
+            self._latest_mask = None
+            self._latest_mask_stamp = None
+            self._set_mask_status('mask error')
+            self._refresh_detection_overlay()
+            rospy.logwarn_throttle(2.0, 'PerceptionWidget mask convert failed: %s', exc)
+
+    @staticmethod
+    def _stamp_key(header):
+        stamp = getattr(header, 'stamp', None)
+        if stamp is None:
+            return None
+        try:
+            return int(stamp.to_nsec())
+        except Exception:
+            return (int(getattr(stamp, 'secs', 0)), int(getattr(stamp, 'nsecs', 0)))
+
+    def _refresh_detection_overlay(self):
+        camera_preview = self.__dict__.get('camera_preview', None)
+        msg = self.__dict__.get('last_object', None)
+        if camera_preview is None:
+            return
+        if msg is None or not getattr(msg, 'detected', False):
+            camera_preview.set_detection_overlay(None)
+            if self.__dict__.get('_latest_mask', None) is not None:
+                self._set_mask_status('mask stale')
+            return
+        bbox = self._object_bbox(msg)
+        if bbox is None:
+            camera_preview.set_detection_overlay(None)
+            return
+        label = msg.label or self.label_edit.text()
+        camera_preview.set_detection_overlay(
+            bbox,
+            label,
+            self._overlay_color_rgb(label or self.description_edit.text()),
+            self._matching_mask_contour(msg),
+        )
+
+    def _matching_mask_contour(self, msg):
+        mask = self.__dict__.get('_latest_mask', None)
+        mask_stamp = self.__dict__.get('_latest_mask_stamp', None)
+        current_stamp = self.__dict__.get('_current_object_stamp', None)
+        current_detected = bool(self.__dict__.get('_current_object_detected', False))
+        if mask is None:
+            if self.__dict__.get('_mask_status', '') not in ('mask empty', 'mask size mismatch', 'mask error'):
+                self._set_mask_status('mask stale')
+            return None
+        camera_preview = self.__dict__.get('camera_preview', None)
+        camera_rgb = getattr(camera_preview, '_last_color_rgb', None) if camera_preview is not None else None
+        if camera_rgb is not None and tuple(mask.shape) != tuple(camera_rgb.shape[:2]):
+            self._latest_mask = None
+            self._latest_mask_stamp = None
+            self._set_mask_status('mask size mismatch')
+            return None
+        if not current_detected or mask_stamp is None or mask_stamp != current_stamp:
+            self._set_mask_status('mask stale')
+            return None
+        contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            self._set_mask_status('mask empty')
+            return None
+        self._set_mask_status('mask ready')
+        return max(contours, key=cv2.contourArea).reshape(-1, 2)
+
+    def _set_mask_status(self, text):
+        self._mask_status = str(text)
+        chip = self.__dict__.get('mask_status_chip', None)
+        if chip is not None:
+            chip.setText(self._mask_status)
+
+    def _clear_mask_state(self):
+        self._current_object_stamp = None
+        self._current_object_detected = False
+        self._latest_mask = None
+        self._latest_mask_stamp = None
+        self._set_mask_status('mask waiting')
+
+    def _invalidate_current_mask(self):
+        self._latest_mask = None
+        self._latest_mask_stamp = None
+        self._set_mask_status('mask stale')
+
     def _emit_plan_result_if_alive(self, token, execute, success, message):
         if not self.__dict__.get('_alive', False):
             return
@@ -383,7 +530,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._alive = False
         self._planning_active = False
         self._plan_token += 1
-        for attribute in ('_subscriber', '_detector_status_subscriber'):
+        for attribute in ('_subscriber', '_detector_status_subscriber', '_mask_subscriber'):
             subscriber = self.__dict__.get(attribute, None)
             flag = attribute + '_unregistered'
             if subscriber is not None and not self.__dict__.get(flag, False):
@@ -467,6 +614,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         self._clear_locked_grasp_target()
         self._reset_target_stability()
         self._localization_error_m = None
+        self._clear_mask_state()
         camera_preview = self.__dict__.get('camera_preview', None)
         if camera_preview is not None:
             camera_preview.set_detection_overlay(None)
@@ -515,17 +663,22 @@ class PerceptionWidget(QtWidgets.QWidget):
     def update_object(self, msg):
         if not self.__dict__.get('_alive', False):
             return
+        self._current_object_stamp = self._stamp_key(getattr(msg, 'header', None))
+        self._current_object_detected = bool(getattr(msg, 'detected', False))
         self._last_object_receive_time = time.monotonic()
         if (
             not getattr(msg, 'detected', False)
             and self.__dict__.get('_grasp_active', False)
             and self._has_recent_locked_grasp_target()
         ):
+            self._invalidate_current_mask()
+            self._refresh_detection_overlay()
             self.detected_chip.setText('目标已锁定 %s' % (msg.label or self.label_edit.text()))
             self._set_perception_status('目标已锁定，运动中临时丢帧不打断抓取流程')
             return
         self.last_object = msg
         if not msg.detected:
+            self._invalidate_current_mask()
             self.pregrasp_pose = None
             self._reset_target_stability()
             self._localization_error_m = None
@@ -536,8 +689,7 @@ class PerceptionWidget(QtWidgets.QWidget):
                 self._set_perception_status('当前画面暂时丢失目标；已保留已规划预抓取轨迹，可在有效期内执行')
             else:
                 self._set_perception_status('未识别到目标，调整 HSV 阈值或移动目标到视野内')
-            if hasattr(self, 'camera_preview'):
-                self.camera_preview.set_detection_overlay(None)
+            self._refresh_detection_overlay()
             return
 
         cam = msg.pose_camera.pose.position
@@ -575,13 +727,8 @@ class PerceptionWidget(QtWidgets.QWidget):
                 '目标定位不可信：相机坐标距离与基座坐标距离偏差 %.3f m，请停稳后重新识别或检查手眼标定'
                 % float(self._localization_error_m or 0.0)
             )
-        bbox = self._object_bbox(msg)
-        if bbox is not None and hasattr(self, 'camera_preview'):
-            self.camera_preview.set_detection_overlay(
-                bbox,
-                msg.label or self.label_edit.text(),
-                self._overlay_color_rgb(msg.label or self.description_edit.text())
-            )
+        if self.__dict__.get('camera_preview', None) is not None:
+            self._refresh_detection_overlay()
 
     def plan_pregrasp(self, execute):
         pose = self._pregrasp_pose_for_request(execute)
@@ -799,7 +946,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         try:
             rospy.wait_for_service('/grasp/start', timeout=1.0)
             srv = rospy.ServiceProxy('/grasp/start', StartGrasp)
-            res = srv(True)
+            res = srv(execute=True)
             success = bool(res.success)
             message = ('抓取流程成功：' if success else '抓取流程失败：') + str(res.message)
             rospy.loginfo('GUI grasp flow result success=%s message=%s', success, res.message)
