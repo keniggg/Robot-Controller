@@ -25,7 +25,10 @@ from alicia_flexible_grasp.grasp.grasp6d_pipeline import (  # noqa: E402
     soft_candidate_cost,
 )
 from alicia_flexible_grasp.grasp.grasp6d_stability import (  # noqa: E402
+    CandidateObservation,
+    CandidateTracker,
     StableCandidate,
+    TrackingConfig,
 )
 
 
@@ -48,10 +51,14 @@ def test_safety_interfaces_carry_exact_variant_and_snapshot_evidence():
         'snapshot_context_revision',
     } <= safety_fields
     assert {
+        'evaluation_request_id',
+        'evaluation_snapshot_stamp_sec',
+        'evaluation_context_revision',
+    } <= scored_fields
+    assert {
         'variant_quaternion_xyzw',
         'variant_approach_base_xyz',
-        'safety_context_revision',
-    } <= scored_fields
+    }.isdisjoint(scored_fields)
 
 
 def test_scored_candidate_has_no_caller_supplied_pre_moveit_score_field():
@@ -192,17 +199,61 @@ def stable_candidate(track_id, pre_moveit_score=0.0):
     )
 
 
+def tracker_observation(request_id):
+    return CandidateObservation(
+        request_id=request_id,
+        snapshot_stamp_sec=100.0 + request_id,
+        target_epoch=7,
+        target_label='carton',
+        model_choice='carton_segmentation',
+        center_base_xyz=(0.1, 0.0, 0.2),
+        tool0_position_xyz=(0.1, 0.0, 0.2),
+        quaternion_xyzw=(0.0, 0.0, 0.0, 1.0),
+        approach_base_xyz=(0.0, 0.0, -1.0),
+        required_open_width_m=0.040,
+        model_width_m=0.038,
+        model_score=0.8,
+        geometry_margin_m=0.008,
+        pre_moveit_score=0.0,
+        payload={'request_id': request_id},
+    )
+
+
+def multiply_xyzw(first, second):
+    x1, y1, z1, w1 = first
+    x2, y2, z2, w2 = second
+    return (
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+    )
+
+
+def expected_variant_quaternion(stable, variant_index):
+    direct = tuple(stable.quaternion_xyzw)
+    if variant_index == 1:
+        return multiply_xyzw(direct, (0.0, 0.0, 1.0, 0.0))
+    return direct
+
+
 def safety_for_candidate(
     stable,
     variant_index=0,
     quaternion=None,
     approach=None,
-    context_revision='ctx-3',
+    evaluation_request_id=None,
+    evaluation_snapshot_stamp_sec=None,
+    evaluation_context_revision='ctx-3',
     **overrides
 ):
+    if evaluation_request_id is None:
+        evaluation_request_id = stable.request_id
+    if evaluation_snapshot_stamp_sec is None:
+        evaluation_snapshot_stamp_sec = stable.snapshot_stamp_sec
     return valid_safety_input(
-        request_id=stable.request_id,
-        snapshot_stamp_sec=stable.snapshot_stamp_sec,
+        request_id=evaluation_request_id,
+        snapshot_stamp_sec=evaluation_snapshot_stamp_sec,
         target_epoch=stable.target_epoch,
         target_label=stable.target_label,
         model_choice=stable.model_choice,
@@ -217,7 +268,7 @@ def safety_for_candidate(
             stable.approach_base_xyz if approach is None else approach
         ),
         required_open_width_m=stable.required_open_width_m,
-        snapshot_context_revision=context_revision,
+        snapshot_context_revision=evaluation_context_revision,
         **overrides
     )
 
@@ -229,15 +280,22 @@ def scored_candidate(
     safety=None,
     features=None,
     score_weights=None,
-    quaternion=None,
-    approach=None,
     context_revision='ctx-3',
+    stable=None,
+    evaluation_request_id=None,
+    evaluation_snapshot_stamp_sec=None,
 ):
-    stable = stable_candidate(track_id, pre_moveit_score=score)
-    variant_quaternion = (
-        stable.quaternion_xyzw if quaternion is None else quaternion
+    stable = (
+        stable_candidate(track_id, pre_moveit_score=score)
+        if stable is None
+        else stable
     )
-    variant_approach = stable.approach_base_xyz if approach is None else approach
+    if evaluation_request_id is None:
+        evaluation_request_id = stable.request_id
+    if evaluation_snapshot_stamp_sec is None:
+        evaluation_snapshot_stamp_sec = stable.snapshot_stamp_sec
+    variant_quaternion = expected_variant_quaternion(stable, variant_index)
+    variant_approach = stable.approach_base_xyz
     candidate_features = (
         soft_features(
             model_score=1.0 if score < 0.0 else 0.0,
@@ -257,7 +315,9 @@ def scored_candidate(
                 variant_index=variant_index,
                 quaternion=variant_quaternion,
                 approach=variant_approach,
-                context_revision=context_revision,
+                evaluation_request_id=evaluation_request_id,
+                evaluation_snapshot_stamp_sec=evaluation_snapshot_stamp_sec,
+                evaluation_context_revision=context_revision,
             )
             if safety is None
             else safety
@@ -268,9 +328,9 @@ def scored_candidate(
             if score_weights is None
             else score_weights
         ),
-        variant_quaternion_xyzw=variant_quaternion,
-        variant_approach_base_xyz=variant_approach,
-        safety_context_revision=context_revision,
+        evaluation_request_id=evaluation_request_id,
+        evaluation_snapshot_stamp_sec=evaluation_snapshot_stamp_sec,
+        evaluation_context_revision=context_revision,
     )
 
 
@@ -706,6 +766,12 @@ def test_moveit_top_n_is_clamped_between_three_and_ten(configured, expected):
     assert result.funnel.remaining_by_stage['moveit_checked'] == expected
 
 
+@pytest.mark.parametrize('configured', [True, np.bool_(True)])
+def test_moveit_top_n_rejects_boolean_values(configured):
+    with pytest.raises(ValueError, match='top_n'):
+        bounded_moveit_select([], lambda _candidate: None, top_n=configured)
+
+
 def test_latest_hard_recheck_precedes_soft_ranking_and_moveit_calls():
     calls = []
 
@@ -779,6 +845,105 @@ def test_non_finite_fused_coordinates_fail_closed_before_moveit():
     assert result.funnel.rejection_counts == {'TRANSFORM_INVALID': 1}
 
 
+def test_evaluation_after_empty_frame_can_recheck_older_stable_source():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    for request_id in (1, 2, 3):
+        tracker.update(request_id, [tracker_observation(request_id)])
+    stable = tracker.update(4, [])[0]
+    assert stable.hit_request_ids == (1, 2, 3)
+    assert stable.request_id == 3
+
+    candidate = scored_candidate(
+        stable.track_id,
+        0.0,
+        stable=stable,
+        evaluation_request_id=4,
+        evaluation_snapshot_stamp_sec=104.0,
+        context_revision='ctx-4',
+    )
+    calls = []
+
+    result = bounded_moveit_select(
+        [candidate],
+        lambda item: calls.append(item) or reachable_moveit_result(),
+    )
+
+    assert calls == [candidate]
+    assert result.selected is not None
+
+
+@pytest.mark.parametrize(
+    ('evaluation_request_id', 'evaluation_stamp'),
+    [
+        (2, 10.0),
+        (3, 9.0),
+    ],
+)
+def test_evaluation_older_than_stable_source_fails_closed(
+    evaluation_request_id, evaluation_stamp
+):
+    calls = []
+    candidate = scored_candidate(
+        6,
+        0.0,
+        evaluation_request_id=evaluation_request_id,
+        evaluation_snapshot_stamp_sec=evaluation_stamp,
+        context_revision='ctx-evaluation',
+    )
+
+    result = bounded_moveit_select(
+        [candidate], lambda item: calls.append(item)
+    )
+
+    assert calls == []
+    assert result.funnel.rejection_counts == {'SAFETY_EVIDENCE_STALE': 1}
+
+
+def test_safety_request_stamp_and_context_bind_to_evaluation_identity():
+    candidate = scored_candidate(
+        6,
+        0.0,
+        evaluation_request_id=4,
+        evaluation_snapshot_stamp_sec=11.0,
+        context_revision='ctx-4',
+    )
+    candidate = replace(
+        candidate,
+        latest_safety=replace(
+            candidate.latest_safety,
+            request_id=3,
+            snapshot_stamp_sec=10.0,
+            snapshot_context_revision='ctx-3',
+        ),
+    )
+
+    result = bounded_moveit_select([candidate], lambda _item: None)
+
+    assert result.funnel.rejection_counts == {'SAFETY_EVIDENCE_STALE': 1}
+
+
+@pytest.mark.parametrize(
+    ('field', 'value'),
+    [
+        ('evaluation_request_id', True),
+        ('evaluation_request_id', np.bool_(True)),
+        ('evaluation_request_id', 0),
+        ('evaluation_request_id', 1.5),
+        ('evaluation_snapshot_stamp_sec', True),
+        ('evaluation_snapshot_stamp_sec', np.bool_(True)),
+        ('evaluation_snapshot_stamp_sec', 0.0),
+        ('evaluation_snapshot_stamp_sec', float('nan')),
+        ('evaluation_context_revision', []),
+        ('evaluation_context_revision', {}),
+        ('evaluation_context_revision', -1),
+        ('evaluation_context_revision', ''),
+    ],
+)
+def test_evaluation_identity_fields_are_strictly_validated(field, value):
+    with pytest.raises(ValueError):
+        replace(scored_candidate(6, 0.0), **{field: value})
+
+
 @pytest.mark.parametrize(
     ('evidence_change', 'expected_code'),
     [
@@ -835,23 +1000,18 @@ def test_fused_width_cannot_be_replaced_by_narrower_safety_evidence():
 @pytest.mark.parametrize(
     ('field', 'value'),
     [
-        ('variant_quaternion_xyzw', (0.0, 0.0, 0.0, 2.0)),
-        ('variant_approach_base_xyz', (0.0, 0.0, -2.0)),
+        ('quaternion_xyzw', (0.0, 0.0, 0.0, 2.0)),
+        ('approach_base_xyz', (0.0, 0.0, -2.0)),
     ],
 )
-def test_non_unit_variant_directions_fail_before_moveit(field, value):
+def test_non_unit_safety_directions_fail_before_moveit(field, value):
     candidate = scored_candidate(6, 0.0)
     candidate = replace(
         candidate,
-        **{field: value},
         latest_safety=replace(
             candidate.latest_safety,
-            **{
-                'quaternion_xyzw'
-                if field == 'variant_quaternion_xyzw'
-                else 'approach_base_xyz': value
-            }
-        )
+            **{field: value}
+        ),
     )
     calls = []
 
@@ -861,6 +1021,74 @@ def test_non_unit_variant_directions_fail_before_moveit(field, value):
 
     assert calls == []
     assert result.funnel.rejection_counts == {'TRANSFORM_INVALID': 1}
+
+
+def test_only_direct_and_local_rz_pi_variants_reach_moveit():
+    half_sqrt = math.sqrt(0.5)
+    stable = replace(
+        stable_candidate(6),
+        quaternion_xyzw=np.array([half_sqrt, 0.0, 0.0, half_sqrt]),
+    )
+    direct = scored_candidate(6, 0.0, variant_index=0, stable=stable)
+    symmetric = scored_candidate(6, 0.0, variant_index=1, stable=stable)
+    calls = []
+
+    result = bounded_moveit_select(
+        [symmetric, direct],
+        lambda item: calls.append(item) or reachable_moveit_result(),
+        top_n=3,
+    )
+
+    expected_direct = tuple(stable.quaternion_xyzw)
+    expected_symmetric = multiply_xyzw(
+        expected_direct, (0.0, 0.0, 1.0, 0.0)
+    )
+    assert [item.variant_index for item in calls] == [0, 1]
+    assert tuple(calls[0].variant_quaternion_xyzw) == pytest.approx(
+        expected_direct
+    )
+    assert tuple(calls[1].variant_quaternion_xyzw) == pytest.approx(
+        expected_symmetric
+    )
+    assert tuple(calls[1].variant_approach_base_xyz) == pytest.approx(
+        stable.approach_base_xyz
+    )
+    assert len(result.checked) == 2
+
+
+def test_arbitrary_variant_pose_cannot_be_supplied_by_caller():
+    candidate = scored_candidate(6, 0.0)
+
+    with pytest.raises(TypeError):
+        replace(
+            candidate,
+            variant_quaternion_xyzw=(0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)),
+        )
+
+
+def test_rz_90_safety_pose_never_reaches_moveit():
+    candidate = scored_candidate(6, 0.0)
+    rz_90 = (0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5))
+    candidate = replace(
+        candidate,
+        latest_safety=replace(
+            candidate.latest_safety,
+            quaternion_xyzw=rz_90,
+        ),
+    )
+    calls = []
+
+    result = bounded_moveit_select(
+        [candidate], lambda item: calls.append(item)
+    )
+
+    assert calls == []
+    assert result.funnel.rejection_counts == {'SAFETY_BINDING_MISMATCH': 1}
+
+
+def test_variant_index_outside_direct_and_rz_pi_is_rejected():
+    with pytest.raises(ValueError, match='variant_index'):
+        scored_candidate(6, 0.0, variant_index=99)
 
 
 def test_safety_evidence_defensively_copies_pose_vectors():

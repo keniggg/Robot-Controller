@@ -66,13 +66,11 @@ def _immutable_vector_evidence(value):
 
 
 def _valid_integer(value, minimum=0):
-    if isinstance(value, (bool, np.bool_)):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, np.integer)
+    ):
         return False
-    try:
-        converted = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return False
-    return converted == value and converted >= minimum
+    return int(value) >= minimum
 
 
 def _valid_context_revision(value):
@@ -109,6 +107,17 @@ def _quaternion_close(first, second):
         first, tuple(-item for item in second), _SAFETY_DIRECTION_TOLERANCE
     )
     return direct or negated
+
+
+def _quaternion_multiply_xyzw(first, second):
+    x1, y1, z1, w1 = first
+    x2, y2, z2, w2 = second
+    return (
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+    )
 
 
 @dataclass(frozen=True)
@@ -622,9 +631,9 @@ class ScoredStableCandidate:
     latest_safety: SafetyGateInput
     soft_features: SoftCandidateFeatures
     score_weights: SoftScoreWeights
-    variant_quaternion_xyzw: object = None
-    variant_approach_base_xyz: object = None
-    safety_context_revision: object = None
+    evaluation_request_id: object
+    evaluation_snapshot_stamp_sec: object
+    evaluation_context_revision: object
     moveit_result: object = None
     final_score: object = None
 
@@ -632,12 +641,29 @@ class ScoredStableCandidate:
         if not isinstance(self.stable_candidate, StableCandidate):
             raise TypeError('stable_candidate must be StableCandidate')
         variant_index = _validated_count(self.variant_index, 'variant_index')
+        if variant_index not in (0, 1):
+            raise ValueError('variant_index must be 0 or 1')
         if not isinstance(self.latest_safety, SafetyGateInput):
             raise TypeError('latest_safety must be SafetyGateInput')
         if not isinstance(self.soft_features, SoftCandidateFeatures):
             raise TypeError('soft_features must be SoftCandidateFeatures')
         if not isinstance(self.score_weights, SoftScoreWeights):
             raise TypeError('score_weights must be SoftScoreWeights')
+        if not _valid_integer(self.evaluation_request_id, minimum=1):
+            raise ValueError(
+                'evaluation_request_id must be a positive integer'
+            )
+        evaluation_stamp = _finite_float(
+            self.evaluation_snapshot_stamp_sec
+        )
+        if evaluation_stamp is None or evaluation_stamp <= 0.0:
+            raise ValueError(
+                'evaluation_snapshot_stamp_sec must be finite and positive'
+            )
+        if not _valid_context_revision(self.evaluation_context_revision):
+            raise ValueError(
+                'evaluation_context_revision must be an immutable revision'
+            )
         if self.moveit_result is not None and not isinstance(
             self.moveit_result, MoveItResult
         ):
@@ -648,21 +674,30 @@ class ScoredStableCandidate:
             if self.moveit_result is None:
                 raise ValueError('final_score requires a moveit_result')
         object.__setattr__(self, 'variant_index', variant_index)
+        object.__setattr__(
+            self, 'evaluation_request_id', int(self.evaluation_request_id)
+        )
+        object.__setattr__(
+            self, 'evaluation_snapshot_stamp_sec', evaluation_stamp
+        )
         object.__setattr__(self, 'final_score', final_score)
-        object.__setattr__(
-            self,
-            'variant_quaternion_xyzw',
-            _immutable_vector_evidence(self.variant_quaternion_xyzw),
-        )
-        object.__setattr__(
-            self,
-            'variant_approach_base_xyz',
-            _immutable_vector_evidence(self.variant_approach_base_xyz),
-        )
 
     @property
     def track_id(self):
         return self.stable_candidate.track_id
+
+    @property
+    def variant_quaternion_xyzw(self):
+        direct = tuple(self.stable_candidate.quaternion_xyzw)
+        if self.variant_index == 0:
+            return direct
+        return _quaternion_multiply_xyzw(
+            direct, (0.0, 0.0, 1.0, 0.0)
+        )
+
+    @property
+    def variant_approach_base_xyz(self):
+        return tuple(self.stable_candidate.approach_base_xyz)
 
     @property
     def pre_moveit_score(self):
@@ -689,7 +724,7 @@ MoveItSelection = BoundedMoveItSelection
 
 
 def _clamped_top_n(value):
-    if isinstance(value, bool):
+    if isinstance(value, (bool, np.bool_)):
         raise ValueError('top_n must be an integer')
     try:
         converted = int(value)
@@ -723,14 +758,18 @@ def _safety_binding_gate(candidate):
         )
 
     evidence_stamp = _finite_float(safety.snapshot_stamp_sec)
+    evaluation_stamp = candidate.evaluation_snapshot_stamp_sec
     stable_stamp = _finite_float(stable.snapshot_stamp_sec)
     if (
-        safety.request_id != stable.request_id
+        safety.request_id != candidate.evaluation_request_id
         or evidence_stamp is None
         or stable_stamp is None
-        or abs(evidence_stamp - stable_stamp) > _SAFETY_STAMP_TOLERANCE_SEC
+        or abs(evidence_stamp - evaluation_stamp)
+        > _SAFETY_STAMP_TOLERANCE_SEC
         or safety.snapshot_context_revision
-        != candidate.safety_context_revision
+        != candidate.evaluation_context_revision
+        or candidate.evaluation_request_id < stable.request_id
+        or evaluation_stamp + _SAFETY_STAMP_TOLERANCE_SEC < stable_stamp
     ):
         return _gate_failure(
             'SAFETY_EVIDENCE_STALE',
