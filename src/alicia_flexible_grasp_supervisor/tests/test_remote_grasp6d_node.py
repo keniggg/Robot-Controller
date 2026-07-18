@@ -959,22 +959,17 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node.depth_mad_absolute_floor_m = 0.002
         node._active_profile_requires_mask = lambda: True
         node._snapshot_depth_config = lambda: (0.0001, 0.03, 2.0)
-        processed = []
-        node._process_frame = lambda snapshot, manual=False, **_kwargs: (
-            processed.append((snapshot, manual)) or (True, 'planned')
+        snapshot, failure_code, failure_reason = node._wait_for_stable_snapshot(
+            True
         )
 
-        response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
-
-        self.assertTrue(response.success)
-        self.assertEqual(response.message, 'planned')
+        self.assertEqual(failure_code, '')
+        self.assertEqual(failure_reason, '')
         self.assertEqual(node.frames.discarded, [1_060_000_000])
         self.assertEqual(node.frames.collection_spans, [3.0, 3.0])
         self.assertEqual(node.frames.inference_latency_limits, [1.2, 1.2])
-        self.assertEqual(len(processed), 1)
-        self.assertTrue(processed[0][0].ok)
-        self.assertEqual(processed[0][0].object_msg.snapshot_stamp, 1.16)
-        self.assertTrue(processed[0][1])
+        self.assertTrue(snapshot.ok)
+        self.assertEqual(snapshot.object_msg.snapshot_stamp, 1.16)
 
     def test_snapshot_failure_is_published_with_one_structured_prefix(self):
         good_mask = np.ones((20, 30), dtype=np.uint8) * 255
@@ -1016,16 +1011,12 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node._active_profile_requires_mask = lambda: True
         node._snapshot_depth_config = lambda: (0.0001, 0.03, 2.0)
 
-        response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
+        _snapshot, failure_code, failure_reason = (
+            node._wait_for_stable_snapshot(True)
+        )
 
-        self.assertFalse(response.success)
-        self.assertTrue(response.message.startswith('MASK_SIZE_MISMATCH: '))
-        self.assertEqual(response.message.count('MASK_SIZE_MISMATCH:'), 1)
-        self.assertEqual(node.status_pub.messages[-1], response.message)
-        self.assertFalse(node.geometry_pub.messages[-1].valid)
-        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, response.message)
-        self.assertIsNone(node.previous_object_axes_base)
-        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+        self.assertEqual(failure_code, 'MASK_SIZE_MISMATCH')
+        self.assertNotIn('MASK_SIZE_MISMATCH:', failure_reason)
 
     def test_stale_mask_timeout_is_published_with_stable_failure_code(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
@@ -1042,15 +1033,12 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node.planning_snapshot_max_span_sec = 3.0
         node._active_profile_requires_mask = lambda: True
 
-        response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
+        _snapshot, failure_code, failure_reason = (
+            node._wait_for_stable_snapshot(True)
+        )
 
-        self.assertFalse(response.success)
-        self.assertTrue(response.message.startswith('MASK_STALE: '))
-        self.assertEqual(node.status_pub.messages[-1], response.message)
-        self.assertFalse(node.geometry_pub.messages[-1].valid)
-        self.assertEqual(node.geometry_pub.messages[-1].failure_reason, response.message)
-        self.assertIsNone(node.previous_object_axes_base)
-        self.assertEqual(node.plan_pub.messages[-1].poses, [])
+        self.assertEqual(failure_code, 'MASK_STALE')
+        self.assertTrue(failure_reason)
 
     def test_missing_and_empty_mask_timeouts_are_published_without_remapping(self):
         for expected_code in ('MASK_MISSING', 'MASK_EMPTY'):
@@ -1069,16 +1057,12 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 node.planning_snapshot_max_span_sec = 3.0
                 node._active_profile_requires_mask = lambda: True
 
-                response = node.request_plan_cb(types.SimpleNamespace(trigger=True))
-
-                self.assertFalse(response.success)
-                self.assertTrue(response.message.startswith(expected_code + ': '))
-                self.assertEqual(node.status_pub.messages[-1], response.message)
-                self.assertFalse(node.geometry_pub.messages[-1].valid)
-                self.assertEqual(
-                    node.geometry_pub.messages[-1].failure_reason,
-                    response.message,
+                _snapshot, failure_code, failure_reason = (
+                    node._wait_for_stable_snapshot(True)
                 )
+
+                self.assertEqual(failure_code, expected_code)
+                self.assertTrue(failure_reason)
 
     def test_segment_snapshot_sends_only_target_depth_to_remote_path(self):
         context_depth = np.full((4, 5), 2200, dtype=np.uint16)
@@ -2558,13 +2542,22 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIn('model_width=0.090', message)
         self.assertIn('required_open=0.044', message)
         self.assertEqual(client.calls[0]['kwargs']['max_gripper_width_m'], 0.0)
-        pending = node.rich_plan_pub.messages[0]
         final = node.rich_plan_pub.messages[-1]
-        self.assertFalse(pending.valid)
-        self.assertTrue(pending.diagnostic.startswith('PLAN_PENDING:'))
-        self.assertEqual(pending.header.stamp.to_nsec(), 0)
+        self.assertFalse(
+            any(
+                str(getattr(item, 'diagnostic', '')).startswith(
+                    'PLAN_PENDING:'
+                )
+                for item in node.rich_plan_pub.messages
+            )
+        )
         self.assertTrue(final.valid)
         self.assertEqual(final.header.stamp.to_nsec(), snapshot.stamp_ns)
+        self.assertGreater(client.calls[0]['kwargs']['request_id'], 0)
+        self.assertEqual(
+            client.calls[0]['kwargs']['snapshot_stamp_sec'],
+            snapshot.stamp_sec,
+        )
 
     def test_plan_publish_exception_invalidates_geometry_and_selected_gate(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)

@@ -8,8 +8,9 @@ import socket
 import threading
 import time
 import urllib.error
+from collections import Counter, deque
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 import rospy
@@ -39,6 +40,23 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (
     evaluate_candidate,
     gripper_contract_mismatch_reason,
 )
+from alicia_flexible_grasp.grasp.grasp6d_stability import (
+    CandidateObservation,
+    CandidateTracker,
+    StableCandidate,
+    TrackingConfig,
+)
+from alicia_flexible_grasp.grasp.grasp6d_pipeline import (
+    CandidateStageFunnel,
+    MoveItResult,
+    SafetyGateInput,
+    ScoredStableCandidate,
+    SoftCandidateFeatures,
+    SoftScoreWeights,
+    bounded_moveit_select,
+    mandatory_safety_gate,
+    soft_candidate_cost,
+)
 from alicia_flexible_grasp.robot.planning_feedback import (
     is_orientation_fallback_message,
     is_position_only_fallback_message,
@@ -63,6 +81,9 @@ from alicia_flexible_grasp.vision.graspnet_input_context import (
     build_graspnet_input_context,
 )
 from alicia_flexible_grasp.vision.model_selection import select_yolo_model
+from alicia_flexible_grasp.vision.latest_only_inference import (
+    LatestOnlyInferenceCoordinator,
+)
 from alicia_flexible_grasp.vision.object_geometry import (
     GeometryEstimate,
     estimate_object_geometry,
@@ -79,7 +100,12 @@ from alicia_flexible_grasp.vision.rgbd_snapshot import (
     SynchronizedRgbdBuffer,
     fuse_stable_samples,
 )
-from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan, ObjectGeometry, ObjectPose
+from alicia_flexible_grasp_supervisor.msg import (
+    Grasp6DPlan,
+    GraspState,
+    ObjectGeometry,
+    ObjectPose,
+)
 from alicia_flexible_grasp_supervisor.srv import SetTargetPose, TriggerZero, TriggerZeroResponse
 
 
@@ -107,6 +133,190 @@ STRICT_ORIENTATION_VARIANTS_RPY_DEG = (
     (0.0, 0.0, 0.0),
     (0.0, 0.0, 180.0),
 )
+PIPELINE_COUNTER_FIELDS = (
+    'submitted',
+    'started',
+    'completed',
+    'accepted',
+    'expired',
+    'stale',
+    'replaced',
+    'busy',
+)
+PIPELINE_METRICS_MAX_BYTES = 12000
+
+
+def _finite_pipeline_number(value, default=0.0):
+    try:
+        converted = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return float(default)
+    return converted if math.isfinite(converted) else float(default)
+
+
+def _pipeline_count(value):
+    if isinstance(value, bool):
+        return 0
+    try:
+        converted = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, converted)
+
+
+def _rolling_latency_percentiles(latency_history_ms):
+    finite = []
+    for value in tuple(latency_history_ms or ())[-100:]:
+        try:
+            converted = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(converted):
+            finite.append(converted)
+    if not finite:
+        return 0.0, 0.0
+    return (
+        float(np.percentile(finite, 50.0)),
+        float(np.percentile(finite, 95.0)),
+    )
+
+
+def build_pipeline_metrics(
+    *,
+    event,
+    request_id,
+    generation,
+    target_epoch,
+    snapshot_stamp_sec,
+    status,
+    drop_reason,
+    counters,
+    pending_replacements,
+    ros_prepare_ms,
+    transport_ms,
+    decode_ms,
+    remote_performance,
+    end_to_end_ms,
+    result_age_ms,
+    latency_history_ms,
+    funnel=None
+):
+    """Build one stable, finite operational event dictionary."""
+
+    counters = dict(counters or {})
+    performance = dict(remote_performance or {})
+    funnel = dict(funnel or {})
+    p50_ms, p95_ms = _rolling_latency_percentiles(latency_history_ms)
+    output = {
+        'event': str(event or ''),
+        'request_id': _pipeline_count(request_id),
+        'generation': _pipeline_count(generation),
+        'target_epoch': _pipeline_count(target_epoch),
+        'snapshot_stamp_sec': _finite_pipeline_number(snapshot_stamp_sec),
+        'status': str(status or ''),
+        'drop_reason': str(drop_reason or ''),
+        'pending_replacements': _pipeline_count(pending_replacements),
+        'ros_prepare_ms': _finite_pipeline_number(ros_prepare_ms),
+        'transport_ms': _finite_pipeline_number(transport_ms),
+        'decode_ms': _finite_pipeline_number(decode_ms),
+        'wsl_preprocess_ms': _finite_pipeline_number(
+            performance.get('preprocess_ms', 0.0)
+        ),
+        'wsl_inference_ms': _finite_pipeline_number(
+            performance.get('inference_ms', 0.0)
+        ),
+        'wsl_postprocess_ms': _finite_pipeline_number(
+            performance.get('postprocess_ms', 0.0)
+        ),
+        'wsl_total_ms': _finite_pipeline_number(
+            performance.get('server_total_ms', 0.0)
+        ),
+        'end_to_end_ms': _finite_pipeline_number(end_to_end_ms),
+        'result_age_ms': _finite_pipeline_number(result_age_ms),
+        'latency_p50_ms': _finite_pipeline_number(p50_ms),
+        'latency_p95_ms': _finite_pipeline_number(p95_ms),
+        'gpu_allocated_mb': _finite_pipeline_number(
+            performance.get('gpu_allocated_mb', 0.0)
+        ),
+        'gpu_reserved_mb': _finite_pipeline_number(
+            performance.get('gpu_reserved_mb', 0.0)
+        ),
+        'gpu_peak_allocated_mb': _finite_pipeline_number(
+            performance.get('gpu_peak_allocated_mb', 0.0)
+        ),
+        'stage_counts': dict(funnel.get('stage_counts', {}) or {}),
+        'rejection_counts': dict(
+            funnel.get('rejection_counts', {}) or {}
+        ),
+        'rejection_ratios': dict(
+            funnel.get('rejection_ratios', {}) or {}
+        ),
+        'primary_failure': funnel.get('primary_failure'),
+    }
+    for name in PIPELINE_COUNTER_FIELDS:
+        output[name] = _pipeline_count(counters.get(name, 0))
+    return output
+
+
+def strict_metrics_json(metrics):
+    """Serialize operational metrics without NaN/Infinity extensions."""
+
+    return json.dumps(
+        dict(metrics or {}),
+        allow_nan=False,
+        sort_keys=True,
+        separators=(',', ':'),
+    )
+
+
+def bounded_metrics_json(metrics, max_bytes=PIPELINE_METRICS_MAX_BYTES):
+    """Return valid strict JSON bounded for the ROS operational topic."""
+
+    limit = max(512, int(max_bytes))
+    payload = dict(metrics or {})
+    encoded = strict_metrics_json(payload)
+    if len(encoded.encode('utf-8')) <= limit:
+        return encoded
+    if 'error' in payload:
+        payload['error'] = str(payload['error'])[:512]
+        encoded = strict_metrics_json(payload)
+        if len(encoded.encode('utf-8')) <= limit:
+            return encoded
+    # Full stage/audit data remains in ``pipeline_metrics`` and the atomic
+    # audit.  The operational topic retains stable field names and totals.
+    for field in ('stage_counts', 'rejection_ratios', 'rejection_counts'):
+        values = dict(payload.get(field, {}) or {})
+        payload[field] = {
+            key: values[key]
+            for key in sorted(values)[:32]
+        }
+        encoded = strict_metrics_json(payload)
+        if len(encoded.encode('utf-8')) <= limit:
+            return encoded
+    payload['stage_counts'] = {}
+    payload['rejection_ratios'] = {}
+    payload['rejection_counts'] = {}
+    payload['metrics_truncated'] = True
+    encoded = strict_metrics_json(payload)
+    if len(encoded.encode('utf-8')) <= limit:
+        return encoded
+    payload.pop('error', None)
+    for field in ('status', 'drop_reason', 'primary_failure', 'event'):
+        payload[field] = str(payload.get(field, '') or '')[:128]
+    encoded = strict_metrics_json(payload)
+    if len(encoded.encode('utf-8')) <= limit:
+        return encoded
+    minimal = {
+        'event': 'metrics_truncated',
+        'request_id': _pipeline_count(payload.get('request_id', 0)),
+        'generation': _pipeline_count(payload.get('generation', 0)),
+        'target_epoch': _pipeline_count(payload.get('target_epoch', 0)),
+        'metrics_truncated': True,
+    }
+    encoded = strict_metrics_json(minimal)
+    if len(encoded.encode('utf-8')) > limit:
+        raise ValueError('pipeline metrics byte limit is too small')
+    return encoded
 
 
 @dataclass(frozen=True)
@@ -137,6 +347,38 @@ class FrozenGraspNetInputConfig:
     @property
     def requires_candidate_target_gate(self):
         return self.mode == CONTEXT_ROI
+
+
+@dataclass(frozen=True)
+class PreparedPrediction:
+    ticket: object
+    snapshot: SnapshotResult
+    stamp: object
+    geometry: object
+    pose_estimator: object
+    graspnet_input: object
+    candidates: tuple
+    remote_diagnostics: dict
+    remote_performance: dict
+    graspnet_input_audit: dict = None
+    request_invalidation_generation: int = 0
+    graspnet_input_config: object = None
+    model_choice: str = ''
+    ros_prepare_ms: float = 0.0
+    transport_ms: float = 0.0
+    decode_ms: float = 0.0
+
+
+@dataclass(frozen=True)
+class LocalCandidatePayload:
+    raw_candidate_index: int
+    variant_index: int
+    raw_candidate: object
+    camera_candidate: object
+    grasp_pose: object
+    geometry_gate: CandidateGateResult
+    soft_features: SoftCandidateFeatures
+    score_components: dict
 
 
 FULL_SCENE_DIAGNOSTIC_CODE = 'GRASPNET_FULL_SCENE_DIAGNOSTIC_ONLY'
@@ -1925,6 +2167,18 @@ class RemoteGrasp6DNode:
             queue_size=1,
             latch=True,
         )
+        self.preview_plan_pub = rospy.Publisher(
+            '/grasp_6d/preview_plan', PoseArray, queue_size=1
+        )
+        self.preview_rich_plan_pub = rospy.Publisher(
+            '/grasp_6d/preview_plan_enriched',
+            Grasp6DPlan,
+            queue_size=1,
+            latch=True,
+        )
+        self.pipeline_metrics_pub = rospy.Publisher(
+            '/grasp_6d/pipeline_metrics', String, queue_size=10
+        )
         self.status_pub = rospy.Publisher('/grasp_6d/status', String, queue_size=1, latch=True)
         self.gate_audit_pub = rospy.Publisher('/grasp_6d/gate_audit', String, queue_size=1, latch=True)
         self.geometry_pub = rospy.Publisher(
@@ -1936,6 +2190,7 @@ class RemoteGrasp6DNode:
         self.previous_object_axes_base = None
         self.latest_object_geometry = None
         self.latest_rich_plan = None
+        self.latest_preview_rich_plan = None
         self._geometry_invalidation_generation = 0
         self._last_geometry_invalidation_code = ''
 
@@ -1996,6 +2251,34 @@ class RemoteGrasp6DNode:
         self._selected_candidate_gate = None
         self.selected_required_open_width_m = None
         self._last_model_choice = str(pcfg.get('yolo_model_choice', 'original'))
+        self.execution_active = False
+        self.target_instance_association_threshold_m = max(
+            0.0,
+            float(
+                remote_cfg.get(
+                    'target_instance_association_threshold_m', 0.08
+                )
+            ),
+        )
+        self.target_absolute_sanity_distance_m = max(
+            0.001,
+            float(remote_cfg.get('target_absolute_sanity_distance_m', 0.15)),
+        )
+        self.moveit_top_n = min(
+            10, max(3, int(remote_cfg.get('moveit_top_n', 5)))
+        )
+        default_soft_weights = SoftScoreWeights()
+        soft_weight_cfg = dict(
+            remote_cfg.get('soft_score_weights', {}) or {}
+        )
+        self.soft_score_weights = SoftScoreWeights(
+            **{
+                name: soft_weight_cfg.get(
+                    name, getattr(default_soft_weights, name)
+                )
+                for name in default_soft_weights.__dataclass_fields__
+            }
+        )
         self.planning_snapshot_frames = max(
             1,
             int(
@@ -2753,13 +3036,50 @@ class RemoteGrasp6DNode:
             queue_size=1,
         )
         rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
-        self.rate_hz = max(0.1, float(rospy.get_param('/grasp_6d/remote/request_hz', remote_cfg.get('request_hz', rospy.get_param('/grasp_6d/plan_hz', 1.0)))))
+        rospy.Subscriber('/grasp/state', GraspState, self.grasp_state_cb, queue_size=1)
+        self.rate_hz = max(
+            0.1,
+            float(
+                rospy.get_param(
+                    '/grasp_6d/remote/request_hz',
+                    remote_cfg.get('request_hz', 1.5),
+                )
+            ),
+        )
+        tracking_config = TrackingConfig(
+            window_size=int(remote_cfg.get('stability_window_size', 5)),
+            min_hits=int(remote_cfg.get('stability_min_hits', 3)),
+            position_threshold_m=float(
+                remote_cfg.get('tracking_position_threshold_m', 0.025)
+            ),
+            orientation_threshold_deg=float(
+                remote_cfg.get('tracking_orientation_threshold_deg', 25.0)
+            ),
+            approach_threshold_deg=float(
+                remote_cfg.get('tracking_approach_threshold_deg', 20.0)
+            ),
+            width_threshold_m=float(
+                remote_cfg.get('tracking_width_threshold_m', 0.008)
+            ),
+        )
+        self._initialize_streaming_state(
+            result_max_age_sec=float(
+                remote_cfg.get('result_max_age_sec', 1.2)
+            ),
+            performance_window_size=int(
+                remote_cfg.get('performance_window_size', 100)
+            ),
+            tracking_config=tracking_config,
+        )
+        rospy.on_shutdown(self.shutdown_streaming_worker)
         rospy.Service('/grasp_6d/request_plan', TriggerZero, self.request_plan_cb)
         self._publish_invalid_plan_pair(
             'INITIALIZING',
             'no rich 6D plan has been generated',
         )
         self._check_remote_health()
+        if self.enabled and self.auto_request:
+            self.start_streaming()
         mode = 'auto %.2f Hz' % self.rate_hz if self.auto_request else 'manual trigger'
         self.status_pub.publish(String('remote 6D grasp waiting for RGB-D: %s (%s)' % (server_url, mode)))
 
@@ -2799,6 +3119,11 @@ class RemoteGrasp6DNode:
             if all(value is not None for value in ordered):
                 positions = np.asarray(ordered, dtype=float)
         self.frames.update_joints(positions[:6])
+
+    def grasp_state_cb(self, msg):
+        """Track execution activity for diagnostics only (Task 6 owns gating)."""
+
+        self.execution_active = bool(getattr(msg, 'active', False))
 
     @staticmethod
     def _invalid_geometry_estimate(code, reason, source_mode=''):
@@ -3334,6 +3659,8 @@ class RemoteGrasp6DNode:
         source_stamp = getattr(getattr(msg, 'header', None), 'stamp', now)
         if not bool(getattr(msg, 'detected', False)):
             with self._object_lock:
+                previous = self.latest_object
+            with self._object_lock:
                 self.latest_object = msg
                 self.latest_object_time = now
             if hasattr(self, 'frames'):
@@ -3344,6 +3671,8 @@ class RemoteGrasp6DNode:
                 stamp=source_stamp,
                 label=str(getattr(msg, 'label', '') or ''),
             )
+            if bool(getattr(previous, 'detected', False)):
+                self._advance_target_instance_epoch('TARGET_LOST')
             return
 
         gcfg = rospy.get_param('/grasp', {})
@@ -3389,57 +3718,1653 @@ class RemoteGrasp6DNode:
             self.latest_object_time = now
         if hasattr(self, 'frames'):
             self.frames.update_object(msg, source_stamp)
+        identity_changed = bool(
+            previous is not None
+            and bool(getattr(previous, 'detected', False))
+            and (
+                str(getattr(previous, 'label', '') or '')
+                != str(getattr(msg, 'label', '') or '')
+                or self._object_pose_distance(previous, msg)
+                > float(
+                    getattr(
+                        self,
+                        'target_instance_association_threshold_m',
+                        0.08,
+                    )
+                )
+            )
+        )
+        if identity_changed:
+            self._advance_target_instance_epoch('TARGET_INSTANCE_CHANGED')
 
-    def spin(self):
-        rate = rospy.Rate(self.rate_hz)
-        while not rospy.is_shutdown():
-            if self.enabled and self.auto_request:
-                self._process_latest_frame()
-            rate.sleep()
+    def _advance_target_instance_epoch(self, reason):
+        """Invalidate pending tracking when the observed target identity changes."""
 
-    def request_plan_cb(self, req):
-        if not bool(getattr(req, 'trigger', False)):
-            return TriggerZeroResponse(False, 'trigger=false')
-        if not self.enabled:
-            return TriggerZeroResponse(False, 'remote 6D disabled')
+        condition = getattr(self, '_stream_condition', None)
+        if condition is None:
+            return False
+        pending_request_id = None
+        with condition:
+            pending_request_id = self._pending_request_id
+            if pending_request_id is not None:
+                self._pipeline_counters['completed'] += 1
+                self._pipeline_counters['stale'] += 1
+                self._pending_request_id = None
+            self.target_instance_epoch += 1
+            self.tracker = CandidateTracker(self._tracking_config)
+            self.inference_coordinator.reset_target_epoch(
+                self.target_instance_epoch
+            )
+            self.last_submitted_stamp_ns = 0
+            self._last_target_epoch_reason = str(reason or '')
+            condition.notify_all()
+        if pending_request_id is not None:
+            self._emit_pending_drop_metrics(
+                pending_request_id, 'TARGET_EPOCH_STALE'
+            )
+        return True
+
+    def _initialize_streaming_state(
+        self,
+        result_max_age_sec=1.2,
+        performance_window_size=100,
+        source_clock=None,
+        tracking_config=None,
+        start_worker=True,
+    ):
+        """Initialize the single-worker, latest-only streaming state."""
+
+        window_size = max(1, int(performance_window_size))
+        self._stream_source_clock = source_clock or (
+            lambda: float(self._ros_source_clock_ns()) / 1e9
+        )
+        self.inference_coordinator = LatestOnlyInferenceCoordinator(
+            result_max_age_sec=result_max_age_sec,
+            clock=self._stream_source_clock,
+        )
+        self._tracking_config = (
+            TrackingConfig()
+            if tracking_config is None
+            else tracking_config
+        )
+        self.tracker = CandidateTracker(self._tracking_config)
+        self._stream_condition = threading.Condition(threading.RLock())
+        self._stream_shutdown = threading.Event()
+        self._stream_worker_ticket = None
+        self._stream_worker = None
+        self._stream_worker_busy = False
+        self.streaming_enabled = False
+        self.last_submitted_stamp_ns = 0
+        self.target_instance_epoch = int(
+            getattr(self, 'target_instance_epoch', 0)
+        )
+        self._pipeline_counters = Counter(
+            {name: 0 for name in PIPELINE_COUNTER_FIELDS}
+        )
+        self._pending_replacements = 0
+        self._pending_request_id = None
+        self._request_telemetry = {}
+        self._stream_generation = 0
+        self._latency_history_ms = deque(maxlen=window_size)
+        self.pipeline_metrics = []
+        if start_worker:
+            self._stream_worker = threading.Thread(
+                target=self._stream_worker_main,
+                name='remote-grasp6d-latest-only',
+                daemon=True,
+            )
+            self._stream_worker.start()
+
+    def start_streaming(self):
+        with self._stream_condition:
+            if self.streaming_enabled:
+                return False
+            self.target_instance_epoch += 1
+            self.tracker = CandidateTracker(self._tracking_config)
+            self._stream_generation = self.inference_coordinator.start()
+            self.last_submitted_stamp_ns = 0
+            self.streaming_enabled = True
+            self._stream_condition.notify_all()
+            return True
+
+    def stop_streaming(self):
+        pending_request_id = None
+        with self._stream_condition:
+            if not self.streaming_enabled:
+                return False
+            pending_request_id = self._pending_request_id
+            if pending_request_id is not None:
+                self._pipeline_counters['completed'] += 1
+                self._pipeline_counters['stale'] += 1
+                self._pending_request_id = None
+            self.streaming_enabled = False
+            self.target_instance_epoch += 1
+            self.inference_coordinator.stop()
+            self.tracker = CandidateTracker(self._tracking_config)
+            self._stream_condition.notify_all()
+        if pending_request_id is not None:
+            self._emit_pending_drop_metrics(
+                pending_request_id, 'GENERATION_STALE'
+            )
+        return True
+
+    def submit_stream_snapshot(self, snapshot, graspnet_input_config=None):
+        stamp_sec = _finite_pipeline_number(
+            getattr(snapshot, 'stamp_sec', float('nan')),
+            default=float('nan'),
+        )
+        stamp_ns = int(getattr(snapshot, 'stamp_ns', 0) or 0)
+        if not math.isfinite(stamp_sec) or stamp_sec <= 0.0 or stamp_ns <= 0:
+            raise ValueError('stream snapshot must have a positive finite stamp')
+        replaced_request_id = None
+        with self._stream_condition:
+            if not self.streaming_enabled:
+                return False
+            if stamp_ns <= self.last_submitted_stamp_ns:
+                return False
+            payload = (snapshot, graspnet_input_config)
+            decision = self.inference_coordinator.submit(
+                payload,
+                stamp_sec,
+                target_epoch=self.target_instance_epoch,
+            )
+            self.last_submitted_stamp_ns = stamp_ns
+            self._pipeline_counters['submitted'] += 1
+            if decision.ticket_to_start is None:
+                self._pipeline_counters['busy'] += 1
+            if decision.replaced_request_id is not None:
+                self._pipeline_counters['replaced'] += 1
+                self._pipeline_counters['completed'] += 1
+                self._pipeline_counters['stale'] += 1
+                self._pending_replacements += 1
+                replaced_request_id = decision.replaced_request_id
+            submitted_request_id = (
+                decision.ticket_to_start.request_id
+                if decision.ticket_to_start is not None
+                else decision.pending_request_id
+            )
+            self._request_telemetry[int(submitted_request_id)] = {
+                'request_id': int(submitted_request_id),
+                'generation': int(self._stream_generation),
+                'target_epoch': int(self.target_instance_epoch),
+                'snapshot_stamp_sec': float(stamp_sec),
+                'submitted_sec': float(self._stream_source_clock()),
+            }
+            if decision.ticket_to_start is not None:
+                self._stream_worker_ticket = decision.ticket_to_start
+                self._stream_condition.notify_all()
+            else:
+                self._pending_request_id = int(decision.pending_request_id)
+        if replaced_request_id is not None:
+            self._emit_pending_drop_metrics(
+                replaced_request_id, 'PENDING_REPLACED'
+            )
+        return True
+
+    def _emit_pending_drop_metrics(self, request_id, code):
+        metadata = self._request_telemetry.pop(int(request_id), {})
+        now_sec = float(self._stream_source_clock())
+        end_to_end_ms = max(
+            0.0,
+            (now_sec - float(metadata.get('submitted_sec', now_sec)))
+            * 1000.0,
+        )
+        self._latency_history_ms.append(end_to_end_ms)
+        result_age_ms = max(
+            0.0,
+            (
+                now_sec
+                - float(metadata.get('snapshot_stamp_sec', now_sec))
+            )
+            * 1000.0,
+        )
+        metrics = build_pipeline_metrics(
+            event='request_dropped',
+            request_id=metadata.get('request_id', request_id),
+            generation=metadata.get('generation', self._stream_generation),
+            target_epoch=metadata.get(
+                'target_epoch', self.target_instance_epoch
+            ),
+            snapshot_stamp_sec=metadata.get('snapshot_stamp_sec', 0.0),
+            status=code,
+            drop_reason=code,
+            counters=self._pipeline_counters,
+            pending_replacements=self._pending_replacements,
+            ros_prepare_ms=0.0,
+            transport_ms=0.0,
+            decode_ms=0.0,
+            remote_performance={},
+            end_to_end_ms=end_to_end_ms,
+            result_age_ms=result_age_ms,
+            latency_history_ms=self._latency_history_ms,
+            funnel={},
+        )
+        self.pipeline_metrics.append(metrics)
+        encoded = bounded_metrics_json(metrics)
+        publisher = getattr(self, 'pipeline_metrics_pub', None)
+        if publisher is not None:
+            try:
+                publisher.publish(String(encoded))
+            except Exception:
+                pass
+        try:
+            rospy.loginfo('remote 6D pipeline metrics: %s', encoded)
+        except Exception:
+            pass
+        return metrics
+
+    def _predict_remote(self, ticket, graspnet_input, intrinsics, frame_id):
+        started = time.perf_counter()
+        candidates = self.client.predict(
+            graspnet_input.color_bgr,
+            graspnet_input.depth_raw,
+            intrinsics,
+            request_id=int(ticket.request_id),
+            snapshot_stamp_sec=float(ticket.snapshot_stamp_sec),
+            frame_id=str(frame_id or 'camera_link'),
+            stamp_sec=float(ticket.snapshot_stamp_sec),
+            max_candidates=int(self.max_candidates),
+            max_gripper_width_m=0.0,
+            candidate_width_tolerance_m=float(
+                self.candidate_width_tolerance_m
+            ),
+        )
+        elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+        diagnostics = dict(
+            getattr(self.client, 'last_diagnostics', {}) or {}
+        )
+        performance = dict(
+            getattr(self.client, 'last_performance', {}) or {}
+        )
+        server_ms = _finite_pipeline_number(
+            performance.get('server_total_ms', 0.0)
+        )
+        transport_ms = max(0.0, elapsed_ms - server_ms)
+        return (
+            tuple(candidates),
+            diagnostics,
+            performance,
+            transport_ms,
+            0.0,
+        )
+
+    def _prepare_and_predict(self, ticket):
+        """Prepare immutable request facts and perform one correlated WSL call."""
+
+        prepare_started = time.perf_counter()
+        try:
+            snapshot, input_config = ticket.payload
+        except (TypeError, ValueError):
+            raise ValueError('inference ticket payload must contain snapshot/config')
+        if not isinstance(snapshot, SnapshotResult) or not snapshot.ok:
+            raise ValueError('inference ticket requires a valid planning snapshot')
+        if not bool(getattr(snapshot.object_msg, 'detected', False)):
+            raise CandidateContractError(
+                'TARGET_LOST',
+                'locked planning snapshot target is not detected',
+            )
+        if input_config is None:
+            input_config = self._freeze_graspnet_input_config()
+        request_invalidation_generation = self._capture_geometry_generation()
+        self._require_graspnet_input_prerequisites(snapshot, input_config)
+        self._refresh_runtime_params()
+        self.candidate_target_gate_enabled = bool(
+            input_config.candidate_target_gate_enabled
+        )
+        stamp = self._snapshot_ros_stamp(snapshot)
+        estimate, depth_for_remote, transform = self._prepare_snapshot_geometry(
+            snapshot,
+            stamp,
+        )
+        if not estimate.ok:
+            raise CandidateContractError(
+                estimate.failure_code,
+                estimate.failure_reason,
+            )
+        pose_estimator = FrozenSnapshotCandidatePoseEstimator(
+            transform,
+            stamp,
+            snapshot.frame_id,
+            raw_candidate_convention=self.candidate_frame_convention,
+        )
+        contract_mismatch = self._gripper_contract_mismatch_reason()
+        if contract_mismatch:
+            raise CandidateContractError(
+                'GRIPPER_MODEL_MISMATCH', contract_mismatch
+            )
+        graspnet_input, graspnet_input_audit = self._build_frozen_graspnet_input(
+            snapshot,
+            depth_for_remote,
+            input_config,
+            commit_audit=False,
+        )
+        model_choice = str(getattr(self, '_last_model_choice', '') or '')
+        if not model_choice:
+            raise CandidateContractError(
+                'MODEL_TASK_MISMATCH', 'model choice is empty'
+            )
+        ros_prepare_ms = max(
+            0.0,
+            (time.perf_counter() - prepare_started) * 1000.0,
+        )
+        (
+            candidates,
+            diagnostics,
+            performance,
+            transport_ms,
+            decode_ms,
+        ) = self._predict_remote(
+            ticket,
+            graspnet_input,
+            self._camera_intrinsics(),
+            snapshot.frame_id or self.pose_estimator.camera_frame,
+        )
+        return PreparedPrediction(
+            ticket=ticket,
+            snapshot=snapshot,
+            stamp=stamp,
+            geometry=estimate,
+            pose_estimator=pose_estimator,
+            graspnet_input=graspnet_input,
+            candidates=tuple(candidates),
+            remote_diagnostics=dict(diagnostics),
+            remote_performance=dict(performance),
+            graspnet_input_audit=dict(graspnet_input_audit),
+            request_invalidation_generation=request_invalidation_generation,
+            graspnet_input_config=input_config,
+            model_choice=model_choice,
+            ros_prepare_ms=ros_prepare_ms,
+            transport_ms=transport_ms,
+            decode_ms=decode_ms,
+        )
+
+    def _update_candidate_tracker(
+        self,
+        request_id,
+        observations,
+        target_identity,
+    ):
+        return self.tracker.update(
+            int(request_id),
+            tuple(observations),
+            target_identity=tuple(target_identity),
+        )
+
+    @staticmethod
+    def _candidate_safety_input(
+        *,
+        request_id,
+        snapshot_stamp_sec,
+        target_identity,
+        track_id,
+        variant_index,
+        center_base_xyz,
+        tool0_position_xyz,
+        quaternion_xyzw,
+        approach_base_xyz,
+        target_present,
+        same_target_instance,
+        target_absolute_distance_m,
+        target_absolute_limit_m,
+        required_open_width_m,
+        physical_open_width_m,
+        depth_valid,
+        transform_valid,
+        geometry_valid,
+        collision_free,
+        snapshot_context_revision,
+    ):
+        target_epoch, target_label, model_choice = tuple(target_identity)
+        return SafetyGateInput(
+            depth_valid=depth_valid,
+            transform_valid=transform_valid,
+            target_present=target_present,
+            same_target_instance=same_target_instance,
+            target_absolute_distance_m=target_absolute_distance_m,
+            target_absolute_limit_m=target_absolute_limit_m,
+            required_open_width_m=required_open_width_m,
+            physical_open_width_m=physical_open_width_m,
+            geometry_valid=geometry_valid,
+            collision_free=collision_free,
+            request_id=int(request_id),
+            snapshot_stamp_sec=float(snapshot_stamp_sec),
+            target_epoch=int(target_epoch),
+            target_label=str(target_label),
+            model_choice=str(model_choice),
+            track_id=int(track_id),
+            variant_index=int(variant_index),
+            center_base_xyz=center_base_xyz,
+            tool0_position_xyz=tool0_position_xyz,
+            quaternion_xyzw=quaternion_xyzw,
+            approach_base_xyz=approach_base_xyz,
+            snapshot_context_revision=snapshot_context_revision,
+        )
+
+    @classmethod
+    def _candidate_safety_gate(cls, **kwargs):
+        return mandatory_safety_gate(cls._candidate_safety_input(**kwargs))
+
+    @staticmethod
+    def _candidate_soft_features(
+        *,
+        model_score,
+        cloud_distance_m,
+        center_distance_m,
+        downward_approach_cos,
+        visibility_center_cost,
+        support_margin_m,
+        jaw_tilt_cos,
+        geometry_margin_m,
+        stability_hit_ratio,
+        joint_path_cost=0.0,
+        joint_max_delta_rad=0.0,
+        position_dispersion_m=0.0,
+        orientation_dispersion_rad=0.0,
+    ):
+        return SoftCandidateFeatures(
+            model_score=model_score,
+            cloud_distance_m=cloud_distance_m,
+            center_distance_m=center_distance_m,
+            downward_approach_cos=downward_approach_cos,
+            visibility_center_cost=visibility_center_cost,
+            support_margin_m=support_margin_m,
+            jaw_tilt_cos=jaw_tilt_cos,
+            geometry_margin_m=geometry_margin_m,
+            joint_path_cost=joint_path_cost,
+            joint_max_delta_rad=joint_max_delta_rad,
+            stability_hit_ratio=stability_hit_ratio,
+            position_dispersion_m=position_dispersion_m,
+            orientation_dispersion_rad=orientation_dispersion_rad,
+        )
+
+    def _activate_prepared_geometry(self, prepared):
+        invalidated, _code = self._geometry_invalidation_state(
+            prepared.request_invalidation_generation
+        )
+        if invalidated:
+            return False
+        self._planning_snapshot_active = True
+        self._planning_object_msg = prepared.snapshot.object_msg
+        self._planning_object_time = prepared.stamp
+        self._target_cloud_request_active = False
+        self._clear_geometry_cache()
+        activated = self._activate_geometry(
+            prepared.geometry,
+            prepared.snapshot,
+            prepared.stamp,
+            prepared.pose_estimator.T_base_optical,
+            expected_generation=prepared.request_invalidation_generation,
+        )
+        if not activated:
+            return False
+        self._current_prepared_prediction = prepared
+        self._active_graspnet_input_audit = dict(
+            getattr(prepared, 'graspnet_input_audit', {}) or {}
+        )
+        if bool(
+            getattr(self, 'camera_visibility_gate_enabled', False)
+            or getattr(self, 'camera_visibility_diagnostic_enabled', False)
+        ):
+            self._freeze_tool_from_camera_matrix(prepared.stamp)
+        return True
+
+    def _pose_approach_base_xyz(self, grasp_pose):
+        matrix = pose_matrix(grasp_pose)
+        name = str(
+            self.grasp_config.get('tool_approach_axis', 'z') or 'z'
+        ).strip().lower()
+        sign = -1.0 if name.startswith('-') else 1.0
+        axis_index = {'x': 0, 'y': 1, 'z': 2}[name.lstrip('+-')]
+        approach = sign * np.asarray(matrix[:3, axis_index], dtype=float)
+        norm = float(np.linalg.norm(approach))
+        if not math.isfinite(norm) or norm <= 1e-12:
+            raise CandidateContractError(
+                'TRANSFORM_INVALID', 'candidate approach axis is invalid'
+            )
+        return approach / norm
+
+    @staticmethod
+    def _funnel_stage(entered, passed):
+        entered = _pipeline_count(entered)
+        passed = min(entered, _pipeline_count(passed))
+        return {
+            'entered': entered,
+            'passed': passed,
+            'rejected': entered - passed,
+        }
+
+    def _evaluate_local_candidates(self, prepared):
+        """Apply current hard facts and compute soft costs before tracking."""
+
+        candidates = tuple(prepared.candidates)
+        diagnostics = dict(prepared.remote_diagnostics or {})
+        rejections = Counter()
+        observations = []
+        weights = getattr(self, 'soft_score_weights', SoftScoreWeights())
+        self._reset_geometry_gate_audit(len(candidates))
+        model_to_tool = validate_execution_tool0_contract(
+            self.require_candidate_depth,
+            self.model_grasp_to_tool_quaternion,
+            self.grasp_config,
+        )
+        target_label = str(
+            getattr(prepared.snapshot.object_msg, 'label', '') or ''
+        )
+        target_identity = (
+            int(prepared.ticket.target_epoch),
+            target_label,
+            str(prepared.model_choice),
+        )
+        target_xyz = np.asarray(
+            prepared.geometry.center_base,
+            dtype=float,
+        ).reshape(3)
+        context_revision = str(prepared.pose_estimator.transform_sha256)
+        for candidate_index, raw_candidate in enumerate(candidates):
+            try:
+                camera_candidate = convert_candidate_to_camera_link(
+                    raw_candidate,
+                    self.candidate_frame_convention,
+                )
+                camera_candidate = align_candidate_to_tool_frame(
+                    camera_candidate,
+                    model_to_tool,
+                    require_depth=self.require_candidate_depth,
+                )
+                setattr(camera_candidate, '_raw_candidate_index', candidate_index)
+                setattr(camera_candidate, '_variant_index', 0)
+                grasp_pose, center_base = make_candidate_base_pose_and_center(
+                    camera_candidate,
+                    prepared.pose_estimator,
+                    prepared.stamp,
+                    CANONICAL_CANDIDATE_CAMERA_FRAME,
+                )
+                setattr(camera_candidate, '_center_base_xyz', center_base)
+                plan = make_grasp_sequence_from_grasp_pose(
+                    grasp_pose,
+                    pregrasp_distance_m=float(
+                        self.grasp_config.get('pregrasp_distance_m', 0.08)
+                    ),
+                    approach_offset_m=float(
+                        self.grasp_config.get('final_approach_offset_m', 0.015)
+                    ),
+                    lift_height_m=float(
+                        self.grasp_config.get('lift_height_m', 0.05)
+                    ),
+                    tool_approach_axis=str(
+                        self.grasp_config.get('tool_approach_axis', 'z')
+                    ),
+                )
+                gate = self._evaluate_candidate_geometry(
+                    raw_candidate,
+                    camera_candidate,
+                    grasp_pose,
+                    plan,
+                )
+                setattr(camera_candidate, '_geometry_gate_result', gate)
+                setattr(camera_candidate, '_grasp_sequence', plan)
+                setattr(
+                    camera_candidate,
+                    'required_open_width_m',
+                    float(gate.required_open_width_m),
+                )
+                pose_transform = pose_matrix(grasp_pose)
+                tool0_position = pose_transform[:3, 3]
+                quaternion = np.asarray(
+                    [
+                        grasp_pose.pose.orientation.x,
+                        grasp_pose.pose.orientation.y,
+                        grasp_pose.pose.orientation.z,
+                        grasp_pose.pose.orientation.w,
+                    ],
+                    dtype=float,
+                )
+                approach = self._pose_approach_base_xyz(grasp_pose)
+                target_distance = float(
+                    np.linalg.norm(np.asarray(center_base) - target_xyz)
+                )
+                safety_input = self._candidate_safety_input(
+                    request_id=prepared.ticket.request_id,
+                    snapshot_stamp_sec=prepared.ticket.snapshot_stamp_sec,
+                    target_identity=target_identity,
+                    track_id=candidate_index + 1,
+                    variant_index=0,
+                    center_base_xyz=center_base,
+                    tool0_position_xyz=tool0_position,
+                    quaternion_xyzw=quaternion,
+                    approach_base_xyz=approach,
+                    target_present=bool(
+                        getattr(prepared.snapshot.object_msg, 'detected', False)
+                    ),
+                    same_target_instance=(
+                        prepared.ticket.target_epoch
+                        == self.target_instance_epoch
+                    ),
+                    target_absolute_distance_m=target_distance,
+                    target_absolute_limit_m=float(
+                        self.target_absolute_sanity_distance_m
+                    ),
+                    required_open_width_m=gate.required_open_width_m,
+                    physical_open_width_m=self.gripper_physical_open_width_m,
+                    depth_valid=(
+                        validate_graspnet_depth_m(
+                            getattr(camera_candidate, 'depth_m', None),
+                            required=True,
+                        )
+                        is not None
+                    ),
+                    transform_valid=True,
+                    geometry_valid=isinstance(gate, CandidateGateResult),
+                    collision_free=bool(gate.ok),
+                    snapshot_context_revision=context_revision,
+                )
+                hard_decision = mandatory_safety_gate(safety_input)
+                if not hard_decision.ok:
+                    rejections[hard_decision.code] += 1
+                    continue
+
+                cloud_distance = self._camera_candidate_cloud_distance(
+                    camera_candidate
+                )
+                if not math.isfinite(cloud_distance):
+                    cloud_distance = target_distance
+                visibility_cost = 0.0
+                if bool(
+                    getattr(self, 'camera_visibility_gate_enabled', False)
+                    or getattr(self, 'camera_visibility_diagnostic_enabled', False)
+                ):
+                    _visible, visibility, _reason = (
+                        self._candidate_visibility_metrics(
+                            grasp_pose,
+                            target_xyz,
+                        )
+                    )
+                    visibility_cost = (
+                        max(float(item['center_cost']) for item in visibility)
+                        if visibility
+                        else 1.0
+                    )
+                    if not math.isfinite(visibility_cost):
+                        visibility_cost = 1.0
+                support_metrics = self._candidate_support_geometry_metrics(
+                    camera_candidate
+                )
+                jaw_tilt_cos = 1.0
+                if support_metrics is not None:
+                    jaw_tilt_cos = 1.0 - min(
+                        1.0,
+                        max(0.0, float(support_metrics['jaw_normal_cos'])),
+                    )
+                geometry_margin = max(
+                    0.0,
+                    min(
+                        float(gate.support_clearance_m),
+                        float(self.gripper_physical_open_width_m)
+                        - float(gate.required_open_width_m),
+                    ),
+                )
+                features = self._candidate_soft_features(
+                    model_score=float(camera_candidate.score),
+                    cloud_distance_m=cloud_distance,
+                    center_distance_m=target_distance,
+                    downward_approach_cos=float(-approach[2]),
+                    visibility_center_cost=visibility_cost,
+                    support_margin_m=max(0.0, float(gate.support_clearance_m)),
+                    jaw_tilt_cos=jaw_tilt_cos,
+                    geometry_margin_m=geometry_margin,
+                    stability_hit_ratio=1.0
+                    / float(max(1, self._tracking_config.window_size)),
+                )
+                score = soft_candidate_cost(features, weights)
+                payload = LocalCandidatePayload(
+                    raw_candidate_index=candidate_index,
+                    variant_index=0,
+                    raw_candidate=raw_candidate,
+                    camera_candidate=camera_candidate,
+                    grasp_pose=grasp_pose,
+                    geometry_gate=gate,
+                    soft_features=features,
+                    score_components=dict(score.components),
+                )
+                observations.append(
+                    CandidateObservation(
+                        request_id=prepared.ticket.request_id,
+                        snapshot_stamp_sec=prepared.ticket.snapshot_stamp_sec,
+                        target_epoch=prepared.ticket.target_epoch,
+                        target_label=target_label,
+                        model_choice=prepared.model_choice,
+                        center_base_xyz=center_base,
+                        tool0_position_xyz=tool0_position,
+                        quaternion_xyzw=quaternion,
+                        approach_base_xyz=approach,
+                        required_open_width_m=gate.required_open_width_m,
+                        model_width_m=camera_candidate.width_m,
+                        model_score=camera_candidate.score,
+                        geometry_margin_m=geometry_margin,
+                        pre_moveit_score=score.total,
+                        payload=payload,
+                    )
+                )
+            except Exception as exc:
+                code = str(
+                    getattr(exc, 'code', 'CANDIDATE_CONTRACT_INVALID')
+                    or 'CANDIDATE_CONTRACT_INVALID'
+                )
+                rejections[code] += 1
+
+        returned = len(candidates)
+        locally_valid = len(observations)
+        raw_count = _pipeline_count(
+            diagnostics.get('raw_candidates', returned)
+        )
+        nms_count = _pipeline_count(diagnostics.get('after_nms', returned))
+        collision_count = _pipeline_count(
+            diagnostics.get('after_collision', returned)
+        )
+        stage_counts = {
+            'raw': self._funnel_stage(raw_count, raw_count),
+            'nms': self._funnel_stage(raw_count, min(raw_count, nms_count)),
+            'remote_collision': self._funnel_stage(
+                nms_count, min(nms_count, collision_count)
+            ),
+            'returned': self._funnel_stage(collision_count, returned),
+            'locally_valid': self._funnel_stage(returned, locally_valid),
+        }
+        denominator = float(max(1, returned))
+        return tuple(observations), {
+            'input_count': returned,
+            'stage_counts': stage_counts,
+            'rejection_counts': dict(sorted(rejections.items())),
+            'rejection_ratios': {
+                code: count / denominator
+                for code, count in sorted(rejections.items())
+            },
+            'primary_failure': (
+                min(rejections, key=lambda code: (-rejections[code], code))
+                if rejections
+                else None
+            ),
+        }
+
+    def _poll_stream_snapshot(self):
+        """Poll one already-buffered rolling window without waiting."""
+
+        if not self.enabled or not self.streaming_enabled:
+            return False
+        if self._safe_time() < getattr(self, '_backoff_until', rospy.Time(0)):
+            return False
         try:
             input_config = self._freeze_graspnet_input_config()
             require_mask = bool(
                 self._active_profile_requires_mask()
                 or input_config.requires_instance_mask
             )
-        except GraspNetInputContextError as exc:
-            message = '%s: %s' % (exc.code, exc.reason)
-            self._invalidate_geometry(exc.code, exc.reason)
-            self.status_pub.publish(String(message))
-            return TriggerZeroResponse(False, message)
-        except Exception as exc:
-            message = 'MODEL_TASK_MISMATCH: %s' % exc
-            self._invalidate_geometry('MODEL_TASK_MISMATCH', str(exc))
-            self.status_pub.publish(String(message))
-            return TriggerZeroResponse(False, message)
-        snapshot, failure_code, failure_reason = self._wait_for_stable_snapshot(require_mask)
-        if snapshot is None or not snapshot.ok:
-            message = '%s: %s' % (failure_code, failure_reason)
-            stamp = (
-                self._snapshot_ros_stamp(snapshot)
-                if snapshot is not None
-                else None
-            )
-            self._invalidate_geometry(
-                failure_code,
-                failure_reason,
-                stamp=stamp,
-                snapshot=snapshot,
-            )
-            self.status_pub.publish(String(message))
-            return TriggerZeroResponse(False, message)
-        ok, message = self._process_frame(
+        except Exception:
+            return False
+        samples = self.frames.wait_for_samples(
+            self.planning_snapshot_frames,
+            0.0,
+            require_mask=require_mask,
+            max_age_sec=self.planning_snapshot_max_age_sec,
+            collection_span_sec=self.planning_snapshot_max_span_sec,
+            max_inference_latency_sec=(
+                self.planning_snapshot_max_inference_latency_sec
+            ),
+            newest_after_ns=self.last_submitted_stamp_ns,
+        )
+        if len(samples) < self.planning_snapshot_frames:
+            return False
+        depth_scale, depth_min_m, depth_max_m = self._snapshot_depth_config()
+        snapshot = fuse_stable_samples(
+            samples,
+            require_mask=require_mask,
+            min_mask_iou=self.planning_mask_min_iou,
+            max_centroid_shift_px=self.planning_mask_max_centroid_shift_px,
+            max_joint_delta_rad=self.planning_max_joint_delta_rad,
+            erosion_px=self.mask_erosion_px,
+            depth_scale=depth_scale,
+            depth_min_m=depth_min_m,
+            depth_max_m=depth_max_m,
+            mad_scale=self.depth_mad_scale,
+            mad_absolute_floor_m=self.depth_mad_absolute_floor_m,
+            internal_hole_max_area_px=self.mask_internal_hole_max_area_px,
+        )
+        if not snapshot.ok:
+            return False
+        return self.submit_stream_snapshot(
             snapshot,
-            manual=True,
             graspnet_input_config=input_config,
         )
-        return TriggerZeroResponse(bool(ok), str(message))
+
+    def _publish_preview_plan(self, rich_plan, legacy_plan):
+        """Publish preview-only copies; never touch execution authority."""
+
+        outgoing_rich = deepcopy(rich_plan)
+        outgoing_legacy = deepcopy(legacy_plan)
+        self.preview_rich_plan_pub.publish(outgoing_rich)
+        self.preview_plan_pub.publish(outgoing_legacy)
+        self.latest_preview_rich_plan = deepcopy(outgoing_rich)
+
+    @staticmethod
+    def _merge_pipeline_funnel(
+        local_funnel,
+        moveit_funnel=None,
+        stable_count=0,
+        preview_count=0,
+    ):
+        local = dict(local_funnel or {})
+        moveit = dict(moveit_funnel or {})
+        stage_counts = dict(local.get('stage_counts', {}) or {})
+        stage_counts.update(dict(moveit.get('stage_counts', {}) or {}))
+        locally_valid = 0
+        local_stage = stage_counts.get('locally_valid')
+        if isinstance(local_stage, dict):
+            locally_valid = _pipeline_count(local_stage.get('passed', 0))
+        stage_counts['stable'] = {
+            'entered': locally_valid,
+            'passed': _pipeline_count(stable_count),
+            'rejected': max(0, locally_valid - _pipeline_count(stable_count)),
+        }
+        reachable_stage = stage_counts.get('moveit_reachable', {})
+        reachable = (
+            _pipeline_count(reachable_stage.get('passed', 0))
+            if isinstance(reachable_stage, dict)
+            else 0
+        )
+        stage_counts['preview'] = {
+            'entered': reachable,
+            'passed': _pipeline_count(preview_count),
+            'rejected': max(0, reachable - _pipeline_count(preview_count)),
+        }
+        # Task 5 never promotes a preview into execution authority.
+        stage_counts['promoted'] = {
+            'entered': _pipeline_count(preview_count),
+            'passed': 0,
+            'rejected': _pipeline_count(preview_count),
+        }
+        rejection_counts = Counter(
+            dict(local.get('rejection_counts', {}) or {})
+        )
+        rejection_counts.update(
+            dict(moveit.get('rejection_counts', {}) or {})
+        )
+        denominator = max(
+            1,
+            _pipeline_count(local.get('input_count', 0)),
+        )
+        ratios = {
+            code: float(count) / float(denominator)
+            for code, count in sorted(rejection_counts.items())
+        }
+        primary = None
+        if rejection_counts:
+            primary = min(
+                rejection_counts,
+                key=lambda code: (-rejection_counts[code], code),
+            )
+        return {
+            'stage_counts': stage_counts,
+            'rejection_counts': dict(sorted(rejection_counts.items())),
+            'rejection_ratios': ratios,
+            'primary_failure': primary,
+        }
+
+    @staticmethod
+    def _stable_variant_pose(stable_candidate, variant_index, stamp):
+        """Materialize one fused physical pose variant in ``base_link``."""
+
+        if int(variant_index) not in (0, 1):
+            raise ValueError('parallel-jaw variant index must be 0 or 1')
+        quaternion = np.asarray(
+            stable_candidate.quaternion_xyzw,
+            dtype=float,
+        )
+        if int(variant_index) == 1:
+            quaternion = np.asarray(
+                quaternion_multiply(
+                    quaternion,
+                    np.asarray([0.0, 0.0, 1.0, 0.0], dtype=float),
+                ),
+                dtype=float,
+            )
+        quaternion = _normalize_quaternion(quaternion)
+        position = np.asarray(
+            stable_candidate.tool0_position_xyz,
+            dtype=float,
+        ).reshape(3)
+        pose = PoseStamped()
+        pose.header.frame_id = 'base_link'
+        pose.header.stamp = stamp
+        pose.pose.position.x = float(position[0])
+        pose.pose.position.y = float(position[1])
+        pose.pose.position.z = float(position[2])
+        pose.pose.orientation.x = float(quaternion[0])
+        pose.pose.orientation.y = float(quaternion[1])
+        pose.pose.orientation.z = float(quaternion[2])
+        pose.pose.orientation.w = float(quaternion[3])
+        return pose
+
+    def _recheck_and_score_stable(self, prepared, stable_candidates):
+        """Re-evaluate stable fused poses against the latest accepted facts."""
+
+        current_identity = (
+            int(prepared.ticket.target_epoch),
+            str(getattr(prepared.snapshot.object_msg, 'label', '') or ''),
+            str(prepared.model_choice or ''),
+        )
+        target_xyz = np.asarray(
+            prepared.geometry.center_base,
+            dtype=float,
+        ).reshape(3)
+        context_revision = str(prepared.pose_estimator.transform_sha256)
+        weights = getattr(self, 'soft_score_weights', SoftScoreWeights())
+        runtime = {}
+        scored = []
+        for stable in tuple(stable_candidates):
+            payload = stable.payload
+            if not isinstance(payload, LocalCandidatePayload):
+                continue
+            for variant_index in (0, 1):
+                try:
+                    grasp_pose = self._stable_variant_pose(
+                        stable,
+                        variant_index,
+                        prepared.stamp,
+                    )
+                    sequence = make_grasp_sequence_from_grasp_pose(
+                        grasp_pose,
+                        pregrasp_distance_m=float(
+                            self.grasp_config.get('pregrasp_distance_m', 0.08)
+                        ),
+                        approach_offset_m=float(
+                            self.grasp_config.get(
+                                'final_approach_offset_m', 0.015
+                            )
+                        ),
+                        lift_height_m=float(
+                            self.grasp_config.get('lift_height_m', 0.05)
+                        ),
+                        tool_approach_axis=str(
+                            self.grasp_config.get('tool_approach_axis', 'z')
+                        ),
+                    )
+                    camera_candidate = deepcopy(payload.camera_candidate)
+                    camera_candidate.width_m = float(stable.model_width_m)
+                    setattr(
+                        camera_candidate,
+                        '_center_base_xyz',
+                        np.asarray(stable.center_base_xyz, dtype=float),
+                    )
+                    setattr(camera_candidate, '_variant_index', variant_index)
+                    gate = self._evaluate_candidate_geometry(
+                        payload.raw_candidate,
+                        camera_candidate,
+                        grasp_pose,
+                        sequence,
+                    )
+                    latest_required_width = _finite_pipeline_number(
+                        getattr(gate, 'required_open_width_m', 0.0)
+                    )
+                    conservative_required_width = max(
+                        float(stable.required_open_width_m),
+                        latest_required_width,
+                    )
+                    current_stable = replace(
+                        stable,
+                        required_open_width_m=conservative_required_width,
+                    )
+                    target_distance = float(
+                        np.linalg.norm(
+                            np.asarray(stable.center_base_xyz) - target_xyz
+                        )
+                    )
+                    latest_safety = self._candidate_safety_input(
+                        request_id=prepared.ticket.request_id,
+                        snapshot_stamp_sec=(
+                            prepared.ticket.snapshot_stamp_sec
+                        ),
+                        target_identity=current_identity,
+                        track_id=stable.track_id,
+                        variant_index=variant_index,
+                        center_base_xyz=current_stable.center_base_xyz,
+                        tool0_position_xyz=current_stable.tool0_position_xyz,
+                        quaternion_xyzw=self._pose_quaternion_xyzw(
+                            grasp_pose
+                        ),
+                        approach_base_xyz=current_stable.approach_base_xyz,
+                        target_present=bool(
+                            getattr(
+                                prepared.snapshot.object_msg,
+                                'detected',
+                                False,
+                            )
+                        ),
+                        same_target_instance=(
+                            current_identity
+                            == (
+                                current_stable.target_epoch,
+                                current_stable.target_label,
+                                current_stable.model_choice,
+                            )
+                            and prepared.ticket.target_epoch
+                            == self.target_instance_epoch
+                        ),
+                        target_absolute_distance_m=target_distance,
+                        target_absolute_limit_m=float(
+                            self.target_absolute_sanity_distance_m
+                        ),
+                        required_open_width_m=(
+                            current_stable.required_open_width_m
+                        ),
+                        physical_open_width_m=self.gripper_physical_open_width_m,
+                        depth_valid=(
+                            validate_graspnet_depth_m(
+                                getattr(camera_candidate, 'depth_m', None),
+                                required=True,
+                            )
+                            is not None
+                        ),
+                        transform_valid=True,
+                        geometry_valid=isinstance(gate, CandidateGateResult),
+                        collision_free=bool(gate.ok),
+                        snapshot_context_revision=context_revision,
+                    )
+                    hit_ratio = float(stable.hit_count) / float(
+                        max(1, stable.window_count)
+                    )
+                    visibility_cost = 0.0
+                    if bool(
+                        getattr(self, 'camera_visibility_gate_enabled', False)
+                        or getattr(
+                            self,
+                            'camera_visibility_diagnostic_enabled',
+                            False,
+                        )
+                    ):
+                        _visible, visibility, _reason = (
+                            self._candidate_visibility_metrics(
+                                grasp_pose,
+                                target_xyz,
+                            )
+                        )
+                        visibility_cost = (
+                            max(
+                                float(item['center_cost'])
+                                for item in visibility
+                            )
+                            if visibility
+                            else 1.0
+                        )
+                    geometry_margin = max(
+                        0.0,
+                        min(
+                            float(gate.support_clearance_m),
+                            float(self.gripper_physical_open_width_m)
+                            - float(gate.required_open_width_m),
+                        ),
+                    )
+                    features = replace(
+                        payload.soft_features,
+                        model_score=float(stable.model_score),
+                        cloud_distance_m=target_distance,
+                        center_distance_m=target_distance,
+                        downward_approach_cos=float(
+                            -np.asarray(stable.approach_base_xyz)[2]
+                        ),
+                        visibility_center_cost=max(
+                            0.0,
+                            _finite_pipeline_number(visibility_cost),
+                        ),
+                        support_margin_m=max(
+                            0.0, float(gate.support_clearance_m)
+                        ),
+                        geometry_margin_m=geometry_margin,
+                        stability_hit_ratio=hit_ratio,
+                    )
+                    candidate = ScoredStableCandidate(
+                        stable_candidate=current_stable,
+                        variant_index=variant_index,
+                        latest_safety=latest_safety,
+                        soft_features=features,
+                        score_weights=weights,
+                        evaluation_request_id=prepared.ticket.request_id,
+                        evaluation_snapshot_stamp_sec=(
+                            prepared.ticket.snapshot_stamp_sec
+                        ),
+                        evaluation_context_revision=context_revision,
+                    )
+                    runtime[(stable.track_id, variant_index)] = {
+                        'prepared': prepared,
+                        'grasp_pose': grasp_pose,
+                        'sequence': sequence,
+                        'camera_candidate': camera_candidate,
+                        'geometry_gate': gate,
+                        'scored_candidate': candidate,
+                    }
+                    scored.append(candidate)
+                except Exception:
+                    continue
+        self._stable_variant_runtime = runtime
+        return tuple(scored)
+
+    @staticmethod
+    def _pose_quaternion_xyzw(grasp_pose):
+        orientation = grasp_pose.pose.orientation
+        return (
+            float(orientation.x),
+            float(orientation.y),
+            float(orientation.z),
+            float(orientation.w),
+        )
+
+    def _check_moveit_stable_candidate(self, candidate):
+        runtime = getattr(self, '_stable_variant_runtime', {}).get(
+            (candidate.track_id, candidate.variant_index)
+        )
+        grasp_pose = (
+            runtime.get('grasp_pose') if isinstance(runtime, dict) else None
+        )
+        if grasp_pose is None:
+            return MoveItResult(
+                reachable=False,
+                joint_path_cost=0.0,
+                joint_max_delta_rad=0.0,
+                reason='stable variant runtime pose is unavailable',
+                collision_free=True,
+                within_joint_limits=True,
+                ik_valid=False,
+                planning_success=False,
+            )
+        reachable = bool(self._plan_reachable(grasp_pose))
+        metrics = dict(
+            getattr(self, '_candidate_plan_metrics', {}).get(
+                self._pose_key(grasp_pose), {}
+            )
+            or {}
+        )
+        path_cost = max(
+            0.0, _finite_pipeline_number(metrics.get('joint_path_cost', 0.0))
+        )
+        max_delta = max(
+            0.0, _finite_pipeline_number(metrics.get('joint_max_delta', 0.0))
+        )
+        return MoveItResult(
+            reachable=reachable,
+            joint_path_cost=path_cost,
+            joint_max_delta_rad=max_delta,
+            reason='' if reachable else 'strict MoveIt pose check rejected',
+            collision_free=True,
+            within_joint_limits=True,
+            ik_valid=reachable,
+            planning_success=reachable,
+        )
+
+    def _publish_selected_preview(self, selected):
+        runtime = getattr(self, '_stable_variant_runtime', {}).get(
+            (selected.track_id, selected.variant_index)
+        )
+        if not isinstance(runtime, dict):
+            raise RuntimeError('selected stable variant runtime is unavailable')
+        prepared = runtime['prepared']
+        candidate = deepcopy(runtime['camera_candidate'])
+        stable = selected.stable_candidate
+        candidate.score = float(stable.model_score)
+        candidate.width_m = float(stable.model_width_m)
+        setattr(
+            candidate,
+            'required_open_width_m',
+            float(stable.required_open_width_m),
+        )
+        setattr(candidate, '_grasp_sequence', runtime['sequence'])
+        setattr(candidate, '_track_id', int(stable.track_id))
+        setattr(candidate, '_variant_index', int(selected.variant_index))
+        geometry_message = geometry_estimate_to_message(
+            prepared.geometry,
+            snapshot=prepared.snapshot,
+            stamp=prepared.stamp,
+            label=stable.target_label,
+        )
+        rich_plan = build_rich_plan(
+            candidate,
+            geometry_message,
+            geometry_message.header,
+            stable.model_choice,
+        )
+        legacy_plan = rich_plan_to_legacy(rich_plan)
+        self._publish_preview_plan(rich_plan, legacy_plan)
+        self._latest_streaming_audit = {
+            'request_id': int(selected.evaluation_request_id),
+            'snapshot_stamp_sec': float(
+                selected.evaluation_snapshot_stamp_sec
+            ),
+            'target_epoch': int(stable.target_epoch),
+            'target_label': stable.target_label,
+            'model_choice': stable.model_choice,
+            'raw_candidate_index': int(selected.payload.raw_candidate_index),
+            'track_id': int(stable.track_id),
+            'variant_index': int(selected.variant_index),
+            'hit_count': int(stable.hit_count),
+            'hit_request_ids': list(stable.hit_request_ids),
+            'pre_moveit_score': float(selected.pre_moveit_score),
+            'final_score': float(selected.final_score),
+            'score_components': dict(
+                soft_candidate_cost(
+                    replace(
+                        selected.soft_features,
+                        joint_path_cost=selected.moveit_result.joint_path_cost,
+                        joint_max_delta_rad=(
+                            selected.moveit_result.joint_max_delta_rad
+                        ),
+                    ),
+                    selected.score_weights,
+                ).components
+            ),
+            'plan_id': str(rich_plan.plan_id),
+        }
+        return rich_plan
+
+    def _finalize_streaming_gate_audit(
+        self,
+        prepared,
+        selection,
+        funnel,
+        status,
+    ):
+        """Atomically enrich the existing full audit with streaming lineage."""
+
+        report = deepcopy(getattr(self, '_active_gate_audit_report', None))
+        if not isinstance(report, dict):
+            raise CandidateContractError(
+                PLANNING_AUDIT_FAILED,
+                'continuous preview audit has no request-local base report',
+            )
+        runtime_by_lineage = {}
+        for (track_id, variant_index), runtime in dict(
+            getattr(self, '_stable_variant_runtime', {}) or {}
+        ).items():
+            scored_candidate = runtime.get('scored_candidate')
+            candidate_payload = getattr(scored_candidate, 'payload', None)
+            if isinstance(candidate_payload, LocalCandidatePayload):
+                runtime_by_lineage[
+                    (
+                        candidate_payload.raw_candidate_index,
+                        variant_index,
+                    )
+                ] = (track_id, runtime, scored_candidate)
+
+        checked = {
+            (item.track_id, item.variant_index): item
+            for item in tuple(getattr(selection, 'checked', ()) or ())
+        }
+        selected = getattr(selection, 'selected', None)
+        selected_lineage = None
+        for row in list(report.get('rows', []) or []):
+            lineage = (
+                int(row.get('candidate_index', -1)),
+                int(row.get('variant_index', -1)),
+            )
+            runtime_item = runtime_by_lineage.get(lineage)
+            if runtime_item is None:
+                continue
+            track_id, _runtime, scored_candidate = runtime_item
+            evaluated = checked.get(
+                (track_id, lineage[1]), scored_candidate
+            )
+            if evaluated is None:
+                continue
+            stable = evaluated.stable_candidate
+            row['tracking'] = {
+                'track_id': int(track_id),
+                'hit_count': int(stable.hit_count),
+                'window_count': int(stable.window_count),
+                'hit_request_ids': list(stable.hit_request_ids),
+            }
+            score_features = evaluated.soft_features
+            if evaluated.moveit_result is not None:
+                score_features = replace(
+                    score_features,
+                    joint_path_cost=evaluated.moveit_result.joint_path_cost,
+                    joint_max_delta_rad=(
+                        evaluated.moveit_result.joint_max_delta_rad
+                    ),
+                )
+            row['score_components'] = dict(
+                soft_candidate_cost(
+                    score_features,
+                    evaluated.score_weights,
+                ).components
+            )
+            row['pre_moveit_score'] = float(evaluated.pre_moveit_score)
+            row['final_score'] = (
+                None
+                if evaluated.final_score is None
+                else float(evaluated.final_score)
+            )
+            row['moveit'] = (
+                None
+                if evaluated.moveit_result is None
+                else asdict(evaluated.moveit_result)
+            )
+            is_selected = bool(
+                selected is not None
+                and selected.track_id == track_id
+                and selected.variant_index == lineage[1]
+            )
+            row['selected'] = is_selected
+            if is_selected:
+                selected_lineage = deepcopy(row)
+
+        report['report_version'] = 3
+        report['mode'] = 'continuous_preview'
+        report['request_id'] = int(prepared.ticket.request_id)
+        report['generation'] = int(prepared.ticket.generation)
+        report['target_epoch'] = int(prepared.ticket.target_epoch)
+        report['pipeline_funnel'] = deepcopy(dict(funnel or {}))
+        report.setdefault('summary', {})['pipeline_funnel'] = deepcopy(
+            dict(funnel or {})
+        )
+        report['lineage'] = [
+            {
+                'candidate_index': int(row.get('candidate_index', -1)),
+                'variant_index': int(row.get('variant_index', -1)),
+                'selected': bool(row.get('selected', False)),
+                'tracking': deepcopy(row.get('tracking')),
+            }
+            for row in list(report.get('rows', []) or [])
+        ]
+        report['selected'] = selected_lineage
+        report['plan_id'] = str(
+            getattr(
+                getattr(self, 'latest_preview_rich_plan', None),
+                'plan_id',
+                '',
+            )
+            or ''
+        )
+        report['outcome'] = {
+            'code': str(status or ''),
+            'reason': str(status or ''),
+            'valid_plan': False,
+            'preview_valid': selected is not None,
+        }
+        self._active_gate_audit_report = deepcopy(report)
+        self._latest_gate_audit_summary = {
+            'pipeline_funnel': deepcopy(dict(funnel or {})),
+            'status': str(status or ''),
+        }
+        self._latest_gate_audit_reference = self._write_gate_audit_report(
+            report
+        )
+        self._publish_bounded_gate_audit(selected_lineage)
+
+    def _accept_prediction(self, prepared):
+        """Accept one correlated result into tracking and preview selection."""
+
+        ticket = prepared.ticket
+        if int(ticket.target_epoch) != int(self.target_instance_epoch):
+            raise RuntimeError('prepared prediction target epoch is stale')
+        if not self._activate_prepared_geometry(prepared):
+            raise RuntimeError('prepared prediction geometry is stale')
+        if isinstance(prepared, PreparedPrediction):
+            self._run_candidate_gate_audit(
+                prepared.candidates,
+                prepared.stamp,
+                CANONICAL_CANDIDATE_CAMERA_FRAME,
+                remote_diagnostics=prepared.remote_diagnostics,
+                candidate_pose_estimator=prepared.pose_estimator,
+            )
+        target_label = str(
+            getattr(prepared.snapshot.object_msg, 'label', '') or ''
+        )
+        target_identity = (
+            int(ticket.target_epoch),
+            target_label,
+            str(
+                getattr(
+                    prepared,
+                    'model_choice',
+                    getattr(self, '_last_model_choice', ''),
+                )
+                or ''
+            ),
+        )
+        observations, local_funnel = self._evaluate_local_candidates(prepared)
+        stable = self._update_candidate_tracker(
+            request_id=ticket.request_id,
+            observations=observations,
+            target_identity=target_identity,
+        )
+        if not stable:
+            funnel = self._merge_pipeline_funnel(
+                local_funnel,
+                stable_count=0,
+                preview_count=0,
+            )
+            if isinstance(prepared, PreparedPrediction):
+                self._finalize_streaming_gate_audit(
+                    prepared,
+                    None,
+                    funnel,
+                    'STABILITY_PENDING',
+                )
+            return {'status': 'STABILITY_PENDING', 'funnel': funnel}
+
+        scored = self._recheck_and_score_stable(prepared, stable)
+        selection = bounded_moveit_select(
+            scored,
+            self._check_moveit_stable_candidate,
+            top_n=int(self.moveit_top_n),
+        )
+        moveit_funnel = selection.funnel.to_dict()
+        preview_count = 0
+        status = 'NO_REACHABLE_STABLE_CANDIDATE'
+        if selection.selected is not None:
+            self._publish_selected_preview(selection.selected)
+            preview_count = 1
+            status = 'PREVIEW_READY'
+        funnel = self._merge_pipeline_funnel(
+            local_funnel,
+            moveit_funnel,
+            stable_count=len(stable),
+            preview_count=preview_count,
+        )
+        primary = funnel.get('primary_failure')
+        if preview_count == 0 and primary:
+            count = int(funnel['rejection_counts'].get(primary, 0))
+            status = '%s:%d' % (primary, count)
+        if isinstance(prepared, PreparedPrediction):
+            self._finalize_streaming_gate_audit(
+                prepared,
+                selection,
+                funnel,
+                status,
+            )
+        return {'status': status, 'funnel': funnel}
+
+    def shutdown_streaming_worker(self, timeout_sec=2.0):
+        with self._stream_condition:
+            self.streaming_enabled = False
+            self.inference_coordinator.stop()
+            self._stream_worker_ticket = None
+            self._stream_shutdown.set()
+            self._stream_condition.notify_all()
+        worker = self._stream_worker
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(max(0.0, float(timeout_sec)))
+        return worker is None or not worker.is_alive()
+
+    def _stream_worker_main(self):
+        while True:
+            with self._stream_condition:
+                while (
+                    self._stream_worker_ticket is None
+                    and not self._stream_shutdown.is_set()
+                ):
+                    self._stream_condition.wait(0.5)
+                if self._stream_shutdown.is_set():
+                    return
+                ticket = self._stream_worker_ticket
+                self._stream_worker_ticket = None
+                self._stream_worker_busy = True
+                self._pipeline_counters['started'] += 1
+
+            prepared = None
+            error = None
+            ticket_stale_before_prediction = bool(
+                not self.streaming_enabled
+                or int(ticket.generation) != int(self._stream_generation)
+                or int(ticket.target_epoch) != int(self.target_instance_epoch)
+            )
+            if not ticket_stale_before_prediction:
+                try:
+                    prepared = self._prepare_and_predict(ticket)
+                except Exception as exc:
+                    error = exc
+
+            now_sec = float(self._stream_source_clock())
+            completion = self.inference_coordinator.complete(
+                ticket,
+                now_sec=now_sec,
+                target_epoch=self.target_instance_epoch,
+            )
+            if completion.next_ticket is not None:
+                with self._stream_condition:
+                    self._pending_request_id = None
+            self._request_telemetry.pop(int(ticket.request_id), None)
+            self._pipeline_counters['completed'] += 1
+            if completion.accepted:
+                self._pipeline_counters['accepted'] += 1
+            elif completion.code == 'RESULT_EXPIRED':
+                self._pipeline_counters['expired'] += 1
+            else:
+                self._pipeline_counters['stale'] += 1
+
+            funnel = {}
+            status = completion.code
+            if completion.accepted and prepared is not None and error is None:
+                try:
+                    accepted_result = self._accept_prediction(prepared)
+                    if isinstance(accepted_result, dict):
+                        funnel = dict(accepted_result.get('funnel', {}) or {})
+                        status = str(
+                            accepted_result.get('status', 'ACCEPTED')
+                        )
+                    else:
+                        status = 'ACCEPTED'
+                except Exception as exc:
+                    error = exc
+                    status = 'ACCEPT_FAILED'
+            elif error is not None and completion.accepted:
+                status = 'PREDICT_FAILED'
+
+            end_to_end_ms = max(
+                0.0,
+                (now_sec - float(ticket.submitted_monotonic_sec)) * 1000.0,
+            )
+            self._latency_history_ms.append(end_to_end_ms)
+            trusted_performance = (
+                dict(getattr(prepared, 'remote_performance', {}) or {})
+                if completion.accepted and prepared is not None
+                else {}
+            )
+            metrics = build_pipeline_metrics(
+                event='request_completed',
+                request_id=ticket.request_id,
+                generation=ticket.generation,
+                target_epoch=ticket.target_epoch,
+                snapshot_stamp_sec=ticket.snapshot_stamp_sec,
+                status=status,
+                drop_reason='' if completion.accepted else completion.code,
+                counters=self._pipeline_counters,
+                pending_replacements=self._pending_replacements,
+                ros_prepare_ms=getattr(prepared, 'ros_prepare_ms', 0.0),
+                transport_ms=getattr(prepared, 'transport_ms', 0.0),
+                decode_ms=getattr(prepared, 'decode_ms', 0.0),
+                remote_performance=trusted_performance,
+                end_to_end_ms=end_to_end_ms,
+                result_age_ms=max(0.0, completion.result_age_sec * 1000.0),
+                latency_history_ms=self._latency_history_ms,
+                funnel=funnel,
+            )
+            if error is not None:
+                metrics['error'] = str(error)
+            active_audit = getattr(self, '_active_gate_audit_report', None)
+            if (
+                completion.accepted
+                and isinstance(prepared, PreparedPrediction)
+                and isinstance(active_audit, dict)
+                and active_audit.get('mode') == 'continuous_preview'
+                and int(active_audit.get('request_id', -1))
+                == int(ticket.request_id)
+            ):
+                try:
+                    active_audit = deepcopy(active_audit)
+                    active_audit['pipeline_metrics'] = deepcopy(metrics)
+                    self._active_gate_audit_report = active_audit
+                    self._latest_gate_audit_reference = (
+                        self._write_gate_audit_report(active_audit)
+                    )
+                except Exception as exc:
+                    metrics['audit_metrics_error'] = str(exc)
+            self.pipeline_metrics.append(metrics)
+            publisher = getattr(self, 'pipeline_metrics_pub', None)
+            encoded_metrics = bounded_metrics_json(metrics)
+            if publisher is not None:
+                try:
+                    publisher.publish(String(encoded_metrics))
+                except Exception as exc:
+                    try:
+                        rospy.logwarn(
+                            'pipeline metrics publication failed: %s', exc
+                        )
+                    except Exception:
+                        pass
+            try:
+                rospy.loginfo('remote 6D pipeline metrics: %s', encoded_metrics)
+            except Exception:
+                pass
+
+            self._planning_snapshot_active = False
+            self._planning_object_msg = None
+            self._planning_object_time = None
+            self._target_cloud_request_active = False
+            self._current_prepared_prediction = None
+
+            with self._stream_condition:
+                self._stream_worker_busy = False
+                if completion.next_ticket is not None:
+                    self._stream_worker_ticket = completion.next_ticket
+                    self._stream_condition.notify_all()
+
+    def spin(self):
+        rate = rospy.Rate(self.rate_hz)
+        while not rospy.is_shutdown():
+            if self.enabled and self.streaming_enabled:
+                self._poll_stream_snapshot()
+            rate.sleep()
+
+    def request_plan_cb(self, req):
+        trigger = bool(getattr(req, 'trigger', False))
+        if trigger and not self.enabled:
+            return TriggerZeroResponse(False, 'remote 6D disabled')
+        if trigger:
+            changed = self.start_streaming()
+            message = (
+                'continuous remote 6D inference started'
+                if changed
+                else 'continuous remote 6D inference already running'
+            )
+        else:
+            changed = self.stop_streaming()
+            message = (
+                'continuous remote 6D inference stopped'
+                if changed
+                else 'continuous remote 6D inference already stopped'
+            )
+        publisher = getattr(self, 'status_pub', None)
+        if publisher is not None:
+            publisher.publish(String(message))
+        return TriggerZeroResponse(True, message)
 
     def _process_latest_frame(self):
         if rospy.Time.now() < self._backoff_until:
@@ -3489,6 +5414,7 @@ class RemoteGrasp6DNode:
                 'model choice changed from %s to %s'
                 % (previous_choice, model_choice),
             )
+            self._advance_target_instance_epoch('MODEL_RELOADED')
         self._last_model_choice = model_choice
         detector_kind = str(pcfg.get('detector', 'simple_hsv')).strip().lower()
         if detector_kind not in ('yolo', 'yolov8'):
@@ -3634,6 +5560,7 @@ class RemoteGrasp6DNode:
         snapshot,
         target_depth,
         config,
+        commit_audit=True,
     ):
         self._require_graspnet_input_prerequisites(snapshot, config)
         if config.requires_support_plane:
@@ -3740,8 +5667,10 @@ class RemoteGrasp6DNode:
                 'frozen_config': asdict(config),
             }
         )
-        self._active_graspnet_input_audit = audit
-        return result
+        if bool(commit_audit):
+            self._active_graspnet_input_audit = audit
+            return result
+        return result, audit
 
     def _wait_for_stable_snapshot(self, require_mask):
         deadline = time.monotonic() + max(0.0, float(self.planning_snapshot_timeout_sec))
@@ -3873,14 +5802,6 @@ class RemoteGrasp6DNode:
             self._cached_tool_from_camera = None
             self._cached_tool_from_camera_stamp_ns = 0
             self._active_gate_audit_report = None
-            self._publish_invalid_plan_pair(
-                'PLAN_PENDING',
-                'a new RGB-D planning snapshot is being processed',
-                # PLAN_PENDING is a control tombstone, not source authority.
-                # A zero stamp prevents it from consuming the snapshot's
-                # source-watermark slot before the final valid rich plan.
-                stamp=rospy.Time(0),
-            )
             # Every filter below must use geometry from this exact RGB-D
             # request, even when remote inference takes several seconds.
             self._target_cloud_request_active = False
@@ -3977,10 +5898,15 @@ class RemoteGrasp6DNode:
                 self._publish_error(message)
                 return False, message
             try:
+                self._legacy_request_id = int(
+                    getattr(self, '_legacy_request_id', 0)
+                ) + 1
                 candidates = self.client.predict(
                     graspnet_input.color_bgr,
                     graspnet_input.depth_raw,
                     self._camera_intrinsics(),
+                    request_id=self._legacy_request_id,
+                    snapshot_stamp_sec=float(snapshot.stamp_sec),
                     frame_id=frame_id or self.pose_estimator.camera_frame,
                     stamp_sec=float(snapshot.stamp_sec),
                     max_candidates=self.max_candidates,
