@@ -7,7 +7,7 @@ import rospy
 import numpy as np
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from alicia_flexible_grasp_supervisor.msg import ObjectPose
 try:
     from cv_bridge import CvBridge
@@ -18,6 +18,7 @@ try:
 except Exception:
     tf2_ros = None
 from alicia_flexible_grasp.vision.object_detector import HSVObjectDetector
+from alicia_flexible_grasp.vision.model_selection import resolve_yolo_model_path, select_yolo_model
 from alicia_flexible_grasp.vision.yolov8_detector import YOLOv8ObjectDetector
 from alicia_flexible_grasp.vision.depth_projector import project_pixel_to_3d
 from alicia_flexible_grasp.vision.pose_estimator import PoseEstimator
@@ -230,6 +231,12 @@ class PerceptionNode:
         self.pub_base = rospy.Publisher(pcfg.get('output_pose_base_topic','/perception/object_pose_base'), PoseStamped, queue_size=10)
         self.pub_detected = rospy.Publisher('/perception/object_detected', Bool, queue_size=10)
         self.pub_raw_detected = rospy.Publisher('/perception/raw_object_detected', Bool, queue_size=10)
+        self.detector_status_pub = rospy.Publisher(
+            '/perception/detector_status',
+            String,
+            queue_size=1,
+            latch=True,
+        )
         self.label = pcfg.get('object_label','target')
         self.stabilizer = DetectionStabilizer(pcfg.get('detection_hold_sec', 0.8))
         self.refresh_detector(force=True)
@@ -249,13 +256,21 @@ class PerceptionNode:
     def detect_loop(self):
         rate = rospy.Rate(self.detect_hz)
         while not rospy.is_shutdown():
-            frame = self.frames.take_latest()
-            if frame is not None:
-                self.color = frame.color
-                self.depth = frame.depth
-                self.color_frame_id = frame.frame_id
-                self.try_detect(frame.stamp, frame.frame_id)
+            self._poll_detector_and_process_latest_frame()
             rate.sleep()
+
+    def _poll_detector_and_process_latest_frame(self):
+        # Detector configuration must be observed even when the camera stops
+        # producing frames, so reload requests can invalidate downstream state.
+        self.refresh_detector()
+        frame = self.frames.take_latest()
+        if frame is None:
+            return False
+        self.color = frame.color
+        self.depth = frame.depth
+        self.color_frame_id = frame.frame_id
+        self.try_detect(frame.stamp, frame.frame_id)
+        return True
 
     def try_detect(self, stamp, camera_frame=None):
         if self.color is None or self.depth is None:
@@ -263,11 +278,11 @@ class PerceptionNode:
         self._refresh_camera_params()
         self.refresh_detector()
         if not self.enabled:
-            self.pub_detected.publish(Bool(False))
+            PerceptionNode._publish_target_unavailable(self)
             return
         if self.detector is None:
             rospy.logwarn_throttle(2.0, 'Perception detector unavailable: %s', self.detector_error or 'not initialized')
-            self.pub_detected.publish(Bool(False))
+            PerceptionNode._publish_target_unavailable(self)
             return
         now = rospy.get_time()
         det, mask = self.detector.detect(
@@ -338,6 +353,20 @@ class PerceptionNode:
         stable_obj = self.stabilizer.update(obj, rospy.get_time())
         self.pub_obj.publish(stable_obj)
         self.pub_detected.publish(Bool(bool(stable_obj.detected)))
+
+    def _publish_target_unavailable(self):
+        obj = ObjectPose()
+        obj.detected = False
+        obj.label = str(getattr(self, 'label', '') or '')
+        raw_publisher = getattr(self, 'pub_raw_detected', None)
+        object_publisher = getattr(self, 'pub_obj', None)
+        detected_publisher = getattr(self, 'pub_detected', None)
+        if raw_publisher is not None:
+            raw_publisher.publish(Bool(False))
+        if object_publisher is not None:
+            object_publisher.publish(obj)
+        if detected_publisher is not None:
+            detected_publisher.publish(Bool(False))
 
     def _refresh_camera_params(self):
         cam_cfg = rospy.get_param('/camera', {})
@@ -472,6 +501,15 @@ class PerceptionNode:
     def _clamp(value, lower, upper):
         return min(float(upper), max(float(lower), float(value)))
 
+    def _publish_detector_status(self, state, choice, detail=''):
+        publisher = getattr(self, 'detector_status_pub', None)
+        if publisher is None:
+            return
+        message = '%s:%s' % (str(state), str(choice))
+        if detail:
+            message += ':' + str(detail)
+        publisher.publish(String(data=message))
+
     def refresh_detector(self, force=False):
         pcfg = rospy.get_param('/perception', {})
         enabled = bool(pcfg.get('enabled', True))
@@ -495,8 +533,19 @@ class PerceptionNode:
         hold_seconds = float(pcfg.get('detection_hold_sec', self.stabilizer.hold_seconds))
         max_jump_px = float(pcfg.get('tracking_max_jump_px', self.stabilizer.max_jump_px))
         switch_confirmations = int(pcfg.get('tracking_switch_confirmations', self.stabilizer.switch_confirmations))
+        yolo_choice = str(pcfg.get('yolo_model_choice', 'original'))
+        yolo_reload_generation = pcfg.get('yolo_reload_generation', 0)
         yolo_model = str(pcfg.get('yolo_model', 'yolov8n.pt'))
         yolo_target_class = str(pcfg.get('yolo_target_class', label if detector_kind in ('yolo', 'yolov8') else ''))
+        resolved_yolo_model = yolo_model
+        path_error = None
+        if detector_kind in ('yolo', 'yolov8'):
+            try:
+                selected_model = select_yolo_model(pcfg, yolo_choice, yolo_target_class)
+                yolo_target_class = selected_model['target_class']
+                resolved_yolo_model = resolve_yolo_model_path(yolo_model)
+            except Exception as exc:
+                path_error = exc
         yolo_conf = float(pcfg.get('yolo_conf', 0.35))
         yolo_iou = float(pcfg.get('yolo_iou', 0.45))
         yolo_device = str(pcfg.get('yolo_device', 'cpu'))
@@ -504,7 +553,8 @@ class PerceptionNode:
         signature = (
             enabled, detector_kind, label, lower, upper, tuple(normalized_ranges),
             min_area, shape, hold_seconds, max_jump_px, switch_confirmations,
-            yolo_model, yolo_target_class, yolo_conf, yolo_iou, yolo_device, yolo_imgsz,
+            resolved_yolo_model, yolo_target_class, yolo_conf, yolo_iou, yolo_device, yolo_imgsz,
+            yolo_reload_generation,
         )
         if not force and signature == self.detector_signature:
             return
@@ -512,23 +562,32 @@ class PerceptionNode:
         self.label = label
         self.detector_kind = detector_kind
         self.detector_error = ''
+        self.detector = None
         self.stabilizer = DetectionStabilizer(hold_seconds, max_jump_px, switch_confirmations)
+        PerceptionNode._publish_target_unavailable(self)
+        PerceptionNode._publish_detector_status(self, 'loading', yolo_choice)
         try:
+            if path_error is not None:
+                raise path_error
             if detector_kind in ('yolo', 'yolov8'):
                 self.detector = YOLOv8ObjectDetector(
-                    model_path=yolo_model,
+                    model_path=resolved_yolo_model,
                     target_class=yolo_target_class,
                     conf=yolo_conf,
                     iou=yolo_iou,
                     device=yolo_device,
                     imgsz=yolo_imgsz,
                 )
+                PerceptionNode._publish_detector_status(self, 'ready', yolo_choice, resolved_yolo_model)
             else:
                 self.detector_kind = 'simple_hsv'
                 self.detector = HSVObjectDetector(lower, upper, min_area, normalized_ranges, shape)
+                PerceptionNode._publish_detector_status(self, 'ready', 'simple_hsv')
         except Exception as exc:
             self.detector = None
             self.detector_error = str(exc)
+            PerceptionNode._publish_target_unavailable(self)
+            PerceptionNode._publish_detector_status(self, 'error', yolo_choice, self.detector_error)
             rospy.logwarn_throttle(2.0, 'Failed to initialize %s detector: %s', detector_kind, exc)
         self.detector_signature = signature
         rospy.loginfo('Perception detector updated: enabled=%s detector=%s label=%s ranges=%s min_area=%s shape=%s yolo_class=%s',
