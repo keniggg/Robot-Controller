@@ -127,6 +127,30 @@ def test_reset_target_epoch_clears_old_pending_and_rejects_active_result():
     assert completed.next_ticket.target_epoch == 8
 
 
+def test_invalid_completion_target_epoch_preserves_active_and_pending_order():
+    queue = LatestOnlyInferenceCoordinator(clock=FakeClock(10.0))
+    queue.start()
+    active = queue.submit('active', 9.8, target_epoch=7).ticket_to_start
+    pending = queue.submit('pending', 9.9, target_epoch=7)
+
+    with pytest.raises(ValueError, match='target_epoch'):
+        queue.complete(active, now_sec=10.0, target_epoch=-1)
+
+    assert queue.pending_count == 1
+    retried = queue.complete(active, now_sec=10.0, target_epoch=7)
+    assert retried.accepted is True
+    assert retried.next_ticket.request_id == pending.pending_request_id
+    assert retried.next_ticket.payload == 'pending'
+    assert queue.pending_count == 0
+    pending_done = queue.complete(
+        retried.next_ticket,
+        now_sec=10.1,
+        target_epoch=7,
+    )
+    assert pending_done.accepted is True
+    assert pending_done.next_ticket is None
+
+
 def test_stop_clears_pending_and_submit_requires_running_generation():
     queue = LatestOnlyInferenceCoordinator(clock=FakeClock(10.0))
     with pytest.raises(RuntimeError, match='not running'):

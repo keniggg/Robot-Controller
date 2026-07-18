@@ -110,6 +110,11 @@ class LatestOnlyInferenceCoordinator:
         now_sec = float(self._clock() if now_sec is None else now_sec)
         if not math.isfinite(now_sec):
             raise ValueError('now_sec must be finite')
+        validated_target_epoch = (
+            None
+            if target_epoch is None
+            else self._validated_target_epoch(target_epoch)
+        )
         result_age_sec = now_sec - float(ticket.snapshot_stamp_sec)
         with self._lock:
             if self._active is None or ticket.request_id != self._active.request_id:
@@ -135,8 +140,8 @@ class LatestOnlyInferenceCoordinator:
                 current_target_epoch = self._target_epoch
                 completion_target_epoch = (
                     current_target_epoch
-                    if target_epoch is None
-                    else self._validated_target_epoch(target_epoch)
+                    if validated_target_epoch is None
+                    else validated_target_epoch
                 )
                 if (
                     current_target_epoch is None
