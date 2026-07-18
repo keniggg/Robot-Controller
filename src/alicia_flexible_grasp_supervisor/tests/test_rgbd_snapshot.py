@@ -72,6 +72,24 @@ def synchronized_buffer_at(source_now_ns, monotonic_clock=None):
     )
 
 
+def add_complete_sample(buffer, stamp):
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, stamp, 'camera_link')
+    buffer.update_depth(depth, stamp, 'camera_link')
+    buffer.update_mask(mask, stamp, 'camera_link')
+    buffer.update_object(detected, stamp)
+
+
 def test_mask_iou_uses_binary_overlap():
     first = np.zeros((4, 5), dtype=np.uint8)
     second = np.zeros((4, 5), dtype=np.uint8)
@@ -333,6 +351,37 @@ def test_direct_snapshot_result_construction_freezes_defensive_array_copies():
             result.object_mask,
         )
     )
+
+
+def test_wait_for_samples_requires_newest_stamp_after_previous_window():
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: 10_000_000_000,
+        monotonic_clock=lambda: 10.0,
+    )
+    for stamp in (9.1, 9.2, 9.3):
+        add_complete_sample(buffer, stamp)
+
+    first = buffer.wait_for_samples(
+        3, 0.01, True, 1.0, newest_after_ns=0,
+    )
+    repeated = buffer.wait_for_samples(
+        3,
+        0.01,
+        True,
+        1.0,
+        newest_after_ns=first[-1].stamp_ns,
+    )
+    add_complete_sample(buffer, 9.4)
+    advanced = buffer.wait_for_samples(
+        3,
+        0.01,
+        True,
+        1.0,
+        newest_after_ns=first[-1].stamp_ns,
+    )
+
+    assert repeated == []
+    assert [sample.stamp_sec for sample in advanced] == [9.2, 9.3, 9.4]
 
 
 def test_synchronized_buffer_requires_exact_timestamp_components_and_returns_copies():

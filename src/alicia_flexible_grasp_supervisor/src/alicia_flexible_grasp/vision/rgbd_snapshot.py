@@ -437,8 +437,10 @@ class SynchronizedRgbdBuffer:
         max_age_sec,
         collection_span_sec=0.0,
         max_inference_latency_sec=None,
+        newest_after_ns=0,
     ):
         count = max(1, int(count))
+        newest_after_ns = int(newest_after_ns)
         collection_span = max(0.0, float(collection_span_sec))
         collection_span_ns = int(round(collection_span * 1e9))
         max_inference_latency = max(
@@ -449,7 +451,9 @@ class SynchronizedRgbdBuffer:
                 else max_inference_latency_sec
             ),
         )
-        deadline = self._monotonic_clock() + max(0.0, float(timeout_sec))
+        timeout = max(0.0, float(timeout_sec))
+        deadline = self._monotonic_clock() + timeout
+        wall_deadline = time.monotonic() + timeout
         collected = {}
         invalidated = set()
         with self._condition:
@@ -513,14 +517,19 @@ class SynchronizedRgbdBuffer:
                             invalidated.add(key)
                     if len(collected) >= count:
                         selected_keys = sorted(collected)[-count:]
-                        return [collected[key][1] for key in selected_keys]
+                        if selected_keys[-1] > newest_after_ns:
+                            return [collected[key][1] for key in selected_keys]
                 elif len(complete) >= count:
                     selected = complete[-count:]
-                    return [
-                        self._sample_from_entry(entry, bool(require_mask))
-                        for _key, entry in selected
-                    ]
-                remaining = deadline - monotonic_now
+                    if selected[-1][0] > newest_after_ns:
+                        return [
+                            self._sample_from_entry(entry, bool(require_mask))
+                            for _key, entry in selected
+                        ]
+                remaining = min(
+                    deadline - monotonic_now,
+                    wall_deadline - time.monotonic(),
+                )
                 if remaining <= 0.0:
                     return []
                 self._condition.wait(remaining)
