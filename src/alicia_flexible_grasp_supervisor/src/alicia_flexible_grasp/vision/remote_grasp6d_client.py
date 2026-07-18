@@ -228,6 +228,21 @@ def validate_predict_protocol_envelope(
             'remote /predict candidate_fields must exactly equal %r, got %r'
             % (expected_fields, candidate_fields)
         )
+    ok = response.get('ok')
+    if type(ok) is not bool:
+        raise ValueError(
+            'remote /predict ok must be a JSON boolean, got %r' % ok
+        )
+    candidates = response.get('candidates')
+    if not isinstance(candidates, list):
+        raise ValueError('remote /predict candidates must be a JSON list')
+    if any(not isinstance(candidate, dict) for candidate in candidates):
+        raise ValueError(
+            'remote /predict candidates must contain only JSON objects'
+        )
+    diagnostics = response.get('diagnostics')
+    if not isinstance(diagnostics, dict):
+        raise ValueError('remote /predict diagnostics must be a JSON object')
     expected_request_id, expected_snapshot_stamp_sec = _validate_request_correlation(
         expected_request_id,
         expected_snapshot_stamp_sec,
@@ -310,15 +325,18 @@ class RemoteGrasp6DClient:
             expected_request_id=request_id,
             expected_snapshot_stamp_sec=snapshot_stamp_sec,
         )
-        self.last_diagnostics = dict(response.get('diagnostics') or {})
-        self.last_performance = {
+        diagnostics = dict(response['diagnostics'])
+        performance = {
             field: float(response[field])
             for field in GRASP6D_PERFORMANCE_FIELDS
         }
-        return decode_remote_grasp_response(
+        candidates = decode_remote_grasp_response(
             response,
             require_candidate_depth=self.require_candidate_depth,
         )
+        self.last_diagnostics = diagnostics
+        self.last_performance = performance
+        return candidates
 
     def _request_json(self, path, payload):
         url = self.server_url + path
@@ -367,21 +385,15 @@ def _validate_request_correlation(request_id, snapshot_stamp_sec):
 
 
 def _finite_nonnegative_number(value, field_name):
-    if isinstance(value, (bool, np.bool_)):
+    if type(value) not in (int, float):
         raise ValueError(
-            'remote /predict %s must be a finite non-negative number'
+            'remote /predict %s must be a finite non-negative JSON number'
             % field_name
         )
-    try:
-        result = float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(
-            'remote /predict %s must be a finite non-negative number'
-            % field_name
-        ) from exc
+    result = float(value)
     if not np.isfinite(result) or result < 0.0:
         raise ValueError(
-            'remote /predict %s must be a finite non-negative number'
+            'remote /predict %s must be a finite non-negative JSON number'
             % field_name
         )
     return result

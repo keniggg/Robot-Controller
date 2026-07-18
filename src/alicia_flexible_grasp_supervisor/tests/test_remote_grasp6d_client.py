@@ -306,11 +306,36 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'correlation'):
                     self._predict_with_response(response)
 
+    def test_predict_rejects_nonboolean_ok_and_malformed_envelope_collections(self):
+        response = self._protocol_response()
+        response['ok'] = 'false'
+        response.pop('candidates')
+        with self.assertRaisesRegex(ValueError, 'ok'):
+            self._predict_with_response(response)
+
+        for ok in (True, False):
+            for label, field, value in (
+                ('missing-candidates', 'candidates', None),
+                ('tuple-candidates', 'candidates', ()),
+                ('nondict-candidate', 'candidates', [[]]),
+                ('missing-diagnostics', 'diagnostics', None),
+                ('list-diagnostics', 'diagnostics', []),
+            ):
+                with self.subTest(ok=ok, case=label):
+                    response = self._protocol_response(ok=ok)
+                    if label.startswith('missing-'):
+                        response.pop(field)
+                    else:
+                        response[field] = value
+                    with self.assertRaisesRegex(ValueError, field):
+                        self._predict_with_response(response)
+
     def test_predict_rejects_missing_or_invalid_mandatory_performance(self):
         for field in PERFORMANCE_FIELDS:
             for label, value in (
                 ('missing', None),
                 ('bool', True),
+                ('numeric-string', '1.0'),
                 ('negative', -0.1),
                 ('nonfinite', float('nan')),
             ):
@@ -387,6 +412,44 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
                 snapshot_stamp_sec=123.25,
             )
 
+        self.assertEqual(client.last_diagnostics, {})
+        self.assertEqual(client.last_performance, {})
+
+    def test_predict_keeps_state_empty_when_candidate_decode_fails(self):
+        client = RemoteGrasp6DClient('http://127.0.0.1:8000')
+        client.last_diagnostics = {'stale': 'previous inference'}
+        client.last_performance = {'server_total_ms': 999.0}
+        response = self._protocol_response()
+        response['candidates'] = [
+            {
+                'score': 0.9,
+                'width_m': 0.04,
+                'height_m': 0.02,
+                'translation_m': [0.1, 0.2, 0.3],
+                'rotation_matrix': np.eye(3).tolist(),
+            }
+        ]
+        client._request_json = lambda _path, _payload: response
+        intrinsics = CameraIntrinsics(
+            width=2,
+            height=2,
+            fx=100.0,
+            fy=100.0,
+            cx=0.5,
+            cy=0.5,
+            depth_scale=0.001,
+        )
+
+        with self.assertRaises(CandidateContractError) as context:
+            client.predict(
+                np.zeros((2, 2, 3), dtype=np.uint8),
+                np.full((2, 2), 200, dtype=np.uint16),
+                intrinsics,
+                request_id=41,
+                snapshot_stamp_sec=123.25,
+            )
+
+        self.assertEqual(context.exception.code, 'DEPTH_MISSING')
         self.assertEqual(client.last_diagnostics, {})
         self.assertEqual(client.last_performance, {})
 
