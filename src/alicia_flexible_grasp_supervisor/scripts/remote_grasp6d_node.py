@@ -442,6 +442,232 @@ PLANNING_AUDIT_FAILED = 'PLANNING_AUDIT_FAILED'
 PLANNING_AUDIT_WRITE_FAILED = 'PLANNING_AUDIT_WRITE_FAILED'
 AUDIT_PATH_CONFLICT = 'AUDIT_PATH_CONFLICT'
 MUJOCO_AUDIT_DEFAULT_PATH = '~/.ros/grasp6d_mujoco_audit_latest.json'
+CONTINUOUS_CONFIG_INVALID = 'CONTINUOUS_CONFIG_INVALID'
+PRODUCTION_STABILITY_WINDOW_SIZE = 5
+PRODUCTION_STABILITY_MIN_HITS = 3
+MAX_CONTINUOUS_REQUEST_HZ = 5.0
+
+CONTINUOUS_RUNTIME_DEFAULTS = {
+    'request_hz': 1.5,
+    'result_max_age_sec': 1.2,
+    'stability_window_size': PRODUCTION_STABILITY_WINDOW_SIZE,
+    'stability_min_hits': PRODUCTION_STABILITY_MIN_HITS,
+    'tracking_position_threshold_m': 0.025,
+    'tracking_orientation_threshold_deg': 25.0,
+    'tracking_approach_threshold_deg': 20.0,
+    'tracking_width_threshold_m': 0.008,
+    'target_instance_association_threshold_m': 0.08,
+    'target_absolute_sanity_distance_m': 0.15,
+    'moveit_top_n': 5,
+    'replan_position_delta_m': 0.012,
+    'replan_orientation_delta_deg': 12.0,
+    'replan_target_drift_m': 0.025,
+    'replan_cooldown_sec': 1.0,
+    'selection_hysteresis_ratio': 0.12,
+    'candidate_consecutive_invalidations': 2,
+    'performance_window_size': 100,
+}
+
+
+@dataclass(frozen=True)
+class ContinuousRuntimeConfig:
+    request_hz: float
+    result_max_age_sec: float
+    tracking_config: TrackingConfig
+    target_instance_association_threshold_m: float
+    target_absolute_sanity_distance_m: float
+    moveit_top_n: int
+    replan_position_delta_m: float
+    replan_orientation_delta_deg: float
+    replan_target_drift_m: float
+    replan_cooldown_sec: float
+    selection_hysteresis_ratio: float
+    candidate_consecutive_invalidations: int
+    performance_window_size: int
+
+
+def _continuous_config_error(message):
+    raise CandidateContractError(CONTINUOUS_CONFIG_INVALID, message)
+
+
+def _strict_config_number(
+    values,
+    name,
+    *,
+    minimum=None,
+    maximum=None,
+    minimum_inclusive=True
+):
+    value = values.get(name)
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        _continuous_config_error('%s must be a finite numeric value' % name)
+    converted = float(value)
+    if not math.isfinite(converted):
+        _continuous_config_error('%s must be finite' % name)
+    if minimum is not None:
+        below = (
+            converted < float(minimum)
+            if minimum_inclusive
+            else converted <= float(minimum)
+        )
+        if below:
+            relation = '>=' if minimum_inclusive else '>'
+            _continuous_config_error(
+                '%s must be %s %s' % (name, relation, minimum)
+            )
+    if maximum is not None and converted > float(maximum):
+        _continuous_config_error('%s must be <= %s' % (name, maximum))
+    return converted
+
+
+def _strict_config_integer(values, name, minimum=None):
+    value = values.get(name)
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, np.integer)
+    ):
+        _continuous_config_error('%s must be a strict integer' % name)
+    converted = int(value)
+    if minimum is not None and converted < int(minimum):
+        _continuous_config_error('%s must be >= %s' % (name, minimum))
+    return converted
+
+
+def validate_continuous_runtime_config(values):
+    """Return one strict, immutable continuous-inference configuration."""
+
+    if not isinstance(values, dict):
+        _continuous_config_error('continuous configuration must be a mapping')
+    window_size = values.get('stability_window_size')
+    min_hits = values.get('stability_min_hits')
+    if (
+        isinstance(window_size, (bool, np.bool_))
+        or not isinstance(window_size, (int, np.integer))
+        or int(window_size) != PRODUCTION_STABILITY_WINDOW_SIZE
+        or isinstance(min_hits, (bool, np.bool_))
+        or not isinstance(min_hits, (int, np.integer))
+        or int(min_hits) != PRODUCTION_STABILITY_MIN_HITS
+    ):
+        _continuous_config_error(
+            'production stability contract requires window_size=5 and '
+            'min_hits=3'
+        )
+    try:
+        tracking = TrackingConfig(
+            window_size=int(window_size),
+            min_hits=int(min_hits),
+            position_threshold_m=_strict_config_number(
+                values,
+                'tracking_position_threshold_m',
+                minimum=0.0,
+                minimum_inclusive=False,
+            ),
+            orientation_threshold_deg=_strict_config_number(
+                values,
+                'tracking_orientation_threshold_deg',
+                minimum=0.0,
+                maximum=180.0,
+                minimum_inclusive=False,
+            ),
+            approach_threshold_deg=_strict_config_number(
+                values,
+                'tracking_approach_threshold_deg',
+                minimum=0.0,
+                maximum=180.0,
+                minimum_inclusive=False,
+            ),
+            width_threshold_m=_strict_config_number(
+                values,
+                'tracking_width_threshold_m',
+                minimum=0.0,
+                minimum_inclusive=False,
+            ),
+        )
+    except CandidateContractError:
+        raise
+    except (TypeError, ValueError) as exc:
+        _continuous_config_error('tracking configuration is invalid: %s' % exc)
+
+    association_threshold = _strict_config_number(
+        values,
+        'target_instance_association_threshold_m',
+        minimum=0.0,
+    )
+    absolute_threshold = _strict_config_number(
+        values,
+        'target_absolute_sanity_distance_m',
+        minimum=0.001,
+    )
+    if association_threshold > absolute_threshold:
+        _continuous_config_error(
+            'target_instance_association_threshold_m must not exceed '
+            'target_absolute_sanity_distance_m'
+        )
+    moveit_top_n = _strict_config_integer(values, 'moveit_top_n')
+    return ContinuousRuntimeConfig(
+        request_hz=_strict_config_number(
+            values,
+            'request_hz',
+            minimum=0.1,
+            maximum=MAX_CONTINUOUS_REQUEST_HZ,
+        ),
+        result_max_age_sec=_strict_config_number(
+            values,
+            'result_max_age_sec',
+            minimum=0.0,
+            minimum_inclusive=False,
+        ),
+        tracking_config=tracking,
+        target_instance_association_threshold_m=association_threshold,
+        target_absolute_sanity_distance_m=absolute_threshold,
+        moveit_top_n=min(10, max(3, moveit_top_n)),
+        replan_position_delta_m=_strict_config_number(
+            values, 'replan_position_delta_m', minimum=0.0
+        ),
+        replan_orientation_delta_deg=_strict_config_number(
+            values,
+            'replan_orientation_delta_deg',
+            minimum=0.0,
+            maximum=180.0,
+        ),
+        replan_target_drift_m=_strict_config_number(
+            values, 'replan_target_drift_m', minimum=0.0
+        ),
+        replan_cooldown_sec=_strict_config_number(
+            values, 'replan_cooldown_sec', minimum=0.0
+        ),
+        selection_hysteresis_ratio=_strict_config_number(
+            values,
+            'selection_hysteresis_ratio',
+            minimum=0.0,
+            maximum=1.0,
+        ),
+        candidate_consecutive_invalidations=_strict_config_integer(
+            values, 'candidate_consecutive_invalidations', minimum=1
+        ),
+        performance_window_size=_strict_config_integer(
+            values, 'performance_window_size', minimum=1
+        ),
+    )
+
+
+def load_continuous_runtime_config(remote_cfg, defaults=None, get_param=None):
+    """Resolve nested/individual ROS values before strict validation."""
+
+    if not isinstance(remote_cfg, dict):
+        _continuous_config_error('/grasp_6d/remote must be a mapping')
+    resolved = dict(CONTINUOUS_RUNTIME_DEFAULTS)
+    if defaults is not None:
+        if not isinstance(defaults, dict):
+            _continuous_config_error('continuous defaults must be a mapping')
+        resolved.update(defaults)
+    for name in CONTINUOUS_RUNTIME_DEFAULTS:
+        value = remote_cfg.get(name, resolved[name])
+        if get_param is not None:
+            value = get_param('/grasp_6d/remote/' + name, value)
+        resolved[name] = value
+    return validate_continuous_runtime_config(resolved)
 
 
 def validate_mandatory_planning_audit(enabled, output_path):
@@ -2182,6 +2408,10 @@ class RemoteGrasp6DNode:
         # node surface so a shared planning/execution path cannot start.
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        startup_continuous_config = load_continuous_runtime_config(
+            remote_cfg,
+            get_param=rospy.get_param,
+        )
         startup_gate_audit_enabled = remote_cfg.get(
             'gate_audit_enabled',
             True,
@@ -2308,40 +2538,32 @@ class RemoteGrasp6DNode:
         self._last_model_choice = str(pcfg.get('yolo_model_choice', 'original'))
         self.robot_execution_active = False
         self.execution_plan_controller = ExecutionPlanController(
-            replan_cooldown_sec=remote_cfg.get(
-                'replan_cooldown_sec', 1.0
+            replan_cooldown_sec=(
+                startup_continuous_config.replan_cooldown_sec
             ),
-            selection_hysteresis_ratio=remote_cfg.get(
-                'selection_hysteresis_ratio', 0.12
+            selection_hysteresis_ratio=(
+                startup_continuous_config.selection_hysteresis_ratio
             ),
-            candidate_consecutive_invalidations=remote_cfg.get(
-                'candidate_consecutive_invalidations', 2
+            candidate_consecutive_invalidations=(
+                startup_continuous_config.candidate_consecutive_invalidations
             ),
-            replan_position_delta_m=remote_cfg.get(
-                'replan_position_delta_m', 0.012
+            replan_position_delta_m=(
+                startup_continuous_config.replan_position_delta_m
             ),
-            replan_orientation_delta_deg=remote_cfg.get(
-                'replan_orientation_delta_deg', 12.0
+            replan_orientation_delta_deg=(
+                startup_continuous_config.replan_orientation_delta_deg
             ),
-            replan_target_drift_m=remote_cfg.get(
-                'replan_target_drift_m', 0.025
-            ),
-        )
-        self.target_instance_association_threshold_m = max(
-            0.0,
-            float(
-                remote_cfg.get(
-                    'target_instance_association_threshold_m', 0.08
-                )
+            replan_target_drift_m=(
+                startup_continuous_config.replan_target_drift_m
             ),
         )
-        self.target_absolute_sanity_distance_m = max(
-            0.001,
-            float(remote_cfg.get('target_absolute_sanity_distance_m', 0.15)),
+        self.target_instance_association_threshold_m = (
+            startup_continuous_config.target_instance_association_threshold_m
         )
-        self.moveit_top_n = min(
-            10, max(3, int(remote_cfg.get('moveit_top_n', 5)))
+        self.target_absolute_sanity_distance_m = (
+            startup_continuous_config.target_absolute_sanity_distance_m
         )
+        self.moveit_top_n = startup_continuous_config.moveit_top_n
         default_soft_weights = SoftScoreWeights()
         soft_weight_cfg = dict(
             remote_cfg.get('soft_score_weights', {}) or {}
@@ -3114,37 +3336,14 @@ class RemoteGrasp6DNode:
         )
         rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
         rospy.Subscriber('/grasp/state', GraspState, self.grasp_state_cb, queue_size=1)
-        self.rate_hz = max(
-            0.1,
-            float(
-                rospy.get_param(
-                    '/grasp_6d/remote/request_hz',
-                    remote_cfg.get('request_hz', 1.5),
-                )
-            ),
-        )
-        tracking_config = TrackingConfig(
-            window_size=int(remote_cfg.get('stability_window_size', 5)),
-            min_hits=int(remote_cfg.get('stability_min_hits', 3)),
-            position_threshold_m=float(
-                remote_cfg.get('tracking_position_threshold_m', 0.025)
-            ),
-            orientation_threshold_deg=float(
-                remote_cfg.get('tracking_orientation_threshold_deg', 25.0)
-            ),
-            approach_threshold_deg=float(
-                remote_cfg.get('tracking_approach_threshold_deg', 20.0)
-            ),
-            width_threshold_m=float(
-                remote_cfg.get('tracking_width_threshold_m', 0.008)
-            ),
-        )
+        self.rate_hz = startup_continuous_config.request_hz
+        tracking_config = startup_continuous_config.tracking_config
         self._initialize_streaming_state(
-            result_max_age_sec=float(
-                remote_cfg.get('result_max_age_sec', 1.2)
+            result_max_age_sec=(
+                startup_continuous_config.result_max_age_sec
             ),
-            performance_window_size=int(
-                remote_cfg.get('performance_window_size', 100)
+            performance_window_size=(
+                startup_continuous_config.performance_window_size
             ),
             tracking_config=tracking_config,
         )
@@ -4027,6 +4226,144 @@ class RemoteGrasp6DNode:
                 daemon=True,
             )
             self._stream_worker.start()
+
+    def _continuous_runtime_defaults(self):
+        tracking = getattr(self, '_tracking_config', TrackingConfig())
+        controller = getattr(self, 'execution_plan_controller', None)
+        if controller is None:
+            controller = ExecutionPlanController()
+        coordinator = getattr(self, 'inference_coordinator', None)
+        result_max_age_sec = getattr(
+            coordinator,
+            '_result_max_age_sec',
+            CONTINUOUS_RUNTIME_DEFAULTS['result_max_age_sec'],
+        )
+        metrics = getattr(self, 'pipeline_metrics', None)
+        performance_window_size = getattr(metrics, 'maxlen', None)
+        if performance_window_size is None:
+            performance_window_size = CONTINUOUS_RUNTIME_DEFAULTS[
+                'performance_window_size'
+            ]
+        return {
+            'request_hz': getattr(
+                self, 'rate_hz', CONTINUOUS_RUNTIME_DEFAULTS['request_hz']
+            ),
+            'result_max_age_sec': result_max_age_sec,
+            'stability_window_size': tracking.window_size,
+            'stability_min_hits': tracking.min_hits,
+            'tracking_position_threshold_m': (
+                tracking.position_threshold_m
+            ),
+            'tracking_orientation_threshold_deg': (
+                tracking.orientation_threshold_deg
+            ),
+            'tracking_approach_threshold_deg': (
+                tracking.approach_threshold_deg
+            ),
+            'tracking_width_threshold_m': tracking.width_threshold_m,
+            'target_instance_association_threshold_m': getattr(
+                self,
+                'target_instance_association_threshold_m',
+                CONTINUOUS_RUNTIME_DEFAULTS[
+                    'target_instance_association_threshold_m'
+                ],
+            ),
+            'target_absolute_sanity_distance_m': getattr(
+                self,
+                'target_absolute_sanity_distance_m',
+                CONTINUOUS_RUNTIME_DEFAULTS[
+                    'target_absolute_sanity_distance_m'
+                ],
+            ),
+            'moveit_top_n': getattr(
+                self,
+                'moveit_top_n',
+                CONTINUOUS_RUNTIME_DEFAULTS['moveit_top_n'],
+            ),
+            'replan_position_delta_m': controller.replan_position_delta_m,
+            'replan_orientation_delta_deg': (
+                controller.replan_orientation_delta_deg
+            ),
+            'replan_target_drift_m': controller.replan_target_drift_m,
+            'replan_cooldown_sec': controller.replan_cooldown_sec,
+            'selection_hysteresis_ratio': (
+                controller.selection_hysteresis_ratio
+            ),
+            'candidate_consecutive_invalidations': (
+                controller.candidate_consecutive_invalidations
+            ),
+            'performance_window_size': performance_window_size,
+        }
+
+    def _apply_continuous_runtime_config(self, config):
+        """Atomically publish validated thresholds without losing authority."""
+
+        if not isinstance(config, ContinuousRuntimeConfig):
+            raise TypeError('config must be ContinuousRuntimeConfig')
+        with self._stream_condition:
+            with self._geometry_state_guard():
+                tracking_changed = config.tracking_config != self._tracking_config
+                self.rate_hz = config.request_hz
+                self.target_instance_association_threshold_m = (
+                    config.target_instance_association_threshold_m
+                )
+                self.target_absolute_sanity_distance_m = (
+                    config.target_absolute_sanity_distance_m
+                )
+                self.moveit_top_n = config.moveit_top_n
+                coordinator = self.inference_coordinator
+                with coordinator._lock:
+                    coordinator._result_max_age_sec = (
+                        config.result_max_age_sec
+                    )
+
+                controller = self._promotion_controller()
+                controller.replan_cooldown_sec = config.replan_cooldown_sec
+                controller.selection_hysteresis_ratio = (
+                    config.selection_hysteresis_ratio
+                )
+                controller.candidate_consecutive_invalidations = (
+                    config.candidate_consecutive_invalidations
+                )
+                controller.replan_position_delta_m = (
+                    config.replan_position_delta_m
+                )
+                controller.replan_orientation_delta_deg = (
+                    config.replan_orientation_delta_deg
+                )
+                controller.replan_target_drift_m = (
+                    config.replan_target_drift_m
+                )
+
+                window_size = config.performance_window_size
+                self._latency_history_ms = deque(
+                    self._latency_history_ms, maxlen=window_size
+                )
+                self.pipeline_metrics = deque(
+                    self.pipeline_metrics, maxlen=window_size
+                )
+                self._terminal_request_limit = max(8, window_size * 2)
+                while (
+                    len(self._terminal_request_order)
+                    > self._terminal_request_limit
+                ):
+                    expired = self._terminal_request_order.popleft()
+                    self._terminal_request_ids.discard(expired)
+
+                if tracking_changed:
+                    self._tracking_config = config.tracking_config
+                    self.tracker = CandidateTracker(self._tracking_config)
+                    self._stable_variant_runtime = {}
+                self._stream_condition.notify_all()
+
+    def _refresh_continuous_runtime_config(self, remote_cfg):
+        config = load_continuous_runtime_config(
+            remote_cfg,
+            defaults=self._continuous_runtime_defaults(),
+            get_param=rospy.get_param,
+        )
+        self._apply_continuous_runtime_config(config)
+        return config
 
     def start_streaming(self):
         with self._stream_condition:
@@ -7073,8 +7410,13 @@ class RemoteGrasp6DNode:
                 )
 
     def spin(self):
-        rate = rospy.Rate(self.rate_hz)
+        rate_hz = None
+        rate = None
         while not rospy.is_shutdown():
+            current_rate_hz = float(self.rate_hz)
+            if rate is None or current_rate_hz != rate_hz:
+                rate_hz = current_rate_hz
+                rate = rospy.Rate(rate_hz)
             if self.enabled and self.streaming_enabled:
                 self._poll_stream_snapshot()
             rate.sleep()
@@ -8204,6 +8546,11 @@ class RemoteGrasp6DNode:
     def _refresh_runtime_params(self):
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        continuous_config = load_continuous_runtime_config(
+            remote_cfg,
+            defaults=self._continuous_runtime_defaults(),
+            get_param=rospy.get_param,
+        )
         gate_audit_enabled = rospy.get_param(
             '/grasp_6d/remote/gate_audit_enabled',
             remote_cfg.get(
@@ -8893,6 +9240,7 @@ class RemoteGrasp6DNode:
                 )
             ),
         )
+        self._apply_continuous_runtime_config(continuous_config)
 
     @staticmethod
     def _parse_orientation_variant_quaternions(value):

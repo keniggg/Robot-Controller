@@ -2179,6 +2179,142 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, remote_node.AUDIT_PATH_CONFLICT)
 
+    def test_startup_continuous_config_fails_before_live_node_surfaces(self):
+        original_get_param = remote_node.rospy.get_param
+        original_bridge = remote_node.CvBridge
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/remote': {'request_hz': True},
+        }.get(name, default)
+        remote_node.CvBridge = lambda: (_ for _ in ()).throw(
+            AssertionError('CvBridge must not be created after config failure')
+        )
+        try:
+            with self.assertRaises(
+                remote_node.CandidateContractError
+            ) as raised:
+                remote_node.RemoteGrasp6DNode()
+        finally:
+            remote_node.rospy.get_param = original_get_param
+            remote_node.CvBridge = original_bridge
+
+        self.assertEqual(
+            raised.exception.code,
+            remote_node.CONTINUOUS_CONFIG_INVALID,
+        )
+        self.assertIn('request_hz', str(raised.exception))
+
+    def test_startup_continuous_config_rejects_nonmapping_remote_namespace(self):
+        original_get_param = remote_node.rospy.get_param
+        original_bridge = remote_node.CvBridge
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/remote': [],
+        }.get(name, default)
+        remote_node.CvBridge = lambda: (_ for _ in ()).throw(
+            AssertionError('CvBridge must not be created after config failure')
+        )
+        try:
+            with self.assertRaises(
+                remote_node.CandidateContractError
+            ) as raised:
+                remote_node.RemoteGrasp6DNode()
+        finally:
+            remote_node.rospy.get_param = original_get_param
+            remote_node.CvBridge = original_bridge
+
+        self.assertEqual(
+            raised.exception.code,
+            remote_node.CONTINUOUS_CONFIG_INVALID,
+        )
+        self.assertIn('mapping', str(raised.exception))
+
+    def test_runtime_continuous_config_failure_has_no_partial_update(self):
+        node = make_processing_node()
+        node._initialize_streaming_state(
+            result_max_age_sec=1.2,
+            performance_window_size=100,
+            tracking_config=remote_node.TrackingConfig(),
+            start_worker=False,
+        )
+        node.rate_hz = 1.5
+        node.target_instance_association_threshold_m = 0.08
+        node.target_absolute_sanity_distance_m = 0.15
+        node.moveit_top_n = 5
+        node.candidate_frame_convention = 'opencv_optical'
+        node.execution_plan_controller = remote_node.ExecutionPlanController()
+        node.execution_plan_controller.commit_execution(
+            'plan-A', 'target-A', score=1.0, now_sec=5.0
+        )
+        node._refresh_runtime_params = types.MethodType(
+            remote_node.RemoteGrasp6DNode._refresh_runtime_params,
+            node,
+        )
+        before_tracker = node.tracker
+        before_controller = node.execution_plan_controller
+        before_metrics = node.pipeline_metrics
+        original_get_param = remote_node.rospy.get_param
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/remote': {
+                'request_hz': 2.0,
+                'tracking_position_threshold_m': float('nan'),
+            },
+        }.get(name, default)
+        try:
+            with self.assertRaises(
+                remote_node.CandidateContractError
+            ) as raised:
+                node._refresh_runtime_params()
+        finally:
+            remote_node.rospy.get_param = original_get_param
+            node.shutdown_streaming_worker()
+
+        self.assertEqual(
+            raised.exception.code,
+            remote_node.CONTINUOUS_CONFIG_INVALID,
+        )
+        self.assertEqual(node.rate_hz, 1.5)
+        self.assertIs(node.tracker, before_tracker)
+        self.assertIs(node.execution_plan_controller, before_controller)
+        self.assertEqual(before_controller.execution_plan_id, 'plan-A')
+        self.assertIs(node.pipeline_metrics, before_metrics)
+
+    def test_later_runtime_config_failure_does_not_apply_continuous_values(self):
+        node = make_processing_node()
+        node._initialize_streaming_state(
+            result_max_age_sec=1.2,
+            performance_window_size=100,
+            tracking_config=remote_node.TrackingConfig(),
+            start_worker=False,
+        )
+        node.rate_hz = 1.5
+        node.target_instance_association_threshold_m = 0.08
+        node.target_absolute_sanity_distance_m = 0.15
+        node.moveit_top_n = 5
+        node.candidate_frame_convention = 'opencv_optical'
+        node.execution_plan_controller = remote_node.ExecutionPlanController()
+        node._refresh_runtime_params = types.MethodType(
+            remote_node.RemoteGrasp6DNode._refresh_runtime_params,
+            node,
+        )
+        controller = node.execution_plan_controller
+        original_get_param = remote_node.rospy.get_param
+        remote_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/remote': {
+                'request_hz': 2.0,
+                'replan_cooldown_sec': 2.0,
+                'geometry_min_size_m': 'not-a-number',
+            },
+        }.get(name, default)
+        try:
+            with self.assertRaises(ValueError):
+                node._refresh_runtime_params()
+        finally:
+            remote_node.rospy.get_param = original_get_param
+            node.shutdown_streaming_worker()
+
+        self.assertEqual(node.rate_hz, 1.5)
+        self.assertIs(node.execution_plan_controller, controller)
+        self.assertEqual(controller.replan_cooldown_sec, 1.0)
+
     def test_runtime_audit_path_refresh_rejects_conflict_without_partial_update(self):
         node = make_processing_node()
         node._refresh_runtime_params = types.MethodType(

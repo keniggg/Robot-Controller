@@ -155,6 +155,238 @@ def wait_until(predicate, timeout=2.0):
     raise AssertionError('condition did not become true')
 
 
+def continuous_runtime_values(**overrides):
+    values = {
+        'request_hz': 1.5,
+        'result_max_age_sec': 1.2,
+        'stability_window_size': 5,
+        'stability_min_hits': 3,
+        'tracking_position_threshold_m': 0.025,
+        'tracking_orientation_threshold_deg': 25.0,
+        'tracking_approach_threshold_deg': 20.0,
+        'tracking_width_threshold_m': 0.008,
+        'target_instance_association_threshold_m': 0.08,
+        'target_absolute_sanity_distance_m': 0.15,
+        'moveit_top_n': 5,
+        'replan_position_delta_m': 0.012,
+        'replan_orientation_delta_deg': 12.0,
+        'replan_target_drift_m': 0.025,
+        'replan_cooldown_sec': 1.0,
+        'selection_hysteresis_ratio': 0.12,
+        'candidate_consecutive_invalidations': 2,
+        'performance_window_size': 100,
+    }
+    values.update(overrides)
+    return values
+
+
+@pytest.mark.parametrize(
+    ('field', 'bad_value'),
+    [
+        ('request_hz', True),
+        ('request_hz', '2.0'),
+        ('request_hz', float('nan')),
+        ('request_hz', float('inf')),
+        ('request_hz', 0.0),
+        ('request_hz', 0.09),
+        ('request_hz', 5.01),
+        ('result_max_age_sec', False),
+        ('result_max_age_sec', 0.0),
+        ('tracking_position_threshold_m', -0.01),
+        ('tracking_orientation_threshold_deg', 181.0),
+        ('tracking_approach_threshold_deg', 0.0),
+        ('tracking_width_threshold_m', float('-inf')),
+        ('target_instance_association_threshold_m', -0.001),
+        ('target_absolute_sanity_distance_m', 0.0),
+        ('target_absolute_sanity_distance_m', 0.0009),
+        ('replan_position_delta_m', -0.001),
+        ('replan_orientation_delta_deg', 181.0),
+        ('replan_target_drift_m', float('nan')),
+        ('replan_cooldown_sec', -0.1),
+        ('selection_hysteresis_ratio', 1.01),
+        ('candidate_consecutive_invalidations', True),
+        ('candidate_consecutive_invalidations', 2.0),
+        ('candidate_consecutive_invalidations', 0),
+        ('performance_window_size', False),
+        ('performance_window_size', 4.0),
+        ('performance_window_size', 0),
+    ],
+)
+def test_continuous_runtime_config_rejects_nonfinite_wrong_type_and_bounds(
+    field, bad_value
+):
+    with pytest.raises(remote_node.CandidateContractError) as raised:
+        remote_node.validate_continuous_runtime_config(
+            continuous_runtime_values(**{field: bad_value})
+        )
+
+    assert raised.value.code == 'CONTINUOUS_CONFIG_INVALID'
+    assert field in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ('field', 'bad_value'),
+    [
+        ('stability_window_size', 4),
+        ('stability_window_size', 6),
+        ('stability_window_size', 5.0),
+        ('stability_min_hits', 2),
+        ('stability_min_hits', 4),
+        ('stability_min_hits', 3.0),
+    ],
+)
+def test_continuous_runtime_config_enforces_production_stability_contract(
+    field, bad_value
+):
+    with pytest.raises(remote_node.CandidateContractError) as raised:
+        remote_node.validate_continuous_runtime_config(
+            continuous_runtime_values(**{field: bad_value})
+        )
+
+    assert raised.value.code == 'CONTINUOUS_CONFIG_INVALID'
+    assert 'window_size=5' in str(raised.value)
+    assert 'min_hits=3' in str(raised.value)
+
+
+@pytest.mark.parametrize(('raw', 'expected'), [(1, 3), (5, 5), (99, 10)])
+def test_continuous_runtime_config_strict_integer_moveit_top_n_clamps(
+    raw, expected
+):
+    config = remote_node.validate_continuous_runtime_config(
+        continuous_runtime_values(moveit_top_n=raw)
+    )
+    assert config.moveit_top_n == expected
+
+
+@pytest.mark.parametrize('bad_value', [True, 5.0, '5', float('nan')])
+def test_continuous_runtime_config_rejects_noninteger_moveit_top_n(bad_value):
+    with pytest.raises(remote_node.CandidateContractError):
+        remote_node.validate_continuous_runtime_config(
+            continuous_runtime_values(moveit_top_n=bad_value)
+        )
+
+
+def test_runtime_continuous_apply_is_atomic_and_preserves_execution_state():
+    node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    node._geometry_state_lock = threading.RLock()
+    node.rate_hz = 1.5
+    node.target_instance_association_threshold_m = 0.08
+    node.target_absolute_sanity_distance_m = 0.15
+    node.moveit_top_n = 5
+    node.execution_plan_controller = ExecutionPlanController()
+    node.execution_plan_controller.commit_execution(
+        'plan-A', 'target-A', score=1.0, now_sec=5.0
+    )
+    node.execution_plan_controller.invalid_streak = 1
+    node.execution_plan_controller.explicit_replan_requested = True
+    node.execution_plan_controller._drift_replan_requested = True
+    old_controller = node.execution_plan_controller
+    old_tracker = node.tracker
+    node._stable_variant_runtime = {'history': object()}
+    old_runtime = node._stable_variant_runtime
+    config = remote_node.validate_continuous_runtime_config(
+        continuous_runtime_values(
+            request_hz=2.0,
+            result_max_age_sec=0.9,
+            target_instance_association_threshold_m=0.06,
+            target_absolute_sanity_distance_m=0.12,
+            moveit_top_n=8,
+            replan_position_delta_m=0.02,
+            replan_orientation_delta_deg=15.0,
+            replan_target_drift_m=0.03,
+            replan_cooldown_sec=1.5,
+            selection_hysteresis_ratio=0.2,
+            candidate_consecutive_invalidations=4,
+            performance_window_size=7,
+        )
+    )
+
+    node._apply_continuous_runtime_config(config)
+
+    assert node.rate_hz == pytest.approx(2.0)
+    assert node.inference_coordinator._result_max_age_sec == pytest.approx(0.9)
+    assert node.moveit_top_n == 8
+    assert node.target_instance_association_threshold_m == pytest.approx(0.06)
+    assert node.target_absolute_sanity_distance_m == pytest.approx(0.12)
+    assert node.pipeline_metrics.maxlen == 7
+    assert node._latency_history_ms.maxlen == 7
+    assert node.tracker is old_tracker
+    assert node._stable_variant_runtime is old_runtime
+    assert node.execution_plan_controller is old_controller
+    assert old_controller.execution_plan_id == 'plan-A'
+    assert old_controller.execution_signature == 'target-A'
+    assert old_controller.execution_score == pytest.approx(1.0)
+    assert old_controller.invalid_streak == 1
+    assert old_controller.explicit_replan_requested is True
+    assert old_controller._drift_replan_requested is True
+    assert old_controller.last_promotion_sec == pytest.approx(5.0)
+    assert old_controller.replan_position_delta_m == pytest.approx(0.02)
+    assert old_controller.replan_orientation_delta_deg == pytest.approx(15.0)
+    assert old_controller.replan_target_drift_m == pytest.approx(0.03)
+    assert old_controller.replan_cooldown_sec == pytest.approx(1.5)
+    assert old_controller.selection_hysteresis_ratio == pytest.approx(0.2)
+    assert old_controller.candidate_consecutive_invalidations == 4
+
+
+def test_tracking_threshold_change_clears_only_tracking_history_under_lock():
+    node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    node._geometry_state_lock = threading.RLock()
+    node.rate_hz = 1.5
+    node.target_instance_association_threshold_m = 0.08
+    node.target_absolute_sanity_distance_m = 0.15
+    node.moveit_top_n = 5
+    node.execution_plan_controller = ExecutionPlanController()
+    old_tracker = node.tracker
+    node._stable_variant_runtime = {'history': object()}
+    config = remote_node.validate_continuous_runtime_config(
+        continuous_runtime_values(
+            tracking_position_threshold_m=0.03,
+            tracking_orientation_threshold_deg=30.0,
+            tracking_approach_threshold_deg=22.0,
+            tracking_width_threshold_m=0.009,
+        )
+    )
+
+    node._apply_continuous_runtime_config(config)
+
+    assert node.tracker is not old_tracker
+    assert node._tracking_config.position_threshold_m == pytest.approx(0.03)
+    assert node._tracking_config.orientation_threshold_deg == pytest.approx(
+        30.0
+    )
+    assert node._tracking_config.approach_threshold_deg == pytest.approx(22.0)
+    assert node._tracking_config.width_threshold_m == pytest.approx(0.009)
+    assert node._stable_variant_runtime == {}
+
+
+def test_spin_rebuilds_rate_on_change_without_catchup_schedule(monkeypatch):
+    node = types.SimpleNamespace(
+        rate_hz=1.5,
+        enabled=False,
+        streaming_enabled=False,
+    )
+    created_rates = []
+    shutdown_checks = {'count': 0}
+
+    class Rate:
+        def __init__(self, hz):
+            created_rates.append(float(hz))
+
+        def sleep(self):
+            node.rate_hz = 2.5
+
+    def is_shutdown():
+        shutdown_checks['count'] += 1
+        return shutdown_checks['count'] > 2
+
+    monkeypatch.setattr(remote_node.rospy, 'Rate', Rate)
+    monkeypatch.setattr(remote_node.rospy, 'is_shutdown', is_shutdown)
+
+    remote_node.RemoteGrasp6DNode.spin(node)
+
+    assert created_rates == [1.5, 2.5]
+
+
 def test_request_service_starts_and_stops_without_waiting_for_inference():
     node = streaming_node()
     try:
