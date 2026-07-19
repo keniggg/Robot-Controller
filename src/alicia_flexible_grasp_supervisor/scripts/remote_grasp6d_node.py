@@ -4238,8 +4238,14 @@ class RemoteGrasp6DNode:
             '_result_max_age_sec',
             CONTINUOUS_RUNTIME_DEFAULTS['result_max_age_sec'],
         )
-        metrics = getattr(self, 'pipeline_metrics', None)
-        performance_window_size = getattr(metrics, 'maxlen', None)
+        condition = getattr(self, '_stream_condition', None)
+        if condition is None:
+            metrics = getattr(self, 'pipeline_metrics', None)
+            performance_window_size = getattr(metrics, 'maxlen', None)
+        else:
+            with condition:
+                metrics = getattr(self, 'pipeline_metrics', None)
+                performance_window_size = getattr(metrics, 'maxlen', None)
         if performance_window_size is None:
             performance_window_size = CONTINUOUS_RUNTIME_DEFAULTS[
                 'performance_window_size'
@@ -4336,12 +4342,22 @@ class RemoteGrasp6DNode:
                 )
 
                 window_size = config.performance_window_size
-                self._latency_history_ms = deque(
-                    self._latency_history_ms, maxlen=window_size
+                current_window_size = getattr(
+                    self.pipeline_metrics, 'maxlen', None
                 )
-                self.pipeline_metrics = deque(
-                    self.pipeline_metrics, maxlen=window_size
+                latency_window_size = getattr(
+                    self._latency_history_ms, 'maxlen', None
                 )
+                if (
+                    current_window_size != window_size
+                    or latency_window_size != window_size
+                ):
+                    self._latency_history_ms = deque(
+                        self._latency_history_ms, maxlen=window_size
+                    )
+                    self.pipeline_metrics = deque(
+                        self.pipeline_metrics, maxlen=window_size
+                    )
                 self._terminal_request_limit = max(8, window_size * 2)
                 while (
                     len(self._terminal_request_order)
@@ -4511,6 +4527,29 @@ class RemoteGrasp6DNode:
             self._pipeline_counters['stale'] += 1
         return True
 
+    def _claim_terminal_metrics_snapshot_locked(
+        self,
+        request_id,
+        status,
+        end_to_end_ms,
+        accepted=False,
+        terminal_claimed=False,
+    ):
+        """Claim one terminal event and snapshot bounded metrics state."""
+
+        if not terminal_claimed and not self._claim_terminal_request_locked(
+            request_id,
+            status,
+            accepted=accepted,
+        ):
+            return None
+        self._latency_history_ms.append(float(end_to_end_ms))
+        return {
+            'counters': dict(self._pipeline_counters),
+            'pending_replacements': int(self._pending_replacements),
+            'latency_history_ms': tuple(self._latency_history_ms),
+        }
+
     def _emit_pending_drop_metrics(
         self,
         request_id,
@@ -4518,21 +4557,31 @@ class RemoteGrasp6DNode:
         terminal_claimed=False,
     ):
         request_id = int(request_id)
-        if not terminal_claimed:
-            with self._stream_condition:
-                if not self._claim_terminal_request_locked(
-                    request_id,
-                    code,
-                ):
-                    return None
-        metadata = self._request_telemetry.pop(int(request_id), {})
         now_sec = float(self._stream_source_clock())
-        end_to_end_ms = max(
-            0.0,
-            (now_sec - float(metadata.get('submitted_sec', now_sec)))
-            * 1000.0,
-        )
-        self._latency_history_ms.append(end_to_end_ms)
+        with self._stream_condition:
+            if not terminal_claimed and not self._claim_terminal_request_locked(
+                request_id,
+                code,
+            ):
+                return None
+            metadata = self._request_telemetry.pop(int(request_id), {})
+            generation = metadata.get(
+                'generation', self._stream_generation
+            )
+            target_epoch = metadata.get(
+                'target_epoch', self.target_instance_epoch
+            )
+            end_to_end_ms = max(
+                0.0,
+                (now_sec - float(metadata.get('submitted_sec', now_sec)))
+                * 1000.0,
+            )
+            snapshot = self._claim_terminal_metrics_snapshot_locked(
+                request_id,
+                code,
+                end_to_end_ms=end_to_end_ms,
+                terminal_claimed=True,
+            )
         result_age_ms = max(
             0.0,
             (
@@ -4544,15 +4593,13 @@ class RemoteGrasp6DNode:
         metrics = build_pipeline_metrics(
             event='request_dropped',
             request_id=metadata.get('request_id', request_id),
-            generation=metadata.get('generation', self._stream_generation),
-            target_epoch=metadata.get(
-                'target_epoch', self.target_instance_epoch
-            ),
+            generation=generation,
+            target_epoch=target_epoch,
             snapshot_stamp_sec=metadata.get('snapshot_stamp_sec', 0.0),
             status=code,
             drop_reason=code,
-            counters=self._pipeline_counters,
-            pending_replacements=self._pending_replacements,
+            counters=snapshot['counters'],
+            pending_replacements=snapshot['pending_replacements'],
             ros_prepare_ms=0.0,
             encode_ms=0.0,
             transport_ms=0.0,
@@ -4560,10 +4607,11 @@ class RemoteGrasp6DNode:
             remote_performance={},
             end_to_end_ms=end_to_end_ms,
             result_age_ms=result_age_ms,
-            latency_history_ms=self._latency_history_ms,
+            latency_history_ms=snapshot['latency_history_ms'],
             funnel={},
         )
-        self.pipeline_metrics.append(metrics)
+        with self._stream_condition:
+            self.pipeline_metrics.append(metrics)
         encoded = bounded_metrics_json(metrics)
         publisher = getattr(self, 'pipeline_metrics_pub', None)
         if publisher is not None:
@@ -7218,7 +7266,7 @@ class RemoteGrasp6DNode:
                 )
                 if completion.next_ticket is not None:
                     self._pending_request_id = None
-            self._request_telemetry.pop(int(ticket.request_id), None)
+                self._request_telemetry.pop(int(ticket.request_id), None)
             funnel = {}
             status = completion.code
             final_accepted = bool(completion.accepted)
@@ -7245,12 +7293,6 @@ class RemoteGrasp6DNode:
                 status = 'PREDICT_FAILED'
 
             final_now_sec = float(self._stream_source_clock())
-            with self._stream_condition:
-                terminal_claimed = self._claim_terminal_request_locked(
-                    ticket.request_id,
-                    status,
-                    accepted=final_accepted,
-                )
             end_to_end_ms = max(
                 0.0,
                 (
@@ -7259,44 +7301,63 @@ class RemoteGrasp6DNode:
                 )
                 * 1000.0,
             )
-            self._latency_history_ms.append(end_to_end_ms)
+            with self._stream_condition:
+                terminal_snapshot = (
+                    self._claim_terminal_metrics_snapshot_locked(
+                        ticket.request_id,
+                        status,
+                        end_to_end_ms=end_to_end_ms,
+                        accepted=final_accepted,
+                    )
+                )
             trusted_performance = (
                 dict(getattr(prepared, 'remote_performance', {}) or {})
                 if final_accepted and prepared is not None
                 else {}
             )
-            metrics = build_pipeline_metrics(
-                event='request_completed',
-                request_id=ticket.request_id,
-                generation=ticket.generation,
-                target_epoch=ticket.target_epoch,
-                snapshot_stamp_sec=ticket.snapshot_stamp_sec,
-                status=status,
-                drop_reason='' if final_accepted else status,
-                counters=self._pipeline_counters,
-                pending_replacements=self._pending_replacements,
-                ros_prepare_ms=getattr(prepared, 'ros_prepare_ms', 0.0),
-                encode_ms=getattr(prepared, 'encode_ms', 0.0),
-                transport_ms=getattr(prepared, 'transport_ms', 0.0),
-                decode_ms=getattr(prepared, 'decode_ms', 0.0),
-                remote_performance=trusted_performance,
-                end_to_end_ms=end_to_end_ms,
-                result_age_ms=max(
-                    0.0,
-                    (
-                        final_now_sec
-                        - float(ticket.snapshot_stamp_sec)
-                    )
-                    * 1000.0,
-                ),
-                latency_history_ms=self._latency_history_ms,
-                funnel=funnel,
+            metrics = (
+                None
+                if terminal_snapshot is None
+                else build_pipeline_metrics(
+                    event='request_completed',
+                    request_id=ticket.request_id,
+                    generation=ticket.generation,
+                    target_epoch=ticket.target_epoch,
+                    snapshot_stamp_sec=ticket.snapshot_stamp_sec,
+                    status=status,
+                    drop_reason='' if final_accepted else status,
+                    counters=terminal_snapshot['counters'],
+                    pending_replacements=terminal_snapshot[
+                        'pending_replacements'
+                    ],
+                    ros_prepare_ms=getattr(
+                        prepared, 'ros_prepare_ms', 0.0
+                    ),
+                    encode_ms=getattr(prepared, 'encode_ms', 0.0),
+                    transport_ms=getattr(prepared, 'transport_ms', 0.0),
+                    decode_ms=getattr(prepared, 'decode_ms', 0.0),
+                    remote_performance=trusted_performance,
+                    end_to_end_ms=end_to_end_ms,
+                    result_age_ms=max(
+                        0.0,
+                        (
+                            final_now_sec
+                            - float(ticket.snapshot_stamp_sec)
+                        )
+                        * 1000.0,
+                    ),
+                    latency_history_ms=terminal_snapshot[
+                        'latency_history_ms'
+                    ],
+                    funnel=funnel,
+                )
             )
-            if error is not None:
+            if metrics is not None and error is not None:
                 metrics['error'] = str(error)
             active_audit = getattr(self, '_active_gate_audit_report', None)
             if (
-                final_accepted
+                metrics is not None
+                and final_accepted
                 and isinstance(prepared, PreparedPrediction)
                 and isinstance(active_audit, dict)
                 and active_audit.get('mode') == 'continuous_preview'
@@ -7328,24 +7389,24 @@ class RemoteGrasp6DNode:
                             int(self._pipeline_counters['accepted']) - 1,
                         )
                         self._pipeline_counters['stale'] += 1
+                        accepted_count = int(
+                            self._pipeline_counters['accepted']
+                        )
+                        stale_count = int(
+                            self._pipeline_counters['stale']
+                        )
                     metrics.update(
                         {
                             'status': status,
                             'drop_reason': status,
-                            'accepted': int(
-                                self._pipeline_counters['accepted']
-                            ),
-                            'stale': int(
-                                self._pipeline_counters['stale']
-                            ),
+                            'accepted': accepted_count,
+                            'stale': stale_count,
                         }
                     )
                 except Exception as exc:
                     metrics['audit_metrics_error'] = str(exc)
-            with self._stream_condition:
-                if not terminal_claimed:
-                    metrics = None
-                else:
+            if metrics is not None:
+                with self._stream_condition:
                     self.pipeline_metrics.append(metrics)
             if metrics is None:
                 publisher = None

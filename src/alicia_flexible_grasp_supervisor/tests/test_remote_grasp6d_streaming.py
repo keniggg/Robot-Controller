@@ -359,6 +359,136 @@ def test_tracking_threshold_change_clears_only_tracking_history_under_lock():
     assert node._stable_variant_runtime == {}
 
 
+def test_unchanged_performance_window_preserves_deque_identity():
+    node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    node._geometry_state_lock = threading.RLock()
+    node.rate_hz = 1.5
+    node.target_instance_association_threshold_m = 0.08
+    node.target_absolute_sanity_distance_m = 0.15
+    node.moveit_top_n = 5
+    node.execution_plan_controller = ExecutionPlanController()
+    latency_history = node._latency_history_ms
+    metrics_history = node.pipeline_metrics
+    config = remote_node.validate_continuous_runtime_config(
+        continuous_runtime_values(performance_window_size=100)
+    )
+
+    node._apply_continuous_runtime_config(config)
+
+    assert node._latency_history_ms is latency_history
+    assert node.pipeline_metrics is metrics_history
+
+
+def test_performance_window_resize_linearizes_with_terminal_append():
+    node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    node._geometry_state_lock = threading.RLock()
+    node.rate_hz = 1.5
+    node.target_instance_association_threshold_m = 0.08
+    node.target_absolute_sanity_distance_m = 0.15
+    node.moveit_top_n = 5
+    node.execution_plan_controller = ExecutionPlanController()
+    append_entered = threading.Event()
+    release_append = threading.Event()
+
+    class BlockingAppendDeque(remote_node.deque):
+        def append(self, value):
+            append_entered.set()
+            if not release_append.wait(2.0):
+                raise RuntimeError('test did not release latency append')
+            super().append(value)
+
+    node._latency_history_ms = BlockingAppendDeque(maxlen=100)
+    node._request_telemetry[1] = {
+        'request_id': 1,
+        'generation': 1,
+        'target_epoch': 1,
+        'snapshot_stamp_sec': 9.5,
+        'submitted_sec': 9.5,
+    }
+    emitted = []
+    emit_thread = threading.Thread(
+        target=lambda: emitted.append(
+            node._emit_pending_drop_metrics(1, 'GENERATION_STALE')
+        )
+    )
+    config = remote_node.validate_continuous_runtime_config(
+        continuous_runtime_values(performance_window_size=7)
+    )
+    resize_done = threading.Event()
+    resize_thread = threading.Thread(
+        target=lambda: (
+            node._apply_continuous_runtime_config(config),
+            resize_done.set(),
+        )
+    )
+
+    emit_thread.start()
+    assert append_entered.wait(1.0)
+    resize_thread.start()
+    try:
+        assert not resize_done.wait(0.2), (
+            'performance resize bypassed an in-flight terminal append'
+        )
+    finally:
+        release_append.set()
+        emit_thread.join(2.0)
+        resize_thread.join(2.0)
+        node.shutdown_streaming_worker()
+
+    assert emitted[0]['request_id'] == 1
+    assert node._latency_history_ms.maxlen == 7
+    assert list(node._latency_history_ms) == [pytest.approx(500.0)]
+    assert [item['request_id'] for item in node.pipeline_metrics] == [1]
+    assert node.pipeline_metrics[0]['latency_p95_ms'] == pytest.approx(500.0)
+
+
+def test_duplicate_terminal_claim_does_not_change_latency_or_metrics():
+    node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    try:
+        with node._stream_condition:
+            first = node._claim_terminal_metrics_snapshot_locked(
+                7,
+                'GENERATION_STALE',
+                end_to_end_ms=25.0,
+            )
+            second = node._claim_terminal_metrics_snapshot_locked(
+                7,
+                'GENERATION_STALE',
+                end_to_end_ms=99.0,
+            )
+
+        assert first is not None
+        assert second is None
+        assert list(node._latency_history_ms) == [25.0]
+        assert node._pipeline_counters['completed'] == 1
+        assert node.pipeline_metrics == remote_node.deque(maxlen=100)
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_worker_duplicate_terminal_does_not_pollute_latency_history():
+    prediction = BlockingPrediction()
+    node = streaming_node(clock=MutableClock(10.0), prepare=prediction)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(9.8))
+        assert prediction.entered.wait(1.0)
+        with node._stream_condition:
+            assert node._claim_terminal_request_locked(
+                1, 'GENERATION_STALE'
+            )
+
+        prediction.release.set()
+        wait_until(lambda: not node._stream_worker_busy)
+
+        assert list(node._latency_history_ms) == []
+        assert list(node.pipeline_metrics) == []
+        assert node._pipeline_counters['completed'] == 1
+    finally:
+        prediction.release.set()
+        node.shutdown_streaming_worker()
+
+
 def test_spin_rebuilds_rate_on_change_without_catchup_schedule(monkeypatch):
     node = types.SimpleNamespace(
         rate_hz=1.5,
