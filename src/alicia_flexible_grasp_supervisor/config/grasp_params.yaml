@@ -1,6 +1,7 @@
 grasp:
   use_grasp6d_plan: true
   grasp6d_plan_topic: "/grasp_6d/plan"
+  grasp6d_preview_enriched_plan_topic: "/grasp_6d/preview_plan_enriched"
   grasp6d_enriched_plan_topic: "/grasp_6d/plan_enriched"
   pregrasp_distance_m: 0.08
   # The Alicia tool0 frame points through the fingertips along +Z. After the
@@ -82,7 +83,9 @@ gripper:
 grasp_6d:
   enabled: true
   use_remote_grasp6d: true
-  plan_validity_sec: 2.0
+  # Execution authority remains fresh long enough for 3-of-5 confirmation at
+  # the initial 1.5 Hz rate. Preview freshness never grants execution rights.
+  plan_validity_sec: 5.0
   target_max_drift_m: 0.02
   target_observation_validity_sec: 1.5
   backend: "remote_graspnet_baseline"
@@ -106,7 +109,28 @@ grasp_6d:
     server_url: "http://172.23.132.97:8000"
     timeout_sec: 30.0
     auto_request: false
-    request_hz: 0.05
+    # Begin at 1.5 Hz. Raise to 2/3/4/5 Hz only after measured P95 latency,
+    # expiration/replacement rates and GPU reserved memory remain acceptable.
+    request_hz: 1.5
+    result_max_age_sec: 1.2
+    stability_window_size: 5
+    stability_min_hits: 3
+    tracking_position_threshold_m: 0.025
+    tracking_orientation_threshold_deg: 25.0
+    tracking_approach_threshold_deg: 20.0
+    tracking_width_threshold_m: 0.008
+    target_instance_association_threshold_m: 0.08
+    target_absolute_sanity_distance_m: 0.15
+    # Strict MoveIt is bounded to stable candidates only; production accepts
+    # 3..10, with five as the initial latency/safety trade-off.
+    moveit_top_n: 5
+    replan_position_delta_m: 0.012
+    replan_orientation_delta_deg: 12.0
+    replan_target_drift_m: 0.025
+    replan_cooldown_sec: 1.0
+    selection_hysteresis_ratio: 0.12
+    candidate_consecutive_invalidations: 2
+    performance_window_size: 100
     planning_snapshot_frames: 3
     planning_snapshot_timeout_sec: 4.0
     # A synchronized frame may spend bounded time in YOLO inference, but once

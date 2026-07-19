@@ -230,6 +230,7 @@ def is_local_legacy_status(text):
 class Grasp6DButtonLabels:
     check_remote: str
     request_plan: str
+    stop_inference: str
     execute_grasp: str
     stop: str
 
@@ -237,19 +238,24 @@ class Grasp6DButtonLabels:
 @dataclass
 class Grasp6DGuiState:
     remote_status: str
+    preview_state: Grasp6DPlanState
     plan_state: Grasp6DPlanState
     grasp_state: str
     grasp_message: str
 
     def summary(self):
-        plan_prefix = '可执行' if self.plan_state.fresh else '不可执行'
+        preview_prefix = '稳定' if self.preview_state.fresh else '未稳定'
+        execution_prefix = '可执行' if self.plan_state.fresh else '不可执行'
         return (
             '远程推理：%s\n'
-            '候选计划：%s，%s\n'
+            'Preview：%s，%s\n'
+            'Execution：%s，%s\n'
             '抓取状态：%s | %s'
             % (
                 self.remote_status or '等待状态',
-                plan_prefix,
+                preview_prefix,
+                self.preview_state.text,
+                execution_prefix,
                 self.plan_state.text,
                 self.grasp_state or 'UNKNOWN',
                 self.grasp_message or '',
@@ -261,6 +267,7 @@ def grasp6d_button_labels():
     return Grasp6DButtonLabels(
         check_remote='检查远程推理端',
         request_plan='生成 6D 候选',
+        stop_inference='停止生成候选',
         execute_grasp='执行 6D 抓取流程',
         stop='停止抓取',
     )
@@ -280,9 +287,11 @@ def format_grasp6d_plan_state(last_plan_time_sec, now_sec=None, max_age_sec=2.0)
 class Grasp6DControlWidget(QtWidgets.QWidget):
     status_signal = QtCore.pyqtSignal(str)
     plan_signal = QtCore.pyqtSignal(object)
+    preview_plan_signal = QtCore.pyqtSignal(object)
     legacy_plan_signal = QtCore.pyqtSignal(object)
     grasp_signal = QtCore.pyqtSignal(object)
     check_signal = QtCore.pyqtSignal(bool, str)
+    stream_signal = QtCore.pyqtSignal(bool, bool, str)
     command_signal = QtCore.pyqtSignal(bool, str)
 
     def __init__(
@@ -292,6 +301,7 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         grasp_state_topic='/grasp/state',
         compact=False,
         enriched_plan_topic='/grasp_6d/plan_enriched',
+        preview_enriched_plan_topic='/grasp_6d/preview_plan_enriched',
     ):
         super().__init__()
         self._alive = True
@@ -300,6 +310,9 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
             rospy.get_param('/grasp_6d/plan_validity_sec', 2.0)
         )
         self._readiness = Grasp6DReadinessTracker(self._plan_validity_sec)
+        self._preview_readiness = Grasp6DReadinessTracker(
+            self._plan_validity_sec
+        )
         self._last_plan_pose_count = 0
         self._use_remote_grasp6d = bool(
             rospy.get_param('/grasp_6d/use_remote_grasp6d', True)
@@ -310,12 +323,21 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         self._grasp_message = ''
         self._checking = False
         self._requesting_plan = False
+        self._streaming_enabled = bool(
+            rospy.get_param('/grasp_6d/remote/auto_request', False)
+        )
         self._command_active = False
         self._server_url = str(rospy.get_param('/grasp_6d/remote/server_url', 'http://172.23.132.97:8000'))
         enriched_plan_topic = str(
             rospy.get_param(
                 '/grasp/grasp6d_enriched_plan_topic',
                 enriched_plan_topic,
+            )
+        )
+        preview_enriched_plan_topic = str(
+            rospy.get_param(
+                '/grasp/grasp6d_preview_enriched_plan_topic',
+                preview_enriched_plan_topic,
             )
         )
         labels = grasp6d_button_labels()
@@ -333,6 +355,7 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
 
         self.endpoint_chip = None
         self.remote_chip = None
+        self.preview_chip = None
         self.plan_chip = None
         self.pose_chip = None
         self.grasp_chip = None
@@ -341,10 +364,11 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
             metrics.setSpacing(8)
             self.endpoint_chip = metric_chip('端点 %s' % self._server_url)
             self.remote_chip = metric_chip('远程等待', accent=True)
-            self.plan_chip = metric_chip('候选等待')
+            self.preview_chip = metric_chip('Preview 等待')
+            self.plan_chip = metric_chip('Execution 等待')
             self.pose_chip = metric_chip('路径 --')
             self.grasp_chip = metric_chip('抓取 IDLE')
-            for index, chip in enumerate((self.endpoint_chip, self.remote_chip, self.plan_chip, self.pose_chip, self.grasp_chip)):
+            for index, chip in enumerate((self.endpoint_chip, self.remote_chip, self.preview_chip, self.plan_chip, self.pose_chip, self.grasp_chip)):
                 metrics.addWidget(chip, index // 2, index % 2)
             body.addLayout(metrics)
 
@@ -372,9 +396,11 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
 
         self.status_signal.connect(self._update_remote_status)
         self.plan_signal.connect(self._update_plan)
+        self.preview_plan_signal.connect(self._update_preview_plan)
         self.legacy_plan_signal.connect(self._update_legacy_plan)
         self.grasp_signal.connect(self._update_grasp)
         self.check_signal.connect(self._finish_remote_check)
+        self.stream_signal.connect(self._finish_stream_request)
         self.command_signal.connect(self._finish_command)
         self._subscribers = [
             rospy.Subscriber(status_topic, String, self._emit_status_if_alive, queue_size=1),
@@ -382,6 +408,12 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
                 enriched_plan_topic,
                 Grasp6DPlan,
                 self._emit_plan_if_alive,
+                queue_size=1,
+            ),
+            rospy.Subscriber(
+                preview_enriched_plan_topic,
+                Grasp6DPlan,
+                self._emit_preview_plan_if_alive,
                 queue_size=1,
             ),
             rospy.Subscriber(
@@ -406,6 +438,10 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         if self.__dict__.get('_alive', False):
             self.plan_signal.emit(msg)
 
+    def _emit_preview_plan_if_alive(self, msg):
+        if self.__dict__.get('_alive', False):
+            self.preview_plan_signal.emit(msg)
+
     def _emit_legacy_plan_if_alive(self, msg):
         if self.__dict__.get('_alive', False):
             self.legacy_plan_signal.emit(msg)
@@ -426,6 +462,10 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
 
     def _update_plan(self, msg):
         self._readiness.update_enriched(msg)
+        self._refresh_view()
+
+    def _update_preview_plan(self, msg):
+        self._preview_readiness.update_enriched(msg)
         self._refresh_view()
 
     def _update_legacy_plan(self, msg):
@@ -464,22 +504,43 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
     def request_plan(self):
         if self._requesting_plan:
             return
+        enable = not self._streaming_enabled
         self._requesting_plan = True
-        self._readiness.clear('PLAN_PENDING: 正在请求新的 6D 富计划')
         self.request_plan_btn.setEnabled(False)
-        self.execute_btn.setEnabled(False)
-        self._remote_status = '正在请求远程 6D 候选...'
+        self._remote_status = (
+            '正在启动持续 6D 候选生成...'
+            if enable
+            else '正在停止持续 6D 候选生成...'
+        )
         self._refresh_view()
-        thread = threading.Thread(target=self._run_request_plan, daemon=True)
+        thread = threading.Thread(
+            target=self._run_set_streaming,
+            args=(enable,),
+            daemon=True,
+        )
         thread.start()
 
-    def _run_request_plan(self):
+    def _run_set_streaming(self, enabled):
+        enabled = bool(enabled)
         try:
             rospy.wait_for_service('/grasp_6d/request_plan', timeout=1.5)
-            res = rospy.ServiceProxy('/grasp_6d/request_plan', TriggerZero)(True)
-            self._emit_check_result_if_alive(bool(res.success), str(res.message))
+            res = rospy.ServiceProxy('/grasp_6d/request_plan', TriggerZero)(enabled)
+            self._emit_stream_result_if_alive(
+                enabled,
+                bool(res.success),
+                str(res.message),
+            )
         except Exception as exc:
-            self._emit_check_result_if_alive(False, '请求 6D 候选失败：%s' % exc)
+            action = '启动' if enabled else '停止'
+            self._emit_stream_result_if_alive(
+                enabled,
+                False,
+                '%s持续 6D 候选失败：%s' % (action, exc),
+            )
+
+    def _run_request_plan(self):
+        """Compatibility worker: a legacy direct call starts streaming."""
+        self._run_set_streaming(True)
 
     def execute_grasp(self):
         if self._command_active:
@@ -534,12 +595,21 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         if self.__dict__.get('_alive', False):
             self.command_signal.emit(bool(ok), str(message))
 
+    def _emit_stream_result_if_alive(self, enabled, ok, message):
+        if self.__dict__.get('_alive', False):
+            self.stream_signal.emit(bool(enabled), bool(ok), str(message))
+
     def _finish_remote_check(self, ok, message):
         self._checking = False
-        self._requesting_plan = False
         self.check_btn.setEnabled(True)
-        self.request_plan_btn.setEnabled(True)
         self._remote_status = message
+        self._refresh_view()
+
+    def _finish_stream_request(self, enabled, ok, message):
+        self._requesting_plan = False
+        if ok:
+            self._streaming_enabled = bool(enabled)
+        self._remote_status = str(message)
         self._refresh_view()
 
     def _finish_command(self, ok, message):
@@ -562,6 +632,9 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
             )
         )
         self._readiness.validity_sec = max(0.0, self._plan_validity_sec)
+        self._preview_readiness.validity_sec = max(
+            0.0, self._plan_validity_sec
+        )
         configured_remote = bool(
             rospy.get_param(
                 '/grasp_6d/use_remote_grasp6d',
@@ -570,11 +643,13 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         )
         self._use_remote_grasp6d = configured_remote and not self._legacy_only_status
         plan_state = self._readiness.state()
+        preview_state = self._preview_readiness.state()
         local_notice = local_plan_execution_notice(self._use_remote_grasp6d)
         if local_notice and not plan_state.fresh:
             plan_state = Grasp6DPlanState(False, plan_state.age_sec, local_notice)
         state = Grasp6DGuiState(
             remote_status=self._remote_status,
+            preview_state=preview_state,
             plan_state=plan_state,
             grasp_state=self._grasp_state,
             grasp_message=self._grasp_message,
@@ -582,8 +657,16 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         self.summary.setText(state.summary())
         if self.remote_chip is not None:
             self.remote_chip.setText('远程 %s' % _short_text(self._remote_status, 26))
+        if self.preview_chip is not None:
+            self.preview_chip.setText(
+                ('Preview 稳定 ' if preview_state.fresh else 'Preview 未稳定 ')
+                + preview_state.text
+            )
         if self.plan_chip is not None:
-            self.plan_chip.setText(('候选可执行 ' if plan_state.fresh else '候选不可用 ') + plan_state.text)
+            self.plan_chip.setText(
+                ('Execution 可执行 ' if plan_state.fresh else 'Execution 不可用 ')
+                + plan_state.text
+            )
         if self.pose_chip is not None:
             rich_count = 4 if plan_state.fresh else 0
             self.pose_chip.setText(
@@ -593,7 +676,13 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         if self.grasp_chip is not None:
             self.grasp_chip.setText('抓取 %s' % _short_text(self._grasp_state, 18))
         self.request_plan_btn.setEnabled(not self._requesting_plan)
-        self.execute_btn.setEnabled((not self._command_active) and (not self._requesting_plan) and plan_state.fresh)
+        labels = grasp6d_button_labels()
+        self.request_plan_btn.setText(
+            labels.stop_inference
+            if self._streaming_enabled
+            else labels.request_plan
+        )
+        self.execute_btn.setEnabled((not self._command_active) and plan_state.fresh)
 
     def _shutdown_ros(self):
         self._alive = False

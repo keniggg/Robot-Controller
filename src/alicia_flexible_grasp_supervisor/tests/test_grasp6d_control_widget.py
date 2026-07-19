@@ -3,8 +3,10 @@ import io
 import pathlib
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 
 import rospy
+import yaml
 from geometry_msgs.msg import Pose, PoseArray
 from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan
 
@@ -416,12 +418,275 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
 
         self.assertEqual(labels.check_remote, '检查远程推理端')
         self.assertEqual(labels.request_plan, '生成 6D 候选')
+        self.assertEqual(labels.stop_inference, '停止生成候选')
         self.assertEqual(labels.execute_grasp, '执行 6D 抓取流程')
         self.assertEqual(labels.stop, '停止抓取')
+
+    def test_generate_button_toggles_streaming_without_using_stop_grasp(self):
+        widget = control_widget.Grasp6DControlWidget.__new__(
+            control_widget.Grasp6DControlWidget
+        )
+        widget._readiness = control_widget.Grasp6DReadinessTracker(
+            validity_sec=5.0
+        )
+        execution = self._rich_plan(stamp_sec=9.0, plan_id='execution')
+        widget._readiness.update_enriched(execution, now_sec=10.0)
+        results = []
+        widget._emit_stream_result_if_alive = (
+            lambda enabled, ok, message: results.append((enabled, ok, message))
+        )
+        request_calls = []
+        stop_grasp_calls = []
+        original_wait = control_widget.rospy.wait_for_service
+        original_proxy = control_widget.rospy.ServiceProxy
+        control_widget.rospy.wait_for_service = lambda *_args, **_kwargs: None
+
+        def service_proxy(name, *_args, **_kwargs):
+            if name == '/grasp/stop':
+                return lambda *_args, **_kwargs: stop_grasp_calls.append(True)
+            self.assertEqual(name, '/grasp_6d/request_plan')
+            return lambda trigger: (
+                request_calls.append(bool(trigger))
+                or type(
+                    'Response',
+                    (),
+                    {'success': True, 'message': 'stream state updated'},
+                )()
+            )
+
+        control_widget.rospy.ServiceProxy = service_proxy
+        try:
+            widget._run_set_streaming(True)
+            widget._run_set_streaming(False)
+        finally:
+            control_widget.rospy.wait_for_service = original_wait
+            control_widget.rospy.ServiceProxy = original_proxy
+
+        self.assertEqual(request_calls, [True, False])
+        self.assertEqual(stop_grasp_calls, [])
+        self.assertEqual([item[:2] for item in results], [(True, True), (False, True)])
+        self.assertTrue(widget._readiness.state(now_sec=10.0).fresh)
+
+    def test_failed_stream_request_keeps_last_confirmed_button_state(self):
+        widget = control_widget.Grasp6DControlWidget.__new__(
+            control_widget.Grasp6DControlWidget
+        )
+        widget._requesting_plan = True
+        widget._streaming_enabled = False
+        widget._remote_status = ''
+        widget._refresh_view = lambda: None
+
+        widget._finish_stream_request(True, False, 'start failed')
+        self.assertFalse(widget._streaming_enabled)
+        self.assertFalse(widget._requesting_plan)
+
+        widget._requesting_plan = True
+        widget._finish_stream_request(True, True, 'started')
+        self.assertTrue(widget._streaming_enabled)
+        self.assertFalse(widget._requesting_plan)
+
+        widget._requesting_plan = True
+        widget._finish_stream_request(False, False, 'stop failed')
+        self.assertTrue(widget._streaming_enabled)
+        self.assertFalse(widget._requesting_plan)
+
+    def test_preview_updates_diagnostics_without_mutating_execution_readiness(self):
+        widget = control_widget.Grasp6DControlWidget.__new__(
+            control_widget.Grasp6DControlWidget
+        )
+        widget._readiness = control_widget.Grasp6DReadinessTracker(
+            validity_sec=5.0
+        )
+        widget._preview_readiness = control_widget.Grasp6DReadinessTracker(
+            validity_sec=5.0
+        )
+        widget._refresh_view = lambda: None
+
+        preview = self._rich_plan(stamp_sec=9.0, plan_id='preview-A')
+        execution = self._rich_plan(stamp_sec=9.5, plan_id='execution-A')
+        original_now = control_widget._ros_now_seconds
+        control_widget._ros_now_seconds = lambda: 10.0
+        try:
+            widget._update_preview_plan(preview)
+            self.assertEqual(widget._preview_readiness.plan_id, preview.plan_id)
+            self.assertFalse(widget._readiness.state(now_sec=10.0).fresh)
+            widget._update_plan(execution)
+        finally:
+            control_widget._ros_now_seconds = original_now
+
+        self.assertEqual(widget._readiness.plan_id, execution.plan_id)
+        self.assertEqual(widget._preview_readiness.plan_id, preview.plan_id)
+
+    def test_execute_enablement_uses_execution_only_even_while_stream_toggle_is_pending(self):
+        class FixedTracker:
+            def __init__(self, state):
+                self.value = state
+                self.validity_sec = 0.0
+
+            def state(self):
+                return self.value
+
+        class Control:
+            def __init__(self):
+                self.enabled = None
+                self.text = ''
+
+            def setEnabled(self, enabled):
+                self.enabled = bool(enabled)
+
+            def setText(self, text):
+                self.text = str(text)
+
+        fresh = control_widget.Grasp6DPlanState(True, 0.1, 'fresh')
+        waiting = control_widget.Grasp6DPlanState(
+            False, float('inf'), 'waiting'
+        )
+        widget = control_widget.Grasp6DControlWidget.__new__(
+            control_widget.Grasp6DControlWidget
+        )
+        widget._plan_validity_sec = 5.0
+        widget._readiness = FixedTracker(fresh)
+        widget._preview_readiness = FixedTracker(fresh)
+        widget._use_remote_grasp6d = True
+        widget._legacy_only_status = False
+        widget._remote_status = 'stream transition'
+        widget._grasp_state = 'IDLE'
+        widget._grasp_message = ''
+        widget._last_plan_pose_count = 0
+        widget._requesting_plan = True
+        widget._streaming_enabled = False
+        widget._command_active = False
+        widget.summary = Control()
+        widget.remote_chip = None
+        widget.preview_chip = None
+        widget.plan_chip = None
+        widget.pose_chip = None
+        widget.grasp_chip = None
+        widget.request_plan_btn = Control()
+        widget.execute_btn = Control()
+        original_get_param = control_widget.rospy.get_param
+        control_widget.rospy.get_param = (
+            lambda _name, default=None: default
+        )
+        try:
+            widget._refresh_view()
+            self.assertTrue(widget.execute_btn.enabled)
+
+            widget._readiness.value = waiting
+            widget._preview_readiness.value = fresh
+            widget._refresh_view()
+            self.assertFalse(widget.execute_btn.enabled)
+        finally:
+            control_widget.rospy.get_param = original_get_param
+
+    def test_state_summary_labels_preview_separately_from_execution(self):
+        preview_state = format_grasp6d_plan_state(
+            99.5, now_sec=100.0, max_age_sec=5.0
+        )
+        execution_state = format_grasp6d_plan_state(
+            None, now_sec=100.0, max_age_sec=5.0
+        )
+        state = Grasp6DGuiState(
+            remote_status='streaming',
+            preview_state=preview_state,
+            plan_state=execution_state,
+            grasp_state='IDLE',
+            grasp_message='waiting',
+        )
+
+        summary = state.summary()
+
+        self.assertIn('Preview：稳定', summary)
+        self.assertIn('Execution：不可执行', summary)
+
+    def test_initial_continuous_pipeline_configuration_is_exact_and_physical_width_is_unchanged(self):
+        with (ROOT / 'config' / 'grasp_params.yaml').open(
+            'r', encoding='utf-8'
+        ) as stream:
+            config = yaml.safe_load(stream)
+
+        remote = config['grasp_6d']['remote']
+        self.assertEqual(config['grasp_6d']['plan_validity_sec'], 5.0)
+        self.assertEqual(
+            {
+                key: remote[key]
+                for key in (
+                    'request_hz',
+                    'result_max_age_sec',
+                    'stability_window_size',
+                    'stability_min_hits',
+                    'tracking_position_threshold_m',
+                    'tracking_orientation_threshold_deg',
+                    'tracking_approach_threshold_deg',
+                    'tracking_width_threshold_m',
+                    'target_instance_association_threshold_m',
+                    'target_absolute_sanity_distance_m',
+                    'moveit_top_n',
+                    'replan_position_delta_m',
+                    'replan_orientation_delta_deg',
+                    'replan_target_drift_m',
+                    'replan_cooldown_sec',
+                    'selection_hysteresis_ratio',
+                    'candidate_consecutive_invalidations',
+                    'performance_window_size',
+                )
+            },
+            {
+                'request_hz': 1.5,
+                'result_max_age_sec': 1.2,
+                'stability_window_size': 5,
+                'stability_min_hits': 3,
+                'tracking_position_threshold_m': 0.025,
+                'tracking_orientation_threshold_deg': 25.0,
+                'tracking_approach_threshold_deg': 20.0,
+                'tracking_width_threshold_m': 0.008,
+                'target_instance_association_threshold_m': 0.08,
+                'target_absolute_sanity_distance_m': 0.15,
+                'moveit_top_n': 5,
+                'replan_position_delta_m': 0.012,
+                'replan_orientation_delta_deg': 12.0,
+                'replan_target_drift_m': 0.025,
+                'replan_cooldown_sec': 1.0,
+                'selection_hysteresis_ratio': 0.12,
+                'candidate_consecutive_invalidations': 2,
+                'performance_window_size': 100,
+            },
+        )
+        self.assertEqual(config['gripper']['open_position_m'], 0.05)
+        self.assertEqual(remote['max_gripper_width_m'], 0.05)
+
+    def test_launch_uses_one_shared_wsl_endpoint_and_distinct_plan_topics(self):
+        root = ET.parse(ROOT / 'launch' / 'grasp_system.launch').getroot()
+        args = {item.attrib['name']: item.attrib for item in root.findall('arg')}
+        params = {
+            item.attrib['name']: item.attrib['value']
+            for item in root.findall('param')
+        }
+
+        self.assertIn('remote_grasp6d_url', args)
+        self.assertEqual(
+            params['/grasp_6d/remote/server_url'],
+            '$(arg remote_grasp6d_url)',
+        )
+        self.assertEqual(
+            params['/mujoco_digital_twin/server_url'],
+            '$(arg remote_grasp6d_url)',
+        )
+        self.assertEqual(
+            params['/grasp/grasp6d_preview_enriched_plan_topic'],
+            '$(arg grasp6d_preview_enriched_plan_topic)',
+        )
+        self.assertEqual(
+            params['/grasp/grasp6d_enriched_plan_topic'],
+            '$(arg grasp6d_execution_enriched_plan_topic)',
+        )
 
     def test_state_summary_combines_remote_status_plan_and_grasp_state(self):
         state = Grasp6DGuiState(
             remote_status='remote 6D plan ready score=0.900 width=0.050',
+            preview_state=format_grasp6d_plan_state(
+                99.5, now_sec=100.0, max_age_sec=2.0
+            ),
             plan_state=format_grasp6d_plan_state(99.0, now_sec=100.0, max_age_sec=2.0),
             grasp_state='IDLE',
             grasp_message='waiting',
@@ -430,7 +695,8 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         summary = state.summary()
 
         self.assertIn('远程推理：remote 6D plan ready', summary)
-        self.assertIn('候选计划：可执行', summary)
+        self.assertIn('Preview：稳定', summary)
+        self.assertIn('Execution：可执行', summary)
         self.assertIn('抓取状态：IDLE', summary)
 
 
