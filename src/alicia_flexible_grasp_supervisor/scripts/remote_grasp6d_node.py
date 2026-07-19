@@ -2519,6 +2519,8 @@ class RemoteGrasp6DNode:
         self._latest_gate_audit_summary = {}
         self._latest_gate_audit_reference = {}
         self._active_gate_audit_report = None
+        self._latest_execution_audit_reference = {}
+        self._active_execution_audit_report = None
         # These values are copied into FrozenGraspNetInputConfig at the very
         # start of each request.  Keep them uncoerced here so the pure builder
         # can reject bool/non-finite/non-integral ROS values fail-closed.
@@ -3292,20 +3294,61 @@ class RemoteGrasp6DNode:
             )
             self.previous_object_axes_base = None
             self._clear_geometry_cache()
-
             rich_publisher = getattr(self, 'rich_plan_pub', None)
             legacy_publisher = getattr(self, 'plan_pub', None)
-            self._publish_invalidation_safely(
-                rich_publisher,
-                deepcopy(invalid),
-                'rich plan',
+
+        # ROS transports can block.  Invalidation authority is already
+        # committed above, so neither publisher is called while holding the
+        # geometry lock.
+        self._publish_invalidation_safely(
+            rich_publisher,
+            deepcopy(invalid),
+            'rich plan',
+        )
+        self._publish_invalidation_safely(
+            legacy_publisher,
+            deepcopy(legacy),
+            'legacy plan',
+        )
+        self._revoke_execution_audit_for_invalidation(
+            str(failure_code or 'PLAN_INVALID'),
+            str(failure_reason or 'plan is invalid'),
+        )
+        return invalid
+
+    def _revoke_execution_audit_for_invalidation(self, code, reason):
+        report = deepcopy(
+            getattr(self, '_active_execution_audit_report', None)
+        )
+        reference = dict(
+            getattr(self, '_latest_execution_audit_reference', {}) or {}
+        )
+        if (
+            not isinstance(report, dict)
+            or not bool(
+                dict(report.get('outcome', {}) or {}).get(
+                    'valid_plan', False
+                )
             )
-            self._publish_invalidation_safely(
-                legacy_publisher,
-                deepcopy(legacy),
-                'legacy plan',
+            or not reference.get('report_sha256')
+        ):
+            return False
+        decision = PromotionDecision(
+            False,
+            str(code or 'PLAN_INVALID'),
+            str(reason or 'execution plan invalidated'),
+            invalidate=True,
+        )
+        try:
+            self._compensate_execution_audit(
+                report,
+                reference,
+                decision,
+                ticket=None,
             )
-            return invalid
+            return True
+        except (CandidateContractError, StreamResultCancelled):
+            return False
 
     @staticmethod
     def _publish_invalidation_safely(publisher, message, channel_name):
@@ -3421,15 +3464,52 @@ class RemoteGrasp6DNode:
             rich_publisher = getattr(self, 'rich_plan_pub', None)
             if rich_publisher is None:
                 return False, 'RICH_PLAN_PUBLISHER_UNAVAILABLE'
-            # The legacy PoseArray is visualization-only.  Publish it first,
-            # then commit the latched rich plan as the sole execution
-            # authority.  A legacy publisher failure can therefore never
-            # leave a valid rich command visible to an executor.
-            self.plan_pub.publish(deepcopy(outgoing_legacy))
+            recovery_token = {
+                'geometry_generation': int(expected_generation),
+                'previous_rich_plan': deepcopy(
+                    getattr(self, 'latest_rich_plan', None)
+                ),
+                'previous_legacy_plan': deepcopy(
+                    getattr(self, 'latest_plan', None)
+                ),
+            }
+
+        # The legacy PoseArray is visualization-only. Publish it first, then
+        # the latched rich authority, with generation checks between the two.
+        # ROS publisher calls are intentionally outside the geometry lock.
+        self.plan_pub.publish(deepcopy(outgoing_legacy))
+        invalidated, code = self._geometry_invalidation_state(
+            expected_generation
+        )
+        if invalidated:
+            return False, code
+        try:
             rich_publisher.publish(deepcopy(outgoing_rich))
-            self.latest_rich_plan = cached
-            self.latest_plan = deepcopy(outgoing_legacy)
-            return True, ''
+        except Exception:
+            self._recover_aborted_execution_publish(
+                recovery_token,
+                'rich execution publisher failed',
+            )
+            raise
+        invalidated, code = self._geometry_invalidation_state(
+            expected_generation
+        )
+        if invalidated:
+            self._recover_aborted_execution_publish(recovery_token, code)
+            return False, code
+        with self._geometry_state_guard():
+            current = int(getattr(self, '_geometry_invalidation_generation', 0))
+            if current != int(expected_generation):
+                code = str(
+                    getattr(self, '_last_geometry_invalidation_code', '')
+                    or 'PLAN_STALE'
+                )
+            else:
+                self.latest_rich_plan = cached
+                self.latest_plan = deepcopy(outgoing_legacy)
+                return True, ''
+        self._recover_aborted_execution_publish(recovery_token, code)
+        return False, code
 
     def _commit_selected_gate_if_current(
         self,
@@ -3494,18 +3574,18 @@ class RemoteGrasp6DNode:
                 stamp=self._safe_time(stamp),
                 label=label,
             )
-            self._publish_invalid_plan_pair(
-                failure_code,
-                failure_reason,
-                header=message.header,
-                invalid_geometry=message,
-            )
-            self._publish_invalidation_safely(
-                getattr(self, 'geometry_pub', None),
-                deepcopy(message),
-                'object geometry',
-            )
-            return message
+        self._publish_invalid_plan_pair(
+            failure_code,
+            failure_reason,
+            header=message.header,
+            invalid_geometry=message,
+        )
+        self._publish_invalidation_safely(
+            getattr(self, 'geometry_pub', None),
+            deepcopy(message),
+            'object geometry',
+        )
+        return message
 
     def _snapshot_geometry_inputs(self, snapshot):
         if snapshot.source_mode == 'instance_mask':
@@ -4904,21 +4984,24 @@ class RemoteGrasp6DNode:
     def _record_preview_promotion(self, ticket, decision):
         with self._stream_condition:
             self._require_stream_ticket_current_locked(ticket)
-            audit = deepcopy(
-                dict(getattr(self, '_latest_streaming_audit', {}) or {})
-            )
-            audit['promotion'] = {
-                'promote': bool(decision.promote),
-                'code': str(decision.code),
-                'reason': str(decision.reason),
-            }
-            self._latest_streaming_audit = audit
-            self._latest_preview_promotion = (
-                int(ticket.request_id),
-                int(ticket.generation),
-                int(ticket.target_epoch),
-                decision,
-            )
+            self._record_preview_promotion_locked(ticket, decision)
+
+    def _record_preview_promotion_locked(self, ticket, decision):
+        audit = deepcopy(
+            dict(getattr(self, '_latest_streaming_audit', {}) or {})
+        )
+        audit['promotion'] = {
+            'promote': bool(decision.promote),
+            'code': str(decision.code),
+            'reason': str(decision.reason),
+        }
+        self._latest_streaming_audit = audit
+        self._latest_preview_promotion = (
+            int(ticket.request_id),
+            int(ticket.generation),
+            int(ticket.target_epoch),
+            decision,
+        )
 
     def _request_promotion_count(self, ticket):
         recorded = getattr(self, '_latest_preview_promotion', None)
@@ -4935,10 +5018,12 @@ class RemoteGrasp6DNode:
 
     def _execution_promotion_audit_ready(self, rich_plan):
         plan_id = str(getattr(rich_plan, 'plan_id', '') or '')
-        report = dict(getattr(self, '_active_gate_audit_report', {}) or {})
+        report = dict(
+            getattr(self, '_active_execution_audit_report', {}) or {}
+        )
         outcome = dict(report.get('outcome', {}) or {})
         reference = dict(
-            getattr(self, '_latest_gate_audit_reference', {}) or {}
+            getattr(self, '_latest_execution_audit_reference', {}) or {}
         )
         expected_sha256 = str(reference.get('report_sha256', '') or '')
         if (
@@ -4959,9 +5044,129 @@ class RemoteGrasp6DNode:
             ).encode('utf-8')
         except (TypeError, ValueError):
             return False
+        if hashlib.sha256(payload).hexdigest() != expected_sha256:
+            return False
+        report_path = str(reference.get('report_path', '') or '')
+        if not report_path:
+            return False
+        try:
+            with open(report_path, 'rb') as handle:
+                disk_payload = handle.read()
+            disk_report = json.loads(disk_payload.decode('utf-8'))
+        except (OSError, UnicodeError, TypeError, ValueError):
+            return False
         return bool(
-            hashlib.sha256(payload).hexdigest() == expected_sha256
+            hashlib.sha256(disk_payload).hexdigest() == expected_sha256
+            and disk_report == report
         )
+
+    def _compensate_execution_audit(
+        self,
+        report,
+        reference,
+        decision,
+        ticket,
+        funnel=None,
+        restore_report=None,
+    ):
+        """CAS-revoke provisional valid evidence after promotion aborts."""
+
+        restored = deepcopy(restore_report)
+        restore_valid = bool(
+            isinstance(restored, dict)
+            and dict(restored.get('outcome', {}) or {}).get(
+                'valid_plan', False
+            )
+            and str(restored.get('plan_id', '') or '')
+        )
+        if restore_valid:
+            failed_report = restored
+        else:
+            failed_report = deepcopy(dict(report or {}))
+            failed_report['promotion'] = {
+                'promote': False,
+                'code': str(decision.code),
+                'reason': str(decision.reason),
+            }
+            failed_report['outcome'] = {
+                'code': str(decision.code),
+                'reason': str(decision.reason),
+                'valid_plan': False,
+                'preview_valid': bool(
+                    failed_report.get('selected') is not None
+                ),
+            }
+            if funnel is not None:
+                failed_report['pipeline_funnel'] = deepcopy(
+                    dict(funnel or {})
+                )
+                failed_report.setdefault('summary', {})[
+                    'pipeline_funnel'
+                ] = deepcopy(dict(funnel or {}))
+
+        def commit_failed(failed_reference):
+            self._active_execution_audit_report = deepcopy(failed_report)
+            self._latest_execution_audit_reference = dict(failed_reference)
+
+        failed_reference = self._write_gate_audit_report(
+            failed_report,
+            ticket=None,
+            commit_callback=commit_failed,
+            replace_reference_sha256=str(
+                dict(reference or {}).get('report_sha256', '') or ''
+            ),
+            output_path=self._execution_audit_output_path(),
+            reference_attr='_latest_execution_audit_reference',
+        )
+        try:
+            self._publish_bounded_gate_audit(
+                failed_report.get('selected'),
+                summary={
+                    'pipeline_funnel': deepcopy(
+                        dict(failed_report.get('pipeline_funnel', {}) or {})
+                    ),
+                    'status': str(
+                        dict(failed_report.get('outcome', {}) or {}).get(
+                            'code', decision.code
+                        )
+                    ),
+                    'promotion': deepcopy(failed_report['promotion']),
+                },
+                reference=failed_reference,
+            )
+        except CandidateContractError:
+            # The durable CAS revocation is authoritative. A diagnostic topic
+            # failure must never roll it back or skip it.
+            pass
+        return failed_report, failed_reference
+
+    def _republish_current_execution_audit_reference(self):
+        report = deepcopy(
+            getattr(self, '_active_execution_audit_report', None)
+        )
+        reference = dict(
+            getattr(self, '_latest_execution_audit_reference', {}) or {}
+        )
+        if not isinstance(report, dict) or not reference.get('report_sha256'):
+            return False
+        try:
+            self._publish_bounded_gate_audit(
+                report.get('selected'),
+                summary={
+                    'pipeline_funnel': deepcopy(
+                        dict(report.get('pipeline_funnel', {}) or {})
+                    ),
+                    'status': str(
+                        dict(report.get('outcome', {}) or {}).get('code', '')
+                        or ''
+                    ),
+                    'promotion': deepcopy(report.get('promotion')),
+                },
+                reference=reference,
+            )
+            return True
+        except CandidateContractError:
+            return False
 
     def _decide_preview_promotion(self, rich_plan, signature, score):
         controller = self._promotion_controller()
@@ -4992,6 +5197,197 @@ class RemoteGrasp6DNode:
         )
         self._latest_promotion_decision = decision
         return decision, now_sec
+
+    @staticmethod
+    def _controller_promotion_state(controller):
+        return (
+            getattr(controller, 'execution_plan_id', None),
+            getattr(controller, 'execution_signature', None),
+            getattr(controller, 'execution_score', None),
+            getattr(controller, 'last_promotion_sec', None),
+            int(getattr(controller, 'invalid_streak', 0)),
+            bool(getattr(controller, 'explicit_replan_requested', False)),
+            bool(getattr(controller, '_drift_replan_requested', False)),
+        )
+
+    def _capture_promotion_token_locked(self, ticket, expected_generation):
+        self._require_stream_ticket_current_locked(ticket)
+        controller = self._promotion_controller()
+        return {
+            'request_id': int(ticket.request_id),
+            'generation': int(ticket.generation),
+            'target_epoch': int(ticket.target_epoch),
+            'geometry_generation': int(expected_generation),
+            'controller_state': self._controller_promotion_state(controller),
+            'previous_rich_plan': deepcopy(
+                getattr(self, 'latest_rich_plan', None)
+            ),
+            'previous_legacy_plan': deepcopy(
+                getattr(self, 'latest_plan', None)
+            ),
+        }
+
+    def _promotion_token_state(self, ticket, token):
+        try:
+            self._require_stream_ticket_current_locked(ticket)
+        except StreamResultCancelled as exc:
+            return False, exc.code
+        if (
+            int(ticket.request_id) != int(token['request_id'])
+            or int(ticket.generation) != int(token['generation'])
+            or int(ticket.target_epoch) != int(token['target_epoch'])
+        ):
+            return False, 'GENERATION_STALE'
+        current_generation = int(
+            getattr(self, '_geometry_invalidation_generation', 0)
+        )
+        if current_generation != int(token['geometry_generation']):
+            return False, str(
+                getattr(self, '_last_geometry_invalidation_code', '')
+                or 'PLAN_STALE'
+            )
+        if bool(getattr(self, 'robot_execution_active', False)):
+            return False, 'EXECUTION_FROZEN'
+        if self._controller_promotion_state(
+            self._promotion_controller()
+        ) != tuple(token['controller_state']):
+            return False, 'PROMOTION_SUPERSEDED'
+        return True, ''
+
+    def _promotion_token_current(self, ticket, token):
+        with self._stream_condition:
+            with self._geometry_state_guard():
+                return self._promotion_token_state(ticket, token)
+
+    def _recover_aborted_execution_publish(self, token, reason):
+        """Restore the previous authority or publish an invalid tombstone."""
+
+        previous_rich = deepcopy(token.get('previous_rich_plan'))
+        previous_legacy = deepcopy(token.get('previous_legacy_plan'))
+        with self._geometry_state_guard():
+            same_geometry = int(
+                getattr(self, '_geometry_invalidation_generation', 0)
+            ) == int(token['geometry_generation'])
+        if (
+            same_geometry
+            and previous_rich is not None
+            and bool(getattr(previous_rich, 'valid', False))
+        ):
+            if previous_legacy is None:
+                previous_legacy = rich_plan_to_legacy(previous_rich)
+            self._publish_invalidation_safely(
+                getattr(self, 'plan_pub', None),
+                deepcopy(previous_legacy),
+                'restored legacy execution plan',
+            )
+            self._publish_invalidation_safely(
+                getattr(self, 'rich_plan_pub', None),
+                deepcopy(previous_rich),
+                'restored rich execution plan',
+            )
+            with self._geometry_state_guard():
+                still_same_geometry = int(
+                    getattr(self, '_geometry_invalidation_generation', 0)
+                ) == int(token['geometry_generation'])
+            if still_same_geometry:
+                return
+
+        self._publish_aborted_execution_tombstone(reason)
+
+    def _publish_aborted_execution_tombstone(self, reason):
+        invalid = Grasp6DPlan()
+        invalid.header.frame_id = 'base_link'
+        invalid.header.stamp = self._safe_time(None)
+        invalid.valid = False
+        invalid.diagnostic = 'PROMOTION_ABORTED: {}'.format(reason)
+        legacy = PoseArray()
+        legacy.header = deepcopy(invalid.header)
+        legacy.poses = []
+        self._publish_invalidation_safely(
+            getattr(self, 'rich_plan_pub', None),
+            invalid,
+            'aborted rich execution plan',
+        )
+        self._publish_invalidation_safely(
+            getattr(self, 'plan_pub', None),
+            legacy,
+            'aborted legacy execution plan',
+        )
+
+    def _publish_execution_with_token(
+        self,
+        rich_plan,
+        signature,
+        score,
+        now_sec,
+        ticket,
+        token,
+    ):
+        """Publish outside locks and commit only after every token recheck."""
+
+        if not self._execution_promotion_audit_ready(rich_plan):
+            return PromotionDecision(
+                False,
+                'PLAN_AUDIT_NOT_READY',
+                'execution audit is missing or no longer content-bound',
+            )
+        current, code = self._promotion_token_current(ticket, token)
+        if not current:
+            return PromotionDecision(False, code, 'promotion token is stale')
+        outgoing_rich = deepcopy(rich_plan)
+        outgoing_legacy = rich_plan_to_legacy(outgoing_rich)
+        rich_attempted = False
+        try:
+            self.plan_pub.publish(deepcopy(outgoing_legacy))
+            current, code = self._promotion_token_current(ticket, token)
+            if not current:
+                return PromotionDecision(
+                    False, code, 'promotion changed during legacy publish'
+                )
+            rich_attempted = True
+            self.rich_plan_pub.publish(deepcopy(outgoing_rich))
+            current, code = self._promotion_token_current(ticket, token)
+            if not current:
+                self._recover_aborted_execution_publish(token, code)
+                return PromotionDecision(
+                    False, code, 'promotion changed during rich publish'
+                )
+        except Exception as exc:
+            if rich_attempted:
+                self._recover_aborted_execution_publish(token, str(exc))
+            return PromotionDecision(
+                False,
+                'PLAN_PUBLICATION_FAILED',
+                'execution plan publication failed: {}'.format(exc),
+            )
+
+        committed = PromotionDecision(
+            True,
+            'PROMOTED',
+            'execution authority published and committed',
+        )
+        with self._stream_condition:
+            with self._geometry_state_guard():
+                current, code = self._promotion_token_state(ticket, token)
+                if current:
+                    self.latest_rich_plan = deepcopy(outgoing_rich)
+                    self.latest_plan = deepcopy(outgoing_legacy)
+                    self._promotion_controller().commit_execution(
+                        str(outgoing_rich.plan_id),
+                        signature,
+                        score=score,
+                        now_sec=now_sec,
+                    )
+                    self._record_preview_promotion_locked(
+                        ticket,
+                        committed,
+                    )
+        if not current:
+            self._recover_aborted_execution_publish(token, code)
+            return PromotionDecision(
+                False, code, 'promotion changed before authority commit'
+            )
+        return committed
 
     def _publish_decided_promotion(
         self,
@@ -5048,12 +5444,31 @@ class RemoteGrasp6DNode:
             )
             self._latest_promotion_decision = failed
             return failed
-        self._promotion_controller().commit_execution(
-            plan_id,
-            signature,
-            score=score,
-            now_sec=now_sec,
-        )
+        with self._geometry_state_guard():
+            current_generation = int(
+                getattr(self, '_geometry_invalidation_generation', 0)
+            )
+            cached_plan_id = str(
+                getattr(getattr(self, 'latest_rich_plan', None), 'plan_id', '')
+                or ''
+            )
+            if current_generation != generation or cached_plan_id != plan_id:
+                failed = PromotionDecision(
+                    False,
+                    str(
+                        getattr(self, '_last_geometry_invalidation_code', '')
+                        or 'PLAN_STALE'
+                    ),
+                    'execution plan changed before controller commit',
+                )
+                self._latest_promotion_decision = failed
+                return failed
+            self._promotion_controller().commit_execution(
+                plan_id,
+                signature,
+                score=score,
+                now_sec=now_sec,
+            )
         return decision
 
     def _maybe_promote_preview(
@@ -5071,20 +5486,20 @@ class RemoteGrasp6DNode:
                 decision, now_sec = self._decide_preview_promotion(
                     rich_plan, signature, score
                 )
-                return self._publish_decided_promotion(
-                    rich_plan,
-                    signature,
-                    score,
-                    decision,
-                    now_sec,
-                    expected_generation=expected_generation,
-                )
+            return self._publish_decided_promotion(
+                rich_plan,
+                signature,
+                score,
+                decision,
+                now_sec,
+                expected_generation=expected_generation,
+            )
 
         if ticket is None:
             return decide_and_publish()
         with self._stream_condition:
             self._require_stream_ticket_current_locked(ticket)
-            return decide_and_publish()
+        return decide_and_publish()
 
     def _finalize_promotion_transaction(
         self,
@@ -5117,6 +5532,10 @@ class RemoteGrasp6DNode:
                     proposal['score'],
                 )
                 self._record_preview_promotion(ticket, decision)
+                promotion_token = self._capture_promotion_token_locked(
+                    ticket,
+                    proposal['expected_generation'],
+                )
         funnel = self._merge_pipeline_funnel(
             local_funnel,
             moveit_funnel,
@@ -5124,49 +5543,129 @@ class RemoteGrasp6DNode:
             preview_count=1,
             promotion_count=int(decision.promote),
         )
-        result_holder = {}
-
-        def publish_after_audit():
-            with self._geometry_state_guard():
-                if bool(getattr(self, 'robot_execution_active', False)):
-                    actual = PromotionDecision(
-                        False,
-                        'EXECUTION_FROZEN',
-                        'robot execution became active before promotion',
-                    )
-                else:
-                    actual = self._publish_decided_promotion(
-                        proposal['rich_plan'],
-                        proposal['signature'],
-                        proposal['score'],
-                        decision,
-                        now_sec,
-                        expected_generation=proposal[
-                            'expected_generation'
-                        ],
-                    )
-                result_holder['decision'] = actual
-                self._record_preview_promotion(ticket, actual)
-
+        # Preview evidence remains request-local and can be overwritten by the
+        # next Preview.  It is never an execution authorization record.
         self._finalize_streaming_gate_audit(
             prepared,
             selection,
             funnel,
             status,
             base_report=base_report,
-            lifecycle_commit_callback=(
-                publish_after_audit if decision.promote else None
-            ),
             promotion_decision=decision,
+            execution_authority=False,
+            publish_reference=not decision.promote,
         )
-        actual = result_holder.get('decision', decision)
-        if decision.promote and not actual.promote:
-            replaced_audit_sha256 = str(
-                dict(
-                    getattr(self, '_latest_gate_audit_reference', {}) or {}
-                ).get('report_sha256', '')
-                or ''
+        if not decision.promote:
+            return funnel, decision
+
+        execution_report = None
+        execution_reference = None
+        previous_execution_sha256 = str(
+            dict(
+                getattr(self, '_latest_execution_audit_reference', {}) or {}
+            ).get('report_sha256', '')
+            or ''
+        )
+        previous_execution_report = deepcopy(
+            getattr(self, '_active_execution_audit_report', None)
+        )
+        try:
+            execution_report, execution_reference = (
+                self._finalize_streaming_gate_audit(
+                    prepared,
+                    selection,
+                    funnel,
+                    status,
+                    base_report=base_report,
+                    promotion_decision=decision,
+                    execution_authority=True,
+                    publish_reference=False,
+                )
             )
+            token_current, token_code = self._promotion_token_current(
+                ticket,
+                promotion_token,
+            )
+            if not token_current:
+                actual = PromotionDecision(
+                    False,
+                    token_code,
+                    'promotion token changed during execution audit write',
+                )
+                funnel = self._merge_pipeline_funnel(
+                    local_funnel,
+                    moveit_funnel,
+                    stable_count=stable_count,
+                    preview_count=1,
+                    promotion_count=0,
+                )
+                self._compensate_execution_audit(
+                    execution_report,
+                    execution_reference,
+                    actual,
+                    ticket,
+                    funnel=funnel,
+                    restore_report=previous_execution_report,
+                )
+                return funnel, actual
+            self._publish_bounded_gate_audit(
+                execution_report.get('selected'),
+                summary={
+                    'pipeline_funnel': deepcopy(dict(funnel or {})),
+                    'status': str(status or ''),
+                    'promotion': deepcopy(execution_report['promotion']),
+                },
+                reference=execution_reference,
+            )
+        except CandidateContractError as exc:
+            reference = dict(
+                getattr(self, '_latest_execution_audit_reference', {}) or {}
+            )
+            active_report = dict(
+                getattr(self, '_active_execution_audit_report', {}) or {}
+            )
+            if (
+                bool(
+                    dict(active_report.get('outcome', {}) or {}).get(
+                        'valid_plan', False
+                    )
+                )
+                and reference.get('report_sha256')
+                and str(reference.get('report_sha256'))
+                != previous_execution_sha256
+                and active_report.get('plan_id')
+                == str(getattr(proposal['rich_plan'], 'plan_id', '') or '')
+            ):
+                failed = PromotionDecision(
+                    False,
+                    PLANNING_AUDIT_FAILED,
+                    str(exc),
+                )
+                self._compensate_execution_audit(
+                    active_report,
+                    reference,
+                    failed,
+                    ticket,
+                    funnel=self._merge_pipeline_funnel(
+                        local_funnel,
+                        moveit_funnel,
+                        stable_count=stable_count,
+                        preview_count=1,
+                        promotion_count=0,
+                    ),
+                    restore_report=previous_execution_report,
+                )
+            raise
+
+        actual = self._publish_execution_with_token(
+            proposal['rich_plan'],
+            proposal['signature'],
+            proposal['score'],
+            now_sec,
+            ticket,
+            promotion_token,
+        )
+        if decision.promote and not actual.promote:
             funnel = self._merge_pipeline_funnel(
                 local_funnel,
                 moveit_funnel,
@@ -5174,15 +5673,18 @@ class RemoteGrasp6DNode:
                 preview_count=1,
                 promotion_count=0,
             )
-            self._finalize_streaming_gate_audit(
-                prepared,
-                selection,
-                funnel,
-                status,
-                base_report=base_report,
-                promotion_decision=actual,
-                replace_audit_sha256=replaced_audit_sha256,
-            )
+            try:
+                self._compensate_execution_audit(
+                    execution_report,
+                    execution_reference,
+                    actual,
+                    ticket,
+                    funnel,
+                    restore_report=previous_execution_report,
+                )
+            except StreamResultCancelled:
+                self._republish_current_execution_audit_reference()
+                raise
         return funnel, actual
 
     def _publish_preview_plan(
@@ -5205,8 +5707,12 @@ class RemoteGrasp6DNode:
             return
         with self._stream_condition:
             self._require_stream_ticket_current_locked(ticket)
-            self.preview_rich_plan_pub.publish(outgoing_rich)
-            self.preview_plan_pub.publish(outgoing_legacy)
+        self.preview_plan_pub.publish(outgoing_legacy)
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(ticket)
+        self.preview_rich_plan_pub.publish(outgoing_rich)
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(ticket)
             self.latest_preview_rich_plan = deepcopy(outgoing_rich)
             if commit_callback is not None:
                 commit_callback()
@@ -5701,18 +6207,17 @@ class RemoteGrasp6DNode:
             ),
         }
 
-    def _finalize_streaming_gate_audit(
+    def _build_streaming_gate_audit_report(
         self,
         prepared,
         selection,
         funnel,
         status,
         base_report=None,
-        lifecycle_commit_callback=None,
         promotion_decision=None,
-        replace_audit_sha256=None,
+        execution_authority=False,
     ):
-        """Atomically enrich the existing full audit with streaming lineage."""
+        """Build one request-local continuous audit without side effects."""
 
         report = deepcopy(base_report)
         if base_report is None:
@@ -5877,7 +6382,11 @@ class RemoteGrasp6DNode:
             row.update(deepcopy(evaluation_record))
 
         report['report_version'] = 3
-        report['mode'] = 'continuous_preview'
+        report['mode'] = (
+            'continuous_execution'
+            if execution_authority
+            else 'continuous_preview'
+        )
         report['request_id'] = int(prepared.ticket.request_id)
         report['generation'] = int(prepared.ticket.generation)
         report['target_epoch'] = int(prepared.ticket.target_epoch)
@@ -5911,6 +6420,8 @@ class RemoteGrasp6DNode:
             else ''
         )
         promotes_execution = bool(
+            execution_authority
+            and
             isinstance(promotion_decision, PromotionDecision)
             and promotion_decision.promote
             and report.get('plan_id')
@@ -5952,25 +6463,230 @@ class RemoteGrasp6DNode:
             'status': str(status or ''),
             'promotion': deepcopy(report['promotion']),
         }
+        return report, summary, selected_lineage
+
+    @staticmethod
+    def _continuous_execution_schema_error(report, ticket):
+        """Return empty text only for one strictly reachable selected lineage."""
+
+        if not isinstance(report, dict):
+            return 'execution audit is not a dictionary'
+        outcome = report.get('outcome')
+        if not isinstance(outcome, dict) or not bool(
+            outcome.get('valid_plan', False)
+        ):
+            return 'execution audit is not marked valid'
+        plan_id = str(report.get('plan_id', '') or '').strip()
+        if not plan_id:
+            return 'execution audit has no plan_id'
+        evaluations = report.get('stable_evaluations')
+        if not isinstance(evaluations, list) or not evaluations:
+            return 'execution audit has no stable evaluations'
+        seen = set()
+        selected = []
+        required_tracking = {
+            'track_id',
+            'hit_count',
+            'window_count',
+            'hit_request_ids',
+        }
+        required_lineage = {
+            'source_request_id',
+            'source_snapshot_stamp_sec',
+            'source_raw_candidate_index',
+            'source_variant_index',
+            'evaluation_request_id',
+            'evaluation_snapshot_stamp_sec',
+            'evaluation_variant_index',
+        }
+        hard_states = (
+            'collision_free',
+            'within_joint_limits',
+            'ik_valid',
+            'planning_success',
+        )
+        for evaluation in evaluations:
+            if not isinstance(evaluation, dict):
+                return 'stable evaluation is not a dictionary'
+            try:
+                key = (
+                    int(evaluation.get('candidate_index')),
+                    int(evaluation.get('variant_index')),
+                )
+            except (TypeError, ValueError, OverflowError):
+                return 'stable evaluation has non-integral lineage indices'
+            if key in seen:
+                return 'duplicate stable evaluation lineage %s' % (key,)
+            seen.add(key)
+            tracking = evaluation.get('tracking')
+            if not isinstance(tracking, dict):
+                return 'stable evaluation %s has no tracking evidence' % (key,)
+            missing = sorted(required_tracking - set(tracking))
+            if missing:
+                return 'stable evaluation %s tracking misses %s' % (
+                    key,
+                    missing,
+                )
+            hit_request_ids = tracking.get('hit_request_ids')
+            if not isinstance(hit_request_ids, list) or not hit_request_ids:
+                return 'stable evaluation %s has no tracking hits' % (key,)
+            lineage = evaluation.get('lineage_binding')
+            if not isinstance(lineage, dict):
+                return 'stable evaluation %s has no lineage binding' % (key,)
+            missing = sorted(required_lineage - set(lineage))
+            if missing:
+                return 'stable evaluation %s lineage misses %s' % (
+                    key,
+                    missing,
+                )
+            try:
+                lineage_key = (
+                    int(lineage['source_raw_candidate_index']),
+                    int(lineage['evaluation_variant_index']),
+                )
+                evaluation_request_id = int(
+                    lineage['evaluation_request_id']
+                )
+                evaluation_stamp = float(
+                    lineage['evaluation_snapshot_stamp_sec']
+                )
+            except (TypeError, ValueError, OverflowError):
+                return 'stable evaluation %s lineage is malformed' % (key,)
+            if lineage_key != key:
+                return 'stable evaluation %s lineage binds %s' % (
+                    key,
+                    lineage_key,
+                )
+            if (
+                evaluation_request_id != int(ticket.request_id)
+                or not math.isfinite(evaluation_stamp)
+                or abs(evaluation_stamp - float(ticket.snapshot_stamp_sec))
+                > 1e-9
+            ):
+                return 'stable evaluation %s is not request-local' % (key,)
+            try:
+                final_score = float(evaluation.get('final_score'))
+            except (TypeError, ValueError, OverflowError):
+                return 'stable evaluation %s has no final_score' % (key,)
+            if not math.isfinite(final_score):
+                return 'stable evaluation %s final_score is non-finite' % (
+                    key,
+                )
+            moveit = evaluation.get('moveit')
+            if not isinstance(moveit, dict):
+                return 'stable evaluation %s has no MoveIt evidence' % (key,)
+            if moveit.get('reachable') is not True:
+                return 'stable evaluation %s is not strictly reachable' % (
+                    key,
+                )
+            hard_values = tuple(moveit.get(name) for name in hard_states)
+            structured_success = all(value is True for value in hard_values)
+            generic_success = (
+                all(value is None for value in hard_values)
+                and str(moveit.get('failure_code', '') or '') in ('', 'OK')
+                and str(moveit.get('evidence_code', '') or '')
+                == 'STRICT_SERVICE_SUCCESS'
+            )
+            if not structured_success and not generic_success:
+                return 'stable evaluation %s has incomplete MoveIt evidence' % (
+                    key,
+                )
+            for name in ('joint_path_cost', 'joint_max_delta_rad'):
+                try:
+                    value = float(moveit.get(name))
+                except (TypeError, ValueError, OverflowError):
+                    return 'stable evaluation %s has invalid %s' % (key, name)
+                if not math.isfinite(value) or value < 0.0:
+                    return 'stable evaluation %s has invalid %s' % (key, name)
+            if evaluation.get('selected') is True:
+                selected.append(evaluation)
+            elif type(evaluation.get('selected')) is not bool:
+                return 'stable evaluation %s selected is not boolean' % (key,)
+        if len(selected) != 1:
+            return 'execution audit requires exactly one selected lineage'
+        if report.get('selected') != selected[0]:
+            return 'execution audit selected lineage is inconsistent'
+        if report.get('lineage') != evaluations:
+            return 'execution audit lineage copy is inconsistent'
+        return ''
+
+    def _execution_audit_output_path(self):
+        return '{}.execution'.format(
+            validate_mandatory_planning_audit(
+                getattr(self, 'gate_audit_enabled', True),
+                getattr(self, 'gate_audit_output_path', ''),
+            )
+        )
+
+    def _finalize_streaming_gate_audit(
+        self,
+        prepared,
+        selection,
+        funnel,
+        status,
+        base_report=None,
+        lifecycle_commit_callback=None,
+        promotion_decision=None,
+        replace_audit_sha256=None,
+        execution_authority=False,
+        publish_reference=True,
+    ):
+        """Atomically persist Preview or separately bound Execution evidence."""
+
+        report, summary, selected_lineage = (
+            self._build_streaming_gate_audit_report(
+                prepared,
+                selection,
+                funnel,
+                status,
+                base_report=base_report,
+                promotion_decision=promotion_decision,
+                execution_authority=execution_authority,
+            )
+        )
+        if execution_authority:
+            schema_error = self._continuous_execution_schema_error(
+                report,
+                prepared.ticket,
+            )
+            if schema_error:
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    'continuous execution audit is incomplete: %s'
+                    % schema_error,
+                )
+            output_path = self._execution_audit_output_path()
+            reference_attr = '_latest_execution_audit_reference'
+        else:
+            output_path = getattr(self, 'gate_audit_output_path', '')
+            reference_attr = '_latest_gate_audit_reference'
 
         def commit_audit(reference):
-            self._active_gate_audit_report = deepcopy(report)
-            self._latest_gate_audit_summary = deepcopy(summary)
-            self._latest_gate_audit_reference = dict(reference)
+            if execution_authority:
+                self._active_execution_audit_report = deepcopy(report)
+                self._latest_execution_audit_reference = dict(reference)
+            else:
+                self._active_gate_audit_report = deepcopy(report)
+                self._latest_gate_audit_summary = deepcopy(summary)
+                self._latest_gate_audit_reference = dict(reference)
+            if lifecycle_commit_callback is not None:
+                lifecycle_commit_callback()
+
+        reference = self._write_gate_audit_report(
+            report,
+            ticket=prepared.ticket,
+            commit_callback=commit_audit,
+            replace_reference_sha256=replace_audit_sha256,
+            output_path=output_path,
+            reference_attr=reference_attr,
+        )
+        if publish_reference:
             self._publish_bounded_gate_audit(
                 selected_lineage,
                 summary=summary,
                 reference=reference,
             )
-            if lifecycle_commit_callback is not None:
-                lifecycle_commit_callback()
-
-        self._write_gate_audit_report(
-            report,
-            ticket=prepared.ticket,
-            commit_callback=commit_audit,
-            replace_reference_sha256=replace_audit_sha256,
-        )
+        return report, reference
 
     def _accept_prediction(self, prepared):
         """Accept one correlated result into tracking and preview selection."""
@@ -9351,11 +10067,18 @@ class RemoteGrasp6DNode:
         ticket=None,
         commit_callback=None,
         replace_reference_sha256=None,
+        output_path=None,
+        reference_attr='_latest_gate_audit_reference',
     ):
+        requested_path = (
+            getattr(self, 'gate_audit_output_path', '')
+            if output_path is None
+            else output_path
+        )
         path, mujoco_path = validate_distinct_audit_paths(
             validate_mandatory_planning_audit(
                 getattr(self, 'gate_audit_enabled', True),
-                getattr(self, 'gate_audit_output_path', ''),
+                requested_path,
             ),
             getattr(
                 self,
@@ -9363,7 +10086,8 @@ class RemoteGrasp6DNode:
                 MUJOCO_AUDIT_DEFAULT_PATH,
             ),
         )
-        self.gate_audit_output_path = path
+        if output_path is None:
+            self.gate_audit_output_path = path
         self.mujoco_audit_output_path = mujoco_path
         temporary_path = '%s.tmp-%d-%d' % (
             path,
@@ -9400,7 +10124,7 @@ class RemoteGrasp6DNode:
                         dict(
                             getattr(
                                 self,
-                                '_latest_gate_audit_reference',
+                                str(reference_attr),
                                 {},
                             )
                             or {}

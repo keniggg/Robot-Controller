@@ -73,6 +73,23 @@ class FailingPublisher:
         raise RuntimeError('publisher unavailable')
 
 
+class BlockingPublisher(RecordingPublisher):
+    def __init__(self, should_block):
+        super().__init__()
+        self.should_block = should_block
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self._blocked_once = False
+
+    def publish(self, message):
+        if not self._blocked_once and self.should_block(message):
+            self._blocked_once = True
+            self.entered.set()
+            if not self.release.wait(2.0):
+                raise RuntimeError('test did not release blocked publisher')
+        super().publish(message)
+
+
 class BlockingPrediction:
     def __init__(self):
         self.entered = threading.Event()
@@ -2136,10 +2153,17 @@ def promotion_transaction_node(tmp_path):
     node.gate_audit_output_path = str(tmp_path / 'planning.json')
     node.mujoco_audit_output_path = str(tmp_path / 'mujoco.json')
     node.gate_audit_pub = RecordingPublisher()
-    node._stable_variant_runtime = {}
     node.start_streaming()
     node.submit_stream_snapshot(snapshot(9.8))
-    ticket = node._stream_worker_ticket
+    active_ticket = node._stream_worker_ticket
+    ticket = InferenceTicket(
+        request_id=4,
+        generation=active_ticket.generation,
+        snapshot_stamp_sec=9.8,
+        target_epoch=active_ticket.target_epoch,
+        payload=active_ticket.payload,
+        submitted_monotonic_sec=active_ticket.submitted_monotonic_sec,
+    )
     plan = promotion_plan('plan-A')
     node._latest_streaming_audit = {
         'request_id': ticket.request_id,
@@ -2152,8 +2176,113 @@ def promotion_transaction_node(tmp_path):
         'ticket': ticket,
         'expected_generation': 0,
     }
+    features = SoftCandidateFeatures(
+        model_score=0.8,
+        cloud_distance_m=0.01,
+        center_distance_m=0.01,
+        downward_approach_cos=1.0,
+        visibility_center_cost=0.0,
+        support_margin_m=0.01,
+        jaw_tilt_cos=1.0,
+        geometry_margin_m=0.01,
+        joint_path_cost=0.0,
+        joint_max_delta_rad=0.0,
+        stability_hit_ratio=0.6,
+        position_dispersion_m=0.002,
+        orientation_dispersion_rad=0.03,
+    )
+    payload = remote_node.LocalCandidatePayload(
+        raw_candidate_index=4,
+        variant_index=0,
+        raw_candidate=None,
+        camera_candidate=None,
+        grasp_pose=None,
+        geometry_gate=None,
+        soft_features=features,
+        score_components={},
+    )
+    stable = StableCandidate(
+        track_id=7,
+        hit_count=3,
+        window_count=5,
+        hit_request_ids=(1, 2, 3),
+        request_id=3,
+        snapshot_stamp_sec=9.7,
+        target_epoch=ticket.target_epoch,
+        target_label='carton',
+        model_choice='carton_segment',
+        center_base_xyz=(0.1, 0.0, 0.3),
+        tool0_position_xyz=(0.1, 0.0, 0.3),
+        quaternion_xyzw=(0.0, 0.0, 0.0, 1.0),
+        approach_base_xyz=(0.0, 0.0, -1.0),
+        required_open_width_m=0.04,
+        model_width_m=0.038,
+        model_score=0.8,
+        geometry_margin_m=0.01,
+        pre_moveit_score=0.0,
+        position_dispersion_m=0.002,
+        orientation_dispersion_rad=0.03,
+        payload=payload,
+    )
+    safety = SafetyGateInput(
+        depth_valid=True,
+        transform_valid=True,
+        target_present=True,
+        same_target_instance=True,
+        target_absolute_distance_m=0.0,
+        target_absolute_limit_m=0.15,
+        required_open_width_m=0.04,
+        physical_open_width_m=0.05,
+        geometry_valid=True,
+        collision_free=True,
+        request_id=ticket.request_id,
+        snapshot_stamp_sec=ticket.snapshot_stamp_sec,
+        target_epoch=ticket.target_epoch,
+        target_label='carton',
+        model_choice='carton_segment',
+        track_id=7,
+        variant_index=1,
+        center_base_xyz=(0.1, 0.0, 0.3),
+        tool0_position_xyz=(0.1, 0.0, 0.3),
+        quaternion_xyzw=(0.0, 0.0, 0.0, 1.0),
+        approach_base_xyz=(0.0, 0.0, -1.0),
+        snapshot_context_revision='ctx-4',
+    )
+    moveit = MoveItResult(
+        reachable=True,
+        joint_path_cost=0.2,
+        joint_max_delta_rad=0.1,
+        reason='strict plan success',
+        collision_free=True,
+        within_joint_limits=True,
+        ik_valid=True,
+        planning_success=True,
+    )
+    evaluated = ScoredStableCandidate(
+        stable_candidate=stable,
+        variant_index=1,
+        latest_safety=safety,
+        soft_features=features,
+        score_weights=SoftScoreWeights(),
+        evaluation_request_id=ticket.request_id,
+        evaluation_snapshot_stamp_sec=ticket.snapshot_stamp_sec,
+        evaluation_context_revision='ctx-4',
+        moveit_result=moveit,
+        final_score=1.0,
+    )
+    node._stable_variant_runtime = {
+        (7, 1): {
+            'prepared': types.SimpleNamespace(ticket=ticket),
+            'scored_candidate': evaluated,
+            'soft_evidence': {'source': 'latest-rgbd'},
+        }
+    }
     prepared = types.SimpleNamespace(ticket=ticket)
-    selection = types.SimpleNamespace(checked=(), selected=object())
+    selection = types.SimpleNamespace(
+        checked=(evaluated,),
+        reachable=(evaluated,),
+        selected=evaluated,
+    )
     local_funnel = {
         'input_count': 1,
         'stage_counts': {
@@ -2252,7 +2381,9 @@ def test_execution_promotion_without_bound_final_audit_is_rejected():
 def test_final_audit_is_bound_before_execution_authority_publish(tmp_path):
     setup = promotion_transaction_node(tmp_path)
     node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
-    audit_path = pathlib.Path(node.gate_audit_output_path)
+    audit_path = pathlib.Path(
+        '{}.execution'.format(node.gate_audit_output_path)
+    )
 
     class AuditBeforeRichPublisher(RecordingPublisher):
         def publish(self, message):
@@ -2306,7 +2437,9 @@ def test_failed_execution_publish_rewrites_audit_as_unpublished(tmp_path):
         )
 
         report = json.loads(
-            pathlib.Path(node.gate_audit_output_path).read_text()
+            pathlib.Path(
+                '{}.execution'.format(node.gate_audit_output_path)
+            ).read_text()
         )
         assert decision.code == 'PLAN_PUBLICATION_FAILED'
         assert report['outcome']['valid_plan'] is False
@@ -2336,9 +2469,11 @@ def test_generation_rejection_rewrites_audit_as_unpublished(tmp_path):
         )
 
         report = json.loads(
-            pathlib.Path(node.gate_audit_output_path).read_text()
+            pathlib.Path(
+                '{}.execution'.format(node.gate_audit_output_path)
+            ).read_text()
         )
-        assert decision.code == 'PLAN_PUBLICATION_FAILED'
+        assert decision.code == 'PLAN_STALE'
         assert report['outcome']['valid_plan'] is False
         assert funnel['stage_counts']['promoted']['passed'] == 0
         assert node.execution_plan_controller.execution_plan_id is None
@@ -2411,20 +2546,20 @@ def test_failed_publish_correction_survives_stop_during_correction_io(
     setup = promotion_transaction_node(tmp_path)
     node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
     node.plan_pub = FailingPublisher()
-    second_fsync_entered = threading.Event()
-    release_second_fsync = threading.Event()
+    correction_fsync_entered = threading.Event()
+    release_correction_fsync = threading.Event()
     original_fsync = remote_node.os.fsync
     fsync_calls = {'count': 0}
 
-    def block_second_fsync(file_descriptor):
+    def block_correction_fsync(file_descriptor):
         fsync_calls['count'] += 1
-        if fsync_calls['count'] == 2:
-            second_fsync_entered.set()
-            if not release_second_fsync.wait(2.0):
+        if fsync_calls['count'] == 3:
+            correction_fsync_entered.set()
+            if not release_correction_fsync.wait(2.0):
                 raise RuntimeError('test did not release correction fsync')
         return original_fsync(file_descriptor)
 
-    monkeypatch.setattr(remote_node.os, 'fsync', block_second_fsync)
+    monkeypatch.setattr(remote_node.os, 'fsync', block_correction_fsync)
     transaction_errors = []
 
     def run_transaction():
@@ -2444,19 +2579,580 @@ def test_failed_publish_correction_survives_stop_during_correction_io(
 
     transaction = threading.Thread(target=run_transaction)
     transaction.start()
-    assert second_fsync_entered.wait(1.0)
+    assert correction_fsync_entered.wait(1.0)
     assert node.stop_streaming() is True
-    release_second_fsync.set()
+    release_correction_fsync.set()
     transaction.join(2.0)
     try:
         report = json.loads(
-            pathlib.Path(node.gate_audit_output_path).read_text()
+            pathlib.Path(
+                '{}.execution'.format(node.gate_audit_output_path)
+            ).read_text()
         )
         assert transaction_errors == []
         assert report['outcome']['valid_plan'] is False
         assert report['outcome']['code'] == 'PLAN_PUBLICATION_FAILED'
         assert node.execution_plan_controller.execution_plan_id is None
         assert node.rich_plan_pub.messages == []
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_gate_audit_publisher_failure_compensates_execution_audit(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    node.gate_audit_pub = FailingPublisher()
+    execution_path = pathlib.Path(
+        '{}.execution'.format(node.gate_audit_output_path)
+    )
+    try:
+        with pytest.raises(remote_node.CandidateContractError):
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+
+        report = json.loads(execution_path.read_text())
+        assert report['outcome']['valid_plan'] is False
+        assert report['outcome']['code'] == remote_node.PLANNING_AUDIT_FAILED
+        assert node.plan_pub.messages == []
+        assert node.rich_plan_pub.messages == []
+        assert node.execution_plan_controller.execution_plan_id is None
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_promotion_rejects_selected_lineage_without_strict_moveit(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    selected = selection.selected
+    incomplete = remote_node.replace(
+        selected,
+        moveit_result=remote_node.replace(
+            selected.moveit_result,
+            planning_success=None,
+        ),
+    )
+    selection.checked = (incomplete,)
+    selection.reachable = (incomplete,)
+    selection.selected = incomplete
+    node._stable_variant_runtime[(7, 1)]['scored_candidate'] = incomplete
+    try:
+        with pytest.raises(remote_node.CandidateContractError) as exc_info:
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+
+        assert exc_info.value.code == remote_node.PLANNING_AUDIT_FAILED
+        assert node.plan_pub.messages == []
+        assert node.rich_plan_pub.messages == []
+        assert node.execution_plan_controller.execution_plan_id is None
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_promotion_rejects_duplicate_selected_candidate_lineage(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    selected = selection.selected
+    duplicate_stable = remote_node.replace(
+        selected.stable_candidate,
+        track_id=8,
+    )
+    duplicate = remote_node.replace(
+        selected,
+        stable_candidate=duplicate_stable,
+    )
+    selection.checked = (selected, duplicate)
+    selection.reachable = (selected, duplicate)
+    node._stable_variant_runtime[(8, 1)] = {
+        'prepared': types.SimpleNamespace(ticket=prepared.ticket),
+        'scored_candidate': duplicate,
+        'soft_evidence': {'source': 'latest-rgbd'},
+    }
+    try:
+        with pytest.raises(remote_node.CandidateContractError) as exc_info:
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                2,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+
+        assert exc_info.value.code == remote_node.PLANNING_AUDIT_FAILED
+        assert node.rich_plan_pub.messages == []
+        assert node.execution_plan_controller.execution_plan_id is None
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize(
+    'missing_evidence',
+    ['selected_lineage', 'tracking', 'lineage_binding', 'final_score'],
+)
+def test_promotion_rejects_incomplete_selected_execution_evidence(
+    tmp_path,
+    monkeypatch,
+    missing_evidence,
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    original = node._build_streaming_gate_audit_report
+
+    def incomplete_report(*args, **kwargs):
+        report, summary, selected = original(*args, **kwargs)
+        if missing_evidence == 'selected_lineage':
+            report['selected'] = None
+        elif missing_evidence == 'tracking':
+            report['stable_evaluations'][0]['tracking'].pop('hit_count')
+            report['selected']['tracking'].pop('hit_count')
+        elif missing_evidence == 'lineage_binding':
+            report['stable_evaluations'][0]['lineage_binding'].pop(
+                'evaluation_request_id'
+            )
+            report['selected']['lineage_binding'].pop(
+                'evaluation_request_id'
+            )
+        else:
+            report['stable_evaluations'][0]['final_score'] = None
+            report['selected']['final_score'] = None
+        report['lineage'] = remote_node.deepcopy(
+            report['stable_evaluations']
+        )
+        return report, summary, selected
+
+    monkeypatch.setattr(
+        node,
+        '_build_streaming_gate_audit_report',
+        incomplete_report,
+    )
+    try:
+        with pytest.raises(remote_node.CandidateContractError) as exc_info:
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+
+        assert exc_info.value.code == remote_node.PLANNING_AUDIT_FAILED
+        assert node.rich_plan_pub.messages == []
+        assert node.execution_plan_controller.execution_plan_id is None
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_blocked_gate_audit_publish_does_not_block_stop_or_authority(
+    tmp_path,
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    node.gate_audit_pub = BlockingPublisher(lambda _message: True)
+    errors = []
+    results = []
+
+    def run_transaction():
+        try:
+            results.append(
+                node._finalize_promotion_transaction(
+                    prepared,
+                    selection,
+                    proposal,
+                    local_funnel,
+                    moveit_funnel,
+                    1,
+                    'PREVIEW_READY',
+                    {'summary': {}, 'rows': []},
+                )
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    transaction = threading.Thread(target=run_transaction)
+    transaction.start()
+    assert node.gate_audit_pub.entered.wait(1.0)
+    try:
+        assert node.stop_streaming() is True
+    finally:
+        node.gate_audit_pub.release.set()
+        transaction.join(2.0)
+
+    execution_report = json.loads(
+        pathlib.Path(
+            '{}.execution'.format(node.gate_audit_output_path)
+        ).read_text()
+    )
+    assert errors == []
+    assert results[0][1].promote is False
+    assert results[0][1].code == 'GENERATION_STALE'
+    assert execution_report['outcome']['valid_plan'] is False
+    assert node.rich_plan_pub.messages == []
+    assert node.execution_plan_controller.execution_plan_id is None
+    node.shutdown_streaming_worker()
+
+
+def test_blocked_gate_audit_publish_allows_hard_invalidation(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    node.gate_audit_pub = BlockingPublisher(lambda _message: True)
+    errors = []
+
+    def run_transaction():
+        try:
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    transaction = threading.Thread(target=run_transaction)
+    transaction.start()
+    assert node.gate_audit_pub.entered.wait(1.0)
+    invalidation_done = threading.Event()
+    invalidation = threading.Thread(
+        target=lambda: (
+            node._invalidate_geometry('TARGET_LOST', 'target lost'),
+            invalidation_done.set(),
+        )
+    )
+    invalidation.start()
+    try:
+        assert invalidation_done.wait(0.2)
+    finally:
+        node.gate_audit_pub.release.set()
+        transaction.join(2.0)
+        invalidation.join(2.0)
+
+    execution_report = json.loads(
+        pathlib.Path(
+            '{}.execution'.format(node.gate_audit_output_path)
+        ).read_text()
+    )
+    assert execution_report['outcome']['valid_plan'] is False
+    assert node.execution_plan_controller.execution_plan_id is None
+    assert node.rich_plan_pub.messages[-1].valid is False
+    bounded_message = node.gate_audit_pub.messages[-1]
+    bounded = json.loads(
+        getattr(bounded_message, 'data', bounded_message)
+    )
+    execution_payload = pathlib.Path(
+        '{}.execution'.format(node.gate_audit_output_path)
+    ).read_bytes()
+    assert bounded['report_sha256'] == remote_node.hashlib.sha256(
+        execution_payload
+    ).hexdigest()
+    node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('blocked_channel', ['legacy', 'rich'])
+def test_blocked_execution_publish_allows_stream_stop_and_recovers(
+    tmp_path,
+    blocked_channel,
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    blocker = BlockingPublisher(
+        lambda message: bool(getattr(message, 'valid', True))
+    )
+    if blocked_channel == 'legacy':
+        node.plan_pub = blocker
+    else:
+        node.rich_plan_pub = blocker
+    results = []
+
+    def run_transaction():
+        results.append(
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+        )
+
+    transaction = threading.Thread(target=run_transaction)
+    transaction.start()
+    assert blocker.entered.wait(1.0)
+    try:
+        assert node.stop_streaming() is True
+    finally:
+        blocker.release.set()
+        transaction.join(2.0)
+
+    execution_report = json.loads(
+        pathlib.Path(
+            '{}.execution'.format(node.gate_audit_output_path)
+        ).read_text()
+    )
+    assert results[0][1].promote is False
+    assert results[0][1].code == 'GENERATION_STALE'
+    assert execution_report['outcome']['valid_plan'] is False
+    assert node.execution_plan_controller.execution_plan_id is None
+    rich_messages = list(node.rich_plan_pub.messages)
+    assert not rich_messages or rich_messages[-1].valid is False
+    node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('blocked_channel', ['legacy', 'rich'])
+def test_blocked_execution_publish_allows_hard_invalidation_and_recovers(
+    tmp_path,
+    blocked_channel,
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    blocker = BlockingPublisher(
+        lambda message: bool(getattr(message, 'valid', True))
+    )
+    if blocked_channel == 'legacy':
+        node.plan_pub = blocker
+    else:
+        node.rich_plan_pub = blocker
+    errors = []
+
+    def run_transaction():
+        try:
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    transaction = threading.Thread(target=run_transaction)
+    transaction.start()
+    assert blocker.entered.wait(1.0)
+    invalidation_done = threading.Event()
+    invalidation = threading.Thread(
+        target=lambda: (
+            node._invalidate_geometry('TARGET_LOST', 'target lost'),
+            invalidation_done.set(),
+        )
+    )
+    invalidation.start()
+    try:
+        assert invalidation_done.wait(0.2), (
+            'hard invalidation blocked on {} publisher'.format(
+                blocked_channel
+            )
+        )
+    finally:
+        blocker.release.set()
+        transaction.join(2.0)
+        invalidation.join(2.0)
+
+    execution_report = json.loads(
+        pathlib.Path(
+            '{}.execution'.format(node.gate_audit_output_path)
+        ).read_text()
+    )
+    assert execution_report['outcome']['valid_plan'] is False
+    assert node.execution_plan_controller.execution_plan_id is None
+    rich_messages = list(node.rich_plan_pub.messages)
+    assert not rich_messages or rich_messages[-1].valid is False
+    node.shutdown_streaming_worker()
+
+
+def test_held_preview_does_not_overwrite_execution_audit(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    execution_path = pathlib.Path(
+        '{}.execution'.format(node.gate_audit_output_path)
+    )
+    try:
+        _funnel, promoted = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            1,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+        assert promoted.promote is True
+        execution_a = json.loads(execution_path.read_text())
+
+        proposal_b = dict(proposal)
+        proposal_b['rich_plan'] = promotion_plan('preview-B', x=0.105)
+        proposal_b['score'] = 2.0
+        node._latest_streaming_audit = {
+            'request_id': prepared.ticket.request_id,
+            'plan_id': 'preview-B',
+        }
+        _funnel, held = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal_b,
+            local_funnel,
+            moveit_funnel,
+            1,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+
+        preview_b = json.loads(
+            pathlib.Path(node.gate_audit_output_path).read_text()
+        )
+        execution_after_b = json.loads(execution_path.read_text())
+        assert held.promote is False
+        assert preview_b['plan_id'] == 'preview-B'
+        assert execution_after_b == execution_a
+        assert execution_after_b['plan_id'] == 'plan-A'
+        assert execution_after_b['outcome']['valid_plan'] is True
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_incomplete_same_plan_replan_keeps_existing_execution_audit(
+    tmp_path,
+    monkeypatch,
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    execution_path = pathlib.Path(
+        '{}.execution'.format(node.gate_audit_output_path)
+    )
+    try:
+        _funnel, promoted = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            1,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+        assert promoted.promote is True
+        execution_a = json.loads(execution_path.read_text())
+
+        node._stream_source_clock.value = 12.0
+        requested = node.execution_plan_controller.request_replan(False)
+        assert requested.code == 'REPLAN_REQUESTED'
+        proposal_b = dict(proposal)
+        proposal_b['score'] = 0.5
+        original = node._build_streaming_gate_audit_report
+
+        def incomplete_report(*args, **kwargs):
+            report, summary, selected = original(*args, **kwargs)
+            if kwargs.get('execution_authority', False):
+                report['stable_evaluations'][0]['final_score'] = None
+                report['selected']['final_score'] = None
+                report['lineage'] = remote_node.deepcopy(
+                    report['stable_evaluations']
+                )
+            return report, summary, selected
+
+        monkeypatch.setattr(
+            node,
+            '_build_streaming_gate_audit_report',
+            incomplete_report,
+        )
+        with pytest.raises(remote_node.CandidateContractError):
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal_b,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+
+        execution_after = json.loads(execution_path.read_text())
+        assert execution_after == execution_a
+        assert execution_after['outcome']['valid_plan'] is True
+        assert node.execution_plan_controller.execution_plan_id == 'plan-A'
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_failed_replan_restores_previous_execution_audit(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    execution_path = pathlib.Path(
+        '{}.execution'.format(node.gate_audit_output_path)
+    )
+    try:
+        _funnel, promoted = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            1,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+        assert promoted.promote is True
+        execution_a = json.loads(execution_path.read_text())
+
+        node._stream_source_clock.value = 12.0
+        node.execution_plan_controller.request_replan(False)
+        proposal_b = dict(proposal)
+        proposal_b['rich_plan'] = promotion_plan('plan-B', x=0.15)
+        proposal_b['score'] = 0.5
+        node._latest_streaming_audit = {
+            'request_id': prepared.ticket.request_id,
+            'plan_id': 'plan-B',
+        }
+        node.plan_pub = FailingPublisher()
+        _funnel, failed = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal_b,
+            local_funnel,
+            moveit_funnel,
+            1,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+
+        assert failed.code == 'PLAN_PUBLICATION_FAILED'
+        assert json.loads(execution_path.read_text()) == execution_a
+        assert node.execution_plan_controller.execution_plan_id == 'plan-A'
+        assert [item.plan_id for item in node.rich_plan_pub.messages] == [
+            'plan-A'
+        ]
     finally:
         node.shutdown_streaming_worker()
 
