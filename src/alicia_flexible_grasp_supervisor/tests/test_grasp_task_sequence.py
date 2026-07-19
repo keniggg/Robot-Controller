@@ -181,6 +181,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(1.0)
         node.latest_joint_state = self._joint_state()
         node.active = True
+        plan = node._freeze_execution_plan(plan)
         states = []
         physical_actions = []
         payloads = []
@@ -512,6 +513,106 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.code, 'EXECUTION_PLAN_INTEGRITY_CHANGED')
         self.assertTrue(node._execution_authority_revoked)
+
+    def test_execution_copy_is_distinct_and_tampering_fails_closed(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        authority = self._rich_plan(plan_id='authority', stamp_sec=9.0)
+        node.latest_grasp6d_plan = authority
+        node.latest_obj = self._object(stamp_sec=9.9)
+        node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(9.9)
+        node.active = True
+        states = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        execution_copy = node._freeze_execution_plan(authority)
+
+        self.assertIsNot(execution_copy, node._bound_execution_plan)
+        execution_copy.score = 0.1
+        self.assertAlmostEqual(node._bound_execution_plan.score, 0.9)
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            result = node._execution_checkpoint(
+                execution_copy, {}, 'tampered execution copy'
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertFalse(result)
+        self.assertIn('EXECUTION_PLAN_INTEGRITY_CHANGED', states[-1][1])
+        self.assertTrue(node._execution_authority_revoked)
+
+    def test_stored_execution_authority_tampering_fails_closed(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        authority = self._rich_plan(plan_id='authority', stamp_sec=9.0)
+        node.latest_grasp6d_plan = authority
+        node.latest_obj = self._object(stamp_sec=9.9)
+        node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(9.9)
+        node.active = True
+        states = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        execution_copy = node._freeze_execution_plan(authority)
+        node._bound_execution_plan.score = 0.1
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            result = node._execution_checkpoint(
+                execution_copy, {}, 'tampered stored authority'
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertFalse(result)
+        self.assertIn('EXECUTION_PLAN_INTEGRITY_CHANGED', states[-1][1])
+        self.assertTrue(node._execution_authority_revoked)
+
+    def test_direct_rich_execute_cannot_mint_authority_from_arbitrary_plan(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        node.latest_grasp6d_plan = self._rich_plan(
+            plan_id='latest-a', stamp_sec=9.0
+        )
+        arbitrary = self._rich_plan(plan_id='arbitrary-b', stamp_sec=9.5)
+        node.latest_obj = self._object(stamp_sec=9.9)
+        node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(9.9)
+        states = []
+        actions = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        node._simulate_grasp6d_plan_if_required = lambda *_args: (
+            actions.append('simulate') or True
+        )
+        node._command_gripper_position = lambda *_args, **_kwargs: (
+            actions.append('physical') or False
+        )
+        original_get_param = grasp_task_node.rospy.get_param
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.get_param = lambda _name, default=None: default
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            result = node._execute_grasp6d_plan(
+                {'plan_validity_sec': 2.0},
+                {'use_compliant_close': False},
+                0.05,
+                lambda *_args: FakeServiceResponse(True),
+                lambda *_args: FakeServiceResponse(True),
+                lambda *_args: FakeServiceResponse(True),
+                None,
+                arbitrary,
+                strict_execute_pose=lambda *_args: FakeServiceResponse(True),
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertFalse(result)
+        self.assertEqual(actions, [])
+        self.assertIsNone(getattr(node, '_bound_execution_plan', None))
+        self.assertIn('EXECUTION_PLAN_NOT_FROZEN', states[-1][1])
 
     def test_start_freezes_deep_copy_and_finally_clears_bound_execution(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
@@ -1561,6 +1662,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True
         plan = self._rich_plan(stamp_sec=1.0)
+        plan = node._freeze_execution_plan(plan)
         states = []
         actions = []
         node.set_state = lambda *args, **kwargs: states.append(args)
@@ -1666,6 +1768,9 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(3.5)
         node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.active = True
+        execution_plan = node._freeze_execution_plan(
+            node.latest_grasp6d_plan
+        )
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
         node._simulate_grasp6d_plan_if_required = lambda *_args: True
         node.set_state = lambda *args, **kwargs: None
@@ -1725,7 +1830,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             self.assertTrue(
                 grasp_task_node.GraspTaskNode.execute(
                     node,
-                    grasp6d_plan=node.latest_grasp6d_plan,
+                    grasp6d_plan=execution_plan,
                 )
             )
         finally:
@@ -1759,6 +1864,9 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(1.0)
         node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.active = True
+        execution_plan = node._freeze_execution_plan(
+            node.latest_grasp6d_plan
+        )
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
         node._simulate_grasp6d_plan_if_required = lambda *_args: True
         node.set_state = lambda *args, **kwargs: None
@@ -1814,7 +1922,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             self.assertTrue(
                 grasp_task_node.GraspTaskNode.execute(
                     node,
-                    grasp6d_plan=node.latest_grasp6d_plan,
+                    grasp6d_plan=execution_plan,
                 )
             )
         finally:
@@ -1835,6 +1943,9 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.latest_joint_state = self._joint_state()
         node.active = True
+        execution_plan = node._freeze_execution_plan(
+            node.latest_grasp6d_plan
+        )
         states = []
         calls = []
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
@@ -1912,7 +2023,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             self.assertFalse(
                 grasp_task_node.GraspTaskNode.execute(
                     node,
-                    grasp6d_plan=node.latest_grasp6d_plan,
+                    grasp6d_plan=execution_plan,
                 )
             )
         finally:
@@ -2510,6 +2621,9 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
         node.latest_joint_state = None
         node.active = True
+        execution_plan = node._freeze_execution_plan(
+            node.latest_grasp6d_plan
+        )
         states = []
         calls = []
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
@@ -2562,7 +2676,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             self.assertFalse(
                 grasp_task_node.GraspTaskNode.execute(
                     node,
-                    grasp6d_plan=node.latest_grasp6d_plan,
+                    grasp6d_plan=execution_plan,
                 )
             )
         finally:

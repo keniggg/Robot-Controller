@@ -771,7 +771,7 @@ class GraspTaskNode:
             self._bound_execution_plan_digest = digest
             self._execution_authority_revoked = False
             self._last_execution_plan_event = 'EXECUTION_FROZEN'
-        return frozen
+        return deepcopy(frozen)
 
     def _clear_bound_execution_plan(self):
         with self._grasp6d_plan_guard():
@@ -1004,23 +1004,8 @@ class GraspTaskNode:
                 '%s: %s' % (validation.code, validation.reason),
             )
             return False
-        drift = self._bound_target_drift_result(plan, gcfg)
-        if not drift.ok:
-            self.set_state(
-                GraspStages.FAILED,
-                '%s: %s' % (drift.code, drift.reason),
-            )
+        if not self._execution_checkpoint(plan, gcfg, 'execution entry'):
             return False
-        with self._grasp6d_plan_guard():
-            if getattr(self, '_bound_execution_plan', None) is None:
-                try:
-                    plan = self._freeze_execution_plan(plan)
-                except (TypeError, ValueError, AttributeError) as exc:
-                    self.set_state(
-                        GraspStages.FAILED,
-                        'EXECUTION_PLAN_FREEZE_FAILED: %s' % exc,
-                    )
-                    return False
         if self._position_only_execute_globally_enabled():
             self.set_state(
                 GraspStages.FAILED,
@@ -1148,11 +1133,14 @@ class GraspTaskNode:
         bound_plan = execution_plan
         if bound_plan is None and execution_plan_id is not None:
             with self._grasp6d_plan_guard():
-                current = getattr(self, 'latest_grasp6d_plan', None)
-                if current is not None and strict_plan_id_equal(
-                    getattr(current, 'plan_id', None), execution_plan_id
+                frozen = getattr(self, '_bound_execution_plan', None)
+                frozen_id = str(
+                    getattr(self, '_bound_execution_plan_id', '') or ''
+                )
+                if frozen is not None and strict_plan_id_equal(
+                    frozen_id, execution_plan_id
                 ):
-                    bound_plan = deepcopy(current)
+                    bound_plan = deepcopy(frozen)
         if bound_plan is not None:
             validation = self._validate_bound_plan(bound_plan, gcfg or {})
             if not validation.ok:
@@ -1163,16 +1151,18 @@ class GraspTaskNode:
                 )
                 return False
         elif execution_plan_id is not None:
-            validation = self.validate_plan_id_for_execution(
-                execution_plan_id, gcfg or {}
+            frozen = getattr(self, '_bound_execution_plan', None)
+            code = (
+                'EXECUTION_PLAN_NOT_FROZEN'
+                if frozen is None
+                else 'EXECUTION_PLAN_MISMATCH'
             )
-            if not validation.ok:
-                self.set_state(
-                    GraspStages.FAILED,
-                    '%s: %s before planning %s'
-                    % (validation.code, validation.reason, label),
-                )
-                return False
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: no matching frozen execution authority before planning %s'
+                % (code, label),
+            )
+            return False
         strict_rich_plan = (
             bound_plan is not None or execution_plan_id is not None
         )
