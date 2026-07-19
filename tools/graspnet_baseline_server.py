@@ -344,7 +344,7 @@ class GraspNetBaselineBackend:
             grasp_group = self.GraspGroup(preds)
             diagnostics = {'raw_candidates': int(len(grasp_group))}
             if len(grasp_group) > 0:
-                grasp_group.nms(
+                grasp_group = grasp_group.nms(
                     translation_thresh=self.nms_translation_thresh_m,
                     rotation_thresh=math.radians(self.nms_rotation_thresh_deg),
                 )

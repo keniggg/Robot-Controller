@@ -305,6 +305,24 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
         self.assertEqual(batch.candidates, ())
         backend.ModelFreeCollisionDetector.assert_not_called()
 
+    def test_backend_uses_nms_returned_group_like_official_graspnet_api(self):
+        backend, _fake_torch = self._loaded_fake_backend()
+        backend.load()
+
+        class ReturnOnlyNmsGroup(server_module.FallbackGraspGroup):
+            def nms(self, translation_thresh=0.03, rotation_thresh=np.deg2rad(30.0)):
+                return server_module.FallbackGraspGroup(
+                    np.zeros((0, 17), dtype=np.float32)
+                )
+
+        backend.GraspGroup = ReturnOnlyNmsGroup
+
+        batch = backend.predict_batch(self._valid_payload(request_id=10))
+
+        self.assertEqual(batch.candidates, ())
+        self.assertEqual(batch.diagnostics['raw_candidates'], 1)
+        self.assertEqual(batch.diagnostics['after_nms'], 0)
+
     def test_baseline_backend_installs_legacy_baseline_import_paths(self):
         original_path = list(sys.path)
         try:
