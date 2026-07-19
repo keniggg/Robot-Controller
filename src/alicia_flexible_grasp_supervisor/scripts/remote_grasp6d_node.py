@@ -138,6 +138,7 @@ PIPELINE_COUNTER_FIELDS = (
     'started',
     'completed',
     'accepted',
+    'failed',
     'expired',
     'stale',
     'replaced',
@@ -4054,6 +4055,8 @@ class RemoteGrasp6DNode:
         self._pipeline_counters['completed'] += 1
         if accepted:
             self._pipeline_counters['accepted'] += 1
+        elif str(status) in ('PREDICT_FAILED', 'ACCEPT_FAILED'):
+            self._pipeline_counters['failed'] += 1
         elif str(status) == 'RESULT_EXPIRED':
             self._pipeline_counters['expired'] += 1
         else:
@@ -5149,7 +5152,13 @@ class RemoteGrasp6DNode:
             )
         prepared = runtime.get('prepared')
         self._require_stream_ticket_current(prepared.ticket)
-        return self._strict_moveit_result(grasp_pose)
+        evaluation = self._strict_moveit_evaluation(grasp_pose)
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(prepared.ticket)
+            return self._commit_strict_moveit_evaluation(
+                grasp_pose,
+                evaluation,
+            )
 
     def _publish_selected_preview(self, selected):
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
@@ -5277,6 +5286,23 @@ class RemoteGrasp6DNode:
             dict(getattr(self, '_stable_variant_runtime', {}) or {}).items()
         )
         for (track_id, variant_index), candidate_runtime in runtime_items:
+            runtime_prepared = candidate_runtime.get('prepared')
+            runtime_ticket = getattr(runtime_prepared, 'ticket', None)
+            if (
+                runtime_ticket is None
+                or int(runtime_ticket.request_id)
+                != int(prepared.ticket.request_id)
+                or int(runtime_ticket.generation)
+                != int(prepared.ticket.generation)
+                or int(runtime_ticket.target_epoch)
+                != int(prepared.ticket.target_epoch)
+                or abs(
+                    float(runtime_ticket.snapshot_stamp_sec)
+                    - float(prepared.ticket.snapshot_stamp_sec)
+                )
+                > 1e-9
+            ):
+                continue
             scored_candidate = candidate_runtime.get('scored_candidate')
             candidate_payload = getattr(scored_candidate, 'payload', None)
             if not isinstance(candidate_payload, LocalCandidatePayload):
@@ -5506,6 +5532,9 @@ class RemoteGrasp6DNode:
         # locally valid candidates must report its current hard failure and
         # must not revalidate or publish the retained pose as fresh evidence.
         if not observations or not stable:
+            with self._stream_condition:
+                self._require_stream_ticket_current_locked(ticket)
+                self._stable_variant_runtime = {}
             funnel = self._merge_pipeline_funnel(
                 local_funnel,
                 stable_count=0,
@@ -5678,9 +5707,11 @@ class RemoteGrasp6DNode:
                     status = exc.code
                     error = None
                 except Exception as exc:
+                    final_accepted = False
                     error = exc
                     status = 'ACCEPT_FAILED'
             elif error is not None and completion.accepted:
+                final_accepted = False
                 status = 'PREDICT_FAILED'
 
             final_now_sec = float(self._stream_source_clock())
@@ -9877,8 +9908,8 @@ class RemoteGrasp6DNode:
             raise ValueError('xyz parameter must contain exactly 3 values')
         return parts
 
-    def _strict_moveit_result(self, grasp_pose):
-        """Return only hard states explicitly supplied by strict MoveIt."""
+    def _strict_moveit_evaluation(self, grasp_pose):
+        """Run strict MoveIt without committing request-shared diagnostics."""
 
         try:
             # Production remote 6D reachability is always a read-only strict
@@ -9889,20 +9920,21 @@ class RemoteGrasp6DNode:
             try:
                 rospy.wait_for_service(service_name, timeout=0.25)
             except Exception as exc:
-                return MoveItResult(
-                    reachable=False,
-                    joint_path_cost=0.0,
-                    joint_max_delta_rad=0.0,
-                    reason=str(exc),
-                    failure_code='MOVEIT_TIMEOUT',
+                return (
+                    MoveItResult(
+                        reachable=False,
+                        joint_path_cost=0.0,
+                        joint_max_delta_rad=0.0,
+                        reason=str(exc),
+                        failure_code='MOVEIT_TIMEOUT',
+                    ),
+                    None,
+                    '',
                 )
             move_pose = rospy.ServiceProxy(service_name, SetTargetPose)
             response = move_pose(grasp_pose, False)
             message = str(getattr(response, 'message', '') or '')
             metrics = self._parse_plan_metrics(message)
-            if not hasattr(self, '_candidate_plan_metrics'):
-                self._candidate_plan_metrics = {}
-            self._candidate_plan_metrics[self._pose_key(grasp_pose)] = metrics
             path_cost = max(
                 0.0,
                 _finite_pipeline_number(
@@ -9917,40 +9949,42 @@ class RemoteGrasp6DNode:
             )
             success = getattr(response, 'success', None)
             if type(success) is not bool:
-                return MoveItResult(
-                    reachable=False,
-                    joint_path_cost=path_cost,
-                    joint_max_delta_rad=max_delta,
-                    reason='strict MoveIt response has invalid success state',
-                    failure_code='MOVEIT_CHECK_ERROR',
+                return (
+                    MoveItResult(
+                        reachable=False,
+                        joint_path_cost=path_cost,
+                        joint_max_delta_rad=max_delta,
+                        reason=(
+                            'strict MoveIt response has invalid success state'
+                        ),
+                        failure_code='MOVEIT_CHECK_ERROR',
+                    ),
+                    metrics,
+                    '',
                 )
             if success and is_position_only_fallback_message(message):
-                self._position_only_rejected_count += 1
-                rospy.logwarn_throttle(
-                    2.0,
-                    'remote 6D candidate rejected: position-only fallback is not executable: %s',
-                    message,
-                )
-                return MoveItResult(
-                    reachable=False,
-                    joint_path_cost=path_cost,
-                    joint_max_delta_rad=max_delta,
-                    reason=message,
-                    failure_code='MOVEIT_UNREACHABLE',
+                return (
+                    MoveItResult(
+                        reachable=False,
+                        joint_path_cost=path_cost,
+                        joint_max_delta_rad=max_delta,
+                        reason=message,
+                        failure_code='MOVEIT_UNREACHABLE',
+                    ),
+                    metrics,
+                    'position_only',
                 )
             if success and is_orientation_fallback_message(message):
-                self._orientation_fallback_rejected_count += 1
-                rospy.logwarn_throttle(
-                    2.0,
-                    'remote 6D candidate rejected: candidate orientation fallback is not executable: %s',
-                    message,
-                )
-                return MoveItResult(
-                    reachable=False,
-                    joint_path_cost=path_cost,
-                    joint_max_delta_rad=max_delta,
-                    reason=message,
-                    failure_code='MOVEIT_UNREACHABLE',
+                return (
+                    MoveItResult(
+                        reachable=False,
+                        joint_path_cost=path_cost,
+                        joint_max_delta_rad=max_delta,
+                        reason=message,
+                        failure_code='MOVEIT_UNREACHABLE',
+                    ),
+                    metrics,
+                    'orientation_fallback',
                 )
 
             hard_state_names = (
@@ -9963,31 +9997,46 @@ class RemoteGrasp6DNode:
                 getattr(response, name, None) for name in hard_state_names
             )
             if all(type(state) is bool for state in hard_states):
-                return MoveItResult(
-                    reachable=bool(success and all(hard_states)),
-                    joint_path_cost=path_cost,
-                    joint_max_delta_rad=max_delta,
-                    reason=message,
-                    collision_free=hard_states[0],
-                    within_joint_limits=hard_states[1],
-                    ik_valid=hard_states[2],
-                    planning_success=hard_states[3],
+                return (
+                    MoveItResult(
+                        reachable=bool(success and all(hard_states)),
+                        joint_path_cost=path_cost,
+                        joint_max_delta_rad=max_delta,
+                        reason=message,
+                        collision_free=hard_states[0],
+                        within_joint_limits=hard_states[1],
+                        ik_valid=hard_states[2],
+                        planning_success=hard_states[3],
+                    ),
+                    metrics,
+                    '',
                 )
             if not all(state is None for state in hard_states):
-                return MoveItResult(
-                    reachable=False,
-                    joint_path_cost=path_cost,
-                    joint_max_delta_rad=max_delta,
-                    reason='strict MoveIt response has partial hard-state evidence',
-                    failure_code='MOVEIT_CHECK_ERROR',
+                return (
+                    MoveItResult(
+                        reachable=False,
+                        joint_path_cost=path_cost,
+                        joint_max_delta_rad=max_delta,
+                        reason=(
+                            'strict MoveIt response has partial hard-state '
+                            'evidence'
+                        ),
+                        failure_code='MOVEIT_CHECK_ERROR',
+                    ),
+                    metrics,
+                    '',
                 )
             if success:
-                return MoveItResult(
-                    reachable=True,
-                    joint_path_cost=path_cost,
-                    joint_max_delta_rad=max_delta,
-                    reason=message,
-                    evidence_code='STRICT_SERVICE_SUCCESS',
+                return (
+                    MoveItResult(
+                        reachable=True,
+                        joint_path_cost=path_cost,
+                        joint_max_delta_rad=max_delta,
+                        reason=message,
+                        evidence_code='STRICT_SERVICE_SUCCESS',
+                    ),
+                    metrics,
+                    '',
                 )
             explicit_code = str(
                 getattr(response, 'failure_code', '') or ''
@@ -9998,29 +10047,75 @@ class RemoteGrasp6DNode:
                 'MOVEIT_TIMEOUT',
             }:
                 explicit_code = 'MOVEIT_UNREACHABLE'
-            return MoveItResult(
-                reachable=False,
-                joint_path_cost=path_cost,
-                joint_max_delta_rad=max_delta,
-                reason=message,
-                failure_code=explicit_code,
+            return (
+                MoveItResult(
+                    reachable=False,
+                    joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta,
+                    reason=message,
+                    failure_code=explicit_code,
+                ),
+                metrics,
+                '',
             )
         except TimeoutError as exc:
-            return MoveItResult(
-                reachable=False,
-                joint_path_cost=0.0,
-                joint_max_delta_rad=0.0,
-                reason=str(exc),
-                failure_code='MOVEIT_TIMEOUT',
+            return (
+                MoveItResult(
+                    reachable=False,
+                    joint_path_cost=0.0,
+                    joint_max_delta_rad=0.0,
+                    reason=str(exc),
+                    failure_code='MOVEIT_TIMEOUT',
+                ),
+                None,
+                '',
             )
         except Exception as exc:
-            return MoveItResult(
-                reachable=False,
-                joint_path_cost=0.0,
-                joint_max_delta_rad=0.0,
-                reason=str(exc),
-                failure_code='MOVEIT_CHECK_ERROR',
+            return (
+                MoveItResult(
+                    reachable=False,
+                    joint_path_cost=0.0,
+                    joint_max_delta_rad=0.0,
+                    reason=str(exc),
+                    failure_code='MOVEIT_CHECK_ERROR',
+                ),
+                None,
+                '',
             )
+
+    def _commit_strict_moveit_evaluation(self, grasp_pose, evaluation):
+        result, metrics, fallback_code = evaluation
+        if metrics is not None:
+            if not hasattr(self, '_candidate_plan_metrics'):
+                self._candidate_plan_metrics = {}
+            self._candidate_plan_metrics[self._pose_key(grasp_pose)] = dict(
+                metrics
+            )
+        if fallback_code == 'position_only':
+            self._position_only_rejected_count += 1
+            rospy.logwarn_throttle(
+                2.0,
+                'remote 6D candidate rejected: position-only fallback is '
+                'not executable: %s',
+                result.reason,
+            )
+        elif fallback_code == 'orientation_fallback':
+            self._orientation_fallback_rejected_count += 1
+            rospy.logwarn_throttle(
+                2.0,
+                'remote 6D candidate rejected: candidate orientation '
+                'fallback is not executable: %s',
+                result.reason,
+            )
+        return result
+
+    def _strict_moveit_result(self, grasp_pose):
+        """Compatibility wrapper that commits one synchronous evaluation."""
+
+        return self._commit_strict_moveit_evaluation(
+            grasp_pose,
+            self._strict_moveit_evaluation(grasp_pose),
+        )
 
     def _plan_reachable(self, grasp_pose):
         return bool(self._strict_moveit_result(grasp_pose).reachable)

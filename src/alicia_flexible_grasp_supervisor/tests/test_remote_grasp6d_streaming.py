@@ -232,8 +232,8 @@ def test_pipeline_metrics_are_finite_strict_json_with_rolling_percentiles():
     assert decoded['latency_p50_ms'] == pytest.approx(50.5)
     assert decoded['latency_p95_ms'] == pytest.approx(95.05)
     assert decoded['primary_failure'] == 'COLLISION'
-    assert set(('submitted', 'started', 'completed', 'accepted', 'expired',
-                'stale', 'replaced', 'busy')) <= decoded.keys()
+    assert set(('submitted', 'started', 'completed', 'accepted', 'failed',
+                'expired', 'stale', 'replaced', 'busy')) <= decoded.keys()
     assert all(
         math.isfinite(value)
         for value in decoded.values()
@@ -616,6 +616,56 @@ def test_worker_latency_is_measured_after_accept_side_effects_finish():
         node.shutdown_streaming_worker()
 
 
+@pytest.mark.parametrize(
+    ('failure_stage', 'expected_status'),
+    [
+        ('predict', 'PREDICT_FAILED'),
+        ('accept', 'ACCEPT_FAILED'),
+    ],
+)
+def test_pipeline_exceptions_have_one_failed_terminal_and_conserve_counts(
+    failure_stage,
+    expected_status,
+):
+    def fail_predict(_ticket):
+        raise RuntimeError('synthetic predict failure')
+
+    node = streaming_node(
+        clock=MutableClock(10.0),
+        prepare=fail_predict if failure_stage == 'predict' else None,
+    )
+    if failure_stage == 'accept':
+        def fail_accept(_prepared):
+            raise RuntimeError('synthetic accept failure')
+
+        node._accept_prediction = fail_accept
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(9.8))
+        wait_until(lambda: len(node.pipeline_metrics) == 1)
+
+        terminal = node.pipeline_metrics[0]
+        assert terminal['status'] == expected_status
+        assert terminal['drop_reason'] == expected_status
+        assert terminal['completed'] == 1
+        assert terminal['accepted'] == 0
+        assert terminal['failed'] == 1
+        assert terminal['expired'] == 0
+        assert terminal['stale'] == 0
+        assert terminal['completed'] == (
+            terminal['accepted']
+            + terminal['failed']
+            + terminal['expired']
+            + terminal['stale']
+        )
+        assert sum(
+            item['request_id'] == terminal['request_id']
+            for item in node.pipeline_metrics
+        ) == 1
+    finally:
+        node.shutdown_streaming_worker()
+
+
 def test_tracker_empty_batch_always_carries_explicit_target_identity():
     class RecordingTracker:
         def __init__(self):
@@ -683,6 +733,7 @@ def test_zero_locally_valid_candidates_report_primary_failure_not_stability():
     assert result['status'] == 'REMOTE_NO_CANDIDATES:1'
     assert result['funnel']['primary_failure'] == 'REMOTE_NO_CANDIDATES'
     assert node.tracker.calls[0][1] == ()
+    assert node._stable_variant_runtime == {}
 
 
 def test_empty_remote_batch_creates_explicit_no_candidates_rejection():
@@ -1051,6 +1102,90 @@ def test_stop_barrier_prevents_each_stale_moveit_call():
         node.shutdown_streaming_worker()
 
 
+@pytest.mark.parametrize(
+    ('invalidate_action', 'expected_code'),
+    [
+        ('stop', 'GENERATION_STALE'),
+        ('target_epoch', 'TARGET_EPOCH_STALE'),
+    ],
+)
+def test_stop_during_inflight_moveit_discards_result_and_metrics(
+    monkeypatch,
+    invalidate_action,
+    expected_code,
+):
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    entered = threading.Event()
+    release = threading.Event()
+    outcomes = []
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        pose = remote_node.PoseStamped()
+        node._candidate_plan_metrics = {}
+        node._position_only_rejected_count = 0
+        node._orientation_fallback_rejected_count = 0
+        node._stable_variant_runtime = {
+            (3, 1): {
+                'prepared': types.SimpleNamespace(ticket=ticket),
+                'grasp_pose': pose,
+            }
+        }
+        response = types.SimpleNamespace(
+            success=True,
+            message=(
+                'planned joint_path_cost=1.25 joint_max_delta=0.35'
+            ),
+        )
+
+        def strict_rpc(*_args):
+            entered.set()
+            if not release.wait(2.0):
+                raise RuntimeError('test did not release MoveIt RPC')
+            return response
+
+        monkeypatch.setattr(
+            remote_node.rospy,
+            'wait_for_service',
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            remote_node.rospy,
+            'ServiceProxy',
+            lambda *_args, **_kwargs: strict_rpc,
+        )
+
+        def invoke_checker():
+            try:
+                outcomes.append(
+                    node._check_moveit_stable_candidate(
+                        types.SimpleNamespace(track_id=3, variant_index=1)
+                    )
+                )
+            except Exception as exc:
+                outcomes.append(exc)
+
+        thread = threading.Thread(target=invoke_checker)
+        thread.start()
+        assert entered.wait(1.0)
+        if invalidate_action == 'stop':
+            node.stop_streaming()
+        else:
+            node._advance_target_instance_epoch('TEST_TARGET_CHANGED')
+        release.set()
+        thread.join(1.0)
+
+        assert not thread.is_alive()
+        assert len(outcomes) == 1
+        assert isinstance(outcomes[0], remote_node.StreamResultCancelled)
+        assert outcomes[0].code == expected_code
+        assert node._candidate_plan_metrics == {}
+    finally:
+        release.set()
+        node.shutdown_streaming_worker()
+
+
 def test_missing_stable_runtime_is_generic_moveit_check_error():
     node = streaming_node(clock=MutableClock(50.0), start_worker=False)
     try:
@@ -1161,15 +1296,19 @@ def test_top_n_uses_node_strict_moveit_checker_for_only_three_candidates():
 
         def strict_checker(pose):
             calls.append(pose)
-            return MoveItResult(
-                reachable=False,
-                joint_path_cost=0.0,
-                joint_max_delta_rad=0.0,
-                reason='not reachable',
-                failure_code='MOVEIT_UNREACHABLE',
+            return (
+                MoveItResult(
+                    reachable=False,
+                    joint_path_cost=0.0,
+                    joint_max_delta_rad=0.0,
+                    reason='not reachable',
+                    failure_code='MOVEIT_UNREACHABLE',
+                ),
+                {},
+                '',
             )
 
-        node._strict_moveit_result = strict_checker
+        node._strict_moveit_evaluation = strict_checker
 
         selection = bounded_moveit_select(
             candidates,
@@ -1396,9 +1535,14 @@ def test_streaming_audit_keeps_selected_lineage_when_current_rows_are_empty(
             moveit_result=None,
             pre_moveit_score=0.0,
             final_score=None,
+            evaluation_request_id=ticket.request_id,
+            evaluation_snapshot_stamp_sec=ticket.snapshot_stamp_sec,
         )
         node._stable_variant_runtime = {
-            (7, 1): {'scored_candidate': evaluated}
+            (7, 1): {
+                'prepared': types.SimpleNamespace(ticket=ticket),
+                'scored_candidate': evaluated,
+            }
         }
         selection = types.SimpleNamespace(
             checked=(evaluated,),
@@ -1495,9 +1639,14 @@ def test_current_raw_index_collision_cannot_rebind_old_stable_lineage(tmp_path):
             moveit_result=None,
             pre_moveit_score=0.0,
             final_score=None,
+            evaluation_request_id=ticket.request_id,
+            evaluation_snapshot_stamp_sec=ticket.snapshot_stamp_sec,
         )
         node._stable_variant_runtime = {
-            (7, 1): {'scored_candidate': evaluated}
+            (7, 1): {
+                'prepared': types.SimpleNamespace(ticket=ticket),
+                'scored_candidate': evaluated,
+            }
         }
         selection = types.SimpleNamespace(
             checked=(evaluated,),
@@ -1525,6 +1674,152 @@ def test_current_raw_index_collision_cannot_rebind_old_stable_lineage(tmp_path):
         assert written['rows'][0].get('tracking') is None
         assert written['rows'][0].get('lineage_binding') is None
         assert written['rows'][0]['selected'] is False
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize(
+    ('current_status', 'current_rows', 'failure_code'),
+    [
+        ('REMOTE_NO_CANDIDATES:1', [], 'REMOTE_NO_CANDIDATES'),
+        (
+            'DEPTH_INVALID:1',
+            [{'candidate_index': 0, 'variant_index': 0}],
+            'DEPTH_INVALID',
+        ),
+    ],
+)
+def test_zero_valid_audit_excludes_previous_preview_runtime(
+    tmp_path,
+    current_status,
+    current_rows,
+    failure_code,
+):
+    node = streaming_node(clock=MutableClock(96.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(95.8))
+        active = node._stream_worker_ticket
+        source_ticket = InferenceTicket(
+            request_id=3,
+            generation=active.generation,
+            snapshot_stamp_sec=95.3,
+            target_epoch=active.target_epoch,
+            payload=active.payload,
+            submitted_monotonic_sec=active.submitted_monotonic_sec,
+        )
+        current_ticket = InferenceTicket(
+            request_id=4,
+            generation=active.generation,
+            snapshot_stamp_sec=95.8,
+            target_epoch=active.target_epoch,
+            payload=active.payload,
+            submitted_monotonic_sec=active.submitted_monotonic_sec,
+        )
+        node.gate_audit_enabled = True
+        node.gate_audit_output_path = str(tmp_path / 'planning.json')
+        node.mujoco_audit_output_path = str(tmp_path / 'mujoco.json')
+        node.gate_audit_pub = RecordingPublisher()
+        features = SoftCandidateFeatures(
+            model_score=0.8,
+            cloud_distance_m=0.01,
+            center_distance_m=0.01,
+            downward_approach_cos=1.0,
+            visibility_center_cost=0.0,
+            support_margin_m=0.01,
+            jaw_tilt_cos=1.0,
+            geometry_margin_m=0.01,
+            joint_path_cost=0.0,
+            joint_max_delta_rad=0.0,
+            stability_hit_ratio=0.6,
+            position_dispersion_m=0.002,
+            orientation_dispersion_rad=0.03,
+        )
+        payload = remote_node.LocalCandidatePayload(
+            raw_candidate_index=4,
+            variant_index=0,
+            raw_candidate=None,
+            camera_candidate=None,
+            grasp_pose=None,
+            geometry_gate=None,
+            soft_features=features,
+            score_components={},
+        )
+        stable = types.SimpleNamespace(
+            request_id=3,
+            snapshot_stamp_sec=95.3,
+            hit_count=3,
+            window_count=5,
+            hit_request_ids=(1, 2, 3),
+        )
+        evaluated = types.SimpleNamespace(
+            track_id=7,
+            variant_index=1,
+            payload=payload,
+            stable_candidate=stable,
+            soft_features=features,
+            score_weights=SoftScoreWeights(),
+            moveit_result=None,
+            pre_moveit_score=0.0,
+            final_score=None,
+            evaluation_request_id=3,
+            evaluation_snapshot_stamp_sec=95.3,
+        )
+        node._stable_variant_runtime = {
+            (7, 1): {
+                'prepared': types.SimpleNamespace(ticket=source_ticket),
+                'scored_candidate': evaluated,
+            }
+        }
+        source_selection = types.SimpleNamespace(
+            checked=(evaluated,),
+            selected=evaluated,
+        )
+        node._finalize_streaming_gate_audit(
+            types.SimpleNamespace(ticket=source_ticket),
+            source_selection,
+            {'stage_counts': {}, 'rejection_counts': {}},
+            'PREVIEW_READY',
+            base_report={
+                'summary': {},
+                'rows': [{'candidate_index': 4, 'variant_index': 1}],
+            },
+        )
+        previous = json.loads(
+            pathlib.Path(node.gate_audit_output_path).read_text()
+        )
+        assert previous['selected']['lineage_binding'][
+            'evaluation_request_id'
+        ] == 3
+
+        node._finalize_streaming_gate_audit(
+            types.SimpleNamespace(ticket=current_ticket),
+            None,
+            {
+                'stage_counts': {
+                    'locally_valid': {
+                        'entered': len(current_rows),
+                        'passed': 0,
+                        'rejected': len(current_rows),
+                    }
+                },
+                'rejection_counts': {failure_code: 1},
+                'primary_failure': failure_code,
+            },
+            current_status,
+            base_report={'summary': {}, 'rows': current_rows},
+        )
+
+        current = json.loads(
+            pathlib.Path(node.gate_audit_output_path).read_text()
+        )
+        assert current['request_id'] == 4
+        assert current['stable_evaluations'] == []
+        assert current['selected'] is None
+        assert all(
+            item.get('lineage_binding') is None
+            for item in current['candidate_row_lineage']
+        )
     finally:
         node.shutdown_streaming_worker()
 

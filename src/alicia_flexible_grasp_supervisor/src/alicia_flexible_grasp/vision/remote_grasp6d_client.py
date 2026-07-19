@@ -1,5 +1,4 @@
 import base64
-from copy import deepcopy
 from dataclasses import dataclass
 import io
 import json
@@ -98,6 +97,83 @@ class RemoteGraspCandidate:
     tool0_translation_m: np.ndarray = None
 
 
+def _readonly_candidate_array(value):
+    if value is None:
+        return None
+    copied = np.asarray(value, dtype=float).copy()
+    copied.setflags(write=False)
+    return copied
+
+
+@dataclass(frozen=True)
+class _FrozenRemoteGraspCandidate:
+    score: float
+    translation_m: np.ndarray
+    quaternion_xyzw: np.ndarray
+    width_m: float = 0.0
+    height_m: float = None
+    depth_m: float = None
+    tool0_translation_m: np.ndarray = None
+
+    def __post_init__(self):
+        object.__setattr__(self, 'score', float(self.score))
+        object.__setattr__(self, 'width_m', float(self.width_m))
+        object.__setattr__(
+            self,
+            'height_m',
+            None if self.height_m is None else float(self.height_m),
+        )
+        object.__setattr__(
+            self,
+            'depth_m',
+            None if self.depth_m is None else float(self.depth_m),
+        )
+        for name in (
+            'translation_m',
+            'quaternion_xyzw',
+            'tool0_translation_m',
+        ):
+            object.__setattr__(
+                self,
+                name,
+                _readonly_candidate_array(getattr(self, name)),
+            )
+
+
+def _freeze_remote_candidate(candidate):
+    return _FrozenRemoteGraspCandidate(
+        score=candidate.score,
+        translation_m=candidate.translation_m,
+        quaternion_xyzw=candidate.quaternion_xyzw,
+        width_m=candidate.width_m,
+        height_m=candidate.height_m,
+        depth_m=candidate.depth_m,
+        tool0_translation_m=candidate.tool0_translation_m,
+    )
+
+
+def _mutable_remote_candidate(candidate):
+    return RemoteGraspCandidate(
+        score=float(candidate.score),
+        translation_m=np.asarray(candidate.translation_m, dtype=float).copy(),
+        quaternion_xyzw=np.asarray(
+            candidate.quaternion_xyzw, dtype=float
+        ).copy(),
+        width_m=float(candidate.width_m),
+        height_m=(
+            None if candidate.height_m is None else float(candidate.height_m)
+        ),
+        depth_m=(
+            None if candidate.depth_m is None else float(candidate.depth_m)
+        ),
+        tool0_translation_m=(
+            None
+            if candidate.tool0_translation_m is None
+            else np.asarray(candidate.tool0_translation_m, dtype=float).copy()
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class RemotePredictionBundle:
     """One correlated prediction result with request-local diagnostics."""
@@ -121,7 +197,10 @@ class RemotePredictionBundle:
         object.__setattr__(
             self,
             'candidates',
-            tuple(deepcopy(candidate) for candidate in (self.candidates or ())),
+            tuple(
+                _freeze_remote_candidate(candidate)
+                for candidate in (self.candidates or ())
+            ),
         )
         object.__setattr__(
             self,
@@ -368,7 +447,10 @@ class RemoteGrasp6DClient:
         )
         self.last_diagnostics = dict(bundle.diagnostics)
         self.last_performance = dict(bundle.performance)
-        return list(bundle.candidates)
+        return [
+            _mutable_remote_candidate(candidate)
+            for candidate in bundle.candidates
+        ]
 
     def predict_bundle(
         self,

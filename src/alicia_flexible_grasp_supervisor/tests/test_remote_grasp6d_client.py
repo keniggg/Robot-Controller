@@ -344,6 +344,32 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
             bundle.candidates[0].translation_m,
             [0.1, 0.0, 0.2],
         )
+        with self.assertRaises(AttributeError):
+            bundle.candidates[0].score = 0.2
+        with self.assertRaises(ValueError):
+            bundle.candidates[0].translation_m[0] = 0.2
+
+    def test_legacy_predict_returns_mutable_candidate_copy(self):
+        response = self._protocol_response()
+        response['candidates'] = [
+            {
+                'score': 0.8,
+                'width_m': 0.04,
+                'height_m': 0.02,
+                'depth_m': 0.03,
+                'translation_m': [0.1, 0.0, 0.2],
+                'rotation_matrix': np.eye(3).tolist(),
+            }
+        ]
+
+        _client, candidates = self._predict_with_response(response)
+        candidate = candidates[0]
+        candidate.score = 0.2
+        candidate.translation_m[0] = 0.3
+
+        self.assertIsInstance(candidate, RemoteGraspCandidate)
+        self.assertEqual(candidate.score, 0.2)
+        self.assertEqual(candidate.translation_m[0], 0.3)
 
     def test_predict_requires_exact_protocol3_request_correlation(self):
         response = self._protocol_response()

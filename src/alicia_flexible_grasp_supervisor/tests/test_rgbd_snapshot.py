@@ -199,6 +199,107 @@ def test_persistent_window_never_mixes_target_identity_epochs():
     ]
 
 
+def test_explicit_identity_mask_mode_switch_keeps_only_current_window_key():
+    buffer = synchronized_buffer_at(30_000_000_000)
+    identity = (9, 'carton', 'carton_segment')
+    add_identity_bound_sample(buffer, 30.0, identity)
+
+    assert len(
+        buffer.wait_for_samples(
+            1,
+            0.0,
+            require_mask=True,
+            max_age_sec=1.0,
+            collection_span_sec=3.0,
+            target_identity=identity,
+        )
+    ) == 1
+    assert list(buffer._collection_windows) == [(True, identity)]
+
+    assert len(
+        buffer.wait_for_samples(
+            1,
+            0.0,
+            require_mask=False,
+            max_age_sec=1.0,
+            collection_span_sec=3.0,
+            target_identity=identity,
+        )
+    ) == 1
+    assert list(buffer._collection_windows) == [(False, identity)]
+
+
+def test_persistent_window_caps_one_hundred_720p_frame_equivalents_to_count():
+    source_now_ns = [40_000_000_000]
+    monotonic_now = [40.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    identity = (10, 'carton', 'carton_segment')
+    requested_count = 3
+    for index in range(100):
+        stamp_ns = 40_000_000_000 + index * 100_000_000
+        source_now_ns[0] = stamp_ns
+        monotonic_now[0] = 40.0 + index * 0.1
+        add_identity_bound_sample(buffer, stamp_ns * 1e-9, identity)
+        buffer.wait_for_samples(
+            requested_count,
+            0.0,
+            require_mask=True,
+            max_age_sec=0.35,
+            collection_span_sec=20.0,
+            max_inference_latency_sec=1.2,
+            target_identity=identity,
+        )
+
+    assert list(buffer._collection_windows) == [(True, identity)]
+    retained = buffer._collection_windows[(True, identity)]
+    bytes_per_720p_rgb_depth_mask = 720 * 1280 * (3 + 2 + 1)
+    retained_memory_proxy = (
+        len(retained) * bytes_per_720p_rgb_depth_mask
+    )
+    assert len(retained) <= requested_count
+    assert retained_memory_proxy <= (
+        requested_count * bytes_per_720p_rgb_depth_mask
+    )
+
+
+def test_persistent_window_materializes_only_newest_count_from_large_backlog():
+    source_now_ns = [70_000_000_000]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: 70.0,
+    )
+    identity = (11, 'carton', 'carton_segment')
+    for index in range(100):
+        stamp_ns = 60_000_000_000 + index * 100_000_000
+        source_now_ns[0] = stamp_ns
+        add_identity_bound_sample(buffer, stamp_ns * 1e-9, identity)
+    source_now_ns[0] = 70_000_000_000
+    original_sample_from_entry = buffer._sample_from_entry
+    materialized = []
+
+    def record_materialization(entry, require_mask):
+        materialized.append(entry['stamp_ns'])
+        return original_sample_from_entry(entry, require_mask)
+
+    buffer._sample_from_entry = record_materialization
+
+    samples = buffer.wait_for_samples(
+        3,
+        0.0,
+        require_mask=True,
+        max_age_sec=0.0,
+        collection_span_sec=20.0,
+        max_inference_latency_sec=20.0,
+        target_identity=identity,
+    )
+
+    assert len(samples) == 3
+    assert len(materialized) <= 3
+
+
 def test_mask_iou_uses_binary_overlap():
     first = np.zeros((4, 5), dtype=np.uint8)
     second = np.zeros((4, 5), dtype=np.uint8)

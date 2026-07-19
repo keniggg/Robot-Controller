@@ -492,10 +492,7 @@ class SynchronizedRgbdBuffer:
         with self._condition:
             if identity is not None:
                 for existing_key in list(self._collection_windows):
-                    if (
-                        existing_key[0] == bool(require_mask)
-                        and existing_key != window_key
-                    ):
+                    if existing_key != window_key:
                         del self._collection_windows[existing_key]
             collected = self._collection_windows.setdefault(window_key, {})
             while True:
@@ -538,13 +535,14 @@ class SynchronizedRgbdBuffer:
                             )
                         ):
                             del collected[key]
-                    for key, entry in complete:
-                        if (
-                            identity is not None
-                            and tuple(entry.get('target_identity', ()) or ())
-                            != identity
-                        ):
-                            continue
+                    admissible_complete = [
+                        (key, entry)
+                        for key, entry in complete
+                        if identity is None
+                        or tuple(entry.get('target_identity', ()) or ())
+                        == identity
+                    ]
+                    for key, entry in admissible_complete[-count:]:
                         revision = int(entry.get('revision', 0))
                         if key not in collected or revision != collected[key][0]:
                             collected[key] = (
@@ -562,6 +560,9 @@ class SynchronizedRgbdBuffer:
                             or monotonic_now - float(admitted_at) > collection_span
                         ]
                         for key in expired_keys:
+                            del collected[key]
+                    if len(collected) > count:
+                        for key in sorted(collected)[:-count]:
                             del collected[key]
                     if len(collected) >= count:
                         selected_keys = sorted(collected)[-count:]
