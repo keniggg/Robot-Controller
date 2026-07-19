@@ -5002,6 +5002,7 @@ class RemoteGrasp6DNode:
             int(ticket.target_epoch),
             decision,
         )
+        self._latest_promotion_decision = decision
 
     def _request_promotion_count(self, ticket):
         recorded = getattr(self, '_latest_preview_promotion', None)
@@ -5195,7 +5196,6 @@ class RemoteGrasp6DNode:
             now_sec=now_sec,
             robot_active=robot_active,
         )
-        self._latest_promotion_decision = decision
         return decision, now_sec
 
     @staticmethod
@@ -5258,6 +5258,14 @@ class RemoteGrasp6DNode:
         with self._stream_condition:
             with self._geometry_state_guard():
                 return self._promotion_token_state(ticket, token)
+
+    def _stream_ticket_still_current(self, ticket):
+        with self._stream_condition:
+            try:
+                self._require_stream_ticket_current_locked(ticket)
+                return True
+            except StreamResultCancelled:
+                return False
 
     def _recover_aborted_execution_publish(self, token, reason):
         """Restore the previous authority or publish an invalid tombstone."""
@@ -5336,11 +5344,14 @@ class RemoteGrasp6DNode:
             return PromotionDecision(False, code, 'promotion token is stale')
         outgoing_rich = deepcopy(rich_plan)
         outgoing_legacy = rich_plan_to_legacy(outgoing_rich)
+        legacy_attempted = False
         rich_attempted = False
         try:
+            legacy_attempted = True
             self.plan_pub.publish(deepcopy(outgoing_legacy))
             current, code = self._promotion_token_current(ticket, token)
             if not current:
+                self._recover_aborted_execution_publish(token, code)
                 return PromotionDecision(
                     False, code, 'promotion changed during legacy publish'
                 )
@@ -5353,7 +5364,7 @@ class RemoteGrasp6DNode:
                     False, code, 'promotion changed during rich publish'
                 )
         except Exception as exc:
-            if rich_attempted:
+            if legacy_attempted or rich_attempted:
                 self._recover_aborted_execution_publish(token, str(exc))
             return PromotionDecision(
                 False,
@@ -5389,88 +5400,6 @@ class RemoteGrasp6DNode:
             )
         return committed
 
-    def _publish_decided_promotion(
-        self,
-        rich_plan,
-        signature,
-        score,
-        decision,
-        now_sec,
-        expected_generation=None,
-    ):
-        if not decision.promote:
-            return decision
-        plan_id = str(getattr(rich_plan, 'plan_id', '') or '').strip()
-        if not plan_id or not bool(getattr(rich_plan, 'valid', False)):
-            failed = PromotionDecision(
-                False,
-                'PLAN_INVALID',
-                'preview is not a valid content-bound rich plan',
-            )
-            self._latest_promotion_decision = failed
-            return failed
-        if not self._execution_promotion_audit_ready(rich_plan):
-            failed = PromotionDecision(
-                False,
-                'PLAN_AUDIT_NOT_READY',
-                'final planning audit does not bind this execution plan',
-            )
-            self._latest_promotion_decision = failed
-            return failed
-        generation = (
-            int(expected_generation)
-            if expected_generation is not None
-            else int(getattr(self, '_geometry_invalidation_generation', 0))
-        )
-        try:
-            published, failure_code = self._publish_plan_pair_if_current(
-                deepcopy(rich_plan), generation
-            )
-        except Exception as exc:
-            failed = PromotionDecision(
-                False,
-                'PLAN_PUBLICATION_FAILED',
-                'execution plan publication failed: {}'.format(exc),
-            )
-            self._latest_promotion_decision = failed
-            return failed
-        if not published:
-            failed = PromotionDecision(
-                False,
-                'PLAN_PUBLICATION_FAILED',
-                'execution plan publication rejected: {}'.format(
-                    failure_code or 'unknown failure'
-                ),
-            )
-            self._latest_promotion_decision = failed
-            return failed
-        with self._geometry_state_guard():
-            current_generation = int(
-                getattr(self, '_geometry_invalidation_generation', 0)
-            )
-            cached_plan_id = str(
-                getattr(getattr(self, 'latest_rich_plan', None), 'plan_id', '')
-                or ''
-            )
-            if current_generation != generation or cached_plan_id != plan_id:
-                failed = PromotionDecision(
-                    False,
-                    str(
-                        getattr(self, '_last_geometry_invalidation_code', '')
-                        or 'PLAN_STALE'
-                    ),
-                    'execution plan changed before controller commit',
-                )
-                self._latest_promotion_decision = failed
-                return failed
-            self._promotion_controller().commit_execution(
-                plan_id,
-                signature,
-                score=score,
-                now_sec=now_sec,
-            )
-        return decision
-
     def _maybe_promote_preview(
         self,
         rich_plan,
@@ -5479,27 +5408,20 @@ class RemoteGrasp6DNode:
         ticket=None,
         expected_generation=None,
     ):
-        """Promote one already-audited Preview and commit only on success."""
+        """Return a provisional policy decision without execution authority."""
 
-        def decide_and_publish():
+        def decide_only():
             with self._geometry_state_guard():
-                decision, now_sec = self._decide_preview_promotion(
+                decision, _now_sec = self._decide_preview_promotion(
                     rich_plan, signature, score
                 )
-            return self._publish_decided_promotion(
-                rich_plan,
-                signature,
-                score,
-                decision,
-                now_sec,
-                expected_generation=expected_generation,
-            )
+                return decision
 
         if ticket is None:
-            return decide_and_publish()
+            return decide_only()
         with self._stream_condition:
             self._require_stream_ticket_current_locked(ticket)
-        return decide_and_publish()
+        return decide_only()
 
     def _finalize_promotion_transaction(
         self,
@@ -5531,11 +5453,36 @@ class RemoteGrasp6DNode:
                     proposal['signature'],
                     proposal['score'],
                 )
-                self._record_preview_promotion(ticket, decision)
                 promotion_token = self._capture_promotion_token_locked(
                     ticket,
                     proposal['expected_generation'],
                 )
+
+        def finalize_actual_preview(actual, actual_funnel, record_decision):
+            if not self._stream_ticket_still_current(ticket):
+                return False
+            try:
+                self._finalize_streaming_gate_audit(
+                    prepared,
+                    selection,
+                    actual_funnel,
+                    status,
+                    base_report=base_report,
+                    lifecycle_commit_callback=(
+                        (lambda: self._record_preview_promotion(
+                            ticket, actual
+                        ))
+                        if record_decision
+                        else None
+                    ),
+                    promotion_decision=actual,
+                    execution_authority=False,
+                    publish_reference=True,
+                )
+                return True
+            except (CandidateContractError, StreamResultCancelled):
+                return False
+
         funnel = self._merge_pipeline_funnel(
             local_funnel,
             moveit_funnel,
@@ -5543,19 +5490,8 @@ class RemoteGrasp6DNode:
             preview_count=1,
             promotion_count=int(decision.promote),
         )
-        # Preview evidence remains request-local and can be overwritten by the
-        # next Preview.  It is never an execution authorization record.
-        self._finalize_streaming_gate_audit(
-            prepared,
-            selection,
-            funnel,
-            status,
-            base_report=base_report,
-            promotion_decision=decision,
-            execution_authority=False,
-            publish_reference=not decision.promote,
-        )
         if not decision.promote:
+            finalize_actual_preview(decision, funnel, record_decision=True)
             return funnel, decision
 
         execution_report = None
@@ -5606,6 +5542,11 @@ class RemoteGrasp6DNode:
                     ticket,
                     funnel=funnel,
                     restore_report=previous_execution_report,
+                )
+                finalize_actual_preview(
+                    actual,
+                    funnel,
+                    record_decision=True,
                 )
                 return funnel, actual
             self._publish_bounded_gate_audit(
@@ -5685,6 +5626,11 @@ class RemoteGrasp6DNode:
             except StreamResultCancelled:
                 self._republish_current_execution_audit_reference()
                 raise
+        finalize_actual_preview(
+            actual,
+            funnel,
+            record_decision=not actual.promote,
+        )
         return funnel, actual
 
     def _publish_preview_plan(
@@ -6580,12 +6526,17 @@ class RemoteGrasp6DNode:
                     key,
                 )
             hard_values = tuple(moveit.get(name) for name in hard_states)
-            structured_success = all(value is True for value in hard_values)
+            failure_code = str(moveit.get('failure_code', '') or '')
+            evidence_code = str(moveit.get('evidence_code', '') or '')
+            structured_success = (
+                all(value is True for value in hard_values)
+                and failure_code == ''
+                and evidence_code == ''
+            )
             generic_success = (
                 all(value is None for value in hard_values)
-                and str(moveit.get('failure_code', '') or '') in ('', 'OK')
-                and str(moveit.get('evidence_code', '') or '')
-                == 'STRICT_SERVICE_SUCCESS'
+                and failure_code in ('', 'OK')
+                and evidence_code == 'STRICT_SERVICE_SUCCESS'
             )
             if not structured_success and not generic_success:
                 return 'stable evaluation %s has incomplete MoveIt evidence' % (

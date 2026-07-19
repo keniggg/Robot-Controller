@@ -2138,6 +2138,20 @@ def promotion_node(clock=None):
     return node
 
 
+def seed_execution(node, plan, signature='candidate-A', score=1.0):
+    legacy = remote_node.rich_plan_to_legacy(plan)
+    node.latest_rich_plan = remote_node.deepcopy(plan)
+    node.latest_plan = remote_node.deepcopy(legacy)
+    node.rich_plan_pub.publish(remote_node.deepcopy(plan))
+    node.plan_pub.publish(remote_node.deepcopy(legacy))
+    node.execution_plan_controller.commit_execution(
+        plan.plan_id,
+        signature,
+        score=score,
+        now_sec=node._promotion_now_sec(),
+    )
+
+
 def promotion_transaction_node(tmp_path):
     node = streaming_node(clock=MutableClock(10.0), start_worker=False)
     node._geometry_state_lock = threading.RLock()
@@ -2306,7 +2320,7 @@ def promotion_transaction_node(tmp_path):
     )
 
 
-def test_initial_preview_promotion_publishes_execution_once():
+def test_preview_promotion_helper_is_provisional_and_cannot_publish():
     node = promotion_node()
     preview = promotion_plan('plan-A')
 
@@ -2318,18 +2332,18 @@ def test_initial_preview_promotion_publishes_execution_once():
     )
 
     assert first.promote is True
-    assert second.promote is False
-    assert [item.plan_id for item in node.rich_plan_pub.messages] == ['plan-A']
-    assert len(node.plan_pub.messages) == 1
-    assert node.latest_rich_plan.plan_id == 'plan-A'
-    assert node.execution_plan_controller.execution_plan_id == 'plan-A'
+    assert second.promote is True
+    assert node.rich_plan_pub.messages == []
+    assert node.plan_pub.messages == []
+    assert node.latest_rich_plan is None
+    assert node.execution_plan_controller.execution_plan_id is None
 
 
 def test_active_execution_keeps_authority_while_new_preview_is_visible():
     node = promotion_node()
     first = promotion_plan('plan-A')
     challenger = promotion_plan('preview-B', x=0.2)
-    node._maybe_promote_preview(first, signature='candidate-A', score=1.0)
+    seed_execution(node, first)
     node.grasp_state_cb(types.SimpleNamespace(active=True))
 
     node._publish_preview_plan(
@@ -2348,7 +2362,7 @@ def test_active_execution_keeps_authority_while_new_preview_is_visible():
     assert node.latest_rich_plan.plan_id == 'plan-A'
 
 
-def test_execution_publication_failure_does_not_commit_controller():
+def test_provisional_helper_never_calls_execution_publishers():
     node = promotion_node()
     node.plan_pub = FailingPublisher()
 
@@ -2356,14 +2370,14 @@ def test_execution_publication_failure_does_not_commit_controller():
         promotion_plan('plan-A'), signature='candidate-A', score=1.0
     )
 
-    assert decision.promote is False
-    assert decision.code == 'PLAN_PUBLICATION_FAILED'
+    assert decision.promote is True
+    assert decision.code == 'PROMOTE_INITIAL'
     assert node.execution_plan_controller.execution_plan_id is None
     assert node.rich_plan_pub.messages == []
     assert node.latest_rich_plan is None
 
 
-def test_execution_promotion_without_bound_final_audit_is_rejected():
+def test_provisional_helper_cannot_consume_or_bypass_execution_audit():
     node = promotion_node()
     node._execution_promotion_audit_ready = lambda _plan: False
 
@@ -2371,8 +2385,8 @@ def test_execution_promotion_without_bound_final_audit_is_rejected():
         promotion_plan('plan-A'), signature='candidate-A', score=1.0
     )
 
-    assert decision.promote is False
-    assert decision.code == 'PLAN_AUDIT_NOT_READY'
+    assert decision.promote is True
+    assert decision.code == 'PROMOTE_INITIAL'
     assert node.rich_plan_pub.messages == []
     assert node.plan_pub.messages == []
     assert node.execution_plan_controller.execution_plan_id is None
@@ -2413,6 +2427,15 @@ def test_final_audit_is_bound_before_execution_authority_publish(tmp_path):
         assert decision.promote is True
         assert funnel['stage_counts']['promoted']['passed'] == 1
         assert node.execution_plan_controller.execution_plan_id == 'plan-A'
+        preview_report = json.loads(
+            pathlib.Path(node.gate_audit_output_path).read_text()
+        )
+        assert preview_report['promotion']['code'] == 'PROMOTED'
+        assert preview_report['promotion']['promote'] is True
+        assert preview_report['pipeline_funnel']['stage_counts']['promoted'][
+            'passed'
+        ] == 1
+        assert node._latest_promotion_decision.code == 'PROMOTED'
         assert [item.plan_id for item in node.rich_plan_pub.messages] == [
             'plan-A'
         ]
@@ -2447,7 +2470,22 @@ def test_failed_execution_publish_rewrites_audit_as_unpublished(tmp_path):
         assert report['promotion']['code'] == 'PLAN_PUBLICATION_FAILED'
         assert funnel['stage_counts']['promoted']['passed'] == 0
         assert node.execution_plan_controller.execution_plan_id is None
-        assert node.rich_plan_pub.messages == []
+        preview_report = json.loads(
+            pathlib.Path(node.gate_audit_output_path).read_text()
+        )
+        assert preview_report['promotion']['promote'] is False
+        assert preview_report['promotion']['code'] == (
+            'PLAN_PUBLICATION_FAILED'
+        )
+        assert preview_report['pipeline_funnel']['stage_counts']['promoted'][
+            'passed'
+        ] == 0
+        assert node._request_promotion_count(prepared.ticket) == 0
+        assert node._latest_promotion_decision.code == (
+            'PLAN_PUBLICATION_FAILED'
+        )
+        assert len(node.rich_plan_pub.messages) == 1
+        assert node.rich_plan_pub.messages[-1].valid is False
     finally:
         node.shutdown_streaming_worker()
 
@@ -2593,7 +2631,8 @@ def test_failed_publish_correction_survives_stop_during_correction_io(
         assert report['outcome']['valid_plan'] is False
         assert report['outcome']['code'] == 'PLAN_PUBLICATION_FAILED'
         assert node.execution_plan_controller.execution_plan_id is None
-        assert node.rich_plan_pub.messages == []
+        assert len(node.rich_plan_pub.messages) == 1
+        assert node.rich_plan_pub.messages[-1].valid is False
     finally:
         node.shutdown_streaming_worker()
 
@@ -2658,6 +2697,92 @@ def test_promotion_rejects_selected_lineage_without_strict_moveit(tmp_path):
 
         assert exc_info.value.code == remote_node.PLANNING_AUDIT_FAILED
         assert node.plan_pub.messages == []
+        assert node.rich_plan_pub.messages == []
+        assert node.execution_plan_controller.execution_plan_id is None
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_promotion_accepts_generic_strict_service_success(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    selected = selection.selected
+    generic_moveit = remote_node.replace(
+        selected.moveit_result,
+        collision_free=None,
+        within_joint_limits=None,
+        ik_valid=None,
+        planning_success=None,
+        failure_code='',
+        evidence_code='STRICT_SERVICE_SUCCESS',
+    )
+    generic = remote_node.replace(selected, moveit_result=generic_moveit)
+    selection.checked = (generic,)
+    selection.reachable = (generic,)
+    selection.selected = generic
+    node._stable_variant_runtime[(7, 1)]['scored_candidate'] = generic
+    try:
+        _funnel, decision = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            1,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+
+        assert decision.promote is True
+        assert node.execution_plan_controller.execution_plan_id == 'plan-A'
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize(
+    'failure_code,evidence_code',
+    [
+        ('MOVEIT_UNREACHABLE', ''),
+        ('', 'STRICT_SERVICE_SUCCESS'),
+    ],
+)
+def test_promotion_rejects_contradictory_structured_moveit_success(
+    tmp_path,
+    failure_code,
+    evidence_code,
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    selected = selection.selected
+    contradictory_moveit = remote_node.replace(
+        selected.moveit_result,
+        failure_code=failure_code,
+        evidence_code=evidence_code,
+    )
+    contradictory = remote_node.replace(
+        selected,
+        moveit_result=contradictory_moveit,
+    )
+    selection.checked = (contradictory,)
+    selection.reachable = (contradictory,)
+    selection.selected = contradictory
+    node._stable_variant_runtime[(7, 1)][
+        'scored_candidate'
+    ] = contradictory
+    try:
+        with pytest.raises(remote_node.CandidateContractError) as exc_info:
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+
+        assert exc_info.value.code == remote_node.PLANNING_AUDIT_FAILED
         assert node.rich_plan_pub.messages == []
         assert node.execution_plan_controller.execution_plan_id is None
     finally:
@@ -2920,8 +3045,63 @@ def test_blocked_execution_publish_allows_stream_stop_and_recovers(
     assert results[0][1].code == 'GENERATION_STALE'
     assert execution_report['outcome']['valid_plan'] is False
     assert node.execution_plan_controller.execution_plan_id is None
+    assert node._request_promotion_count(prepared.ticket) == 0
+    preview_path = pathlib.Path(node.gate_audit_output_path)
+    if preview_path.exists():
+        preview_report = json.loads(preview_path.read_text())
+        assert preview_report['promotion']['promote'] is False
+        assert preview_report['pipeline_funnel']['stage_counts']['promoted'][
+            'passed'
+        ] == 0
+    if blocked_channel == 'legacy':
+        assert node.plan_pub.messages[-1].poses == []
     rich_messages = list(node.rich_plan_pub.messages)
     assert not rich_messages or rich_messages[-1].valid is False
+    node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('state_change', ['target_epoch', 'robot_active'])
+def test_blocked_rich_publish_state_change_cannot_commit_authority(
+    tmp_path,
+    state_change,
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    blocker = BlockingPublisher(
+        lambda message: bool(getattr(message, 'valid', False))
+    )
+    node.rich_plan_pub = blocker
+    results = []
+
+    def run_transaction():
+        results.append(
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+        )
+
+    transaction = threading.Thread(target=run_transaction)
+    transaction.start()
+    assert blocker.entered.wait(1.0)
+    if state_change == 'target_epoch':
+        with node._stream_condition:
+            node.target_instance_epoch += 1
+    else:
+        node.grasp_state_cb(types.SimpleNamespace(active=True))
+    blocker.release.set()
+    transaction.join(2.0)
+
+    assert results[0][1].promote is False
+    assert node.execution_plan_controller.execution_plan_id is None
+    assert node._request_promotion_count(prepared.ticket) == 0
+    assert node.rich_plan_pub.messages[-1].valid is False
     node.shutdown_streaming_worker()
 
 
@@ -3151,7 +3331,8 @@ def test_failed_replan_restores_previous_execution_audit(tmp_path):
         assert json.loads(execution_path.read_text()) == execution_a
         assert node.execution_plan_controller.execution_plan_id == 'plan-A'
         assert [item.plan_id for item in node.rich_plan_pub.messages] == [
-            'plan-A'
+            'plan-A',
+            'plan-A',
         ]
     finally:
         node.shutdown_streaming_worker()
@@ -3160,9 +3341,7 @@ def test_failed_replan_restores_previous_execution_audit(tmp_path):
 def test_replan_service_rejects_false_and_active_without_touching_streaming():
     node = promotion_node()
     node.streaming_enabled = True
-    node._maybe_promote_preview(
-        promotion_plan('plan-A'), signature='candidate-A', score=1.0
-    )
+    seed_execution(node, promotion_plan('plan-A'))
 
     false_request = node.replan_execution_cb(
         types.SimpleNamespace(trigger=False)
@@ -3181,9 +3360,7 @@ def test_replan_service_rejects_false_and_active_without_touching_streaming():
 def test_replan_service_idle_request_allows_better_preview_after_cooldown():
     clock = MutableClock(10.0)
     node = promotion_node(clock=clock)
-    node._maybe_promote_preview(
-        promotion_plan('plan-A'), signature='candidate-A', score=1.0
-    )
+    seed_execution(node, promotion_plan('plan-A'))
     clock.value = 11.1
 
     response = node.replan_execution_cb(types.SimpleNamespace(trigger=True))
@@ -3195,18 +3372,13 @@ def test_replan_service_idle_request_allows_better_preview_after_cooldown():
 
     assert response.success is True
     assert decision.promote is True
-    assert [item.plan_id for item in node.rich_plan_pub.messages] == [
-        'plan-A',
-        'plan-B',
-    ]
-    assert node.execution_plan_controller.execution_plan_id == 'plan-B'
+    assert [item.plan_id for item in node.rich_plan_pub.messages] == ['plan-A']
+    assert node.execution_plan_controller.execution_plan_id == 'plan-A'
 
 
 def test_preview_failure_only_updates_invalid_streak_not_execution_topics():
     node = promotion_node()
-    node._maybe_promote_preview(
-        promotion_plan('plan-A'), signature='candidate-A', score=1.0
-    )
+    seed_execution(node, promotion_plan('plan-A'))
 
     first = node._observe_execution_candidate_invalid(now_sec=10.1)
     second = node._observe_execution_candidate_invalid(now_sec=10.2)
@@ -3289,8 +3461,10 @@ def test_target_signature_ignores_track_and_parallel_jaw_variant_identity():
 def test_recovered_equivalent_preview_breaks_nonconsecutive_invalid_streak():
     node = promotion_node()
     signature = 'target:4:carton:carton_segment'
-    node._maybe_promote_preview(
-        promotion_plan('plan-A'), signature=signature, score=1.0
+    seed_execution(
+        node,
+        promotion_plan('plan-A'),
+        signature=signature,
     )
 
     node._observe_execution_candidate_invalid(now_sec=10.1)
@@ -3347,8 +3521,10 @@ def test_same_target_drift_authorizes_idle_replan(challenger):
     clock = MutableClock(10.0)
     node = promotion_node(clock=clock)
     signature = 'target:4:carton:carton_segment'
-    node._maybe_promote_preview(
-        promotion_plan('plan-A'), signature=signature, score=1.0
+    seed_execution(
+        node,
+        promotion_plan('plan-A'),
+        signature=signature,
     )
     clock.value = 11.1
 
@@ -3360,7 +3536,7 @@ def test_same_target_drift_authorizes_idle_replan(challenger):
 
     assert decision.promote is True
     assert decision.code == 'PROMOTE_REPLAN'
-    assert len(node.rich_plan_pub.messages) == 2
+    assert len(node.rich_plan_pub.messages) == 1
 
 
 def test_parallel_jaw_half_turn_is_zero_orientation_drift():
