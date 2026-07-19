@@ -1,8 +1,6 @@
 <launch>
   <arg name="use_remote_grasp6d" default="true" />
   <arg name="remote_grasp6d_url" default="$(optenv GRASP6D_URL http://172.23.132.97:8000)" />
-  <arg name="grasp6d_preview_enriched_plan_topic" default="/grasp_6d/preview_plan_enriched" />
-  <arg name="grasp6d_execution_enriched_plan_topic" default="/grasp_6d/plan_enriched" />
 
   <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/grasp_params.yaml" />
   <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/safety_limits.yaml" />
@@ -11,8 +9,6 @@
   <!-- Predict and MuJoCo deliberately share one resident WSL service URL. -->
   <param name="/grasp_6d/remote/server_url" value="$(arg remote_grasp6d_url)" />
   <param name="/mujoco_digital_twin/server_url" value="$(arg remote_grasp6d_url)" />
-  <param name="/grasp/grasp6d_preview_enriched_plan_topic" value="$(arg grasp6d_preview_enriched_plan_topic)" />
-  <param name="/grasp/grasp6d_enriched_plan_topic" value="$(arg grasp6d_execution_enriched_plan_topic)" />
 
   <group if="$(arg use_remote_grasp6d)">
     <node pkg="alicia_flexible_grasp_supervisor" type="remote_grasp6d_node.py" name="remote_grasp6d_node" output="screen" />

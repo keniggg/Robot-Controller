@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import io
+import inspect
 import pathlib
 import sys
 import unittest
@@ -654,8 +655,9 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         )
         self.assertEqual(config['gripper']['open_position_m'], 0.05)
         self.assertEqual(remote['max_gripper_width_m'], 0.05)
+        self.assertNotIn('grasp6d_preview_enriched_plan_topic', config['grasp'])
 
-    def test_launch_uses_one_shared_wsl_endpoint_and_distinct_plan_topics(self):
+    def test_launch_uses_one_shared_wsl_endpoint_without_fake_topic_overrides(self):
         root = ET.parse(ROOT / 'launch' / 'grasp_system.launch').getroot()
         args = {item.attrib['name']: item.attrib for item in root.findall('arg')}
         params = {
@@ -672,13 +674,17 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
             params['/mujoco_digital_twin/server_url'],
             '$(arg remote_grasp6d_url)',
         )
-        self.assertEqual(
-            params['/grasp/grasp6d_preview_enriched_plan_topic'],
-            '$(arg grasp6d_preview_enriched_plan_topic)',
+        self.assertNotIn('grasp6d_preview_enriched_plan_topic', args)
+        self.assertNotIn('grasp6d_execution_enriched_plan_topic', args)
+        self.assertNotIn(
+            '/grasp/grasp6d_preview_enriched_plan_topic', params
         )
+        self.assertNotIn('/grasp/grasp6d_enriched_plan_topic', params)
+
+        signature = inspect.signature(control_widget.Grasp6DControlWidget.__init__)
         self.assertEqual(
-            params['/grasp/grasp6d_enriched_plan_topic'],
-            '$(arg grasp6d_execution_enriched_plan_topic)',
+            signature.parameters['preview_enriched_plan_topic'].default,
+            '/grasp_6d/preview_plan_enriched',
         )
 
     def test_state_summary_combines_remote_status_plan_and_grasp_state(self):

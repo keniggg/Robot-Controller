@@ -334,12 +334,6 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
                 enriched_plan_topic,
             )
         )
-        preview_enriched_plan_topic = str(
-            rospy.get_param(
-                '/grasp/grasp6d_preview_enriched_plan_topic',
-                preview_enriched_plan_topic,
-            )
-        )
         labels = grasp6d_button_labels()
 
         layout = QtWidgets.QVBoxLayout(self)

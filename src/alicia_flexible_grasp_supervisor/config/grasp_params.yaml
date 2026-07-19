@@ -1,7 +1,6 @@
 grasp:
   use_grasp6d_plan: true
   grasp6d_plan_topic: "/grasp_6d/plan"
-  grasp6d_preview_enriched_plan_topic: "/grasp_6d/preview_plan_enriched"
   grasp6d_enriched_plan_topic: "/grasp_6d/plan_enriched"
   pregrasp_distance_m: 0.08
   # The Alicia tool0 frame points through the fingertips along +Z. After the
