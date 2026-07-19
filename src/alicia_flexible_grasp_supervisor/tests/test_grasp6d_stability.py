@@ -113,6 +113,35 @@ def test_candidate_track_requires_three_distinct_hits_in_last_five_requests():
     assert stable[0].request_id == 3
 
 
+def test_stable_candidate_reports_measured_pose_dispersion():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    quaternions = (
+        identity_quaternion(),
+        (0.0, math.sin(math.radians(3.0)), 0.0, math.cos(math.radians(3.0))),
+        (0.0, math.sin(math.radians(6.0)), 0.0, math.cos(math.radians(6.0))),
+    )
+    centers = (0.090, 0.100, 0.110)
+    stable = []
+    for request_id, center_x, quaternion in zip(
+        (1, 2, 3), centers, quaternions
+    ):
+        stable = tracker.update(
+            request_id,
+            [
+                observation(
+                    request_id,
+                    center_x=center_x,
+                    quaternion=quaternion,
+                )
+            ],
+        )
+
+    assert stable[0].position_dispersion_m > 0.0
+    assert stable[0].position_dispersion_m < 0.02
+    assert stable[0].orientation_dispersion_rad > 0.0
+    assert stable[0].orientation_dispersion_rad < math.radians(15.0)
+
+
 def test_same_request_cannot_count_two_candidates_as_two_hits():
     tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
 

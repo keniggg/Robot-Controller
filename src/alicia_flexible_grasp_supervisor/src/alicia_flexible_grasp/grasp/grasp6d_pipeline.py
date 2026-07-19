@@ -419,7 +419,7 @@ def _required_finite(value, name):
 
 @dataclass(frozen=True)
 class SoftCandidateFeatures:
-    """Finite preference features; none of these is a mandatory gate."""
+    """Preference features; cloud distance may be explicitly unresolved."""
 
     model_score: float
     cloud_distance_m: float
@@ -437,6 +437,10 @@ class SoftCandidateFeatures:
 
     def __post_init__(self):
         for item in fields(self):
+            if item.name == 'cloud_distance_m' and getattr(
+                self, item.name
+            ) is None:
+                continue
             object.__setattr__(
                 self,
                 item.name,
@@ -553,9 +557,14 @@ def soft_candidate_cost(features, weights):
     components = {
         'model_score': -weights.model_score_weight
         * _clamp_unit(features.model_score),
-        'cloud_distance': weights.cloud_distance_weight
-        * _normalized_positive(
-            features.cloud_distance_m, weights.cloud_distance_knee_m
+        'cloud_distance': (
+            weights.cloud_distance_weight
+            if features.cloud_distance_m is None
+            else weights.cloud_distance_weight
+            * _normalized_positive(
+                features.cloud_distance_m,
+                weights.cloud_distance_knee_m,
+            )
         ),
         'center_distance': weights.center_distance_weight
         * _normalized_positive(
@@ -620,6 +629,8 @@ class MoveItResult:
     within_joint_limits: object = None
     ik_valid: object = None
     planning_success: object = None
+    failure_code: str = ''
+    evidence_code: str = ''
 
 
 @dataclass(frozen=True)
@@ -825,6 +836,8 @@ def _safety_binding_gate(candidate):
 
 
 def _moveit_failure_code(result):
+    if result.failure_code:
+        return result.failure_code
     if not result.collision_free:
         return 'MOVEIT_COLLISION'
     if not result.within_joint_limits:
@@ -845,11 +858,13 @@ def _validated_moveit_result(result):
         result.ik_valid,
         result.planning_success,
     )
-    if type(result.reachable) is not bool or not all(
-        type(state) is bool for state in hard_states
-    ):
+    if type(result.reachable) is not bool:
         return None
     if not isinstance(result.reason, str):
+        return None
+    if not isinstance(result.failure_code, str) or not isinstance(
+        result.evidence_code, str
+    ):
         return None
     joint_path = _finite_float(result.joint_path_cost)
     joint_max_delta = _finite_float(result.joint_max_delta_rad)
@@ -860,7 +875,42 @@ def _validated_moveit_result(result):
         or joint_max_delta < 0.0
     ):
         return None
-    if result.reachable != all(hard_states):
+    failure_code = str(result.failure_code or '')
+    evidence_code = str(result.evidence_code or '')
+    if all(type(state) is bool for state in hard_states):
+        if result.reachable != all(hard_states):
+            return None
+        derived_code = (
+            ''
+            if result.reachable
+            else _moveit_failure_code(replace(result, failure_code=''))
+        )
+        if failure_code and failure_code != derived_code:
+            return None
+        failure_code = derived_code
+        if evidence_code:
+            return None
+    elif all(state is None for state in hard_states):
+        allowed_generic_failures = {
+            'MOVEIT_UNREACHABLE',
+            'MOVEIT_CHECK_ERROR',
+            'MOVEIT_TIMEOUT',
+        }
+        if result.reachable:
+            if (
+                failure_code not in ('', 'OK')
+                or evidence_code != 'STRICT_SERVICE_SUCCESS'
+            ):
+                return None
+            failure_code = ''
+        elif (
+            failure_code not in allowed_generic_failures
+            or evidence_code
+        ):
+            # Collision/joint-limit/IK labels require explicit structured
+            # boolean evidence; diagnostic prose is never sufficient.
+            return None
+    else:
         return None
     return MoveItResult(
         reachable=result.reachable,
@@ -871,6 +921,8 @@ def _validated_moveit_result(result):
         within_joint_limits=result.within_joint_limits,
         ik_valid=result.ik_valid,
         planning_success=result.planning_success,
+        failure_code=failure_code,
+        evidence_code=evidence_code,
     )
 
 

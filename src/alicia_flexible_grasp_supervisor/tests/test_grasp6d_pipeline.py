@@ -195,6 +195,8 @@ def stable_candidate(track_id, pre_moveit_score=0.0):
         model_score=0.8,
         geometry_margin_m=0.008,
         pre_moveit_score=pre_moveit_score,
+        position_dispersion_m=0.002,
+        orientation_dispersion_rad=0.03,
         payload={'track_id': track_id},
     )
 
@@ -557,6 +559,17 @@ def test_approach_center_visibility_and_joint_motion_are_soft_costs():
     assert degraded_score.total > preferred_score.total
     assert math.isfinite(degraded_score.total)
     assert all(math.isfinite(value) for value in degraded_score.components.values())
+
+
+def test_unresolved_cloud_distance_is_explicit_and_not_fabricated():
+    unresolved = soft_features(cloud_distance_m=None)
+
+    score = soft_candidate_cost(unresolved, weights())
+
+    assert unresolved.cloud_distance_m is None
+    assert score.components['cloud_distance'] == (
+        weights().cloud_distance_weight
+    )
 
 
 def test_model_score_and_geometry_margin_improve_rank_without_bypass():
@@ -1185,6 +1198,54 @@ def test_structured_moveit_hard_failure_codes_continue_shortlist(
     assert calls == [0, 1]
     assert result.selected.track_id == 1
     assert result.funnel.rejection_counts == {expected_code: 1}
+
+
+def test_generic_moveit_failure_needs_no_fabricated_hard_state_booleans():
+    generic = MoveItResult(
+        reachable=False,
+        joint_path_cost=0.0,
+        joint_max_delta_rad=0.0,
+        reason='strict pose service returned success=false',
+        failure_code='MOVEIT_UNREACHABLE',
+    )
+
+    result = bounded_moveit_select(
+        [scored_candidate(0, 0.0)],
+        lambda _candidate: generic,
+    )
+
+    assert result.selected is None
+    assert result.checked[0].moveit_result.collision_free is None
+    assert result.funnel.rejection_counts == {'MOVEIT_UNREACHABLE': 1}
+
+
+@pytest.mark.parametrize(
+    'specific_code',
+    [
+        'MOVEIT_COLLISION',
+        'MOVEIT_JOINT_LIMIT',
+        'MOVEIT_IK_FAILED',
+        'MOVEIT_PLANNING_FAILED',
+    ],
+)
+def test_specific_moveit_failure_requires_structured_boolean_evidence(
+    specific_code,
+):
+    unsupported_claim = MoveItResult(
+        reachable=False,
+        joint_path_cost=0.0,
+        joint_max_delta_rad=0.0,
+        reason='generic response text mentions collision',
+        failure_code=specific_code,
+    )
+
+    result = bounded_moveit_select(
+        [scored_candidate(0, 0.0)],
+        lambda _candidate: unsupported_claim,
+    )
+
+    assert result.selected is None
+    assert result.funnel.rejection_counts == {'MOVEIT_RESULT_INVALID': 1}
 
 
 @pytest.mark.parametrize(

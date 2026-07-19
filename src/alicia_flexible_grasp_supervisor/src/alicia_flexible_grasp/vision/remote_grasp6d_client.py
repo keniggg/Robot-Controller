@@ -1,7 +1,10 @@
 import base64
+from copy import deepcopy
 from dataclasses import dataclass
 import io
 import json
+import time
+from types import MappingProxyType
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -93,6 +96,49 @@ class RemoteGraspCandidate:
     # Derived once on the ROS side from ``translation_m + depth * approach``.
     # None is retained for legacy responses that do not carry insertion depth.
     tool0_translation_m: np.ndarray = None
+
+
+@dataclass(frozen=True)
+class RemotePredictionBundle:
+    """One correlated prediction result with request-local diagnostics."""
+
+    request_id: int
+    snapshot_stamp_sec: float
+    candidates: tuple
+    diagnostics: object
+    performance: object
+    encode_ms: float
+    transport_ms: float
+    decode_ms: float
+
+    def __post_init__(self):
+        request_id, stamp = _validate_request_correlation(
+            self.request_id,
+            self.snapshot_stamp_sec,
+        )
+        object.__setattr__(self, 'request_id', request_id)
+        object.__setattr__(self, 'snapshot_stamp_sec', stamp)
+        object.__setattr__(
+            self,
+            'candidates',
+            tuple(deepcopy(candidate) for candidate in (self.candidates or ())),
+        )
+        object.__setattr__(
+            self,
+            'diagnostics',
+            _immutable_json_mapping(self.diagnostics),
+        )
+        object.__setattr__(
+            self,
+            'performance',
+            _immutable_json_mapping(self.performance),
+        )
+        for name in ('encode_ms', 'transport_ms', 'decode_ms'):
+            object.__setattr__(
+                self,
+                name,
+                _finite_nonnegative_number(getattr(self, name), name),
+            )
 
 
 def validate_remote_grasp6d_url(server_url):
@@ -288,6 +334,7 @@ class RemoteGrasp6DClient:
         self.require_candidate_depth = bool(require_candidate_depth)
         self.last_diagnostics = {}
         self.last_performance = {}
+        self._timing_clock = time.perf_counter
 
     def health(self):
         return self._request_json('/health', None)
@@ -307,6 +354,38 @@ class RemoteGrasp6DClient:
     ):
         self.last_diagnostics = {}
         self.last_performance = {}
+        bundle = self.predict_bundle(
+            color_bgr,
+            depth_raw,
+            intrinsics,
+            request_id=request_id,
+            snapshot_stamp_sec=snapshot_stamp_sec,
+            frame_id=frame_id,
+            stamp_sec=stamp_sec,
+            max_candidates=max_candidates,
+            max_gripper_width_m=max_gripper_width_m,
+            candidate_width_tolerance_m=candidate_width_tolerance_m,
+        )
+        self.last_diagnostics = dict(bundle.diagnostics)
+        self.last_performance = dict(bundle.performance)
+        return list(bundle.candidates)
+
+    def predict_bundle(
+        self,
+        color_bgr,
+        depth_raw,
+        intrinsics,
+        request_id,
+        snapshot_stamp_sec,
+        frame_id='camera_link',
+        stamp_sec=0.0,
+        max_candidates=20,
+        max_gripper_width_m=0.0,
+        candidate_width_tolerance_m=0.0,
+    ):
+        """Return an immutable result without mutating legacy ``last_*``."""
+
+        encode_started = self._timing_clock()
         payload = encode_rgbd_payload(
             color_bgr,
             depth_raw,
@@ -319,46 +398,115 @@ class RemoteGrasp6DClient:
             max_gripper_width_m=max_gripper_width_m,
             candidate_width_tolerance_m=candidate_width_tolerance_m,
         )
-        response = self._request_json('/predict', payload)
+        request_data = self._encode_json_payload(payload)
+        encode_ms = max(
+            0.0,
+            (self._timing_clock() - encode_started) * 1000.0,
+        )
+
+        transport_started = self._timing_clock()
+        if self._request_json_is_overridden():
+            response = self._request_json('/predict', payload)
+            response_bytes = None
+        else:
+            response = None
+            response_bytes = self._request_bytes('/predict', request_data)
+        transport_ms = max(
+            0.0,
+            (self._timing_clock() - transport_started) * 1000.0,
+        )
+
+        decode_started = self._timing_clock()
+        if response is None:
+            response = self._decode_json_response(response_bytes)
         validate_predict_protocol_envelope(
             response,
             expected_request_id=request_id,
             expected_snapshot_stamp_sec=snapshot_stamp_sec,
         )
-        diagnostics = dict(response['diagnostics'])
-        performance = {
-            field: float(response[field])
-            for field in GRASP6D_PERFORMANCE_FIELDS
-        }
-        candidates = decode_remote_grasp_response(
-            response,
-            require_candidate_depth=self.require_candidate_depth,
+        diagnostics = _immutable_json_mapping(response['diagnostics'])
+        performance = MappingProxyType(
+            {
+                field: float(response[field])
+                for field in GRASP6D_PERFORMANCE_FIELDS
+            }
         )
-        self.last_diagnostics = diagnostics
-        self.last_performance = performance
-        return candidates
+        candidates = tuple(
+            decode_remote_grasp_response(
+                response,
+                require_candidate_depth=self.require_candidate_depth,
+            )
+        )
+        decode_ms = max(
+            0.0,
+            (self._timing_clock() - decode_started) * 1000.0,
+        )
+        validated_request_id, validated_stamp = _validate_request_correlation(
+            request_id,
+            snapshot_stamp_sec,
+        )
+        return RemotePredictionBundle(
+            request_id=validated_request_id,
+            snapshot_stamp_sec=validated_stamp,
+            candidates=candidates,
+            diagnostics=diagnostics,
+            performance=performance,
+            encode_ms=encode_ms,
+            transport_ms=transport_ms,
+            decode_ms=decode_ms,
+        )
+
+    def _request_json_is_overridden(self):
+        return (
+            '_request_json' in self.__dict__
+            or type(self)._request_json is not RemoteGrasp6DClient._request_json
+        )
 
     def _request_json(self, path, payload):
+        data = None if payload is None else self._encode_json_payload(payload)
+        return self._decode_json_response(self._request_bytes(path, data))
+
+    @staticmethod
+    def _encode_json_payload(payload):
+        return json.dumps(payload, allow_nan=False).encode('utf-8')
+
+    @staticmethod
+    def _decode_json_response(raw):
+        return json.loads(
+            raw.decode('utf-8'),
+            parse_constant=_reject_nonstandard_json_constant,
+        )
+
+    def _request_bytes(self, path, data):
         url = self.server_url + path
-        data = None
         method = 'GET'
         headers = {'Accept': 'application/json'}
-        if payload is not None:
-            data = json.dumps(payload, allow_nan=False).encode('utf-8')
+        if data is not None:
             method = 'POST'
             headers['Content-Type'] = 'application/json'
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:
-                return json.loads(
-                    response.read().decode('utf-8'),
-                    parse_constant=_reject_nonstandard_json_constant,
-                )
+                return response.read()
         except urllib.error.HTTPError as exc:
             body = exc.read().decode('utf-8', errors='replace')
             raise RuntimeError('remote grasp6d HTTP %s: %s' % (exc.code, body)) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError('remote grasp6d connection failed: %s' % exc) from exc
+
+
+def _freeze_json_value(value):
+    if isinstance(value, dict):
+        return MappingProxyType(
+            {str(key): _freeze_json_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, list):
+        return tuple(_freeze_json_value(item) for item in value)
+    return value
+
+
+def _immutable_json_mapping(value):
+    return _freeze_json_value(dict(value or {}))
 
 
 def _reject_nonstandard_json_constant(value):

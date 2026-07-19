@@ -205,7 +205,8 @@ def build_pipeline_metrics(
     end_to_end_ms,
     result_age_ms,
     latency_history_ms,
-    funnel=None
+    funnel=None,
+    encode_ms=0.0,
 ):
     """Build one stable, finite operational event dictionary."""
 
@@ -223,6 +224,7 @@ def build_pipeline_metrics(
         'drop_reason': str(drop_reason or ''),
         'pending_replacements': _pipeline_count(pending_replacements),
         'ros_prepare_ms': _finite_pipeline_number(ros_prepare_ms),
+        'encode_ms': _finite_pipeline_number(encode_ms),
         'transport_ms': _finite_pipeline_number(transport_ms),
         'decode_ms': _finite_pipeline_number(decode_ms),
         'wsl_preprocess_ms': _finite_pipeline_number(
@@ -275,6 +277,29 @@ def strict_metrics_json(metrics):
     )
 
 
+def _metrics_original_totals(payload):
+    stages = dict(payload.get('stage_counts', {}) or {})
+    rejection_counts = dict(payload.get('rejection_counts', {}) or {})
+
+    def stage_total(field):
+        return sum(
+            _pipeline_count(dict(value or {}).get(field, 0))
+            for value in stages.values()
+            if isinstance(value, dict)
+        )
+
+    return {
+        'stage_count': len(stages),
+        'stage_entered_total': stage_total('entered'),
+        'stage_passed_total': stage_total('passed'),
+        'stage_rejected_total': stage_total('rejected'),
+        'rejection_code_count': len(rejection_counts),
+        'rejection_total': sum(
+            _pipeline_count(value) for value in rejection_counts.values()
+        ),
+    }
+
+
 def bounded_metrics_json(metrics, max_bytes=PIPELINE_METRICS_MAX_BYTES):
     """Return valid strict JSON bounded for the ROS operational topic."""
 
@@ -283,6 +308,8 @@ def bounded_metrics_json(metrics, max_bytes=PIPELINE_METRICS_MAX_BYTES):
     encoded = strict_metrics_json(payload)
     if len(encoded.encode('utf-8')) <= limit:
         return encoded
+    payload['metrics_truncated'] = True
+    payload['metrics_original_totals'] = _metrics_original_totals(payload)
     if 'error' in payload:
         payload['error'] = str(payload['error'])[:512]
         encoded = strict_metrics_json(payload)
@@ -302,7 +329,6 @@ def bounded_metrics_json(metrics, max_bytes=PIPELINE_METRICS_MAX_BYTES):
     payload['stage_counts'] = {}
     payload['rejection_ratios'] = {}
     payload['rejection_counts'] = {}
-    payload['metrics_truncated'] = True
     encoded = strict_metrics_json(payload)
     if len(encoded.encode('utf-8')) <= limit:
         return encoded
@@ -318,8 +344,27 @@ def bounded_metrics_json(metrics, max_bytes=PIPELINE_METRICS_MAX_BYTES):
         'generation': _pipeline_count(payload.get('generation', 0)),
         'target_epoch': _pipeline_count(payload.get('target_epoch', 0)),
         'metrics_truncated': True,
+        'metrics_original_totals': dict(
+            payload.get('metrics_original_totals', {}) or {}
+        ),
     }
+    for field in PIPELINE_COUNTER_FIELDS:
+        if field in payload:
+            minimal[field] = _pipeline_count(payload.get(field, 0))
+    audit_reference = dict(payload.get('audit_reference', {}) or {})
+    if audit_reference:
+        minimal['audit_reference'] = audit_reference
     encoded = strict_metrics_json(minimal)
+    if len(encoded.encode('utf-8')) > limit and audit_reference:
+        minimal['audit_reference'] = {
+            'report_sha256': str(
+                audit_reference.get('report_sha256', '') or ''
+            ),
+            'row_count': _pipeline_count(
+                audit_reference.get('row_count', 0)
+            ),
+        }
+        encoded = strict_metrics_json(minimal)
     if len(encoded.encode('utf-8')) > limit:
         raise ValueError('pipeline metrics byte limit is too small')
     return encoded
@@ -371,6 +416,7 @@ class PreparedPrediction:
     graspnet_input_config: object = None
     model_choice: str = ''
     ros_prepare_ms: float = 0.0
+    encode_ms: float = 0.0
     transport_ms: float = 0.0
     decode_ms: float = 0.0
 
@@ -3801,6 +3847,7 @@ class RemoteGrasp6DNode:
                 self._pending_request_id = None
             self.target_instance_epoch += 1
             self.tracker = CandidateTracker(self._tracking_config)
+            self._stable_variant_runtime = {}
             self.inference_coordinator.reset_target_epoch(
                 self.target_instance_epoch
             )
@@ -3838,6 +3885,7 @@ class RemoteGrasp6DNode:
             else tracking_config
         )
         self.tracker = CandidateTracker(self._tracking_config)
+        self._stable_variant_runtime = {}
         self._stream_condition = threading.Condition(threading.RLock())
         self._stream_shutdown = threading.Event()
         self._stream_worker_ticket = None
@@ -3874,6 +3922,7 @@ class RemoteGrasp6DNode:
                 return False
             self.target_instance_epoch += 1
             self.tracker = CandidateTracker(self._tracking_config)
+            self._stable_variant_runtime = {}
             self._stream_generation = self.inference_coordinator.start()
             self.streaming_enabled = True
             self._stream_condition.notify_all()
@@ -3896,6 +3945,7 @@ class RemoteGrasp6DNode:
             self.target_instance_epoch += 1
             self.inference_coordinator.stop()
             self.tracker = CandidateTracker(self._tracking_config)
+            self._stable_variant_runtime = {}
             self._stream_condition.notify_all()
         if pending_request_id is not None:
             self._emit_pending_drop_metrics(
@@ -4053,6 +4103,7 @@ class RemoteGrasp6DNode:
             counters=self._pipeline_counters,
             pending_replacements=self._pending_replacements,
             ros_prepare_ms=0.0,
+            encode_ms=0.0,
             transport_ms=0.0,
             decode_ms=0.0,
             remote_performance={},
@@ -4076,6 +4127,33 @@ class RemoteGrasp6DNode:
         return metrics
 
     def _predict_remote(self, ticket, graspnet_input, intrinsics, frame_id):
+        predict_bundle = getattr(self.client, 'predict_bundle', None)
+        if callable(predict_bundle):
+            bundle = predict_bundle(
+                graspnet_input.color_bgr,
+                graspnet_input.depth_raw,
+                intrinsics,
+                request_id=int(ticket.request_id),
+                snapshot_stamp_sec=float(ticket.snapshot_stamp_sec),
+                frame_id=str(frame_id or 'camera_link'),
+                stamp_sec=float(ticket.snapshot_stamp_sec),
+                max_candidates=int(self.max_candidates),
+                max_gripper_width_m=0.0,
+                candidate_width_tolerance_m=float(
+                    self.candidate_width_tolerance_m
+                ),
+            )
+            return (
+                tuple(bundle.candidates),
+                dict(bundle.diagnostics),
+                dict(bundle.performance),
+                max(0.0, _finite_pipeline_number(bundle.encode_ms)),
+                max(0.0, _finite_pipeline_number(bundle.transport_ms)),
+                max(0.0, _finite_pipeline_number(bundle.decode_ms)),
+            )
+
+        # Compatibility for injected legacy clients.  Production uses the
+        # request-local bundle above and never reads shared ``last_*`` state.
         started = time.perf_counter()
         candidates = self.client.predict(
             graspnet_input.color_bgr,
@@ -4106,6 +4184,7 @@ class RemoteGrasp6DNode:
             tuple(candidates),
             diagnostics,
             performance,
+            0.0,
             transport_ms,
             0.0,
         )
@@ -4169,10 +4248,12 @@ class RemoteGrasp6DNode:
             0.0,
             (time.perf_counter() - prepare_started) * 1000.0,
         )
+        self._require_stream_ticket_current(ticket)
         (
             candidates,
             diagnostics,
             performance,
+            encode_ms,
             transport_ms,
             decode_ms,
         ) = self._predict_remote(
@@ -4196,6 +4277,7 @@ class RemoteGrasp6DNode:
             graspnet_input_config=input_config,
             model_choice=model_choice,
             ros_prepare_ms=ros_prepare_ms,
+            encode_ms=encode_ms,
             transport_ms=transport_ms,
             decode_ms=decode_ms,
         )
@@ -4506,7 +4588,7 @@ class RemoteGrasp6DNode:
                     camera_candidate
                 )
                 if not math.isfinite(cloud_distance):
-                    cloud_distance = target_distance
+                    cloud_distance = None
                 visibility_cost = 0.0
                 if bool(
                     getattr(self, 'camera_visibility_gate_enabled', False)
@@ -4593,6 +4675,8 @@ class RemoteGrasp6DNode:
 
         returned = len(candidates)
         locally_valid = len(observations)
+        if returned == 0:
+            rejections['REMOTE_NO_CANDIDATES'] += 1
         raw_count = _pipeline_count(
             diagnostics.get('raw_candidates', returned)
         )
@@ -4965,10 +5049,15 @@ class RemoteGrasp6DNode:
                             - float(gate.required_open_width_m),
                         ),
                     )
+                    cloud_distance = self._camera_candidate_cloud_distance(
+                        camera_candidate
+                    )
+                    if not math.isfinite(cloud_distance):
+                        cloud_distance = None
                     features = replace(
                         payload.soft_features,
                         model_score=float(stable.model_score),
-                        cloud_distance_m=target_distance,
+                        cloud_distance_m=cloud_distance,
                         center_distance_m=target_distance,
                         downward_approach_cos=float(
                             -np.asarray(stable.approach_base_xyz)[2]
@@ -4982,6 +5071,12 @@ class RemoteGrasp6DNode:
                         ),
                         geometry_margin_m=geometry_margin,
                         stability_hit_ratio=hit_ratio,
+                        position_dispersion_m=float(
+                            stable.position_dispersion_m
+                        ),
+                        orientation_dispersion_rad=float(
+                            stable.orientation_dispersion_rad
+                        ),
                     )
                     candidate = ScoredStableCandidate(
                         stable_candidate=current_stable,
@@ -5002,11 +5097,29 @@ class RemoteGrasp6DNode:
                         'camera_candidate': camera_candidate,
                         'geometry_gate': gate,
                         'scored_candidate': candidate,
+                        'soft_evidence': {
+                            'cloud_distance_resolved': (
+                                cloud_distance is not None
+                            ),
+                            'cloud_distance_m': cloud_distance,
+                            'position_dispersion_m': float(
+                                stable.position_dispersion_m
+                            ),
+                            'orientation_dispersion_rad': float(
+                                stable.orientation_dispersion_rad
+                            ),
+                        },
                     }
                     scored.append(candidate)
                 except Exception:
                     continue
-        self._stable_variant_runtime = runtime
+        condition = getattr(self, '_stream_condition', None)
+        if condition is None:
+            self._stable_variant_runtime = runtime
+        else:
+            with condition:
+                self._require_stream_ticket_current_locked(prepared.ticket)
+                self._stable_variant_runtime = runtime
         return tuple(scored)
 
     @staticmethod
@@ -5032,36 +5145,11 @@ class RemoteGrasp6DNode:
                 joint_path_cost=0.0,
                 joint_max_delta_rad=0.0,
                 reason='stable variant runtime pose is unavailable',
-                collision_free=True,
-                within_joint_limits=True,
-                ik_valid=False,
-                planning_success=False,
+                failure_code='MOVEIT_CHECK_ERROR',
             )
         prepared = runtime.get('prepared')
         self._require_stream_ticket_current(prepared.ticket)
-        reachable = bool(self._plan_reachable(grasp_pose))
-        metrics = dict(
-            getattr(self, '_candidate_plan_metrics', {}).get(
-                self._pose_key(grasp_pose), {}
-            )
-            or {}
-        )
-        path_cost = max(
-            0.0, _finite_pipeline_number(metrics.get('joint_path_cost', 0.0))
-        )
-        max_delta = max(
-            0.0, _finite_pipeline_number(metrics.get('joint_max_delta', 0.0))
-        )
-        return MoveItResult(
-            reachable=reachable,
-            joint_path_cost=path_cost,
-            joint_max_delta_rad=max_delta,
-            reason='' if reachable else 'strict MoveIt pose check rejected',
-            collision_free=True,
-            within_joint_limits=True,
-            ik_valid=reachable,
-            planning_success=reachable,
-        )
+        return self._strict_moveit_result(grasp_pose)
 
     def _publish_selected_preview(self, selected):
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
@@ -5125,6 +5213,25 @@ class RemoteGrasp6DNode:
                 ).components
             ),
             'plan_id': str(rich_plan.plan_id),
+            'lineage_binding': {
+                'source_request_id': int(stable.request_id),
+                'source_snapshot_stamp_sec': float(
+                    stable.snapshot_stamp_sec
+                ),
+                'source_raw_candidate_index': int(
+                    selected.payload.raw_candidate_index
+                ),
+                'source_variant_index': int(
+                    selected.payload.variant_index
+                ),
+                'evaluation_request_id': int(
+                    selected.evaluation_request_id
+                ),
+                'evaluation_snapshot_stamp_sec': float(
+                    selected.evaluation_snapshot_stamp_sec
+                ),
+                'evaluation_variant_index': int(selected.variant_index),
+            },
         }
 
         def commit_streaming_audit():
@@ -5158,42 +5265,29 @@ class RemoteGrasp6DNode:
                 PLANNING_AUDIT_FAILED,
                 'continuous preview audit has no request-local base report',
             )
-        runtime_by_lineage = {}
-        for (track_id, variant_index), runtime in dict(
-            getattr(self, '_stable_variant_runtime', {}) or {}
-        ).items():
-            scored_candidate = runtime.get('scored_candidate')
-            candidate_payload = getattr(scored_candidate, 'payload', None)
-            if isinstance(candidate_payload, LocalCandidatePayload):
-                runtime_by_lineage[
-                    (
-                        candidate_payload.raw_candidate_index,
-                        variant_index,
-                    )
-                ] = (track_id, runtime, scored_candidate)
-
         checked = {
             (item.track_id, item.variant_index): item
             for item in tuple(getattr(selection, 'checked', ()) or ())
         }
         selected = getattr(selection, 'selected', None)
         selected_lineage = None
-        for row in list(report.get('rows', []) or []):
-            lineage = (
-                int(row.get('candidate_index', -1)),
-                int(row.get('variant_index', -1)),
-            )
-            runtime_item = runtime_by_lineage.get(lineage)
-            if runtime_item is None:
+        stable_evaluations = []
+        current_row_annotations = {}
+        runtime_items = sorted(
+            dict(getattr(self, '_stable_variant_runtime', {}) or {}).items()
+        )
+        for (track_id, variant_index), candidate_runtime in runtime_items:
+            scored_candidate = candidate_runtime.get('scored_candidate')
+            candidate_payload = getattr(scored_candidate, 'payload', None)
+            if not isinstance(candidate_payload, LocalCandidatePayload):
                 continue
-            track_id, _runtime, scored_candidate = runtime_item
             evaluated = checked.get(
-                (track_id, lineage[1]), scored_candidate
+                (track_id, variant_index), scored_candidate
             )
             if evaluated is None:
                 continue
             stable = evaluated.stable_candidate
-            row['tracking'] = {
+            tracking = {
                 'track_id': int(track_id),
                 'hit_count': int(stable.hit_count),
                 'window_count': int(stable.window_count),
@@ -5208,31 +5302,103 @@ class RemoteGrasp6DNode:
                         evaluated.moveit_result.joint_max_delta_rad
                     ),
                 )
-            row['score_components'] = dict(
+            score_components = dict(
                 soft_candidate_cost(
                     score_features,
                     evaluated.score_weights,
                 ).components
             )
-            row['pre_moveit_score'] = float(evaluated.pre_moveit_score)
-            row['final_score'] = (
+            final_score = (
                 None
                 if evaluated.final_score is None
                 else float(evaluated.final_score)
             )
-            row['moveit'] = (
+            moveit = (
                 None
                 if evaluated.moveit_result is None
                 else asdict(evaluated.moveit_result)
             )
+            evaluation_request_id = int(
+                getattr(
+                    evaluated,
+                    'evaluation_request_id',
+                    prepared.ticket.request_id,
+                )
+            )
+            evaluation_snapshot_stamp_sec = float(
+                getattr(
+                    evaluated,
+                    'evaluation_snapshot_stamp_sec',
+                    prepared.ticket.snapshot_stamp_sec,
+                )
+            )
+            lineage_binding = {
+                'source_request_id': int(stable.request_id),
+                'source_snapshot_stamp_sec': float(
+                    stable.snapshot_stamp_sec
+                ),
+                'source_raw_candidate_index': int(
+                    candidate_payload.raw_candidate_index
+                ),
+                'source_variant_index': int(
+                    candidate_payload.variant_index
+                ),
+                'evaluation_request_id': evaluation_request_id,
+                'evaluation_snapshot_stamp_sec': (
+                    evaluation_snapshot_stamp_sec
+                ),
+                'evaluation_variant_index': int(variant_index),
+            }
             is_selected = bool(
                 selected is not None
                 and selected.track_id == track_id
-                and selected.variant_index == lineage[1]
+                and selected.variant_index == variant_index
             )
-            row['selected'] = is_selected
+            evaluation_record = {
+                'candidate_index': int(
+                    candidate_payload.raw_candidate_index
+                ),
+                'variant_index': int(variant_index),
+                'selected': is_selected,
+                'tracking': tracking,
+                'lineage_binding': lineage_binding,
+                'score_components': score_components,
+                'pre_moveit_score': float(evaluated.pre_moveit_score),
+                'final_score': final_score,
+                'moveit': moveit,
+                'latest_soft_evidence': deepcopy(
+                    candidate_runtime.get('soft_evidence', {})
+                ),
+            }
+            stable_evaluations.append(evaluation_record)
             if is_selected:
-                selected_lineage = deepcopy(row)
+                selected_lineage = deepcopy(evaluation_record)
+            source_is_evaluation = bool(
+                int(stable.request_id) == evaluation_request_id
+                and abs(
+                    float(stable.snapshot_stamp_sec)
+                    - evaluation_snapshot_stamp_sec
+                )
+                <= 1e-9
+            )
+            if source_is_evaluation:
+                current_row_annotations[
+                    (
+                        int(candidate_payload.raw_candidate_index),
+                        int(variant_index),
+                    )
+                ] = evaluation_record
+
+        for row in list(report.get('rows', []) or []):
+            row['selected'] = False
+            lineage = (
+                int(row.get('candidate_index', -1)),
+                int(row.get('variant_index', -1)),
+            )
+            evaluation_record = current_row_annotations.get(lineage)
+            if evaluation_record is None:
+                continue
+            row.update(deepcopy(evaluation_record))
 
         report['report_version'] = 3
         report['mode'] = 'continuous_preview'
@@ -5243,15 +5409,20 @@ class RemoteGrasp6DNode:
         report.setdefault('summary', {})['pipeline_funnel'] = deepcopy(
             dict(funnel or {})
         )
-        report['lineage'] = [
+        report['candidate_row_lineage'] = [
             {
                 'candidate_index': int(row.get('candidate_index', -1)),
                 'variant_index': int(row.get('variant_index', -1)),
                 'selected': bool(row.get('selected', False)),
                 'tracking': deepcopy(row.get('tracking')),
+                'lineage_binding': deepcopy(
+                    row.get('lineage_binding')
+                ),
             }
             for row in list(report.get('rows', []) or [])
         ]
+        report['stable_evaluations'] = deepcopy(stable_evaluations)
+        report['lineage'] = deepcopy(stable_evaluations)
         report['selected'] = selected_lineage
         preview_audit = dict(
             getattr(self, '_latest_streaming_audit', {}) or {}
@@ -5330,21 +5501,40 @@ class RemoteGrasp6DNode:
             target_identity=target_identity,
             ticket=ticket,
         )
-        if not stable:
+        # A tracker may retain a previously stable track across one missed
+        # request.  It is useful to record that miss, but a request with zero
+        # locally valid candidates must report its current hard failure and
+        # must not revalidate or publish the retained pose as fresh evidence.
+        if not observations or not stable:
             funnel = self._merge_pipeline_funnel(
                 local_funnel,
                 stable_count=0,
                 preview_count=0,
             )
+            status = 'STABILITY_PENDING'
+            local_stage = dict(
+                funnel.get('stage_counts', {}).get(
+                    'locally_valid',
+                    {},
+                )
+                or {}
+            )
+            if _pipeline_count(local_stage.get('passed', 0)) == 0:
+                primary = funnel.get('primary_failure')
+                if primary:
+                    count = int(
+                        funnel.get('rejection_counts', {}).get(primary, 0)
+                    )
+                    status = '%s:%d' % (primary, count)
             if isinstance(prepared, PreparedPrediction):
                 self._finalize_streaming_gate_audit(
                     prepared,
                     None,
                     funnel,
-                    'STABILITY_PENDING',
+                    status,
                     base_report=base_audit_report,
                 )
-            return {'status': 'STABILITY_PENDING', 'funnel': funnel}
+            return {'status': status, 'funnel': funnel}
 
         scored = self._recheck_and_score_stable(prepared, stable)
         selection = bounded_moveit_select(
@@ -5525,6 +5715,7 @@ class RemoteGrasp6DNode:
                 counters=self._pipeline_counters,
                 pending_replacements=self._pending_replacements,
                 ros_prepare_ms=getattr(prepared, 'ros_prepare_ms', 0.0),
+                encode_ms=getattr(prepared, 'encode_ms', 0.0),
                 transport_ms=getattr(prepared, 'transport_ms', 0.0),
                 decode_ms=getattr(prepared, 'decode_ms', 0.0),
                 remote_performance=trusted_performance,
@@ -5561,11 +5752,12 @@ class RemoteGrasp6DNode:
                         )
                         self._latest_gate_audit_reference = dict(reference)
 
-                    self._write_gate_audit_report(
+                    audit_reference = self._write_gate_audit_report(
                         active_audit,
                         ticket=ticket,
                         commit_callback=commit_audit_metrics,
                     )
+                    metrics['audit_reference'] = dict(audit_reference)
                 except StreamResultCancelled as exc:
                     final_accepted = False
                     status = exc.code
@@ -9685,41 +9877,153 @@ class RemoteGrasp6DNode:
             raise ValueError('xyz parameter must contain exactly 3 values')
         return parts
 
-    def _plan_reachable(self, grasp_pose):
+    def _strict_moveit_result(self, grasp_pose):
+        """Return only hard states explicitly supplied by strict MoveIt."""
+
         try:
             # Production remote 6D reachability is always a read-only strict
             # check.  Configuration is validated earlier, but this hard-coded
             # endpoint prevents a partially constructed/test node from ever
             # turning candidate screening into a motion-capable service call.
             service_name = '/supervisor/check_pose_strict'
-            rospy.wait_for_service(service_name, timeout=0.25)
+            try:
+                rospy.wait_for_service(service_name, timeout=0.25)
+            except Exception as exc:
+                return MoveItResult(
+                    reachable=False,
+                    joint_path_cost=0.0,
+                    joint_max_delta_rad=0.0,
+                    reason=str(exc),
+                    failure_code='MOVEIT_TIMEOUT',
+                )
             move_pose = rospy.ServiceProxy(service_name, SetTargetPose)
             response = move_pose(grasp_pose, False)
-            if not bool(response.success):
-                return False
-            metrics = self._parse_plan_metrics(getattr(response, 'message', ''))
+            message = str(getattr(response, 'message', '') or '')
+            metrics = self._parse_plan_metrics(message)
             if not hasattr(self, '_candidate_plan_metrics'):
                 self._candidate_plan_metrics = {}
             self._candidate_plan_metrics[self._pose_key(grasp_pose)] = metrics
-            if is_position_only_fallback_message(getattr(response, 'message', '')):
+            path_cost = max(
+                0.0,
+                _finite_pipeline_number(
+                    metrics.get('joint_path_cost', 0.0)
+                ),
+            )
+            max_delta = max(
+                0.0,
+                _finite_pipeline_number(
+                    metrics.get('joint_max_delta', 0.0)
+                ),
+            )
+            success = getattr(response, 'success', None)
+            if type(success) is not bool:
+                return MoveItResult(
+                    reachable=False,
+                    joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta,
+                    reason='strict MoveIt response has invalid success state',
+                    failure_code='MOVEIT_CHECK_ERROR',
+                )
+            if success and is_position_only_fallback_message(message):
                 self._position_only_rejected_count += 1
                 rospy.logwarn_throttle(
                     2.0,
                     'remote 6D candidate rejected: position-only fallback is not executable: %s',
-                    getattr(response, 'message', ''),
+                    message,
                 )
-                return False
-            if is_orientation_fallback_message(getattr(response, 'message', '')):
+                return MoveItResult(
+                    reachable=False,
+                    joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta,
+                    reason=message,
+                    failure_code='MOVEIT_UNREACHABLE',
+                )
+            if success and is_orientation_fallback_message(message):
                 self._orientation_fallback_rejected_count += 1
                 rospy.logwarn_throttle(
                     2.0,
                     'remote 6D candidate rejected: candidate orientation fallback is not executable: %s',
-                    getattr(response, 'message', ''),
+                    message,
                 )
-                return False
-            return True
-        except Exception:
-            return False
+                return MoveItResult(
+                    reachable=False,
+                    joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta,
+                    reason=message,
+                    failure_code='MOVEIT_UNREACHABLE',
+                )
+
+            hard_state_names = (
+                'collision_free',
+                'within_joint_limits',
+                'ik_valid',
+                'planning_success',
+            )
+            hard_states = tuple(
+                getattr(response, name, None) for name in hard_state_names
+            )
+            if all(type(state) is bool for state in hard_states):
+                return MoveItResult(
+                    reachable=bool(success and all(hard_states)),
+                    joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta,
+                    reason=message,
+                    collision_free=hard_states[0],
+                    within_joint_limits=hard_states[1],
+                    ik_valid=hard_states[2],
+                    planning_success=hard_states[3],
+                )
+            if not all(state is None for state in hard_states):
+                return MoveItResult(
+                    reachable=False,
+                    joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta,
+                    reason='strict MoveIt response has partial hard-state evidence',
+                    failure_code='MOVEIT_CHECK_ERROR',
+                )
+            if success:
+                return MoveItResult(
+                    reachable=True,
+                    joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta,
+                    reason=message,
+                    evidence_code='STRICT_SERVICE_SUCCESS',
+                )
+            explicit_code = str(
+                getattr(response, 'failure_code', '') or ''
+            )
+            if explicit_code not in {
+                'MOVEIT_UNREACHABLE',
+                'MOVEIT_CHECK_ERROR',
+                'MOVEIT_TIMEOUT',
+            }:
+                explicit_code = 'MOVEIT_UNREACHABLE'
+            return MoveItResult(
+                reachable=False,
+                joint_path_cost=path_cost,
+                joint_max_delta_rad=max_delta,
+                reason=message,
+                failure_code=explicit_code,
+            )
+        except TimeoutError as exc:
+            return MoveItResult(
+                reachable=False,
+                joint_path_cost=0.0,
+                joint_max_delta_rad=0.0,
+                reason=str(exc),
+                failure_code='MOVEIT_TIMEOUT',
+            )
+        except Exception as exc:
+            return MoveItResult(
+                reachable=False,
+                joint_path_cost=0.0,
+                joint_max_delta_rad=0.0,
+                reason=str(exc),
+                failure_code='MOVEIT_CHECK_ERROR',
+            )
+
+    def _plan_reachable(self, grasp_pose):
+        return bool(self._strict_moveit_result(grasp_pose).reachable)
 
     def _check_remote_health(self):
         try:

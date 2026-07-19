@@ -19,6 +19,8 @@ from alicia_flexible_grasp.vision.remote_grasp6d_client import (
     GRASP6D_CANDIDATE_FIELDS,
     GRASP6D_PROTOCOL_VERSION,
     RemoteGrasp6DClient,
+    RemoteGraspCandidate,
+    RemotePredictionBundle,
     decode_remote_grasp_response,
     decode_rgbd_payload,
     encode_rgbd_payload,
@@ -270,6 +272,77 @@ class RemoteGrasp6DClientTest(unittest.TestCase):
                 field: self._protocol_response()[field]
                 for field in PERFORMANCE_FIELDS
             },
+        )
+
+    def test_predict_bundle_is_immutable_and_does_not_touch_legacy_state(self):
+        client = RemoteGrasp6DClient('http://127.0.0.1:8000')
+        client.last_diagnostics = {'legacy': 'keep'}
+        client.last_performance = {'server_total_ms': 999.0}
+        client._request_json = lambda _path, _payload: self._protocol_response()
+        client._timing_clock = iter(
+            (0.000, 0.010, 0.010, 0.030, 0.030, 0.037)
+        ).__next__
+        intrinsics = CameraIntrinsics(
+            width=2,
+            height=2,
+            fx=100.0,
+            fy=100.0,
+            cx=0.5,
+            cy=0.5,
+            depth_scale=0.001,
+        )
+
+        bundle = client.predict_bundle(
+            np.zeros((2, 2, 3), dtype=np.uint8),
+            np.full((2, 2), 200, dtype=np.uint16),
+            intrinsics,
+            request_id=41,
+            snapshot_stamp_sec=123.25,
+        )
+
+        self.assertIsInstance(bundle, RemotePredictionBundle)
+        self.assertEqual(bundle.request_id, 41)
+        self.assertEqual(bundle.candidates, ())
+        self.assertEqual(bundle.diagnostics, {'contract': 'v3'})
+        self.assertAlmostEqual(bundle.encode_ms, 10.0)
+        self.assertAlmostEqual(bundle.transport_ms, 20.0)
+        self.assertAlmostEqual(bundle.decode_ms, 7.0)
+        with self.assertRaises(TypeError):
+            bundle.diagnostics['mutated'] = True
+        with self.assertRaises(AttributeError):
+            bundle.transport_ms = 99.0
+        self.assertEqual(client.last_diagnostics, {'legacy': 'keep'})
+        self.assertEqual(
+            client.last_performance,
+            {'server_total_ms': 999.0},
+        )
+
+    def test_prediction_bundle_defensively_copies_candidate_payloads(self):
+        source = RemoteGraspCandidate(
+            score=0.8,
+            translation_m=np.array([0.1, 0.0, 0.2]),
+            quaternion_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.04,
+            depth_m=0.03,
+        )
+
+        bundle = RemotePredictionBundle(
+            request_id=1,
+            snapshot_stamp_sec=10.0,
+            candidates=(source,),
+            diagnostics={},
+            performance={},
+            encode_ms=0.0,
+            transport_ms=0.0,
+            decode_ms=0.0,
+        )
+        source.score = 0.1
+        source.translation_m[0] = 9.0
+
+        self.assertEqual(bundle.candidates[0].score, 0.8)
+        np.testing.assert_allclose(
+            bundle.candidates[0].translation_m,
+            [0.1, 0.0, 0.2],
         )
 
     def test_predict_requires_exact_protocol3_request_correlation(self):

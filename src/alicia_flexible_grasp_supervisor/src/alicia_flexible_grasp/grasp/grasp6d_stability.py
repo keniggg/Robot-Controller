@@ -280,6 +280,8 @@ class StableCandidate:
     model_score: float
     geometry_margin_m: float
     pre_moveit_score: float
+    position_dispersion_m: float
+    orientation_dispersion_rad: float
     payload: Any = field(compare=False, repr=False)
     moveit_cost: Optional[float] = None
 
@@ -660,6 +662,35 @@ class CandidateTracker:
             _distance, quaternion_xyzw = parallel_jaw_orientation_distance_rad(
                 track._last_fused_quaternion, quaternion_xyzw
             )
+        position_residuals = np.asarray(
+            [
+                float(
+                    np.linalg.norm(
+                        item.center_base_xyz - center_base_xyz
+                    )
+                )
+                for item in observations
+            ],
+            dtype=np.float64,
+        )
+        position_dispersion_m = float(
+            math.sqrt(float(np.sum(weights * np.square(position_residuals))))
+        )
+        orientation_residuals = np.asarray(
+            [
+                parallel_jaw_orientation_distance_rad(
+                    quaternion_xyzw,
+                    item.quaternion_xyzw,
+                )[0]
+                for item in observations
+            ],
+            dtype=np.float64,
+        )
+        orientation_dispersion_rad = float(
+            math.sqrt(
+                float(np.sum(weights * np.square(orientation_residuals)))
+            )
+        )
         return StableCandidate(
             track_id=track.track_id,
             hit_count=len(request_ids),
@@ -679,6 +710,8 @@ class CandidateTracker:
             model_score=model_score,
             geometry_margin_m=geometry_margin_m,
             pre_moveit_score=pre_moveit_score,
+            position_dispersion_m=position_dispersion_m,
+            orientation_dispersion_rad=orientation_dispersion_rad,
             payload=newest.payload,
             moveit_cost=None,
         )
