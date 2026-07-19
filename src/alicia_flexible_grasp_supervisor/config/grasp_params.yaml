@@ -111,7 +111,10 @@ grasp_6d:
     # Begin at 1.5 Hz. Raise to 2/3/4/5 Hz only after measured P95 latency,
     # expiration/replacement rates and GPU reserved memory remain acceptable.
     request_hz: 1.5
-    result_max_age_sec: 1.2
+    # Measured ROS preparation + resident WSL inference is 3.2-4.0 s on the
+    # deployed host; keep one second of margin while retaining epoch/drift and
+    # plan-validity gates for every accepted result.
+    result_max_age_sec: 5.0
     stability_window_size: 5
     stability_min_hits: 3
     tracking_position_threshold_m: 0.025

@@ -634,7 +634,7 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
             },
             {
                 'request_hz': 1.5,
-                'result_max_age_sec': 1.2,
+                'result_max_age_sec': 5.0,
                 'stability_window_size': 5,
                 'stability_min_hits': 3,
                 'tracking_position_threshold_m': 0.025,
