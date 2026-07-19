@@ -630,6 +630,96 @@ def test_pipeline_metrics_are_finite_strict_json_with_rolling_percentiles():
     )
 
 
+def test_hundred_stream_requests_emit_bounded_strict_metrics_with_exact_p95():
+    clock = MutableClock(1000.0)
+
+    def prepare(ticket):
+        clock.value = (
+            float(ticket.submitted_monotonic_sec)
+            + float(ticket.request_id) / 1000.0
+        )
+        return types.SimpleNamespace(
+            ticket=ticket,
+            candidates=(),
+            remote_diagnostics={},
+            remote_performance={},
+            ros_prepare_ms=1.0,
+            transport_ms=2.0,
+            decode_ms=3.0,
+        )
+
+    node = streaming_node(clock=clock, prepare=prepare)
+    node.moveit_top_n = 5
+    node._accept_prediction = lambda _prepared: {
+        'status': 'PREVIEW_READY',
+        'funnel': {
+            'stage_counts': {
+                'moveit_checked': {
+                    'entered': 5,
+                    'passed': 3,
+                    'rejected': 2,
+                },
+            },
+            'rejection_counts': {'MOVEIT_UNREACHABLE': 2},
+            'rejection_ratios': {'MOVEIT_UNREACHABLE': 0.4},
+            'primary_failure': None,
+        },
+    }
+
+    try:
+        assert node.start_streaming() is True
+        for request_id in range(1, 101):
+            clock.value = 1000.0 + float(request_id)
+            assert node.submit_stream_snapshot(snapshot(clock.value)) is True
+            wait_until(
+                lambda expected=request_id: bool(node.pipeline_metrics)
+                and node.pipeline_metrics[-1]['request_id'] == expected
+            )
+
+        wait_until(lambda: not node._stream_worker_busy)
+        metrics_history = list(node.pipeline_metrics)
+        assert len(metrics_history) == 100
+        assert all(
+            0 <= item['submitted'] - item['completed'] <= 2
+            for item in metrics_history
+        )
+
+        metrics = metrics_history[-1]
+        assert metrics['submitted'] == 100
+        assert metrics['started'] == 100
+        assert metrics['completed'] == 100
+        assert metrics['accepted'] == 100
+        assert metrics['latency_p95_ms'] == pytest.approx(95.05)
+        assert (
+            metrics['stage_counts']['moveit_checked']['entered']
+            <= node.moveit_top_n
+        )
+        assert sum(metrics['rejection_counts'].values()) >= 0
+
+        def numeric_values(value):
+            if isinstance(value, dict):
+                for nested in value.values():
+                    yield from numeric_values(nested)
+            elif isinstance(value, (list, tuple)):
+                for nested in value:
+                    yield from numeric_values(nested)
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                yield float(value)
+
+        assert all(math.isfinite(value) for value in numeric_values(metrics))
+        encoded = remote_node.strict_metrics_json(metrics)
+        decoded = json.loads(encoded)
+        assert encoded == json.dumps(
+            decoded,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        )
+        assert node.inference_coordinator.pending_count == 0
+    finally:
+        node.shutdown_streaming_worker()
+
+
 def test_bounded_metrics_json_hard_limits_arbitrarily_long_strings():
     metrics = {
         'event': 'x' * 20000,
