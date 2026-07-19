@@ -25,7 +25,9 @@ remote_node = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(remote_node)
 
 from alicia_flexible_grasp.grasp.grasp6d_pipeline import (  # noqa: E402
+    ExecutionPlanController,
     MoveItResult,
+    PromotionDecision,
     SafetyGateInput,
     ScoredStableCandidate,
     SoftCandidateFeatures,
@@ -64,6 +66,11 @@ class RecordingPublisher:
 
     def publish(self, message):
         self.messages.append(message)
+
+
+class FailingPublisher:
+    def publish(self, _message):
+        raise RuntimeError('publisher unavailable')
 
 
 class BlockingPrediction:
@@ -2056,3 +2063,644 @@ def test_current_recheck_binds_conservative_latest_required_width():
         item.soft_features.orientation_dispersion_rad == pytest.approx(0.03)
         for item in scored
     )
+
+
+def promotion_plan(
+    plan_id,
+    x=0.1,
+    target_x=0.2,
+    quaternion=(0.0, 0.0, 0.0, 1.0),
+):
+    pose = types.SimpleNamespace(
+        position=types.SimpleNamespace(x=float(x), y=0.0, z=0.3),
+        orientation=types.SimpleNamespace(
+            x=float(quaternion[0]),
+            y=float(quaternion[1]),
+            z=float(quaternion[2]),
+            w=float(quaternion[3]),
+        ),
+    )
+    geometry_pose = types.SimpleNamespace(
+        position=types.SimpleNamespace(
+            x=float(target_x), y=0.0, z=0.1
+        ),
+        orientation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+    )
+    return types.SimpleNamespace(
+        valid=True,
+        plan_id=str(plan_id),
+        header=types.SimpleNamespace(frame_id='base_link', stamp=20.0),
+        poses=[pose, pose, pose, pose],
+        object_geometry=types.SimpleNamespace(pose_base=geometry_pose),
+    )
+
+
+def promotion_node(clock=None):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node._geometry_state_lock = threading.RLock()
+    node._geometry_invalidation_generation = 0
+    node._last_geometry_invalidation_code = ''
+    node.robot_execution_active = False
+    node.execution_plan_controller = ExecutionPlanController(
+        replan_cooldown_sec=1.0,
+        selection_hysteresis_ratio=0.12,
+        candidate_consecutive_invalidations=2,
+        replan_position_delta_m=0.012,
+        replan_orientation_delta_deg=12.0,
+        replan_target_drift_m=0.025,
+    )
+    node._stream_source_clock = clock or MutableClock(10.0)
+    node.plan_pub = RecordingPublisher()
+    node.rich_plan_pub = RecordingPublisher()
+    node.preview_plan_pub = RecordingPublisher()
+    node.preview_rich_plan_pub = RecordingPublisher()
+    node.latest_rich_plan = None
+    node.latest_plan = None
+    node.latest_preview_rich_plan = None
+    node._execution_promotion_audit_ready = lambda _plan: True
+    return node
+
+
+def promotion_transaction_node(tmp_path):
+    node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    node._geometry_state_lock = threading.RLock()
+    node._geometry_invalidation_generation = 0
+    node._last_geometry_invalidation_code = ''
+    node.robot_execution_active = False
+    node.execution_plan_controller = ExecutionPlanController()
+    node.plan_pub = RecordingPublisher()
+    node.rich_plan_pub = RecordingPublisher()
+    node.latest_rich_plan = None
+    node.latest_plan = None
+    node.gate_audit_enabled = True
+    node.gate_audit_output_path = str(tmp_path / 'planning.json')
+    node.mujoco_audit_output_path = str(tmp_path / 'mujoco.json')
+    node.gate_audit_pub = RecordingPublisher()
+    node._stable_variant_runtime = {}
+    node.start_streaming()
+    node.submit_stream_snapshot(snapshot(9.8))
+    ticket = node._stream_worker_ticket
+    plan = promotion_plan('plan-A')
+    node._latest_streaming_audit = {
+        'request_id': ticket.request_id,
+        'plan_id': plan.plan_id,
+    }
+    proposal = {
+        'rich_plan': plan,
+        'signature': 'target:4:carton:carton_segment',
+        'score': 1.0,
+        'ticket': ticket,
+        'expected_generation': 0,
+    }
+    prepared = types.SimpleNamespace(ticket=ticket)
+    selection = types.SimpleNamespace(checked=(), selected=object())
+    local_funnel = {
+        'input_count': 1,
+        'stage_counts': {
+            'locally_valid': {'entered': 1, 'passed': 1, 'rejected': 0}
+        },
+        'rejection_counts': {},
+    }
+    moveit_funnel = {
+        'stage_counts': {
+            'moveit_reachable': {'entered': 1, 'passed': 1, 'rejected': 0}
+        },
+        'rejection_counts': {},
+    }
+    return (
+        node,
+        prepared,
+        selection,
+        proposal,
+        local_funnel,
+        moveit_funnel,
+    )
+
+
+def test_initial_preview_promotion_publishes_execution_once():
+    node = promotion_node()
+    preview = promotion_plan('plan-A')
+
+    first = node._maybe_promote_preview(
+        preview, signature='candidate-A', score=1.0
+    )
+    second = node._maybe_promote_preview(
+        preview, signature='candidate-A', score=1.0
+    )
+
+    assert first.promote is True
+    assert second.promote is False
+    assert [item.plan_id for item in node.rich_plan_pub.messages] == ['plan-A']
+    assert len(node.plan_pub.messages) == 1
+    assert node.latest_rich_plan.plan_id == 'plan-A'
+    assert node.execution_plan_controller.execution_plan_id == 'plan-A'
+
+
+def test_active_execution_keeps_authority_while_new_preview_is_visible():
+    node = promotion_node()
+    first = promotion_plan('plan-A')
+    challenger = promotion_plan('preview-B', x=0.2)
+    node._maybe_promote_preview(first, signature='candidate-A', score=1.0)
+    node.grasp_state_cb(types.SimpleNamespace(active=True))
+
+    node._publish_preview_plan(
+        challenger,
+        remote_node.rich_plan_to_legacy(challenger),
+    )
+    decision = node._maybe_promote_preview(
+        challenger, signature='candidate-B', score=0.5
+    )
+
+    assert decision.code == 'EXECUTION_FROZEN'
+    assert [item.plan_id for item in node.preview_rich_plan_pub.messages] == [
+        'preview-B'
+    ]
+    assert [item.plan_id for item in node.rich_plan_pub.messages] == ['plan-A']
+    assert node.latest_rich_plan.plan_id == 'plan-A'
+
+
+def test_execution_publication_failure_does_not_commit_controller():
+    node = promotion_node()
+    node.plan_pub = FailingPublisher()
+
+    decision = node._maybe_promote_preview(
+        promotion_plan('plan-A'), signature='candidate-A', score=1.0
+    )
+
+    assert decision.promote is False
+    assert decision.code == 'PLAN_PUBLICATION_FAILED'
+    assert node.execution_plan_controller.execution_plan_id is None
+    assert node.rich_plan_pub.messages == []
+    assert node.latest_rich_plan is None
+
+
+def test_execution_promotion_without_bound_final_audit_is_rejected():
+    node = promotion_node()
+    node._execution_promotion_audit_ready = lambda _plan: False
+
+    decision = node._maybe_promote_preview(
+        promotion_plan('plan-A'), signature='candidate-A', score=1.0
+    )
+
+    assert decision.promote is False
+    assert decision.code == 'PLAN_AUDIT_NOT_READY'
+    assert node.rich_plan_pub.messages == []
+    assert node.plan_pub.messages == []
+    assert node.execution_plan_controller.execution_plan_id is None
+
+
+def test_final_audit_is_bound_before_execution_authority_publish(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    audit_path = pathlib.Path(node.gate_audit_output_path)
+
+    class AuditBeforeRichPublisher(RecordingPublisher):
+        def publish(self, message):
+            assert audit_path.is_file()
+            report = json.loads(audit_path.read_text())
+            assert report['plan_id'] == message.plan_id
+            assert report['outcome']['valid_plan'] is True
+            assert report['promotion']['promote'] is True
+            assert report['pipeline_funnel']['stage_counts']['promoted'][
+                'passed'
+            ] == 1
+            super().publish(message)
+
+    node.rich_plan_pub = AuditBeforeRichPublisher()
+    try:
+        funnel, decision = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            1,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+
+        assert decision.promote is True
+        assert funnel['stage_counts']['promoted']['passed'] == 1
+        assert node.execution_plan_controller.execution_plan_id == 'plan-A'
+        assert [item.plan_id for item in node.rich_plan_pub.messages] == [
+            'plan-A'
+        ]
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_failed_execution_publish_rewrites_audit_as_unpublished(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    node.plan_pub = FailingPublisher()
+    try:
+        funnel, decision = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            1,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+
+        report = json.loads(
+            pathlib.Path(node.gate_audit_output_path).read_text()
+        )
+        assert decision.code == 'PLAN_PUBLICATION_FAILED'
+        assert report['outcome']['valid_plan'] is False
+        assert report['outcome']['code'] == 'PLAN_PUBLICATION_FAILED'
+        assert report['promotion']['code'] == 'PLAN_PUBLICATION_FAILED'
+        assert funnel['stage_counts']['promoted']['passed'] == 0
+        assert node.execution_plan_controller.execution_plan_id is None
+        assert node.rich_plan_pub.messages == []
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_generation_rejection_rewrites_audit_as_unpublished(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    proposal['expected_generation'] = 1
+    try:
+        funnel, decision = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            1,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+
+        report = json.loads(
+            pathlib.Path(node.gate_audit_output_path).read_text()
+        )
+        assert decision.code == 'PLAN_PUBLICATION_FAILED'
+        assert report['outcome']['valid_plan'] is False
+        assert funnel['stage_counts']['promoted']['passed'] == 0
+        assert node.execution_plan_controller.execution_plan_id is None
+        assert node.plan_pub.messages == []
+        assert node.rich_plan_pub.messages == []
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_blocked_audit_io_does_not_block_stream_stop_or_publish_execution(
+    tmp_path, monkeypatch
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    fsync_entered = threading.Event()
+    release_fsync = threading.Event()
+    original_fsync = remote_node.os.fsync
+
+    def blocking_fsync(file_descriptor):
+        fsync_entered.set()
+        if not release_fsync.wait(2.0):
+            raise RuntimeError('test did not release audit fsync')
+        return original_fsync(file_descriptor)
+
+    monkeypatch.setattr(remote_node.os, 'fsync', blocking_fsync)
+    transaction_errors = []
+
+    def run_transaction():
+        try:
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+        except Exception as exc:
+            transaction_errors.append(exc)
+
+    transaction = threading.Thread(target=run_transaction)
+    transaction.start()
+    assert fsync_entered.wait(1.0)
+    stop_done = threading.Event()
+    stop_thread = threading.Thread(
+        target=lambda: (node.stop_streaming(), stop_done.set())
+    )
+    stop_thread.start()
+    try:
+        assert stop_done.wait(0.2), 'stop_streaming blocked on audit fsync'
+    finally:
+        release_fsync.set()
+        transaction.join(2.0)
+        stop_thread.join(2.0)
+        node.shutdown_streaming_worker()
+
+    assert any(
+        isinstance(exc, remote_node.StreamResultCancelled)
+        for exc in transaction_errors
+    )
+    assert node.rich_plan_pub.messages == []
+    assert node.execution_plan_controller.execution_plan_id is None
+
+
+def test_failed_publish_correction_survives_stop_during_correction_io(
+    tmp_path, monkeypatch
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    node.plan_pub = FailingPublisher()
+    second_fsync_entered = threading.Event()
+    release_second_fsync = threading.Event()
+    original_fsync = remote_node.os.fsync
+    fsync_calls = {'count': 0}
+
+    def block_second_fsync(file_descriptor):
+        fsync_calls['count'] += 1
+        if fsync_calls['count'] == 2:
+            second_fsync_entered.set()
+            if not release_second_fsync.wait(2.0):
+                raise RuntimeError('test did not release correction fsync')
+        return original_fsync(file_descriptor)
+
+    monkeypatch.setattr(remote_node.os, 'fsync', block_second_fsync)
+    transaction_errors = []
+
+    def run_transaction():
+        try:
+            node._finalize_promotion_transaction(
+                prepared,
+                selection,
+                proposal,
+                local_funnel,
+                moveit_funnel,
+                1,
+                'PREVIEW_READY',
+                {'summary': {}, 'rows': []},
+            )
+        except Exception as exc:
+            transaction_errors.append(exc)
+
+    transaction = threading.Thread(target=run_transaction)
+    transaction.start()
+    assert second_fsync_entered.wait(1.0)
+    assert node.stop_streaming() is True
+    release_second_fsync.set()
+    transaction.join(2.0)
+    try:
+        report = json.loads(
+            pathlib.Path(node.gate_audit_output_path).read_text()
+        )
+        assert transaction_errors == []
+        assert report['outcome']['valid_plan'] is False
+        assert report['outcome']['code'] == 'PLAN_PUBLICATION_FAILED'
+        assert node.execution_plan_controller.execution_plan_id is None
+        assert node.rich_plan_pub.messages == []
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_replan_service_rejects_false_and_active_without_touching_streaming():
+    node = promotion_node()
+    node.streaming_enabled = True
+    node._maybe_promote_preview(
+        promotion_plan('plan-A'), signature='candidate-A', score=1.0
+    )
+
+    false_request = node.replan_execution_cb(
+        types.SimpleNamespace(trigger=False)
+    )
+    node.grasp_state_cb(types.SimpleNamespace(active=True))
+    active_request = node.replan_execution_cb(
+        types.SimpleNamespace(trigger=True)
+    )
+
+    assert false_request.success is False
+    assert active_request.success is False
+    assert node.execution_plan_controller.explicit_replan_requested is False
+    assert node.streaming_enabled is True
+
+
+def test_replan_service_idle_request_allows_better_preview_after_cooldown():
+    clock = MutableClock(10.0)
+    node = promotion_node(clock=clock)
+    node._maybe_promote_preview(
+        promotion_plan('plan-A'), signature='candidate-A', score=1.0
+    )
+    clock.value = 11.1
+
+    response = node.replan_execution_cb(types.SimpleNamespace(trigger=True))
+    decision = node._maybe_promote_preview(
+        promotion_plan('plan-B', x=0.15),
+        signature='candidate-B',
+        score=0.5,
+    )
+
+    assert response.success is True
+    assert decision.promote is True
+    assert [item.plan_id for item in node.rich_plan_pub.messages] == [
+        'plan-A',
+        'plan-B',
+    ]
+    assert node.execution_plan_controller.execution_plan_id == 'plan-B'
+
+
+def test_preview_failure_only_updates_invalid_streak_not_execution_topics():
+    node = promotion_node()
+    node._maybe_promote_preview(
+        promotion_plan('plan-A'), signature='candidate-A', score=1.0
+    )
+
+    first = node._observe_execution_candidate_invalid(now_sec=10.1)
+    second = node._observe_execution_candidate_invalid(now_sec=10.2)
+
+    assert first.invalidate is False
+    assert second.invalidate is True
+    assert [item.plan_id for item in node.rich_plan_pub.messages] == ['plan-A']
+    assert len(node.plan_pub.messages) == 1
+    assert node.latest_rich_plan.plan_id == 'plan-A'
+
+
+def test_stale_ticket_cannot_mutate_execution_invalid_streak():
+    node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    try:
+        node._geometry_state_lock = threading.RLock()
+        node.robot_execution_active = False
+        node.execution_plan_controller = ExecutionPlanController()
+        node.execution_plan_controller.commit_execution(
+            'plan-A', 'candidate-A', score=1.0, now_sec=9.0
+        )
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(9.8))
+        ticket = node._stream_worker_ticket
+        node.stop_streaming()
+
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._observe_execution_candidate_invalid(
+                now_sec=10.1,
+                ticket=ticket,
+            )
+
+        assert node.execution_plan_controller.invalid_streak == 0
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_stale_ticket_cannot_append_promotion_to_streaming_audit():
+    node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(9.8))
+        ticket = node._stream_worker_ticket
+        node._latest_streaming_audit = {'plan_id': 'preview-A'}
+        node.stop_streaming()
+
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._record_preview_promotion(
+                ticket,
+                PromotionDecision(
+                    False,
+                    'EXECUTION_HELD',
+                    'a valid execution plan already exists',
+                ),
+            )
+
+        assert node._latest_streaming_audit == {'plan_id': 'preview-A'}
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_target_signature_ignores_track_and_parallel_jaw_variant_identity():
+    first = types.SimpleNamespace(
+        target_epoch=4,
+        target_label='carton',
+        model_choice='carton_segment',
+        track_id=1,
+    )
+    rebuilt = types.SimpleNamespace(
+        target_epoch=4,
+        target_label='carton',
+        model_choice='carton_segment',
+        track_id=99,
+    )
+
+    assert remote_node.RemoteGrasp6DNode._preview_target_signature(
+        first
+    ) == remote_node.RemoteGrasp6DNode._preview_target_signature(rebuilt)
+
+
+def test_recovered_equivalent_preview_breaks_nonconsecutive_invalid_streak():
+    node = promotion_node()
+    signature = 'target:4:carton:carton_segment'
+    node._maybe_promote_preview(
+        promotion_plan('plan-A'), signature=signature, score=1.0
+    )
+
+    node._observe_execution_candidate_invalid(now_sec=10.1)
+    recovered = node._maybe_promote_preview(
+        promotion_plan('preview-A2', x=0.105, target_x=0.205),
+        signature=signature,
+        score=0.5,
+    )
+    node._observe_execution_candidate_invalid(now_sec=10.2)
+
+    assert recovered.code == 'EXECUTION_HELD'
+    assert node.execution_plan_controller.invalid_streak == 1
+    assert node.execution_plan_controller.replacement_authorized is False
+    assert [item.plan_id for item in node.rich_plan_pub.messages] == ['plan-A']
+
+
+def test_pipeline_funnel_records_successful_execution_promotion():
+    merged = remote_node.RemoteGrasp6DNode._merge_pipeline_funnel(
+        {
+            'input_count': 1,
+            'stage_counts': {},
+            'rejection_counts': {},
+            'rejection_ratios': {},
+        },
+        stable_count=1,
+        preview_count=1,
+        promotion_count=1,
+    )
+
+    assert merged['stage_counts']['promoted'] == {
+        'entered': 1,
+        'passed': 1,
+        'rejected': 0,
+    }
+
+
+@pytest.mark.parametrize(
+    'challenger',
+    [
+        promotion_plan('plan-B-position', x=0.113),
+        promotion_plan(
+            'plan-B-orientation',
+            quaternion=(
+                math.sin(math.radians(13.0) / 2.0),
+                0.0,
+                0.0,
+                math.cos(math.radians(13.0) / 2.0),
+            ),
+        ),
+        promotion_plan('plan-B-target', target_x=0.226),
+    ],
+)
+def test_same_target_drift_authorizes_idle_replan(challenger):
+    clock = MutableClock(10.0)
+    node = promotion_node(clock=clock)
+    signature = 'target:4:carton:carton_segment'
+    node._maybe_promote_preview(
+        promotion_plan('plan-A'), signature=signature, score=1.0
+    )
+    clock.value = 11.1
+
+    decision = node._maybe_promote_preview(
+        challenger,
+        signature=signature,
+        score=0.5,
+    )
+
+    assert decision.promote is True
+    assert decision.code == 'PROMOTE_REPLAN'
+    assert len(node.rich_plan_pub.messages) == 2
+
+
+def test_parallel_jaw_half_turn_is_zero_orientation_drift():
+    current = promotion_plan('plan-A')
+    symmetric = promotion_plan(
+        'preview-symmetric', quaternion=(0.0, 0.0, 1.0, 0.0)
+    )
+
+    _position, orientation, _target = (
+        remote_node.RemoteGrasp6DNode._execution_plan_drift(
+            current, symmetric
+        )
+    )
+
+    assert orientation == pytest.approx(0.0, abs=1e-9)
+
+
+def test_request_local_promotion_count_ignores_unrelated_decision():
+    node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(9.8))
+        ticket = node._stream_worker_ticket
+        promoted = PromotionDecision(
+            True,
+            'PROMOTE_INITIAL',
+            'no valid execution plan exists',
+        )
+        node._latest_streaming_audit = {'plan_id': 'preview-A'}
+        node._record_preview_promotion(ticket, promoted)
+        node._latest_promotion_decision = PromotionDecision(
+            False,
+            'EXECUTION_FROZEN',
+            'robot execution is active',
+        )
+
+        assert node._request_promotion_count(ticket) == 1
+    finally:
+        node.shutdown_streaming_worker()

@@ -48,7 +48,9 @@ from alicia_flexible_grasp.grasp.grasp6d_stability import (
 )
 from alicia_flexible_grasp.grasp.grasp6d_pipeline import (
     CandidateStageFunnel,
+    ExecutionPlanController,
     MoveItResult,
+    PromotionDecision,
     SafetyGateInput,
     ScoredStableCandidate,
     SoftCandidateFeatures,
@@ -2304,7 +2306,27 @@ class RemoteGrasp6DNode:
         self._selected_candidate_gate = None
         self.selected_required_open_width_m = None
         self._last_model_choice = str(pcfg.get('yolo_model_choice', 'original'))
-        self.execution_active = False
+        self.robot_execution_active = False
+        self.execution_plan_controller = ExecutionPlanController(
+            replan_cooldown_sec=remote_cfg.get(
+                'replan_cooldown_sec', 1.0
+            ),
+            selection_hysteresis_ratio=remote_cfg.get(
+                'selection_hysteresis_ratio', 0.12
+            ),
+            candidate_consecutive_invalidations=remote_cfg.get(
+                'candidate_consecutive_invalidations', 2
+            ),
+            replan_position_delta_m=remote_cfg.get(
+                'replan_position_delta_m', 0.012
+            ),
+            replan_orientation_delta_deg=remote_cfg.get(
+                'replan_orientation_delta_deg', 12.0
+            ),
+            replan_target_drift_m=remote_cfg.get(
+                'replan_target_drift_m', 0.025
+            ),
+        )
         self.target_instance_association_threshold_m = max(
             0.0,
             float(
@@ -3126,6 +3148,11 @@ class RemoteGrasp6DNode:
         )
         rospy.on_shutdown(self.shutdown_streaming_worker)
         rospy.Service('/grasp_6d/request_plan', TriggerZero, self.request_plan_cb)
+        rospy.Service(
+            '/grasp_6d/replan_execution',
+            TriggerZero,
+            self.replan_execution_cb,
+        )
         self._publish_invalid_plan_pair(
             'INITIALIZING',
             'no rich 6D plan has been generated',
@@ -3174,9 +3201,10 @@ class RemoteGrasp6DNode:
         self.frames.update_joints(positions[:6])
 
     def grasp_state_cb(self, msg):
-        """Track execution activity for diagnostics only (Task 6 owns gating)."""
+        """Track execution activity only; it does not control inference."""
 
-        self.execution_active = bool(getattr(msg, 'active', False))
+        with self._geometry_state_guard():
+            self.robot_execution_active = bool(getattr(msg, 'active', False))
 
     @staticmethod
     def _invalid_geometry_estimate(code, reason, source_mode=''):
@@ -3254,6 +3282,9 @@ class RemoteGrasp6DNode:
             # called. A broken transport must never leave an executable cache.
             self.latest_rich_plan = None
             self.latest_plan = None
+            controller = getattr(self, 'execution_plan_controller', None)
+            if controller is not None:
+                controller.clear_execution()
             self.latest_object_geometry = (
                 deepcopy(invalid_geometry)
                 if invalid_geometry is not None
@@ -4768,6 +4799,392 @@ class RemoteGrasp6DNode:
             graspnet_input_config=input_config,
         )
 
+    def _promotion_controller(self):
+        controller = getattr(self, 'execution_plan_controller', None)
+        if controller is None:
+            controller = ExecutionPlanController()
+            self.execution_plan_controller = controller
+        return controller
+
+    def _promotion_now_sec(self):
+        clock = getattr(self, '_stream_source_clock', None)
+        return float(clock()) if callable(clock) else float(time.monotonic())
+
+    @staticmethod
+    def _pose_position_and_quaternion(pose):
+        position = getattr(pose, 'position', None)
+        orientation = getattr(pose, 'orientation', None)
+        xyz = np.asarray(
+            [position.x, position.y, position.z], dtype=float
+        )
+        quaternion = np.asarray(
+            [
+                orientation.x,
+                orientation.y,
+                orientation.z,
+                orientation.w,
+            ],
+            dtype=float,
+        )
+        if not np.all(np.isfinite(xyz)) or not np.all(
+            np.isfinite(quaternion)
+        ):
+            raise ValueError('execution plan pose is non-finite')
+        norm = float(np.linalg.norm(quaternion))
+        if norm <= 1e-12:
+            raise ValueError('execution plan quaternion is invalid')
+        return xyz, quaternion / norm
+
+    @classmethod
+    def _execution_plan_drift(cls, current_plan, preview_plan):
+        current_poses = tuple(getattr(current_plan, 'poses', ()) or ())
+        preview_poses = tuple(getattr(preview_plan, 'poses', ()) or ())
+        if len(current_poses) != 4 or len(preview_poses) != 4:
+            raise ValueError('execution and preview plans need four poses')
+        current_xyz, current_q = cls._pose_position_and_quaternion(
+            current_poses[2]
+        )
+        preview_xyz, preview_q = cls._pose_position_and_quaternion(
+            preview_poses[2]
+        )
+        position_delta_m = float(np.linalg.norm(preview_xyz - current_xyz))
+        preview_symmetric_q = np.asarray(
+            quaternion_multiply(preview_q, (0.0, 0.0, 1.0, 0.0)),
+            dtype=float,
+        )
+        preview_symmetric_q /= max(
+            float(np.linalg.norm(preview_symmetric_q)), 1e-12
+        )
+        dots = (
+            abs(float(np.dot(current_q, preview_q))),
+            abs(float(np.dot(current_q, preview_symmetric_q))),
+        )
+        dot = min(1.0, max(0.0, max(dots)))
+        orientation_delta_deg = float(math.degrees(2.0 * math.acos(dot)))
+
+        def target_center(plan):
+            geometry = getattr(plan, 'object_geometry', None)
+            pose_base = getattr(geometry, 'pose_base', None)
+            position = getattr(pose_base, 'position', None)
+            center = np.asarray(
+                [position.x, position.y, position.z], dtype=float
+            )
+            if not np.all(np.isfinite(center)):
+                raise ValueError('execution target center is non-finite')
+            return center
+
+        target_drift_m = float(
+            np.linalg.norm(target_center(preview_plan) - target_center(current_plan))
+        )
+        return position_delta_m, orientation_delta_deg, target_drift_m
+
+    def _observe_execution_candidate_invalid(self, now_sec=None, ticket=None):
+        def observe():
+            with self._geometry_state_guard():
+                controller = self._promotion_controller()
+                decision = controller.observe_invalid(
+                    now_sec=(
+                        self._promotion_now_sec()
+                        if now_sec is None
+                        else now_sec
+                    ),
+                    robot_active=bool(
+                        getattr(self, 'robot_execution_active', False)
+                    ),
+                )
+                self._latest_promotion_decision = decision
+                return decision
+
+        if ticket is None:
+            return observe()
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(ticket)
+            return observe()
+
+    def _record_preview_promotion(self, ticket, decision):
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(ticket)
+            audit = deepcopy(
+                dict(getattr(self, '_latest_streaming_audit', {}) or {})
+            )
+            audit['promotion'] = {
+                'promote': bool(decision.promote),
+                'code': str(decision.code),
+                'reason': str(decision.reason),
+            }
+            self._latest_streaming_audit = audit
+            self._latest_preview_promotion = (
+                int(ticket.request_id),
+                int(ticket.generation),
+                int(ticket.target_epoch),
+                decision,
+            )
+
+    def _request_promotion_count(self, ticket):
+        recorded = getattr(self, '_latest_preview_promotion', None)
+        if not isinstance(recorded, tuple) or len(recorded) != 4:
+            return 0
+        request_id, generation, target_epoch, decision = recorded
+        if (
+            int(request_id) != int(ticket.request_id)
+            or int(generation) != int(ticket.generation)
+            or int(target_epoch) != int(ticket.target_epoch)
+        ):
+            return 0
+        return int(bool(getattr(decision, 'promote', False)))
+
+    def _execution_promotion_audit_ready(self, rich_plan):
+        plan_id = str(getattr(rich_plan, 'plan_id', '') or '')
+        report = dict(getattr(self, '_active_gate_audit_report', {}) or {})
+        outcome = dict(report.get('outcome', {}) or {})
+        reference = dict(
+            getattr(self, '_latest_gate_audit_reference', {}) or {}
+        )
+        expected_sha256 = str(reference.get('report_sha256', '') or '')
+        if (
+            not plan_id
+            or report.get('plan_id') != plan_id
+            or not bool(outcome.get('valid_plan', False))
+            or not expected_sha256
+            or not bool(reference.get('atomic_committed', False))
+        ):
+            return False
+        try:
+            payload = json.dumps(
+                report,
+                allow_nan=False,
+                ensure_ascii=True,
+                indent=2,
+                sort_keys=True,
+            ).encode('utf-8')
+        except (TypeError, ValueError):
+            return False
+        return bool(
+            hashlib.sha256(payload).hexdigest() == expected_sha256
+        )
+
+    def _decide_preview_promotion(self, rich_plan, signature, score):
+        controller = self._promotion_controller()
+        now_sec = self._promotion_now_sec()
+        robot_active = bool(
+            getattr(self, 'robot_execution_active', False)
+        )
+        if controller.has_execution and not robot_active:
+            current = getattr(self, 'latest_rich_plan', None)
+            if current is not None:
+                try:
+                    drift = self._execution_plan_drift(current, rich_plan)
+                except (AttributeError, TypeError, ValueError):
+                    drift = None
+                if drift is not None:
+                    controller.observe_drift(
+                        position_delta_m=drift[0],
+                        orientation_delta_deg=drift[1],
+                        target_drift_m=drift[2],
+                        now_sec=now_sec,
+                        robot_active=False,
+                    )
+        decision = controller.observe_preview(
+            signature,
+            score=score,
+            now_sec=now_sec,
+            robot_active=robot_active,
+        )
+        self._latest_promotion_decision = decision
+        return decision, now_sec
+
+    def _publish_decided_promotion(
+        self,
+        rich_plan,
+        signature,
+        score,
+        decision,
+        now_sec,
+        expected_generation=None,
+    ):
+        if not decision.promote:
+            return decision
+        plan_id = str(getattr(rich_plan, 'plan_id', '') or '').strip()
+        if not plan_id or not bool(getattr(rich_plan, 'valid', False)):
+            failed = PromotionDecision(
+                False,
+                'PLAN_INVALID',
+                'preview is not a valid content-bound rich plan',
+            )
+            self._latest_promotion_decision = failed
+            return failed
+        if not self._execution_promotion_audit_ready(rich_plan):
+            failed = PromotionDecision(
+                False,
+                'PLAN_AUDIT_NOT_READY',
+                'final planning audit does not bind this execution plan',
+            )
+            self._latest_promotion_decision = failed
+            return failed
+        generation = (
+            int(expected_generation)
+            if expected_generation is not None
+            else int(getattr(self, '_geometry_invalidation_generation', 0))
+        )
+        try:
+            published, failure_code = self._publish_plan_pair_if_current(
+                deepcopy(rich_plan), generation
+            )
+        except Exception as exc:
+            failed = PromotionDecision(
+                False,
+                'PLAN_PUBLICATION_FAILED',
+                'execution plan publication failed: {}'.format(exc),
+            )
+            self._latest_promotion_decision = failed
+            return failed
+        if not published:
+            failed = PromotionDecision(
+                False,
+                'PLAN_PUBLICATION_FAILED',
+                'execution plan publication rejected: {}'.format(
+                    failure_code or 'unknown failure'
+                ),
+            )
+            self._latest_promotion_decision = failed
+            return failed
+        self._promotion_controller().commit_execution(
+            plan_id,
+            signature,
+            score=score,
+            now_sec=now_sec,
+        )
+        return decision
+
+    def _maybe_promote_preview(
+        self,
+        rich_plan,
+        signature,
+        score,
+        ticket=None,
+        expected_generation=None,
+    ):
+        """Promote one already-audited Preview and commit only on success."""
+
+        def decide_and_publish():
+            with self._geometry_state_guard():
+                decision, now_sec = self._decide_preview_promotion(
+                    rich_plan, signature, score
+                )
+                return self._publish_decided_promotion(
+                    rich_plan,
+                    signature,
+                    score,
+                    decision,
+                    now_sec,
+                    expected_generation=expected_generation,
+                )
+
+        if ticket is None:
+            return decide_and_publish()
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(ticket)
+            return decide_and_publish()
+
+    def _finalize_promotion_transaction(
+        self,
+        prepared,
+        selection,
+        proposal,
+        local_funnel,
+        moveit_funnel,
+        stable_count,
+        status,
+        base_report,
+    ):
+        """Write final evidence, then publish/commit execution authority."""
+
+        ticket = prepared.ticket
+        proposal_ticket = proposal.get('ticket')
+        if (
+            proposal_ticket is None
+            or int(proposal_ticket.request_id) != int(ticket.request_id)
+            or int(proposal_ticket.generation) != int(ticket.generation)
+            or int(proposal_ticket.target_epoch) != int(ticket.target_epoch)
+        ):
+            raise StreamResultCancelled('GENERATION_STALE')
+        with self._stream_condition:
+            self._require_stream_ticket_current_locked(ticket)
+            with self._geometry_state_guard():
+                decision, now_sec = self._decide_preview_promotion(
+                    proposal['rich_plan'],
+                    proposal['signature'],
+                    proposal['score'],
+                )
+                self._record_preview_promotion(ticket, decision)
+        funnel = self._merge_pipeline_funnel(
+            local_funnel,
+            moveit_funnel,
+            stable_count=stable_count,
+            preview_count=1,
+            promotion_count=int(decision.promote),
+        )
+        result_holder = {}
+
+        def publish_after_audit():
+            with self._geometry_state_guard():
+                if bool(getattr(self, 'robot_execution_active', False)):
+                    actual = PromotionDecision(
+                        False,
+                        'EXECUTION_FROZEN',
+                        'robot execution became active before promotion',
+                    )
+                else:
+                    actual = self._publish_decided_promotion(
+                        proposal['rich_plan'],
+                        proposal['signature'],
+                        proposal['score'],
+                        decision,
+                        now_sec,
+                        expected_generation=proposal[
+                            'expected_generation'
+                        ],
+                    )
+                result_holder['decision'] = actual
+                self._record_preview_promotion(ticket, actual)
+
+        self._finalize_streaming_gate_audit(
+            prepared,
+            selection,
+            funnel,
+            status,
+            base_report=base_report,
+            lifecycle_commit_callback=(
+                publish_after_audit if decision.promote else None
+            ),
+            promotion_decision=decision,
+        )
+        actual = result_holder.get('decision', decision)
+        if decision.promote and not actual.promote:
+            replaced_audit_sha256 = str(
+                dict(
+                    getattr(self, '_latest_gate_audit_reference', {}) or {}
+                ).get('report_sha256', '')
+                or ''
+            )
+            funnel = self._merge_pipeline_funnel(
+                local_funnel,
+                moveit_funnel,
+                stable_count=stable_count,
+                preview_count=1,
+                promotion_count=0,
+            )
+            self._finalize_streaming_gate_audit(
+                prepared,
+                selection,
+                funnel,
+                status,
+                base_report=base_report,
+                promotion_decision=actual,
+                replace_audit_sha256=replaced_audit_sha256,
+            )
+        return funnel, actual
+
     def _publish_preview_plan(
         self,
         rich_plan,
@@ -4800,6 +5217,7 @@ class RemoteGrasp6DNode:
         moveit_funnel=None,
         stable_count=0,
         preview_count=0,
+        promotion_count=0,
     ):
         local = dict(local_funnel or {})
         moveit = dict(moveit_funnel or {})
@@ -4825,11 +5243,14 @@ class RemoteGrasp6DNode:
             'passed': _pipeline_count(preview_count),
             'rejected': max(0, reachable - _pipeline_count(preview_count)),
         }
-        # Task 5 never promotes a preview into execution authority.
+        promoted = min(
+            _pipeline_count(preview_count),
+            _pipeline_count(promotion_count),
+        )
         stage_counts['promoted'] = {
             'entered': _pipeline_count(preview_count),
-            'passed': 0,
-            'rejected': _pipeline_count(preview_count),
+            'passed': promoted,
+            'rejected': _pipeline_count(preview_count) - promoted,
         }
         rejection_counts = Counter(
             dict(local.get('rejection_counts', {}) or {})
@@ -5160,6 +5581,24 @@ class RemoteGrasp6DNode:
                 evaluation,
             )
 
+    @staticmethod
+    def _preview_target_signature(stable):
+        """Identify target authority, not a jittery tracker/pose realization."""
+
+        payload = {
+            'target_epoch': int(stable.target_epoch),
+            'target_label': str(stable.target_label),
+            'model_choice': str(stable.model_choice),
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(',', ':'),
+                allow_nan=False,
+            ).encode('utf-8')
+        ).hexdigest()
+
     def _publish_selected_preview(self, selected):
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
             (selected.track_id, selected.variant_index)
@@ -5252,7 +5691,15 @@ class RemoteGrasp6DNode:
             ticket=prepared.ticket,
             commit_callback=commit_streaming_audit,
         )
-        return rich_plan
+        return {
+            'rich_plan': rich_plan,
+            'signature': self._preview_target_signature(stable),
+            'score': float(selected.final_score),
+            'ticket': prepared.ticket,
+            'expected_generation': int(
+                prepared.request_invalidation_generation
+            ),
+        }
 
     def _finalize_streaming_gate_audit(
         self,
@@ -5261,6 +5708,9 @@ class RemoteGrasp6DNode:
         funnel,
         status,
         base_report=None,
+        lifecycle_commit_callback=None,
+        promotion_decision=None,
+        replace_audit_sha256=None,
     ):
         """Atomically enrich the existing full audit with streaming lineage."""
 
@@ -5460,15 +5910,47 @@ class RemoteGrasp6DNode:
             == int(prepared.ticket.request_id)
             else ''
         )
+        promotes_execution = bool(
+            isinstance(promotion_decision, PromotionDecision)
+            and promotion_decision.promote
+            and report.get('plan_id')
+        )
+        promotion_failure = bool(
+            isinstance(promotion_decision, PromotionDecision)
+            and not promotion_decision.promote
+            and str(promotion_decision.code).startswith('PLAN_')
+        )
+        report['promotion'] = (
+            None
+            if not isinstance(promotion_decision, PromotionDecision)
+            else {
+                'promote': bool(promotion_decision.promote),
+                'code': str(promotion_decision.code),
+                'reason': str(promotion_decision.reason),
+            }
+        )
         report['outcome'] = {
-            'code': str(status or ''),
-            'reason': str(status or ''),
-            'valid_plan': False,
+            'code': (
+                'PLAN_READY'
+                if promotes_execution
+                else (
+                    str(promotion_decision.code)
+                    if promotion_failure
+                    else str(status or '')
+                )
+            ),
+            'reason': (
+                str(promotion_decision.reason)
+                if promotes_execution or promotion_failure
+                else str(status or '')
+            ),
+            'valid_plan': promotes_execution,
             'preview_valid': selected is not None,
         }
         summary = {
             'pipeline_funnel': deepcopy(dict(funnel or {})),
             'status': str(status or ''),
+            'promotion': deepcopy(report['promotion']),
         }
 
         def commit_audit(reference):
@@ -5480,11 +5962,14 @@ class RemoteGrasp6DNode:
                 summary=summary,
                 reference=reference,
             )
+            if lifecycle_commit_callback is not None:
+                lifecycle_commit_callback()
 
         self._write_gate_audit_report(
             report,
             ticket=prepared.ticket,
             commit_callback=commit_audit,
+            replace_reference_sha256=replace_audit_sha256,
         )
 
     def _accept_prediction(self, prepared):
@@ -5562,7 +6047,14 @@ class RemoteGrasp6DNode:
                     funnel,
                     status,
                     base_report=base_audit_report,
+                    lifecycle_commit_callback=lambda: (
+                        self._observe_execution_candidate_invalid(
+                            ticket=ticket
+                        )
+                    ),
                 )
+            else:
+                self._observe_execution_candidate_invalid(ticket=ticket)
             return {'status': status, 'funnel': funnel}
 
         scored = self._recheck_and_score_stable(prepared, stable)
@@ -5573,16 +6065,40 @@ class RemoteGrasp6DNode:
         )
         moveit_funnel = selection.funnel.to_dict()
         preview_count = 0
+        promotion_count = 0
+        promotion_proposal = None
         status = 'NO_REACHABLE_STABLE_CANDIDATE'
         if selection.selected is not None:
-            self._publish_selected_preview(selection.selected)
+            promotion_proposal = self._publish_selected_preview(
+                selection.selected
+            )
             preview_count = 1
             status = 'PREVIEW_READY'
+        promotion_decision = None
+        if (
+            isinstance(promotion_proposal, dict)
+            and isinstance(prepared, PreparedPrediction)
+        ):
+            funnel, promotion_decision = (
+                self._finalize_promotion_transaction(
+                    prepared,
+                    selection,
+                    promotion_proposal,
+                    local_funnel,
+                    moveit_funnel,
+                    len(stable),
+                    status,
+                    base_audit_report,
+                )
+            )
+            return {'status': status, 'funnel': funnel}
+
         funnel = self._merge_pipeline_funnel(
             local_funnel,
             moveit_funnel,
             stable_count=len(stable),
             preview_count=preview_count,
+            promotion_count=promotion_count,
         )
         primary = funnel.get('primary_failure')
         if preview_count == 0 and primary:
@@ -5595,7 +6111,17 @@ class RemoteGrasp6DNode:
                 funnel,
                 status,
                 base_report=base_audit_report,
+                lifecycle_commit_callback=(
+                    (lambda: self._observe_execution_candidate_invalid(
+                        ticket=ticket
+                    ))
+                    if preview_count == 0
+                    else None
+                ),
+                promotion_decision=promotion_decision,
             )
+        elif preview_count == 0:
+            self._observe_execution_candidate_invalid(ticket=ticket)
         return {'status': status, 'funnel': funnel}
 
     def shutdown_streaming_worker(self, timeout_sec=2.0):
@@ -5908,6 +6434,24 @@ class RemoteGrasp6DNode:
         if publisher is not None:
             publisher.publish(String(message))
         return TriggerZeroResponse(True, message)
+
+    def replan_execution_cb(self, req):
+        """Request a future idle Preview promotion; never control inference."""
+
+        if type(getattr(req, 'trigger', None)) is not bool or not req.trigger:
+            return TriggerZeroResponse(
+                False,
+                'replan_execution requires trigger=true',
+            )
+        with self._geometry_state_guard():
+            decision = self._promotion_controller().request_replan(
+                robot_active=bool(
+                    getattr(self, 'robot_execution_active', False)
+                )
+            )
+            self._latest_promotion_decision = decision
+        success = decision.code == 'REPLAN_REQUESTED'
+        return TriggerZeroResponse(success, decision.reason)
 
     def _process_latest_frame(self):
         if rospy.Time.now() < self._backoff_until:
@@ -8806,6 +9350,7 @@ class RemoteGrasp6DNode:
         report,
         ticket=None,
         commit_callback=None,
+        replace_reference_sha256=None,
     ):
         path, mujoco_path = validate_distinct_audit_paths(
             validate_mandatory_planning_audit(
@@ -8846,8 +9391,28 @@ class RemoteGrasp6DNode:
                 'row_count': int(
                     len(list(report.get('rows', []) or []))
                 ),
+                'atomic_committed': True,
             }
-            if ticket is None:
+            replacement_sha256 = str(replace_reference_sha256 or '')
+            if replacement_sha256:
+                with self._stream_condition:
+                    current_sha256 = str(
+                        dict(
+                            getattr(
+                                self,
+                                '_latest_gate_audit_reference',
+                                {},
+                            )
+                            or {}
+                        ).get('report_sha256', '')
+                        or ''
+                    )
+                    if current_sha256 != replacement_sha256:
+                        raise StreamResultCancelled('AUDIT_SUPERSEDED')
+                    os.replace(temporary_path, path)
+                    if commit_callback is not None:
+                        commit_callback(reference)
+            elif ticket is None:
                 os.replace(temporary_path, path)
                 if commit_callback is not None:
                     commit_callback(reference)

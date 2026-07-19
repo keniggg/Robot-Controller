@@ -22,6 +22,7 @@ _SAFETY_POSITION_TOLERANCE_M = 1e-8
 _SAFETY_DIRECTION_TOLERANCE = 1e-8
 _SAFETY_WIDTH_TOLERANCE_M = 1e-9
 _UNIT_NORM_TOLERANCE = 1e-6
+_HYSTERESIS_SCORE_EPSILON = 1e-12
 
 
 def _strict_true(value):
@@ -1054,3 +1055,308 @@ def bounded_moveit_select(candidates, checker, top_n=5):
         funnel=funnel,
         configured_top_n=configured_top_n,
     )
+
+
+def _nonnegative_finite(value, name):
+    converted = _finite_float(value)
+    if converted is None or converted < 0.0:
+        raise ValueError('{} must be finite and non-negative'.format(name))
+    return converted
+
+
+def _positive_integer(value, name):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, np.integer)
+    ):
+        raise ValueError('{} must be a positive integer'.format(name))
+    converted = int(value)
+    if converted <= 0:
+        raise ValueError('{} must be a positive integer'.format(name))
+    return converted
+
+
+def _execution_signature(value):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError('execution signature must be a non-empty string')
+    return value.strip()
+
+
+def _execution_plan_id(value):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError('execution plan_id must be a non-empty string')
+    return value.strip()
+
+
+def _robot_active(value):
+    if type(value) is not bool:
+        raise ValueError('robot_active must be a bool')
+    return value
+
+
+@dataclass(frozen=True)
+class PromotionDecision:
+    """One pure lifecycle decision; it never carries a ROS message."""
+
+    promote: bool
+    code: str
+    reason: str
+    invalidate: bool = False
+
+    def __post_init__(self):
+        if type(self.promote) is not bool or type(self.invalidate) is not bool:
+            raise ValueError('promotion flags must be bool values')
+        if not isinstance(self.code, str) or not self.code:
+            raise ValueError('promotion code must be a non-empty string')
+        if not isinstance(self.reason, str):
+            raise ValueError('promotion reason must be a string')
+
+
+class ExecutionPlanController:
+    """Pure Preview-to-Execution promotion policy.
+
+    Lower scores are better.  The controller stores only immutable scalar
+    lifecycle facts; ROS messages remain owned by the node publication layer.
+    A positive decision is provisional until ``commit_execution`` is called
+    after both execution-authority topics have been published successfully.
+    """
+
+    def __init__(
+        self,
+        replan_cooldown_sec=1.0,
+        selection_hysteresis_ratio=0.12,
+        candidate_consecutive_invalidations=2,
+        replan_position_delta_m=0.012,
+        replan_orientation_delta_deg=12.0,
+        replan_target_drift_m=0.025,
+    ):
+        self.replan_cooldown_sec = _nonnegative_finite(
+            replan_cooldown_sec, 'replan_cooldown_sec'
+        )
+        self.selection_hysteresis_ratio = _nonnegative_finite(
+            selection_hysteresis_ratio, 'selection_hysteresis_ratio'
+        )
+        self.candidate_consecutive_invalidations = _positive_integer(
+            candidate_consecutive_invalidations,
+            'candidate_consecutive_invalidations',
+        )
+        self.replan_position_delta_m = _nonnegative_finite(
+            replan_position_delta_m, 'replan_position_delta_m'
+        )
+        self.replan_orientation_delta_deg = _nonnegative_finite(
+            replan_orientation_delta_deg,
+            'replan_orientation_delta_deg',
+        )
+        self.replan_target_drift_m = _nonnegative_finite(
+            replan_target_drift_m, 'replan_target_drift_m'
+        )
+        self.execution_plan_id = None
+        self.execution_signature = None
+        self.execution_score = None
+        self.last_promotion_sec = None
+        self.invalid_streak = 0
+        self.explicit_replan_requested = False
+        self._drift_replan_requested = False
+
+    @staticmethod
+    def _decision(promote, code, reason, invalidate=False):
+        return PromotionDecision(
+            promote=promote,
+            code=code,
+            reason=reason,
+            invalidate=invalidate,
+        )
+
+    @property
+    def has_execution(self):
+        return self.execution_plan_id is not None
+
+    @property
+    def replacement_authorized(self):
+        return bool(
+            self.explicit_replan_requested
+            or self._drift_replan_requested
+            or self.invalid_streak
+            >= self.candidate_consecutive_invalidations
+        )
+
+    def observe_preview(self, signature, score, now_sec, robot_active):
+        signature = _execution_signature(signature)
+        score = _required_finite(score, 'score')
+        now_sec = _nonnegative_finite(now_sec, 'now_sec')
+        robot_active = _robot_active(robot_active)
+        if robot_active:
+            return self._decision(
+                False,
+                'EXECUTION_FROZEN',
+                'robot execution is active',
+            )
+        if not self.has_execution:
+            return self._decision(
+                True,
+                'PROMOTE_INITIAL',
+                'no valid execution plan exists',
+            )
+
+        if (
+            signature == self.execution_signature
+            and not self.explicit_replan_requested
+            and not self._drift_replan_requested
+        ):
+            self.invalid_streak = 0
+        if not self.replacement_authorized:
+            return self._decision(
+                False,
+                'EXECUTION_HELD',
+                'a valid execution plan already exists',
+            )
+
+        elapsed = now_sec - self.last_promotion_sec
+        if elapsed < self.replan_cooldown_sec:
+            return self._decision(
+                False,
+                'REPLAN_COOLDOWN',
+                'execution-plan promotion cooldown has not elapsed',
+            )
+
+        required_improvement = self.selection_hysteresis_ratio * max(
+            abs(self.execution_score), _HYSTERESIS_SCORE_EPSILON
+        )
+        required_score = self.execution_score - required_improvement
+        if score > required_score:
+            return self._decision(
+                False,
+                'REPLAN_HYSTERESIS',
+                'preview score does not improve enough to replace execution',
+            )
+        return self._decision(
+            True,
+            'PROMOTE_REPLAN',
+            'authorized preview satisfies cooldown and hysteresis',
+        )
+
+    def observe_invalid(self, now_sec, robot_active=False):
+        _nonnegative_finite(now_sec, 'now_sec')
+        robot_active = _robot_active(robot_active)
+        if not self.has_execution:
+            return self._decision(
+                False,
+                'NO_EXECUTION',
+                'no execution plan exists to invalidate',
+            )
+        self.invalid_streak += 1
+        invalidated = (
+            self.invalid_streak
+            >= self.candidate_consecutive_invalidations
+        )
+        if robot_active:
+            return self._decision(
+                False,
+                'EXECUTION_FROZEN',
+                'robot execution is active',
+                invalidate=invalidated,
+            )
+        if invalidated:
+            return self._decision(
+                False,
+                'EXECUTION_INVALIDATED',
+                'execution candidate failed consecutively',
+                invalidate=True,
+            )
+        return self._decision(
+            False,
+            'EXECUTION_INVALID_PENDING',
+            'execution candidate has not reached the invalidation threshold',
+        )
+
+    def observe_drift(
+        self,
+        *,
+        position_delta_m=0.0,
+        orientation_delta_deg=0.0,
+        target_drift_m=0.0,
+        now_sec,
+        robot_active=False
+    ):
+        position_delta_m = _nonnegative_finite(
+            position_delta_m, 'position_delta_m'
+        )
+        orientation_delta_deg = _nonnegative_finite(
+            orientation_delta_deg, 'orientation_delta_deg'
+        )
+        target_drift_m = _nonnegative_finite(
+            target_drift_m, 'target_drift_m'
+        )
+        _nonnegative_finite(now_sec, 'now_sec')
+        robot_active = _robot_active(robot_active)
+        if not self.has_execution:
+            return self._decision(
+                False,
+                'NO_EXECUTION',
+                'no execution plan exists to compare for drift',
+            )
+        exceeded = bool(
+            position_delta_m > self.replan_position_delta_m
+            or orientation_delta_deg > self.replan_orientation_delta_deg
+            or target_drift_m > self.replan_target_drift_m
+        )
+        if not exceeded:
+            self._drift_replan_requested = False
+            return self._decision(
+                False,
+                'DRIFT_WITHIN_LIMIT',
+                'preview and target drift remain within replan thresholds',
+            )
+        self.invalid_streak = max(
+            self.invalid_streak,
+            self.candidate_consecutive_invalidations,
+        )
+        self._drift_replan_requested = True
+        if robot_active:
+            return self._decision(
+                False,
+                'EXECUTION_FROZEN',
+                'robot execution is active',
+                invalidate=True,
+            )
+        return self._decision(
+            False,
+            'EXECUTION_DRIFTED',
+            'preview or target drift exceeded a replan threshold',
+            invalidate=True,
+        )
+
+    def request_replan(self, robot_active):
+        robot_active = _robot_active(robot_active)
+        if robot_active:
+            return self._decision(
+                False,
+                'EXECUTION_FROZEN',
+                'robot execution is active',
+            )
+        self.explicit_replan_requested = True
+        return self._decision(
+            False,
+            'REPLAN_REQUESTED',
+            'explicit execution replan requested',
+        )
+
+    def commit_execution(self, plan_id, signature, score, now_sec):
+        plan_id = _execution_plan_id(plan_id)
+        signature = _execution_signature(signature)
+        score = _required_finite(score, 'score')
+        now_sec = _nonnegative_finite(now_sec, 'now_sec')
+        self.execution_plan_id = plan_id
+        self.execution_signature = signature
+        self.execution_score = score
+        self.last_promotion_sec = now_sec
+        self.invalid_streak = 0
+        self.explicit_replan_requested = False
+        self._drift_replan_requested = False
+
+    def clear_execution(self):
+        self.execution_plan_id = None
+        self.execution_signature = None
+        self.execution_score = None
+        self.invalid_streak = 0
+        self.explicit_replan_requested = False
+        self._drift_replan_requested = False

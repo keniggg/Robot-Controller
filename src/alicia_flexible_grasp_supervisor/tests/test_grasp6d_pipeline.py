@@ -15,7 +15,9 @@ for path in (ROOT, ROOT / 'src'):
 
 from alicia_flexible_grasp.grasp.grasp6d_pipeline import (  # noqa: E402
     CandidateStageFunnel,
+    ExecutionPlanController,
     MoveItResult,
+    PromotionDecision,
     SafetyGateInput,
     ScoredStableCandidate,
     SoftCandidateFeatures,
@@ -1375,3 +1377,292 @@ def test_candidates_outside_top_n_are_not_mislabeled_as_hard_rejections():
         'passed': 3,
         'rejected': 5,
     }
+
+
+def execution_controller(**overrides):
+    values = {
+        'replan_cooldown_sec': 1.0,
+        'selection_hysteresis_ratio': 0.12,
+        'candidate_consecutive_invalidations': 2,
+        'replan_position_delta_m': 0.012,
+        'replan_orientation_delta_deg': 12.0,
+        'replan_target_drift_m': 0.025,
+    }
+    values.update(overrides)
+    return ExecutionPlanController(**values)
+
+
+def committed_execution_controller(score=1.0, now_sec=1.0):
+    controller = execution_controller()
+    controller.commit_execution(
+        'plan-A', 'candidate-A', score=score, now_sec=now_sec
+    )
+    return controller
+
+
+def test_first_idle_preview_can_be_promoted_without_existing_execution():
+    controller = execution_controller()
+
+    decision = controller.observe_preview(
+        'candidate-A', score=1.0, now_sec=1.0, robot_active=False
+    )
+
+    assert decision == PromotionDecision(
+        promote=True,
+        code='PROMOTE_INITIAL',
+        reason='no valid execution plan exists',
+    )
+    assert controller.execution_plan_id is None
+
+
+def test_preview_updates_do_not_replace_valid_execution_plan():
+    controller = committed_execution_controller()
+
+    decision = controller.observe_preview(
+        'candidate-B', score=0.5, now_sec=3.0, robot_active=False
+    )
+
+    assert decision.promote is False
+    assert decision.code == 'EXECUTION_HELD'
+    assert controller.execution_plan_id == 'plan-A'
+    assert controller.execution_signature == 'candidate-A'
+
+
+def test_execution_active_freezes_plan_against_new_preview():
+    controller = committed_execution_controller()
+
+    decision = controller.observe_preview(
+        'candidate-B', score=0.5, now_sec=3.0, robot_active=True
+    )
+
+    assert decision.promote is False
+    assert decision.code == 'EXECUTION_FROZEN'
+    assert controller.execution_plan_id == 'plan-A'
+
+
+def test_consecutive_invalid_cooldown_and_hysteresis_control_replan():
+    controller = committed_execution_controller(score=1.0)
+
+    first = controller.observe_invalid(now_sec=1.1, robot_active=False)
+    second = controller.observe_invalid(now_sec=1.2, robot_active=False)
+    cooldown = controller.observe_preview(
+        'candidate-B', score=0.70, now_sec=1.5, robot_active=False
+    )
+    hysteresis = controller.observe_preview(
+        'candidate-B', score=0.95, now_sec=2.3, robot_active=False
+    )
+    promoted = controller.observe_preview(
+        'candidate-B', score=0.70, now_sec=2.3, robot_active=False
+    )
+
+    assert first.invalidate is False
+    assert first.code == 'EXECUTION_INVALID_PENDING'
+    assert second.invalidate is True
+    assert second.code == 'EXECUTION_INVALIDATED'
+    assert cooldown.code == 'REPLAN_COOLDOWN'
+    assert hysteresis.code == 'REPLAN_HYSTERESIS'
+    assert promoted.promote is True
+    assert promoted.code == 'PROMOTE_REPLAN'
+    assert controller.execution_plan_id == 'plan-A'
+
+
+def test_same_execution_signature_recovery_clears_confirmed_invalidity():
+    controller = committed_execution_controller(score=1.0)
+    controller.observe_invalid(now_sec=1.1, robot_active=False)
+    controller.observe_invalid(now_sec=1.2, robot_active=False)
+
+    recovered = controller.observe_preview(
+        'candidate-A', score=0.5, now_sec=3.0, robot_active=False
+    )
+
+    assert recovered.promote is False
+    assert recovered.code == 'EXECUTION_HELD'
+    assert controller.invalid_streak == 0
+    assert controller.replacement_authorized is False
+
+
+def test_relative_hysteresis_is_correct_for_negative_costs():
+    controller = committed_execution_controller(score=-2.0)
+    controller.observe_invalid(now_sec=2.1, robot_active=False)
+    controller.observe_invalid(now_sec=2.2, robot_active=False)
+
+    insufficient = controller.observe_preview(
+        'candidate-B', score=-2.10, now_sec=3.0, robot_active=False
+    )
+    sufficient = controller.observe_preview(
+        'candidate-B', score=-2.25, now_sec=3.0, robot_active=False
+    )
+
+    assert insufficient.code == 'REPLAN_HYSTERESIS'
+    assert sufficient.promote is True
+
+
+def test_explicit_replan_is_rejected_while_active_and_allowed_while_idle():
+    controller = committed_execution_controller(score=1.0)
+
+    rejected = controller.request_replan(robot_active=True)
+    assert controller.explicit_replan_requested is False
+    held = controller.observe_preview(
+        'candidate-B', score=0.5, now_sec=3.0, robot_active=False
+    )
+    accepted = controller.request_replan(robot_active=False)
+    promoted = controller.observe_preview(
+        'candidate-B', score=0.5, now_sec=3.0, robot_active=False
+    )
+
+    assert rejected.code == 'EXECUTION_FROZEN'
+    assert controller.explicit_replan_requested is True
+    assert held.code == 'EXECUTION_HELD'
+    assert accepted.code == 'REPLAN_REQUESTED'
+    assert promoted.promote is True
+
+
+def test_explicit_replan_can_replan_same_signature_when_score_improves():
+    controller = committed_execution_controller(score=1.0)
+    controller.request_replan(robot_active=False)
+
+    promoted = controller.observe_preview(
+        'candidate-A', score=0.5, now_sec=3.0, robot_active=False
+    )
+
+    assert promoted.promote is True
+    assert promoted.code == 'PROMOTE_REPLAN'
+
+
+def test_position_orientation_and_target_drift_authorize_replan():
+    threshold_cases = (
+        {'position_delta_m': 0.013},
+        {'orientation_delta_deg': 12.1},
+        {'target_drift_m': 0.026},
+    )
+    for drift in threshold_cases:
+        controller = committed_execution_controller(score=1.0)
+        decision = controller.observe_drift(
+            now_sec=2.1,
+            robot_active=False,
+            position_delta_m=drift.get('position_delta_m', 0.0),
+            orientation_delta_deg=drift.get('orientation_delta_deg', 0.0),
+            target_drift_m=drift.get('target_drift_m', 0.0),
+        )
+        promoted = controller.observe_preview(
+            'candidate-B', score=0.5, now_sec=2.1, robot_active=False
+        )
+
+        assert decision.invalidate is True
+        assert decision.code == 'EXECUTION_DRIFTED'
+        assert promoted.promote is True
+
+
+def test_confirmed_drift_can_replan_same_target_signature():
+    controller = committed_execution_controller(score=1.0)
+
+    controller.observe_drift(
+        now_sec=2.1,
+        robot_active=False,
+        position_delta_m=0.013,
+    )
+    promoted = controller.observe_preview(
+        'candidate-A', score=0.5, now_sec=2.1, robot_active=False
+    )
+
+    assert promoted.promote is True
+    assert promoted.code == 'PROMOTE_REPLAN'
+
+
+def test_drift_recovery_clears_only_drift_replan_authorization():
+    controller = committed_execution_controller(score=1.0)
+    controller.observe_drift(
+        now_sec=2.0,
+        robot_active=False,
+        target_drift_m=0.026,
+    )
+
+    recovered_drift = controller.observe_drift(
+        now_sec=2.1,
+        robot_active=False,
+        target_drift_m=0.010,
+    )
+    held = controller.observe_preview(
+        'candidate-A', score=0.5, now_sec=2.1, robot_active=False
+    )
+
+    assert recovered_drift.code == 'DRIFT_WITHIN_LIMIT'
+    assert held.code == 'EXECUTION_HELD'
+    assert controller.replacement_authorized is False
+    assert controller.invalid_streak == 0
+
+
+def test_drift_recovery_does_not_clear_explicit_replan_request():
+    controller = committed_execution_controller(score=1.0)
+    controller.request_replan(robot_active=False)
+
+    controller.observe_drift(
+        now_sec=2.1,
+        robot_active=False,
+        target_drift_m=0.010,
+    )
+    promoted = controller.observe_preview(
+        'candidate-A', score=0.5, now_sec=2.1, robot_active=False
+    )
+
+    assert promoted.promote is True
+
+
+@pytest.mark.parametrize(
+    'field,bad_value',
+    [
+        ('replan_cooldown_sec', True),
+        ('replan_cooldown_sec', float('nan')),
+        ('selection_hysteresis_ratio', -0.1),
+        ('candidate_consecutive_invalidations', True),
+        ('candidate_consecutive_invalidations', 1.5),
+        ('candidate_consecutive_invalidations', 0),
+        ('replan_position_delta_m', float('inf')),
+        ('replan_orientation_delta_deg', -1.0),
+        ('replan_target_drift_m', False),
+    ],
+)
+def test_execution_controller_rejects_invalid_configuration(field, bad_value):
+    with pytest.raises(ValueError):
+        execution_controller(**{field: bad_value})
+
+
+@pytest.mark.parametrize(
+    'call',
+    [
+        lambda controller: controller.observe_preview(
+            '', score=1.0, now_sec=1.0, robot_active=False
+        ),
+        lambda controller: controller.observe_preview(
+            'candidate-A', score=True, now_sec=1.0, robot_active=False
+        ),
+        lambda controller: controller.observe_preview(
+            'candidate-A', score=1.0, now_sec=float('nan'), robot_active=False
+        ),
+        lambda controller: controller.observe_invalid(
+            now_sec=True, robot_active=False
+        ),
+        lambda controller: controller.observe_drift(
+            now_sec=1.0,
+            robot_active=False,
+            position_delta_m=float('nan'),
+        ),
+    ],
+)
+def test_execution_controller_rejects_invalid_runtime_values(call):
+    with pytest.raises(ValueError):
+        call(execution_controller())
+
+
+def test_execution_commit_validation_is_transactional():
+    controller = committed_execution_controller(score=1.0)
+
+    with pytest.raises(ValueError):
+        controller.commit_execution(
+            'plan-B', '', score=0.5, now_sec=3.0
+        )
+
+    assert controller.execution_plan_id == 'plan-A'
+    assert controller.execution_signature == 'candidate-A'
+    assert controller.execution_score == pytest.approx(1.0)
+    assert controller.last_promotion_sec == pytest.approx(1.0)
