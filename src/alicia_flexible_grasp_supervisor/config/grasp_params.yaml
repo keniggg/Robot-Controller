@@ -145,13 +145,12 @@ grasp_6d:
     mask_internal_hole_max_area_px: 25
     depth_mad_scale: 3.5
     depth_mad_absolute_floor_m: 0.002
-    # Pure-GraspNet input A/B switch. These modes only change the RGB-D points
-    # sent to the existing GraspNet server; they never synthesize OBB/top-down
-    # candidates. Keep masked_target as the production default until
-    # context_roi has passed live A/B acceptance. There is no automatic mode
-    # fallback. full_scene is permanently diagnostic-only and can never
-    # publish an executable plan.
-    graspnet_input_mode: "masked_target" # masked_target | context_roi | full_scene
+    # Pure-GraspNet input switch. context_roi keeps the segmented target plus
+    # nearby support-plane points so GraspNet retains local scene geometry;
+    # the mandatory target gate still restricts executable grasps to the
+    # selected instance. There is no automatic mode fallback. full_scene is
+    # permanently diagnostic-only and can never publish an executable plan.
+    graspnet_input_mode: "context_roi" # masked_target | context_roi | full_scene
     graspnet_input_context_margin_px: 24.0
     graspnet_input_context_expand_ratio: 0.30
     graspnet_input_context_max_margin_px: 64.0
