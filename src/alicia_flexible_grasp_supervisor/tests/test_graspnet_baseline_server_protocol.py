@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import builtins
 import collections.abc
+import contextlib
 import importlib.util
 import json
 import pathlib
@@ -10,6 +11,7 @@ import tempfile
 import types
 import unittest
 import urllib.request
+from unittest import mock
 
 import numpy as np
 
@@ -31,6 +33,106 @@ spec.loader.exec_module(server_module)
 
 
 class GraspNetBaselineServerProtocolTest(unittest.TestCase):
+    @staticmethod
+    def _valid_payload(request_id=1, snapshot_stamp_sec=123.25):
+        return encode_rgbd_payload(
+            np.zeros((4, 4, 3), dtype=np.uint8),
+            np.full((4, 4), 1000, dtype=np.uint16),
+            CameraIntrinsics(
+                width=4,
+                height=4,
+                fx=100.0,
+                fy=100.0,
+                cx=2.0,
+                cy=2.0,
+                depth_scale=0.001,
+            ),
+            request_id=request_id,
+            snapshot_stamp_sec=snapshot_stamp_sec,
+            max_candidates=3,
+        )
+
+    @staticmethod
+    def _loaded_fake_backend():
+        class FakeCuda:
+            def __init__(self):
+                self.empty_cache = mock.Mock()
+                self.synchronize = mock.Mock()
+                self.memory_allocated = mock.Mock(return_value=64 * 1024 * 1024)
+                self.memory_reserved = mock.Mock(return_value=96 * 1024 * 1024)
+                self.max_memory_allocated = mock.Mock(return_value=80 * 1024 * 1024)
+
+        class FakeTorch:
+            def __init__(self):
+                self.cuda = FakeCuda()
+
+            @staticmethod
+            def inference_mode():
+                return contextlib.nullcontext()
+
+        class FakePrediction:
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            @staticmethod
+            def numpy():
+                return np.asarray(
+                    [
+                        [
+                            0.9,
+                            0.04,
+                            0.02,
+                            0.03,
+                            1.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            0.1,
+                            0.2,
+                            0.3,
+                            -1.0,
+                        ]
+                    ],
+                    dtype=np.float32,
+                )
+
+        backend = server_module.GraspNetBaselineBackend(
+            '/tmp/baseline',
+            '/tmp/checkpoint',
+            device='cuda:0',
+            collision_thresh=-1.0,
+        )
+        fake_torch = FakeTorch()
+        backend.load_count = 0
+
+        def load_once():
+            if backend.loaded:
+                return backend
+            backend.load_count += 1
+            backend.torch = fake_torch
+            backend.device = 'cuda:0'
+            backend.collate_fn = lambda rows: {'rows': rows}
+            backend.net = mock.Mock(return_value={'end_points': True})
+            backend.pred_decode = lambda _end_points: [FakePrediction()]
+            backend.GraspGroup = server_module.FallbackGraspGroup
+            backend._build_model_input = lambda _decoded: (
+                {'point_clouds': np.zeros((4, 3), dtype=np.float32)},
+                np.zeros((4, 3), dtype=np.float32),
+            )
+            backend.loaded = True
+            return backend
+
+        backend.load = load_once
+        return backend, fake_torch
+
     def test_installs_torch_six_compat_for_pytorch_2_baseline_imports(self):
         previous = sys.modules.pop('torch._six', None)
         try:
@@ -58,7 +160,7 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
             health = self._json_get(base_url + '/health')
             self.assertTrue(health['ok'])
             self.assertEqual(health['backend'], 'mock')
-            self.assertEqual(health['protocol_version'], 2)
+            self.assertEqual(health['protocol_version'], 3)
             self.assertIn('depth_m', health['candidate_fields'])
             self.assertIn('height_m', health['candidate_fields'])
 
@@ -66,6 +168,8 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
                 np.zeros((4, 4, 3), dtype=np.uint8),
                 np.full((4, 4), 1000, dtype=np.uint16),
                 CameraIntrinsics(width=4, height=4, fx=100.0, fy=100.0, cx=2.0, cy=2.0, depth_scale=0.001),
+                request_id=7,
+                snapshot_stamp_sec=123.25,
                 max_candidates=3,
             )
             response = self._json_post(base_url + '/predict', payload)
@@ -75,12 +179,131 @@ class GraspNetBaselineServerProtocolTest(unittest.TestCase):
             thread.join(timeout=2.0)
 
         self.assertTrue(response['ok'])
-        self.assertEqual(response['protocol_version'], 2)
+        self.assertEqual(response['protocol_version'], 3)
+        self.assertEqual(response['request_id'], 7)
+        self.assertEqual(response['snapshot_stamp_sec'], 123.25)
+        for field in (
+            'server_receive_sec',
+            'server_send_sec',
+            'preprocess_ms',
+            'inference_ms',
+            'postprocess_ms',
+            'server_total_ms',
+            'gpu_allocated_mb',
+            'gpu_reserved_mb',
+            'gpu_peak_allocated_mb',
+        ):
+            self.assertGreaterEqual(response[field], 0.0)
         self.assertEqual(len(response['candidates']), 1)
         self.assertIn('height_m', response['candidates'][0])
         self.assertIn('depth_m', response['candidates'][0])
         self.assertIn('translation_m', response['candidates'][0])
         self.assertIn('rotation_matrix', response['candidates'][0])
+
+    def test_standalone_server_fails_closed_on_incomplete_batch_performance(self):
+        class IncompleteBatchBackend:
+            name = 'incomplete_batch'
+
+            @staticmethod
+            def predict_batch(payload):
+                return server_module.PredictionBatch(
+                    request_id=payload['request_id'],
+                    snapshot_stamp_sec=payload['snapshot_stamp_sec'],
+                    candidates=(),
+                    diagnostics={},
+                    performance={},
+                )
+
+        server = server_module.make_server('127.0.0.1', 0, IncompleteBatchBackend())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            response = self._json_post(
+                'http://127.0.0.1:%d/predict' % server.server_port,
+                self._valid_payload(request_id=8),
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2.0)
+
+        self.assertFalse(response['ok'])
+        self.assertEqual(response['request_id'], 8)
+        self.assertEqual(response['snapshot_stamp_sec'], 123.25)
+        self.assertIn('server_receive_sec', response['error'])
+        for field in server_module.PERFORMANCE_FIELDS:
+            self.assertEqual(response[field], 0.0)
+
+    def test_backend_loads_once_and_normal_predict_never_empties_cuda_cache(self):
+        backend, fake_torch = self._loaded_fake_backend()
+
+        backend.predict_batch(self._valid_payload(request_id=1))
+        backend.predict_batch(self._valid_payload(request_id=2))
+
+        self.assertEqual(backend.load_count, 1)
+        self.assertEqual(fake_torch.cuda.empty_cache.call_count, 0)
+        self.assertEqual(backend.net.call_count, 2)
+
+    def test_cuda_oom_rejects_request_then_clears_allocator_cache(self):
+        backend, fake_torch = self._loaded_fake_backend()
+        backend.load()
+
+        class FakeCudaOutOfMemoryError(RuntimeError):
+            pass
+
+        fake_torch.OutOfMemoryError = FakeCudaOutOfMemoryError
+        backend.net.side_effect = FakeCudaOutOfMemoryError('synthetic cuda oom')
+
+        with self.assertRaisesRegex(FakeCudaOutOfMemoryError, 'synthetic cuda oom'):
+            backend.predict_batch(self._valid_payload(request_id=3))
+
+        self.assertEqual(fake_torch.cuda.empty_cache.call_count, 1)
+
+    def test_prediction_batch_has_correlated_timing_and_gpu_memory(self):
+        backend, _fake_torch = self._loaded_fake_backend()
+
+        batch = backend.predict_batch(self._valid_payload(request_id=7))
+
+        self.assertIsInstance(batch, server_module.PredictionBatch)
+        self.assertEqual(batch.request_id, 7)
+        self.assertEqual(batch.snapshot_stamp_sec, 123.25)
+        self.assertEqual(len(batch.candidates), 1)
+        for field in (
+            'server_receive_sec',
+            'server_send_sec',
+            'preprocess_ms',
+            'inference_ms',
+            'postprocess_ms',
+            'server_total_ms',
+            'gpu_allocated_mb',
+            'gpu_reserved_mb',
+            'gpu_peak_allocated_mb',
+        ):
+            self.assertTrue(np.isfinite(batch.performance[field]))
+            self.assertGreaterEqual(batch.performance[field], 0.0)
+        self.assertEqual(batch.performance['gpu_allocated_mb'], 64.0)
+        self.assertEqual(batch.performance['gpu_reserved_mb'], 96.0)
+        self.assertEqual(batch.performance['gpu_peak_allocated_mb'], 80.0)
+
+    def test_empty_after_nms_skips_collision_detector(self):
+        backend, _fake_torch = self._loaded_fake_backend()
+        backend.load()
+
+        class EmptyAfterNmsGroup(server_module.FallbackGraspGroup):
+            def nms(self, translation_thresh=0.03, rotation_thresh=np.deg2rad(30.0)):
+                self.grasp_group_array = np.zeros((0, 17), dtype=np.float32)
+                return self
+
+        backend.GraspGroup = EmptyAfterNmsGroup
+        backend.collision_thresh = 0.01
+        backend.ModelFreeCollisionDetector = mock.Mock(
+            side_effect=AssertionError('collision detector must not receive an empty group')
+        )
+
+        batch = backend.predict_batch(self._valid_payload(request_id=9))
+
+        self.assertEqual(batch.candidates, ())
+        backend.ModelFreeCollisionDetector.assert_not_called()
 
     def test_baseline_backend_installs_legacy_baseline_import_paths(self):
         original_path = list(sys.path)

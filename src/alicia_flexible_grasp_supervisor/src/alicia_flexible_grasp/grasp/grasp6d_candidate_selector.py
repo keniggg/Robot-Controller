@@ -15,10 +15,34 @@ class Grasp6DCandidate:
 
 
 def select_best_grasp6d_candidate(candidates: Sequence[Grasp6DCandidate], tactile_weight=0.2):
-    valid = [candidate for candidate in candidates if candidate.collision_free and candidate.reachable]
-    if not valid:
-        return None
-    return max(valid, key=lambda candidate: _combined_score(candidate, tactile_weight))
+    ranked = rank_grasp6d_candidates_for_strict_check(
+        candidates, tactile_weight=tactile_weight
+    )
+    return next(
+        (candidate for candidate in ranked if candidate.reachable is True),
+        None,
+    )
+
+
+def rank_grasp6d_candidates_for_strict_check(candidates, tactile_weight=0.2):
+    """Soft-rank collision-free candidates before strict reachability.
+
+    ``reachable`` is deliberately ignored here: the expensive strict checker
+    belongs after stable-candidate ranking and the bounded Top-N slice.
+    """
+
+    eligible = [
+        (index, candidate)
+        for index, candidate in enumerate(candidates)
+        if candidate.collision_free is True
+    ]
+    eligible.sort(
+        key=lambda item: (
+            -_combined_score(item[1], tactile_weight),
+            item[0],
+        )
+    )
+    return tuple(candidate for _index, candidate in eligible)
 
 
 def _combined_score(candidate, tactile_weight):

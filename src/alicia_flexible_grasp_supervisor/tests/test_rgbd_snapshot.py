@@ -72,6 +72,234 @@ def synchronized_buffer_at(source_now_ns, monotonic_clock=None):
     )
 
 
+def add_complete_sample(buffer, stamp):
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, stamp, 'camera_link')
+    buffer.update_depth(depth, stamp, 'camera_link')
+    buffer.update_mask(mask, stamp, 'camera_link')
+    buffer.update_object(detected, stamp)
+
+
+def add_identity_bound_sample(buffer, stamp, target_identity):
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        label=target_identity[1],
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, stamp, 'camera_link')
+    buffer.update_depth(depth, stamp, 'camera_link')
+    buffer.update_mask(mask, stamp, 'camera_link')
+    buffer.update_object(
+        detected,
+        stamp,
+        target_epoch=target_identity[0],
+        target_identity=target_identity,
+    )
+
+
+def test_zero_timeout_polls_accumulate_low_rate_exact_samples_persistently():
+    source_now_ns = [10_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    identity = (3, 'carton', 'carton_segment')
+
+    for index, stamp_ns in enumerate(
+        (10_000_000_000, 10_670_000_000, 11_340_000_000)
+    ):
+        source_now_ns[0] = stamp_ns
+        monotonic_now[0] = 10.0 + 0.67 * index
+        add_identity_bound_sample(buffer, stamp_ns * 1e-9, identity)
+        samples = buffer.wait_for_samples(
+            3,
+            0.0,
+            require_mask=True,
+            max_age_sec=0.35,
+            collection_span_sec=3.0,
+            max_inference_latency_sec=1.2,
+            target_identity=identity,
+        )
+
+    assert [item.stamp_ns for item in samples] == [
+        10_000_000_000,
+        10_670_000_000,
+        11_340_000_000,
+    ]
+    assert all(item.target_identity == identity for item in samples)
+
+
+def test_persistent_window_never_mixes_target_identity_epochs():
+    source_now_ns = [20_000_000_000]
+    monotonic_now = [20.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    old_identity = (7, 'carton', 'carton_segment')
+    new_identity = (8, 'carton', 'carton_segment')
+
+    for index, identity in enumerate(
+        (old_identity, old_identity, new_identity, new_identity)
+    ):
+        stamp_ns = 20_000_000_000 + index * 400_000_000
+        source_now_ns[0] = stamp_ns
+        monotonic_now[0] = 20.0 + index * 0.4
+        add_identity_bound_sample(buffer, stamp_ns * 1e-9, identity)
+        requested_identity = old_identity if index < 2 else new_identity
+        samples = buffer.wait_for_samples(
+            3,
+            0.0,
+            require_mask=True,
+            max_age_sec=0.35,
+            collection_span_sec=3.0,
+            max_inference_latency_sec=1.2,
+            target_identity=requested_identity,
+        )
+        assert samples == []
+
+    stamp_ns = 21_600_000_000
+    source_now_ns[0] = stamp_ns
+    monotonic_now[0] = 21.6
+    add_identity_bound_sample(buffer, stamp_ns * 1e-9, new_identity)
+    samples = buffer.wait_for_samples(
+        3,
+        0.0,
+        require_mask=True,
+        max_age_sec=0.35,
+        collection_span_sec=3.0,
+        max_inference_latency_sec=1.2,
+        target_identity=new_identity,
+    )
+
+    assert [item.target_identity for item in samples] == [new_identity] * 3
+    assert list(buffer._collection_windows) == [(True, new_identity)]
+    assert [item.stamp_ns for item in samples] == [
+        20_800_000_000,
+        21_200_000_000,
+        21_600_000_000,
+    ]
+
+
+def test_explicit_identity_mask_mode_switch_keeps_only_current_window_key():
+    buffer = synchronized_buffer_at(30_000_000_000)
+    identity = (9, 'carton', 'carton_segment')
+    add_identity_bound_sample(buffer, 30.0, identity)
+
+    assert len(
+        buffer.wait_for_samples(
+            1,
+            0.0,
+            require_mask=True,
+            max_age_sec=1.0,
+            collection_span_sec=3.0,
+            target_identity=identity,
+        )
+    ) == 1
+    assert list(buffer._collection_windows) == [(True, identity)]
+
+    assert len(
+        buffer.wait_for_samples(
+            1,
+            0.0,
+            require_mask=False,
+            max_age_sec=1.0,
+            collection_span_sec=3.0,
+            target_identity=identity,
+        )
+    ) == 1
+    assert list(buffer._collection_windows) == [(False, identity)]
+
+
+def test_persistent_window_caps_one_hundred_720p_frame_equivalents_to_count():
+    source_now_ns = [40_000_000_000]
+    monotonic_now = [40.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    identity = (10, 'carton', 'carton_segment')
+    requested_count = 3
+    for index in range(100):
+        stamp_ns = 40_000_000_000 + index * 100_000_000
+        source_now_ns[0] = stamp_ns
+        monotonic_now[0] = 40.0 + index * 0.1
+        add_identity_bound_sample(buffer, stamp_ns * 1e-9, identity)
+        buffer.wait_for_samples(
+            requested_count,
+            0.0,
+            require_mask=True,
+            max_age_sec=0.35,
+            collection_span_sec=20.0,
+            max_inference_latency_sec=1.2,
+            target_identity=identity,
+        )
+
+    assert list(buffer._collection_windows) == [(True, identity)]
+    retained = buffer._collection_windows[(True, identity)]
+    bytes_per_720p_rgb_depth_mask = 720 * 1280 * (3 + 2 + 1)
+    retained_memory_proxy = (
+        len(retained) * bytes_per_720p_rgb_depth_mask
+    )
+    assert len(retained) <= requested_count
+    assert retained_memory_proxy <= (
+        requested_count * bytes_per_720p_rgb_depth_mask
+    )
+
+
+def test_persistent_window_materializes_only_newest_count_from_large_backlog():
+    source_now_ns = [70_000_000_000]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: 70.0,
+    )
+    identity = (11, 'carton', 'carton_segment')
+    for index in range(100):
+        stamp_ns = 60_000_000_000 + index * 100_000_000
+        source_now_ns[0] = stamp_ns
+        add_identity_bound_sample(buffer, stamp_ns * 1e-9, identity)
+    source_now_ns[0] = 70_000_000_000
+    original_sample_from_entry = buffer._sample_from_entry
+    materialized = []
+
+    def record_materialization(entry, require_mask):
+        materialized.append(entry['stamp_ns'])
+        return original_sample_from_entry(entry, require_mask)
+
+    buffer._sample_from_entry = record_materialization
+
+    samples = buffer.wait_for_samples(
+        3,
+        0.0,
+        require_mask=True,
+        max_age_sec=0.0,
+        collection_span_sec=20.0,
+        max_inference_latency_sec=20.0,
+        target_identity=identity,
+    )
+
+    assert len(samples) == 3
+    assert len(materialized) <= 3
+
+
 def test_mask_iou_uses_binary_overlap():
     first = np.zeros((4, 5), dtype=np.uint8)
     second = np.zeros((4, 5), dtype=np.uint8)
@@ -333,6 +561,37 @@ def test_direct_snapshot_result_construction_freezes_defensive_array_copies():
             result.object_mask,
         )
     )
+
+
+def test_wait_for_samples_requires_newest_stamp_after_previous_window():
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: 10_000_000_000,
+        monotonic_clock=lambda: 10.0,
+    )
+    for stamp in (9.1, 9.2, 9.3):
+        add_complete_sample(buffer, stamp)
+
+    first = buffer.wait_for_samples(
+        3, 0.01, True, 1.0, newest_after_ns=0,
+    )
+    repeated = buffer.wait_for_samples(
+        3,
+        0.01,
+        True,
+        1.0,
+        newest_after_ns=first[-1].stamp_ns,
+    )
+    add_complete_sample(buffer, 9.4)
+    advanced = buffer.wait_for_samples(
+        3,
+        0.01,
+        True,
+        1.0,
+        newest_after_ns=first[-1].stamp_ns,
+    )
+
+    assert repeated == []
+    assert [sample.stamp_sec for sample in advanced] == [9.2, 9.3, 9.4]
 
 
 def test_synchronized_buffer_requires_exact_timestamp_components_and_returns_copies():

@@ -57,8 +57,18 @@ export MUJOCO_ALICIA_MODEL_XML="$PWD/src/arm-mujoco/synriard/mjcf/Alicia_D_v5_6/
 ```
 
 WSL 环境需能导入 `mujoco>=3.2`、NumPy、SciPy，并具备既有 GraspNet 依赖、模型
-checkpoint 和 Alicia-D mesh。ROS 主机与 WSL 主机必须使用同步的墙上时钟；
-`snapshot_stamp_sec` 为零、位于未来或超过 2 秒都会被拒绝为 `PLAN_STALE`。
+checkpoint 和 Alicia-D mesh。`--warmup` 会在对外接受请求前加载一次官方 GraspNet
+baseline 及现有权重。同一 server 进程内模型、CUDA context 和 PyTorch allocator
+缓存应常驻 GPU；不得为每个 `/predict` 重新加载模型，也不得在正常请求后
+调用 `torch.cuda.empty_cache()`。当前实现只允许在确认 CUDA OOM 恢复路径中清理
+缓存；正常性应通过 `gpu_allocated_mb`、`gpu_reserved_mb` 和
+`gpu_peak_allocated_mb` 观测。
+
+ROS 主机与 WSL 主机必须使用同步的墙上时钟，并只接受
+`/predict` protocol version `3`。启动前在两端分别运行 `date +%s.%N`，并检查
+`timedatectl status`（如使用 chrony 再检查 `chronyc tracking`）。不应通过放宽
+过期阈值掩盖时钟偏差；`snapshot_stamp_sec` 为零、位于未来，或结果年龄超过
+`result_max_age_sec` 都会失效。
 
 以下服务不能授权真实机械臂：
 
@@ -190,19 +200,33 @@ mask 或旧计划。
 分割轮廓只显示在目标识别页，并且只有 mask 与当前目标 header 完全匹配时才绘制；
 普通相机页保持原始画面。detect profile 不伪造实例 mask。
 
-## 5. 一次点击与三帧稳定窗口
+## 5. 持续 latest-only 候选流水线
 
-默认 `/grasp_6d/remote/auto_request=false`。GUI 的“生成 6D 候选”一次点击只触发
-一次 `/grasp_6d/request_plan` 请求；该请求默认在最多 4 秒内收集三份精确同时间戳的
-RGB/depth/object 样本，segment 模式还要求对应 mask。时间安全门分成两个独立阶段：
-源帧到完整 RGB-D-mask-object 的推理流水线延迟不得超过
+默认 `/grasp_6d/remote/auto_request=false`。GUI 点击“生成 6D 候选”后向现有
+`/grasp_6d/request_plan` 发送 `trigger: true`，按钮改为“停止生成候选”，节点进入
+持续推理。再点击会向同一 service 发送 `trigger: false`，只停止新的候选推理。
+命令行等价操作为：
+
+```bash
+rosservice call /grasp_6d/request_plan "trigger: true"   # 启动持续候选
+rosservice call /grasp_6d/request_plan "trigger: false"  # 停止持续候选
+```
+
+GUI 现有“停止抓取”只调用 `/grasp/stop`，是机械臂执行急停，绝不用于推理
+状态控制。“停止生成候选”也不调用 `/grasp/stop`。启停推理不会清除已有的
+有效 Execution readiness；是否仍允许执行只由 Execution 富计划的完整性、新鲜度和
+后续安全门决定。
+
+调度器任何时刻最多允许一个 WSL 请求正在执行，以及一个待处理的最新
+快照。新快照覆盖旧的待处理快照；旧 generation、旧 request ID、目标 epoch 不匹配或
+返回时已超过 `result_max_age_sec=1.2` 秒的结果只记录 metrics，不得进入候选池。
+这个上界不能通过只提高 timer 频率来绕过。
+
+每个请求仍从滚动 RGB-D-mask-object 数据中组成稳定快照：segment 模式要求
+精确同时间戳的 RGB/depth/object/mask，detect 模式要求 RGB/depth/object。源帧到完整
+样本的推理流水线延迟不得超过
 `planning_snapshot_max_inference_latency_sec=1.2` 秒；样本完整后又必须在
-`planning_snapshot_max_age_sec=0.35` 秒内被当前请求采纳。已采纳样本只能在
-`planning_snapshot_max_span_sec=3.0` 秒的源时间戳跨度和请求内单调时间生命周期内
-累积。因此 1～2 Hz 的分割输出也能由一次点击组成三帧窗口，同时不会放行过度延迟、
-完成后陈旧、重放、未来或组件时间戳不一致的帧。请求采集器持有独立帧副本，共享同步
-缓冲区的 2 秒接收时间裁剪不会删除已准入帧；任何同时间戳组件在准入后再次变化都会使
-该帧在本次请求中失效。最终快照使用最新一帧的时间戳。三帧还需通过以下稳定性检查：
+`planning_snapshot_max_age_sec=0.35` 秒内采纳。三帧窗口还需通过：
 
 - mask IoU、质心漂移和关节变化；
 - mask 腐蚀、内部小孔处理、有效深度比例和 MAD 去异常值；
@@ -217,10 +241,51 @@ OpenCV-optical → ROS-`camera_link` 轴映射派生请求内只读的
 改成 `ros_camera_link` 会以 `CANDIDATE_FRAME_CONVENTION_INVALID` 在 WSL、MoveIt 前闭锁；
 配置项是合同断言，不是可切换的生产坐标模式。
 
-因此“一次点击”表示触发一个三帧采集/规划窗口，不表示一定生成成功。失败后上一条
-富计划已经失效；排除原因后需要重新点击，以新快照生成新 `plan_id`。
+连续返回的本地安全候选按目标实例、中心距离、姿态角距离、接近方向和开度进行
+跨帧匹配，平行夹爪的 tool-`Rz(180°)` 按物理等价姿态处理。初始合同固定为最近
+5 个不同请求至少命中 3 次，然后稳健融合位置、姿态和开度。只有稳定候选的
+前 `moveit_top_n=5` 个变体进入严格 MoveIt；生产参数只允许 3～10。
 
-### 5.1 纯 GraspNet 输入模式 A/B
+### 5.1 初始频率与分阶段提速
+
+首次实机验收使用 `request_hz=1.5`、`performance_window_size=100`。在相同场景、相同模型和
+相同缩放设置下收集至少 100 个 terminal metrics，同时记录端到端 P50/P95、过期率、
+替换率、稳定候选率和 GPU allocated/reserved/peak。只有这些指标稳定且没有隐藏
+积压时，才依次调为 `2.0`、`3.0`、`4.0`、`5.0` Hz；每一档都重新收集独立窗口。
+若 P95 接近/超过结果年龄上限、`expired`/`replaced` 比例上升、稳定率下降或
+`gpu_reserved_mb` 持续增长，立即回退上一档；不得只把定时触发频率调高后宣称
+吞吐已提升。
+
+初始生产值为：
+
+```yaml
+grasp_6d:
+  plan_validity_sec: 5.0
+  remote:
+    request_hz: 1.5
+    result_max_age_sec: 1.2
+    stability_window_size: 5
+    stability_min_hits: 3
+    tracking_position_threshold_m: 0.025
+    tracking_orientation_threshold_deg: 25.0
+    tracking_approach_threshold_deg: 20.0
+    tracking_width_threshold_m: 0.008
+    target_instance_association_threshold_m: 0.08
+    target_absolute_sanity_distance_m: 0.15
+    moveit_top_n: 5
+    replan_position_delta_m: 0.012
+    replan_orientation_delta_deg: 12.0
+    replan_target_drift_m: 0.025
+    replan_cooldown_sec: 1.0
+    selection_hysteresis_ratio: 0.12
+    candidate_consecutive_invalidations: 2
+    performance_window_size: 100
+```
+
+这些参数不改变 `/gripper/open_position_m=0.05` 等物理夹爪硬合同；不得为增加候选数
+放宽非法深度、TF、碰撞、关节限位或最大开度门。
+
+### 5.2 纯 GraspNet 输入模式 A/B
 
 `/grasp_6d/remote/graspnet_input_mode` 只改变送入同一个 GraspNet 的 RGB-D 点集，
 不会从目标 OBB、轮廓或支撑面人工合成俯抓/侧抓候选。远端返回的每个候选都保留原始
@@ -255,7 +320,8 @@ OpenCV-optical → ROS-`camera_link` 轴映射派生请求内只读的
 rosservice call /grasp_6d/request_plan "trigger: true"
 ```
 
-相机-only 阶段不要调用 `/grasp/start`。
+相机-only 阶段不要调用 `/grasp/start`，取得证据后运行
+`rosservice call /grasp_6d/request_plan "trigger: false"` 停止持续候选。
 
 ## 6. 诊断主题与命令
 
@@ -268,6 +334,9 @@ rostopic echo -n 1 /supervisor/camera/depth/image_raw/header
 rostopic echo -n 1 /grasp_6d/status
 rostopic echo -n 1 /grasp_6d/object_geometry
 rostopic echo -n 1 /grasp_6d/gate_audit
+rostopic echo -n 1 /grasp_6d/pipeline_metrics
+rostopic echo -n 1 /grasp_6d/preview_plan_enriched
+rostopic echo -n 1 /grasp_6d/preview_plan
 rostopic echo -n 1 /grasp_6d/plan_enriched
 rostopic echo -n 1 /grasp_6d/plan
 rostopic echo -n 1 /grasp/state
@@ -279,6 +348,9 @@ rostopic echo -n 1 /grasp/state
 - `valid_depth_points`、`valid_depth_ratio`、`depth_mad_m`、`fused_frames`；
 - `support_inlier_ratio`、目标点数和 OBB 三维尺寸；
 - WSL raw/NMS/collision/returned 候选数及本地逐级 gate counts；
+- 每个 request ID/generation/target epoch、snapshot stamp、WSL 分段耗时和端到端延迟；
+- 候选在目标匹配、几何、可见性、支撑面、稳定性、MoveIt 各阶段的剩余数；
+- 稳定拒绝码的计数/比例，以及全部失败时的 `primary_failure`；
 - GraspNet `center` 与 Alicia `tool0` 的 camera/base 坐标、depth 偏移及契约残差；
 - snapshot stamp/source frame、原始/规范候选坐标约定和冻结变换 SHA-256；
 - `candidate_width_m`、`required_open_width_m`、四阶段位姿和 `plan_id`；
@@ -309,12 +381,61 @@ identity / `Rz(180°)` 两行都必须包含候选合同、六阶段解析几何
 前闭锁。
 
 组合 WSL `/predict` 响应会同时给出 `protocol_version`、`candidate_fields`、候选数组和与
-数组分离的 `diagnostics`。ROS 客户端强制要求精确整数版本 `2`，以及有序字段
+数组分离的 `diagnostics`。ROS 客户端强制要求精确整数版本 `3`，以及有序字段
 `score,width_m,height_m,depth_m,translation_m,rotation_matrix`；缺失、旧版、增删或乱序
 均按远端协议失败。现场应保存 raw、NMS 后、碰撞过滤后和 returned 数量；这些诊断只用于
 审计，不得成为推理输入或改变候选。每次请求在网络前清空上一批诊断，传输失败不能沿用
 旧 evidence；整个响应（包括未知额外字段）必须是严格 JSON，隐藏的 NaN/Infinity 也会
 闭锁。畸形 JSON 或非法 Content-Length 必须返回结构完整的失败包络。
+
+`/grasp_6d/pipeline_metrics` 是有界 `std_msgs/String`，`data` 必须是
+`allow_nan=false`、紧凑且 key 排序的严格 JSON。下面只是字段/格式示例，数值不是
+RTX 4070 或实机实测结果：
+
+```json
+{"accepted":98,"busy":12,"completed":107,"decode_ms":2.1,"drop_reason":"","encode_ms":4.8,"end_to_end_ms":438.2,"event":"request_completed","expired":2,"failed":0,"generation":4,"gpu_allocated_mb":2350.0,"gpu_peak_allocated_mb":2610.0,"gpu_reserved_mb":2780.0,"latency_p50_ms":401.5,"latency_p95_ms":612.7,"pending_replacements":7,"primary_failure":null,"rejection_counts":{"TARGET_TOO_FAR":18},"rejection_ratios":{"TARGET_TOO_FAR":0.06},"replaced":7,"request_id":105,"result_age_ms":472.0,"ros_prepare_ms":19.6,"snapshot_stamp_sec":1784420000.125,"stage_counts":{"moveit_checked":{"entered":5,"passed":3,"rejected":2},"stable":{"entered":12,"passed":5,"rejected":7}},"stale":7,"started":100,"status":"PREVIEW_READY","submitted":107,"target_epoch":3,"transport_ms":31.4,"wsl_inference_ms":326.7,"wsl_postprocess_ms":42.0,"wsl_preprocess_ms":11.6,"wsl_total_ms":380.3}
+```
+
+`latency_p95_ms` 是最近 `performance_window_size=100` 个有限端到端样本的 95 分位；
+它不是 WSL 纯 inference 时间。性能日志应按运行批次保存原始 topic 和环境信息：
+
+```bash
+mkdir -p ~/.ros/grasp6d_perf
+rostopic echo /grasp_6d/pipeline_metrics | \
+  tee ~/.ros/grasp6d_perf/pipeline_metrics_$(date +%Y%m%d_%H%M%S).log
+nvidia-smi --query-gpu=timestamp,memory.used,memory.total,utilization.gpu \
+  --format=csv -l 1 | tee ~/.ros/grasp6d_perf/nvidia_smi_$(date +%Y%m%d_%H%M%S).csv
+```
+
+用下面的读取脚本连续检查“已提交但未 terminal”不超过 2，并确认忙时新快照体现为
+`replaced` 增长、过期/旧 generation 体现为 `expired`/`stale`，而不是 FIFO 队列不断增长：
+
+```bash
+python3 - <<'PY'
+import json
+import rospy
+from std_msgs.msg import String
+
+rospy.init_node('check_grasp6d_latest_only', anonymous=True)
+for _ in range(100):
+    metric = json.loads(rospy.wait_for_message(
+        '/grasp_6d/pipeline_metrics', String, timeout=10.0).data)
+    outstanding = metric['submitted'] - metric['completed']
+    assert 0 <= outstanding <= 2, metric
+    print(metric['request_id'], outstanding, metric['replaced'],
+          metric['expired'], metric['stale'], metric['latency_p95_ms'])
+PY
+```
+
+该检查需与 request ID/generation 日志、WSL 同期日志和 GPU 采样一起存档；单看 GUI
+刷新频率或定时器周期不能证明无积压。
+
+候选漏斗中，碰撞、关节限位、物理夹爪开度、非法深度/TF和目标完全丢失仍是硬
+拒绝；接近方向、中心距离、画面居中、支撑面余量、关节运动量和模型分数通过软成本排序。
+`stage_counts` 用于定位目标匹配、几何、可见性、支撑面、稳定性和 MoveIt 的逐级损失；
+`rejection_counts`/`rejection_ratios` 用于根据实际分布调阈值。所有候选失败时必须有非空
+`primary_failure`，应先处理占主导的真实硬门或数据质量问题，不能把“无可用候选”当作
+可调试的最终原因。
 
 ## 7. 50 mm 夹爪硬限制
 
@@ -342,7 +463,20 @@ MuJoCo 编译模型会验证实际碰撞 mesh 满开内间隙约为 `49.9375 mm`
 
 ## 8. 富计划与 `plan_id` 生命周期
 
-`/grasp_6d/plan_enriched` 是唯一执行授权，包含：
+两阶段候选流水线的 topic 权限严格分离：
+
+- `/grasp_6d/preview_plan_enriched` 和 `/grasp_6d/preview_plan` 是持续更新的 Preview，
+  只用于界面/RViz、稳定分析和重规划判断，从不授权物理运动；
+- `/grasp_6d/plan_enriched` 是唯一 Execution 执行授权；
+- `/grasp_6d/plan` 是 Execution 的派生 `PoseArray`，只供可视化，自身也不是授权。
+
+每个通过稳定、硬安全和有界 MoveIt 检查的结果可更新 Preview。只有机械臂未执行且
+提升控制器通过冷却、迟滞、目标漂移和候选连续失效判定时，Preview 才能以新的
+固定 `plan_id` 提升为 Execution。提升审计写入
+`~/.ros/grasp6d_gate_audit_latest.json.execution`，与持续 Preview 审计分离；审计写入、
+内容绑定或发布失败都不得留下部分授权。
+
+Execution 富计划包含：
 
 - 与快照绑定的 header、模型选择和非空 `plan_id`；
 - 固定顺序的四个位姿：pregrasp、approach、grasp、lift；
@@ -354,20 +488,29 @@ MuJoCo 编译模型会验证实际碰撞 mesh 满开内间隙约为 `49.9375 mm`
 配置，不能把运行时质量/摩擦误称为富计划自身字段。
 
 `plan_id` 由快照纳秒、模型选择、四个位姿、宽度、OBB 和支撑面等规范化内容生成。
-模型切换、目标/mask 丢失、几何失败、新请求、计划替换、超时、停止或执行中 authority
-变化都会发布失效 tombstone 并撤销旧 ID。默认计划有效期为 2 秒。
+模型切换、目标/mask 完全丢失、非法 TF/深度、几何硬门失败或执行急停会以失效
+tombstone 撤销授权。新的有效 Preview 不撤销或替换 Execution。默认 Execution
+富计划有效期为 5 秒。
 
-`/grasp_6d/plan` 是派生的 `geometry_msgs/PoseArray`，只供 RViz/界面显示。旧
 `grasp6d_node.py`（`use_remote_grasp6d=false`）只能发布这个 legacy 可视化结果，不能
 产生执行授权。legacy topic 即使包含四个位姿，也绝不能启用“执行 6D 抓取”。
 
-发布顺序固定为先发送 legacy 可视化，再发送 latched `/grasp_6d/plan_enriched` 执行权威；
-legacy 发布失败时 rich plan 不得发布或缓存。若 rich 发布失败，节点会发布失效 tombstone
-并把对应审计改写为 `valid_plan=false`。
+执行请求必须携带当前 `/plan_enriched` 的精确 `plan_id`。成功 start 会在设置 active
+的同一临界区深拷贝并摘要绑定这条 Execution；后续 MoveIt、MuJoCo 和动作检查只验证
+该不可变副本。执行期间后来的有效 Preview 或有效 Execution 更新不会改写已绑定计划；
+无效 Execution tombstone、目标安全事件或“停止抓取”会撤权。`StartGrasp` MD5 不匹配的
+旧 GUI/节点必须重建并重启。
 
-执行请求必须携带当前 `/plan_enriched` 的精确 `plan_id`。ROS 在发送 WSL 请求前后都
-会重新验证 authority；网络请求进行中发生 stop、计划替换或过期时，即使 WSL 返回
-成功也不得运动。`StartGrasp` MD5 不匹配的旧 GUI/节点必须重建并重启。
+显式重规划只接受 `trigger: true`，且机械臂执行中会被拒绝：
+
+```bash
+rosservice call /grasp_6d/replan_execution "trigger: true"
+```
+
+机械臂空闲时，只在当前候选连续失效 2 次、位置变化超过 `0.012 m`、姿态变化
+超过 `12°`、目标漂移超过 `0.025 m`，或受理的显式 replan 时考虑新 Execution；
+`replan_cooldown_sec=1.0` 限制重规划频率，有效挑战者还需满足
+`selection_hysteresis_ratio=0.12`，避免计划拖拉、抖动或来回切换。
 
 富计划的 pregrasp 只能先调用 `/supervisor/check_pose_strict` 生成严格位姿缓存，再由
 `/supervisor/execute_pose_strict` 执行同一个完全匹配且类型为 `strict pose` 的缓存。
@@ -427,3 +570,7 @@ ROS 接口或节点更新后，重新构建、source 并重启 GUI、`grasp_task
 
 只有现场 camera-only 记录和真实 WSL MuJoCo 记录均完成，且最新计划获得完整匹配的
 通过响应后，才可进入单独的真实机械臂授权评审。
+
+本阶段的离线单元/集成测试、协议检查、camera-only 检查、WSL/RTX 4070 性能采样、
+MuJoCo 检查乃至机械臂空载干跑，都不保证真实抓取成功。真实相机噪声、手眼标定、
+目标材料/摩擦、夹爪尺寸与回差、驱动器动力学和紧急停车路径仍必须逐项实机验证。

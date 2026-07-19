@@ -6,6 +6,7 @@
   <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/safety_limits.yaml" />
   <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/joint_limits.yaml" />
 
+  <!-- Predict and MuJoCo deliberately share one resident WSL service URL. -->
   <param name="/grasp_6d/remote/server_url" value="$(arg remote_grasp6d_url)" />
   <param name="/mujoco_digital_twin/server_url" value="$(arg remote_grasp6d_url)" />
 

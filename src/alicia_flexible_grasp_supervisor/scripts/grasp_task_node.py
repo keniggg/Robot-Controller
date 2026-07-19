@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
+import io
 import json
 import math
 import os
@@ -470,7 +471,13 @@ class GraspTaskNode:
         self.latest_visual_obj = None
         self.latest_visual_obj_time = None
         self.latest_grasp6d_plan = None
+        self.latest_grasp6d_preview_plan = None
         self.latest_grasp6d_legacy_plan = None
+        self._bound_execution_plan = None
+        self._bound_execution_plan_id = ''
+        self._bound_execution_plan_digest = ''
+        self._execution_authority_revoked = False
+        self._last_execution_plan_event = ''
         self._grasp6d_watermark_stamp_ns = 0
         self._grasp6d_watermark_plan_id = ''
         self._grasp6d_watermark_tombstoned = False
@@ -502,6 +509,12 @@ class GraspTaskNode:
             rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'),
             PoseArray,
             self.grasp6d_legacy_plan_cb,
+            queue_size=1,
+        )
+        rospy.Subscriber(
+            '/grasp_6d/preview_plan_enriched',
+            Grasp6DPlan,
+            self.grasp6d_preview_plan_cb,
             queue_size=1,
         )
         rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
@@ -628,7 +641,24 @@ class GraspTaskNode:
                 getattr(getattr(msg, 'header', None), 'stamp', None)
             )
             incoming_id = str(getattr(msg, 'plan_id', '') or '')
+            execution_frozen = (
+                bool(getattr(self, 'active', False))
+                and getattr(self, '_bound_execution_plan', None) is not None
+            )
+            if execution_frozen and bool(getattr(msg, 'valid', False)):
+                self._last_execution_plan_event = 'EXECUTION_FROZEN'
+                rospy.logwarn(
+                    'Ignored rich 6D plan %s: EXECUTION_FROZEN (%s)',
+                    incoming_id,
+                    result.code if not result.ok else 'VALID_REPLACEMENT',
+                )
+                return
             if not result.ok:
+                if execution_frozen:
+                    self._execution_authority_revoked = True
+                    self._last_execution_plan_event = (
+                        'EXECUTION_AUTHORITY_REVOKED'
+                    )
                 if incoming_ns > self._grasp6d_watermark_stamp_ns:
                     self._grasp6d_watermark_stamp_ns = incoming_ns
                     self._grasp6d_watermark_plan_id = incoming_id
@@ -667,6 +697,10 @@ class GraspTaskNode:
                 self._grasp6d_watermark_tombstoned = False
             self.latest_grasp6d_plan = deepcopy(msg)
 
+    def grasp6d_preview_plan_cb(self, msg):
+        """Cache Preview for diagnostics without changing execution authority."""
+        self.latest_grasp6d_preview_plan = deepcopy(msg)
+
     def grasp6d_legacy_plan_cb(self, msg):
         # Compatibility visualization only. Never assign execution authority.
         self.latest_grasp6d_legacy_plan = deepcopy(msg)
@@ -703,6 +737,9 @@ class GraspTaskNode:
 
     def _clear_grasp6d_authority(self, expected_plan_id=None):
         with self._grasp6d_plan_guard():
+            if getattr(self, '_bound_execution_plan', None) is not None:
+                self._execution_authority_revoked = True
+                self._last_execution_plan_event = 'EXECUTION_AUTHORITY_REVOKED'
             current = getattr(self, 'latest_grasp6d_plan', None)
             self._seed_grasp6d_watermark_locked(current)
             if (
@@ -716,6 +753,32 @@ class GraspTaskNode:
                 self._grasp6d_watermark_tombstoned = True
             self.latest_grasp6d_plan = None
             return True
+
+    @staticmethod
+    def _execution_plan_digest(plan):
+        wire = io.BytesIO()
+        plan.serialize(wire)
+        return hashlib.sha256(wire.getvalue()).hexdigest()
+
+    def _freeze_execution_plan(self, plan):
+        frozen = deepcopy(plan)
+        if not plan_id_matches_content(frozen):
+            raise ValueError('cannot freeze an invalid rich execution plan')
+        digest = self._execution_plan_digest(frozen)
+        with self._grasp6d_plan_guard():
+            self._bound_execution_plan = frozen
+            self._bound_execution_plan_id = str(frozen.plan_id)
+            self._bound_execution_plan_digest = digest
+            self._execution_authority_revoked = False
+            self._last_execution_plan_event = 'EXECUTION_FROZEN'
+        return deepcopy(frozen)
+
+    def _clear_bound_execution_plan(self):
+        with self._grasp6d_plan_guard():
+            self._bound_execution_plan = None
+            self._bound_execution_plan_id = ''
+            self._bound_execution_plan_digest = ''
+            self._execution_authority_revoked = False
 
     def set_state(self, stage, message='', success=False):
         self.stage = stage
@@ -737,18 +800,20 @@ class GraspTaskNode:
         with self._start_guard():
             if getattr(self, '_start_inflight', False) or self.active:
                 return StartGraspResponse(False, 'already active')
-            if bool(gcfg.get('use_grasp6d_plan', False)):
-                validation, bound_plan = self._copy_requested_grasp6d_plan(
-                    getattr(req, 'plan_id', ''),
-                    gcfg,
-                )
-                if not validation.ok:
-                    return StartGraspResponse(
-                        False,
-                        '%s: %s' % (validation.code, validation.reason),
+            with self._grasp6d_plan_guard():
+                if bool(gcfg.get('use_grasp6d_plan', False)):
+                    validation, bound_plan = self._copy_requested_grasp6d_plan(
+                        getattr(req, 'plan_id', ''),
+                        gcfg,
                     )
-            self._start_inflight = True
-            self.active = True
+                    if not validation.ok:
+                        return StartGraspResponse(
+                            False,
+                            '%s: %s' % (validation.code, validation.reason),
+                        )
+                    bound_plan = self._freeze_execution_plan(bound_plan)
+                self._start_inflight = True
+                self.active = True
         try:
             result = self.execute(grasp6d_plan=bound_plan)
             return StartGraspResponse(result, 'success' if result else 'failed')
@@ -757,8 +822,10 @@ class GraspTaskNode:
             return StartGraspResponse(False, str(exc))
         finally:
             with self._start_guard():
-                self.active = False
-                self._start_inflight = False
+                with self._grasp6d_plan_guard():
+                    self.active = False
+                    self._start_inflight = False
+                    self._clear_bound_execution_plan()
 
     def stop_cb(self, req):
         with self._start_guard():
@@ -767,6 +834,11 @@ class GraspTaskNode:
                 # action holding plan first commits before stop returns; a
                 # stop that obtains plan first cancels every later action.
                 # Only start_cb's finally block releases the execution slot.
+                if getattr(self, '_bound_execution_plan', None) is not None:
+                    self._execution_authority_revoked = True
+                    self._last_execution_plan_event = (
+                        'EXECUTION_AUTHORITY_REVOKED'
+                    )
                 self.active = False
         self.set_state(GraspStages.EMERGENCY_STOP if req.emergency else GraspStages.IDLE, 'stop requested')
         return StopGraspResponse(True, 'stop requested')
@@ -932,12 +1004,7 @@ class GraspTaskNode:
                 '%s: %s' % (validation.code, validation.reason),
             )
             return False
-        drift = self._bound_target_drift_result(plan, gcfg)
-        if not drift.ok:
-            self.set_state(
-                GraspStages.FAILED,
-                '%s: %s' % (drift.code, drift.reason),
-            )
+        if not self._execution_checkpoint(plan, gcfg, 'execution entry'):
             return False
         if self._position_only_execute_globally_enabled():
             self.set_state(
@@ -1066,11 +1133,14 @@ class GraspTaskNode:
         bound_plan = execution_plan
         if bound_plan is None and execution_plan_id is not None:
             with self._grasp6d_plan_guard():
-                current = getattr(self, 'latest_grasp6d_plan', None)
-                if current is not None and strict_plan_id_equal(
-                    getattr(current, 'plan_id', None), execution_plan_id
+                frozen = getattr(self, '_bound_execution_plan', None)
+                frozen_id = str(
+                    getattr(self, '_bound_execution_plan_id', '') or ''
+                )
+                if frozen is not None and strict_plan_id_equal(
+                    frozen_id, execution_plan_id
                 ):
-                    bound_plan = deepcopy(current)
+                    bound_plan = deepcopy(frozen)
         if bound_plan is not None:
             validation = self._validate_bound_plan(bound_plan, gcfg or {})
             if not validation.ok:
@@ -1081,16 +1151,18 @@ class GraspTaskNode:
                 )
                 return False
         elif execution_plan_id is not None:
-            validation = self.validate_plan_id_for_execution(
-                execution_plan_id, gcfg or {}
+            frozen = getattr(self, '_bound_execution_plan', None)
+            code = (
+                'EXECUTION_PLAN_NOT_FROZEN'
+                if frozen is None
+                else 'EXECUTION_PLAN_MISMATCH'
             )
-            if not validation.ok:
-                self.set_state(
-                    GraspStages.FAILED,
-                    '%s: %s before planning %s'
-                    % (validation.code, validation.reason, label),
-                )
-                return False
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: no matching frozen execution authority before planning %s'
+                % (code, label),
+            )
+            return False
         strict_rich_plan = (
             bound_plan is not None or execution_plan_id is not None
         )
@@ -1464,39 +1536,31 @@ class GraspTaskNode:
                 'EXECUTION_CANCELLED',
                 'grasp execution was stopped',
             )
-        current = getattr(self, 'latest_grasp6d_plan', None)
-        self._seed_grasp6d_watermark_locked(current)
-        if current is None:
-            return PlanValidationResult(False, 'PLAN_MISSING', 'no current rich plan')
-        if self._grasp6d_watermark_tombstoned:
+        if bool(getattr(self, '_execution_authority_revoked', False)):
             return PlanValidationResult(
                 False,
-                'PLAN_REPLAYED',
-                'current rich plan source timestamp is tombstoned',
+                'EXECUTION_AUTHORITY_REVOKED',
+                'frozen execution authority was revoked by a hard safety event',
             )
-        bound_id = str(getattr(plan, 'plan_id', '') or '')
-        current_id = str(getattr(current, 'plan_id', '') or '')
-        if not strict_plan_id_equal(bound_id, current_id):
-            return PlanValidationResult(
-                False,
-                'PLAN_REPLACED',
-                'current rich plan id no longer matches execution copy',
-            )
-        current_ns = _stamp_nanoseconds(
-            getattr(getattr(current, 'header', None), 'stamp', None)
+        frozen = getattr(self, '_bound_execution_plan', None)
+        frozen_id = str(getattr(self, '_bound_execution_plan_id', '') or '')
+        frozen_digest = str(
+            getattr(self, '_bound_execution_plan_digest', '') or ''
         )
-        if (
-            current_ns != self._grasp6d_watermark_stamp_ns
-            or not strict_plan_id_equal(
-                current_id, self._grasp6d_watermark_plan_id
-            )
-        ):
+        if frozen is None or not frozen_id or not frozen_digest:
             return PlanValidationResult(
                 False,
-                'PLAN_REPLAYED',
-                'current rich plan does not match replay watermark',
+                'EXECUTION_PLAN_NOT_FROZEN',
+                'no immutable execution plan is bound to this execution',
             )
-        for candidate in (plan, current):
+        supplied_id = str(getattr(plan, 'plan_id', '') or '')
+        if not strict_plan_id_equal(supplied_id, frozen_id):
+            return PlanValidationResult(
+                False,
+                'EXECUTION_PLAN_MISMATCH',
+                'supplied execution plan does not match the frozen plan_id',
+            )
+        for candidate in (plan, frozen):
             integrity = validate_execution_plan(
                 candidate,
                 _stamp_seconds(rospy.Time.now()),
@@ -1504,9 +1568,29 @@ class GraspTaskNode:
                 enforce_freshness=False,
             )
             if not integrity.ok:
-                self._clear_grasp6d_authority(expected_plan_id=current_id)
+                self._execution_authority_revoked = True
                 return integrity
-        return self._bound_target_drift_result(plan, gcfg)
+        try:
+            supplied_digest = self._execution_plan_digest(plan)
+            current_frozen_digest = self._execution_plan_digest(frozen)
+        except Exception as exc:
+            self._execution_authority_revoked = True
+            return PlanValidationResult(
+                False,
+                'EXECUTION_PLAN_INTEGRITY_CHANGED',
+                str(exc),
+            )
+        if (
+            supplied_digest != frozen_digest
+            or current_frozen_digest != frozen_digest
+        ):
+            self._execution_authority_revoked = True
+            return PlanValidationResult(
+                False,
+                'EXECUTION_PLAN_INTEGRITY_CHANGED',
+                'execution plan content no longer matches its frozen digest',
+            )
+        return self._bound_target_drift_result(frozen, gcfg)
 
     def _validate_bound_plan(self, plan, gcfg):
         with self._grasp6d_plan_guard():

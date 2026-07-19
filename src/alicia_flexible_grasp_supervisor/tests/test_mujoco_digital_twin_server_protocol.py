@@ -42,6 +42,19 @@ client_module = importlib.util.module_from_spec(client_spec)
 client_spec.loader.exec_module(client_module)
 
 
+PERFORMANCE_FIELDS = (
+    'server_receive_sec',
+    'server_send_sec',
+    'preprocess_ms',
+    'inference_ms',
+    'postprocess_ms',
+    'server_total_ms',
+    'gpu_allocated_mb',
+    'gpu_reserved_mb',
+    'gpu_peak_allocated_mb',
+)
+
+
 BASE_XML = '''
 <mujoco model="test_gripper">
   <asset/>
@@ -1129,7 +1142,7 @@ class DiagnosticGraspBackend:
     name = 'diagnostic_graspnet'
 
     def __init__(self):
-        self.last_diagnostics = {}
+        self.diagnostics = {}
 
     def health(self):
         return {
@@ -1140,15 +1153,31 @@ class DiagnosticGraspBackend:
             'candidate_fields': list(server_module.CANDIDATE_FIELDS),
         }
 
-    def predict(self, _payload):
-        self.last_diagnostics = {
+    def predict_batch(self, payload):
+        self.diagnostics = {
             'raw_candidates': 280,
             'after_nms': 41,
             'after_collision': 17,
             'returned': 12,
             'stages': {'width_rejected': 5},
         }
-        return [{'score': 0.99}]
+        return server_module.PredictionBatch(
+            request_id=payload['request_id'],
+            snapshot_stamp_sec=payload['snapshot_stamp_sec'],
+            candidates=({'score': 0.99},),
+            diagnostics=self.diagnostics,
+            performance={
+                'server_receive_sec': 200.0,
+                'server_send_sec': 200.25,
+                'preprocess_ms': 1.0,
+                'inference_ms': 2.0,
+                'postprocess_ms': 3.0,
+                'server_total_ms': 6.0,
+                'gpu_allocated_mb': 100.0,
+                'gpu_reserved_mb': 120.0,
+                'gpu_peak_allocated_mb': 110.0,
+            },
+        )
 
 
 def _direct_predict(grasp_backend, payload=None):
@@ -1157,7 +1186,11 @@ def _direct_predict(grasp_backend, payload=None):
     )
     return server_module.MujocoDigitalTwinHTTPHandler._handle_predict(
         handler,
-        {} if payload is None else payload,
+        (
+            {'request_id': 41, 'snapshot_stamp_sec': 123.25}
+            if payload is None
+            else payload
+        ),
     )
 
 
@@ -1167,8 +1200,10 @@ def test_unified_predict_contract_snapshots_complete_grasp_diagnostics():
 
     assert response['ok'] is True
     assert response['backend'] == backend.name
-    assert response['protocol_version'] == 2
+    assert response['protocol_version'] == 3
     assert response['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
+    assert response['request_id'] == 41
+    assert response['snapshot_stamp_sec'] == 123.25
     assert response['candidates'] == [{'score': 0.99}]
     assert response['diagnostics'] == {
         'raw_candidates': 280,
@@ -1178,8 +1213,11 @@ def test_unified_predict_contract_snapshots_complete_grasp_diagnostics():
         'stages': {'width_rejected': 5},
     }
 
-    backend.last_diagnostics['raw_candidates'] = 0
-    backend.last_diagnostics['stages']['width_rejected'] = 0
+    assert response['server_total_ms'] == 6.0
+    assert response['gpu_reserved_mb'] == 120.0
+
+    backend.diagnostics['raw_candidates'] = 0
+    backend.diagnostics['stages']['width_rejected'] = 0
     assert response['diagnostics']['raw_candidates'] == 280
     assert response['diagnostics']['stages']['width_rejected'] == 5
 
@@ -1196,9 +1234,15 @@ def test_unified_predict_contract_snapshots_complete_grasp_diagnostics():
 )
 def test_unified_predict_normalizes_unsafe_diagnostics_to_empty_dict(unsafe_diagnostics):
     class UnsafeDiagnosticsBackend(DiagnosticGraspBackend):
-        def predict(self, _payload):
-            self.last_diagnostics = unsafe_diagnostics
-            return []
+        def predict_batch(self, payload):
+            batch = super().predict_batch(payload)
+            return server_module.PredictionBatch(
+                request_id=batch.request_id,
+                snapshot_stamp_sec=batch.snapshot_stamp_sec,
+                candidates=(),
+                diagnostics=unsafe_diagnostics,
+                performance=batch.performance,
+            )
 
     response = _direct_predict(UnsafeDiagnosticsBackend())
 
@@ -1209,15 +1253,24 @@ def test_unified_predict_normalizes_unsafe_diagnostics_to_empty_dict(unsafe_diag
 
 
 def test_unified_predict_normalizes_diagnostics_property_exception():
+    class ExplodingBatch:
+        request_id = 41
+        snapshot_stamp_sec = 123.25
+        candidates = ()
+        performance = {
+            field: 0.0
+            for field in PERFORMANCE_FIELDS
+        }
+
+        @property
+        def diagnostics(self):
+            raise RuntimeError('diagnostics unavailable')
+
     class ExplodingDiagnosticsBackend:
         name = 'exploding_diagnostics'
 
-        @property
-        def last_diagnostics(self):
-            raise RuntimeError('diagnostics unavailable')
-
-        def predict(self, _payload):
-            return []
+        def predict_batch(self, _payload):
+            return ExplodingBatch()
 
     response = _direct_predict(ExplodingDiagnosticsBackend())
 
@@ -1229,17 +1282,20 @@ def test_unified_predict_backend_exception_returns_complete_fail_closed_contract
     class ExplodingGraspBackend:
         name = 'exploding_graspnet'
 
-        def predict(self, _payload):
+        def predict_batch(self, _payload):
             raise RuntimeError('synthetic inference failure')
 
     response = _direct_predict(ExplodingGraspBackend())
 
     assert response['ok'] is False
     assert response['backend'] == 'exploding_graspnet'
-    assert response['protocol_version'] == 2
+    assert response['protocol_version'] == 3
     assert response['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
+    assert response['request_id'] == 41
+    assert response['snapshot_stamp_sec'] == 123.25
     assert response['candidates'] == []
     assert response['diagnostics'] == {}
+    assert all(response[field] == 0.0 for field in PERFORMANCE_FIELDS)
     assert response['error'] == 'synthetic inference failure'
 
 
@@ -1256,7 +1312,11 @@ def test_unified_http_predict_transports_grasp_diagnostics_contract():
     try:
         response = _json_post(
             'http://127.0.0.1:%d/predict' % http_server.server_port,
-            {'encoding': 'contract-test'},
+            {
+                'encoding': 'contract-test',
+                'request_id': 41,
+                'snapshot_stamp_sec': 123.25,
+            },
         )
     finally:
         http_server.shutdown()
@@ -1265,13 +1325,17 @@ def test_unified_http_predict_transports_grasp_diagnostics_contract():
 
     assert response['ok'] is True
     assert response['backend'] == grasp_backend.name
-    assert response['protocol_version'] == 2
+    assert response['protocol_version'] == 3
     assert response['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
+    assert response['request_id'] == 41
+    assert response['snapshot_stamp_sec'] == 123.25
     assert response['candidates'] == [{'score': 0.99}]
     assert response['diagnostics']['raw_candidates'] == 280
     assert response['diagnostics']['after_nms'] == 41
     assert response['diagnostics']['after_collision'] == 17
     assert response['diagnostics']['returned'] == 12
+    assert response['inference_ms'] == 2.0
+    assert response['gpu_peak_allocated_mb'] == 110.0
 
 
 @pytest.mark.parametrize(
@@ -1312,8 +1376,11 @@ def test_unified_http_predict_parse_failures_return_complete_fail_closed_contrac
     assert response['backend'] == grasp_backend.name
     assert response['protocol_version'] == server_module.GRASP6D_PROTOCOL_VERSION
     assert response['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
+    assert response['request_id'] is None
+    assert response['snapshot_stamp_sec'] is None
     assert response['candidates'] == []
     assert response['diagnostics'] == {}
+    assert all(response[field] == 0.0 for field in PERFORMANCE_FIELDS)
     assert isinstance(response['error'], str) and response['error']
 
 
@@ -1330,7 +1397,7 @@ def test_server_serves_schema_v2_health_sync_predict_and_simulate():
         base_url = 'http://127.0.0.1:%d' % http_server.server_port
         health = _json_get(base_url + '/health')
         assert health['ok'] is True
-        assert health['protocol_version'] == 2
+        assert health['protocol_version'] == 3
         assert health['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
         assert health['grasp_backend']['backend'] == 'mock'
         assert health['digital_twin']['backend'] == 'test_passing_mujoco'
@@ -1344,14 +1411,22 @@ def test_server_serves_schema_v2_health_sync_predict_and_simulate():
 
         predict = _json_post(
             base_url + '/predict',
-            {'encoding': 'mock', 'max_candidates': 1},
+            {
+                'encoding': 'mock',
+                'request_id': 7,
+                'snapshot_stamp_sec': 123.25,
+                'max_candidates': 1,
+            },
         )
         assert predict['ok'] is True
         assert predict['backend'] == 'mock'
-        assert predict['protocol_version'] == 2
+        assert predict['protocol_version'] == 3
         assert predict['candidate_fields'] == list(server_module.CANDIDATE_FIELDS)
+        assert predict['request_id'] == 7
+        assert predict['snapshot_stamp_sec'] == 123.25
         assert len(predict['candidates']) == 1
-        assert predict['diagnostics'] == {}
+        assert predict['diagnostics']['returned'] == 1
+        assert all(predict[field] >= 0.0 for field in PERFORMANCE_FIELDS)
 
         sim = _json_post(
             base_url + '/simulate_grasp',

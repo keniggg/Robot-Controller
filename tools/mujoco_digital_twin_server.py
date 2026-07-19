@@ -31,6 +31,8 @@ from graspnet_baseline_server import (  # noqa: E402
     GRASP6D_PROTOCOL_VERSION,
     GraspNetBaselineBackend,
     MockGraspNetBackend as _BaselineMockGraspNetBackend,
+    PERFORMANCE_FIELDS,
+    PredictionBatch,
 )
 
 
@@ -781,7 +783,7 @@ def _grasp_backend_name(grasp_backend):
         return 'unknown'
 
 
-def _snapshot_grasp_diagnostics(grasp_backend):
+def _snapshot_grasp_diagnostics(batch):
     """Return a detached, strict-JSON diagnostics dictionary.
 
     Diagnostics are audit metadata, not inference input.  An unsafe value must
@@ -789,7 +791,7 @@ def _snapshot_grasp_diagnostics(grasp_backend):
     or retain a live reference that a later inference can mutate.
     """
     try:
-        diagnostics = getattr(grasp_backend, 'last_diagnostics', {})
+        diagnostics = getattr(batch, 'diagnostics', {})
         if not isinstance(diagnostics, dict):
             return {}
         diagnostics = copy.deepcopy(diagnostics)
@@ -800,16 +802,91 @@ def _snapshot_grasp_diagnostics(grasp_backend):
     return diagnostics if isinstance(diagnostics, dict) else {}
 
 
-def _predict_failure_response(grasp_backend, error):
+def _predict_success_response(batch, backend_name):
+    performance = getattr(batch, 'performance', None)
+    if not isinstance(performance, dict):
+        raise ValueError('prediction batch performance must be a dictionary')
+    normalized_performance = {}
+    for field in PERFORMANCE_FIELDS:
+        normalized_performance[field] = _finite_nonnegative_performance(
+            performance.get(field),
+            field,
+        )
+    request_id, snapshot_stamp_sec = _validate_predict_correlation(
+        getattr(batch, 'request_id', None),
+        getattr(batch, 'snapshot_stamp_sec', None),
+    )
+    response = {
+        'ok': True,
+        'backend': str(backend_name),
+        'protocol_version': GRASP6D_PROTOCOL_VERSION,
+        'candidate_fields': list(CANDIDATE_FIELDS),
+        'request_id': request_id,
+        'snapshot_stamp_sec': snapshot_stamp_sec,
+        'candidates': list(batch.candidates),
+        'diagnostics': _snapshot_grasp_diagnostics(batch),
+        **normalized_performance,
+    }
+    json.dumps(response, allow_nan=False)
+    return response
+
+
+def _predict_failure_response(grasp_backend, error, payload=None):
+    request_id, snapshot_stamp_sec = _recover_predict_correlation(payload)
     return {
         'ok': False,
         'backend': _grasp_backend_name(grasp_backend),
         'protocol_version': GRASP6D_PROTOCOL_VERSION,
         'candidate_fields': list(CANDIDATE_FIELDS),
+        'request_id': request_id,
+        'snapshot_stamp_sec': snapshot_stamp_sec,
         'candidates': [],
         'diagnostics': {},
+        **{field: 0.0 for field in PERFORMANCE_FIELDS},
         'error': str(error),
     }
+
+
+def _validate_predict_correlation(request_id, snapshot_stamp_sec):
+    if type(request_id) is not int or request_id <= 0:
+        raise ValueError('request_id must be a positive integer')
+    if isinstance(snapshot_stamp_sec, (bool, np.bool_)):
+        raise ValueError('snapshot_stamp_sec must be a finite positive number')
+    try:
+        snapshot_stamp_sec = float(snapshot_stamp_sec)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            'snapshot_stamp_sec must be a finite positive number'
+        ) from exc
+    if not math.isfinite(snapshot_stamp_sec) or snapshot_stamp_sec <= 0.0:
+        raise ValueError('snapshot_stamp_sec must be a finite positive number')
+    return request_id, snapshot_stamp_sec
+
+
+def _recover_predict_correlation(payload):
+    if not isinstance(payload, dict):
+        return None, None
+    try:
+        return _validate_predict_correlation(
+            payload.get('request_id'),
+            payload.get('snapshot_stamp_sec'),
+        )
+    except Exception:
+        return None, None
+
+
+def _finite_nonnegative_performance(value, field):
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError('%s must be a finite non-negative number' % field)
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            '%s must be a finite non-negative number' % field
+        ) from exc
+    if not math.isfinite(result) or result < 0.0:
+        raise ValueError('%s must be a finite non-negative number' % field)
+    return result
 
 
 class MujocoDigitalTwinHTTPHandler(BaseHTTPRequestHandler):
@@ -865,7 +942,11 @@ class MujocoDigitalTwinHTTPHandler(BaseHTTPRequestHandler):
             if self.path == '/predict':
                 self._send_json(
                     200,
-                    _predict_failure_response(self.server.grasp_backend, exc),
+                    _predict_failure_response(
+                        self.server.grasp_backend,
+                        exc,
+                        payload,
+                    ),
                 )
                 return
             self._send_json(200, {'ok': False, 'error': str(exc)})
@@ -873,17 +954,13 @@ class MujocoDigitalTwinHTTPHandler(BaseHTTPRequestHandler):
     def _handle_predict(self, payload):
         grasp_backend = self.server.grasp_backend
         try:
-            candidates = grasp_backend.predict(payload)
+            batch = grasp_backend.predict_batch(payload)
+            return _predict_success_response(
+                batch,
+                _grasp_backend_name(grasp_backend),
+            )
         except Exception as exc:
-            return _predict_failure_response(grasp_backend, exc)
-        return {
-            'ok': True,
-            'backend': _grasp_backend_name(grasp_backend),
-            'protocol_version': GRASP6D_PROTOCOL_VERSION,
-            'candidate_fields': list(CANDIDATE_FIELDS),
-            'candidates': candidates,
-            'diagnostics': _snapshot_grasp_diagnostics(grasp_backend),
-        }
+            return _predict_failure_response(grasp_backend, exc, payload)
 
     def _handle_sync_joint_state(self, payload):
         self.server.sim_backend.update_joint_state(payload)
@@ -923,17 +1000,41 @@ class MujocoDigitalTwinHTTPHandler(BaseHTTPRequestHandler):
 
 
 class MockGraspNetBackend(_BaselineMockGraspNetBackend):
-    def predict(self, payload):
+    def predict_batch(self, payload):
         if payload.get('encoding') == 'mock':
-            return [
+            started = time.perf_counter()
+            server_receive_sec = time.time()
+            request_id, snapshot_stamp_sec = _validate_predict_correlation(
+                payload.get('request_id'),
+                payload.get('snapshot_stamp_sec'),
+            )
+            candidate = {
+                'score': 1.0,
+                'width_m': 0.05,
+                'height_m': 0.02,
+                'depth_m': 0.02,
+                'translation_m': [0.30, 0.0, 0.20],
+                'rotation_matrix': [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            }
+            performance = {field: 0.0 for field in PERFORMANCE_FIELDS}
+            performance.update(
                 {
-                    'score': 1.0,
-                    'width_m': 0.05,
-                    'translation_m': [0.30, 0.0, 0.20],
-                    'rotation_matrix': [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                    'server_receive_sec': server_receive_sec,
+                    'server_send_sec': time.time(),
+                    'server_total_ms': max(
+                        0.0,
+                        (time.perf_counter() - started) * 1000.0,
+                    ),
                 }
-            ]
-        return super().predict(payload)
+            )
+            return PredictionBatch(
+                request_id=request_id,
+                snapshot_stamp_sec=snapshot_stamp_sec,
+                candidates=(candidate,),
+                diagnostics={'returned': 1},
+                performance=performance,
+            )
+        return super().predict_batch(payload)
 
 
 class JointStateCache:

@@ -18,6 +18,8 @@ class RgbdSample:
     frame_id: str
     joint_positions: np.ndarray
     stamp_ns: int = 0
+    target_epoch: int = 0
+    target_identity: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -46,11 +48,14 @@ class SnapshotResult:
     quality: DepthQuality
     source_mode: str
     stamp_ns: int = 0
+    target_epoch: int = 0
+    target_identity: tuple = ()
 
     def __post_init__(self):
         for name in ('color_bgr', 'depth_raw', 'target_depth_raw', 'object_mask'):
             object.__setattr__(self, name, _readonly_copy(getattr(self, name)))
         object.__setattr__(self, 'bbox', tuple(self.bbox or ()))
+        object.__setattr__(self, 'target_identity', tuple(self.target_identity or ()))
 
 
 def mask_iou(first, second):
@@ -195,6 +200,16 @@ def fuse_stable_samples(
     source_mode = 'instance_mask' if require_mask else 'bbox_depth'
     if not samples:
         return _failure(samples, 'DEPTH_UNSTABLE', 'no synchronized RGB-D samples', source_mode)
+
+    identities = {tuple(getattr(item, 'target_identity', ()) or ()) for item in samples}
+    epochs = {int(getattr(item, 'target_epoch', 0) or 0) for item in samples}
+    if len(identities) != 1 or len(epochs) != 1:
+        return _failure(
+            samples,
+            'TARGET_INSTANCE_MISMATCH',
+            'synchronized RGB-D samples span multiple target identities',
+            source_mode,
+        )
 
     first_depth = np.asarray(samples[0].depth_raw)
     first_color = np.asarray(samples[0].color_bgr)
@@ -364,6 +379,8 @@ def fuse_stable_samples(
         quality=quality,
         source_mode=source_mode,
         stamp_ns=int(getattr(latest, 'stamp_ns', round(float(latest.stamp_sec) * 1e9))),
+        target_epoch=int(getattr(latest, 'target_epoch', 0) or 0),
+        target_identity=tuple(getattr(latest, 'target_identity', ()) or ()),
     )
 
 
@@ -399,6 +416,7 @@ class SynchronizedRgbdBuffer:
         self._source_clock_ns = source_clock_ns or _wall_clock_ns
         self._monotonic_clock = monotonic_clock or time.monotonic
         self._update_sequence = 0
+        self._collection_windows = {}
 
     def update_color(self, color_bgr, stamp_sec, frame_id):
         self._update_entry(
@@ -421,8 +439,20 @@ class SynchronizedRgbdBuffer:
             mask_frame_id=str(frame_id or ''),
         )
 
-    def update_object(self, object_msg, stamp_sec):
-        self._update_entry(stamp_sec, object_msg=deepcopy(object_msg))
+    def update_object(
+        self,
+        object_msg,
+        stamp_sec,
+        target_epoch=0,
+        target_identity=None,
+    ):
+        identity = tuple(target_identity or ())
+        self._update_entry(
+            stamp_sec,
+            object_msg=deepcopy(object_msg),
+            target_epoch=int(target_epoch),
+            target_identity=identity,
+        )
 
     def update_joints(self, joint_positions):
         with self._condition:
@@ -437,8 +467,11 @@ class SynchronizedRgbdBuffer:
         max_age_sec,
         collection_span_sec=0.0,
         max_inference_latency_sec=None,
+        newest_after_ns=0,
+        target_identity=None,
     ):
         count = max(1, int(count))
+        newest_after_ns = int(newest_after_ns)
         collection_span = max(0.0, float(collection_span_sec))
         collection_span_ns = int(round(collection_span * 1e9))
         max_inference_latency = max(
@@ -449,10 +482,19 @@ class SynchronizedRgbdBuffer:
                 else max_inference_latency_sec
             ),
         )
-        deadline = self._monotonic_clock() + max(0.0, float(timeout_sec))
-        collected = {}
-        invalidated = set()
+        timeout = max(0.0, float(timeout_sec))
+        deadline = self._monotonic_clock() + timeout
+        wall_deadline = time.monotonic() + timeout
+        identity = (
+            None if target_identity is None else tuple(target_identity)
+        )
+        window_key = (bool(require_mask), identity)
         with self._condition:
+            if identity is not None:
+                for existing_key in list(self._collection_windows):
+                    if existing_key != window_key:
+                        del self._collection_windows[existing_key]
+            collected = self._collection_windows.setdefault(window_key, {})
             while True:
                 monotonic_now = self._monotonic_clock()
                 self._prune_locked(monotonic_now)
@@ -486,12 +528,21 @@ class SynchronizedRgbdBuffer:
                         if (
                             key not in structurally_complete
                             or int(entry.get('revision', 0)) != collected[key][0]
+                            or (
+                                identity is not None
+                                and tuple(entry.get('target_identity', ()) or ())
+                                != identity
+                            )
                         ):
                             del collected[key]
-                            invalidated.add(key)
-                    for key, entry in complete:
-                        if key in invalidated:
-                            continue
+                    admissible_complete = [
+                        (key, entry)
+                        for key, entry in complete
+                        if identity is None
+                        or tuple(entry.get('target_identity', ()) or ())
+                        == identity
+                    ]
+                    for key, entry in admissible_complete[-count:]:
                         revision = int(entry.get('revision', 0))
                         if key not in collected or revision != collected[key][0]:
                             collected[key] = (
@@ -510,17 +561,24 @@ class SynchronizedRgbdBuffer:
                         ]
                         for key in expired_keys:
                             del collected[key]
-                            invalidated.add(key)
+                    if len(collected) > count:
+                        for key in sorted(collected)[:-count]:
+                            del collected[key]
                     if len(collected) >= count:
                         selected_keys = sorted(collected)[-count:]
-                        return [collected[key][1] for key in selected_keys]
+                        if selected_keys[-1] > newest_after_ns:
+                            return [collected[key][1] for key in selected_keys]
                 elif len(complete) >= count:
                     selected = complete[-count:]
-                    return [
-                        self._sample_from_entry(entry, bool(require_mask))
-                        for _key, entry in selected
-                    ]
-                remaining = deadline - monotonic_now
+                    if selected[-1][0] > newest_after_ns:
+                        return [
+                            self._sample_from_entry(entry, bool(require_mask))
+                            for _key, entry in selected
+                        ]
+                remaining = min(
+                    deadline - monotonic_now,
+                    wall_deadline - time.monotonic(),
+                )
                 if remaining <= 0.0:
                     return []
                 self._condition.wait(remaining)
@@ -585,6 +643,9 @@ class SynchronizedRgbdBuffer:
         with self._condition:
             for key in [key for key in self._entries if key <= key_limit]:
                 del self._entries[key]
+            for collected in self._collection_windows.values():
+                for key in [key for key in collected if key <= key_limit]:
+                    del collected[key]
             self._condition.notify_all()
 
     def _update_entry(self, stamp, **values):
@@ -727,4 +788,6 @@ class SynchronizedRgbdBuffer:
             frame_id=frame_id,
             joint_positions=np.asarray(entry.get('joint_positions', ()), dtype=float).copy(),
             stamp_ns=int(entry['stamp_ns']),
+            target_epoch=int(entry.get('target_epoch', 0) or 0),
+            target_identity=tuple(entry.get('target_identity', ()) or ()),
         )
