@@ -1,0 +1,27 @@
+camera:
+  enabled: true
+  simulate: false
+  use_realsense: true
+  width: 640
+  height: 480
+  fps: 30
+  publish_fps: 20
+  fallback_to_simulation: false
+  read_failure_limit: 3
+  color_topic: "/supervisor/camera/color/image_raw"
+  depth_topic: "/supervisor/camera/depth/image_raw"
+  camera_info_topic: "/supervisor/camera/color/camera_info"
+  align_depth_to_color: true
+  depth_filter:
+    spatial_enabled: true
+    spatial_magnitude: 2
+    spatial_smooth_alpha: 0.5
+    spatial_smooth_delta: 20
+    temporal_enabled: false
+    hole_filling_enabled: false
+  frame_id: "camera_link"
+  depth_scale: 0.0001
+  fx: 438.60040283203125
+  fy: 438.4169616699219
+  cx: 317.7792663574219
+  cy: 245.35714721679688

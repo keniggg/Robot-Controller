@@ -32,7 +32,7 @@ Examples:
 
 Add an executable script `src/alicia_flexible_grasp_supervisor/scripts/rgb_dataset_collector_gui.py`. It initializes a ROS node, subscribes to the RGB image topic through `cv_bridge`, keeps a thread-safe copy of the latest BGR frame, renders an RGB preview in PyQt, and saves the BGR frame with `cv2.imwrite`.
 
-Add `src/alicia_flexible_grasp_supervisor/launch/rgb_dataset_collector.launch`. It loads `config/camera.yaml`, starts `camera_node.py`, and starts the collector GUI with configurable `color_topic` and `output_root` parameters.
+Add `src/alicia_flexible_grasp_supervisor/launch/rgb_dataset_collector.launch`. It loads the camera-only `config/rgb_dataset_camera.yaml`, starts `camera_node.py`, and starts the collector GUI with configurable `color_topic` and `output_root` parameters.
 
 ## Error Handling
 
