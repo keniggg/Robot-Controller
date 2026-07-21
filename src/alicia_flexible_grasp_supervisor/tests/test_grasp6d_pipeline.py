@@ -25,6 +25,7 @@ from alicia_flexible_grasp.grasp.grasp6d_pipeline import (  # noqa: E402
     bounded_moveit_select,
     mandatory_safety_gate,
     soft_candidate_cost,
+    source_neutral_candidate_cost,
 )
 from alicia_flexible_grasp.grasp.grasp6d_stability import (  # noqa: E402
     CandidateObservation,
@@ -124,6 +125,7 @@ def soft_features(**overrides):
         'stability_hit_ratio': 0.80,
         'position_dispersion_m': 0.002,
         'orientation_dispersion_rad': 0.03,
+        'contact_balance': 0.5,
     }
     values.update(overrides)
     return SoftCandidateFeatures(**values)
@@ -587,6 +589,37 @@ def test_model_score_and_geometry_margin_improve_rank_without_bypass():
         high_score.components['geometry_margin']
         < low_score.components['geometry_margin']
     )
+
+
+def test_source_neutral_cost_cannot_prefer_graspnet_confidence():
+    low_confidence = soft_features(model_score=0.1, center_distance_m=0.011)
+    high_confidence = soft_features(model_score=1.0, center_distance_m=0.012)
+
+    low_cost = source_neutral_candidate_cost(low_confidence, weights())
+    high_cost = source_neutral_candidate_cost(high_confidence, weights())
+
+    assert low_cost.total < high_cost.total
+    assert low_cost.components['model_score'] == 0.0
+    assert high_cost.components['model_score'] == 0.0
+
+
+def test_better_bilateral_contact_balance_improves_common_physical_cost():
+    weak = soft_features(contact_balance=0.2)
+    balanced = replace(weak, contact_balance=0.9)
+
+    weak_cost = source_neutral_candidate_cost(weak, weights())
+    balanced_cost = source_neutral_candidate_cost(balanced, weights())
+
+    assert balanced_cost.total < weak_cost.total
+    assert balanced_cost.components['contact_balance'] < (
+        weak_cost.components['contact_balance']
+    )
+
+
+@pytest.mark.parametrize('invalid', [-0.001, 1.001, float('nan')])
+def test_contact_balance_must_be_a_finite_unit_interval_feature(invalid):
+    with pytest.raises(ValueError, match='contact_balance'):
+        soft_features(contact_balance=invalid)
 
 
 def test_support_jaw_and_stability_are_bounded_soft_rewards():

@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
+from .hybrid_grasp_candidates import VALID_CANDIDATE_SOURCES
+
 
 _NORM_EPSILON = 1e-12
 
@@ -31,6 +33,29 @@ def _validated_finite(value, name, positive=False):
     if positive and converted <= 0.0:
         raise ValueError('{} must be finite and positive'.format(name))
     return converted
+
+
+def _validated_optional_model_value(value, name):
+    if value is None:
+        return None
+    converted = _validated_finite(value, name)
+    if converted < 0.0:
+        raise ValueError('{} must be non-negative'.format(name))
+    return converted
+
+
+def _validated_candidate_provenance(candidate_source, source_lineage):
+    if candidate_source not in VALID_CANDIDATE_SOURCES:
+        raise ValueError('candidate_source must be a known canonical source')
+    if not isinstance(source_lineage, tuple) or not source_lineage:
+        raise ValueError('source_lineage must be a non-empty tuple')
+    if any(item not in VALID_CANDIDATE_SOURCES for item in source_lineage):
+        raise ValueError('source_lineage contains an unknown source')
+    if tuple(sorted(set(source_lineage))) != source_lineage:
+        raise ValueError('source_lineage must be sorted and unique')
+    if candidate_source not in source_lineage:
+        raise ValueError('source_lineage must contain candidate_source')
+    return candidate_source, source_lineage
 
 
 def _validated_target_identity(value):
@@ -202,11 +227,13 @@ class CandidateObservation:
     quaternion_xyzw: np.ndarray
     approach_base_xyz: np.ndarray
     required_open_width_m: float
-    model_width_m: float
-    model_score: float
+    model_width_m: Optional[float]
+    model_score: Optional[float]
     geometry_margin_m: float
     pre_moveit_score: float
     payload: Any = field(compare=False, repr=False)
+    candidate_source: str = 'graspnet'
+    source_lineage: tuple = ('graspnet',)
 
     def __post_init__(self):
         object.__setattr__(
@@ -250,14 +277,30 @@ class CandidateObservation:
                 self.approach_base_xyz, 3, 'approach_base_xyz', normalize=True
             ),
         )
-        for name in ('required_open_width_m', 'model_width_m'):
+        object.__setattr__(
+            self,
+            'required_open_width_m',
+            _validated_finite(
+                self.required_open_width_m,
+                'required_open_width_m',
+                positive=True,
+            ),
+        )
+        for name in ('model_width_m', 'model_score'):
             object.__setattr__(
-                self, name, _validated_finite(getattr(self, name), name, positive=True)
+                self,
+                name,
+                _validated_optional_model_value(getattr(self, name), name),
             )
-        for name in ('model_score', 'geometry_margin_m', 'pre_moveit_score'):
+        for name in ('geometry_margin_m', 'pre_moveit_score'):
             object.__setattr__(
                 self, name, _validated_finite(getattr(self, name), name)
             )
+        source, lineage = _validated_candidate_provenance(
+            self.candidate_source, self.source_lineage
+        )
+        object.__setattr__(self, 'candidate_source', source)
+        object.__setattr__(self, 'source_lineage', lineage)
 
 
 @dataclass(frozen=True)
@@ -276,14 +319,29 @@ class StableCandidate:
     quaternion_xyzw: np.ndarray
     approach_base_xyz: np.ndarray
     required_open_width_m: float
-    model_width_m: float
-    model_score: float
+    model_width_m: Optional[float]
+    model_score: Optional[float]
     geometry_margin_m: float
     pre_moveit_score: float
     position_dispersion_m: float
     orientation_dispersion_rad: float
     payload: Any = field(compare=False, repr=False)
+    candidate_source: str = 'graspnet'
+    source_lineage: tuple = ('graspnet',)
     moveit_cost: Optional[float] = None
+
+    def __post_init__(self):
+        source, lineage = _validated_candidate_provenance(
+            self.candidate_source, self.source_lineage
+        )
+        object.__setattr__(self, 'candidate_source', source)
+        object.__setattr__(self, 'source_lineage', lineage)
+        for name in ('model_width_m', 'model_score'):
+            object.__setattr__(
+                self,
+                name,
+                _validated_optional_model_value(getattr(self, name), name),
+            )
 
 
 class _CandidateTrack:
@@ -504,33 +562,8 @@ class CandidateTracker:
     @staticmethod
     def _fusion_weights(observations):
         count = len(observations)
-        if count == 1:
-            return np.ones(1, dtype=np.float64)
         freshness = np.linspace(1.0, 2.0, num=count, dtype=np.float64)
-        confidence = np.maximum(
-            np.asarray([item.model_score for item in observations]), 0.0
-        )
-        maximum_confidence = float(np.max(confidence))
-        if maximum_confidence > 0.0:
-            confidence = confidence / maximum_confidence
-        weights = (confidence + 1e-6) * freshness
-
-        largest_index = int(np.argmax(weights))
-        other_total = math.fsum(
-            float(weight)
-            for index, weight in enumerate(weights)
-            if index != largest_index
-        )
-        if count > 2 and weights[largest_index] >= other_total:
-            strict_gap = max(
-                other_total * 1e-12,
-                4.0 * abs(float(np.spacing(other_total))),
-            )
-            weights[largest_index] = other_total - strict_gap
-        elif weights[largest_index] > other_total:
-            weights[largest_index] = other_total
-        total = math.fsum(float(weight) for weight in weights)
-        weights = weights / total
+        weights = freshness / math.fsum(float(item) for item in freshness)
         if (
             not np.all(np.isfinite(weights))
             or np.any(weights <= 0.0)
@@ -543,6 +576,24 @@ class CandidateTracker:
         ):
             raise ValueError('fusion weights must be positive, finite, and normalized')
         return weights
+
+    @staticmethod
+    def _optional_weighted_median(observations, weights, attribute):
+        present_indices = [
+            index
+            for index, item in enumerate(observations)
+            if getattr(item, attribute) is not None
+        ]
+        if not present_indices:
+            return None
+        present_weights = weights[present_indices]
+        present_weights = present_weights / math.fsum(
+            float(item) for item in present_weights
+        )
+        return weighted_median(
+            [getattr(observations[index], attribute) for index in present_indices],
+            present_weights,
+        )
 
     @staticmethod
     def _coordinate_weighted_median(vectors, weights, name):
@@ -643,11 +694,11 @@ class CandidateTracker:
         required_open_width_m = weighted_median(
             [item.required_open_width_m for item in observations], weights
         )
-        model_width_m = weighted_median(
-            [item.model_width_m for item in observations], weights
+        model_width_m = self._optional_weighted_median(
+            observations, weights, 'model_width_m'
         )
-        model_score = float(
-            np.median([item.model_score for item in observations])
+        model_score = self._optional_weighted_median(
+            observations, weights, 'model_score'
         )
         pre_moveit_score = float(
             np.median([item.pre_moveit_score for item in observations])
@@ -713,5 +764,15 @@ class CandidateTracker:
             position_dispersion_m=position_dispersion_m,
             orientation_dispersion_rad=orientation_dispersion_rad,
             payload=newest.payload,
+            candidate_source=newest.candidate_source,
+            source_lineage=tuple(
+                sorted(
+                    {
+                        source
+                        for item in observations
+                        for source in item.source_lineage
+                    }
+                )
+            ),
             moveit_cost=None,
         )

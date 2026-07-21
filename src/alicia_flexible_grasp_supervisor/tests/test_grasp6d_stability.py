@@ -20,6 +20,9 @@ from alicia_flexible_grasp.grasp.grasp6d_stability import (
 )
 
 
+_DEFAULT_MODEL_WIDTH = object()
+
+
 def identity_quaternion():
     return (0.0, 0.0, 0.0, 1.0)
 
@@ -54,8 +57,10 @@ def observation(
     quaternion=None,
     approach=(0.0, 0.0, -1.0),
     width_m=0.040,
-    model_width_m=None,
+    model_width_m=_DEFAULT_MODEL_WIDTH,
     model_score=0.8,
+    candidate_source='graspnet',
+    source_lineage=('graspnet',),
     geometry_margin_m=0.012,
     pre_moveit_score=0.25,
     payload=None,
@@ -64,7 +69,7 @@ def observation(
         tool_x = center_x
     if quaternion is None:
         quaternion = identity_quaternion()
-    if model_width_m is None:
+    if model_width_m is _DEFAULT_MODEL_WIDTH:
         model_width_m = width_m - 0.002
     if payload is None:
         payload = {'request_id': request_id}
@@ -84,6 +89,8 @@ def observation(
         geometry_margin_m=geometry_margin_m,
         pre_moveit_score=pre_moveit_score,
         payload=payload,
+        candidate_source=candidate_source,
+        source_lineage=source_lineage,
     )
 
 
@@ -111,6 +118,102 @@ def test_candidate_track_requires_three_distinct_hits_in_last_five_requests():
     assert stable[0].hit_count == 3
     assert stable[0].window_count == 3
     assert stable[0].request_id == 3
+
+
+def test_physical_track_expands_lineage_uses_latest_source_and_still_needs_three_hits():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+
+    assert tracker.update(1, [observation(1)]) == []
+    assert tracker.update(
+        2,
+        [
+            observation(
+                2,
+                candidate_source='tabletop_geometry',
+                source_lineage=('graspnet', 'tabletop_geometry'),
+                model_width_m=None,
+                model_score=None,
+            )
+        ],
+    ) == []
+    stable = tracker.update(
+        3,
+        [
+            observation(
+                3,
+                candidate_source='tabletop_geometry',
+                source_lineage=('tabletop_geometry',),
+                model_width_m=None,
+                model_score=None,
+            )
+        ],
+    )
+
+    assert len(stable) == 1
+    assert stable[0].track_id == 1
+    assert stable[0].hit_count == 3
+    assert stable[0].candidate_source == 'tabletop_geometry'
+    assert stable[0].source_lineage == ('graspnet', 'tabletop_geometry')
+    assert stable[0].model_width_m == pytest.approx(0.038)
+    assert stable[0].model_score == pytest.approx(0.8)
+
+
+def test_geometry_only_track_keeps_optional_model_values_absent():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+
+    stable = []
+    for request_id in (1, 2, 3):
+        stable = tracker.update(
+            request_id,
+            [
+                observation(
+                    request_id,
+                    candidate_source='tabletop_geometry',
+                    source_lineage=('tabletop_geometry',),
+                    model_width_m=None,
+                    model_score=None,
+                )
+            ],
+        )
+
+    assert stable[0].model_width_m is None
+    assert stable[0].model_score is None
+
+
+def test_shared_tracker_fusion_weights_depend_only_on_freshness():
+    low_then_high = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    high_then_low = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    centers = (0.090, 0.100, 0.110)
+    for request_id, center_x, first_score, second_score in zip(
+        (1, 2, 3), centers, (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)
+    ):
+        first = low_then_high.update(
+            request_id,
+            [observation(request_id, center_x=center_x, model_score=first_score)],
+        )
+        second = high_then_low.update(
+            request_id,
+            [observation(request_id, center_x=center_x, model_score=second_score)],
+        )
+
+    assert first[0].center_base_xyz.tolist() == second[0].center_base_xyz.tolist()
+
+
+@pytest.mark.parametrize(
+    'changes',
+    [
+        {'candidate_source': 'unknown'},
+        {'source_lineage': ()},
+        {'source_lineage': ('tabletop_geometry', 'graspnet')},
+        {'source_lineage': ('graspnet', 'graspnet')},
+        {'source_lineage': ('tabletop_geometry',)},
+        {'model_width_m': -0.001},
+        {'model_score': float('nan')},
+    ],
+)
+def test_observation_rejects_invalid_source_lineage_and_optional_models(changes):
+    with pytest.raises(ValueError):
+        observation(1, **changes)
 
 
 def test_stable_candidate_reports_measured_pose_dispersion():

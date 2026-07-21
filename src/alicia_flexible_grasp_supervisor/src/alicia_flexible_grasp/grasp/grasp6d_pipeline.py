@@ -435,6 +435,7 @@ class SoftCandidateFeatures:
     stability_hit_ratio: float
     position_dispersion_m: float
     orientation_dispersion_rad: float
+    contact_balance: float = 0.0
 
     def __post_init__(self):
         for item in fields(self):
@@ -447,6 +448,8 @@ class SoftCandidateFeatures:
                 item.name,
                 _required_finite(getattr(self, item.name), item.name),
             )
+        if not 0.0 <= self.contact_balance <= 1.0:
+            raise ValueError('contact_balance must be between 0 and 1')
 
 
 @dataclass(frozen=True)
@@ -466,6 +469,7 @@ class SoftScoreWeights:
     stability_hit_ratio_weight: float = 0.8
     position_dispersion_weight: float = 0.4
     orientation_dispersion_weight: float = 0.4
+    contact_balance_weight: float = 0.3
     cloud_distance_knee_m: float = 0.020
     center_distance_knee_m: float = 0.040
     downward_approach_cos_knee: float = 0.75
@@ -614,8 +618,17 @@ def soft_candidate_cost(features, weights):
             features.orientation_dispersion_rad,
             weights.orientation_dispersion_knee_rad,
         ),
+        'contact_balance': -weights.contact_balance_weight
+        * features.contact_balance,
     }
     return SoftScore(total=math.fsum(components.values()), components=components)
+
+
+def source_neutral_candidate_cost(features, weights):
+    """Return common physical cost without cross-source confidence bias."""
+    if not isinstance(features, SoftCandidateFeatures):
+        raise TypeError('features must be SoftCandidateFeatures')
+    return soft_candidate_cost(replace(features, model_score=0.0), weights)
 
 
 @dataclass(frozen=True)
