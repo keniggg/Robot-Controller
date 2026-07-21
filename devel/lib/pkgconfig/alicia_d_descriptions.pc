@@ -1,8 +1,0 @@
-prefix=/home/zhuyupei/alicia_wa_full/devel
-
-Name: alicia_d_descriptions
-Description: Description of alicia_d_descriptions
-Version: 1.0.0
-Cflags: 
-Libs: -L${prefix}/lib 
-Requires: 

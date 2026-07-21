@@ -1,8 +1,0 @@
-prefix=/home/zhuyupei/alicia_wa_full/install
-
-Name: alicia_d_calibration
-Description: Description of alicia_d_calibration
-Version: 0.0.0
-Cflags: 
-Libs: -L${prefix}/lib 
-Requires: 

@@ -1,2 +1,15 @@
 .worktrees/
 .superpowers/
+
+# ROS/catkin generated workspaces
+build/
+devel/
+build.bak_*/
+devel.bak_*/
+
+# Python caches and local test output
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+**/.pytest_cache/

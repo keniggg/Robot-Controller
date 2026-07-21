@@ -1,2 +1,0 @@
-alicia_flexible_grasp_supervisor:easy_handeye/easy_handeye:easy_handeye/easy_handeye_msgs:easy_handeye/rqt_easy_handeye:real-arm/alicia_d_calibration:real-arm/alicia_d_descriptions:real-arm/alicia_d_drag_teaching:real-arm/alicia_d_driver:real-arm/alicia_d_moveit:real-arm/alicia_d_object_sort
--DCATKIN_DEVEL_PREFIX=/home/zhuyupei/alicia_wa_full/devel -DCMAKE_INSTALL_PREFIX=/home/zhuyupei/alicia_wa_full/install -G Unix Makefiles
