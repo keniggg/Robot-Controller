@@ -91,10 +91,12 @@ def valid_payload(now_sec=100.0):
             }
         )
     return {
-        'schema_version': 2,
+        'schema_version': 3,
         'plan_id': 'plan-carton-001',
         'snapshot_stamp_sec': now_sec - 0.5,
         'model_choice': 'carton_seg',
+        'candidate_source': 'graspnet',
+        'candidate_source_lineage': ['graspnet'],
         'joint_names': ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'],
         'joint_positions': [0.0, 0.1, -0.2, 0.3, -0.1, 0.2],
         'trajectory': trajectory,
@@ -107,7 +109,7 @@ def valid_payload(now_sec=100.0):
             'palm_size_xyz_m': [0.1175, 0.1550, 0.0774],
         },
         'object_model': {
-            'type': 'carton_box',
+            'type': 'obb_box',
             'pose_base': {
                 'position_m': [0.30, 0.0, 0.04],
                 'quaternion_xyzw': [0.0, 0.0, 0.0, 1.0],
@@ -152,6 +154,9 @@ def test_task10_builder_output_is_accepted_by_server_schema_validator():
         valid=True,
         plan_id='task10-builder-contract',
         model_choice='carton_seg',
+        candidate_source='graspnet',
+        candidate_source_lineage=['graspnet'],
+        has_candidate_model_width=True,
         score=0.9,
         header=types.SimpleNamespace(
             stamp=types.SimpleNamespace(to_sec=lambda: now_sec - 0.5),
@@ -174,23 +179,23 @@ def test_task10_builder_output_is_accepted_by_server_schema_validator():
     )
 
     assert set(payload) == set(valid_payload())
-    validated = server_module._validate_v2_payload(payload, now_sec=now_sec)
+    validated = server_module._validate_v3_payload(payload, now_sec=now_sec)
     assert validated['plan_id'] == plan.plan_id
 
 
 def _invalid_code(payload, now_sec=100.0):
     with pytest.raises(server_module.ProtocolValidationError) as caught:
-        server_module._validate_v2_payload(payload, now_sec=now_sec)
+        server_module._validate_v3_payload(payload, now_sec=now_sec)
     return caught.value.code
 
 
-def test_validate_v2_payload_normalizes_pose_and_support_quaternions():
+def test_validate_v3_payload_normalizes_pose_and_support_quaternions():
     payload = valid_payload()
     payload['trajectory'][0]['quaternion_xyzw'] = [0.0, 0.0, 0.0, 2.0]
     payload['support_plane']['normal_base'] = [0.0, 0.0, 4.0]
     payload['support_plane']['offset_m'] = 0.8
 
-    validated = server_module._validate_v2_payload(payload, now_sec=100.0)
+    validated = server_module._validate_v3_payload(payload, now_sec=100.0)
 
     assert math.sqrt(sum(value * value for value in validated['trajectory'][0]['quaternion_xyzw'])) == pytest.approx(1.0)
     assert validated['support_plane']['normal_base'] == pytest.approx([0.0, 0.0, 1.0])
@@ -200,7 +205,7 @@ def test_validate_v2_payload_normalizes_pose_and_support_quaternions():
 def test_snapshot_age_boundary_is_accepted_but_zero_and_future_are_stale():
     boundary = valid_payload()
     boundary['snapshot_stamp_sec'] = 98.0
-    assert server_module._validate_v2_payload(boundary, now_sec=100.0)['plan_id'] == boundary['plan_id']
+    assert server_module._validate_v3_payload(boundary, now_sec=100.0)['plan_id'] == boundary['plan_id']
 
     for stamp in (0.0, 100.001):
         payload = valid_payload()
@@ -222,6 +227,9 @@ def test_plan_shape_failure_precedes_other_validation_failures():
         (lambda p: p.update(schema_version=1), 'PLAN_INVALID'),
         (lambda p: p.update(plan_id=''), 'PLAN_INVALID'),
         (lambda p: p.update(model_choice=''), 'PLAN_INVALID'),
+        (lambda p: p.update(candidate_source='unknown'), 'PLAN_INVALID'),
+        (lambda p: p.update(candidate_source_lineage=[]), 'PLAN_INVALID'),
+        (lambda p: p.update(candidate_source_lineage=['tabletop_geometry']), 'PLAN_INVALID'),
         (lambda p: p.update(snapshot_stamp_sec=float('nan')), 'PLAN_INVALID'),
         (lambda p: p.update(snapshot_stamp_sec=97.0), 'PLAN_STALE'),
         (lambda p: p.update(joint_names=[]), 'JOINT_STATE_INVALID'),
@@ -244,6 +252,7 @@ def test_plan_shape_failure_precedes_other_validation_failures():
         (lambda p: p['support_plane'].update(offset_m=float('inf')), 'SUPPORT_PLANE_INVALID'),
         (lambda p: p['object_model'].update(size_xyz_m=[0.2, -0.1, 0.08]), 'OBB_INVALID'),
         (lambda p: p['object_model'].update(size_xyz_m=[0.2, float('nan'), 0.08]), 'OBB_INVALID'),
+        (lambda p: p['object_model'].update(type='carton_box'), 'OBB_INVALID'),
         (lambda p: p['object_model'].update(type='mouse_compound'), 'OBB_INVALID'),
         (lambda p: p['object_model'].update(size_xyz_m=[0.6001, 0.1, 0.08]), 'OBB_INVALID'),
         (lambda p: p['object_model'].update(size_xyz_m=[0.2, 0.1, 0.5001]), 'OBB_INVALID'),
@@ -253,10 +262,39 @@ def test_plan_shape_failure_precedes_other_validation_failures():
         (lambda p: p['object_model'].update(friction=[1.2, -0.1, 0.02]), 'OBB_INVALID'),
     ],
 )
-def test_invalid_v2_payloads_fail_closed_with_stable_code(mutation, expected_code):
+def test_invalid_v3_payloads_fail_closed_with_stable_code(mutation, expected_code):
     payload = valid_payload()
     mutation(payload)
     assert _invalid_code(payload) == expected_code
+
+
+def test_geometry_source_accepts_only_json_null_candidate_width():
+    payload = valid_payload()
+    payload['candidate_source'] = 'tabletop_geometry'
+    payload['candidate_source_lineage'] = ['tabletop_geometry']
+    payload['candidate_width_m'] = None
+
+    validated = server_module._validate_v3_payload(payload, now_sec=100.0)
+
+    assert validated['candidate_width_m'] is None
+
+
+@pytest.mark.parametrize(
+    'mutation',
+    (
+        lambda p: p.update(candidate_width_m=None),
+        lambda p: p.update(candidate_width_m=0.0),
+        lambda p: (
+            p.update(candidate_source='tabletop_geometry'),
+            p.update(candidate_source_lineage=['tabletop_geometry']),
+        ),
+    ),
+)
+def test_source_width_mismatches_fail_closed(mutation):
+    payload = valid_payload()
+    mutation(payload)
+
+    assert _invalid_code(payload) == 'PLAN_INVALID'
 
 
 def test_carton_size_is_quantized_to_one_millimetre_for_cache_key():
@@ -433,7 +471,7 @@ def test_injected_carton_uses_half_extents_and_dynamic_support_body():
     assert root.find(".//body[@name='detected_support']/geom").attrib['type'] == 'plane'
 
 
-def test_schema_v2_dynamic_scene_disables_legacy_floor_collision_authority():
+def test_schema_v3_dynamic_scene_disables_legacy_floor_collision_authority():
     root = ElementTree.fromstring(
         server_module._inject_dynamic_scene(BASE_XML, valid_payload()['object_model'])
     )
@@ -967,7 +1005,7 @@ def test_validated_simulation_maps_lift_failure_to_the_exact_component(
         ),
     )
     now_sec = server_module.time.time()
-    payload = server_module._validate_v2_payload(
+    payload = server_module._validate_v3_payload(
         valid_payload(now_sec=now_sec),
         now_sec=now_sec,
     )
@@ -1384,7 +1422,7 @@ def test_unified_http_predict_parse_failures_return_complete_fail_closed_contrac
     assert isinstance(response['error'], str) and response['error']
 
 
-def test_server_serves_schema_v2_health_sync_predict_and_simulate():
+def test_server_serves_schema_v3_health_sync_predict_and_simulate():
     http_server = server_module.make_server(
         '127.0.0.1',
         0,
@@ -1439,6 +1477,8 @@ def test_server_serves_schema_v2_health_sync_predict_and_simulate():
 
     assert sim['ok'] is True
     assert sim['plan_id'] == 'plan-carton-001'
+    assert sim['candidate_source'] == 'graspnet'
+    assert sim['candidate_source_lineage'] == ['graspnet']
     assert sim['simulation_ok'] is True
     assert all(sim[key] is True for key in (
         'ik_success',
@@ -1623,7 +1663,7 @@ def test_optional_mujoco_smoke_compiles_real_dynamic_carton_model():
     import mujoco
 
     now_sec = server_module.time.time()
-    payload = server_module._validate_v2_payload(
+    payload = server_module._validate_v3_payload(
         valid_payload(now_sec=now_sec),
         now_sec=now_sec,
     )

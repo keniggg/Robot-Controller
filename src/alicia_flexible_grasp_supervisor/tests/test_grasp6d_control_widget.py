@@ -37,6 +37,9 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         plan.valid = True
         plan.model_choice = 'carton_segment:' + str(plan_id)
         plan.score = 0.9
+        plan.candidate_source = 'graspnet'
+        plan.candidate_source_lineage = ['graspnet']
+        plan.has_candidate_model_width = True
         plan.candidate_width_m = 0.039
         plan.required_open_width_m = 0.044
         for index in range(4):
@@ -271,6 +274,52 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
                 over, now_sec=10.0, validity_sec=2.0
             ).fresh
         )
+
+    def test_gui_accepts_geometry_source_without_model_width(self):
+        plan = self._rich_plan(stamp_sec=9.0)
+        plan.candidate_source = 'tabletop_geometry'
+        plan.candidate_source_lineage = ['tabletop_geometry']
+        plan.has_candidate_model_width = False
+        plan.candidate_width_m = 0.0
+        plan.plan_id = compute_plan_id(plan)
+
+        self.assertTrue(
+            control_widget.validate_enriched_plan(
+                plan,
+                now_sec=10.0,
+                validity_sec=2.0,
+            ).fresh
+        )
+
+    def test_gui_rejects_invalid_candidate_provenance(self):
+        mutations = (
+            lambda plan: setattr(plan, 'has_candidate_model_width', False),
+            lambda plan: setattr(plan, 'candidate_source', 'unknown'),
+            lambda plan: setattr(plan, 'candidate_source_lineage', []),
+            lambda plan: (
+                setattr(plan, 'candidate_source', 'tabletop_geometry'),
+                setattr(
+                    plan,
+                    'candidate_source_lineage',
+                    ['tabletop_geometry'],
+                ),
+            ),
+        )
+        for mutation in mutations:
+            plan = self._rich_plan(stamp_sec=9.0)
+            mutation(plan)
+            with self.subTest(
+                source=plan.candidate_source,
+                lineage=list(plan.candidate_source_lineage),
+                present=plan.has_candidate_model_width,
+            ):
+                self.assertFalse(
+                    control_widget.validate_enriched_plan(
+                        plan,
+                        now_sec=10.0,
+                        validity_sec=2.0,
+                    ).fresh
+                )
 
     def test_replacement_changes_ready_plan_identity_without_aliasing(self):
         tracker = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)

@@ -23,6 +23,7 @@ from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     stamp_nanoseconds as _stamp_nanoseconds,
     stamp_seconds as _stamp_seconds,
     strict_plan_id_equal,
+    validate_candidate_model_width,
     validate_finite_pose,
     validate_plan_header_binding,
     validate_rich_geometry,
@@ -125,6 +126,8 @@ def _new_mujoco_execution_audit(plan):
             'sha256': None,
             'raw_echo_plan_id': None,
             'raw_echo_plan_id_type': None,
+            'candidate_source': None,
+            'candidate_source_lineage': None,
             'score': None,
             'failure_code': None,
             'failure_reason': None,
@@ -175,6 +178,14 @@ def _record_mujoco_payload(audit, payload):
                 payload.get('snapshot_stamp_sec')
             ),
             'model_choice': _bounded_text(payload.get('model_choice'), 256),
+            'candidate_source': _bounded_text(
+                payload.get('candidate_source'), 64
+            ),
+            'candidate_source_lineage': (
+                list(payload.get('candidate_source_lineage'))
+                if isinstance(payload.get('candidate_source_lineage'), list)
+                else None
+            ),
             'joint_count': len(joint_names) if isinstance(joint_names, list) else None,
             'trajectory_count': len(trajectory) if isinstance(trajectory, list) else None,
             'candidate_width_m': _strict_json_number(
@@ -218,6 +229,17 @@ def _record_mujoco_response(audit, response):
     echoed_id = response.get('plan_id')
     record['raw_echo_plan_id'] = echoed_id if isinstance(echoed_id, str) else None
     record['raw_echo_plan_id_type'] = type(echoed_id).__name__
+    raw_source = response.get('candidate_source')
+    record['candidate_source'] = (
+        raw_source if isinstance(raw_source, str) else None
+    )
+    raw_lineage = response.get('candidate_source_lineage')
+    record['candidate_source_lineage'] = (
+        list(raw_lineage)
+        if isinstance(raw_lineage, list)
+        and all(isinstance(item, str) for item in raw_lineage)
+        else None
+    )
     record['score'] = _strict_json_number(response.get('score'))
     raw_code = response.get('failure_code')
     record['failure_code'] = raw_code if isinstance(raw_code, str) else None
@@ -412,16 +434,19 @@ def validate_execution_plan(plan, now_sec, validity_sec, enforce_freshness=True)
         )
     try:
         score = float(plan.score)
-        candidate_width = float(plan.candidate_width_m)
         required_width = float(plan.required_open_width_m)
     except Exception:
         return PlanValidationResult(False, 'PLAN_MALFORMED', 'plan scalar fields are invalid')
-    if (
-        not math.isfinite(score)
-        or not math.isfinite(candidate_width)
-        or candidate_width < 0.0
-    ):
-        return PlanValidationResult(False, 'PLAN_MALFORMED', 'plan score or candidate width is non-finite')
+    if not math.isfinite(score):
+        return PlanValidationResult(False, 'PLAN_MALFORMED', 'plan score is non-finite')
+    try:
+        validate_candidate_model_width(plan)
+    except (TypeError, ValueError, AttributeError) as exc:
+        return PlanValidationResult(
+            False,
+            'CANDIDATE_SOURCE_INVALID',
+            str(exc),
+        )
     if not required_open_width_is_valid(required_width):
         return PlanValidationResult(False, 'GRIPPER_TOO_NARROW', 'required opening is outside (0, 0.050] m')
     if not _finite_geometry(getattr(plan, 'object_geometry', None)):
@@ -1937,6 +1962,10 @@ class GraspTaskNode:
                 response,
                 request_plan_id,
                 twin_cfg.get('min_score', 80),
+                expected_candidate_source=plan.candidate_source,
+                expected_candidate_source_lineage=(
+                    plan.candidate_source_lineage
+                ),
             )
         except Exception as exc:
             gate = PlanValidationResult(

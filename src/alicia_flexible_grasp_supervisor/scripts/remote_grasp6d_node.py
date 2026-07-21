@@ -29,6 +29,8 @@ from alicia_flexible_grasp.grasp.grasp6d_sequence import make_grasp_sequence_fro
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     compute_plan_id,
     required_open_width_is_valid,
+    validate_candidate_model_width,
+    validate_candidate_source,
     validate_plan_header_binding,
     validate_rich_geometry,
 )
@@ -2274,7 +2276,9 @@ def make_grasp_plan_pose_array(grasp_pose, stamp, grasp_config):
 
 
 def _candidate_plan_poses(selected_candidate):
-    sequence = getattr(selected_candidate, '_grasp_sequence', None)
+    sequence = getattr(selected_candidate, 'grasp_sequence', None)
+    if sequence is None:
+        sequence = getattr(selected_candidate, '_grasp_sequence', None)
     if sequence is None:
         raise ValueError('selected candidate has no four-stage grasp sequence')
     stamped = (
@@ -2295,17 +2299,37 @@ def build_rich_plan(
     model_choice,
 ):
     """Build one immutable-by-copy execution plan from one RGB-D snapshot."""
-    score = float(getattr(selected_candidate, 'score', float('nan')))
-    candidate_width = float(
-        getattr(selected_candidate, 'width_m', float('nan'))
+    raw_score = getattr(selected_candidate, 'score', None)
+    if raw_score is None:
+        raw_score = getattr(selected_candidate, 'model_score', None)
+    if raw_score is None:
+        raw_score = getattr(selected_candidate, 'source_local_score', None)
+    score = float(raw_score)
+    if isinstance(selected_candidate, RemoteGraspCandidate):
+        default_source = 'graspnet'
+        default_lineage = ('graspnet',)
+    else:
+        default_source = ''
+        default_lineage = ()
+    candidate_source, source_lineage = validate_candidate_source(
+        getattr(selected_candidate, 'candidate_source', default_source),
+        getattr(selected_candidate, 'source_lineage', default_lineage),
     )
+    if hasattr(selected_candidate, 'model_width_m'):
+        candidate_width = selected_candidate.model_width_m
+    elif isinstance(selected_candidate, RemoteGraspCandidate):
+        candidate_width = selected_candidate.width_m
+    else:
+        candidate_width = None
     required_width = float(
         getattr(selected_candidate, 'required_open_width_m', float('nan'))
     )
     if not math.isfinite(score):
         raise ValueError('selected candidate score is non-finite')
-    if not math.isfinite(candidate_width) or candidate_width < 0.0:
-        raise ValueError('selected candidate width is invalid')
+    if candidate_width is not None:
+        candidate_width = float(candidate_width)
+        if not math.isfinite(candidate_width) or candidate_width < 0.0:
+            raise ValueError('selected candidate model width is invalid')
     if not required_open_width_is_valid(required_width):
         raise ValueError('required open width must be in (0, 0.050] m')
     model = str(model_choice or '').strip()
@@ -2319,13 +2343,19 @@ def build_rich_plan(
     if len(message.poses) != 4:
         raise ValueError('rich plan must contain exactly four poses')
     message.score = score
-    message.candidate_width_m = candidate_width
+    message.candidate_source = candidate_source
+    message.candidate_source_lineage = list(source_lineage)
+    message.has_candidate_model_width = candidate_width is not None
+    message.candidate_width_m = (
+        0.0 if candidate_width is None else candidate_width
+    )
     message.required_open_width_m = required_width
     message.object_geometry = deepcopy(geometry_msg)
     message.model_choice = model
     message.diagnostic = ''
     validate_rich_geometry(message.object_geometry)
     validate_plan_header_binding(message)
+    validate_candidate_model_width(message)
     message.plan_id = compute_plan_id(message)
     return message
 

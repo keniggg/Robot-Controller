@@ -10,6 +10,7 @@ import struct
 _CANONICAL_PREFIX = b'ALICIA_GRASP6D_PLAN_V1\x00'
 _PLAN_ID_PATTERN = re.compile(r'^[0-9a-f]{24}$')
 SUPPORTED_GEOMETRY_SOURCE_MODES = frozenset(('instance_mask', 'bbox_depth'))
+SUPPORTED_CANDIDATE_SOURCES = frozenset(('graspnet', 'tabletop_geometry'))
 GRIPPER_MAX_OPEN_WIDTH_M = 0.050
 
 
@@ -133,6 +134,36 @@ def validate_plan_header_binding(plan, base_frame='base_link'):
     return plan_stamp_ns
 
 
+def validate_candidate_source(source, lineage):
+    canonical = str(source or '')
+    items = tuple(str(item or '') for item in lineage or ())
+    if canonical not in SUPPORTED_CANDIDATE_SOURCES:
+        raise ValueError('candidate source is unsupported')
+    if not items or tuple(sorted(set(items))) != items:
+        raise ValueError('candidate source lineage must be sorted and unique')
+    if canonical not in items or any(
+        item not in SUPPORTED_CANDIDATE_SOURCES for item in items
+    ):
+        raise ValueError('candidate source lineage is inconsistent')
+    return canonical, items
+
+
+def validate_candidate_model_width(plan):
+    source, _lineage = validate_candidate_source(
+        plan.candidate_source,
+        plan.candidate_source_lineage,
+    )
+    present = bool(plan.has_candidate_model_width)
+    width = float(plan.candidate_width_m)
+    if not math.isfinite(width) or width < 0.0:
+        raise ValueError('candidate model width is invalid')
+    if source == 'graspnet' and (not present or width <= 0.0):
+        raise ValueError('GraspNet plan requires its model width')
+    if source == 'tabletop_geometry' and (present or width != 0.0):
+        raise ValueError('geometry plan must encode absent model width')
+    return None if not present else width
+
+
 def canonical_plan_bytes(plan):
     """Return Task 9 canonical bytes; header binding is validated separately."""
     stamp_ns = stamp_nanoseconds(
@@ -144,6 +175,14 @@ def canonical_plan_bytes(plan):
     if not model_text or model_text != model_text.strip():
         raise ValueError('model choice must be non-empty and canonical')
     model = model_text.encode('utf-8')
+    source_text, lineage = validate_candidate_source(
+        getattr(plan, 'candidate_source', None),
+        getattr(plan, 'candidate_source_lineage', None),
+    )
+    source = source_text.encode('utf-8')
+    lineage_bytes = tuple(item.encode('utf-8') for item in lineage)
+    candidate_width = validate_candidate_model_width(plan)
+    candidate_width_value = float(plan.candidate_width_m)
     poses = list(getattr(plan, 'poses', ()) or ())
     if len(poses) != 4:
         raise ValueError('rich plan must contain exactly four poses')
@@ -151,20 +190,31 @@ def canonical_plan_bytes(plan):
     payload = bytearray(_CANONICAL_PREFIX)
     payload.extend(struct.pack('>qI', stamp_ns, len(model)))
     payload.extend(model)
+    payload.extend(struct.pack('>II', len(source), len(lineage_bytes)))
+    payload.extend(source)
+    for item in lineage_bytes:
+        payload.extend(struct.pack('>I', len(item)))
+        payload.extend(item)
+    payload.extend(
+        struct.pack(
+            '>?f',
+            candidate_width is not None,
+            candidate_width_value,
+        )
+    )
     for pose in poses:
         payload.extend(
             struct.pack('>7d', *validate_finite_pose(pose, 'plan pose'))
         )
     try:
-        candidate_width = float(plan.candidate_width_m)
         required_width = float(plan.required_open_width_m)
     except Exception as exc:
-        raise ValueError('plan width fields are unavailable') from exc
-    if not math.isfinite(candidate_width) or not math.isfinite(required_width):
-        raise ValueError('plan width fields must be finite')
-    # These two message fields are ROS float32 values. Pack at wire precision
-    # so the producer and a subscriber recompute the same digest.
-    payload.extend(struct.pack('>2f', candidate_width, required_width))
+        raise ValueError('required plan width field is unavailable') from exc
+    if not math.isfinite(required_width):
+        raise ValueError('required plan width field must be finite')
+    # Message width fields are ROS float32 values. Pack at wire precision so
+    # the producer and a subscriber recompute the same digest.
+    payload.extend(struct.pack('>f', required_width))
     geometry_pose, geometry_size, support = validate_rich_geometry(
         getattr(plan, 'object_geometry', None)
     )

@@ -8,3 +8,6 @@ alicia_flexible_grasp_supervisor/ObjectGeometry object_geometry
 string model_choice
 string plan_id
 string diagnostic
+string candidate_source
+string[] candidate_source_lineage
+bool has_candidate_model_width

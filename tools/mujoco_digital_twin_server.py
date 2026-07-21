@@ -46,7 +46,10 @@ DEFAULT_MODEL_XML = (
     / 'Alicia_D_v5_6_gripper_50mm.xml'
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+SUPPORTED_CANDIDATE_SOURCES = frozenset(
+    ('graspnet', 'tabletop_geometry')
+)
 MAX_SNAPSHOT_AGE_SEC = 2.0
 MAX_INNER_GAP_M = 0.050
 MAX_CARTON_DIMENSION_M = 0.600
@@ -162,13 +165,53 @@ def _validated_pose(value, code, field_name):
     }
 
 
-def _validate_v2_payload(payload, now_sec=None, max_snapshot_age_sec=MAX_SNAPSHOT_AGE_SEC):
-    """Return a normalized schema-v2 request or raise a stable fail-closed error."""
+def _validated_candidate_provenance(payload):
+    source = payload.get('candidate_source')
+    lineage = payload.get('candidate_source_lineage')
+    if source not in SUPPORTED_CANDIDATE_SOURCES:
+        raise ProtocolValidationError(
+            'PLAN_INVALID',
+            'candidate_source is unsupported',
+        )
+    if (
+        not isinstance(lineage, list)
+        or not lineage
+        or any(not isinstance(item, str) for item in lineage)
+        or sorted(set(lineage)) != lineage
+        or source not in lineage
+        or any(item not in SUPPORTED_CANDIDATE_SOURCES for item in lineage)
+    ):
+        raise ProtocolValidationError(
+            'PLAN_INVALID',
+            'candidate_source_lineage must be canonical and consistent',
+        )
+    width = payload.get('candidate_width_m')
+    if source == 'graspnet':
+        width = _finite_float(width, 'PLAN_INVALID', 'candidate_width_m')
+        if width <= 0.0:
+            raise ProtocolValidationError(
+                'PLAN_INVALID',
+                'GraspNet candidate_width_m must be positive',
+            )
+    elif width is not None:
+        raise ProtocolValidationError(
+            'PLAN_INVALID',
+            'tabletop_geometry candidate_width_m must be null',
+        )
+    return source, list(lineage), width
+
+
+def _validate_v3_payload(
+    payload,
+    now_sec=None,
+    max_snapshot_age_sec=MAX_SNAPSHOT_AGE_SEC,
+):
+    """Return a normalized schema-v3 request or raise a stable error."""
     if not isinstance(payload, dict):
         raise ProtocolValidationError('PLAN_INVALID', 'request must be a JSON object')
     result = copy.deepcopy(payload)
     if result.get('schema_version') != SCHEMA_VERSION:
-        raise ProtocolValidationError('PLAN_INVALID', 'schema_version must be 2')
+        raise ProtocolValidationError('PLAN_INVALID', 'schema_version must be 3')
     if not isinstance(result.get('plan_id'), str) or not result.get('plan_id'):
         raise ProtocolValidationError('PLAN_INVALID', 'plan_id must be a non-empty string')
     if not isinstance(result.get('model_choice'), str) or not result.get('model_choice'):
@@ -182,14 +225,11 @@ def _validate_v2_payload(payload, now_sec=None, max_snapshot_age_sec=MAX_SNAPSHO
         _validated_pose(item, 'PLAN_INVALID', 'trajectory[%d]' % index)
         for index, item in enumerate(trajectory)
     ]
-    candidate_width = _finite_float(
-        result.get('candidate_width_m'),
-        'PLAN_INVALID',
-        'candidate_width_m',
-    )
-    if candidate_width < 0.0:
-        raise ProtocolValidationError('PLAN_INVALID', 'candidate_width_m must be non-negative')
-    result['candidate_width_m'] = candidate_width
+    (
+        result['candidate_source'],
+        result['candidate_source_lineage'],
+        result['candidate_width_m'],
+    ) = _validated_candidate_provenance(result)
 
     now = time.time() if now_sec is None else _finite_float(now_sec, 'PLAN_INVALID', 'now_sec')
     max_age = _finite_float(max_snapshot_age_sec, 'PLAN_INVALID', 'max_snapshot_age_sec')
@@ -261,8 +301,8 @@ def _validate_v2_payload(payload, now_sec=None, max_snapshot_age_sec=MAX_SNAPSHO
         )
 
     object_model = result.get('object_model')
-    if not isinstance(object_model, dict) or object_model.get('type') != 'carton_box':
-        raise ProtocolValidationError('OBB_INVALID', 'object_model.type must be carton_box')
+    if not isinstance(object_model, dict) or object_model.get('type') != 'obb_box':
+        raise ProtocolValidationError('OBB_INVALID', 'object_model.type must be obb_box')
     object_model['pose_base'] = _validated_pose(
         object_model.get('pose_base'),
         'OBB_INVALID',
@@ -280,12 +320,12 @@ def _validate_v2_payload(payload, now_sec=None, max_snapshot_age_sec=MAX_SNAPSHO
     ):
         raise ProtocolValidationError(
             'OBB_INVALID',
-            'carton dimensions must be positive, at most 0.600 m, and height at most 0.500 m',
+            'OBB dimensions must be positive, at most 0.600 m, and height at most 0.500 m',
         )
     mass = _finite_float(object_model.get('mass_kg'), 'OBB_INVALID', 'object_model.mass_kg')
     friction = _finite_vector(object_model.get('friction'), 3, 'OBB_INVALID', 'object_model.friction')
     if mass <= 0.0 or any(value < 0.0 for value in friction):
-        raise ProtocolValidationError('OBB_INVALID', 'carton mass must be positive and friction non-negative')
+        raise ProtocolValidationError('OBB_INVALID', 'OBB mass must be positive and friction non-negative')
     object_model['size_xyz_m'] = size
     object_model['mass_kg'] = mass
     object_model['friction'] = friction
@@ -690,6 +730,24 @@ def _normalize_http_simulation_result(payload, result, sim_backend):
         backend_name = str(getattr(sim_backend, 'name', 'unknown'))
     except Exception:
         backend_name = 'unknown'
+    try:
+        candidate_source, candidate_source_lineage, _width = (
+            _validated_candidate_provenance(payload)
+        )
+    except ProtocolValidationError as exc:
+        return _internal_simulation_failure(plan_id, backend_name, exc.reason)
+
+    def internal_failure(reason):
+        response = _internal_simulation_failure(
+            plan_id,
+            backend_name,
+            reason,
+        )
+        response['candidate_source'] = candidate_source
+        response['candidate_source_lineage'] = list(
+            candidate_source_lineage
+        )
+        return response
 
     required_bool_keys = (
         'simulation_ok',
@@ -699,28 +757,20 @@ def _normalize_http_simulation_result(payload, result, sim_backend):
         'lift_success',
     )
     if not isinstance(result, dict):
-        return _internal_simulation_failure(
-            plan_id,
-            backend_name,
+        return internal_failure(
             'simulation backend returned a non-object result',
         )
     if result.get('plan_id') != plan_id:
-        return _internal_simulation_failure(
-            plan_id,
-            backend_name,
+        return internal_failure(
             'simulation backend returned a missing or mismatched plan_id',
         )
     if any(type(result.get(key)) is not bool for key in required_bool_keys):
-        return _internal_simulation_failure(
-            plan_id,
-            backend_name,
+        return internal_failure(
             'simulation backend returned missing or non-boolean safety components',
         )
     score = result.get('score')
     if isinstance(score, bool):
-        return _internal_simulation_failure(
-            plan_id,
-            backend_name,
+        return internal_failure(
             'simulation backend returned a non-finite score',
         )
     try:
@@ -728,17 +778,13 @@ def _normalize_http_simulation_result(payload, result, sim_backend):
     except (TypeError, ValueError, OverflowError):
         score = float('nan')
     if not math.isfinite(score):
-        return _internal_simulation_failure(
-            plan_id,
-            backend_name,
+        return internal_failure(
             'simulation backend returned a non-finite score',
         )
     failure_code = result.get('failure_code')
     failure_reason = result.get('failure_reason')
     if not isinstance(failure_code, str) or not isinstance(failure_reason, str):
-        return _internal_simulation_failure(
-            plan_id,
-            backend_name,
+        return internal_failure(
             'simulation backend returned incomplete failure details',
         )
     try:
@@ -760,11 +806,11 @@ def _normalize_http_simulation_result(payload, result, sim_backend):
         backend=backend_name,
     )
     if normalized['simulation_ok'] is not result['simulation_ok']:
-        return _internal_simulation_failure(
-            plan_id,
-            backend_name,
+        return internal_failure(
             'simulation backend returned inconsistent safety components',
         )
+    normalized['candidate_source'] = candidate_source
+    normalized['candidate_source_lineage'] = list(candidate_source_lineage)
     return normalized
 
 
@@ -968,7 +1014,31 @@ class MujocoDigitalTwinHTTPHandler(BaseHTTPRequestHandler):
 
     def _handle_simulate_grasp(self, payload):
         try:
-            result = self.server.sim_backend.simulate_grasp(payload)
+            validated_payload = _validate_v3_payload(
+                payload,
+                now_sec=time.time(),
+            )
+            result = self.server.sim_backend.simulate_grasp(
+                validated_payload
+            )
+            payload = validated_payload
+        except ProtocolValidationError as exc:
+            result = _build_component_response(
+                plan_id=_echo_plan_id(payload),
+                pass_score=80,
+                score=0.0,
+                ik_success=False,
+                collision_free=False,
+                contact_success=False,
+                lift_success=False,
+                failure_code=exc.code,
+                failure_reason=exc.reason,
+                backend=getattr(
+                    self.server.sim_backend,
+                    'name',
+                    'unknown',
+                ),
+            )
         except Exception as exc:
             result = _internal_simulation_failure(
                 _echo_plan_id(payload),
@@ -1082,7 +1152,7 @@ class MockDigitalTwinBackend:
     def simulate_grasp(self, payload):
         plan_id = _echo_plan_id(payload)
         try:
-            _validate_v2_payload(payload, now_sec=time.time())
+            _validate_v3_payload(payload, now_sec=time.time())
         except ProtocolValidationError as exc:
             response = _build_component_response(
                 plan_id=plan_id,
@@ -1176,7 +1246,7 @@ class MujocoDigitalTwinBackend:
     def simulate_grasp(self, payload):
         plan_id = _echo_plan_id(payload)
         try:
-            payload = _validate_v2_payload(payload, now_sec=time.time())
+            payload = _validate_v3_payload(payload, now_sec=time.time())
         except ProtocolValidationError as exc:
             return self._failure_response(plan_id, exc.code, exc.reason)
         with self._lock:

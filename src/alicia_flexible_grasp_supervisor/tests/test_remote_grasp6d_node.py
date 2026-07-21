@@ -311,6 +311,8 @@ def make_selected_candidate(required_width_m=0.044):
         tool_approach_axis='z',
     )
     selected.required_open_width_m = float(required_width_m)
+    selected.candidate_source = 'graspnet'
+    selected.source_lineage = ('graspnet',)
     return selected
 
 
@@ -471,6 +473,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertTrue(plan.valid)
         self.assertEqual(len(plan.poses), 4)
         self.assertAlmostEqual(plan.score, 0.91)
+        self.assertEqual(plan.candidate_source, 'graspnet')
+        self.assertEqual(plan.candidate_source_lineage, ['graspnet'])
+        self.assertTrue(plan.has_candidate_model_width)
         self.assertAlmostEqual(plan.candidate_width_m, 0.039)
         self.assertAlmostEqual(plan.required_open_width_m, 0.044)
         self.assertEqual(plan.object_geometry.source_mode, 'instance_mask')
@@ -482,6 +487,32 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         selected.required_open_width_m = 0.049
         self.assertAlmostEqual(plan.object_geometry.pose_base.position.x, 0.40)
         self.assertAlmostEqual(plan.required_open_width_m, 0.044)
+
+    def test_build_rich_plan_preserves_geometry_source_without_model_width(self):
+        geometry = make_geometry_message()
+        selected = make_selected_candidate()
+        normalized = types.SimpleNamespace(
+            candidate_source='tabletop_geometry',
+            source_lineage=('tabletop_geometry',),
+            model_width_m=None,
+            model_score=None,
+            source_local_score=0.82,
+            required_open_width_m=selected.required_open_width_m,
+            grasp_sequence=selected._grasp_sequence,
+        )
+
+        plan = remote_node.build_rich_plan(
+            normalized,
+            geometry,
+            deepcopy(geometry.header),
+            'geometry_fallback',
+        )
+
+        self.assertEqual(plan.candidate_source, 'tabletop_geometry')
+        self.assertEqual(plan.candidate_source_lineage, ['tabletop_geometry'])
+        self.assertFalse(plan.has_candidate_model_width)
+        self.assertEqual(plan.candidate_width_m, 0.0)
+        self.assertAlmostEqual(plan.score, 0.82)
 
     def test_build_rich_plan_rejects_cross_snapshot_geometry_headers(self):
         selected = make_selected_candidate()

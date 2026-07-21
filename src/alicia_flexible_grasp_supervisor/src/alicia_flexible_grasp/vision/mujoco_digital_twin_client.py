@@ -6,6 +6,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from alicia_flexible_grasp.grasp.rich_plan_integrity import (
+    validate_candidate_model_width,
+    validate_candidate_source,
+)
+
 
 _GRIPPER_MODEL_NAME = 'Alicia_D_v5_6_gripper_50mm'
 _MAX_INNER_GAP_M = 0.050
@@ -120,7 +125,7 @@ def _configured_vector(config, keys, default, field_name):
 
 
 def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None):
-    """Build the finite, JSON-only schema-v2 request for one immutable plan."""
+    """Build the finite, JSON-only schema-v3 request for one immutable plan."""
     if plan is None:
         raise TypeError('plan is required')
     if getattr(plan, 'valid', None) is not True:
@@ -132,6 +137,10 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
     if not isinstance(model_choice, str) or not model_choice:
         raise ValueError('model_choice must be a non-empty string')
     _finite_float(getattr(plan, 'score', None), 'plan.score')
+    candidate_source, candidate_source_lineage = validate_candidate_source(
+        getattr(plan, 'candidate_source', None),
+        getattr(plan, 'candidate_source_lineage', None),
+    )
 
     header = getattr(plan, 'header', None)
     stamp = getattr(header, 'stamp', None)
@@ -165,16 +174,11 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
         for index, pose in enumerate(poses)
     ]
 
-    candidate_width = _finite_float(
-        getattr(plan, 'candidate_width_m', None),
-        'candidate_width_m',
-    )
+    candidate_width = validate_candidate_model_width(plan)
     required_width = _finite_float(
         getattr(plan, 'required_open_width_m', None),
         'required_open_width_m',
     )
-    if candidate_width < 0.0:
-        raise ValueError('candidate_width_m must be non-negative')
     if required_width <= 0.0 or required_width > _MAX_INNER_GAP_M:
         raise ValueError('required_open_width_m must be in (0, 0.050]')
 
@@ -239,9 +243,9 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
         root_config.get('object_model', {}),
         'object_model',
     )
-    object_type = object_config.get('type', 'carton_box')
-    if object_type != 'carton_box':
-        raise ValueError('object_model.type must be carton_box')
+    object_type = object_config.get('type', 'obb_box')
+    if object_type != 'obb_box':
+        raise ValueError('object_model.type must be obb_box')
     mass = _finite_float(
         object_config.get('mass_kg', _DEFAULT_CARTON_MASS_KG),
         'object_model.mass_kg',
@@ -256,10 +260,12 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
         raise ValueError('object_model.friction values must be non-negative')
 
     payload = {
-        'schema_version': 2,
+        'schema_version': 3,
         'plan_id': plan_id,
         'snapshot_stamp_sec': snapshot_stamp_sec,
         'model_choice': model_choice,
+        'candidate_source': candidate_source,
+        'candidate_source_lineage': list(candidate_source_lineage),
         'joint_names': names,
         'joint_positions': positions,
         'trajectory': trajectory,
@@ -272,7 +278,7 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
             'palm_size_xyz_m': palm_size,
         },
         'object_model': {
-            'type': 'carton_box',
+            'type': 'obb_box',
             'pose_base': object_pose,
             'size_xyz_m': object_size,
             'mass_kg': mass,
@@ -297,7 +303,13 @@ def _failure_details(response, default_code, default_reason):
     return code, reason
 
 
-def validate_mujoco_gate_response(response, expected_plan_id, min_score):
+def validate_mujoco_gate_response(
+    response,
+    expected_plan_id,
+    min_score,
+    expected_candidate_source=None,
+    expected_candidate_source_lineage=None,
+):
     """Accept only an exactly correlated, fully explicit MuJoCo safety pass."""
     if not isinstance(response, dict):
         return MujocoGateValidationResult(
@@ -328,6 +340,31 @@ def validate_mujoco_gate_response(response, expected_plan_id, min_score):
             False,
             'PLAN_ID_MISMATCH',
             'MuJoCo response plan_id does not exactly match the bound plan',
+        )
+
+    try:
+        response_source, response_lineage = validate_candidate_source(
+            response.get('candidate_source'),
+            response.get('candidate_source_lineage'),
+        )
+        if (
+            expected_candidate_source is not None
+            or expected_candidate_source_lineage is not None
+        ):
+            expected_source, expected_lineage = validate_candidate_source(
+                expected_candidate_source,
+                expected_candidate_source_lineage,
+            )
+            if (
+                response_source != expected_source
+                or response_lineage != expected_lineage
+            ):
+                raise ValueError('MuJoCo response candidate provenance differs')
+    except (TypeError, ValueError, AttributeError):
+        return MujocoGateValidationResult(
+            False,
+            'CANDIDATE_SOURCE_MISMATCH',
+            'MuJoCo response candidate provenance is invalid or mismatched',
         )
 
     raw_score = response.get('score')

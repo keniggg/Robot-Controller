@@ -16,6 +16,7 @@ from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     stamp_nanoseconds as _stamp_nanoseconds,
     stamp_seconds as _stamp_seconds,
     strict_plan_id_equal,
+    validate_candidate_model_width,
     validate_finite_pose,
     validate_plan_header_binding,
     validate_rich_geometry,
@@ -72,6 +73,14 @@ def validate_enriched_plan(plan, now_sec=None, validity_sec=2.0):
         required_width = float('nan')
     if not required_open_width_is_valid(required_width):
         return Grasp6DPlanState(False, float('inf'), 'GRIPPER_TOO_NARROW: 富计划开口宽度无效')
+    try:
+        validate_candidate_model_width(plan)
+    except (TypeError, ValueError, AttributeError) as exc:
+        return Grasp6DPlanState(
+            False,
+            float('inf'),
+            'CANDIDATE_SOURCE_INVALID: %s' % exc,
+        )
     if not _finite_geometry(getattr(plan, 'object_geometry', None)):
         return Grasp6DPlanState(False, float('inf'), 'OBB_INVALID: 富计划物体几何无效')
     try:

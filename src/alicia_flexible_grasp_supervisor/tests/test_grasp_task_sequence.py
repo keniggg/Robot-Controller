@@ -113,6 +113,9 @@ class GraspTaskSequenceTest(unittest.TestCase):
         plan.header.stamp = grasp_task_node.rospy.Time.from_sec(canonical_stamp_sec)
         plan.valid = True
         plan.score = 0.9
+        plan.candidate_source = 'graspnet'
+        plan.candidate_source_lineage = ['graspnet']
+        plan.has_candidate_model_width = True
         plan.candidate_width_m = 0.039
         plan.required_open_width_m = 0.044
         plan.model_choice = 'carton_segment:' + str(plan_id)
@@ -151,6 +154,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
     def _passing_mujoco_response(plan_id):
         return {
             'plan_id': plan_id,
+            'candidate_source': 'graspnet',
+            'candidate_source_lineage': ['graspnet'],
             'score': 95.0,
             'simulation_ok': True,
             'ik_success': True,
@@ -230,7 +235,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             'require_object_pose': True,
             'send_joint_state_in_request': True,
             'object_model': {
-                'type': 'carton_box',
+                'type': 'obb_box',
                 'mass_kg': 0.08,
                 'friction': [1.2, 0.08, 0.02],
             },
@@ -1307,6 +1312,48 @@ class GraspTaskSequenceTest(unittest.TestCase):
             grasp_task_node.validate_execution_plan(over, 10.0, 2.0).ok
         )
 
+    def test_execution_validation_accepts_geometry_source_without_model_width(self):
+        plan = self._rich_plan(stamp_sec=9.0)
+        plan.candidate_source = 'tabletop_geometry'
+        plan.candidate_source_lineage = ['tabletop_geometry']
+        plan.has_candidate_model_width = False
+        plan.candidate_width_m = 0.0
+        plan.plan_id = compute_plan_id(plan)
+
+        self.assertTrue(
+            grasp_task_node.validate_execution_plan(plan, 10.0, 2.0).ok
+        )
+
+    def test_execution_validation_rejects_invalid_candidate_provenance(self):
+        mutations = (
+            lambda plan: setattr(plan, 'has_candidate_model_width', False),
+            lambda plan: setattr(plan, 'candidate_source', 'unknown'),
+            lambda plan: setattr(plan, 'candidate_source_lineage', []),
+            lambda plan: (
+                setattr(plan, 'candidate_source', 'tabletop_geometry'),
+                setattr(
+                    plan,
+                    'candidate_source_lineage',
+                    ['tabletop_geometry'],
+                ),
+            ),
+        )
+        for mutation in mutations:
+            plan = self._rich_plan(stamp_sec=9.0)
+            mutation(plan)
+            with self.subTest(
+                source=plan.candidate_source,
+                lineage=list(plan.candidate_source_lineage),
+                present=plan.has_candidate_model_width,
+            ):
+                self.assertFalse(
+                    grasp_task_node.validate_execution_plan(
+                        plan,
+                        10.0,
+                        2.0,
+                    ).ok
+                )
+
     def test_bound_execution_checkpoint_ignores_original_plan_lease_age(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         plan = self._rich_plan(stamp_sec=9.0)
@@ -1960,6 +2007,12 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 calls.append(('joint_payload', len(payload.get('joint_names') or [])))
                 return {
                     'plan_id': node.latest_grasp6d_plan.plan_id,
+                    'candidate_source': (
+                        node.latest_grasp6d_plan.candidate_source
+                    ),
+                    'candidate_source_lineage': list(
+                        node.latest_grasp6d_plan.candidate_source_lineage
+                    ),
                     'simulation_ok': True,
                     'ik_success': True,
                     'collision_free': False,
@@ -2052,8 +2105,12 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertFalse(result)  # the first-action stub stops the sequence
         self.assertEqual(physical, ['open-gripper'])
         self.assertEqual(len(payloads), 1)
-        self.assertEqual(payloads[0]['schema_version'], 2)
+        self.assertEqual(payloads[0]['schema_version'], 3)
         self.assertEqual(payloads[0]['plan_id'], plan.plan_id)
+        self.assertEqual(payloads[0]['candidate_source'], 'graspnet')
+        self.assertEqual(
+            payloads[0]['candidate_source_lineage'], ['graspnet']
+        )
         self.assertEqual(len(payloads[0]['trajectory']), 4)
         self.assertIn('MuJoCo simulation passed', states[-2][1])
         audit = node._test_mujoco_audit

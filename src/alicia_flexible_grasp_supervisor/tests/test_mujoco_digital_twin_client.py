@@ -59,6 +59,9 @@ def _rich_plan():
     plan.header.stamp.nsecs = 456789000
     plan.valid = True
     plan.score = 0.91
+    plan.candidate_source = 'graspnet'
+    plan.candidate_source_lineage = ['graspnet']
+    plan.has_candidate_model_width = True
     plan.candidate_width_m = 0.039
     plan.required_open_width_m = 0.044
     plan.model_choice = 'carton_segment'
@@ -88,7 +91,12 @@ def _rich_plan():
 
 
 def _passing_response(plan_id='0123456789abcdef01234567'):
-    response = {'plan_id': plan_id, 'score': 92.5}
+    response = {
+        'plan_id': plan_id,
+        'candidate_source': 'graspnet',
+        'candidate_source_lineage': ['graspnet'],
+        'score': 92.5,
+    }
     response.update({key: True for key in SAFETY_KEYS})
     return response
 
@@ -138,7 +146,7 @@ class MujocoDigitalTwinClientTest(unittest.TestCase):
         self.assertEqual(payload['grasp_sequence_base'][2]['position'], [0.30, 0.0, 0.2])
 
 
-def test_build_mujoco_payload_serializes_exact_v2_rich_plan_schema():
+def test_build_mujoco_payload_serializes_exact_v3_rich_plan_schema():
     plan = _rich_plan()
     payload = client_module.build_mujoco_payload(
         plan,
@@ -155,6 +163,8 @@ def test_build_mujoco_payload_serializes_exact_v2_rich_plan_schema():
         'plan_id',
         'snapshot_stamp_sec',
         'model_choice',
+        'candidate_source',
+        'candidate_source_lineage',
         'joint_names',
         'joint_positions',
         'trajectory',
@@ -164,10 +174,12 @@ def test_build_mujoco_payload_serializes_exact_v2_rich_plan_schema():
         'object_model',
         'support_plane',
     }
-    assert payload['schema_version'] == 2
+    assert payload['schema_version'] == 3
     assert payload['plan_id'] == plan.plan_id
     assert payload['snapshot_stamp_sec'] == pytest.approx(123.456789)
     assert payload['model_choice'] == plan.model_choice
+    assert payload['candidate_source'] == 'graspnet'
+    assert payload['candidate_source_lineage'] == ['graspnet']
     assert payload['joint_names'] == [
         'Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'
     ]
@@ -191,7 +203,7 @@ def test_build_mujoco_payload_serializes_exact_v2_rich_plan_schema():
         'finger_size_xyz_m': [0.0434, 0.0286, 0.0600],
         'palm_size_xyz_m': [0.1175, 0.1550, 0.0774],
     }
-    assert payload['object_model']['type'] == 'carton_box'
+    assert payload['object_model']['type'] == 'obb_box'
     assert payload['object_model']['pose_base']['position_m'] == pytest.approx(
         [0.30, -0.04, 0.12]
     )
@@ -207,6 +219,58 @@ def test_build_mujoco_payload_serializes_exact_v2_rich_plan_schema():
     )
     assert payload['support_plane']['offset_m'] == pytest.approx(-0.02)
     json.dumps(payload, allow_nan=False)
+
+
+def test_build_mujoco_payload_serializes_geometry_width_as_json_null():
+    plan = _rich_plan()
+    plan.candidate_source = 'tabletop_geometry'
+    plan.candidate_source_lineage = ['tabletop_geometry']
+    plan.has_candidate_model_width = False
+    plan.candidate_width_m = 0.0
+
+    payload = client_module.build_mujoco_payload(
+        plan,
+        ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'],
+        [0.0] * 6,
+    )
+
+    assert payload['candidate_width_m'] is None
+    assert payload['candidate_source'] == 'tabletop_geometry'
+
+
+@pytest.mark.parametrize(
+    'mutation',
+    (
+        lambda plan: setattr(plan, 'has_candidate_model_width', False),
+        lambda plan: setattr(plan, 'candidate_width_m', 0.0),
+        lambda plan: setattr(plan, 'candidate_source_lineage', []),
+        lambda plan: (
+            setattr(plan, 'candidate_source', 'tabletop_geometry'),
+            setattr(plan, 'candidate_source_lineage', ['tabletop_geometry']),
+        ),
+    ),
+)
+def test_build_mujoco_payload_rejects_source_width_mismatches(mutation):
+    plan = _rich_plan()
+    mutation(plan)
+
+    with pytest.raises(ValueError):
+        client_module.build_mujoco_payload(
+            plan,
+            ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'],
+            [0.0] * 6,
+        )
+
+
+@pytest.mark.parametrize('object_type', ['carton_box', 'mouse_compound'])
+def test_build_mujoco_payload_rejects_category_specific_object_types(object_type):
+    with pytest.raises(ValueError, match='obb_box'):
+        client_module.build_mujoco_payload(
+            _rich_plan(),
+            ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'],
+            [0.0] * 6,
+            {'object_model': {'type': object_type}},
+        )
 
 
 @pytest.mark.parametrize(
@@ -259,12 +323,41 @@ def test_validate_mujoco_gate_response_accepts_only_complete_correlated_pass():
         _passing_response(),
         '0123456789abcdef01234567',
         80,
+        expected_candidate_source='graspnet',
+        expected_candidate_source_lineage=['graspnet'],
     )
 
     assert result.ok
     assert result.code == ''
     assert result.reason == ''
     assert result.score == pytest.approx(92.5)
+
+
+@pytest.mark.parametrize(
+    'mutation',
+    (
+        lambda response: response.pop('candidate_source'),
+        lambda response: response.update(candidate_source='tabletop_geometry'),
+        lambda response: response.update(candidate_source_lineage=[]),
+        lambda response: response.update(
+            candidate_source_lineage=['graspnet', 'tabletop_geometry']
+        ),
+    ),
+)
+def test_validate_mujoco_gate_response_rejects_mismatched_provenance(mutation):
+    response = _passing_response()
+    mutation(response)
+
+    result = client_module.validate_mujoco_gate_response(
+        response,
+        '0123456789abcdef01234567',
+        80,
+        expected_candidate_source='graspnet',
+        expected_candidate_source_lineage=['graspnet'],
+    )
+
+    assert not result.ok
+    assert result.code == 'CANDIDATE_SOURCE_MISMATCH'
 
 
 @pytest.mark.parametrize('echoed_id', [None, '', 'different-plan'])
@@ -492,7 +585,7 @@ def test_http_client_rejects_nonstandard_json_constants(monkeypatch, constant):
     )
 
     with pytest.raises(ValueError, match='non-standard JSON constant'):
-        client.simulate_grasp({'schema_version': 2})
+        client.simulate_grasp({'schema_version': 3})
 
 
 if __name__ == '__main__':
