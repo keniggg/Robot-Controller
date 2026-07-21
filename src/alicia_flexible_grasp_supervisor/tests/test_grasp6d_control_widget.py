@@ -567,6 +567,35 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         self.assertEqual(widget._readiness.plan_id, execution.plan_id)
         self.assertEqual(widget._preview_readiness.plan_id, preview.plan_id)
 
+    def test_gui_summary_displays_geometry_source_without_enabling_execution(self):
+        widget = control_widget.Grasp6DControlWidget.__new__(
+            control_widget.Grasp6DControlWidget
+        )
+        widget._readiness = control_widget.Grasp6DReadinessTracker(
+            validity_sec=5.0
+        )
+        widget._preview_readiness = control_widget.Grasp6DReadinessTracker(
+            validity_sec=5.0
+        )
+        widget._refresh_view = lambda: None
+        preview = self._rich_plan(stamp_sec=9.0, plan_id='geometry-preview')
+        preview.candidate_source = 'tabletop_geometry'
+        preview.candidate_source_lineage = ['tabletop_geometry']
+        preview.has_candidate_model_width = False
+        preview.candidate_width_m = 0.0
+        preview.plan_id = compute_plan_id(preview)
+        original_now = control_widget._ros_now_seconds
+        control_widget._ros_now_seconds = lambda: 10.0
+        try:
+            widget._update_preview_plan(preview)
+        finally:
+            control_widget._ros_now_seconds = original_now
+
+        self.assertIn(
+            '桌面几何', widget._preview_readiness.state(now_sec=10.0).text
+        )
+        self.assertFalse(widget._readiness.state(now_sec=10.0).fresh)
+
     def test_execute_enablement_uses_execution_only_even_while_stream_toggle_is_pending(self):
         class FixedTracker:
             def __init__(self, state):

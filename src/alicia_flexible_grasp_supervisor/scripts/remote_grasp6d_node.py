@@ -988,10 +988,18 @@ def failed_planning_evaluation(
     failure_code,
     failure_reason,
     stage='audit_finalization',
+    candidate_source='graspnet',
+    source_lineage=None,
 ):
     """Build one complete fail-closed selector evaluation record."""
-    return {
-        'candidate_index': int(candidate_index),
+    source, lineage = validate_candidate_source(
+        candidate_source,
+        source_lineage or (candidate_source,),
+    )
+    record = {
+        'candidate_source': source,
+        'source_index': int(candidate_index),
+        'source_lineage': list(lineage),
         'variant_index': int(variant_index),
         'candidate_contract': {
             'ok': False,
@@ -1016,6 +1024,30 @@ def failed_planning_evaluation(
         'rank_valid': False,
         'selected': False,
     }
+    if source == 'graspnet':
+        # Kept only as a legacy display alias; source-aware identity uses
+        # candidate_source/source_index/variant_index everywhere.
+        record['candidate_index'] = int(candidate_index)
+    return record
+
+
+def audit_lineage_key(record, default_source='graspnet'):
+    """Validate and return one canonical source-aware audit identity."""
+    if not isinstance(record, dict):
+        raise ValueError('audit lineage must be a dictionary')
+    source_value = record.get('candidate_source', default_source)
+    lineage_value = record.get('source_lineage', (source_value,))
+    source, lineage = validate_candidate_source(source_value, lineage_value)
+    try:
+        source_index = int(
+            record.get('source_index', record.get('candidate_index', -1))
+        )
+        variant_index = int(record.get('variant_index', -1))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError('audit lineage indices must be integral') from exc
+    if source_index < 0 or variant_index < 0:
+        raise ValueError('audit lineage indices must be non-negative')
+    return source, source_index, variant_index, list(lineage)
 
 
 def planning_evaluation_schema_error(evaluation, expected_key):
@@ -1023,7 +1055,9 @@ def planning_evaluation_schema_error(evaluation, expected_key):
     if not isinstance(evaluation, dict):
         return 'planning evaluation is not a dictionary'
     required = {
-        'candidate_index',
+        'candidate_source',
+        'source_index',
+        'source_lineage',
         'variant_index',
         'candidate_contract',
         'analytical_result',
@@ -1037,12 +1071,9 @@ def planning_evaluation_schema_error(evaluation, expected_key):
     if missing:
         return 'planning evaluation is missing fields %s' % missing
     try:
-        actual_key = (
-            int(evaluation.get('candidate_index')),
-            int(evaluation.get('variant_index')),
-        )
-    except (TypeError, ValueError, OverflowError):
-        return 'planning evaluation has non-integral lineage indices'
+        actual_key = audit_lineage_key(evaluation)[:3]
+    except ValueError as exc:
+        return 'planning evaluation has invalid source-aware lineage: %s' % exc
     if actual_key != tuple(expected_key):
         return 'planning evaluation lineage %s does not match row %s' % (
             actual_key,
@@ -2128,6 +2159,9 @@ def select_first_reachable_candidate(
 
     def base_evaluation(candidate_index, variant_index):
         return {
+            'candidate_source': 'graspnet',
+            'source_index': int(candidate_index),
+            'source_lineage': ['graspnet'],
             'candidate_index': int(candidate_index),
             'variant_index': int(variant_index),
             'candidate_contract': {
@@ -5077,8 +5111,7 @@ class RemoteGrasp6DNode:
         rejections = Counter()
         for proposal in generation.proposals:
             try:
-                materialized.extend(
-                    materialize_tabletop_candidates(
+                variants = materialize_tabletop_candidates(
                         proposal=proposal,
                         support_point_base=support_point,
                         support_normal_base=support_normal,
@@ -5088,6 +5121,21 @@ class RemoteGrasp6DNode:
                             self.gripper_tool_finger_length_axis
                         ),
                     )
+                materialized.extend(
+                    replace(
+                        item,
+                        audit=MappingProxyType({
+                            **dict(item.audit),
+                            'sampled_angle_deg': float(proposal.angle_deg),
+                            'negative_contact_count': int(
+                                proposal.negative_contact_count
+                            ),
+                            'positive_contact_count': int(
+                                proposal.positive_contact_count
+                            ),
+                        }),
+                    )
+                    for item in variants
                 )
             except TabletopCandidateContractError as exc:
                 rejections[str(exc.code)] += 1
@@ -5928,13 +5976,13 @@ class RemoteGrasp6DNode:
         denominator = float(max(1, returned + geometry_returned))
         source_counts = {
             source: {
-                'input': (
+                'generated': (
                     returned if source == 'graspnet' else geometry_returned
                 ),
                 'locally_valid': len(normalized_by_source[source]),
-                'rejection_counts': dict(
-                    sorted(source_rejections[source].items())
-                ),
+                'stable': 0,
+                'preview': 0,
+                'promoted': 0,
             }
             for source in ('graspnet', 'tabletop_geometry')
         }
@@ -6616,12 +6664,22 @@ class RemoteGrasp6DNode:
             except (CandidateContractError, StreamResultCancelled):
                 return False
 
+        audit_stable_candidates = tuple(
+            getattr(selection, 'checked', ()) or ()
+        )
+        audit_preview_candidate = getattr(selection, 'selected', None)
+
         funnel = self._merge_pipeline_funnel(
             local_funnel,
             moveit_funnel,
             stable_count=stable_count,
             preview_count=1,
             promotion_count=int(decision.promote),
+            stable_candidates=audit_stable_candidates,
+            preview_candidate=audit_preview_candidate,
+            promoted_candidate=(
+                audit_preview_candidate if decision.promote else None
+            ),
         )
         if not decision.promote:
             finalize_actual_preview(decision, funnel, record_decision=True)
@@ -6667,6 +6725,8 @@ class RemoteGrasp6DNode:
                     stable_count=stable_count,
                     preview_count=1,
                     promotion_count=0,
+                    stable_candidates=audit_stable_candidates,
+                    preview_candidate=audit_preview_candidate,
                 )
                 self._compensate_execution_audit(
                     execution_report,
@@ -6726,6 +6786,8 @@ class RemoteGrasp6DNode:
                         stable_count=stable_count,
                         preview_count=1,
                         promotion_count=0,
+                        stable_candidates=audit_stable_candidates,
+                        preview_candidate=audit_preview_candidate,
                     ),
                     restore_report=previous_execution_report,
                 )
@@ -6746,6 +6808,8 @@ class RemoteGrasp6DNode:
                 stable_count=stable_count,
                 preview_count=1,
                 promotion_count=0,
+                stable_candidates=audit_stable_candidates,
+                preview_candidate=audit_preview_candidate,
             )
             try:
                 self._compensate_execution_audit(
@@ -6797,12 +6861,43 @@ class RemoteGrasp6DNode:
                 commit_callback()
 
     @staticmethod
+    def _audit_candidate_source(candidate):
+        """Return a canonical source from a stable/selected audit object."""
+        pending = [candidate]
+        seen = set()
+        while pending:
+            item = pending.pop()
+            if item is None or id(item) in seen:
+                continue
+            seen.add(id(item))
+            source = getattr(item, 'candidate_source', None)
+            lineage = getattr(item, 'source_lineage', None)
+            if source is not None:
+                try:
+                    return validate_candidate_source(
+                        source, lineage or (source,)
+                    )[0]
+                except ValueError:
+                    return None
+            pending.extend(
+                (
+                    getattr(item, 'payload', None),
+                    getattr(item, 'stable_candidate', None),
+                )
+            )
+        return None
+
+    @classmethod
     def _merge_pipeline_funnel(
+        cls,
         local_funnel,
         moveit_funnel=None,
         stable_count=0,
         preview_count=0,
         promotion_count=0,
+        stable_candidates=(),
+        preview_candidate=None,
+        promoted_candidate=None,
     ):
         local = dict(local_funnel or {})
         moveit = dict(moveit_funnel or {})
@@ -6857,12 +6952,35 @@ class RemoteGrasp6DNode:
                 rejection_counts,
                 key=lambda code: (-rejection_counts[code], code),
             )
+        source_counts = {}
+        local_sources = dict(local.get('source_counts', {}) or {})
+        for source in ('graspnet', 'tabletop_geometry'):
+            raw = dict(local_sources.get(source, {}) or {})
+            source_counts[source] = {
+                'generated': _pipeline_count(
+                    raw.get('generated', raw.get('input', 0))
+                ),
+                'locally_valid': _pipeline_count(
+                    raw.get('locally_valid', 0)
+                ),
+                'stable': 0,
+                'preview': 0,
+                'promoted': 0,
+            }
+        for item in tuple(stable_candidates or ()):
+            source = cls._audit_candidate_source(item)
+            if source in source_counts:
+                source_counts[source]['stable'] += 1
+        preview_source = cls._audit_candidate_source(preview_candidate)
+        if preview_source in source_counts and _pipeline_count(preview_count):
+            source_counts[preview_source]['preview'] = 1
+        promoted_source = cls._audit_candidate_source(promoted_candidate)
+        if promoted_source in source_counts and _pipeline_count(promotion_count):
+            source_counts[promoted_source]['promoted'] = 1
         return {
             'input_count': _pipeline_count(local.get('input_count', 0)),
             'stage_counts': stage_counts,
-            'source_counts': deepcopy(
-                dict(local.get('source_counts', {}) or {})
-            ),
+            'source_counts': source_counts,
             'rejection_counts': dict(sorted(rejection_counts.items())),
             'rejection_ratios': ratios,
             'primary_failure': primary,
@@ -7498,11 +7616,9 @@ class RemoteGrasp6DNode:
                 and selected.variant_index == variant_index
             )
             evaluation_record = {
-                'candidate_index': int(
-                    candidate_source_index
-                ),
-                'variant_index': int(variant_index),
                 'candidate_source': candidate_source,
+                'source_index': int(candidate_source_index),
+                'variant_index': int(variant_index),
                 'source_lineage': list(candidate_lineage),
                 'selected': is_selected,
                 'tracking': tracking,
@@ -7515,6 +7631,10 @@ class RemoteGrasp6DNode:
                     candidate_runtime.get('soft_evidence', {})
                 ),
             }
+            if candidate_source == 'graspnet':
+                evaluation_record['candidate_index'] = int(
+                    candidate_source_index
+                )
             stable_evaluations.append(evaluation_record)
             if is_selected:
                 selected_lineage = deepcopy(evaluation_record)
@@ -7526,12 +7646,10 @@ class RemoteGrasp6DNode:
                 )
                 <= 1e-9
             )
-            if (
-                source_is_evaluation
-                and candidate_source == 'graspnet'
-            ):
+            if source_is_evaluation:
                 current_row_annotations[
                     (
+                        candidate_source,
                         candidate_source_index,
                         int(variant_index),
                     )
@@ -7539,10 +7657,7 @@ class RemoteGrasp6DNode:
 
         for row in list(report.get('rows', []) or []):
             row['selected'] = False
-            lineage = (
-                int(row.get('candidate_index', -1)),
-                int(row.get('variant_index', -1)),
-            )
+            lineage = audit_lineage_key(row)[:3]
             evaluation_record = current_row_annotations.get(lineage)
             if evaluation_record is None:
                 continue
@@ -7563,7 +7678,8 @@ class RemoteGrasp6DNode:
         )
         report['candidate_row_lineage'] = [
             {
-                'candidate_index': int(row.get('candidate_index', -1)),
+                'candidate_source': audit_lineage_key(row)[0],
+                'source_index': audit_lineage_key(row)[1],
                 'variant_index': int(row.get('variant_index', -1)),
                 'selected': bool(row.get('selected', False)),
                 'tracking': deepcopy(row.get('tracking')),
@@ -7573,6 +7689,9 @@ class RemoteGrasp6DNode:
             }
             for row in list(report.get('rows', []) or [])
         ]
+        for item in report['candidate_row_lineage']:
+            if item['candidate_source'] == 'graspnet':
+                item['candidate_index'] = item['source_index']
         report['stable_evaluations'] = deepcopy(stable_evaluations)
         report['lineage'] = deepcopy(stable_evaluations)
         report['selected'] = selected_lineage
@@ -7676,12 +7795,9 @@ class RemoteGrasp6DNode:
             if not isinstance(evaluation, dict):
                 return 'stable evaluation is not a dictionary'
             try:
-                key = (
-                    int(evaluation.get('candidate_index')),
-                    int(evaluation.get('variant_index')),
-                )
-            except (TypeError, ValueError, OverflowError):
-                return 'stable evaluation has non-integral lineage indices'
+                key = audit_lineage_key(evaluation)[:3]
+            except ValueError:
+                return 'stable evaluation has invalid source-aware lineage'
             if key in seen:
                 return 'duplicate stable evaluation lineage %s' % (key,)
             seen.add(key)
@@ -7708,6 +7824,7 @@ class RemoteGrasp6DNode:
                 )
             try:
                 lineage_key = (
+                    str(evaluation.get('candidate_source', 'graspnet')),
                     int(lineage['source_raw_candidate_index']),
                     int(lineage['evaluation_variant_index']),
                 )
@@ -7909,6 +8026,12 @@ class RemoteGrasp6DNode:
             ),
         )
         observations, local_funnel = self._evaluate_local_candidates(prepared)
+        if isinstance(base_audit_report, dict):
+            base_audit_report = self._append_normalized_geometry_audit_rows(
+                base_audit_report,
+                observations,
+                prepared.geometry,
+            )
         stable = self._update_candidate_tracker(
             request_id=ticket.request_id,
             observations=observations,
@@ -7993,6 +8116,8 @@ class RemoteGrasp6DNode:
                 stable_count=len(stable),
                 preview_count=preview_count,
                 promotion_count=0,
+                stable_candidates=stable,
+                preview_candidate=selection.selected,
             )
             self._finalize_streaming_gate_audit(
                 prepared,
@@ -8027,6 +8152,8 @@ class RemoteGrasp6DNode:
             stable_count=len(stable),
             preview_count=preview_count,
             promotion_count=promotion_count,
+            stable_candidates=stable,
+            preview_candidate=selection.selected,
         )
         primary = funnel.get('primary_failure')
         if preview_count == 0 and primary:
@@ -9301,10 +9428,11 @@ class RemoteGrasp6DNode:
             depth_text = 'missing' if selected.depth_m is None else '%.3f' % float(selected.depth_m)
             selected_metrics = self._candidate_plan_metrics.get(self._pose_key(grasp_pose), {})
             approach_down = self._candidate_approach_downward_cos(selected, grasp_pose)
-            message = 'remote 6D plan ready score=%.3f model_width=%.3f required_open=%.3f depth=%s target_delta=%.3fm target=%s strict_orientation=1 tool_aligned=1 approach_down=%.3f joint_path_cost=%.3f joint_max_delta=%.3f' % (
+            message = 'remote 6D plan ready source=%s score=%.3f required_open=%.3f model_width=%.3f depth=%s target_delta=%.3fm target=%s strict_orientation=1 tool_aligned=1 approach_down=%.3f joint_path_cost=%.3f joint_max_delta=%.3f' % (
+                getattr(selected, 'candidate_source', 'graspnet'),
                 selected.score,
-                selected.width_m,
                 selected_gate.required_open_width_m,
+                selected.width_m,
                 depth_text,
                 final_target_delta,
                 target_source,
@@ -10815,7 +10943,12 @@ class RemoteGrasp6DNode:
             'selected': None,
             'lineage': [
                 {
-                    'candidate_index': int(row.get('candidate_index', -1)),
+                    'candidate_source': str(
+                        row.get('candidate_source', 'graspnet')
+                    ),
+                    'source_index': int(
+                        row.get('source_index', row.get('candidate_index', -1))
+                    ),
                     'variant_index': int(row.get('variant_index', -1)),
                     'selected': False,
                 }
@@ -10845,6 +10978,103 @@ class RemoteGrasp6DNode:
         rospy.logwarn('remote 6D controlled gate audit: %s', summary_text)
         return report
 
+    def _append_normalized_geometry_audit_rows(
+        self,
+        report,
+        observations,
+        geometry,
+    ):
+        """Attach bounded tabletop facts without retaining target samples."""
+        if not isinstance(report, dict):
+            return report
+        rows = list(report.get('rows', []) or [])
+        existing = set()
+        for row in rows:
+            try:
+                existing.add(audit_lineage_key(row)[:3])
+            except ValueError:
+                continue
+        target_hash = array_sha256(
+            np.asarray(getattr(geometry, 'object_points_base', ()), dtype=float)
+        )
+        support_normal = self._json_vector(
+            getattr(geometry, 'support_normal_base', None)
+        )
+        for observation in tuple(observations or ()):
+            normalized = getattr(observation, 'payload', None)
+            if not isinstance(normalized, NormalizedPlanningCandidate):
+                continue
+            source, lineage = validate_candidate_source(
+                normalized.candidate_source,
+                normalized.source_lineage,
+            )
+            if source != 'tabletop_geometry':
+                continue
+            key = (source, int(normalized.source_index), int(normalized.variant_index))
+            if key in existing:
+                continue
+            evidence = dict(normalized.audit)
+            gate_audit = candidate_gate_result_audit(normalized.geometry_gate)
+            rows.append({
+                'candidate_source': source,
+                'source_index': key[1],
+                'variant_index': key[2],
+                'source_lineage': list(lineage),
+                'source_local_score': float(normalized.source_local_score),
+                'common_physical_cost': float(normalized.common_physical_cost),
+                'sampled_angle_deg': self._finite_json_number(
+                    evidence.get('sampled_angle_deg')
+                ),
+                'insertion_axis_base': self._json_vector(
+                    normalized.insertion_axis_base
+                ),
+                'jaw_axis_base': self._json_vector(normalized.jaw_axis_base),
+                'support_normal_base': support_normal,
+                'contact_center_base_m': self._json_vector(
+                    normalized.contact_center_base
+                ),
+                'negative_contact_count': int(
+                    evidence.get('negative_contact_count', 0)
+                ),
+                'positive_contact_count': int(
+                    evidence.get('positive_contact_count', 0)
+                ),
+                'projection_min_m': self._finite_json_number(
+                    evidence.get('projection_min_m')
+                ),
+                'projection_max_m': self._finite_json_number(
+                    evidence.get('projection_max_m')
+                ),
+                'required_open_width_m': float(
+                    normalized.required_open_width_m
+                ),
+                'T_base_tool0': np.asarray(
+                    normalized.T_base_tool0, dtype=float
+                ).tolist(),
+                'tool0_base_m': self._json_vector(
+                    normalized.T_base_tool0[:3, 3]
+                ),
+                'target_points_sha256': target_hash,
+                'gate_stages': deepcopy(gate_audit['stages']),
+                'analytical_result': gate_audit,
+                'tracking_result': None,
+                'mujoco_result': None,
+            })
+            existing.add(key)
+        report['rows'] = rows
+        report['lineage'] = [
+            {
+                'candidate_source': key[0],
+                'source_index': key[1],
+                'variant_index': key[2],
+                'selected': False,
+            }
+            for key in sorted(
+                audit_lineage_key(row)[:3] for row in rows
+            )
+        ]
+        return report
+
     def _finalize_gate_audit_report(
         self,
         evaluation_records,
@@ -10869,10 +11099,24 @@ class RemoteGrasp6DNode:
                     PLANNING_AUDIT_FAILED,
                     'planning audit contains a non-dictionary candidate row',
                 )
-            key = (
-                int(row.get('candidate_index', -1)),
-                int(row.get('variant_index', -1)),
-            )
+            try:
+                source, source_index, variant_index, lineage = (
+                    audit_lineage_key(row)
+                )
+            except ValueError as exc:
+                raise CandidateContractError(
+                    PLANNING_AUDIT_FAILED,
+                    'planning audit row has invalid source-aware lineage: %s'
+                    % exc,
+                )
+            row['candidate_source'] = source
+            row['source_index'] = source_index
+            row['source_lineage'] = lineage
+            if source == 'graspnet':
+                row['candidate_index'] = source_index
+            else:
+                row.pop('candidate_index', None)
+            key = (source, source_index, variant_index)
             if key in rows_by_lineage:
                 raise CandidateContractError(
                     PLANNING_AUDIT_FAILED,
@@ -10890,14 +11134,12 @@ class RemoteGrasp6DNode:
                 )
                 continue
             try:
-                candidate_index = int(evaluation.get('candidate_index', -1))
-                variant_index = int(evaluation.get('variant_index', -1))
-            except (TypeError, ValueError, OverflowError):
+                key = audit_lineage_key(evaluation)[:3]
+            except ValueError:
                 consistency_errors.append(
-                    'selector emitted non-integral lineage indices'
+                    'selector emitted invalid source-aware lineage indices'
                 )
                 continue
-            key = (candidate_index, variant_index)
             row = rows_by_lineage.get(key)
             if row is None:
                 consistency_errors.append(
@@ -10910,7 +11152,10 @@ class RemoteGrasp6DNode:
                 )
                 continue
             emitted_keys.add(key)
-            row['planning_evaluation'] = deepcopy(evaluation)
+            normalized_evaluation = deepcopy(evaluation)
+            if key[0] != 'graspnet':
+                normalized_evaluation.pop('candidate_index', None)
+            row['planning_evaluation'] = normalized_evaluation
 
         for key, row in rows_by_lineage.items():
             schema_error = planning_evaluation_schema_error(
@@ -10926,10 +11171,12 @@ class RemoteGrasp6DNode:
                 )
             else:
                 row['planning_evaluation'] = failed_planning_evaluation(
-                    key[0],
                     key[1],
+                    key[2],
                     'PLANNING_EVALUATION_MISSING',
                     schema_error,
+                    candidate_source=key[0],
+                    source_lineage=row['source_lineage'],
                 )
 
         if bool(valid_plan) and (
@@ -10955,10 +11202,20 @@ class RemoteGrasp6DNode:
                     PLANNING_AUDIT_FAILED,
                     'selected audit candidate and pose must be provided together',
                 )
-            selected_key = (
-                int(getattr(selected_candidate, '_raw_candidate_index', -1)),
-                int(getattr(selected_candidate, '_variant_index', -1)),
-            )
+            selected_key = audit_lineage_key({
+                'candidate_source': getattr(
+                    selected_candidate, 'candidate_source', 'graspnet'
+                ),
+                'source_lineage': getattr(
+                    selected_candidate, 'source_lineage', ('graspnet',)
+                ),
+                'source_index': getattr(
+                    selected_candidate,
+                    'source_index',
+                    getattr(selected_candidate, '_raw_candidate_index', -1),
+                ),
+                'variant_index': getattr(selected_candidate, '_variant_index', -1),
+            })[:3]
             if selected_key not in rows_by_lineage:
                 raise CandidateContractError(
                     PLANNING_AUDIT_FAILED,
@@ -11007,14 +11264,18 @@ class RemoteGrasp6DNode:
 
         lineage = [
             {
-                'candidate_index': int(key[0]),
-                'variant_index': int(key[1]),
+                'candidate_source': key[0],
+                'source_index': int(key[1]),
+                'variant_index': int(key[2]),
                 'selected': bool(
                     row.get('planning_evaluation', {}).get('selected', False)
                 ),
             }
             for key, row in rows_by_lineage.items()
         ]
+        for item in lineage:
+            if item['candidate_source'] == 'graspnet':
+                item['candidate_index'] = item['source_index']
 
         selected_row = None
         if selected_key is not None:
@@ -11022,14 +11283,20 @@ class RemoteGrasp6DNode:
             # Recompute the selected row after ranking so its analytical
             # result and motion cost match the executable rich plan.
             refreshed = self._candidate_gate_audit_row(
-                selected_key[0],
                 selected_key[1],
+                selected_key[2],
                 selected_candidate,
                 selected_pose,
             )
             planning_evaluation = selected_row.get('planning_evaluation')
-            selected_row.clear()
-            selected_row.update(refreshed)
+            if selected_key[0] == 'tabletop_geometry':
+                # The source row contains bounded proposal-only evidence
+                # (angle, contacts, projections, explicit tool0 and hashes)
+                # that a ranked-pose refresh cannot reconstruct.
+                selected_row.update(refreshed)
+            else:
+                selected_row.clear()
+                selected_row.update(refreshed)
             if planning_evaluation is not None:
                 selected_row['planning_evaluation'] = planning_evaluation
             selected_row['selected'] = True
@@ -11081,6 +11348,9 @@ class RemoteGrasp6DNode:
             for variant_index in range(len(variants)):
                 rows.append(
                     {
+                        'candidate_source': 'graspnet',
+                        'source_index': int(candidate_index),
+                        'source_lineage': ['graspnet'],
                         'candidate_index': int(candidate_index),
                         'variant_index': int(variant_index),
                         'score': self._finite_json_number(
@@ -11136,6 +11406,9 @@ class RemoteGrasp6DNode:
             'selected': None,
             'lineage': [
                 {
+                    'candidate_source': 'graspnet',
+                    'source_index': int(row['candidate_index']),
+                    'source_lineage': ['graspnet'],
                     'candidate_index': int(row['candidate_index']),
                     'variant_index': int(row['variant_index']),
                     'selected': False,
@@ -11160,6 +11433,13 @@ class RemoteGrasp6DNode:
         )
 
     def _candidate_gate_audit_row(self, candidate_index, variant_index, candidate, grasp_pose):
+        candidate_source, source_lineage = validate_candidate_source(
+            getattr(candidate, 'candidate_source', 'graspnet'),
+            getattr(candidate, 'source_lineage', ('graspnet',)),
+        )
+        source_index = int(
+            getattr(candidate, 'source_index', candidate_index)
+        )
         try:
             depth = float(getattr(candidate, 'depth_m', float('nan')))
         except (TypeError, ValueError):
@@ -11242,8 +11522,10 @@ class RemoteGrasp6DNode:
                 grasp_pose,
                 target_xyz,
             )
-        return {
-            'candidate_index': int(candidate_index),
+        row = {
+            'candidate_source': candidate_source,
+            'source_index': source_index,
+            'source_lineage': list(source_lineage),
             'variant_index': int(variant_index),
             'score': float(getattr(candidate, 'score', 0.0) or 0.0),
             'width_m': width,
@@ -11279,6 +11561,9 @@ class RemoteGrasp6DNode:
             'visibility_ok': bool(visibility_ok),
             'visibility_reason': str(visibility_reason),
         }
+        if candidate_source == 'graspnet':
+            row['candidate_index'] = source_index
+        return row
 
     def _invalid_candidate_gate_audit_row(
         self,
@@ -11295,8 +11580,10 @@ class RemoteGrasp6DNode:
             center = self._json_vector(candidate.translation_m)
         except Exception:
             center = None
-        return {
-            'candidate_index': int(candidate_index),
+        row = {
+            'candidate_source': 'graspnet',
+            'source_index': int(candidate_index),
+            'source_lineage': ['graspnet'],
             'variant_index': int(variant_index),
             'score': float(getattr(candidate, 'score', 0.0) or 0.0),
             'width_m': float(getattr(candidate, 'width_m', 0.0) or 0.0),
@@ -11336,6 +11623,8 @@ class RemoteGrasp6DNode:
                 exception,
             ),
         }
+        row['candidate_index'] = int(candidate_index)
+        return row
 
     @staticmethod
     def _audit_thresholds(primary, defaults):

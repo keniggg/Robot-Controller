@@ -1612,6 +1612,37 @@ def test_target_epoch_invalidation_clears_tracks_from_both_sources():
     assert tracker.track_count == 0
 
 
+def test_source_funnel_exposes_bounded_hybrid_outcomes():
+    funnel = remote_node.RemoteGrasp6DNode._merge_pipeline_funnel(
+        {
+            'input_count': 3,
+            'stage_counts': {
+                'locally_valid': {'entered': 3, 'passed': 2, 'rejected': 1},
+            },
+            'source_counts': {
+                'graspnet': {'input': 1, 'locally_valid': 1},
+                'tabletop_geometry': {'input': 2, 'locally_valid': 1},
+            },
+            'rejection_counts': {},
+        },
+    )
+
+    assert funnel['source_counts']['graspnet'] == {
+        'generated': 1,
+        'locally_valid': 1,
+        'stable': 0,
+        'preview': 0,
+        'promoted': 0,
+    }
+    assert funnel['source_counts']['tabletop_geometry'] == {
+        'generated': 2,
+        'locally_valid': 1,
+        'stable': 0,
+        'preview': 0,
+        'promoted': 0,
+    }
+
+
 @pytest.mark.parametrize(
     'failure_code',
     [

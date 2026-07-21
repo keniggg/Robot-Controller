@@ -5031,6 +5031,180 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(valid_report['selected']['candidate_index'], 0)
         self.assertEqual(valid_report['selected']['variant_index'], 0)
 
+    def test_gate_audit_records_geometry_provenance_without_index_collision(self):
+        node = make_processing_node()
+        node._active_gate_audit_report = {
+            'report_version': 3,
+            'summary': {},
+            'rows': [
+                {
+                    'candidate_source': 'graspnet',
+                    'source_index': 0,
+                    'candidate_index': 0,
+                    'variant_index': 0,
+                    'source_lineage': ['graspnet'],
+                },
+                {
+                    'candidate_source': 'tabletop_geometry',
+                    'source_index': 0,
+                    # A legacy numeric alias must never be used as identity:
+                    # both sources may legitimately have source index zero.
+                    'candidate_index': 0,
+                    'variant_index': 0,
+                    'source_lineage': ['tabletop_geometry'],
+                    'sampled_angle_deg': 0.0,
+                    'insertion_axis_base': [0.0, 0.0, -1.0],
+                    'jaw_axis_base': [1.0, 0.0, 0.0],
+                    'support_normal_base': [0.0, 0.0, 1.0],
+                    'negative_contact_count': 8,
+                    'positive_contact_count': 8,
+                    'projection_min_m': -0.02,
+                    'projection_max_m': 0.02,
+                    'required_open_width_m': 0.044,
+                    'T_base_tool0': np.eye(4).tolist(),
+                    'gate_stages': [],
+                    'tracking': None,
+                    'mujoco': None,
+                },
+            ],
+            'lineage': [],
+            'selected': None,
+            'plan_id': '',
+            'outcome': {'code': '', 'reason': '', 'valid_plan': False},
+        }
+        evaluations = []
+        for source in ('graspnet', 'tabletop_geometry'):
+            evaluation = remote_node.failed_planning_evaluation(
+                0,
+                0,
+                'SYNTHETIC_FAILURE',
+                'synthetic failure',
+            )
+            evaluation.update({
+                'candidate_source': source,
+                'source_index': 0,
+                'source_lineage': [source],
+            })
+            evaluations.append(evaluation)
+
+        node._finalize_gate_audit_report(
+            evaluation_records=evaluations,
+            selected_candidate=None,
+            selected_pose=None,
+            plan_id='',
+            outcome_code='NO_STABLE_PLAN',
+            outcome_reason='test fixture has not selected a plan',
+            valid_plan=False,
+        )
+
+        report = node._active_gate_audit_report
+        keys = {
+            (
+                row['candidate_source'],
+                row['source_index'],
+                row['variant_index'],
+            )
+            for row in report['rows']
+        }
+        self.assertEqual(
+            keys,
+            {
+                ('graspnet', 0, 0),
+                ('tabletop_geometry', 0, 0),
+            },
+        )
+        geometry = next(
+            row for row in report['rows']
+            if row['candidate_source'] == 'tabletop_geometry'
+        )
+        self.assertEqual(geometry['source_lineage'], ['tabletop_geometry'])
+        self.assertLess(geometry['required_open_width_m'], 0.050)
+        self.assertLess(
+            geometry['projection_min_m'], geometry['projection_max_m']
+        )
+        self.assertLess(
+            abs(np.dot(geometry['jaw_axis_base'], geometry['support_normal_base'])),
+            1e-3,
+        )
+
+    def test_selected_geometry_audit_row_keeps_bounded_source_evidence(self):
+        node = make_processing_node()
+        geometry_evidence = {
+            'candidate_source': 'tabletop_geometry',
+            'source_index': 0,
+            'variant_index': 0,
+            'source_lineage': ['tabletop_geometry'],
+            'sampled_angle_deg': 15.0,
+            'insertion_axis_base': [0.0, 0.0, -1.0],
+            'jaw_axis_base': [1.0, 0.0, 0.0],
+            'support_normal_base': [0.0, 0.0, 1.0],
+            'negative_contact_count': 7,
+            'positive_contact_count': 9,
+            'projection_min_m': -0.021,
+            'projection_max_m': 0.021,
+            'required_open_width_m': 0.046,
+            'T_base_tool0': np.eye(4).tolist(),
+            'target_points_sha256': 'a' * 64,
+            'gate_stages': [{'name': 'transform', 'status': 'passed'}],
+            'tracking_result': {'hit_count': 3},
+            'mujoco_result': None,
+        }
+        node._active_gate_audit_report = {
+            'report_version': 3,
+            'summary': {},
+            'rows': [deepcopy(geometry_evidence)],
+            'lineage': [],
+            'selected': None,
+            'plan_id': '',
+            'outcome': {'code': '', 'reason': '', 'valid_plan': False},
+        }
+        evaluation = remote_node.failed_planning_evaluation(
+            0,
+            0,
+            'SYNTHETIC_FAILURE',
+            'synthetic selected geometry',
+            candidate_source='tabletop_geometry',
+            source_lineage=('tabletop_geometry',),
+        )
+        evaluation['selected'] = True
+        selected = types.SimpleNamespace(
+            candidate_source='tabletop_geometry',
+            source_lineage=('tabletop_geometry',),
+            source_index=0,
+            _variant_index=0,
+        )
+        node._candidate_gate_audit_row = lambda *_args: {
+            'candidate_source': 'tabletop_geometry',
+            'source_index': 0,
+            'variant_index': 0,
+            'source_lineage': ['tabletop_geometry'],
+            'selected_refresh': True,
+        }
+
+        node._finalize_gate_audit_report(
+            evaluation_records=[evaluation],
+            selected_candidate=selected,
+            selected_pose=object(),
+            plan_id='a' * 24,
+            outcome_code='PLAN_READY',
+            outcome_reason='synthetic selected geometry',
+            valid_plan=True,
+        )
+
+        row = node._active_gate_audit_report['selected']
+        self.assertEqual(
+            (
+                row['candidate_source'],
+                row['source_index'],
+                row['variant_index'],
+                row['source_lineage'],
+            ),
+            ('tabletop_geometry', 0, 0, ['tabletop_geometry']),
+        )
+        self.assertTrue(row['selected_refresh'])
+        for field, value in geometry_evidence.items():
+            self.assertEqual(row[field], value)
+
     def test_bad_raw_candidate_and_good_candidate_keep_complete_two_variant_lineage(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
         bad = RemoteGraspCandidate(

@@ -105,10 +105,15 @@ def validate_enriched_plan(plan, now_sec=None, validity_sec=2.0):
         return Grasp6DPlanState(False, age, 'PLAN_FUTURE: 富计划来自未来时间')
     if age > validity:
         return Grasp6DPlanState(False, age, 'PLAN_STALE: 富计划已过期 %.1fs' % age)
+    source = str(getattr(plan, 'candidate_source', '') or '')
+    source_text = {
+        'graspnet': 'GraspNet',
+        'tabletop_geometry': '桌面几何',
+    }.get(source, source)
     return Grasp6DPlanState(
         True,
         age,
-        '富计划 %s %.1fs 内有效' % (plan_id, age),
+        '富计划 %s 来源%s %.1fs 内有效' % (plan_id, source_text, age),
     )
 
 
