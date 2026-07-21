@@ -22,6 +22,7 @@ class StartGraspRequest {
     if (initObj === null) {
       // initObj === null is a special case for deserialization where we don't initialize fields
       this.execute = null;
+      this.plan_id = null;
     }
     else {
       if (initObj.hasOwnProperty('execute')) {
@@ -30,6 +31,12 @@ class StartGraspRequest {
       else {
         this.execute = false;
       }
+      if (initObj.hasOwnProperty('plan_id')) {
+        this.plan_id = initObj.plan_id
+      }
+      else {
+        this.plan_id = '';
+      }
     }
   }
 
@@ -37,6 +44,8 @@ class StartGraspRequest {
     // Serializes a message object of type StartGraspRequest
     // Serialize message field [execute]
     bufferOffset = _serializer.bool(obj.execute, buffer, bufferOffset);
+    // Serialize message field [plan_id]
+    bufferOffset = _serializer.string(obj.plan_id, buffer, bufferOffset);
     return bufferOffset;
   }
 
@@ -46,11 +55,15 @@ class StartGraspRequest {
     let data = new StartGraspRequest(null);
     // Deserialize message field [execute]
     data.execute = _deserializer.bool(buffer, bufferOffset);
+    // Deserialize message field [plan_id]
+    data.plan_id = _deserializer.string(buffer, bufferOffset);
     return data;
   }
 
   static getMessageSize(object) {
-    return 1;
+    let length = 0;
+    length += _getByteLength(object.plan_id);
+    return length + 5;
   }
 
   static datatype() {
@@ -60,13 +73,14 @@ class StartGraspRequest {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return '371e747b927788fd0b8812d474ff9a56';
+    return 'c369fa0a7af61ec00670dcab4b57bf63';
   }
 
   static messageDefinition() {
     // Returns full string definition for message
     return `
     bool execute
+    string plan_id
     
     `;
   }
@@ -82,6 +96,13 @@ class StartGraspRequest {
     }
     else {
       resolved.execute = false
+    }
+
+    if (msg.plan_id !== undefined) {
+      resolved.plan_id = msg.plan_id;
+    }
+    else {
+      resolved.plan_id = ''
     }
 
     return resolved;
@@ -184,6 +205,6 @@ class StartGraspResponse {
 module.exports = {
   Request: StartGraspRequest,
   Response: StartGraspResponse,
-  md5sum() { return 'c1e3198b68b143183a952c85cd9f744a'; },
+  md5sum() { return '5d246499be275f0453d1db3b1be742a6'; },
   datatype() { return 'alicia_flexible_grasp_supervisor/StartGrasp'; }
 };

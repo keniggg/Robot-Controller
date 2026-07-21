@@ -1,5 +1,7 @@
 file(REMOVE_RECURSE
+  "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/msg/Grasp6DPlan.lisp"
   "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/msg/GraspState.lisp"
+  "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/msg/ObjectGeometry.lisp"
   "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.lisp"
   "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/msg/SafetyState.lisp"
   "/home/zhuyupei/alicia_wa_full/devel/share/common-lisp/ros/alicia_flexible_grasp_supervisor/msg/TactileFrame.lisp"

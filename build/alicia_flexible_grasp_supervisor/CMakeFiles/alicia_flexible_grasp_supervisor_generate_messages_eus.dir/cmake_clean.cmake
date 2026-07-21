@@ -1,6 +1,8 @@
 file(REMOVE_RECURSE
   "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/manifest.l"
+  "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/Grasp6DPlan.l"
   "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/GraspState.l"
+  "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectGeometry.l"
   "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.l"
   "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/SafetyState.l"
   "/home/zhuyupei/alicia_wa_full/devel/share/roseus/ros/alicia_flexible_grasp_supervisor/msg/TactileFrame.l"

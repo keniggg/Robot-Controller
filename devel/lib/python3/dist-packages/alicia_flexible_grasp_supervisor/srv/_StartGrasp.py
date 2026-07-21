@@ -8,13 +8,14 @@ import struct
 
 
 class StartGraspRequest(genpy.Message):
-  _md5sum = "371e747b927788fd0b8812d474ff9a56"
+  _md5sum = "c369fa0a7af61ec00670dcab4b57bf63"
   _type = "alicia_flexible_grasp_supervisor/StartGraspRequest"
   _has_header = False  # flag to mark the presence of a Header object
   _full_text = """bool execute
+string plan_id
 """
-  __slots__ = ['execute']
-  _slot_types = ['bool']
+  __slots__ = ['execute','plan_id']
+  _slot_types = ['bool','string']
 
   def __init__(self, *args, **kwds):
     """
@@ -24,7 +25,7 @@ class StartGraspRequest(genpy.Message):
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       execute
+       execute,plan_id
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -35,8 +36,11 @@ class StartGraspRequest(genpy.Message):
       # message fields cannot be None, assign default values for those that are
       if self.execute is None:
         self.execute = False
+      if self.plan_id is None:
+        self.plan_id = ''
     else:
       self.execute = False
+      self.plan_id = ''
 
   def _get_types(self):
     """
@@ -52,6 +56,12 @@ class StartGraspRequest(genpy.Message):
     try:
       _x = self.execute
       buff.write(_get_struct_B().pack(_x))
+      _x = self.plan_id
+      length = len(_x)
+      if python3 or type(_x) == unicode:
+        _x = _x.encode('utf-8')
+        length = len(_x)
+      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -68,6 +78,15 @@ class StartGraspRequest(genpy.Message):
       end += 1
       (self.execute,) = _get_struct_B().unpack(str[start:end])
       self.execute = bool(self.execute)
+      start = end
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      start = end
+      end += length
+      if python3:
+        self.plan_id = str[start:end].decode('utf-8', 'rosmsg')
+      else:
+        self.plan_id = str[start:end]
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -82,6 +101,12 @@ class StartGraspRequest(genpy.Message):
     try:
       _x = self.execute
       buff.write(_get_struct_B().pack(_x))
+      _x = self.plan_id
+      length = len(_x)
+      if python3 or type(_x) == unicode:
+        _x = _x.encode('utf-8')
+        length = len(_x)
+      buff.write(struct.Struct('<I%ss'%length).pack(length, _x))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
     except TypeError as te: self._check_types(ValueError("%s: '%s' when writing '%s'" % (type(te), str(te), str(locals().get('_x', self)))))
 
@@ -99,6 +124,15 @@ class StartGraspRequest(genpy.Message):
       end += 1
       (self.execute,) = _get_struct_B().unpack(str[start:end])
       self.execute = bool(self.execute)
+      start = end
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      start = end
+      end += length
+      if python3:
+        self.plan_id = str[start:end].decode('utf-8', 'rosmsg')
+      else:
+        self.plan_id = str[start:end]
       return self
     except struct.error as e:
       raise genpy.DeserializationError(e)  # most likely buffer underfill
@@ -265,6 +299,6 @@ def _get_struct_B():
     return _struct_B
 class StartGrasp(object):
   _type          = 'alicia_flexible_grasp_supervisor/StartGrasp'
-  _md5sum = 'c1e3198b68b143183a952c85cd9f744a'
+  _md5sum = '5d246499be275f0453d1db3b1be742a6'
   _request_class  = StartGraspRequest
   _response_class = StartGraspResponse

@@ -46,6 +46,8 @@ if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/TactileFrame.msg"
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/TactileState.msg"
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectPose.msg"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/ObjectGeometry.msg"
+    "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/Grasp6DPlan.msg"
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/GraspState.msg"
     "/home/zhuyupei/alicia_wa_full/src/alicia_flexible_grasp_supervisor/msg/SafetyState.msg"
     )

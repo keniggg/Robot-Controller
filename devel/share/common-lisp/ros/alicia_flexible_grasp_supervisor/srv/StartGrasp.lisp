@@ -11,7 +11,12 @@
     :reader execute
     :initarg :execute
     :type cl:boolean
-    :initform cl:nil))
+    :initform cl:nil)
+   (plan_id
+    :reader plan_id
+    :initarg :plan_id
+    :type cl:string
+    :initform ""))
 )
 
 (cl:defclass StartGrasp-request (<StartGrasp-request>)
@@ -26,13 +31,32 @@
 (cl:defmethod execute-val ((m <StartGrasp-request>))
   (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-srv:execute-val is deprecated.  Use alicia_flexible_grasp_supervisor-srv:execute instead.")
   (execute m))
+
+(cl:ensure-generic-function 'plan_id-val :lambda-list '(m))
+(cl:defmethod plan_id-val ((m <StartGrasp-request>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader alicia_flexible_grasp_supervisor-srv:plan_id-val is deprecated.  Use alicia_flexible_grasp_supervisor-srv:plan_id instead.")
+  (plan_id m))
 (cl:defmethod roslisp-msg-protocol:serialize ((msg <StartGrasp-request>) ostream)
   "Serializes a message object of type '<StartGrasp-request>"
   (cl:write-byte (cl:ldb (cl:byte 8 0) (cl:if (cl:slot-value msg 'execute) 1 0)) ostream)
+  (cl:let ((__ros_str_len (cl:length (cl:slot-value msg 'plan_id))))
+    (cl:write-byte (cl:ldb (cl:byte 8 0) __ros_str_len) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 8) __ros_str_len) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 16) __ros_str_len) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 24) __ros_str_len) ostream))
+  (cl:map cl:nil #'(cl:lambda (c) (cl:write-byte (cl:char-code c) ostream)) (cl:slot-value msg 'plan_id))
 )
 (cl:defmethod roslisp-msg-protocol:deserialize ((msg <StartGrasp-request>) istream)
   "Deserializes a message object of type '<StartGrasp-request>"
     (cl:setf (cl:slot-value msg 'execute) (cl:not (cl:zerop (cl:read-byte istream))))
+    (cl:let ((__ros_str_len 0))
+      (cl:setf (cl:ldb (cl:byte 8 0) __ros_str_len) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 8) __ros_str_len) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 16) __ros_str_len) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 24) __ros_str_len) (cl:read-byte istream))
+      (cl:setf (cl:slot-value msg 'plan_id) (cl:make-string __ros_str_len))
+      (cl:dotimes (__ros_str_idx __ros_str_len msg)
+        (cl:setf (cl:char (cl:slot-value msg 'plan_id) __ros_str_idx) (cl:code-char (cl:read-byte istream)))))
   msg
 )
 (cl:defmethod roslisp-msg-protocol:ros-datatype ((msg (cl:eql '<StartGrasp-request>)))
@@ -43,24 +67,26 @@
   "alicia_flexible_grasp_supervisor/StartGraspRequest")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql '<StartGrasp-request>)))
   "Returns md5sum for a message object of type '<StartGrasp-request>"
-  "c1e3198b68b143183a952c85cd9f744a")
+  "5d246499be275f0453d1db3b1be742a6")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql 'StartGrasp-request)))
   "Returns md5sum for a message object of type 'StartGrasp-request"
-  "c1e3198b68b143183a952c85cd9f744a")
+  "5d246499be275f0453d1db3b1be742a6")
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql '<StartGrasp-request>)))
   "Returns full string definition for message of type '<StartGrasp-request>"
-  (cl:format cl:nil "bool execute~%~%~%"))
+  (cl:format cl:nil "bool execute~%string plan_id~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql 'StartGrasp-request)))
   "Returns full string definition for message of type 'StartGrasp-request"
-  (cl:format cl:nil "bool execute~%~%~%"))
+  (cl:format cl:nil "bool execute~%string plan_id~%~%~%"))
 (cl:defmethod roslisp-msg-protocol:serialization-length ((msg <StartGrasp-request>))
   (cl:+ 0
      1
+     4 (cl:length (cl:slot-value msg 'plan_id))
 ))
 (cl:defmethod roslisp-msg-protocol:ros-message-to-list ((msg <StartGrasp-request>))
   "Converts a ROS message object to a list"
   (cl:list 'StartGrasp-request
     (cl:cons ':execute (execute msg))
+    (cl:cons ':plan_id (plan_id msg))
 ))
 ;//! \htmlinclude StartGrasp-response.msg.html
 
@@ -125,10 +151,10 @@
   "alicia_flexible_grasp_supervisor/StartGraspResponse")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql '<StartGrasp-response>)))
   "Returns md5sum for a message object of type '<StartGrasp-response>"
-  "c1e3198b68b143183a952c85cd9f744a")
+  "5d246499be275f0453d1db3b1be742a6")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql 'StartGrasp-response)))
   "Returns md5sum for a message object of type 'StartGrasp-response"
-  "c1e3198b68b143183a952c85cd9f744a")
+  "5d246499be275f0453d1db3b1be742a6")
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql '<StartGrasp-response>)))
   "Returns full string definition for message of type '<StartGrasp-response>"
   (cl:format cl:nil "bool success~%string message~%~%~%~%"))

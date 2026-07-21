@@ -1,15 +1,31 @@
 #!/usr/bin/env python3
 from copy import deepcopy
+from dataclasses import dataclass
+import hashlib
+import json
 import math
+import os
+import tempfile
+import threading
 import time
 import rospy
 from geometry_msgs.msg import PoseArray, PoseStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
-from alicia_flexible_grasp_supervisor.msg import ObjectPose, GraspState
+from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan, ObjectPose, GraspState
 from alicia_flexible_grasp_supervisor.srv import StartGrasp, StartGraspResponse, StopGrasp, StopGraspResponse, SetTargetPose, SetFloat
 from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages, STATE_NAMES
 from alicia_flexible_grasp.grasp.grasp_pose_generator import make_pregrasp_pose, make_lift_pose
+from alicia_flexible_grasp.grasp.rich_plan_integrity import (
+    plan_id_matches_content,
+    required_open_width_is_valid,
+    stamp_nanoseconds as _stamp_nanoseconds,
+    stamp_seconds as _stamp_seconds,
+    strict_plan_id_equal,
+    validate_finite_pose,
+    validate_plan_header_binding,
+    validate_rich_geometry,
+)
 from alicia_flexible_grasp.robot.planning_feedback import (
     is_orientation_fallback_message,
     is_position_only_fallback_message,
@@ -18,12 +34,434 @@ from alicia_flexible_grasp.robot.planning_feedback import (
 )
 from alicia_flexible_grasp.vision.mujoco_digital_twin_client import (
     MujocoDigitalTwinClient,
-    build_simulation_payload,
+    build_mujoco_payload,
+    validate_mujoco_gate_response,
 )
 try:
     import tf2_ros
 except Exception:
     tf2_ros = None
+
+
+@dataclass(frozen=True)
+class PlanValidationResult:
+    ok: bool
+    code: str = ''
+    reason: str = ''
+    age_sec: float = float('inf')
+
+
+_MUJOCO_AUDIT_SCHEMA_VERSION = 1
+_MUJOCO_AUDIT_DEFAULT_PATH = '~/.ros/grasp6d_mujoco_audit_latest.json'
+_MUJOCO_SAFETY_KEYS = (
+    'simulation_ok',
+    'ik_success',
+    'collision_free',
+    'contact_success',
+    'lift_success',
+)
+_MUJOCO_AUDIT_TEXT_LIMIT = 2048
+_MUJOCO_STATUS_TEXT_LIMIT = 320
+
+
+class AuditPathConflictError(ValueError):
+    pass
+
+
+def _bounded_text(value, limit=_MUJOCO_AUDIT_TEXT_LIMIT):
+    if not isinstance(value, str):
+        return None
+    maximum = max(0, int(limit))
+    return value[:maximum]
+
+
+def _strict_json_number(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _wall_time_sec():
+    value = _strict_json_number(time.time())
+    return 0.0 if value is None else value
+
+
+def _exception_audit_record(exception):
+    if exception is None:
+        return None
+    return {
+        'type': _bounded_text(type(exception).__name__, 128),
+        'message': _bounded_text(str(exception)),
+    }
+
+
+def _new_mujoco_execution_audit(plan):
+    request_plan_id = getattr(plan, 'plan_id', None)
+    return {
+        'schema_version': _MUJOCO_AUDIT_SCHEMA_VERSION,
+        'audit_kind': 'mujoco_rich_plan_execution_gate',
+        'request_plan_id': _bounded_text(request_plan_id, 256),
+        'attempt': {
+            'started_unix_sec': _wall_time_sec(),
+            'completed_unix_sec': None,
+            'duration_sec': None,
+        },
+        'payload': {
+            'built': False,
+            'plan_id': None,
+            'sha256': None,
+            'summary': None,
+            'build_error': None,
+        },
+        'response': {
+            'received': False,
+            'json_object': False,
+            'strict_json_serializable': False,
+            'sha256': None,
+            'raw_echo_plan_id': None,
+            'raw_echo_plan_id_type': None,
+            'score': None,
+            'failure_code': None,
+            'failure_reason': None,
+            'failure_reason_length': None,
+            'network_error': None,
+            **{key: None for key in _MUJOCO_SAFETY_KEYS},
+        },
+        'authority_after_network': {
+            'checked': False,
+            'ok': None,
+            'code': None,
+            'reason': None,
+        },
+        'gate_validation': {
+            'checked': False,
+            'ok': None,
+            'code': None,
+            'reason': None,
+            'score': None,
+        },
+        'final_validation': {
+            'ok': False,
+            'code': None,
+            'reason': None,
+            'score': None,
+            'completed_unix_sec': None,
+        },
+    }
+
+
+def _record_mujoco_payload(audit, payload):
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(',', ':'),
+        sort_keys=True,
+    ).encode('utf-8')
+    trajectory = payload.get('trajectory') if isinstance(payload, dict) else None
+    joint_names = payload.get('joint_names') if isinstance(payload, dict) else None
+    audit['payload'] = {
+        'built': True,
+        'plan_id': _bounded_text(payload.get('plan_id'), 256),
+        'sha256': hashlib.sha256(encoded).hexdigest(),
+        'summary': {
+            'schema_version': payload.get('schema_version'),
+            'snapshot_stamp_sec': _strict_json_number(
+                payload.get('snapshot_stamp_sec')
+            ),
+            'model_choice': _bounded_text(payload.get('model_choice'), 256),
+            'joint_count': len(joint_names) if isinstance(joint_names, list) else None,
+            'trajectory_count': len(trajectory) if isinstance(trajectory, list) else None,
+            'candidate_width_m': _strict_json_number(
+                payload.get('candidate_width_m')
+            ),
+            'required_open_width_m': _strict_json_number(
+                payload.get('required_open_width_m')
+            ),
+            'gripper_model_name': _bounded_text(
+                (payload.get('gripper') or {}).get('model_name')
+                if isinstance(payload.get('gripper'), dict)
+                else None,
+                256,
+            ),
+        },
+        'build_error': None,
+    }
+
+
+def _record_mujoco_response(audit, response):
+    record = audit['response']
+    record['received'] = True
+    record['json_object'] = isinstance(response, dict)
+    try:
+        encoded = json.dumps(
+            response,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(',', ':'),
+            sort_keys=True,
+        ).encode('utf-8')
+    except (TypeError, ValueError, OverflowError):
+        encoded = None
+    if encoded is not None:
+        record['strict_json_serializable'] = True
+        record['sha256'] = hashlib.sha256(encoded).hexdigest()
+    if not isinstance(response, dict):
+        record['raw_echo_plan_id_type'] = type(response).__name__
+        return
+
+    echoed_id = response.get('plan_id')
+    record['raw_echo_plan_id'] = echoed_id if isinstance(echoed_id, str) else None
+    record['raw_echo_plan_id_type'] = type(echoed_id).__name__
+    record['score'] = _strict_json_number(response.get('score'))
+    raw_code = response.get('failure_code')
+    record['failure_code'] = raw_code if isinstance(raw_code, str) else None
+    raw_reason = response.get('failure_reason')
+    record['failure_reason'] = raw_reason if isinstance(raw_reason, str) else None
+    record['failure_reason_length'] = (
+        len(raw_reason) if isinstance(raw_reason, str) else None
+    )
+    for key in _MUJOCO_SAFETY_KEYS:
+        value = response.get(key)
+        record[key] = value if type(value) is bool else None
+
+
+def _validation_audit_record(result, checked=True):
+    return {
+        'checked': bool(checked),
+        'ok': bool(getattr(result, 'ok', False)) if checked else None,
+        'code': _bounded_text(str(getattr(result, 'code', '') or ''), 256)
+        if checked else None,
+        'reason': _bounded_text(str(getattr(result, 'reason', '') or ''))
+        if checked else None,
+        'score': _strict_json_number(getattr(result, 'score', None))
+        if checked else None,
+    }
+
+
+def normalize_audit_output_path(output_path, label='audit_output_path'):
+    if not isinstance(output_path, str) or not output_path.strip():
+        raise ValueError('%s must be a non-empty string' % str(label))
+    return os.path.normcase(
+        os.path.realpath(
+            os.path.abspath(os.path.expanduser(output_path.strip()))
+        )
+    )
+
+
+def validate_distinct_audit_output_paths(
+    mujoco_output_path,
+    planning_output_path,
+):
+    """Return canonical audit paths and reject cross-gate file aliasing."""
+    mujoco_path = normalize_audit_output_path(
+        mujoco_output_path,
+        'MuJoCo audit_output_path',
+    )
+    if planning_output_path is None or (
+        isinstance(planning_output_path, str)
+        and not planning_output_path.strip()
+    ):
+        return mujoco_path, None
+    planning_path = normalize_audit_output_path(
+        planning_output_path,
+        'planning gate_audit_output_path',
+    )
+    same_path = planning_path == mujoco_path
+    if not same_path and os.path.exists(planning_path) and os.path.exists(mujoco_path):
+        try:
+            same_path = os.path.samefile(planning_path, mujoco_path)
+        except OSError:
+            same_path = False
+    if same_path:
+        raise AuditPathConflictError(
+            'MuJoCo and planning gate audits must use distinct canonical paths'
+        )
+    return mujoco_path, planning_path
+
+
+def write_mujoco_execution_audit(output_path, report):
+    """Atomically persist one strict-JSON MuJoCo execution-gate attempt."""
+    path = normalize_audit_output_path(
+        output_path,
+        'MuJoCo audit_output_path',
+    )
+    directory = os.path.dirname(path) or os.curdir
+    payload = json.dumps(
+        report,
+        allow_nan=False,
+        ensure_ascii=True,
+        indent=2,
+        sort_keys=True,
+    ).encode('utf-8')
+    os.makedirs(directory, exist_ok=True)
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix='.%s.tmp-' % os.path.basename(path),
+        dir=directory,
+    )
+    replaced = False
+    try:
+        with os.fdopen(descriptor, 'wb') as handle:
+            descriptor = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        replaced = True
+        directory_descriptor = os.open(
+            directory,
+            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0),
+        )
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if not replaced:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+    return {
+        'path': path,
+        'sha256': hashlib.sha256(payload).hexdigest(),
+        'bytes': len(payload),
+    }
+
+
+def _finalize_mujoco_execution_audit(
+    audit,
+    output_path,
+    ok,
+    code,
+    reason,
+    score=None,
+):
+    completed = _wall_time_sec()
+    started = _strict_json_number(audit['attempt'].get('started_unix_sec'))
+    audit['attempt']['completed_unix_sec'] = completed
+    audit['attempt']['duration_sec'] = (
+        max(0.0, completed - started) if started is not None else None
+    )
+    audit['final_validation'] = {
+        'ok': bool(ok),
+        'code': _bounded_text(str(code or ''), 256),
+        'reason': _bounded_text(str(reason or '')),
+        'score': _strict_json_number(score),
+        'completed_unix_sec': completed,
+    }
+    return write_mujoco_execution_audit(output_path, audit)
+
+
+def _mujoco_audit_reference_text(reference):
+    return 'audit_path=%s audit_sha256=%s' % (
+        _bounded_text(str(reference.get('path', '') or ''), 256),
+        str(reference.get('sha256', '') or ''),
+    )
+
+
+def _bounded_status_reason(reason):
+    return _bounded_text(str(reason or ''), _MUJOCO_STATUS_TEXT_LIMIT) or ''
+
+
+def _bounded_status_code(code):
+    return _bounded_text(str(code or 'MUJOCO_GATE_FAILED'), 128) or 'MUJOCO_GATE_FAILED'
+
+
+def _finite_pose(pose):
+    try:
+        validate_finite_pose(pose)
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return True
+
+
+def _finite_geometry(geometry):
+    try:
+        validate_rich_geometry(geometry)
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return True
+
+
+def validate_execution_plan(plan, now_sec, validity_sec, enforce_freshness=True):
+    if plan is None:
+        return PlanValidationResult(False, 'PLAN_MISSING', 'no rich 6D plan')
+    diagnostic = str(getattr(plan, 'diagnostic', '') or '')
+    if not bool(getattr(plan, 'valid', False)):
+        code = diagnostic.split(':', 1)[0].strip() if diagnostic else 'PLAN_INVALID'
+        return PlanValidationResult(False, code, diagnostic or 'rich plan is invalid')
+    plan_id = str(getattr(plan, 'plan_id', '') or '').strip()
+    if not plan_id:
+        return PlanValidationResult(False, 'PLAN_ID_MISSING', 'plan_id is empty')
+    if not str(getattr(plan, 'model_choice', '') or '').strip():
+        return PlanValidationResult(False, 'MODEL_MISSING', 'model_choice is empty')
+    poses = list(getattr(plan, 'poses', ()) or ())
+    if len(poses) != 4 or not all(_finite_pose(pose) for pose in poses):
+        return PlanValidationResult(
+            False,
+            'PLAN_MALFORMED',
+            'rich plan must contain exactly four finite non-zero-quaternion poses',
+        )
+    try:
+        score = float(plan.score)
+        candidate_width = float(plan.candidate_width_m)
+        required_width = float(plan.required_open_width_m)
+    except Exception:
+        return PlanValidationResult(False, 'PLAN_MALFORMED', 'plan scalar fields are invalid')
+    if (
+        not math.isfinite(score)
+        or not math.isfinite(candidate_width)
+        or candidate_width < 0.0
+    ):
+        return PlanValidationResult(False, 'PLAN_MALFORMED', 'plan score or candidate width is non-finite')
+    if not required_open_width_is_valid(required_width):
+        return PlanValidationResult(False, 'GRIPPER_TOO_NARROW', 'required opening is outside (0, 0.050] m')
+    if not _finite_geometry(getattr(plan, 'object_geometry', None)):
+        return PlanValidationResult(False, 'OBB_INVALID', 'embedded object geometry is invalid')
+    try:
+        validate_plan_header_binding(plan)
+    except (TypeError, ValueError, AttributeError) as exc:
+        return PlanValidationResult(
+            False,
+            'PLAN_SNAPSHOT_MISMATCH',
+            str(exc),
+        )
+    if not plan_id_matches_content(plan):
+        return PlanValidationResult(
+            False,
+            'PLAN_ID_MISMATCH',
+            'plan_id does not match canonical rich-plan content',
+        )
+    stamp_sec = _stamp_seconds(getattr(getattr(plan, 'header', None), 'stamp', None))
+    if not math.isfinite(stamp_sec) or stamp_sec <= 0.0:
+        return PlanValidationResult(False, 'PLAN_STALE', 'plan source timestamp is zero')
+    age = float(now_sec) - stamp_sec
+    if not enforce_freshness:
+        return PlanValidationResult(True, age_sec=age)
+    if age < 0.0:
+        return PlanValidationResult(False, 'PLAN_FUTURE', 'plan source timestamp is in the future', age)
+    if age > max(0.0, float(validity_sec)):
+        return PlanValidationResult(False, 'PLAN_STALE', 'plan source timestamp is stale', age)
+    return PlanValidationResult(True, age_sec=age)
+
+
+def split_rich_plan_poses(plan):
+    if len(getattr(plan, 'poses', ()) or ()) != 4:
+        raise ValueError('rich 6D plan must contain exactly four poses')
+    result = []
+    for source in plan.poses:
+        stamped = PoseStamped()
+        stamped.header = deepcopy(plan.header)
+        stamped.pose = deepcopy(source)
+        result.append(stamped)
+    return tuple(result)
 
 class GraspTaskNode:
     def __init__(self):
@@ -32,8 +470,13 @@ class GraspTaskNode:
         self.latest_visual_obj = None
         self.latest_visual_obj_time = None
         self.latest_grasp6d_plan = None
-        self.latest_grasp6d_plan_time = None
-        self.latest_grasp6d_plan_object = None
+        self.latest_grasp6d_legacy_plan = None
+        self._grasp6d_watermark_stamp_ns = 0
+        self._grasp6d_watermark_plan_id = ''
+        self._grasp6d_watermark_tombstoned = False
+        self._grasp6d_plan_lock = threading.RLock()
+        self._start_lock = threading.RLock()
+        self._start_inflight = False
         self.latest_joint_state = None
         self.latest_raw_detection = False
         self.latest_raw_detection_time = None
@@ -46,7 +489,21 @@ class GraspTaskNode:
             self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.pub = rospy.Publisher('/grasp/state', GraspState, queue_size=10)
         rospy.Subscriber('/perception/object', ObjectPose, self.obj_cb, queue_size=1)
-        rospy.Subscriber(rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'), PoseArray, self.grasp6d_plan_cb, queue_size=1)
+        rospy.Subscriber(
+            rospy.get_param(
+                '/grasp/grasp6d_enriched_plan_topic',
+                '/grasp_6d/plan_enriched',
+            ),
+            Grasp6DPlan,
+            self.grasp6d_plan_cb,
+            queue_size=1,
+        )
+        rospy.Subscriber(
+            rospy.get_param('/grasp/grasp6d_plan_topic', '/grasp_6d/plan'),
+            PoseArray,
+            self.grasp6d_legacy_plan_cb,
+            queue_size=1,
+        )
         rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
         rospy.Subscriber('/perception/raw_object_detected', Bool, self.raw_detection_cb, queue_size=1)
         rospy.Service('/grasp/start', StartGrasp, self.start_cb)
@@ -55,13 +512,12 @@ class GraspTaskNode:
 
     def obj_cb(self, msg):
         if not msg.detected:
-            self.latest_obj = None
-            self.latest_obj_time = None
             self.latest_visual_obj = None
             self.latest_visual_obj_time = None
-            self.latest_grasp6d_plan = None
-            self.latest_grasp6d_plan_time = None
-            self.latest_grasp6d_plan_object = None
+            with self._grasp6d_plan_guard():
+                self.latest_obj = None
+                self.latest_obj_time = None
+                self._clear_grasp6d_authority()
             return
         gcfg = rospy.get_param('/grasp', {})
         confidence = float(getattr(msg, 'confidence', 1.0) or 0.0)
@@ -70,6 +526,30 @@ class GraspTaskNode:
         # Candidate generation still uses latest_obj and its stricter threshold.
         self.latest_visual_obj = msg
         self.latest_visual_obj_time = now
+        source_stamp = self._object_source_stamp(msg)
+        source_age = (
+            float('inf')
+            if source_stamp is None
+            else _stamp_seconds(now) - _stamp_seconds(source_stamp)
+        )
+        source_validity = self._configured_target_observation_validity(gcfg)
+        if (
+            source_stamp is None
+            or not math.isfinite(source_age)
+            or source_age < 0.0
+            or source_age > source_validity
+        ):
+            rospy.logwarn_throttle(
+                1.0,
+                'Grasp ignored stale object source age %.3fs outside [0, %.3f]s',
+                source_age,
+                source_validity,
+            )
+            with self._grasp6d_plan_guard():
+                self.latest_obj = None
+                self.latest_obj_time = None
+                self._clear_grasp6d_authority()
+            return
         min_confidence = self._cfg_float(gcfg, 'min_object_confidence', 0.50)
         if confidence < min_confidence:
             rospy.logwarn_throttle(
@@ -78,6 +558,10 @@ class GraspTaskNode:
                 confidence,
                 min_confidence,
             )
+            with self._grasp6d_plan_guard():
+                self.latest_obj = None
+                self.latest_obj_time = None
+                self._clear_grasp6d_authority()
             return
 
         previous = getattr(self, 'latest_obj', None)
@@ -98,10 +582,31 @@ class GraspTaskNode:
                     max_jump,
                     jump_window,
                 )
+                with self._grasp6d_plan_guard():
+                    self.latest_obj = None
+                    self.latest_obj_time = None
+                    self._clear_grasp6d_authority()
                 return
 
-        self.latest_obj = msg
-        self.latest_obj_time = now
+        # Live authority updates share the plan RLock with physical commits so
+        # a drift-changing observation cannot cross the action boundary.
+        with self._grasp6d_plan_guard():
+            self.latest_obj = msg
+            self.latest_obj_time = source_stamp
+
+    @staticmethod
+    def _object_source_stamp(msg):
+        primary = getattr(getattr(msg, 'header', None), 'stamp', None)
+        if _stamp_nanoseconds(primary) > 0:
+            return primary
+        fallback = getattr(
+            getattr(getattr(msg, 'pose_base', None), 'header', None),
+            'stamp',
+            None,
+        )
+        if _stamp_nanoseconds(fallback) > 0:
+            return fallback
+        return None
 
     def joint_cb(self, msg):
         self.latest_joint_state = msg
@@ -111,10 +616,106 @@ class GraspTaskNode:
         self.latest_raw_detection_time = rospy.Time.now()
 
     def grasp6d_plan_cb(self, msg):
-        self.latest_grasp6d_plan = msg
-        self.latest_grasp6d_plan_time = rospy.Time.now()
-        obj = getattr(self, 'latest_obj', None)
-        self.latest_grasp6d_plan_object = deepcopy(obj) if obj is not None and bool(getattr(obj, 'detected', False)) else None
+        result = validate_execution_plan(
+            msg,
+            _stamp_seconds(rospy.Time.now()),
+            self._configured_plan_validity({}),
+        )
+        with self._grasp6d_plan_guard():
+            current = getattr(self, 'latest_grasp6d_plan', None)
+            self._seed_grasp6d_watermark_locked(current)
+            incoming_ns = _stamp_nanoseconds(
+                getattr(getattr(msg, 'header', None), 'stamp', None)
+            )
+            incoming_id = str(getattr(msg, 'plan_id', '') or '')
+            if not result.ok:
+                if incoming_ns > self._grasp6d_watermark_stamp_ns:
+                    self._grasp6d_watermark_stamp_ns = incoming_ns
+                    self._grasp6d_watermark_plan_id = incoming_id
+                if self._grasp6d_watermark_stamp_ns > 0:
+                    self._grasp6d_watermark_tombstoned = True
+                self.latest_grasp6d_plan = None
+                rospy.logwarn(
+                    'Rejected rich 6D plan %s: %s',
+                    result.code,
+                    result.reason,
+                )
+                return
+            replayed_source = (
+                incoming_ns < self._grasp6d_watermark_stamp_ns
+                or (
+                    incoming_ns == self._grasp6d_watermark_stamp_ns
+                    and (
+                        self._grasp6d_watermark_tombstoned
+                        or not strict_plan_id_equal(
+                            incoming_id, self._grasp6d_watermark_plan_id
+                        )
+                    )
+                )
+            )
+            if replayed_source:
+                if self._grasp6d_watermark_stamp_ns > 0:
+                    self._grasp6d_watermark_tombstoned = True
+                self.latest_grasp6d_plan = None
+                rospy.logwarn(
+                    'Rejected rich 6D plan PLAN_REPLAYED: older, conflicting, or tombstoned source timestamp'
+                )
+                return
+            if incoming_ns > self._grasp6d_watermark_stamp_ns:
+                self._grasp6d_watermark_stamp_ns = incoming_ns
+                self._grasp6d_watermark_plan_id = incoming_id
+                self._grasp6d_watermark_tombstoned = False
+            self.latest_grasp6d_plan = deepcopy(msg)
+
+    def grasp6d_legacy_plan_cb(self, msg):
+        # Compatibility visualization only. Never assign execution authority.
+        self.latest_grasp6d_legacy_plan = deepcopy(msg)
+
+    def _grasp6d_plan_guard(self):
+        lock = getattr(self, '_grasp6d_plan_lock', None)
+        if lock is None:
+            lock = threading.RLock()
+            self._grasp6d_plan_lock = lock
+        return lock
+
+    def _start_guard(self):
+        lock = getattr(self, '_start_lock', None)
+        if lock is None:
+            lock = threading.RLock()
+            self._start_lock = lock
+        return lock
+
+    def _seed_grasp6d_watermark_locked(self, current=None):
+        if not hasattr(self, '_grasp6d_watermark_stamp_ns'):
+            self._grasp6d_watermark_stamp_ns = 0
+            self._grasp6d_watermark_plan_id = ''
+            self._grasp6d_watermark_tombstoned = False
+        if current is None:
+            current = getattr(self, 'latest_grasp6d_plan', None)
+        if current is not None and self._grasp6d_watermark_stamp_ns <= 0:
+            self._grasp6d_watermark_stamp_ns = _stamp_nanoseconds(
+                getattr(getattr(current, 'header', None), 'stamp', None)
+            )
+            self._grasp6d_watermark_plan_id = str(
+                getattr(current, 'plan_id', '') or ''
+            )
+            self._grasp6d_watermark_tombstoned = False
+
+    def _clear_grasp6d_authority(self, expected_plan_id=None):
+        with self._grasp6d_plan_guard():
+            current = getattr(self, 'latest_grasp6d_plan', None)
+            self._seed_grasp6d_watermark_locked(current)
+            if (
+                expected_plan_id is not None
+                and current is not None
+                and str(getattr(current, 'plan_id', '') or '')
+                != str(expected_plan_id)
+            ):
+                return False
+            if self._grasp6d_watermark_stamp_ns > 0:
+                self._grasp6d_watermark_tombstoned = True
+            self.latest_grasp6d_plan = None
+            return True
 
     def set_state(self, stage, message='', success=False):
         self.stage = stage
@@ -129,31 +730,67 @@ class GraspTaskNode:
         rospy.loginfo('[Grasp] %s %s', msg.state, message)
 
     def start_cb(self, req):
-        if self.active:
-            return StartGraspResponse(False, 'already active')
-        self.active = True
+        if not bool(getattr(req, 'execute', False)):
+            return StartGraspResponse(False, 'execute=false')
+        gcfg = rospy.get_param('/grasp', {})
+        bound_plan = None
+        with self._start_guard():
+            if getattr(self, '_start_inflight', False) or self.active:
+                return StartGraspResponse(False, 'already active')
+            if bool(gcfg.get('use_grasp6d_plan', False)):
+                validation, bound_plan = self._copy_requested_grasp6d_plan(
+                    getattr(req, 'plan_id', ''),
+                    gcfg,
+                )
+                if not validation.ok:
+                    return StartGraspResponse(
+                        False,
+                        '%s: %s' % (validation.code, validation.reason),
+                    )
+            self._start_inflight = True
+            self.active = True
         try:
-            result = self.execute()
-            self.active = False
+            result = self.execute(grasp6d_plan=bound_plan)
             return StartGraspResponse(result, 'success' if result else 'failed')
         except Exception as exc:
-            self.active = False
             self.set_state(GraspStages.FAILED, str(exc), False)
             return StartGraspResponse(False, str(exc))
+        finally:
+            with self._start_guard():
+                self.active = False
+                self._start_inflight = False
 
     def stop_cb(self, req):
-        self.active = False
+        with self._start_guard():
+            with self._grasp6d_plan_guard():
+                # Global lock order is start -> plan. A synchronous physical
+                # action holding plan first commits before stop returns; a
+                # stop that obtains plan first cancels every later action.
+                # Only start_cb's finally block releases the execution slot.
+                self.active = False
         self.set_state(GraspStages.EMERGENCY_STOP if req.emergency else GraspStages.IDLE, 'stop requested')
         return StopGraspResponse(True, 'stop requested')
 
-    def execute(self):
-        rospy.wait_for_service('/supervisor/move_to_pose', timeout=10)
+    def execute(self, grasp6d_plan=None):
+        gcfg = rospy.get_param('/grasp', {})
+        use_grasp6d_plan = bool(gcfg.get('use_grasp6d_plan', False))
+        strict_execute_pose = None
+        if use_grasp6d_plan:
+            rospy.wait_for_service('/supervisor/check_pose_strict', timeout=10)
+            rospy.wait_for_service('/supervisor/execute_pose_strict', timeout=10)
+            move_pose = rospy.ServiceProxy(
+                '/supervisor/check_pose_strict', SetTargetPose
+            )
+            strict_execute_pose = rospy.ServiceProxy(
+                '/supervisor/execute_pose_strict', SetTargetPose
+            )
+        else:
+            rospy.wait_for_service('/supervisor/move_to_pose', timeout=10)
+            move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
         rospy.wait_for_service('/supervisor/move_to_pose_linear', timeout=10)
         rospy.wait_for_service('/supervisor/set_gripper', timeout=10)
-        move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
         move_pose_linear = rospy.ServiceProxy('/supervisor/move_to_pose_linear', SetTargetPose)
         set_gripper = rospy.ServiceProxy('/supervisor/set_gripper', SetFloat)
-        gcfg = rospy.get_param('/grasp', {})
         gripper_cfg = rospy.get_param('/gripper', {})
         close = None
         if bool(gripper_cfg.get('use_compliant_close', True)):
@@ -166,7 +803,7 @@ class GraspTaskNode:
         pregrasp_reached_tolerance = float(gcfg.get('pregrasp_reached_tolerance_m', 0.04))
         open_position = float(gripper_cfg.get('open_position_m', 0.0))
 
-        if bool(gcfg.get('use_grasp6d_plan', False)):
+        if use_grasp6d_plan:
             return self._execute_grasp6d_plan(
                 gcfg,
                 gripper_cfg,
@@ -175,6 +812,8 @@ class GraspTaskNode:
                 move_pose_linear,
                 set_gripper,
                 close,
+                grasp6d_plan,
+                strict_execute_pose=strict_execute_pose,
             )
 
         self.set_state(GraspStages.SEARCH_OBJECT, 'waiting for object')
@@ -274,31 +913,54 @@ class GraspTaskNode:
         move_pose_linear,
         set_gripper,
         close,
+        plan,
+        strict_execute_pose=None,
     ):
-        plan = self._fresh_grasp6d_plan(gcfg)
-        if plan is None:
-            self.set_state(GraspStages.FAILED, 'no fresh 6D grasp plan')
+        validation = validate_execution_plan(
+            plan,
+            _stamp_seconds(rospy.Time.now()),
+            self._configured_plan_validity(gcfg),
+            enforce_freshness=False,
+        )
+        if not validation.ok:
+            if plan is not None:
+                self._clear_grasp6d_authority(
+                    expected_plan_id=str(getattr(plan, 'plan_id', '') or '')
+                )
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: %s' % (validation.code, validation.reason),
+            )
+            return False
+        drift = self._bound_target_drift_result(plan, gcfg)
+        if not drift.ok:
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: %s' % (drift.code, drift.reason),
+            )
+            return False
+        if self._position_only_execute_globally_enabled():
+            self.set_state(
+                GraspStages.FAILED,
+                'POSITION_ONLY_FALLBACK_FORBIDDEN: rich 6D execution requires '
+                '/robot/position_only_execute_enabled=false',
+            )
+            return False
+        if not callable(strict_execute_pose):
+            self.set_state(
+                GraspStages.FAILED,
+                'STRICT_CACHED_EXECUTOR_UNAVAILABLE: rich 6D execution requires '
+                '/supervisor/execute_pose_strict before simulation or physical action',
+            )
             return False
 
-        pregrasp = self._pose_array_item_as_stamped(plan, 0)
-        approach = self._pose_array_item_as_stamped(plan, 1)
-        grasp = self._pose_array_item_as_stamped(plan, 2)
-        lift = self._pose_array_item_as_stamped(plan, 3)
-        locked_obj = deepcopy(getattr(self, 'latest_grasp6d_plan_object', None))
-
+        pregrasp, approach, grasp, lift = split_rich_plan_poses(plan)
+        if not self._execution_checkpoint(plan, gcfg, 'MuJoCo gate'):
+            return False
         if not self._simulate_grasp6d_plan_if_required(gcfg, gripper_cfg, plan):
             return False
-
-        retargeted = self._visual_retarget_6d_poses(
-            locked_obj,
-            [pregrasp, approach, grasp, lift],
-            gcfg,
-            'execution start',
-            required=bool(gcfg.get('visual_retarget_require_start_detection', True)),
-        )
-        if retargeted is None:
+        if not self._execution_checkpoint(plan, gcfg, 'gripper open'):
             return False
-        (pregrasp, approach, grasp, lift), locked_obj = retargeted
 
         self.set_state(GraspStages.PLAN_PREGRASP, 'using 6D grasp plan')
         if not self._command_gripper_position(
@@ -306,71 +968,142 @@ class GraspTaskNode:
             open_position,
             'open gripper before 6D motion',
             self._cfg_float(gripper_cfg, 'open_wait_sec', 0.5),
+            execution_plan=plan,
+            gcfg=gcfg,
         ):
             return False
-        if not self._plan_and_execute_pose(GraspStages.MOVE_PREGRASP, '6D pregrasp', pregrasp, move_pose, '6D pregrasp'):
+        if not self._execution_checkpoint(plan, gcfg, 'pregrasp'):
+            return False
+        if not self._plan_and_execute_pose(
+            GraspStages.MOVE_PREGRASP,
+            '6D pregrasp',
+            pregrasp,
+            move_pose,
+            '6D pregrasp',
+            execution_plan_id=plan.plan_id,
+            execution_plan=plan,
+            gcfg=gcfg,
+            execute_pose=strict_execute_pose,
+        ):
             return False
 
-        retargeted = self._visual_retarget_6d_poses(
-            locked_obj,
-            [approach, grasp, lift],
-            gcfg,
-            'pregrasp',
-            required=bool(gcfg.get('visual_retarget_require_pregrasp_detection', True)),
-        )
-        if retargeted is None:
+        if not self._execution_checkpoint(plan, gcfg, 'approach'):
             return False
-        (approach, grasp, lift), locked_obj = retargeted
-
         if not self._plan_and_execute_pose(
             GraspStages.APPROACH_TARGET,
             'linear 6D approach',
             approach,
             move_pose_linear,
             '6D approach',
+            execution_plan_id=plan.plan_id,
+            execution_plan=plan,
+            gcfg=gcfg,
+            execute_pose=move_pose_linear,
         ):
             return False
 
-        if bool(gcfg.get('visual_retarget_after_approach', True)):
-            retargeted = self._visual_retarget_6d_poses(
-                locked_obj,
-                [grasp, lift],
-                gcfg,
-                'approach',
-                required=bool(gcfg.get('visual_retarget_require_approach_detection', False)),
-            )
-            if retargeted is None:
-                return False
-            (grasp, lift), locked_obj = retargeted
-
+        if not self._execution_checkpoint(plan, gcfg, 'grasp pose'):
+            return False
         if not self._plan_and_execute_pose(
             GraspStages.APPROACH_TARGET,
             'linear 6D grasp pose',
             grasp,
             move_pose_linear,
             '6D grasp pose',
+            execution_plan_id=plan.plan_id,
+            execution_plan=plan,
+            gcfg=gcfg,
+            execute_pose=move_pose_linear,
         ):
             return False
 
+        if not self._execution_checkpoint(plan, gcfg, 'gripper close'):
+            return False
         close_label = 'force-guided close' if bool(gripper_cfg.get('use_compliant_close', True)) else 'fixed gripper close'
         self.set_state(GraspStages.COMPLIANT_CLOSE, close_label)
-        ok, message = self._close_gripper(gripper_cfg, set_gripper, close)
+        ok, message = self._close_gripper(
+            gripper_cfg,
+            set_gripper,
+            close,
+            execution_plan=plan,
+            gcfg=gcfg,
+        )
         if not ok:
             self.set_state(GraspStages.FAILED, message)
             return False
 
+        if not self._execution_checkpoint(plan, gcfg, 'lift'):
+            return False
         if not self._plan_and_execute_pose(
             GraspStages.LIFT_OBJECT,
             'linear 6D lift',
             lift,
             move_pose_linear,
             '6D lift',
+            execution_plan_id=plan.plan_id,
+            execution_plan=plan,
+            gcfg=gcfg,
+            execute_pose=move_pose_linear,
         ):
+            return False
+        if not self._execution_checkpoint(plan, gcfg, 'success acknowledgement'):
             return False
         self.set_state(GraspStages.SUCCESS, '6D grasp done', True)
         return True
 
-    def _plan_and_execute_pose(self, stage, label, pose, move_pose, settle_reason):
+    def _plan_and_execute_pose(
+        self,
+        stage,
+        label,
+        pose,
+        move_pose,
+        settle_reason,
+        execution_plan_id=None,
+        execution_plan=None,
+        gcfg=None,
+        execute_pose=None,
+    ):
+        bound_plan = execution_plan
+        if bound_plan is None and execution_plan_id is not None:
+            with self._grasp6d_plan_guard():
+                current = getattr(self, 'latest_grasp6d_plan', None)
+                if current is not None and strict_plan_id_equal(
+                    getattr(current, 'plan_id', None), execution_plan_id
+                ):
+                    bound_plan = deepcopy(current)
+        if bound_plan is not None:
+            validation = self._validate_bound_plan(bound_plan, gcfg or {})
+            if not validation.ok:
+                self.set_state(
+                    GraspStages.FAILED,
+                    '%s: %s before planning %s'
+                    % (validation.code, validation.reason, label),
+                )
+                return False
+        elif execution_plan_id is not None:
+            validation = self.validate_plan_id_for_execution(
+                execution_plan_id, gcfg or {}
+            )
+            if not validation.ok:
+                self.set_state(
+                    GraspStages.FAILED,
+                    '%s: %s before planning %s'
+                    % (validation.code, validation.reason, label),
+                )
+                return False
+        strict_rich_plan = (
+            bound_plan is not None or execution_plan_id is not None
+        )
+        if (
+            strict_rich_plan
+            and self._position_only_execute_globally_enabled()
+        ):
+            self.set_state(
+                GraspStages.FAILED,
+                'POSITION_ONLY_FALLBACK_FORBIDDEN: rich 6D planning requires '
+                '/robot/position_only_execute_enabled=false',
+            )
+            return False
         self.set_state(stage, 'planning ' + label)
         resp = move_pose(pose, False)
         if not resp.success:
@@ -378,7 +1111,9 @@ class GraspTaskNode:
             return False
         if (
             is_position_only_fallback_message(getattr(resp, 'message', ''))
-            and not self._position_only_execute_allowed()
+            and not self._position_only_execute_allowed(
+                strict_rich_plan=strict_rich_plan
+            )
         ):
             self.set_state(
                 GraspStages.FAILED,
@@ -387,7 +1122,9 @@ class GraspTaskNode:
             return False
         if (
             is_orientation_fallback_message(getattr(resp, 'message', ''))
-            and not self._orientation_fallback_execute_allowed()
+            and not self._orientation_fallback_execute_allowed(
+                strict_rich_plan=strict_rich_plan
+            )
         ):
             self.set_state(
                 GraspStages.FAILED,
@@ -395,7 +1132,30 @@ class GraspTaskNode:
             )
             return False
         self.set_state(stage, 'moving ' + label)
-        resp = move_pose(pose, True)
+        if strict_rich_plan and not callable(execute_pose):
+            self.set_state(
+                GraspStages.FAILED,
+                'STRICT_CACHED_EXECUTOR_UNAVAILABLE: %s cannot use the planning '
+                'service or generic move_to_pose as an execution fallback' % label,
+            )
+            return False
+        execute_pose = execute_pose or move_pose
+        if bound_plan is not None:
+            validation, resp = self._invoke_plan_bound_action(
+                bound_plan,
+                gcfg or {},
+                label,
+                lambda: execute_pose(pose, True),
+            )
+            if not validation.ok:
+                self.set_state(
+                    GraspStages.FAILED,
+                    '%s: %s before moving %s'
+                    % (validation.code, validation.reason, label),
+                )
+                return False
+        else:
+            resp = execute_pose(pose, True)
         if not resp.success:
             self.set_state(GraspStages.FAILED, '%s failed: %s' % (label, resp.message))
             return False
@@ -409,15 +1169,16 @@ class GraspTaskNode:
         return True
 
     def _visual_retarget_6d_poses(self, reference_obj, poses, gcfg, stage_label, required=False):
+        """Legacy entry point retained as a drift guard; never translate rich poses."""
         if not bool(gcfg.get('visual_retarget_enabled', False)):
-            return list(poses), reference_obj
+            return [deepcopy(pose) for pose in poses], reference_obj
         if reference_obj is None or not bool(getattr(reference_obj, 'detected', False)):
             message = 'visual retarget unavailable: no object locked with the 6D plan'
             if required:
                 self.set_state(GraspStages.FAILED, message)
                 return None
             rospy.logwarn('%s', message)
-            return list(poses), reference_obj
+            return [deepcopy(pose) for pose in poses], reference_obj
 
         live_obj = self._wait_for_stable_visual_target(reference_obj, gcfg, stage_label)
         if live_obj is None:
@@ -426,25 +1187,23 @@ class GraspTaskNode:
                 self.set_state(GraspStages.FAILED, message)
                 return None
             rospy.logwarn('%s', message)
-            return list(poses), reference_obj
+            return [deepcopy(pose) for pose in poses], reference_obj
 
         delta = self._object_delta_xyz(reference_obj, live_obj)
         distance = math.sqrt(sum(float(value) ** 2 for value in delta))
-        max_correction = max(0.0, self._cfg_float(gcfg, 'visual_retarget_max_correction_m', 0.04))
-        if max_correction > 0.0 and distance > max_correction:
+        max_drift = self._configured_target_max_drift(gcfg)
+        if distance > max_drift:
             self.set_state(
                 GraspStages.FAILED,
                 (
-                    'visual/hand-eye consistency failed after %s: target shifted %.3fm > %.3fm; '
-                    'check rigid camera mounting and hand-eye calibration'
-                ) % (stage_label, distance, max_correction),
+                    'TARGET_DRIFT after %s: target shifted %.3fm > %.3fm; '
+                    'generate a new rich plan'
+                ) % (stage_label, distance, max_drift),
             )
             return None
 
-        deadband = max(0.0, self._cfg_float(gcfg, 'visual_retarget_deadband_m', 0.002))
-        shifted = [self._translate_pose(pose, delta if distance > deadband else (0.0, 0.0, 0.0)) for pose in poses]
         rospy.loginfo(
-            'Grasp visual retarget after %s: delta=(%.3f, %.3f, %.3f)m norm=%.3fm orientation_preserved=1',
+            'Grasp rich-plan drift guard after %s: delta=(%.3f, %.3f, %.3f)m norm=%.3fm retarget=0',
             stage_label,
             float(delta[0]),
             float(delta[1]),
@@ -453,9 +1212,10 @@ class GraspTaskNode:
         )
         self.set_state(
             GraspStages.APPROACH_TARGET,
-            'visual target locked after %s; correction %.1f mm' % (stage_label, distance * 1000.0),
+            'rich-plan target stable after %s; drift %.1f mm; retarget disabled'
+            % (stage_label, distance * 1000.0),
         )
-        return shifted, live_obj
+        return [deepcopy(pose) for pose in poses], reference_obj
 
     def _wait_for_stable_visual_target(self, reference_obj, gcfg, stage_label):
         timeout = max(0.0, self._cfg_float(gcfg, 'visual_retarget_timeout_sec', 1.2))
@@ -549,7 +1309,7 @@ class GraspTaskNode:
     def _same_target_label(first, second):
         first_label = str(getattr(first, 'label', '') or '').strip().lower()
         second_label = str(getattr(second, 'label', '') or '').strip().lower()
-        return not first_label or not second_label or first_label == second_label
+        return bool(first_label and second_label and first_label == second_label)
 
     @staticmethod
     def _object_xyz(obj):
@@ -574,73 +1334,473 @@ class GraspTaskNode:
         shifted.pose.position.z += float(delta_xyz[2])
         return shifted
 
-    def _fresh_grasp6d_plan(self, gcfg):
-        plan = getattr(self, 'latest_grasp6d_plan', None)
-        if plan is None or len(getattr(plan, 'poses', [])) < 4:
-            return None
-        plan_time = getattr(self, 'latest_grasp6d_plan_time', None)
-        if plan_time is None:
-            return None
-        max_age = max(0.0, self._cfg_float(gcfg, 'grasp6d_plan_max_age_sec', 2.0))
+    def _configured_plan_validity(self, gcfg):
+        if isinstance(gcfg, dict) and 'plan_validity_sec' in gcfg:
+            return max(0.0, self._cfg_float(gcfg, 'plan_validity_sec', 2.0))
         try:
-            age = (rospy.Time.now() - plan_time).to_sec()
+            default = rospy.get_param('/grasp_6d/plan_validity_sec', 2.0)
+        except Exception:
+            default = 2.0
+        return max(0.0, float(default))
+
+    def _configured_target_max_drift(self, gcfg):
+        if isinstance(gcfg, dict) and 'target_max_drift_m' in gcfg:
+            return max(0.0, self._cfg_float(gcfg, 'target_max_drift_m', 0.02))
+        try:
+            default = rospy.get_param('/grasp_6d/target_max_drift_m', 0.02)
+        except Exception:
+            default = 0.02
+        return max(0.0, float(default))
+
+    def _configured_target_observation_validity(self, gcfg):
+        if isinstance(gcfg, dict) and 'target_observation_validity_sec' in gcfg:
+            return max(
+                0.0,
+                self._cfg_float(
+                    gcfg, 'target_observation_validity_sec', 1.5
+                ),
+            )
+        try:
+            default = rospy.get_param(
+                '/grasp_6d/target_observation_validity_sec', 1.5
+            )
+        except Exception:
+            default = 1.5
+        return max(0.0, float(default))
+
+    def _copy_requested_grasp6d_plan(self, plan_id, gcfg=None):
+        requested_id = plan_id if isinstance(plan_id, str) else ''
+        if not requested_id:
+            return (
+                PlanValidationResult(
+                    False,
+                    'PLAN_ID_MISSING',
+                    '6D execution requires a non-empty plan_id',
+                ),
+                None,
+            )
+        with self._grasp6d_plan_guard():
+            current = getattr(self, 'latest_grasp6d_plan', None)
+            self._seed_grasp6d_watermark_locked(current)
+            if current is None:
+                return (
+                    PlanValidationResult(
+                        False,
+                        'PLAN_MISSING',
+                        'no current rich plan',
+                    ),
+                    None,
+                )
+            if self._grasp6d_watermark_tombstoned:
+                return (
+                    PlanValidationResult(
+                        False,
+                        'PLAN_REPLAYED',
+                        'current rich plan source timestamp is tombstoned',
+                    ),
+                    None,
+                )
+            current_id = getattr(current, 'plan_id', None)
+            if not strict_plan_id_equal(current_id, requested_id):
+                return (
+                    PlanValidationResult(
+                        False,
+                        'PLAN_ID_MISMATCH',
+                        'requested plan_id is not the current rich plan',
+                    ),
+                    None,
+                )
+            copied = deepcopy(current)
+            validation = validate_execution_plan(
+                copied,
+                _stamp_seconds(rospy.Time.now()),
+                self._configured_plan_validity(gcfg or {}),
+            )
+            if not validation.ok:
+                self._clear_grasp6d_authority(
+                    expected_plan_id=requested_id
+                )
+                return validation, None
+        drift = self._bound_target_drift_result(copied, gcfg or {})
+        if not drift.ok:
+            return drift, None
+        return validation, copied
+
+    def validate_plan_id_for_execution(self, plan_id, gcfg=None):
+        requested_id = plan_id if isinstance(plan_id, str) else ''
+        with self._grasp6d_plan_guard():
+            current = getattr(self, 'latest_grasp6d_plan', None)
+            self._seed_grasp6d_watermark_locked(current)
+            if current is None:
+                return PlanValidationResult(False, 'PLAN_MISSING', 'no current rich plan')
+            if self._grasp6d_watermark_tombstoned:
+                return PlanValidationResult(
+                    False,
+                    'PLAN_REPLAYED',
+                    'current rich plan source timestamp is tombstoned',
+                )
+            current_id = getattr(current, 'plan_id', None)
+            if not strict_plan_id_equal(current_id, requested_id):
+                return PlanValidationResult(
+                    False,
+                    'PLAN_REPLACED',
+                    'current rich plan id no longer matches execution copy',
+                )
+            copied = deepcopy(current)
+            result = validate_execution_plan(
+                copied,
+                _stamp_seconds(rospy.Time.now()),
+                self._configured_plan_validity(gcfg or {}),
+                enforce_freshness=False,
+            )
+            if not result.ok:
+                self._clear_grasp6d_authority(expected_plan_id=requested_id)
+            return result
+
+    def _validate_bound_plan_locked(self, plan, gcfg):
+        if not bool(getattr(self, 'active', False)):
+            return PlanValidationResult(
+                False,
+                'EXECUTION_CANCELLED',
+                'grasp execution was stopped',
+            )
+        current = getattr(self, 'latest_grasp6d_plan', None)
+        self._seed_grasp6d_watermark_locked(current)
+        if current is None:
+            return PlanValidationResult(False, 'PLAN_MISSING', 'no current rich plan')
+        if self._grasp6d_watermark_tombstoned:
+            return PlanValidationResult(
+                False,
+                'PLAN_REPLAYED',
+                'current rich plan source timestamp is tombstoned',
+            )
+        bound_id = str(getattr(plan, 'plan_id', '') or '')
+        current_id = str(getattr(current, 'plan_id', '') or '')
+        if not strict_plan_id_equal(bound_id, current_id):
+            return PlanValidationResult(
+                False,
+                'PLAN_REPLACED',
+                'current rich plan id no longer matches execution copy',
+            )
+        current_ns = _stamp_nanoseconds(
+            getattr(getattr(current, 'header', None), 'stamp', None)
+        )
+        if (
+            current_ns != self._grasp6d_watermark_stamp_ns
+            or not strict_plan_id_equal(
+                current_id, self._grasp6d_watermark_plan_id
+            )
+        ):
+            return PlanValidationResult(
+                False,
+                'PLAN_REPLAYED',
+                'current rich plan does not match replay watermark',
+            )
+        for candidate in (plan, current):
+            integrity = validate_execution_plan(
+                candidate,
+                _stamp_seconds(rospy.Time.now()),
+                self._configured_plan_validity(gcfg),
+                enforce_freshness=False,
+            )
+            if not integrity.ok:
+                self._clear_grasp6d_authority(expected_plan_id=current_id)
+                return integrity
+        return self._bound_target_drift_result(plan, gcfg)
+
+    def _validate_bound_plan(self, plan, gcfg):
+        with self._grasp6d_plan_guard():
+            return self._validate_bound_plan_locked(plan, gcfg)
+
+    def _invoke_plan_bound_action(self, plan, gcfg, stage_label, action):
+        """Validate and commit one synchronous physical action atomically.
+
+        The service call is the physical commit boundary. Holding the same
+        RLock as rich-plan callbacks makes the action/replacement order equal
+        to their lock-acquisition order. Planning and settling stay outside.
+        """
+        del stage_label
+        with self._grasp6d_plan_guard():
+            validation = self._validate_bound_plan_locked(plan, gcfg or {})
+            if not validation.ok:
+                return validation, None
+            return validation, action()
+
+    def _plan_geometry_center_xyz(self, plan):
+        try:
+            point = plan.object_geometry.pose_base.position
+            values = (float(point.x), float(point.y), float(point.z))
         except Exception:
             return None
-        if age > max_age:
-            rospy.logwarn('Rejected stale 6D grasp plan age %.2fs > %.2fs', age, max_age)
+        return values if all(math.isfinite(value) for value in values) else None
+
+    @staticmethod
+    def _bound_object_pose_from_plan(plan):
+        geometry = deepcopy(plan.object_geometry)
+        reference = ObjectPose()
+        reference.header = deepcopy(plan.header)
+        reference.detected = bool(geometry.valid)
+        reference.label = str(geometry.label or '')
+        reference.confidence = 1.0
+        reference.pose_base.header = deepcopy(plan.header)
+        reference.pose_base.pose = deepcopy(geometry.pose_base)
+        return reference
+
+    def _bound_target_drift_result(self, plan, gcfg):
+        def fail(code, reason):
+            self._clear_grasp6d_authority(
+                expected_plan_id=str(getattr(plan, 'plan_id', '') or '')
+            )
+            return PlanValidationResult(False, code, reason)
+
+        latest_obj = getattr(self, 'latest_obj', None)
+        if latest_obj is None:
+            return fail('TARGET_LOST', 'live target observation is missing')
+        if not bool(getattr(latest_obj, 'detected', False)):
+            return fail('TARGET_LOST', 'live target is not detected')
+        observation_time = getattr(self, 'latest_obj_time', None)
+        if observation_time is None:
+            return fail(
+                'TARGET_STALE',
+                'live target observation timestamp is missing',
+            )
+        observation_age = (
+            _stamp_seconds(rospy.Time.now())
+            - _stamp_seconds(observation_time)
+        )
+        observation_validity = self._configured_target_observation_validity(
+            gcfg
+        )
+        if (
+            not math.isfinite(observation_age)
+            or observation_age < 0.0
+            or observation_age > observation_validity
+        ):
+            return fail(
+                'TARGET_STALE',
+                'live target observation age %.3fs is outside [0, %.3f]s'
+                % (observation_age, observation_validity),
+            )
+        plan_label = str(
+            getattr(getattr(plan, 'object_geometry', None), 'label', '') or ''
+        ).strip().lower()
+        live_label = str(getattr(latest_obj, 'label', '') or '').strip().lower()
+        if not plan_label or not live_label:
+            return fail(
+                'TARGET_LABEL_MISSING',
+                'plan and live target labels must both be non-empty',
+            )
+        if plan_label != live_label:
+            return fail(
+                'TARGET_LABEL_MISMATCH',
+                'live target label %s does not match plan geometry label %s'
+                % (live_label, plan_label),
+            )
+        plan_center = self._plan_geometry_center_xyz(plan)
+        live_center = self._object_xyz(latest_obj)
+        if plan_center is None or live_center is None:
+            return fail(
+                'OBB_INVALID',
+                'plan or live target center is unavailable',
+            )
+        drift = math.sqrt(
+            sum(
+                (float(live_center[index]) - float(plan_center[index])) ** 2
+                for index in range(3)
+            )
+        )
+        maximum = self._configured_target_max_drift(gcfg)
+        if drift > maximum:
+            return fail(
+                'TARGET_DRIFT',
+                'live target drift %.3fm exceeds %.3fm' % (drift, maximum),
+            )
+        return PlanValidationResult(True)
+
+    def _fresh_grasp6d_plan(self, gcfg):
+        with self._grasp6d_plan_guard():
+            current = getattr(self, 'latest_grasp6d_plan', None)
+            plan = deepcopy(current) if current is not None else None
+        result = validate_execution_plan(
+            plan,
+            _stamp_seconds(rospy.Time.now()),
+            self._configured_plan_validity(gcfg),
+        )
+        if not result.ok:
+            if plan is not None:
+                self._clear_grasp6d_authority(
+                    expected_plan_id=str(getattr(plan, 'plan_id', '') or '')
+                )
+            rospy.logwarn('Rejected rich 6D plan %s: %s', result.code, result.reason)
             return None
-        max_drift = max(0.0, self._cfg_float(gcfg, 'grasp6d_plan_max_object_drift_m', 0.0))
-        if max_drift > 0.0:
-            locked_obj = getattr(self, 'latest_grasp6d_plan_object', None)
-            latest_obj = getattr(self, 'latest_obj', None)
-            if (
-                locked_obj is not None
-                and latest_obj is not None
-                and bool(getattr(latest_obj, 'detected', False))
-            ):
-                drift = self._object_distance(locked_obj, latest_obj)
-                if drift > max_drift:
-                    rospy.logwarn(
-                        'Rejected 6D grasp plan: object drift %.3fm > %.3fm since plan generation',
-                        drift,
-                        max_drift,
-                    )
-                    return None
+        drift = self._bound_target_drift_result(plan, gcfg)
+        if not drift.ok:
+            self._clear_grasp6d_authority(expected_plan_id=plan.plan_id)
+            rospy.logwarn('Rejected rich 6D plan %s: %s', drift.code, drift.reason)
+            return None
         return plan
+
+    def _execution_checkpoint(self, plan, gcfg, stage_label):
+        validation = self._validate_bound_plan(plan, gcfg)
+        if not validation.ok:
+            stage = (
+                GraspStages.IDLE
+                if validation.code == 'EXECUTION_CANCELLED'
+                else GraspStages.FAILED
+            )
+            self.set_state(
+                stage,
+                '%s: %s before %s'
+                % (validation.code, validation.reason, stage_label),
+            )
+            return False
+        return True
 
     def _simulate_grasp6d_plan_if_required(self, gcfg, gripper_cfg, plan):
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
-        if not bool(twin_cfg.get('enabled', False)) or not bool(twin_cfg.get('execution_gate_enabled', False)):
-            return True
+        if not isinstance(twin_cfg, dict):
+            self.set_state(
+                GraspStages.FAILED,
+                'MUJOCO_GATE_CONFIG_INVALID: /mujoco_digital_twin must be a mapping',
+            )
+            return False
+        for key in ('enabled', 'execution_gate_enabled'):
+            value = twin_cfg.get(key)
+            if type(value) is not bool or value is not True:
+                self.set_state(
+                    GraspStages.FAILED,
+                    (
+                        'MUJOCO_GATE_CONFIG_INVALID: '
+                        '/mujoco_digital_twin/%s must be the boolean true'
+                    )
+                    % key,
+                )
+                return False
 
         self.set_state(GraspStages.PLAN_PREGRASP, 'MuJoCo digital twin checking 6D plan')
+        raw_audit_path = twin_cfg.get(
+            'audit_output_path', _MUJOCO_AUDIT_DEFAULT_PATH
+        )
+        planning_audit_path = rospy.get_param(
+            '/grasp_6d/remote/gate_audit_output_path',
+            '',
+        )
+        try:
+            audit_path, _planning_audit_path = (
+                validate_distinct_audit_output_paths(
+                    raw_audit_path,
+                    planning_audit_path,
+                )
+            )
+        except AuditPathConflictError as exc:
+            self.set_state(
+                GraspStages.FAILED,
+                'MUJOCO_AUDIT_PATH_CONFLICT: %s' % exc,
+            )
+            return False
+        except (TypeError, ValueError, OSError) as exc:
+            self.set_state(
+                GraspStages.FAILED,
+                'MUJOCO_AUDIT_PATH_INVALID: %s' % exc,
+            )
+            return False
+        audit = _new_mujoco_execution_audit(plan)
+
+        def finish(ok, code, reason, score=None, stage=GraspStages.FAILED):
+            try:
+                reference = _finalize_mujoco_execution_audit(
+                    audit,
+                    audit_path,
+                    ok,
+                    code,
+                    reason,
+                    score=score,
+                )
+            except Exception as audit_error:
+                message = (
+                    '%s: %s; MUJOCO_AUDIT_WRITE_FAILED: %s audit_path=%s'
+                    % (
+                        _bounded_status_code(code),
+                        _bounded_status_reason(reason),
+                        _bounded_status_reason(audit_error),
+                        _bounded_text(str(audit_path), 256),
+                    )
+                )
+                # A passing simulation cannot become motion authority unless
+                # its exact request/response association is durably recorded.
+                self.set_state(
+                    GraspStages.FAILED if ok else stage,
+                    message,
+                )
+                return False
+
+            reference_text = _mujoco_audit_reference_text(reference)
+            if ok:
+                self.set_state(
+                    GraspStages.PLAN_PREGRASP,
+                    'MuJoCo simulation passed score=%.3f; %s'
+                    % (float(score), reference_text),
+                )
+                return True
+            self.set_state(
+                stage,
+                '%s: %s; %s'
+                % (_bounded_status_code(code), _bounded_status_reason(reason), reference_text),
+            )
+            return False
+
         require_object = bool(twin_cfg.get('require_object_pose', True))
-        object_pose = getattr(self, 'latest_obj', None)
+        object_pose = self._bound_object_pose_from_plan(plan)
         if require_object and (object_pose is None or not bool(getattr(object_pose, 'detected', False))):
-            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked: no detected object pose')
-            return False
+            return finish(
+                False,
+                'OBB_INVALID',
+                'MuJoCo simulation blocked: rich plan has no valid object geometry',
+            )
 
-        send_joint_state = bool(twin_cfg.get('send_joint_state_in_request', False))
-        joint_state = getattr(self, 'latest_joint_state', None) if send_joint_state else None
-        if send_joint_state and joint_state is None:
-            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked: no /joint_states for request payload')
-            return False
-        object_model = dict(twin_cfg.get('object_model', {}) or {})
-        open_width = self._cfg_float(twin_cfg, 'open_width_m', self._cfg_float(gripper_cfg, 'open_position_m', 0.05))
-        payload = build_simulation_payload(
-            joint_state=joint_state,
-            object_pose=object_pose if object_pose is not None else None,
-            grasp_plan=plan,
-            gripper_width_m=open_width,
-            object_model=object_model,
-        )
-        payload['close_width_m'] = self._cfg_float(
-            twin_cfg,
-            'close_width_m',
-            self._cfg_float(gripper_cfg, 'simple_close_position_m', self._cfg_float(gripper_cfg, 'close_limit_m', 0.0)),
-        )
-        payload['min_lift_success_m'] = self._cfg_float(twin_cfg, 'min_lift_success_m', 0.015)
+        if not bool(twin_cfg.get('send_joint_state_in_request', False)):
+            return finish(
+                False,
+                'WSL_UNAVAILABLE',
+                'WSL_UNAVAILABLE: strict MuJoCo gate requires current joint state in every request',
+            )
+        joint_state = deepcopy(getattr(self, 'latest_joint_state', None))
+        if joint_state is None:
+            return finish(
+                False,
+                'WSL_UNAVAILABLE',
+                'WSL_UNAVAILABLE: no /joint_states for strict MuJoCo request payload',
+            )
+        joint_names = list(getattr(joint_state, 'name', ()) or ())
+        joint_positions = list(getattr(joint_state, 'position', ()) or ())
 
+        try:
+            payload = build_mujoco_payload(
+                plan,
+                joint_names,
+                joint_positions,
+                twin_cfg,
+            )
+            _record_mujoco_payload(audit, payload)
+        except Exception as exc:
+            audit['payload']['build_error'] = _exception_audit_record(exc)
+            return finish(
+                False,
+                'WSL_UNAVAILABLE',
+                'invalid MuJoCo request payload: %s' % exc,
+            )
+
+        request_plan_id = str(getattr(plan, 'plan_id', '') or '')
+        payload_plan_id = payload.get('plan_id') if isinstance(payload, dict) else None
+        if not strict_plan_id_equal(payload_plan_id, request_plan_id):
+            return finish(
+                False,
+                'PLAN_ID_MISMATCH',
+                'MuJoCo payload plan_id does not exactly match the bound rich plan',
+            )
+
+        response = None
+        request_error = None
         try:
             client = MujocoDigitalTwinClient(
                 twin_cfg.get('server_url', 'http://172.23.132.97:8000'),
@@ -648,22 +1808,72 @@ class GraspTaskNode:
             )
             response = client.simulate_grasp(payload)
         except Exception as exc:
-            message = 'MuJoCo simulation request failed: %s' % exc
-            if bool(twin_cfg.get('allow_execution_on_error', False)):
-                rospy.logwarn('%s; execution allowed by config', message)
-                return True
-            self.set_state(GraspStages.FAILED, message)
-            return False
+            request_error = exc
+            audit['response']['network_error'] = _exception_audit_record(exc)
+        else:
+            _record_mujoco_response(audit, response)
 
-        score = int(response.get('score', 0) or 0)
-        min_score = int(twin_cfg.get('min_score', 80) or 80)
-        simulation_ok = bool(response.get('simulation_ok', False)) and score >= min_score
-        if not simulation_ok:
-            reason = str(response.get('failure_reason') or 'score %d < %d' % (score, min_score))
-            self.set_state(GraspStages.FAILED, 'MuJoCo simulation blocked execution: %s' % reason)
-            return False
-        self.set_state(GraspStages.PLAN_PREGRASP, 'MuJoCo simulation passed score=%d' % score)
-        return True
+        post_network = self._validate_bound_plan(plan, gcfg)
+        audit['authority_after_network'] = _validation_audit_record(post_network)
+        if not post_network.ok:
+            stage = (
+                GraspStages.IDLE
+                if post_network.code == 'EXECUTION_CANCELLED'
+                else GraspStages.FAILED
+            )
+            return finish(
+                False,
+                post_network.code,
+                '%s after MuJoCo network return' % post_network.reason,
+                stage=stage,
+            )
+
+        if request_error is not None:
+            return finish(
+                False,
+                'WSL_UNAVAILABLE',
+                'MuJoCo simulation request failed: %s' % request_error,
+            )
+
+        if audit['response'].get('strict_json_serializable') is not True:
+            gate = PlanValidationResult(
+                False,
+                'WSL_UNAVAILABLE',
+                'MuJoCo response must be fully strict-JSON serializable',
+            )
+            audit['gate_validation'] = _validation_audit_record(gate)
+            return finish(
+                False,
+                gate.code,
+                gate.reason,
+            )
+
+        try:
+            gate = validate_mujoco_gate_response(
+                response,
+                request_plan_id,
+                twin_cfg.get('min_score', 80),
+            )
+        except Exception as exc:
+            gate = PlanValidationResult(
+                False,
+                'WSL_UNAVAILABLE',
+                'MuJoCo response validation failed: %s' % exc,
+            )
+        audit['gate_validation'] = _validation_audit_record(gate)
+        if not gate.ok:
+            return finish(
+                False,
+                gate.code,
+                gate.reason,
+                score=getattr(gate, 'score', None),
+            )
+        return finish(
+            True,
+            'MUJOCO_GATE_PASSED',
+            'MuJoCo response exactly matched the bound rich plan and all gates passed',
+            score=gate.score,
+        )
 
     @staticmethod
     def _pose_array_item_as_stamped(plan, index):
@@ -799,16 +2009,47 @@ class GraspTaskNode:
         return False
 
     @staticmethod
-    def _position_only_execute_allowed():
+    def _position_only_execute_globally_enabled():
         return bool(rospy.get_param('/robot/position_only_execute_enabled', False))
 
     @staticmethod
-    def _orientation_fallback_execute_allowed():
+    def _position_only_execute_allowed(strict_rich_plan=False):
+        if bool(strict_rich_plan):
+            return False
+        return GraspTaskNode._position_only_execute_globally_enabled()
+
+    @staticmethod
+    def _orientation_fallback_execute_allowed(strict_rich_plan=False):
+        if bool(strict_rich_plan):
+            return False
         return bool(rospy.get_param('/grasp/accept_orientation_fallback', False))
 
-    def _command_gripper_position(self, set_gripper, position, label, wait_sec):
+    def _command_gripper_position(
+        self,
+        set_gripper,
+        position,
+        label,
+        wait_sec,
+        execution_plan=None,
+        gcfg=None,
+    ):
         try:
-            resp = set_gripper(float(position))
+            if execution_plan is not None:
+                validation, resp = self._invoke_plan_bound_action(
+                    execution_plan,
+                    gcfg or {},
+                    label,
+                    lambda: set_gripper(float(position)),
+                )
+                if not validation.ok:
+                    self.set_state(
+                        GraspStages.FAILED,
+                        '%s: %s before %s'
+                        % (validation.code, validation.reason, label),
+                    )
+                    return False
+            else:
+                resp = set_gripper(float(position))
         except Exception as exc:
             self.set_state(GraspStages.FAILED, '%s failed: %s' % (label, exc))
             return False
@@ -820,11 +2061,31 @@ class GraspTaskNode:
             rospy.sleep(delay)
         return True
 
-    def _close_gripper(self, gripper_cfg, set_gripper, close):
+    def _close_gripper(
+        self,
+        gripper_cfg,
+        set_gripper,
+        close,
+        execution_plan=None,
+        gcfg=None,
+    ):
         if bool(gripper_cfg.get('use_compliant_close', True)):
             if close is None:
                 return False, 'compliant close service is unavailable'
-            resp = close(True)
+            if execution_plan is not None:
+                validation, resp = self._invoke_plan_bound_action(
+                    execution_plan,
+                    gcfg or {},
+                    'compliant gripper close',
+                    lambda: close(execute=True),
+                )
+                if not validation.ok:
+                    return (
+                        False,
+                        '%s: %s' % (validation.code, validation.reason),
+                    )
+            else:
+                resp = close(execute=True)
             return bool(resp.success), getattr(resp, 'message', '')
 
         close_position = self._cfg_float(
@@ -833,7 +2094,14 @@ class GraspTaskNode:
             self._cfg_float(gripper_cfg, 'close_limit_m', 0.05),
         )
         wait_sec = self._cfg_float(gripper_cfg, 'simple_close_wait_sec', 0.8)
-        ok = self._command_gripper_position(set_gripper, close_position, 'fixed gripper close', wait_sec)
+        ok = self._command_gripper_position(
+            set_gripper,
+            close_position,
+            'fixed gripper close',
+            wait_sec,
+            execution_plan=execution_plan,
+            gcfg=gcfg,
+        )
         return ok, 'fixed gripper close command published' if ok else 'fixed gripper close failed'
 
     def _joint_positions_tuple(self):

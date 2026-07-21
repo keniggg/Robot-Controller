@@ -1,6 +1,8 @@
 file(REMOVE_RECURSE
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/CartesianJog.h"
+  "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/Grasp6DPlan.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/GraspState.h"
+  "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/ObjectGeometry.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/ObjectPose.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/SafetyState.h"
   "/home/zhuyupei/alicia_wa_full/devel/include/alicia_flexible_grasp_supervisor/SetFloat.h"

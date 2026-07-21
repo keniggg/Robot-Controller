@@ -24,10 +24,12 @@ struct StartGraspRequest_
   typedef StartGraspRequest_<ContainerAllocator> Type;
 
   StartGraspRequest_()
-    : execute(false)  {
+    : execute(false)
+    , plan_id()  {
     }
   StartGraspRequest_(const ContainerAllocator& _alloc)
-    : execute(false)  {
+    : execute(false)
+    , plan_id(_alloc)  {
   (void)_alloc;
     }
 
@@ -35,6 +37,9 @@ struct StartGraspRequest_
 
    typedef uint8_t _execute_type;
   _execute_type execute;
+
+   typedef std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> _plan_id_type;
+  _plan_id_type plan_id;
 
 
 
@@ -65,7 +70,8 @@ return s;
 template<typename ContainerAllocator1, typename ContainerAllocator2>
 bool operator==(const ::alicia_flexible_grasp_supervisor::StartGraspRequest_<ContainerAllocator1> & lhs, const ::alicia_flexible_grasp_supervisor::StartGraspRequest_<ContainerAllocator2> & rhs)
 {
-  return lhs.execute == rhs.execute;
+  return lhs.execute == rhs.execute &&
+    lhs.plan_id == rhs.plan_id;
 }
 
 template<typename ContainerAllocator1, typename ContainerAllocator2>
@@ -98,12 +104,12 @@ struct IsMessage< ::alicia_flexible_grasp_supervisor::StartGraspRequest_<Contain
 
 template <class ContainerAllocator>
 struct IsFixedSize< ::alicia_flexible_grasp_supervisor::StartGraspRequest_<ContainerAllocator> >
-  : TrueType
+  : FalseType
   { };
 
 template <class ContainerAllocator>
 struct IsFixedSize< ::alicia_flexible_grasp_supervisor::StartGraspRequest_<ContainerAllocator> const>
-  : TrueType
+  : FalseType
   { };
 
 template <class ContainerAllocator>
@@ -122,12 +128,12 @@ struct MD5Sum< ::alicia_flexible_grasp_supervisor::StartGraspRequest_<ContainerA
 {
   static const char* value()
   {
-    return "371e747b927788fd0b8812d474ff9a56";
+    return "c369fa0a7af61ec00670dcab4b57bf63";
   }
 
   static const char* value(const ::alicia_flexible_grasp_supervisor::StartGraspRequest_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x371e747b927788fdULL;
-  static const uint64_t static_value2 = 0x0b8812d474ff9a56ULL;
+  static const uint64_t static_value1 = 0xc369fa0a7af61ec0ULL;
+  static const uint64_t static_value2 = 0x0670dcab4b57bf63ULL;
 };
 
 template<class ContainerAllocator>
@@ -147,6 +153,7 @@ struct Definition< ::alicia_flexible_grasp_supervisor::StartGraspRequest_<Contai
   static const char* value()
   {
     return "bool execute\n"
+"string plan_id\n"
 ;
   }
 
@@ -166,6 +173,7 @@ namespace serialization
     template<typename Stream, typename T> inline static void allInOne(Stream& stream, T m)
     {
       stream.next(m.execute);
+      stream.next(m.plan_id);
     }
 
     ROS_DECLARE_ALLINONE_SERIALIZER
@@ -188,6 +196,10 @@ struct Printer< ::alicia_flexible_grasp_supervisor::StartGraspRequest_<Container
       s << std::endl;
     s << indent << "execute: ";
     Printer<uint8_t>::stream(s, indent + "  ", v.execute);
+    if (true || !indent.empty())
+      s << std::endl;
+    s << indent << "plan_id: ";
+    Printer<std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>>>::stream(s, indent + "  ", v.plan_id);
   }
 };
 

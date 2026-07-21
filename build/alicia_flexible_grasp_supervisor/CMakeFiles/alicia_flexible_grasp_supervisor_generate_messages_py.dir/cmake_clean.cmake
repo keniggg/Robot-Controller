@@ -1,5 +1,7 @@
 file(REMOVE_RECURSE
+  "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_Grasp6DPlan.py"
   "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_GraspState.py"
+  "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectGeometry.py"
   "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_ObjectPose.py"
   "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_SafetyState.py"
   "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages/alicia_flexible_grasp_supervisor/msg/_TactileFrame.py"

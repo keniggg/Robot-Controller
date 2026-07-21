@@ -1,5 +1,7 @@
 file(REMOVE_RECURSE
+  "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/Grasp6DPlan.js"
   "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/GraspState.js"
+  "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectGeometry.js"
   "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/ObjectPose.js"
   "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/SafetyState.js"
   "/home/zhuyupei/alicia_wa_full/devel/share/gennodejs/ros/alicia_flexible_grasp_supervisor/msg/TactileFrame.js"

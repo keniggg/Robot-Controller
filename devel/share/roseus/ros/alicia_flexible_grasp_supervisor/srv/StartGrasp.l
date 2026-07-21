@@ -20,24 +20,31 @@
 
 (defclass alicia_flexible_grasp_supervisor::StartGraspRequest
   :super ros::object
-  :slots (_execute ))
+  :slots (_execute _plan_id ))
 
 (defmethod alicia_flexible_grasp_supervisor::StartGraspRequest
   (:init
    (&key
     ((:execute __execute) nil)
+    ((:plan_id __plan_id) "")
     )
    (send-super :init)
    (setq _execute __execute)
+   (setq _plan_id (string __plan_id))
    self)
   (:execute
    (&optional (__execute :null))
    (if (not (eq __execute :null)) (setq _execute __execute)) _execute)
+  (:plan_id
+   (&optional __plan_id)
+   (if __plan_id (setq _plan_id __plan_id)) _plan_id)
   (:serialization-length
    ()
    (+
     ;; bool _execute
     1
+    ;; string _plan_id
+    4 (length _plan_id)
     ))
   (:serialize
    (&optional strm)
@@ -45,12 +52,16 @@
               (make-string-output-stream (send self :serialization-length)))))
      ;; bool _execute
        (if _execute (write-byte -1 s) (write-byte 0 s))
+     ;; string _plan_id
+       (write-long (length _plan_id) s) (princ _plan_id s)
      ;;
      (if (null strm) (get-output-stream-string s))))
   (:deserialize
    (buf &optional (ptr- 0))
    ;; bool _execute
      (setq _execute (not (= 0 (sys::peek buf ptr- :char)))) (incf ptr- 1)
+   ;; string _plan_id
+     (let (n) (setq n (sys::peek buf ptr- :integer)) (incf ptr- 4) (setq _plan_id (subseq buf ptr- (+ ptr- n))) (incf ptr- n))
    ;;
    self)
   )
@@ -107,7 +118,7 @@
   :super ros::object
   :slots ())
 
-(setf (get alicia_flexible_grasp_supervisor::StartGrasp :md5sum-) "c1e3198b68b143183a952c85cd9f744a")
+(setf (get alicia_flexible_grasp_supervisor::StartGrasp :md5sum-) "5d246499be275f0453d1db3b1be742a6")
 (setf (get alicia_flexible_grasp_supervisor::StartGrasp :datatype-) "alicia_flexible_grasp_supervisor/StartGrasp")
 (setf (get alicia_flexible_grasp_supervisor::StartGrasp :request) alicia_flexible_grasp_supervisor::StartGraspRequest)
 (setf (get alicia_flexible_grasp_supervisor::StartGrasp :response) alicia_flexible_grasp_supervisor::StartGraspResponse)
@@ -115,20 +126,22 @@
 (defmethod alicia_flexible_grasp_supervisor::StartGraspRequest
   (:response () (instance alicia_flexible_grasp_supervisor::StartGraspResponse :init)))
 
-(setf (get alicia_flexible_grasp_supervisor::StartGraspRequest :md5sum-) "c1e3198b68b143183a952c85cd9f744a")
+(setf (get alicia_flexible_grasp_supervisor::StartGraspRequest :md5sum-) "5d246499be275f0453d1db3b1be742a6")
 (setf (get alicia_flexible_grasp_supervisor::StartGraspRequest :datatype-) "alicia_flexible_grasp_supervisor/StartGraspRequest")
 (setf (get alicia_flexible_grasp_supervisor::StartGraspRequest :definition-)
       "bool execute
+string plan_id
 ---
 bool success
 string message
 
 ")
 
-(setf (get alicia_flexible_grasp_supervisor::StartGraspResponse :md5sum-) "c1e3198b68b143183a952c85cd9f744a")
+(setf (get alicia_flexible_grasp_supervisor::StartGraspResponse :md5sum-) "5d246499be275f0453d1db3b1be742a6")
 (setf (get alicia_flexible_grasp_supervisor::StartGraspResponse :datatype-) "alicia_flexible_grasp_supervisor/StartGraspResponse")
 (setf (get alicia_flexible_grasp_supervisor::StartGraspResponse :definition-)
       "bool execute
+string plan_id
 ---
 bool success
 string message
@@ -137,6 +150,6 @@ string message
 
 
 
-(provide :alicia_flexible_grasp_supervisor/StartGrasp "c1e3198b68b143183a952c85cd9f744a")
+(provide :alicia_flexible_grasp_supervisor/StartGrasp "5d246499be275f0453d1db3b1be742a6")
 
 

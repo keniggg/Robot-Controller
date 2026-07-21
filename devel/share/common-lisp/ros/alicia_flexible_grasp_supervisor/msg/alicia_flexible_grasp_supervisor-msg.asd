@@ -6,8 +6,12 @@
                :std_msgs-msg
 )
   :components ((:file "_package")
+    (:file "Grasp6DPlan" :depends-on ("_package_Grasp6DPlan"))
+    (:file "_package_Grasp6DPlan" :depends-on ("_package"))
     (:file "GraspState" :depends-on ("_package_GraspState"))
     (:file "_package_GraspState" :depends-on ("_package"))
+    (:file "ObjectGeometry" :depends-on ("_package_ObjectGeometry"))
+    (:file "_package_ObjectGeometry" :depends-on ("_package"))
     (:file "ObjectPose" :depends-on ("_package_ObjectPose"))
     (:file "_package_ObjectPose" :depends-on ("_package"))
     (:file "SafetyState" :depends-on ("_package_SafetyState"))

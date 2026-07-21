@@ -38,6 +38,7 @@ class MotionGateway:
         rospy.Service('/supervisor/move_to_pose', SetTargetPose, self.handle_pose)
         rospy.Service('/supervisor/move_to_pose_linear', SetTargetPose, self.handle_pose_linear)
         rospy.Service('/supervisor/check_pose_strict', SetTargetPose, self.handle_pose_strict)
+        rospy.Service('/supervisor/execute_pose_strict', SetTargetPose, self.handle_pose_strict_execute)
         rospy.Service('/supervisor/cartesian_jog', CartesianJog, self.handle_jog)
         rospy.Service('/supervisor/trigger_zero', TriggerZero, self.handle_zero)
         rospy.loginfo('MotionGateway ready: commands -> %s', cfg.get('joint_command_topic','/joint_commands'))
@@ -89,6 +90,31 @@ class MotionGateway:
             rospy.loginfo('check_pose_strict result success=True message=%s', msg)
         else:
             rospy.logwarn('check_pose_strict result success=False message=%s', msg)
+        return SetTargetPoseResponse(ok, msg)
+
+    def handle_pose_strict_execute(self, req):
+        self._log_pose_request(req, operation='execute_pose_strict')
+        if not req.execute:
+            return SetTargetPoseResponse(
+                False,
+                'strict cached pose execution service requires execute=true',
+            )
+        planner = self._ensure_planner()
+        if planner is None:
+            msg = self._moveit_not_ready_message()
+            rospy.logwarn('execute_pose_strict result success=False message=%s', msg)
+            return SetTargetPoseResponse(False, msg)
+        controllers_ok, controller_msg = self._ensure_trajectory_controllers_started()
+        if not controllers_ok:
+            msg = 'strict cached execute blocked: %s' % controller_msg
+            rospy.logwarn('execute_pose_strict result success=False message=%s', msg)
+            return SetTargetPoseResponse(False, msg)
+        rospy.loginfo('strict cached trajectory controller check passed: %s', controller_msg)
+        ok, msg = planner.execute_cached_strict_pose(req.target)
+        if ok:
+            rospy.loginfo('execute_pose_strict result success=True message=%s', msg)
+        else:
+            rospy.logwarn('execute_pose_strict result success=False message=%s', msg)
         return SetTargetPoseResponse(ok, msg)
 
     def handle_pose_linear(self, req):
