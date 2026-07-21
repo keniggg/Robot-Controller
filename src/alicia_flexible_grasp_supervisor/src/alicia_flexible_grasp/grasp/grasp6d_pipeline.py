@@ -8,6 +8,7 @@ reachability checker at the expensive boundary.
 from dataclasses import dataclass, fields, replace
 import math
 from types import MappingProxyType
+from typing import Optional
 
 import numpy as np
 
@@ -422,7 +423,7 @@ def _required_finite(value, name):
 class SoftCandidateFeatures:
     """Preference features; cloud distance may be explicitly unresolved."""
 
-    model_score: float
+    model_score: Optional[float]
     cloud_distance_m: float
     center_distance_m: float
     downward_approach_cos: float
@@ -439,7 +440,7 @@ class SoftCandidateFeatures:
 
     def __post_init__(self):
         for item in fields(self):
-            if item.name == 'cloud_distance_m' and getattr(
+            if item.name in ('cloud_distance_m', 'model_score') and getattr(
                 self, item.name
             ) is None:
                 continue
@@ -560,8 +561,12 @@ def soft_candidate_cost(features, weights):
         raise TypeError('weights must be SoftScoreWeights')
 
     components = {
-        'model_score': -weights.model_score_weight
-        * _clamp_unit(features.model_score),
+        'model_score': (
+            0.0
+            if features.model_score is None
+            else -weights.model_score_weight
+            * _clamp_unit(features.model_score)
+        ),
         'cloud_distance': (
             weights.cloud_distance_weight
             if features.cloud_distance_m is None

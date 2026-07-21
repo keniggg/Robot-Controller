@@ -67,10 +67,12 @@ def _frozen_array(value, shape, name):
 
 
 def _frozen_unit_vector(value, name):
-    copied = _frozen_array(value, (3,), name)
+    copied = np.array(_frozen_array(value, (3,), name), copy=True)
     norm = float(np.linalg.norm(copied))
     if not math.isfinite(norm) or abs(norm - 1.0) > 1e-6:
         raise ValueError('{} must be a unit vector'.format(name))
+    copied /= norm
+    copied.setflags(write=False)
     return copied
 
 
@@ -78,6 +80,48 @@ def _optional_model_value(value, name):
     if value is None:
         return None
     return _finite_number(value, name, non_negative=True)
+
+
+def bilateral_contact_balance(
+    object_points_base,
+    jaw_axis_base,
+    contact_band_fraction=0.12,
+):
+    """Return source-neutral balance of opposite jaw projection bands."""
+    try:
+        points = np.array(object_points_base, dtype=np.float64, copy=True)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError('object_points_base must be a finite Nx3 cloud')
+    if (
+        points.ndim != 2
+        or points.shape[1:] != (3,)
+        or points.shape[0] < 2
+        or not np.all(np.isfinite(points))
+    ):
+        raise ValueError('object_points_base must be a finite Nx3 cloud')
+    jaw_axis = _frozen_unit_vector(jaw_axis_base, 'jaw_axis_base')
+    fraction = _finite_number(
+        contact_band_fraction,
+        'contact_band_fraction',
+        positive=True,
+    )
+    if fraction > 0.5:
+        raise ValueError('contact_band_fraction must not exceed 0.5')
+
+    projection = points.dot(jaw_axis)
+    lower = float(np.min(projection))
+    upper = float(np.max(projection))
+    span = upper - lower
+    if span <= 1e-12:
+        raise ValueError('object_points_base has no extent along jaw_axis_base')
+    band_width = fraction * span
+    negative_count = int(np.count_nonzero(projection <= lower + band_width))
+    positive_count = int(np.count_nonzero(projection >= upper - band_width))
+    larger_count = max(negative_count, positive_count)
+    if larger_count <= 0:
+        raise ValueError('projection bands must contain points')
+    balance = min(negative_count, positive_count) / float(larger_count)
+    return min(1.0, max(0.0, balance))
 
 
 @dataclass(frozen=True)
@@ -216,13 +260,13 @@ def _duplicates(first, second, config):
             second.insertion_axis_base,
             undirected=False,
         )
-        <= config.insertion_angle_deg
+        <= config.insertion_angle_deg + 1e-12
         and _vector_angle_deg(
             first.jaw_axis_base,
             second.jaw_axis_base,
             undirected=True,
         )
-        <= config.jaw_angle_deg
+        <= config.jaw_angle_deg + 1e-12
     )
 
 
