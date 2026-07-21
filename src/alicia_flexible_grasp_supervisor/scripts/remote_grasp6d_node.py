@@ -11,6 +11,7 @@ import urllib.error
 from collections import Counter, deque
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
+from types import MappingProxyType
 
 import numpy as np
 import rospy
@@ -40,7 +41,20 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (
     candidate_rank_key,
     candidate_with_motion_cost,
     evaluate_candidate,
+    evaluate_explicit_candidate,
     gripper_contract_mismatch_reason,
+)
+from alicia_flexible_grasp.grasp.hybrid_grasp_candidates import (
+    MergeConfig,
+    NormalizedPlanningCandidate,
+    bilateral_contact_balance,
+    merge_hybrid_candidates,
+)
+from alicia_flexible_grasp.grasp.tabletop_geometry_candidates import (
+    TabletopCandidateContractError,
+    TabletopGeometryConfig,
+    generate_tabletop_proposals,
+    materialize_tabletop_candidates,
 )
 from alicia_flexible_grasp.grasp.grasp6d_stability import (
     CandidateObservation,
@@ -60,6 +74,7 @@ from alicia_flexible_grasp.grasp.grasp6d_pipeline import (
     bounded_moveit_select,
     mandatory_safety_gate,
     soft_candidate_cost,
+    source_neutral_candidate_cost,
 )
 from alicia_flexible_grasp.robot.planning_feedback import (
     is_orientation_fallback_message,
@@ -416,6 +431,9 @@ class PreparedPrediction:
     candidates: tuple
     remote_diagnostics: dict
     remote_performance: dict
+    tabletop_candidates: tuple = ()
+    remote_failure_code: str = ''
+    remote_failure_reason: str = ''
     graspnet_input_audit: dict = None
     request_invalidation_generation: int = 0
     graspnet_input_config: object = None
@@ -670,6 +688,144 @@ def load_continuous_runtime_config(remote_cfg, defaults=None, get_param=None):
             value = get_param('/grasp_6d/remote/' + name, value)
         resolved[name] = value
     return validate_continuous_runtime_config(resolved)
+
+
+TABLETOP_GEOMETRY_DEFAULTS = {
+    'enabled': True,
+    'angle_step_deg': 15.0,
+    'angle_dedup_deg': 2.0,
+    'jaw_clearance_each_side_m': 0.002,
+    'min_contact_band_points': 6,
+    'contact_band_fraction': 0.12,
+    'min_finger_support_clearance_m': 0.003,
+    'max_candidates': 8,
+    'merge_center_distance_m': 0.005,
+    'merge_insertion_angle_deg': 10.0,
+    'merge_jaw_angle_deg': 10.0,
+}
+
+
+def load_tabletop_geometry_config(remote_cfg, gripper):
+    """Return immutable geometry generation and cross-source merge contracts."""
+
+    if not isinstance(remote_cfg, dict):
+        _continuous_config_error('/grasp_6d/remote must be a mapping')
+    if not isinstance(gripper, GripperGeometry):
+        _continuous_config_error('gripper geometry must be available')
+    configured = remote_cfg.get('tabletop_geometry_candidates', {})
+    if configured is None:
+        configured = {}
+    if not isinstance(configured, dict):
+        _continuous_config_error(
+            'tabletop_geometry_candidates must be a mapping'
+        )
+    values = dict(TABLETOP_GEOMETRY_DEFAULTS)
+    values.update(configured)
+    if type(values.get('enabled')) is not bool:
+        _continuous_config_error(
+            'tabletop_geometry_candidates.enabled must be a boolean'
+        )
+    angle_step = _strict_config_number(
+        values,
+        'angle_step_deg',
+        minimum=0.0,
+        maximum=180.0,
+        minimum_inclusive=False,
+    )
+    angle_dedup = _strict_config_number(
+        values,
+        'angle_dedup_deg',
+        minimum=0.0,
+        maximum=90.0 - 1e-12,
+    )
+    jaw_clearance = _strict_config_number(
+        values,
+        'jaw_clearance_each_side_m',
+        minimum=0.0,
+    )
+    contact_fraction = _strict_config_number(
+        values,
+        'contact_band_fraction',
+        minimum=0.0,
+        maximum=0.5 - 1e-12,
+        minimum_inclusive=False,
+    )
+    support_clearance = _strict_config_number(
+        values,
+        'min_finger_support_clearance_m',
+        minimum=0.0,
+    )
+    min_contact_points = _strict_config_integer(
+        values,
+        'min_contact_band_points',
+        minimum=1,
+    )
+    max_candidates = _strict_config_integer(
+        values,
+        'max_candidates',
+        minimum=1,
+    )
+    if max_candidates > 8:
+        _continuous_config_error(
+            'tabletop_geometry_candidates.max_candidates must be <= 8'
+        )
+    if not math.isclose(
+        jaw_clearance,
+        float(gripper.jaw_clearance_each_side_m),
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        _continuous_config_error(
+            'tabletop jaw clearance conflicts with analytical gripper contract'
+        )
+    if not math.isclose(
+        support_clearance,
+        float(gripper.support_clearance_m),
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        _continuous_config_error(
+            'tabletop support clearance conflicts with analytical gripper contract'
+        )
+    try:
+        geometry = TabletopGeometryConfig(
+            max_inner_gap_m=float(gripper.max_inner_gap_m),
+            angle_step_deg=angle_step,
+            angle_dedup_deg=angle_dedup,
+            jaw_clearance_each_side_m=jaw_clearance,
+            min_contact_band_points=min_contact_points,
+            contact_band_fraction=contact_fraction,
+            max_candidates=max_candidates,
+        )
+        merge = MergeConfig(
+            center_distance_m=_strict_config_number(
+                values,
+                'merge_center_distance_m',
+                minimum=0.0,
+                minimum_inclusive=False,
+            ),
+            insertion_angle_deg=_strict_config_number(
+                values,
+                'merge_insertion_angle_deg',
+                minimum=0.0,
+                maximum=180.0,
+                minimum_inclusive=False,
+            ),
+            jaw_angle_deg=_strict_config_number(
+                values,
+                'merge_jaw_angle_deg',
+                minimum=0.0,
+                maximum=180.0,
+                minimum_inclusive=False,
+            ),
+        )
+    except CandidateContractError:
+        raise
+    except (TypeError, ValueError) as exc:
+        _continuous_config_error(
+            'tabletop geometry configuration is invalid: %s' % exc
+        )
+    return bool(values['enabled']), geometry, merge
 
 
 def validate_mandatory_planning_audit(enabled, output_path):
@@ -1552,6 +1708,22 @@ def pose_matrix(pose_stamped):
         [pose.position.x, pose.position.y, pose.position.z],
         [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w],
     )
+
+
+def make_pose_stamped(frame_id, position_xyz, quaternion_xyzw, stamp=None):
+    position = np.asarray(position_xyz, dtype=float).reshape(3)
+    quaternion = _normalize_quaternion(quaternion_xyzw)
+    pose = PoseStamped()
+    pose.header.frame_id = str(frame_id)
+    pose.header.stamp = stamp if stamp is not None else rospy.Time(0)
+    pose.pose.position.x = float(position[0])
+    pose.pose.position.y = float(position[1])
+    pose.pose.position.z = float(position[2])
+    pose.pose.orientation.x = float(quaternion[0])
+    pose.pose.orientation.y = float(quaternion[1])
+    pose.pose.orientation.z = float(quaternion[2])
+    pose.pose.orientation.w = float(quaternion[3])
+    return pose
 
 
 def _readonly_rigid_transform(value, name):
@@ -2544,6 +2716,11 @@ class RemoteGrasp6DNode:
                 gripper_geometry_cfg.get('support_clearance_m', 0.003)
             ),
         )
+        (
+            self.tabletop_geometry_enabled,
+            self.tabletop_geometry_config,
+            self.hybrid_merge_config,
+        ) = load_tabletop_geometry_config(remote_cfg, self.gripper_geometry)
         self.gripper_tool_jaw_axis = str(
             gripper_geometry_cfg.get('tool_jaw_axis', 'y')
         )
@@ -4718,6 +4895,81 @@ class RemoteGrasp6DNode:
             0.0,
         )
 
+    def _generate_tabletop_candidates(self, geometry):
+        """Materialize a bounded geometry batch from one frozen estimate."""
+
+        if not bool(getattr(self, 'tabletop_geometry_enabled', True)):
+            return (), {
+                'enabled': False,
+                'proposal_count': 0,
+                'materialized_count': 0,
+                'failure_code': '',
+                'failure_reason': '',
+                'rejection_counts': {},
+            }
+        support_normal = np.asarray(
+            geometry.support_normal_base,
+            dtype=float,
+        )
+        support_point = -float(geometry.support_offset_m) * support_normal
+        generation = generate_tabletop_proposals(
+            object_points_base=geometry.object_points_base,
+            obb_center_base=geometry.center_base,
+            R_base_obb=geometry.axes_base,
+            obb_size_xyz_m=geometry.size_xyz_m,
+            support_point_base=support_point,
+            support_normal_base=support_normal,
+            config=self.tabletop_geometry_config,
+        )
+        diagnostics = {
+            'enabled': True,
+            'proposal_count': len(generation.proposals),
+            'materialized_count': 0,
+            'failure_code': str(generation.failure_code or ''),
+            'failure_reason': str(generation.failure_reason or ''),
+            'sampled_angles_deg': tuple(generation.sampled_angles_deg),
+            'rejection_counts': {},
+        }
+        if not generation.ok:
+            return (), diagnostics
+        materialized = []
+        rejections = Counter()
+        for proposal in generation.proposals:
+            try:
+                materialized.extend(
+                    materialize_tabletop_candidates(
+                        proposal=proposal,
+                        support_point_base=support_point,
+                        support_normal_base=support_normal,
+                        gripper=self.gripper_geometry,
+                        tool_jaw_axis=self.gripper_tool_jaw_axis,
+                        tool_finger_length_axis=(
+                            self.gripper_tool_finger_length_axis
+                        ),
+                    )
+                )
+            except TabletopCandidateContractError as exc:
+                rejections[str(exc.code)] += 1
+        materialized.sort(
+            key=lambda item: (
+                float(item.source_score),
+                int(item.source_index),
+                int(item.variant_index),
+            )
+        )
+        bounded = tuple(materialized[:8])
+        diagnostics['materialized_count'] = len(bounded)
+        diagnostics['rejection_counts'] = dict(sorted(rejections.items()))
+        if not bounded and rejections:
+            diagnostics['failure_code'] = min(
+                rejections,
+                key=lambda code: (-rejections[code], code),
+            )
+            diagnostics['failure_reason'] = (
+                'all tabletop proposals failed materialization'
+            )
+        return bounded, diagnostics
+
     def _prepare_and_predict(self, ticket):
         """Prepare immutable request facts and perform one correlated WSL call."""
 
@@ -4751,6 +5003,9 @@ class RemoteGrasp6DNode:
                 estimate.failure_code,
                 estimate.failure_reason,
             )
+        tabletop_candidates, tabletop_diagnostics = (
+            self._generate_tabletop_candidates(estimate)
+        )
         pose_estimator = FrozenSnapshotCandidatePoseEstimator(
             transform,
             stamp,
@@ -4778,19 +5033,37 @@ class RemoteGrasp6DNode:
             (time.perf_counter() - prepare_started) * 1000.0,
         )
         self._require_stream_ticket_current(ticket)
-        (
-            candidates,
-            diagnostics,
-            performance,
-            encode_ms,
-            transport_ms,
-            decode_ms,
-        ) = self._predict_remote(
-            ticket,
-            graspnet_input,
-            self._camera_intrinsics(),
-            snapshot.frame_id or self.pose_estimator.camera_frame,
-        )
+        remote_failure_code = ''
+        remote_failure_reason = ''
+        try:
+            (
+                candidates,
+                diagnostics,
+                performance,
+                encode_ms,
+                transport_ms,
+                decode_ms,
+            ) = self._predict_remote(
+                ticket,
+                graspnet_input,
+                self._camera_intrinsics(),
+                snapshot.frame_id or self.pose_estimator.camera_frame,
+            )
+        except StreamResultCancelled:
+            raise
+        except Exception as exc:
+            if not tabletop_candidates:
+                raise
+            candidates = ()
+            diagnostics = {}
+            performance = {}
+            encode_ms = 0.0
+            transport_ms = 0.0
+            decode_ms = 0.0
+            remote_failure_code = remote_prediction_failure_code(exc)
+            remote_failure_reason = str(exc)
+        diagnostics = dict(diagnostics)
+        diagnostics['tabletop_geometry'] = dict(tabletop_diagnostics)
         return PreparedPrediction(
             ticket=ticket,
             snapshot=snapshot,
@@ -4799,8 +5072,11 @@ class RemoteGrasp6DNode:
             pose_estimator=pose_estimator,
             graspnet_input=graspnet_input,
             candidates=tuple(candidates),
-            remote_diagnostics=dict(diagnostics),
+            remote_diagnostics=diagnostics,
             remote_performance=dict(performance),
+            tabletop_candidates=tabletop_candidates,
+            remote_failure_code=remote_failure_code,
+            remote_failure_reason=remote_failure_reason,
             graspnet_input_audit=dict(graspnet_input_audit),
             request_invalidation_generation=request_invalidation_generation,
             graspnet_input_config=input_config,
@@ -4902,6 +5178,7 @@ class RemoteGrasp6DNode:
         joint_max_delta_rad=0.0,
         position_dispersion_m=0.0,
         orientation_dispersion_rad=0.0,
+        contact_balance=0.0,
     ):
         return SoftCandidateFeatures(
             model_score=model_score,
@@ -4917,6 +5194,7 @@ class RemoteGrasp6DNode:
             stability_hit_ratio=stability_hit_ratio,
             position_dispersion_m=position_dispersion_m,
             orientation_dispersion_rad=orientation_dispersion_rad,
+            contact_balance=contact_balance,
         )
 
     def _activate_prepared_geometry(self, prepared):
@@ -4973,6 +5251,28 @@ class RemoteGrasp6DNode:
             )
         return approach / norm
 
+    def _pose_jaw_base_xyz(self, grasp_pose):
+        matrix = pose_matrix(grasp_pose)
+        name = str(
+            getattr(self, 'gripper_tool_jaw_axis', 'y') or 'y'
+        ).strip().lower()
+        sign = -1.0 if name.startswith('-') else 1.0
+        axis_name = name.lstrip('+-')
+        if axis_name not in ('x', 'y', 'z'):
+            raise CandidateContractError(
+                'TRANSFORM_INVALID', 'candidate jaw axis is invalid'
+            )
+        jaw = sign * np.asarray(
+            matrix[:3, {'x': 0, 'y': 1, 'z': 2}[axis_name]],
+            dtype=float,
+        )
+        norm = float(np.linalg.norm(jaw))
+        if not math.isfinite(norm) or norm <= 1e-12:
+            raise CandidateContractError(
+                'TRANSFORM_INVALID', 'candidate jaw axis is invalid'
+            )
+        return jaw / norm
+
     @staticmethod
     def _funnel_stage(entered, passed):
         entered = _pipeline_count(entered)
@@ -4983,20 +5283,284 @@ class RemoteGrasp6DNode:
             'rejected': entered - passed,
         }
 
-    def _evaluate_local_candidates(self, prepared):
-        """Apply current hard facts and compute soft costs before tracking."""
+    def _evaluate_graspnet_source_contract(
+        self,
+        prepared,
+        raw_candidate,
+        source_index,
+    ):
+        """Preserve the existing GraspNet depth/tool0 and analytical gates."""
 
-        candidates = tuple(prepared.candidates)
-        diagnostics = dict(prepared.remote_diagnostics or {})
-        rejections = Counter()
-        observations = []
-        weights = getattr(self, 'soft_score_weights', SoftScoreWeights())
-        self._reset_geometry_gate_audit(len(candidates))
         model_to_tool = validate_execution_tool0_contract(
             self.require_candidate_depth,
             self.model_grasp_to_tool_quaternion,
             self.grasp_config,
         )
+        camera_candidate = convert_candidate_to_camera_link(
+            raw_candidate,
+            self.candidate_frame_convention,
+        )
+        camera_candidate = align_candidate_to_tool_frame(
+            camera_candidate,
+            model_to_tool,
+            require_depth=self.require_candidate_depth,
+        )
+        setattr(camera_candidate, '_raw_candidate_index', int(source_index))
+        setattr(camera_candidate, '_variant_index', 0)
+        grasp_pose, center_base = make_candidate_base_pose_and_center(
+            camera_candidate,
+            prepared.pose_estimator,
+            prepared.stamp,
+            CANONICAL_CANDIDATE_CAMERA_FRAME,
+        )
+        setattr(camera_candidate, '_center_base_xyz', center_base)
+        sequence = make_grasp_sequence_from_grasp_pose(
+            grasp_pose,
+            pregrasp_distance_m=float(
+                self.grasp_config.get('pregrasp_distance_m', 0.08)
+            ),
+            approach_offset_m=float(
+                self.grasp_config.get('final_approach_offset_m', 0.015)
+            ),
+            lift_height_m=float(
+                self.grasp_config.get('lift_height_m', 0.05)
+            ),
+            tool_approach_axis=str(
+                self.grasp_config.get('tool_approach_axis', 'z')
+            ),
+        )
+        gate = self._evaluate_candidate_geometry(
+            raw_candidate,
+            camera_candidate,
+            grasp_pose,
+            sequence,
+        )
+        if not isinstance(gate, CandidateGateResult) or not gate.ok:
+            raise CandidateContractError(
+                str(getattr(gate, 'failure_code', '') or 'COLLISION'),
+                str(getattr(gate, 'failure_reason', '') or 'candidate collided'),
+            )
+        setattr(camera_candidate, '_geometry_gate_result', gate)
+        setattr(camera_candidate, '_grasp_sequence', sequence)
+        setattr(
+            camera_candidate,
+            'required_open_width_m',
+            float(gate.required_open_width_m),
+        )
+        return camera_candidate, grasp_pose, center_base, sequence, gate
+
+    def _common_soft_features(
+        self,
+        *,
+        prepared,
+        contact_center_base,
+        grasp_pose,
+        approach_axis_base,
+        jaw_axis_base,
+        gate,
+    ):
+        geometry = prepared.geometry
+        points = np.asarray(geometry.object_points_base, dtype=float)
+        contact_center = np.asarray(contact_center_base, dtype=float).reshape(3)
+        approach = np.asarray(approach_axis_base, dtype=float).reshape(3)
+        jaw = np.asarray(jaw_axis_base, dtype=float).reshape(3)
+        support = np.asarray(geometry.support_normal_base, dtype=float).reshape(3)
+        support /= max(float(np.linalg.norm(support)), 1e-12)
+        cloud_distance = float(
+            np.min(np.linalg.norm(points - contact_center, axis=1))
+        )
+        target_distance = float(
+            np.linalg.norm(contact_center - np.asarray(geometry.center_base))
+        )
+        visibility_cost = 0.0
+        if bool(
+            getattr(self, 'camera_visibility_gate_enabled', False)
+            or getattr(self, 'camera_visibility_diagnostic_enabled', False)
+        ):
+            _visible, visibility, _reason = self._candidate_visibility_metrics(
+                grasp_pose,
+                np.asarray(geometry.center_base, dtype=float),
+            )
+            visibility_cost = (
+                max(float(item['center_cost']) for item in visibility)
+                if visibility
+                else 1.0
+            )
+            if not math.isfinite(visibility_cost):
+                visibility_cost = 1.0
+        geometry_margin = max(
+            0.0,
+            min(
+                float(gate.support_clearance_m),
+                float(self.gripper_physical_open_width_m)
+                - float(gate.required_open_width_m),
+            ),
+        )
+        return self._candidate_soft_features(
+            model_score=0.0,
+            cloud_distance_m=cloud_distance,
+            center_distance_m=target_distance,
+            downward_approach_cos=float(np.dot(approach, -support)),
+            visibility_center_cost=max(0.0, visibility_cost),
+            support_margin_m=max(0.0, float(gate.support_clearance_m)),
+            jaw_tilt_cos=1.0 - min(1.0, abs(float(np.dot(jaw, support)))),
+            geometry_margin_m=geometry_margin,
+            stability_hit_ratio=0.0,
+            joint_path_cost=0.0,
+            joint_max_delta_rad=0.0,
+            position_dispersion_m=0.0,
+            orientation_dispersion_rad=0.0,
+            contact_balance=bilateral_contact_balance(points, jaw),
+        )
+
+    def _normalize_graspnet_candidate(
+        self,
+        prepared,
+        raw_candidate,
+        source_index,
+    ):
+        camera_candidate, grasp_pose, center_base, sequence, gate = (
+            self._evaluate_graspnet_source_contract(
+                prepared,
+                raw_candidate,
+                source_index,
+            )
+        )
+        transform = pose_matrix(grasp_pose)
+        approach = self._pose_approach_base_xyz(grasp_pose)
+        jaw_axis = self._pose_jaw_base_xyz(grasp_pose)
+        features = self._common_soft_features(
+            prepared=prepared,
+            contact_center_base=center_base,
+            grasp_pose=grasp_pose,
+            approach_axis_base=approach,
+            jaw_axis_base=jaw_axis,
+            gate=gate,
+        )
+        common_score = source_neutral_candidate_cost(
+            features,
+            self.soft_score_weights,
+        )
+        payload = LocalCandidatePayload(
+            raw_candidate_index=int(source_index),
+            variant_index=0,
+            raw_candidate=raw_candidate,
+            camera_candidate=camera_candidate,
+            grasp_pose=grasp_pose,
+            geometry_gate=gate,
+            soft_features=features,
+            score_components=dict(common_score.components),
+        )
+        return NormalizedPlanningCandidate(
+            candidate_source='graspnet',
+            source_index=int(source_index),
+            variant_index=0,
+            source_lineage=('graspnet',),
+            contact_center_base=np.asarray(center_base, dtype=float),
+            T_base_tool0=transform,
+            insertion_axis_base=approach,
+            jaw_axis_base=jaw_axis,
+            required_open_width_m=float(gate.required_open_width_m),
+            model_width_m=float(camera_candidate.width_m),
+            model_score=float(camera_candidate.score),
+            source_local_score=-float(camera_candidate.score),
+            common_physical_cost=float(common_score.total),
+            geometry_gate=gate,
+            grasp_sequence=sequence,
+            payload=payload,
+            audit=MappingProxyType({
+                'depth_m': float(camera_candidate.depth_m),
+                'model_width_m': float(camera_candidate.width_m),
+                'model_score': float(camera_candidate.score),
+            }),
+        )
+
+    def _normalize_tabletop_candidate(self, prepared, tabletop_candidate):
+        transform = np.asarray(tabletop_candidate.T_base_tool0, dtype=float)
+        quaternion = quaternion_from_matrix(transform)
+        grasp_pose = make_pose_stamped(
+            'base_link',
+            transform[:3, 3],
+            quaternion,
+            stamp=prepared.stamp,
+        )
+        sequence = make_grasp_sequence_from_grasp_pose(
+            grasp_pose,
+            pregrasp_distance_m=float(
+                self.grasp_config.get('pregrasp_distance_m', 0.08)
+            ),
+            approach_offset_m=float(
+                self.grasp_config.get('final_approach_offset_m', 0.015)
+            ),
+            lift_height_m=float(
+                self.grasp_config.get('lift_height_m', 0.05)
+            ),
+            approach_direction_base=tabletop_candidate.insertion_axis_base,
+        )
+        geometry = prepared.geometry
+        gate = evaluate_explicit_candidate(
+            gripper=self.gripper_geometry,
+            candidate_center_base=tabletop_candidate.contact_center_base,
+            candidate_tool0_base=transform[:3, 3],
+            R_base_tool=transform[:3, :3],
+            required_open_width_m=tabletop_candidate.required_open_width_m,
+            target_points_base=geometry.object_points_base,
+            obb_center_base=geometry.center_base,
+            R_base_obb=geometry.axes_base,
+            obb_size_xyz_m=geometry.size_xyz_m,
+            support_normal_base=geometry.support_normal_base,
+            support_offset_m=geometry.support_offset_m,
+            pregrasp_T_base_tool=pose_matrix(sequence.pregrasp),
+            approach_T_base_tool=pose_matrix(sequence.approach),
+            grasp_T_base_tool=pose_matrix(sequence.grasp),
+            lift_T_base_tool=pose_matrix(sequence.lift),
+            tool_jaw_axis=self.gripper_tool_jaw_axis,
+            tool_finger_length_axis=self.gripper_tool_finger_length_axis,
+            motion_cost=0.0,
+        )
+        recorder = getattr(self, '_record_geometry_gate_result', None)
+        if callable(recorder):
+            recorder(gate)
+        if not isinstance(gate, CandidateGateResult) or not gate.ok:
+            raise CandidateContractError(
+                str(getattr(gate, 'failure_code', '') or 'COLLISION'),
+                str(getattr(gate, 'failure_reason', '') or 'candidate collided'),
+            )
+        features = self._common_soft_features(
+            prepared=prepared,
+            contact_center_base=tabletop_candidate.contact_center_base,
+            grasp_pose=grasp_pose,
+            approach_axis_base=tabletop_candidate.insertion_axis_base,
+            jaw_axis_base=tabletop_candidate.jaw_axis_base,
+            gate=gate,
+        )
+        common_score = source_neutral_candidate_cost(
+            features,
+            self.soft_score_weights,
+        )
+        return NormalizedPlanningCandidate(
+            candidate_source='tabletop_geometry',
+            source_index=int(tabletop_candidate.source_index),
+            variant_index=int(tabletop_candidate.variant_index),
+            source_lineage=('tabletop_geometry',),
+            contact_center_base=tabletop_candidate.contact_center_base,
+            T_base_tool0=transform,
+            insertion_axis_base=tabletop_candidate.insertion_axis_base,
+            jaw_axis_base=tabletop_candidate.jaw_axis_base,
+            required_open_width_m=float(
+                tabletop_candidate.required_open_width_m
+            ),
+            model_width_m=None,
+            model_score=None,
+            source_local_score=float(tabletop_candidate.source_score),
+            common_physical_cost=float(common_score.total),
+            geometry_gate=gate,
+            grasp_sequence=sequence,
+            payload=tabletop_candidate,
+            audit=MappingProxyType(dict(tabletop_candidate.audit)),
+        )
+
+    def _normalized_candidate_safety(self, prepared, candidate):
         target_label = str(
             getattr(prepared.snapshot.object_msg, 'label', '') or ''
         )
@@ -5005,207 +5569,191 @@ class RemoteGrasp6DNode:
             target_label,
             str(prepared.model_choice),
         )
-        target_xyz = np.asarray(
-            prepared.geometry.center_base,
-            dtype=float,
-        ).reshape(3)
-        context_revision = str(prepared.pose_estimator.transform_sha256)
-        for candidate_index, raw_candidate in enumerate(candidates):
-            try:
-                camera_candidate = convert_candidate_to_camera_link(
-                    raw_candidate,
-                    self.candidate_frame_convention,
+        quaternion = quaternion_from_matrix(candidate.T_base_tool0)
+        depth_valid = True
+        if candidate.candidate_source == 'graspnet':
+            depth_valid = (
+                validate_graspnet_depth_m(
+                    getattr(candidate.payload.camera_candidate, 'depth_m', None),
+                    required=True,
                 )
-                camera_candidate = align_candidate_to_tool_frame(
-                    camera_candidate,
-                    model_to_tool,
-                    require_depth=self.require_candidate_depth,
+                is not None
+            )
+        safety = self._candidate_safety_input(
+            request_id=prepared.ticket.request_id,
+            snapshot_stamp_sec=prepared.ticket.snapshot_stamp_sec,
+            target_identity=target_identity,
+            track_id=int(candidate.source_index) + 1,
+            variant_index=int(candidate.variant_index),
+            center_base_xyz=candidate.contact_center_base,
+            tool0_position_xyz=candidate.T_base_tool0[:3, 3],
+            quaternion_xyzw=quaternion,
+            approach_base_xyz=candidate.insertion_axis_base,
+            target_present=bool(
+                getattr(prepared.snapshot.object_msg, 'detected', False)
+            ),
+            same_target_instance=(
+                prepared.ticket.target_epoch == self.target_instance_epoch
+            ),
+            target_absolute_distance_m=float(
+                np.linalg.norm(
+                    candidate.contact_center_base
+                    - np.asarray(prepared.geometry.center_base, dtype=float)
                 )
-                setattr(camera_candidate, '_raw_candidate_index', candidate_index)
-                setattr(camera_candidate, '_variant_index', 0)
-                grasp_pose, center_base = make_candidate_base_pose_and_center(
-                    camera_candidate,
-                    prepared.pose_estimator,
-                    prepared.stamp,
-                    CANONICAL_CANDIDATE_CAMERA_FRAME,
-                )
-                setattr(camera_candidate, '_center_base_xyz', center_base)
-                plan = make_grasp_sequence_from_grasp_pose(
-                    grasp_pose,
-                    pregrasp_distance_m=float(
-                        self.grasp_config.get('pregrasp_distance_m', 0.08)
-                    ),
-                    approach_offset_m=float(
-                        self.grasp_config.get('final_approach_offset_m', 0.015)
-                    ),
-                    lift_height_m=float(
-                        self.grasp_config.get('lift_height_m', 0.05)
-                    ),
-                    tool_approach_axis=str(
-                        self.grasp_config.get('tool_approach_axis', 'z')
-                    ),
-                )
-                gate = self._evaluate_candidate_geometry(
-                    raw_candidate,
-                    camera_candidate,
-                    grasp_pose,
-                    plan,
-                )
-                setattr(camera_candidate, '_geometry_gate_result', gate)
-                setattr(camera_candidate, '_grasp_sequence', plan)
-                setattr(
-                    camera_candidate,
-                    'required_open_width_m',
-                    float(gate.required_open_width_m),
-                )
-                pose_transform = pose_matrix(grasp_pose)
-                tool0_position = pose_transform[:3, 3]
-                quaternion = np.asarray(
-                    [
-                        grasp_pose.pose.orientation.x,
-                        grasp_pose.pose.orientation.y,
-                        grasp_pose.pose.orientation.z,
-                        grasp_pose.pose.orientation.w,
-                    ],
-                    dtype=float,
-                )
-                approach = self._pose_approach_base_xyz(grasp_pose)
-                target_distance = float(
-                    np.linalg.norm(np.asarray(center_base) - target_xyz)
-                )
-                safety_input = self._candidate_safety_input(
-                    request_id=prepared.ticket.request_id,
-                    snapshot_stamp_sec=prepared.ticket.snapshot_stamp_sec,
-                    target_identity=target_identity,
-                    track_id=candidate_index + 1,
-                    variant_index=0,
-                    center_base_xyz=center_base,
-                    tool0_position_xyz=tool0_position,
-                    quaternion_xyzw=quaternion,
-                    approach_base_xyz=approach,
-                    target_present=bool(
-                        getattr(prepared.snapshot.object_msg, 'detected', False)
-                    ),
-                    same_target_instance=(
-                        prepared.ticket.target_epoch
-                        == self.target_instance_epoch
-                    ),
-                    target_absolute_distance_m=target_distance,
-                    target_absolute_limit_m=float(
-                        self.target_absolute_sanity_distance_m
-                    ),
-                    required_open_width_m=gate.required_open_width_m,
-                    physical_open_width_m=self.gripper_physical_open_width_m,
-                    depth_valid=(
-                        validate_graspnet_depth_m(
-                            getattr(camera_candidate, 'depth_m', None),
-                            required=True,
-                        )
-                        is not None
-                    ),
-                    transform_valid=True,
-                    geometry_valid=isinstance(gate, CandidateGateResult),
-                    collision_free=bool(gate.ok),
-                    snapshot_context_revision=context_revision,
-                )
-                hard_decision = mandatory_safety_gate(safety_input)
-                if not hard_decision.ok:
-                    rejections[hard_decision.code] += 1
-                    continue
+            ),
+            target_absolute_limit_m=float(
+                self.target_absolute_sanity_distance_m
+            ),
+            required_open_width_m=candidate.required_open_width_m,
+            physical_open_width_m=self.gripper_physical_open_width_m,
+            depth_valid=depth_valid,
+            transform_valid=True,
+            geometry_valid=isinstance(
+                candidate.geometry_gate,
+                CandidateGateResult,
+            ),
+            collision_free=bool(candidate.geometry_gate.ok),
+            snapshot_context_revision=str(
+                prepared.pose_estimator.transform_sha256
+            ),
+        )
+        return mandatory_safety_gate(safety)
 
-                cloud_distance = self._camera_candidate_cloud_distance(
-                    camera_candidate
+    def _evaluate_local_candidates(self, prepared):
+        """Normalize, hard-gate, cross-source merge, and observe candidates."""
+
+        graspnet_candidates = tuple(prepared.candidates)
+        tabletop_candidates = tuple(
+            getattr(prepared, 'tabletop_candidates', ()) or ()
+        )
+        diagnostics = dict(prepared.remote_diagnostics or {})
+        rejections = Counter()
+        source_rejections = {
+            'graspnet': Counter(),
+            'tabletop_geometry': Counter(),
+        }
+        normalized_by_source = {
+            'graspnet': [],
+            'tabletop_geometry': [],
+        }
+        self._reset_geometry_gate_audit(
+            len(graspnet_candidates) + len(tabletop_candidates)
+        )
+
+        for source_index, raw_candidate in enumerate(graspnet_candidates):
+            try:
+                normalized = self._normalize_graspnet_candidate(
+                    prepared,
+                    raw_candidate,
+                    source_index,
                 )
-                if not math.isfinite(cloud_distance):
-                    cloud_distance = None
-                visibility_cost = 0.0
-                if bool(
-                    getattr(self, 'camera_visibility_gate_enabled', False)
-                    or getattr(self, 'camera_visibility_diagnostic_enabled', False)
-                ):
-                    _visible, visibility, _reason = (
-                        self._candidate_visibility_metrics(
-                            grasp_pose,
-                            target_xyz,
-                        )
-                    )
-                    visibility_cost = (
-                        max(float(item['center_cost']) for item in visibility)
-                        if visibility
-                        else 1.0
-                    )
-                    if not math.isfinite(visibility_cost):
-                        visibility_cost = 1.0
-                support_metrics = self._candidate_support_geometry_metrics(
-                    camera_candidate
+                decision = self._normalized_candidate_safety(
+                    prepared,
+                    normalized,
                 )
-                jaw_tilt_cos = 1.0
-                if support_metrics is not None:
-                    jaw_tilt_cos = 1.0 - min(
-                        1.0,
-                        max(0.0, float(support_metrics['jaw_normal_cos'])),
-                    )
-                geometry_margin = max(
-                    0.0,
-                    min(
-                        float(gate.support_clearance_m),
-                        float(self.gripper_physical_open_width_m)
-                        - float(gate.required_open_width_m),
-                    ),
-                )
-                features = self._candidate_soft_features(
-                    model_score=float(camera_candidate.score),
-                    cloud_distance_m=cloud_distance,
-                    center_distance_m=target_distance,
-                    downward_approach_cos=float(-approach[2]),
-                    visibility_center_cost=visibility_cost,
-                    support_margin_m=max(0.0, float(gate.support_clearance_m)),
-                    jaw_tilt_cos=jaw_tilt_cos,
-                    geometry_margin_m=geometry_margin,
-                    stability_hit_ratio=1.0
-                    / float(max(1, self._tracking_config.window_size)),
-                )
-                score = soft_candidate_cost(features, weights)
-                payload = LocalCandidatePayload(
-                    raw_candidate_index=candidate_index,
-                    variant_index=0,
-                    raw_candidate=raw_candidate,
-                    camera_candidate=camera_candidate,
-                    grasp_pose=grasp_pose,
-                    geometry_gate=gate,
-                    soft_features=features,
-                    score_components=dict(score.components),
-                )
-                observations.append(
-                    CandidateObservation(
-                        request_id=prepared.ticket.request_id,
-                        snapshot_stamp_sec=prepared.ticket.snapshot_stamp_sec,
-                        target_epoch=prepared.ticket.target_epoch,
-                        target_label=target_label,
-                        model_choice=prepared.model_choice,
-                        center_base_xyz=center_base,
-                        tool0_position_xyz=tool0_position,
-                        quaternion_xyzw=quaternion,
-                        approach_base_xyz=approach,
-                        required_open_width_m=gate.required_open_width_m,
-                        model_width_m=camera_candidate.width_m,
-                        model_score=camera_candidate.score,
-                        geometry_margin_m=geometry_margin,
-                        pre_moveit_score=score.total,
-                        payload=payload,
-                    )
-                )
+                if not decision.ok:
+                    raise CandidateContractError(decision.code, decision.reason)
+                normalized_by_source['graspnet'].append(normalized)
             except Exception as exc:
                 code = str(
                     getattr(exc, 'code', 'CANDIDATE_CONTRACT_INVALID')
                     or 'CANDIDATE_CONTRACT_INVALID'
                 )
                 rejections[code] += 1
+                source_rejections['graspnet'][code] += 1
 
-        returned = len(candidates)
+        for tabletop_candidate in tabletop_candidates:
+            try:
+                normalized = self._normalize_tabletop_candidate(
+                    prepared,
+                    tabletop_candidate,
+                )
+                decision = self._normalized_candidate_safety(
+                    prepared,
+                    normalized,
+                )
+                if not decision.ok:
+                    raise CandidateContractError(decision.code, decision.reason)
+                normalized_by_source['tabletop_geometry'].append(normalized)
+            except Exception as exc:
+                code = str(
+                    getattr(exc, 'code', 'CANDIDATE_CONTRACT_INVALID')
+                    or 'CANDIDATE_CONTRACT_INVALID'
+                )
+                rejections[code] += 1
+                source_rejections['tabletop_geometry'][code] += 1
+
+        for source in normalized_by_source:
+            normalized_by_source[source].sort(
+                key=lambda item: (
+                    item.source_local_score,
+                    item.source_index,
+                    item.variant_index,
+                )
+            )
+        merged = merge_hybrid_candidates(
+            tuple(normalized_by_source['graspnet'])
+            + tuple(normalized_by_source['tabletop_geometry']),
+            self.hybrid_merge_config,
+        )
+        target_label = str(
+            getattr(prepared.snapshot.object_msg, 'label', '') or ''
+        )
+        observations = []
+        for normalized in merged:
+            geometry_margin = max(
+                0.0,
+                min(
+                    float(normalized.geometry_gate.support_clearance_m),
+                    float(self.gripper_physical_open_width_m)
+                    - float(normalized.required_open_width_m),
+                ),
+            )
+            observations.append(
+                CandidateObservation(
+                    request_id=prepared.ticket.request_id,
+                    snapshot_stamp_sec=prepared.ticket.snapshot_stamp_sec,
+                    target_epoch=prepared.ticket.target_epoch,
+                    target_label=target_label,
+                    model_choice=prepared.model_choice,
+                    center_base_xyz=normalized.contact_center_base,
+                    tool0_position_xyz=normalized.T_base_tool0[:3, 3],
+                    quaternion_xyzw=quaternion_from_matrix(
+                        normalized.T_base_tool0
+                    ),
+                    approach_base_xyz=normalized.insertion_axis_base,
+                    required_open_width_m=normalized.required_open_width_m,
+                    model_width_m=normalized.model_width_m,
+                    model_score=normalized.model_score,
+                    geometry_margin_m=geometry_margin,
+                    pre_moveit_score=normalized.common_physical_cost,
+                    payload=normalized,
+                    candidate_source=normalized.candidate_source,
+                    source_lineage=normalized.source_lineage,
+                )
+            )
+
+        returned = len(graspnet_candidates)
+        geometry_returned = len(tabletop_candidates)
         locally_valid = len(observations)
-        if returned == 0:
+        remote_failure_code = str(
+            getattr(prepared, 'remote_failure_code', '') or ''
+        )
+        if remote_failure_code:
+            rejections[remote_failure_code] += 1
+            source_rejections['graspnet'][remote_failure_code] += 1
+        elif returned == 0 and geometry_returned == 0:
             rejections['REMOTE_NO_CANDIDATES'] += 1
+            source_rejections['graspnet']['REMOTE_NO_CANDIDATES'] += 1
+        tabletop_diagnostics = dict(
+            diagnostics.get('tabletop_geometry', {}) or {}
+        )
+        tabletop_failure = str(
+            tabletop_diagnostics.get('failure_code', '') or ''
+        )
+        if tabletop_failure and geometry_returned == 0:
+            rejections[tabletop_failure] += 1
+            source_rejections['tabletop_geometry'][tabletop_failure] += 1
         raw_count = _pipeline_count(
             diagnostics.get('raw_candidates', returned)
         )
@@ -5220,12 +5768,32 @@ class RemoteGrasp6DNode:
                 nms_count, min(nms_count, collision_count)
             ),
             'returned': self._funnel_stage(collision_count, returned),
-            'locally_valid': self._funnel_stage(returned, locally_valid),
+            'tabletop_materialized': self._funnel_stage(
+                geometry_returned,
+                geometry_returned,
+            ),
+            'locally_valid': self._funnel_stage(
+                returned + geometry_returned,
+                locally_valid,
+            ),
         }
-        denominator = float(max(1, returned))
+        denominator = float(max(1, returned + geometry_returned))
+        source_counts = {
+            source: {
+                'input': (
+                    returned if source == 'graspnet' else geometry_returned
+                ),
+                'locally_valid': len(normalized_by_source[source]),
+                'rejection_counts': dict(
+                    sorted(source_rejections[source].items())
+                ),
+            }
+            for source in ('graspnet', 'tabletop_geometry')
+        }
         return tuple(observations), {
-            'input_count': returned,
+            'input_count': returned + geometry_returned,
             'stage_counts': stage_counts,
+            'source_counts': source_counts,
             'rejection_counts': dict(sorted(rejections.items())),
             'rejection_ratios': {
                 code: count / denominator
@@ -6140,7 +6708,11 @@ class RemoteGrasp6DNode:
                 key=lambda code: (-rejection_counts[code], code),
             )
         return {
+            'input_count': _pipeline_count(local.get('input_count', 0)),
             'stage_counts': stage_counts,
+            'source_counts': deepcopy(
+                dict(local.get('source_counts', {}) or {})
+            ),
             'rejection_counts': dict(sorted(rejection_counts.items())),
             'rejection_ratios': ratios,
             'primary_failure': primary,
@@ -6198,8 +6770,8 @@ class RemoteGrasp6DNode:
         runtime = {}
         scored = []
         for stable in tuple(stable_candidates):
-            payload = stable.payload
-            if not isinstance(payload, LocalCandidatePayload):
+            normalized = stable.payload
+            if not isinstance(normalized, NormalizedPlanningCandidate):
                 continue
             for variant_index in (0, 1):
                 try:
@@ -6208,37 +6780,115 @@ class RemoteGrasp6DNode:
                         variant_index,
                         prepared.stamp,
                     )
-                    sequence = make_grasp_sequence_from_grasp_pose(
-                        grasp_pose,
-                        pregrasp_distance_m=float(
-                            self.grasp_config.get('pregrasp_distance_m', 0.08)
-                        ),
-                        approach_offset_m=float(
-                            self.grasp_config.get(
-                                'final_approach_offset_m', 0.015
+                    camera_candidate = None
+                    if normalized.candidate_source == 'graspnet':
+                        source_payload = normalized.payload
+                        if not isinstance(source_payload, LocalCandidatePayload):
+                            continue
+                        sequence = make_grasp_sequence_from_grasp_pose(
+                            grasp_pose,
+                            pregrasp_distance_m=float(
+                                self.grasp_config.get(
+                                    'pregrasp_distance_m', 0.08
+                                )
+                            ),
+                            approach_offset_m=float(
+                                self.grasp_config.get(
+                                    'final_approach_offset_m', 0.015
+                                )
+                            ),
+                            lift_height_m=float(
+                                self.grasp_config.get('lift_height_m', 0.05)
+                            ),
+                            tool_approach_axis=str(
+                                self.grasp_config.get(
+                                    'tool_approach_axis', 'z'
+                                )
+                            ),
+                        )
+                        camera_candidate = deepcopy(
+                            source_payload.camera_candidate
+                        )
+                        camera_candidate.width_m = float(stable.model_width_m)
+                        setattr(
+                            camera_candidate,
+                            '_center_base_xyz',
+                            np.asarray(stable.center_base_xyz, dtype=float),
+                        )
+                        setattr(
+                            camera_candidate,
+                            '_variant_index',
+                            variant_index,
+                        )
+                        gate = self._evaluate_candidate_geometry(
+                            source_payload.raw_candidate,
+                            camera_candidate,
+                            grasp_pose,
+                            sequence,
+                        )
+                        depth_valid = (
+                            validate_graspnet_depth_m(
+                                getattr(camera_candidate, 'depth_m', None),
+                                required=True,
                             )
-                        ),
-                        lift_height_m=float(
-                            self.grasp_config.get('lift_height_m', 0.05)
-                        ),
-                        tool_approach_axis=str(
-                            self.grasp_config.get('tool_approach_axis', 'z')
-                        ),
-                    )
-                    camera_candidate = deepcopy(payload.camera_candidate)
-                    camera_candidate.width_m = float(stable.model_width_m)
-                    setattr(
-                        camera_candidate,
-                        '_center_base_xyz',
-                        np.asarray(stable.center_base_xyz, dtype=float),
-                    )
-                    setattr(camera_candidate, '_variant_index', variant_index)
-                    gate = self._evaluate_candidate_geometry(
-                        payload.raw_candidate,
-                        camera_candidate,
-                        grasp_pose,
-                        sequence,
-                    )
+                            is not None
+                        )
+                    elif normalized.candidate_source == 'tabletop_geometry':
+                        sequence = make_grasp_sequence_from_grasp_pose(
+                            grasp_pose,
+                            pregrasp_distance_m=float(
+                                self.grasp_config.get(
+                                    'pregrasp_distance_m', 0.08
+                                )
+                            ),
+                            approach_offset_m=float(
+                                self.grasp_config.get(
+                                    'final_approach_offset_m', 0.015
+                                )
+                            ),
+                            lift_height_m=float(
+                                self.grasp_config.get('lift_height_m', 0.05)
+                            ),
+                            approach_direction_base=(
+                                stable.approach_base_xyz
+                            ),
+                        )
+                        transform = pose_matrix(grasp_pose)
+                        geometry = prepared.geometry
+                        gate = evaluate_explicit_candidate(
+                            gripper=self.gripper_geometry,
+                            candidate_center_base=stable.center_base_xyz,
+                            candidate_tool0_base=transform[:3, 3],
+                            R_base_tool=transform[:3, :3],
+                            required_open_width_m=(
+                                stable.required_open_width_m
+                            ),
+                            target_points_base=geometry.object_points_base,
+                            obb_center_base=geometry.center_base,
+                            R_base_obb=geometry.axes_base,
+                            obb_size_xyz_m=geometry.size_xyz_m,
+                            support_normal_base=(
+                                geometry.support_normal_base
+                            ),
+                            support_offset_m=geometry.support_offset_m,
+                            pregrasp_T_base_tool=pose_matrix(
+                                sequence.pregrasp
+                            ),
+                            approach_T_base_tool=pose_matrix(
+                                sequence.approach
+                            ),
+                            grasp_T_base_tool=transform,
+                            lift_T_base_tool=pose_matrix(sequence.lift),
+                            tool_jaw_axis=self.gripper_tool_jaw_axis,
+                            tool_finger_length_axis=(
+                                self.gripper_tool_finger_length_axis
+                            ),
+                            motion_cost=0.0,
+                        )
+                        self._record_geometry_gate_result(gate)
+                        depth_valid = True
+                    else:
+                        continue
                     latest_required_width = _finite_pipeline_number(
                         getattr(gate, 'required_open_width_m', 0.0)
                     )
@@ -6294,13 +6944,7 @@ class RemoteGrasp6DNode:
                             current_stable.required_open_width_m
                         ),
                         physical_open_width_m=self.gripper_physical_open_width_m,
-                        depth_valid=(
-                            validate_graspnet_depth_m(
-                                getattr(camera_candidate, 'depth_m', None),
-                                required=True,
-                            )
-                            is not None
-                        ),
+                        depth_valid=depth_valid,
                         transform_valid=True,
                         geometry_valid=isinstance(gate, CandidateGateResult),
                         collision_free=bool(gate.ok),
@@ -6309,58 +6953,16 @@ class RemoteGrasp6DNode:
                     hit_ratio = float(stable.hit_count) / float(
                         max(1, stable.window_count)
                     )
-                    visibility_cost = 0.0
-                    if bool(
-                        getattr(self, 'camera_visibility_gate_enabled', False)
-                        or getattr(
-                            self,
-                            'camera_visibility_diagnostic_enabled',
-                            False,
-                        )
-                    ):
-                        _visible, visibility, _reason = (
-                            self._candidate_visibility_metrics(
-                                grasp_pose,
-                                target_xyz,
-                            )
-                        )
-                        visibility_cost = (
-                            max(
-                                float(item['center_cost'])
-                                for item in visibility
-                            )
-                            if visibility
-                            else 1.0
-                        )
-                    geometry_margin = max(
-                        0.0,
-                        min(
-                            float(gate.support_clearance_m),
-                            float(self.gripper_physical_open_width_m)
-                            - float(gate.required_open_width_m),
-                        ),
+                    common_features = self._common_soft_features(
+                        prepared=prepared,
+                        contact_center_base=stable.center_base_xyz,
+                        grasp_pose=grasp_pose,
+                        approach_axis_base=stable.approach_base_xyz,
+                        jaw_axis_base=self._pose_jaw_base_xyz(grasp_pose),
+                        gate=gate,
                     )
-                    cloud_distance = self._camera_candidate_cloud_distance(
-                        camera_candidate
-                    )
-                    if not math.isfinite(cloud_distance):
-                        cloud_distance = None
                     features = replace(
-                        payload.soft_features,
-                        model_score=float(stable.model_score),
-                        cloud_distance_m=cloud_distance,
-                        center_distance_m=target_distance,
-                        downward_approach_cos=float(
-                            -np.asarray(stable.approach_base_xyz)[2]
-                        ),
-                        visibility_center_cost=max(
-                            0.0,
-                            _finite_pipeline_number(visibility_cost),
-                        ),
-                        support_margin_m=max(
-                            0.0, float(gate.support_clearance_m)
-                        ),
-                        geometry_margin_m=geometry_margin,
+                        common_features,
                         stability_hit_ratio=hit_ratio,
                         position_dispersion_m=float(
                             stable.position_dispersion_m
@@ -6389,10 +6991,9 @@ class RemoteGrasp6DNode:
                         'geometry_gate': gate,
                         'scored_candidate': candidate,
                         'soft_evidence': {
-                            'cloud_distance_resolved': (
-                                cloud_distance is not None
-                            ),
-                            'cloud_distance_m': cloud_distance,
+                            'cloud_distance_resolved': True,
+                            'cloud_distance_m': features.cloud_distance_m,
+                            'contact_balance': features.contact_balance,
                             'position_dispersion_m': float(
                                 stable.position_dispersion_m
                             ),
@@ -6473,18 +7074,46 @@ class RemoteGrasp6DNode:
         if not isinstance(runtime, dict):
             raise RuntimeError('selected stable variant runtime is unavailable')
         prepared = runtime['prepared']
-        candidate = deepcopy(runtime['camera_candidate'])
         stable = selected.stable_candidate
-        candidate.score = float(stable.model_score)
-        candidate.width_m = float(stable.model_width_m)
-        setattr(
-            candidate,
-            'required_open_width_m',
-            float(stable.required_open_width_m),
-        )
-        setattr(candidate, '_grasp_sequence', runtime['sequence'])
-        setattr(candidate, '_track_id', int(stable.track_id))
-        setattr(candidate, '_variant_index', int(selected.variant_index))
+        normalized = selected.payload
+        if not isinstance(normalized, NormalizedPlanningCandidate):
+            raise RuntimeError('selected payload is not normalized')
+        if normalized.candidate_source == 'graspnet':
+            candidate = deepcopy(runtime['camera_candidate'])
+            candidate.score = float(stable.model_score)
+            candidate.width_m = float(stable.model_width_m)
+            setattr(
+                candidate,
+                'required_open_width_m',
+                float(stable.required_open_width_m),
+            )
+            setattr(candidate, '_grasp_sequence', runtime['sequence'])
+            setattr(candidate, '_track_id', int(stable.track_id))
+            setattr(candidate, '_variant_index', int(selected.variant_index))
+            setattr(candidate, 'candidate_source', stable.candidate_source)
+            setattr(candidate, 'source_lineage', stable.source_lineage)
+        elif normalized.candidate_source == 'tabletop_geometry':
+            gate = replace(
+                runtime['geometry_gate'],
+                required_open_width_m=float(stable.required_open_width_m),
+            )
+            transform = pose_matrix(runtime['grasp_pose'])
+            candidate = replace(
+                normalized,
+                source_lineage=stable.source_lineage,
+                contact_center_base=stable.center_base_xyz,
+                T_base_tool0=transform,
+                insertion_axis_base=stable.approach_base_xyz,
+                jaw_axis_base=self._pose_jaw_base_xyz(
+                    runtime['grasp_pose']
+                ),
+                required_open_width_m=float(stable.required_open_width_m),
+                common_physical_cost=float(selected.pre_moveit_score),
+                geometry_gate=gate,
+                grasp_sequence=runtime['sequence'],
+            )
+        else:
+            raise RuntimeError('selected candidate source is unsupported')
         geometry_message = geometry_estimate_to_message(
             prepared.geometry,
             snapshot=prepared.snapshot,
@@ -6506,7 +7135,9 @@ class RemoteGrasp6DNode:
             'target_epoch': int(stable.target_epoch),
             'target_label': stable.target_label,
             'model_choice': stable.model_choice,
-            'raw_candidate_index': int(selected.payload.raw_candidate_index),
+            'raw_candidate_index': int(normalized.source_index),
+            'candidate_source': stable.candidate_source,
+            'source_lineage': list(stable.source_lineage),
             'track_id': int(stable.track_id),
             'variant_index': int(selected.variant_index),
             'hit_count': int(stable.hit_count),
@@ -6534,10 +7165,10 @@ class RemoteGrasp6DNode:
                     stable.snapshot_stamp_sec
                 ),
                 'source_raw_candidate_index': int(
-                    selected.payload.raw_candidate_index
+                    normalized.source_index
                 ),
                 'source_variant_index': int(
-                    selected.payload.variant_index
+                    normalized.variant_index
                 ),
                 'evaluation_request_id': int(
                     selected.evaluation_request_id
@@ -6621,7 +7252,23 @@ class RemoteGrasp6DNode:
                 continue
             scored_candidate = candidate_runtime.get('scored_candidate')
             candidate_payload = getattr(scored_candidate, 'payload', None)
-            if not isinstance(candidate_payload, LocalCandidatePayload):
+            if isinstance(candidate_payload, NormalizedPlanningCandidate):
+                candidate_source_index = int(candidate_payload.source_index)
+                candidate_source_variant = int(
+                    candidate_payload.variant_index
+                )
+                candidate_source = candidate_payload.candidate_source
+                candidate_lineage = candidate_payload.source_lineage
+            elif isinstance(candidate_payload, LocalCandidatePayload):
+                candidate_source_index = int(
+                    candidate_payload.raw_candidate_index
+                )
+                candidate_source_variant = int(
+                    candidate_payload.variant_index
+                )
+                candidate_source = 'graspnet'
+                candidate_lineage = ('graspnet',)
+            else:
                 continue
             evaluated = checked.get(
                 (track_id, variant_index), scored_candidate
@@ -6680,10 +7327,10 @@ class RemoteGrasp6DNode:
                     stable.snapshot_stamp_sec
                 ),
                 'source_raw_candidate_index': int(
-                    candidate_payload.raw_candidate_index
+                    candidate_source_index
                 ),
                 'source_variant_index': int(
-                    candidate_payload.variant_index
+                    candidate_source_variant
                 ),
                 'evaluation_request_id': evaluation_request_id,
                 'evaluation_snapshot_stamp_sec': (
@@ -6698,9 +7345,11 @@ class RemoteGrasp6DNode:
             )
             evaluation_record = {
                 'candidate_index': int(
-                    candidate_payload.raw_candidate_index
+                    candidate_source_index
                 ),
                 'variant_index': int(variant_index),
+                'candidate_source': candidate_source,
+                'source_lineage': list(candidate_lineage),
                 'selected': is_selected,
                 'tracking': tracking,
                 'lineage_binding': lineage_binding,
@@ -6723,10 +7372,13 @@ class RemoteGrasp6DNode:
                 )
                 <= 1e-9
             )
-            if source_is_evaluation:
+            if (
+                source_is_evaluation
+                and candidate_source == 'graspnet'
+            ):
                 current_row_annotations[
                     (
-                        int(candidate_payload.raw_candidate_index),
+                        candidate_source_index,
                         int(variant_index),
                     )
                 ] = evaluation_record
@@ -7157,6 +7809,38 @@ class RemoteGrasp6DNode:
             preview_count = 1
             status = 'PREVIEW_READY'
         promotion_decision = None
+        remote_failure_code = str(
+            getattr(prepared, 'remote_failure_code', '') or ''
+        )
+        if (
+            isinstance(promotion_proposal, dict)
+            and isinstance(prepared, PreparedPrediction)
+            and remote_failure_code == 'WSL_UNAVAILABLE'
+        ):
+            promotion_decision = PromotionDecision(
+                False,
+                remote_failure_code,
+                str(
+                    getattr(prepared, 'remote_failure_reason', '')
+                    or 'shared WSL inference/MuJoCo endpoint is unavailable'
+                ),
+            )
+            funnel = self._merge_pipeline_funnel(
+                local_funnel,
+                moveit_funnel,
+                stable_count=len(stable),
+                preview_count=preview_count,
+                promotion_count=0,
+            )
+            self._finalize_streaming_gate_audit(
+                prepared,
+                selection,
+                funnel,
+                status,
+                base_report=base_audit_report,
+                promotion_decision=promotion_decision,
+            )
+            return {'status': status, 'funnel': funnel}
         if (
             isinstance(promotion_proposal, dict)
             and isinstance(prepared, PreparedPrediction)
@@ -8742,6 +9426,67 @@ class RemoteGrasp6DNode:
             accept_position_only_fallback,
             accept_orientation_fallback,
         )
+        gripper_geometry_cfg = dict(
+            remote_cfg.get('gripper_geometry', {}) or {}
+        )
+        refreshed_gripper_geometry = GripperGeometry(
+            max_inner_gap_m=float(
+                gripper_geometry_cfg.get(
+                    'max_inner_gap_m',
+                    getattr(self.gripper_geometry, 'max_inner_gap_m', 0.050),
+                )
+            ),
+            jaw_clearance_each_side_m=float(
+                gripper_geometry_cfg.get(
+                    'width_safety_margin_per_side_m',
+                    getattr(
+                        self.gripper_geometry,
+                        'jaw_clearance_each_side_m',
+                        0.002,
+                    ),
+                )
+            ),
+            finger_size_xyz_m=np.asarray(
+                gripper_geometry_cfg.get(
+                    'finger_box_xyz_m',
+                    getattr(
+                        self.gripper_geometry,
+                        'finger_size_xyz_m',
+                        [0.0434, 0.0286, 0.0600],
+                    ),
+                ),
+                dtype=float,
+            ),
+            palm_size_xyz_m=np.asarray(
+                gripper_geometry_cfg.get(
+                    'palm_box_xyz_m',
+                    getattr(
+                        self.gripper_geometry,
+                        'palm_size_xyz_m',
+                        [0.1175, 0.1550, 0.0774],
+                    ),
+                ),
+                dtype=float,
+            ),
+            support_clearance_m=float(
+                gripper_geometry_cfg.get(
+                    'support_clearance_m',
+                    getattr(
+                        self.gripper_geometry,
+                        'support_clearance_m',
+                        0.003,
+                    ),
+                )
+            ),
+        )
+        (
+            tabletop_geometry_enabled,
+            tabletop_geometry_config,
+            hybrid_merge_config,
+        ) = load_tabletop_geometry_config(
+            remote_cfg,
+            refreshed_gripper_geometry,
+        )
 
         # Publish the refreshed critical contract only after every field has
         # passed.  A bad runtime override cannot leave a partially relaxed
@@ -8753,6 +9498,10 @@ class RemoteGrasp6DNode:
         self.require_candidate_depth = require_candidate_depth
         self.allow_position_only_fallback = allow_position_only_fallback
         self.allow_orientation_fallback = allow_orientation_fallback
+        self.gripper_geometry = refreshed_gripper_geometry
+        self.tabletop_geometry_enabled = tabletop_geometry_enabled
+        self.tabletop_geometry_config = tabletop_geometry_config
+        self.hybrid_merge_config = hybrid_merge_config
         self.gate_audit_enabled = gate_audit_enabled
         self.gate_audit_output_path = gate_audit_output_path
         self.mujoco_audit_output_path = mujoco_audit_output_path
@@ -9215,57 +9964,6 @@ class RemoteGrasp6DNode:
         )
         gripper_cfg = rospy.get_param('/gripper', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
-        gripper_geometry_cfg = dict(remote_cfg.get('gripper_geometry', {}) or {})
-        self.gripper_geometry = GripperGeometry(
-            max_inner_gap_m=float(
-                gripper_geometry_cfg.get(
-                    'max_inner_gap_m',
-                    getattr(self.gripper_geometry, 'max_inner_gap_m', 0.050),
-                )
-            ),
-            jaw_clearance_each_side_m=float(
-                gripper_geometry_cfg.get(
-                    'width_safety_margin_per_side_m',
-                    getattr(
-                        self.gripper_geometry,
-                        'jaw_clearance_each_side_m',
-                        0.002,
-                    ),
-                )
-            ),
-            finger_size_xyz_m=np.asarray(
-                gripper_geometry_cfg.get(
-                    'finger_box_xyz_m',
-                    getattr(
-                        self.gripper_geometry,
-                        'finger_size_xyz_m',
-                        [0.0434, 0.0286, 0.0600],
-                    ),
-                ),
-                dtype=float,
-            ),
-            palm_size_xyz_m=np.asarray(
-                gripper_geometry_cfg.get(
-                    'palm_box_xyz_m',
-                    getattr(
-                        self.gripper_geometry,
-                        'palm_size_xyz_m',
-                        [0.1175, 0.1550, 0.0774],
-                    ),
-                ),
-                dtype=float,
-            ),
-            support_clearance_m=float(
-                gripper_geometry_cfg.get(
-                    'support_clearance_m',
-                    getattr(
-                        self.gripper_geometry,
-                        'support_clearance_m',
-                        0.003,
-                    ),
-                )
-            ),
-        )
         self.gripper_tool_jaw_axis = str(
             gripper_geometry_cfg.get(
                 'tool_jaw_axis',

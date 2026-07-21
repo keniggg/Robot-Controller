@@ -176,6 +176,18 @@ grasp_6d:
       tool_finger_length_axis: "z"
       finger_box_xyz_m: [0.0434, 0.0286, 0.0600]
       palm_box_xyz_m: [0.1175, 0.1550, 0.0774]
+    tabletop_geometry_candidates:
+      enabled: true
+      angle_step_deg: 15.0
+      angle_dedup_deg: 2.0
+      jaw_clearance_each_side_m: 0.002
+      min_contact_band_points: 6
+      contact_band_fraction: 0.12
+      min_finger_support_clearance_m: 0.003
+      max_candidates: 8
+      merge_center_distance_m: 0.005
+      merge_insertion_angle_deg: 10.0
+      merge_jaw_angle_deg: 10.0
     # Return a broader score-ranked set so strict target, support-plane and
     # approach gates can find a safe pose instead of seeing only side grasps.
     max_candidates: 300
@@ -318,7 +330,7 @@ mujoco_digital_twin:
   send_joint_state_in_request: true
   open_width_m: 0.05
   object_model:
-    type: "carton_box"
+    type: "obb_box"
     label: "carton"
     mass_kg: 0.08
     friction: [1.2, 0.08, 0.02]

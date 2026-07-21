@@ -8,6 +8,7 @@ import threading
 import time
 import types
 
+import numpy as np
 import pytest
 
 
@@ -43,6 +44,12 @@ from alicia_flexible_grasp.grasp.grasp6d_stability import (  # noqa: E402
 )
 from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
     CandidateGateResult,
+    GripperGeometry,
+)
+from alicia_flexible_grasp.grasp.tabletop_geometry_candidates import (  # noqa: E402
+    TabletopGeometryConfig,
+    generate_tabletop_proposals,
+    materialize_tabletop_candidates,
 )
 from alicia_flexible_grasp.vision.remote_grasp6d_client import (  # noqa: E402
     RemoteGraspCandidate,
@@ -178,6 +185,75 @@ def continuous_runtime_values(**overrides):
     }
     values.update(overrides)
     return values
+
+
+def tabletop_box_cloud(size_xyz):
+    xs = np.linspace(-size_xyz[0] / 2.0, size_xyz[0] / 2.0, 21)
+    ys = np.linspace(-size_xyz[1] / 2.0, size_xyz[1] / 2.0, 17)
+    zs = np.linspace(0.0, size_xyz[2], 7)
+    points = []
+    for x_value in xs:
+        for z_value in zs:
+            points.extend(
+                (
+                    (x_value, -size_xyz[1] / 2.0, z_value),
+                    (x_value, size_xyz[1] / 2.0, z_value),
+                )
+            )
+    for y_value in ys:
+        for z_value in zs:
+            points.extend(
+                (
+                    (-size_xyz[0] / 2.0, y_value, z_value),
+                    (size_xyz[0] / 2.0, y_value, z_value),
+                )
+            )
+    return np.asarray(points, dtype=float)
+
+
+def tabletop_geometry(size_xyz=(0.051, 0.035, 0.011)):
+    size = np.asarray(size_xyz, dtype=float)
+    return types.SimpleNamespace(
+        ok=True,
+        center_base=np.asarray([0.0, 0.0, size[2] / 2.0]),
+        axes_base=np.eye(3),
+        size_xyz_m=size,
+        support_normal_base=np.asarray([0.0, 0.0, 1.0]),
+        support_offset_m=0.0,
+        object_points_base=tabletop_box_cloud(size),
+    )
+
+
+def tabletop_gripper():
+    return GripperGeometry(
+        max_inner_gap_m=0.050,
+        jaw_clearance_each_side_m=0.002,
+        finger_size_xyz_m=np.asarray([0.0434, 0.0286, 0.0600]),
+        palm_size_xyz_m=np.asarray([0.1175, 0.1550, 0.0774]),
+        support_clearance_m=0.003,
+    )
+
+
+def tabletop_candidates_for(geometry):
+    result = generate_tabletop_proposals(
+        object_points_base=geometry.object_points_base,
+        obb_center_base=geometry.center_base,
+        R_base_obb=geometry.axes_base,
+        obb_size_xyz_m=geometry.size_xyz_m,
+        support_point_base=np.zeros(3),
+        support_normal_base=geometry.support_normal_base,
+        config=TabletopGeometryConfig(max_candidates=8),
+    )
+    return tuple(
+        candidate
+        for proposal in result.proposals
+        for candidate in materialize_tabletop_candidates(
+            proposal,
+            np.zeros(3),
+            geometry.support_normal_base,
+            tabletop_gripper(),
+        )
+    )[:8]
 
 
 @pytest.mark.parametrize(
@@ -1220,6 +1296,7 @@ def test_empty_remote_batch_creates_explicit_no_candidates_rejection():
     )
     node.grasp_config = {'tool_approach_axis': 'z'}
     node.soft_score_weights = SoftScoreWeights()
+    node.hybrid_merge_config = remote_node.MergeConfig()
     prepared = types.SimpleNamespace(
         candidates=(),
         remote_diagnostics={
@@ -1242,6 +1319,261 @@ def test_empty_remote_batch_creates_explicit_no_candidates_rejection():
     assert funnel['primary_failure'] == 'REMOTE_NO_CANDIDATES'
     assert funnel['rejection_counts'] == {'REMOTE_NO_CANDIDATES': 1}
     assert funnel['rejection_ratios'] == {'REMOTE_NO_CANDIDATES': 1.0}
+
+
+def test_local_pipeline_keeps_tabletop_candidate_when_graspnet_hits_table(
+    monkeypatch,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.require_candidate_depth = True
+    node.model_grasp_to_tool_quaternion = (
+        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION
+    )
+    node.grasp_config = {
+        'tool_approach_axis': 'z',
+        'pregrasp_distance_m': 0.08,
+        'final_approach_offset_m': 0.015,
+        'lift_height_m': 0.05,
+    }
+    node.soft_score_weights = SoftScoreWeights()
+    node.hybrid_merge_config = remote_node.MergeConfig()
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.gripper_physical_open_width_m = 0.05
+    node.target_instance_epoch = 4
+    node.target_absolute_sanity_distance_m = 0.15
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    geometry = tabletop_geometry()
+    passing_gate = CandidateGateResult(
+        ok=True,
+        failure_code='',
+        failure_reason='',
+        required_open_width_m=0.039,
+        center_distance_m=0.0,
+        support_clearance_m=0.003,
+        jaw_alignment=1.0,
+        motion_cost=0.0,
+        geometry_cost=0.0,
+        failed_gate='',
+        passed_gate_count=6,
+    )
+    monkeypatch.setattr(
+        remote_node,
+        'evaluate_explicit_candidate',
+        lambda **_kwargs: passing_gate,
+    )
+    monkeypatch.setattr(
+        node,
+        '_normalize_graspnet_candidate',
+        lambda *_args: (_ for _ in ()).throw(
+            remote_node.CandidateContractError(
+                'GRIPPER_SWEEP_COLLISION',
+                'synthetic table collision',
+            )
+        ),
+        raising=False,
+    )
+    ticket = InferenceTicket(
+        request_id=9,
+        generation=1,
+        snapshot_stamp_sec=20.0,
+        target_epoch=4,
+        payload=None,
+        submitted_monotonic_sec=20.0,
+    )
+    prepared = types.SimpleNamespace(
+        ticket=ticket,
+        stamp=remote_node.rospy.Time.from_sec(20.0),
+        snapshot=types.SimpleNamespace(
+            object_msg=types.SimpleNamespace(detected=True, label='carton')
+        ),
+        geometry=geometry,
+        pose_estimator=types.SimpleNamespace(transform_sha256='frozen-cloud'),
+        candidates=('graspnet-table-collision',),
+        tabletop_candidates=tabletop_candidates_for(geometry),
+        remote_diagnostics={
+            'raw_candidates': 1,
+            'after_nms': 1,
+            'after_collision': 1,
+        },
+        remote_failure_code='',
+        remote_failure_reason='',
+        model_choice='carton_segment',
+    )
+
+    observations, funnel = node._evaluate_local_candidates(prepared)
+
+    assert funnel['source_counts']['graspnet']['locally_valid'] == 0
+    assert funnel['source_counts']['tabletop_geometry']['locally_valid'] >= 1
+    assert any(
+        item.candidate_source == 'tabletop_geometry'
+        for item in observations
+    )
+    assert all(item.model_width_m is None for item in observations)
+    assert len(observations) <= 8
+
+
+@pytest.mark.parametrize(
+    ('geometry', 'expected_code'),
+    [
+        (
+            types.SimpleNamespace(
+                **{
+                    **tabletop_geometry().__dict__,
+                    'support_normal_base': np.zeros(3),
+                }
+            ),
+            'SUPPORT_PLANE_INVALID',
+        ),
+        (tabletop_geometry((0.060, 0.055, 0.011)), 'NO_FIT_DIRECTION'),
+    ],
+)
+def test_prepared_geometry_generation_fails_closed_with_stable_code(
+    geometry, expected_code
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=8)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+
+    candidates, diagnostics = node._generate_tabletop_candidates(geometry)
+
+    assert candidates == ()
+    assert diagnostics['failure_code'] == expected_code
+
+
+def test_target_epoch_invalidation_clears_tracks_from_both_sources():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    graspnet = matching_observation(1)
+    geometry = CandidateObservation(
+        **{
+            **matching_observation(1).__dict__,
+            'model_width_m': None,
+            'model_score': None,
+            'payload': {'source': 'geometry'},
+            'candidate_source': 'tabletop_geometry',
+            'source_lineage': ('tabletop_geometry',),
+        }
+    )
+    tracker.update(
+        1,
+        (graspnet, geometry),
+        target_identity=(4, 'carton', 'carton_segment'),
+    )
+
+    stable = tracker.update(
+        2,
+        (),
+        target_identity=(5, 'carton', 'carton_segment'),
+    )
+
+    assert stable == []
+    assert tracker.track_count == 0
+
+
+def test_geometry_preview_survives_remote_failure_without_promotion(monkeypatch):
+    node = streaming_node(clock=MutableClock(20.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(19.8))
+        ticket = node._stream_worker_ticket
+        node.moveit_top_n = 5
+        prepared = remote_node.PreparedPrediction(
+            ticket=ticket,
+            snapshot=types.SimpleNamespace(
+                object_msg=types.SimpleNamespace(detected=True, label='carton')
+            ),
+            stamp=remote_node.rospy.Time.from_sec(19.8),
+            geometry=tabletop_geometry(),
+            pose_estimator=types.SimpleNamespace(transform_sha256='frozen-tf'),
+            graspnet_input=None,
+            candidates=(),
+            remote_diagnostics={},
+            remote_performance={},
+            tabletop_candidates=('geometry-candidate',),
+            remote_failure_code='WSL_UNAVAILABLE',
+            remote_failure_reason='connection refused',
+            model_choice='carton_segment',
+        )
+        node._activate_prepared_geometry = lambda _prepared: True
+        node._run_candidate_gate_audit = lambda *_args, **_kwargs: {
+            'summary': {},
+            'rows': [],
+        }
+        local_funnel = {
+            'input_count': 1,
+            'stage_counts': {
+                'locally_valid': {'entered': 1, 'passed': 1, 'rejected': 0}
+            },
+            'source_counts': {
+                'graspnet': {'input': 0, 'locally_valid': 0},
+                'tabletop_geometry': {'input': 1, 'locally_valid': 1},
+            },
+            'rejection_counts': {'WSL_UNAVAILABLE': 1},
+            'rejection_ratios': {'WSL_UNAVAILABLE': 1.0},
+            'primary_failure': 'WSL_UNAVAILABLE',
+        }
+        node._evaluate_local_candidates = lambda _prepared: (
+            ('geometry-observation',),
+            local_funnel,
+        )
+        node._update_candidate_tracker = lambda **_kwargs: ('stable',)
+        node._recheck_and_score_stable = lambda *_args: ('scored',)
+        selection = types.SimpleNamespace(
+            selected='selected',
+            checked=('selected',),
+            reachable=('selected',),
+            funnel=types.SimpleNamespace(
+                to_dict=lambda: {
+                    'stage_counts': {
+                        'moveit_reachable': {
+                            'entered': 1,
+                            'passed': 1,
+                            'rejected': 0,
+                        }
+                    },
+                    'rejection_counts': {},
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            remote_node,
+            'bounded_moveit_select',
+            lambda *_args, **_kwargs: selection,
+        )
+        node._publish_selected_preview = lambda _selected: {
+            'rich_plan': object(),
+            'signature': 'geometry-preview',
+            'score': 0.0,
+            'ticket': ticket,
+            'expected_generation': 1,
+        }
+        node._finalize_promotion_transaction = lambda *_args, **_kwargs: (
+            pytest.fail('known WSL failure must not enter MuJoCo promotion')
+        )
+        finalized = []
+        node._finalize_streaming_gate_audit = (
+            lambda *_args, **kwargs: finalized.append(
+                kwargs.get('promotion_decision')
+            )
+        )
+
+        result = remote_node.RemoteGrasp6DNode._accept_prediction(
+            node,
+            prepared,
+        )
+
+        assert result['status'] == 'PREVIEW_READY'
+        assert result['funnel']['stage_counts']['preview']['passed'] == 1
+        assert result['funnel']['stage_counts']['promoted']['passed'] == 0
+        assert result['funnel']['primary_failure'] == 'WSL_UNAVAILABLE'
+        assert finalized[0].code == 'WSL_UNAVAILABLE'
+    finally:
+        node.shutdown_streaming_worker()
 
 
 def test_generic_strict_moveit_failure_does_not_invent_hard_states(monkeypatch):
@@ -2419,7 +2751,7 @@ def test_current_recheck_binds_conservative_latest_required_width():
     node.soft_score_weights = SoftScoreWeights()
     node.camera_visibility_gate_enabled = False
     node.camera_visibility_diagnostic_enabled = False
-    node._camera_candidate_cloud_distance = lambda _candidate: 0.007
+    node.gripper_tool_jaw_axis = 'y'
     latest_gate = CandidateGateResult(
         ok=True,
         failure_code='',
@@ -2457,7 +2789,7 @@ def test_current_recheck_binds_conservative_latest_required_width():
         position_dispersion_m=0.0,
         orientation_dispersion_rad=0.0,
     )
-    payload = remote_node.LocalCandidatePayload(
+    source_payload = remote_node.LocalCandidatePayload(
         raw_candidate_index=0,
         variant_index=0,
         raw_candidate=camera_candidate,
@@ -2466,6 +2798,33 @@ def test_current_recheck_binds_conservative_latest_required_width():
         geometry_gate=latest_gate,
         soft_features=features,
         score_components={},
+    )
+    initial_gate = CandidateGateResult(
+        **{
+            **latest_gate.__dict__,
+            'required_open_width_m': 0.04,
+        }
+    )
+    transform = np.eye(4)
+    transform[:3, 3] = (0.1, 0.0, 0.2)
+    normalized = remote_node.NormalizedPlanningCandidate(
+        candidate_source='graspnet',
+        source_index=0,
+        variant_index=0,
+        source_lineage=('graspnet',),
+        contact_center_base=(0.1, 0.0, 0.2),
+        T_base_tool0=transform,
+        insertion_axis_base=(0.0, 0.0, -1.0),
+        jaw_axis_base=(0.0, 1.0, 0.0),
+        required_open_width_m=0.04,
+        model_width_m=0.038,
+        model_score=0.8,
+        source_local_score=-0.8,
+        common_physical_cost=0.0,
+        geometry_gate=initial_gate,
+        grasp_sequence=None,
+        payload=source_payload,
+        audit={},
     )
     stable = StableCandidate(
         track_id=1,
@@ -2488,7 +2847,7 @@ def test_current_recheck_binds_conservative_latest_required_width():
         pre_moveit_score=0.0,
         position_dispersion_m=0.002,
         orientation_dispersion_rad=0.03,
-        payload=payload,
+        payload=normalized,
     )
     ticket = InferenceTicket(
         request_id=4,
@@ -2501,7 +2860,14 @@ def test_current_recheck_binds_conservative_latest_required_width():
     prepared = types.SimpleNamespace(
         ticket=ticket,
         stamp=remote_node.rospy.Time.from_sec(20.0),
-        geometry=types.SimpleNamespace(center_base=(0.1, 0.0, 0.2)),
+        geometry=types.SimpleNamespace(
+            center_base=(0.1, 0.0, 0.2),
+            object_points_base=(
+                tabletop_box_cloud((0.03, 0.02, 0.01))
+                + np.asarray([0.1, 0.0, 0.195])
+            ),
+            support_normal_base=(0.0, 0.0, 1.0),
+        ),
         pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
         snapshot=types.SimpleNamespace(
             object_msg=types.SimpleNamespace(detected=True, label='carton')
@@ -2520,10 +2886,8 @@ def test_current_recheck_binds_conservative_latest_required_width():
         item.latest_safety.required_open_width_m == pytest.approx(0.045)
         for item in scored
     )
-    assert all(
-        item.soft_features.cloud_distance_m == pytest.approx(0.007)
-        for item in scored
-    )
+    assert all(item.soft_features.model_score == 0.0 for item in scored)
+    assert all(item.soft_features.contact_balance > 0.0 for item in scored)
     assert all(
         item.soft_features.position_dispersion_m == pytest.approx(0.002)
         for item in scored
@@ -2532,6 +2896,106 @@ def test_current_recheck_binds_conservative_latest_required_width():
         item.soft_features.orientation_dispersion_rad == pytest.approx(0.03)
         for item in scored
     )
+
+
+def test_tabletop_stable_recheck_uses_fused_pose_without_depth(monkeypatch):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.target_instance_epoch = 4
+    node.grasp_config = {
+        'tool_approach_axis': 'z',
+        'pregrasp_distance_m': 0.08,
+        'final_approach_offset_m': 0.015,
+        'lift_height_m': 0.05,
+    }
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.gripper_physical_open_width_m = 0.05
+    node.target_absolute_sanity_distance_m = 0.15
+    node.soft_score_weights = SoftScoreWeights()
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    geometry = tabletop_geometry()
+    gate = CandidateGateResult(
+        ok=True,
+        failure_code='',
+        failure_reason='',
+        required_open_width_m=0.039,
+        center_distance_m=0.0,
+        support_clearance_m=0.003,
+        jaw_alignment=1.0,
+        motion_cost=0.0,
+        geometry_cost=0.0,
+        failed_gate='',
+        passed_gate_count=6,
+    )
+    monkeypatch.setattr(
+        remote_node,
+        'evaluate_explicit_candidate',
+        lambda **_kwargs: gate,
+    )
+    ticket = InferenceTicket(
+        request_id=4,
+        generation=1,
+        snapshot_stamp_sec=20.0,
+        target_epoch=4,
+        payload=None,
+        submitted_monotonic_sec=20.0,
+    )
+    prepared = types.SimpleNamespace(
+        ticket=ticket,
+        stamp=remote_node.rospy.Time.from_sec(20.0),
+        geometry=geometry,
+        pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
+        snapshot=types.SimpleNamespace(
+            object_msg=types.SimpleNamespace(detected=True, label='carton')
+        ),
+        model_choice='carton_segment',
+    )
+    normalized = node._normalize_tabletop_candidate(
+        prepared,
+        tabletop_candidates_for(geometry)[0],
+    )
+    stable = StableCandidate(
+        track_id=1,
+        hit_count=3,
+        window_count=5,
+        hit_request_ids=(1, 2, 3),
+        request_id=3,
+        snapshot_stamp_sec=19.9,
+        target_epoch=4,
+        target_label='carton',
+        model_choice='carton_segment',
+        center_base_xyz=normalized.contact_center_base,
+        tool0_position_xyz=normalized.T_base_tool0[:3, 3],
+        quaternion_xyzw=remote_node.quaternion_from_matrix(
+            normalized.T_base_tool0
+        ),
+        approach_base_xyz=normalized.insertion_axis_base,
+        required_open_width_m=normalized.required_open_width_m,
+        model_width_m=None,
+        model_score=None,
+        geometry_margin_m=0.003,
+        pre_moveit_score=normalized.common_physical_cost,
+        position_dispersion_m=0.002,
+        orientation_dispersion_rad=0.03,
+        payload=normalized,
+        candidate_source='tabletop_geometry',
+        source_lineage=('tabletop_geometry',),
+    )
+    monkeypatch.setattr(
+        remote_node,
+        'validate_graspnet_depth_m',
+        lambda *_args, **_kwargs: pytest.fail(
+            'tabletop recheck must never request GraspNet depth'
+        ),
+    )
+
+    scored = node._recheck_and_score_stable(prepared, (stable,))
+
+    assert len(scored) == 2
+    assert all(item.latest_safety.depth_valid is True for item in scored)
+    assert all(item.stable_candidate.model_width_m is None for item in scored)
 
 
 def promotion_plan(

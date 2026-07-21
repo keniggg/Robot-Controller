@@ -276,6 +276,43 @@ def make_geometry_estimate(
     )
 
 
+def make_tabletop_geometry_estimate(size_xyz=(0.051, 0.035, 0.011)):
+    size = np.asarray(size_xyz, dtype=float)
+    xs = np.linspace(-size[0] / 2.0, size[0] / 2.0, 21)
+    ys = np.linspace(-size[1] / 2.0, size[1] / 2.0, 17)
+    zs = np.linspace(0.0, size[2], 7)
+    points = []
+    for x_value in xs:
+        for z_value in zs:
+            points.extend(
+                (
+                    (x_value, -size[1] / 2.0, z_value),
+                    (x_value, size[1] / 2.0, z_value),
+                )
+            )
+    for y_value in ys:
+        for z_value in zs:
+            points.extend(
+                (
+                    (-size[0] / 2.0, y_value, z_value),
+                    (size[0] / 2.0, y_value, z_value),
+                )
+            )
+    return remote_node.GeometryEstimate(
+        ok=True,
+        failure_code='',
+        failure_reason='',
+        center_base=np.asarray([0.0, 0.0, size[2] / 2.0]),
+        axes_base=np.eye(3),
+        size_xyz_m=size,
+        support_normal_base=np.asarray([0.0, 0.0, 1.0]),
+        support_offset_m=0.0,
+        support_inlier_ratio=0.82,
+        object_points_base=np.asarray(points, dtype=float),
+        source_mode='instance_mask',
+    )
+
+
 def make_geometry_message(stamp_ns=10_000_000_123):
     snapshot = make_snapshot(
         np.ones((3, 4), dtype=np.uint16) * 2200,
@@ -457,6 +494,126 @@ def frozen_input_config(node, mode=None, **overrides):
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
+    def test_tabletop_runtime_config_is_immutable_and_uses_gripper_aperture(self):
+        gripper = make_processing_node().gripper_geometry
+        values = {
+            'tabletop_geometry_candidates': {
+                'enabled': True,
+                'angle_step_deg': 15.0,
+                'angle_dedup_deg': 2.0,
+                'jaw_clearance_each_side_m': 0.002,
+                'min_contact_band_points': 6,
+                'contact_band_fraction': 0.12,
+                'min_finger_support_clearance_m': 0.003,
+                'max_candidates': 8,
+                'merge_center_distance_m': 0.005,
+                'merge_insertion_angle_deg': 10.0,
+                'merge_jaw_angle_deg': 10.0,
+            }
+        }
+
+        enabled, geometry, merge = remote_node.load_tabletop_geometry_config(
+            values,
+            gripper,
+        )
+
+        self.assertTrue(enabled)
+        self.assertEqual(geometry.max_inner_gap_m, gripper.max_inner_gap_m)
+        self.assertEqual(geometry.max_candidates, 8)
+        self.assertEqual(merge.center_distance_m, 0.005)
+        with self.assertRaises(Exception):
+            geometry.max_candidates = 99
+
+    def test_tabletop_runtime_config_rejects_physical_clearance_mismatch(self):
+        gripper = make_processing_node().gripper_geometry
+        base = {
+            'enabled': True,
+            'angle_step_deg': 15.0,
+            'angle_dedup_deg': 2.0,
+            'jaw_clearance_each_side_m': 0.002,
+            'min_contact_band_points': 6,
+            'contact_band_fraction': 0.12,
+            'min_finger_support_clearance_m': 0.003,
+            'max_candidates': 8,
+            'merge_center_distance_m': 0.005,
+            'merge_insertion_angle_deg': 10.0,
+            'merge_jaw_angle_deg': 10.0,
+        }
+        for name, value in (
+            ('jaw_clearance_each_side_m', 0.003),
+            ('min_finger_support_clearance_m', 0.002),
+        ):
+            with self.subTest(name=name):
+                invalid = dict(base)
+                invalid[name] = value
+                with self.assertRaises(
+                    remote_node.CandidateContractError
+                ) as raised:
+                    remote_node.load_tabletop_geometry_config(
+                        {'tabletop_geometry_candidates': invalid},
+                        gripper,
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    remote_node.CONTINUOUS_CONFIG_INVALID,
+                )
+
+    def test_prepare_keeps_frozen_geometry_when_graspnet_transport_fails(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node = make_processing_node()
+        geometry = make_tabletop_geometry_estimate()
+        node.tabletop_geometry_enabled = True
+        node.tabletop_geometry_config = remote_node.TabletopGeometryConfig(
+            max_candidates=8
+        )
+        node.hybrid_merge_config = remote_node.MergeConfig()
+        node._require_graspnet_input_prerequisites = lambda *_args: None
+        node._prepare_snapshot_geometry = lambda *_args: (
+            geometry,
+            snapshot.depth_raw,
+            np.eye(4),
+        )
+        node._gripper_contract_mismatch_reason = lambda: ''
+        node._build_frozen_graspnet_input = lambda *_args, **_kwargs: (
+            types.SimpleNamespace(
+                color_bgr=snapshot.color_bgr,
+                depth_raw=snapshot.depth_raw,
+            ),
+            {},
+        )
+        node._require_stream_ticket_current = lambda _ticket: None
+
+        def unavailable(*_args, **_kwargs):
+            node._latest_geometry_estimate = make_tabletop_geometry_estimate(
+                (0.060, 0.055, 0.011)
+            )
+            error = RuntimeError('connection failed')
+            error.__cause__ = urllib.error.URLError('refused')
+            raise error
+
+        node._predict_remote = unavailable
+        ticket = types.SimpleNamespace(
+            request_id=7,
+            generation=1,
+            snapshot_stamp_sec=snapshot.stamp_sec,
+            target_epoch=1,
+            payload=(snapshot, frozen_input_config(node)),
+        )
+
+        prepared = node._prepare_and_predict(ticket)
+
+        self.assertIs(prepared.geometry, geometry)
+        self.assertGreaterEqual(len(prepared.tabletop_candidates), 1)
+        self.assertLessEqual(len(prepared.tabletop_candidates), 8)
+        self.assertEqual(prepared.candidates, ())
+        self.assertEqual(prepared.remote_failure_code, 'WSL_UNAVAILABLE')
+        self.assertTrue(
+            all(
+                candidate.required_open_width_m < 0.050
+                for candidate in prepared.tabletop_candidates
+            )
+        )
+
     def test_build_rich_plan_copies_geometry_width_and_exact_snapshot_identity(self):
         stamp_ns = 1_700_000_000_000_000_123
         geometry = make_geometry_message(stamp_ns)

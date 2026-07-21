@@ -5,6 +5,7 @@ import pathlib
 import sys
 import unittest
 
+import numpy as np
 from geometry_msgs.msg import PoseStamped
 from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan
 from tf.transformations import quaternion_from_euler
@@ -84,6 +85,31 @@ class Grasp6DSequenceTest(unittest.TestCase):
         self.assertAlmostEqual(plan.pregrasp.pose.position.x, 0.4)
         self.assertAlmostEqual(plan.pregrasp.pose.position.z, 0.12)
         self.assertAlmostEqual(plan.approach.pose.position.z, 0.185)
+
+    def test_sequence_can_use_explicit_base_frame_approach_direction(self):
+        grasp_pose = self._pose()
+
+        plan = make_grasp_sequence_from_grasp_pose(
+            grasp_pose,
+            pregrasp_distance_m=0.08,
+            approach_offset_m=0.015,
+            lift_height_m=0.05,
+            approach_direction_base=(0.0, 0.0, -2.0),
+        )
+
+        self.assertAlmostEqual(plan.pregrasp.pose.position.x, 0.4)
+        self.assertAlmostEqual(plan.pregrasp.pose.position.z, 0.28)
+        self.assertAlmostEqual(plan.approach.pose.position.z, 0.215)
+
+    def test_sequence_rejects_invalid_explicit_approach_direction(self):
+        grasp_pose = self._pose()
+
+        for direction in ((0.0, 0.0, 0.0), (1.0, 2.0), (np.nan, 0.0, 1.0)):
+            with self.subTest(direction=direction), self.assertRaises(ValueError):
+                make_grasp_sequence_from_grasp_pose(
+                    grasp_pose,
+                    approach_direction_base=direction,
+                )
 
     def test_rich_plan_fixed_order_is_split_into_independent_stamped_poses(self):
         plan = Grasp6DPlan()

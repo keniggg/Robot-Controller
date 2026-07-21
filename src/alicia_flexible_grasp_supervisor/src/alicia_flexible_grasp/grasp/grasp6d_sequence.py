@@ -19,22 +19,61 @@ def make_grasp_sequence_from_grasp_pose(
     approach_offset_m=0.015,
     lift_height_m=0.05,
     tool_approach_axis='x',
+    approach_direction_base=None,
 ):
     """Create a motion sequence from a 6D gripper pose in base frame."""
-    pregrasp = _offset_along_approach_axis(
-        grasp_pose,
-        -abs(float(pregrasp_distance_m)),
-        tool_approach_axis,
-    )
-    approach = _offset_along_approach_axis(
-        grasp_pose,
-        -abs(float(approach_offset_m)),
-        tool_approach_axis,
-    )
+    if approach_direction_base is None:
+        pregrasp = _offset_along_approach_axis(
+            grasp_pose,
+            -abs(float(pregrasp_distance_m)),
+            tool_approach_axis,
+        )
+        approach = _offset_along_approach_axis(
+            grasp_pose,
+            -abs(float(approach_offset_m)),
+            tool_approach_axis,
+        )
+    else:
+        direction = _validated_approach_direction(approach_direction_base)
+        pregrasp = _offset_along_vector(
+            grasp_pose,
+            -abs(float(pregrasp_distance_m)),
+            direction,
+        )
+        approach = _offset_along_vector(
+            grasp_pose,
+            -abs(float(approach_offset_m)),
+            direction,
+        )
     grasp = deepcopy(grasp_pose)
     lift = deepcopy(grasp_pose)
     lift.pose.position.z += float(lift_height_m)
     return Grasp6DPlan(pregrasp=pregrasp, approach=approach, grasp=grasp, lift=lift)
+
+
+def _validated_approach_direction(value):
+    try:
+        direction = np.asarray(value, dtype=float).reshape(3)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            'approach_direction_base must contain three finite components'
+        ) from exc
+    if not np.all(np.isfinite(direction)):
+        raise ValueError(
+            'approach_direction_base must contain three finite components'
+        )
+    norm = float(np.linalg.norm(direction))
+    if not np.isfinite(norm) or norm <= 1e-12:
+        raise ValueError('approach_direction_base must have non-zero norm')
+    return direction / norm
+
+
+def _offset_along_vector(pose_stamped, distance_m, direction):
+    pose = deepcopy(pose_stamped)
+    pose.pose.position.x += direction[0] * float(distance_m)
+    pose.pose.position.y += direction[1] * float(distance_m)
+    pose.pose.position.z += direction[2] * float(distance_m)
+    return pose
 
 
 def _offset_along_approach_axis(pose_stamped, distance_m, tool_approach_axis='x'):
