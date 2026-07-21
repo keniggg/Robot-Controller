@@ -25,12 +25,15 @@ from alicia_flexible_grasp.grasp.hybrid_grasp_candidates import (
 )
 
 
-def successful_gate(support_clearance_m=0.010):
+def successful_gate(
+    support_clearance_m=0.010,
+    required_open_width_m=0.040,
+):
     return CandidateGateResult(
         ok=True,
         failure_code='',
         failure_reason='',
-        required_open_width_m=0.040,
+        required_open_width_m=required_open_width_m,
         center_distance_m=0.002,
         support_clearance_m=support_clearance_m,
         jaw_alignment=1.0,
@@ -69,7 +72,10 @@ def normalized_candidate(
         model_score=None if is_geometry else 0.80,
         source_local_score=0.1,
         common_physical_cost=common_cost,
-        geometry_gate=successful_gate(support_clearance_m),
+        geometry_gate=successful_gate(
+            support_clearance_m,
+            required_width_m,
+        ),
         grasp_sequence={'sequence': source},
         payload={'source': source},
         audit={'source': source},
@@ -291,21 +297,46 @@ def test_same_source_and_different_variant_candidates_are_not_collapsed():
     assert len(different_variants) == 2
 
 
-def test_reversing_tied_input_preserves_physical_result_and_sorted_lineage():
+def test_exact_cross_source_physical_tie_retains_both_without_source_preference():
     graspnet = normalized_candidate('graspnet')
     geometry = normalized_candidate('tabletop_geometry')
 
-    forward = merge_hybrid_candidates((graspnet, geometry), MergeConfig())[0]
-    reverse = merge_hybrid_candidates((geometry, graspnet), MergeConfig())[0]
+    forward = merge_hybrid_candidates((graspnet, geometry), MergeConfig())
+    reverse = merge_hybrid_candidates((geometry, graspnet), MergeConfig())
 
-    assert forward.common_physical_cost == reverse.common_physical_cost
-    assert forward.required_open_width_m == reverse.required_open_width_m
-    assert np.array_equal(forward.contact_center_base, reverse.contact_center_base)
-    assert np.array_equal(forward.T_base_tool0, reverse.T_base_tool0)
-    assert forward.source_lineage == reverse.source_lineage == (
+    assert len(forward) == len(reverse) == 2
+    assert {item.candidate_source for item in forward} == {
         'graspnet',
         'tabletop_geometry',
+    }
+    assert {item.candidate_source for item in reverse} == {
+        'graspnet',
+        'tabletop_geometry',
+    }
+    assert all(
+        item.source_lineage == ('graspnet', 'tabletop_geometry')
+        for item in forward + reverse
     )
+
+
+def test_near_tied_cross_source_duplicate_uses_only_neutral_physical_rank():
+    graspnet = normalized_candidate(
+        'graspnet',
+        common_cost=0.20,
+        required_width_m=0.041,
+    )
+    geometry = normalized_candidate(
+        'tabletop_geometry',
+        common_cost=0.20,
+        required_width_m=0.040,
+    )
+
+    forward = merge_hybrid_candidates((graspnet, geometry), MergeConfig())
+    reverse = merge_hybrid_candidates((geometry, graspnet), MergeConfig())
+
+    assert len(forward) == len(reverse) == 1
+    assert forward[0].candidate_source == 'tabletop_geometry'
+    assert reverse[0].candidate_source == 'tabletop_geometry'
 
 
 def test_normalized_candidate_defensively_copies_and_freezes_arrays_and_audit():

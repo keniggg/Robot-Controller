@@ -270,8 +270,36 @@ def _duplicates(first, second, config):
     )
 
 
+def _canonical_undirected_axis(axis):
+    values = tuple(float(value) for value in np.asarray(axis, dtype=float))
+    for value in values:
+        if abs(value) > 1e-12:
+            return tuple(-item for item in values) if value < 0.0 else values
+    return values
+
+
+def _physical_rank(candidate):
+    """Rank without source identity, confidence, symmetry, or input order."""
+
+    return (
+        float(candidate.common_physical_cost),
+        float(candidate.required_open_width_m),
+        -float(candidate.geometry_gate.support_clearance_m),
+        tuple(float(value) for value in candidate.contact_center_base),
+        tuple(float(value) for value in candidate.T_base_tool0.reshape(-1)),
+        tuple(float(value) for value in candidate.insertion_axis_base),
+        _canonical_undirected_axis(candidate.jaw_axis_base),
+        int(candidate.variant_index),
+    )
+
+
 def merge_hybrid_candidates(candidates, config):
-    """Merge only cross-source duplicates of the same wrist variant."""
+    """Merge cross-source duplicates using source-neutral physical facts.
+
+    Physically identical exact ties retain both source-specific candidates.
+    With no physical fact available to distinguish them, selecting either one
+    would necessarily introduce source name or input order as hidden policy.
+    """
     if not isinstance(config, MergeConfig):
         raise TypeError('config must be a MergeConfig')
     candidates = tuple(candidates)
@@ -280,13 +308,7 @@ def merge_hybrid_candidates(candidates, config):
 
     ordered = sorted(
         candidates,
-        key=lambda item: (
-            item.common_physical_cost,
-            item.required_open_width_m,
-            -item.geometry_gate.support_clearance_m,
-            item.source_index,
-            item.variant_index,
-        ),
+        key=_physical_rank,
     )
     merged = []
     for candidate in ordered:
@@ -306,10 +328,13 @@ def merge_hybrid_candidates(candidates, config):
         lineage = tuple(
             sorted(set(match.source_lineage + candidate.source_lineage))
         )
-        winner = (
-            candidate
-            if candidate.common_physical_cost < match.common_physical_cost
-            else match
-        )
-        merged[merged.index(match)] = replace(winner, source_lineage=lineage)
+        match_index = merged.index(match)
+        match_rank = _physical_rank(match)
+        candidate_rank = _physical_rank(candidate)
+        if candidate_rank == match_rank:
+            merged[match_index] = replace(match, source_lineage=lineage)
+            merged.append(replace(candidate, source_lineage=lineage))
+            continue
+        winner = candidate if candidate_rank < match_rank else match
+        merged[match_index] = replace(winner, source_lineage=lineage)
     return tuple(merged)

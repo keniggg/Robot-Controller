@@ -126,7 +126,7 @@ def _quaternion_multiply_xyzw(first, second):
 class SafetyGateInput:
     """Only mandatory physical and identity facts for one latest pose."""
 
-    depth_valid: bool
+    depth_valid: object
     transform_valid: bool
     target_present: bool
     same_target_instance: bool
@@ -136,6 +136,7 @@ class SafetyGateInput:
     physical_open_width_m: float
     geometry_valid: bool
     collision_free: bool
+    depth_required: bool = True
     request_id: object = None
     snapshot_stamp_sec: object = None
     target_epoch: object = None
@@ -180,10 +181,21 @@ def mandatory_safety_gate(gate):
             'SAFETY_INPUT_INVALID',
             'safety gate input is missing or has the wrong type',
         )
-    if not _strict_true(gate.depth_valid):
+    if type(gate.depth_required) is not bool:
         return _gate_failure(
-            'DEPTH_INVALID',
-            'candidate depth is missing, invalid, or outside its domain',
+            'SAFETY_INPUT_INVALID',
+            'depth applicability must be an explicit boolean',
+        )
+    if gate.depth_required:
+        if not _strict_true(gate.depth_valid):
+            return _gate_failure(
+                'DEPTH_INVALID',
+                'candidate depth is missing, invalid, or outside its domain',
+            )
+    elif gate.depth_valid is not None:
+        return _gate_failure(
+            'DEPTH_EVIDENCE_INVALID',
+            'depth-not-applicable candidates must not claim depth evidence',
         )
     if not _strict_true(gate.transform_valid):
         return _gate_failure(

@@ -9,7 +9,8 @@ import threading
 import time
 import urllib.error
 from collections import Counter, deque
-from copy import deepcopy
+from collections.abc import Mapping
+from copy import copy, deepcopy
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 
@@ -420,6 +421,42 @@ class FrozenGraspNetInputConfig:
         return self.mode == CONTEXT_ROI
 
 
+def _freeze_request_evidence(value):
+    """Defensively copy and recursively freeze one request's evidence."""
+
+    if isinstance(value, Mapping):
+        return MappingProxyType({
+            deepcopy(key): _freeze_request_evidence(item)
+            for key, item in value.items()
+        })
+    if isinstance(value, np.ndarray):
+        frozen = np.array(value, copy=True)
+        frozen.setflags(write=False)
+        return frozen
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_request_evidence(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_request_evidence(item) for item in value)
+    return deepcopy(value)
+
+
+def _thaw_request_evidence(value):
+    """Return ordinary copied containers for reports and ROS serialization."""
+
+    if isinstance(value, Mapping):
+        return {
+            deepcopy(key): _thaw_request_evidence(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, np.ndarray):
+        return np.array(value, copy=True)
+    if isinstance(value, tuple):
+        return [_thaw_request_evidence(item) for item in value]
+    if isinstance(value, frozenset):
+        return [_thaw_request_evidence(item) for item in value]
+    return deepcopy(value)
+
+
 @dataclass(frozen=True)
 class PreparedPrediction:
     ticket: object
@@ -442,6 +479,19 @@ class PreparedPrediction:
     encode_ms: float = 0.0
     transport_ms: float = 0.0
     decode_ms: float = 0.0
+
+    def __post_init__(self):
+        for name in (
+            'remote_diagnostics',
+            'remote_performance',
+            'graspnet_input_audit',
+        ):
+            value = getattr(self, name)
+            if value is None:
+                value = {}
+            if not isinstance(value, Mapping):
+                raise TypeError('{} must be a mapping'.format(name))
+            object.__setattr__(self, name, _freeze_request_evidence(value))
 
 
 @dataclass(frozen=True)
@@ -4515,69 +4565,63 @@ class RemoteGrasp6DNode:
             raise TypeError('config must be ContinuousRuntimeConfig')
         with self._stream_condition:
             with self._geometry_state_guard():
-                tracking_changed = config.tracking_config != self._tracking_config
-                self.rate_hz = config.request_hz
-                self.target_instance_association_threshold_m = (
-                    config.target_instance_association_threshold_m
-                )
-                self.target_absolute_sanity_distance_m = (
-                    config.target_absolute_sanity_distance_m
-                )
-                self.moveit_top_n = config.moveit_top_n
-                coordinator = self.inference_coordinator
-                with coordinator._lock:
-                    coordinator._result_max_age_sec = (
-                        config.result_max_age_sec
-                    )
-
-                controller = self._promotion_controller()
-                controller.replan_cooldown_sec = config.replan_cooldown_sec
-                controller.selection_hysteresis_ratio = (
-                    config.selection_hysteresis_ratio
-                )
-                controller.candidate_consecutive_invalidations = (
-                    config.candidate_consecutive_invalidations
-                )
-                controller.replan_position_delta_m = (
-                    config.replan_position_delta_m
-                )
-                controller.replan_orientation_delta_deg = (
-                    config.replan_orientation_delta_deg
-                )
-                controller.replan_target_drift_m = (
-                    config.replan_target_drift_m
-                )
-
-                window_size = config.performance_window_size
-                current_window_size = getattr(
-                    self.pipeline_metrics, 'maxlen', None
-                )
-                latency_window_size = getattr(
-                    self._latency_history_ms, 'maxlen', None
-                )
-                if (
-                    current_window_size != window_size
-                    or latency_window_size != window_size
-                ):
-                    self._latency_history_ms = deque(
-                        self._latency_history_ms, maxlen=window_size
-                    )
-                    self.pipeline_metrics = deque(
-                        self.pipeline_metrics, maxlen=window_size
-                    )
-                self._terminal_request_limit = max(8, window_size * 2)
-                while (
-                    len(self._terminal_request_order)
-                    > self._terminal_request_limit
-                ):
-                    expired = self._terminal_request_order.popleft()
-                    self._terminal_request_ids.discard(expired)
-
-                if tracking_changed:
-                    self._tracking_config = config.tracking_config
-                    self.tracker = CandidateTracker(self._tracking_config)
-                    self._stable_variant_runtime = {}
+                self._apply_continuous_runtime_config_locked(config)
                 self._stream_condition.notify_all()
+
+    def _apply_continuous_runtime_config_locked(self, config):
+        """Apply continuous fields while stream and geometry locks are held."""
+
+        tracking_changed = config.tracking_config != self._tracking_config
+        self.rate_hz = config.request_hz
+        self.target_instance_association_threshold_m = (
+            config.target_instance_association_threshold_m
+        )
+        self.target_absolute_sanity_distance_m = (
+            config.target_absolute_sanity_distance_m
+        )
+        self.moveit_top_n = config.moveit_top_n
+        coordinator = self.inference_coordinator
+        with coordinator._lock:
+            coordinator._result_max_age_sec = config.result_max_age_sec
+
+        controller = self._promotion_controller()
+        controller.replan_cooldown_sec = config.replan_cooldown_sec
+        controller.selection_hysteresis_ratio = (
+            config.selection_hysteresis_ratio
+        )
+        controller.candidate_consecutive_invalidations = (
+            config.candidate_consecutive_invalidations
+        )
+        controller.replan_position_delta_m = config.replan_position_delta_m
+        controller.replan_orientation_delta_deg = (
+            config.replan_orientation_delta_deg
+        )
+        controller.replan_target_drift_m = config.replan_target_drift_m
+
+        window_size = config.performance_window_size
+        current_window_size = getattr(self.pipeline_metrics, 'maxlen', None)
+        latency_window_size = getattr(
+            self._latency_history_ms, 'maxlen', None
+        )
+        if (
+            current_window_size != window_size
+            or latency_window_size != window_size
+        ):
+            self._latency_history_ms = deque(
+                self._latency_history_ms, maxlen=window_size
+            )
+            self.pipeline_metrics = deque(
+                self.pipeline_metrics, maxlen=window_size
+            )
+        self._terminal_request_limit = max(8, window_size * 2)
+        while len(self._terminal_request_order) > self._terminal_request_limit:
+            expired = self._terminal_request_order.popleft()
+            self._terminal_request_ids.discard(expired)
+
+        if tracking_changed:
+            self._tracking_config = config.tracking_config
+            self.tracker = CandidateTracker(self._tracking_config)
+            self._stable_variant_runtime = {}
 
     def _refresh_continuous_runtime_config(self, remote_cfg):
         config = load_continuous_runtime_config(
@@ -5131,10 +5175,12 @@ class RemoteGrasp6DNode:
         geometry_valid,
         collision_free,
         snapshot_context_revision,
+        depth_required=True,
     ):
         target_epoch, target_label, model_choice = tuple(target_identity)
         return SafetyGateInput(
             depth_valid=depth_valid,
+            depth_required=depth_required,
             transform_valid=transform_valid,
             target_present=target_present,
             same_target_instance=same_target_instance,
@@ -5222,7 +5268,7 @@ class RemoteGrasp6DNode:
             if not activated:
                 return False
             self._current_prepared_prediction = prepared
-            self._active_graspnet_input_audit = dict(
+            self._active_graspnet_input_audit = _thaw_request_evidence(
                 getattr(prepared, 'graspnet_input_audit', {}) or {}
             )
             if bool(
@@ -5334,6 +5380,7 @@ class RemoteGrasp6DNode:
             camera_candidate,
             grasp_pose,
             sequence,
+            prepared.geometry,
         )
         if not isinstance(gate, CandidateGateResult) or not gate.ok:
             raise CandidateContractError(
@@ -5570,8 +5617,9 @@ class RemoteGrasp6DNode:
             str(prepared.model_choice),
         )
         quaternion = quaternion_from_matrix(candidate.T_base_tool0)
-        depth_valid = True
-        if candidate.candidate_source == 'graspnet':
+        depth_required = candidate.candidate_source == 'graspnet'
+        depth_valid = None
+        if depth_required:
             depth_valid = (
                 validate_graspnet_depth_m(
                     getattr(candidate.payload.camera_candidate, 'depth_m', None),
@@ -5607,6 +5655,7 @@ class RemoteGrasp6DNode:
             required_open_width_m=candidate.required_open_width_m,
             physical_open_width_m=self.gripper_physical_open_width_m,
             depth_valid=depth_valid,
+            depth_required=depth_required,
             transform_valid=True,
             geometry_valid=isinstance(
                 candidate.geometry_gate,
@@ -5626,7 +5675,9 @@ class RemoteGrasp6DNode:
         tabletop_candidates = tuple(
             getattr(prepared, 'tabletop_candidates', ()) or ()
         )
-        diagnostics = dict(prepared.remote_diagnostics or {})
+        diagnostics = _thaw_request_evidence(
+            prepared.remote_diagnostics or {}
+        )
         rejections = Counter()
         source_rejections = {
             'graspnet': Counter(),
@@ -6825,6 +6876,7 @@ class RemoteGrasp6DNode:
                             camera_candidate,
                             grasp_pose,
                             sequence,
+                            prepared.geometry,
                         )
                         depth_valid = (
                             validate_graspnet_depth_m(
@@ -6833,6 +6885,7 @@ class RemoteGrasp6DNode:
                             )
                             is not None
                         )
+                        depth_required = True
                     elif normalized.candidate_source == 'tabletop_geometry':
                         sequence = make_grasp_sequence_from_grasp_pose(
                             grasp_pose,
@@ -6886,7 +6939,8 @@ class RemoteGrasp6DNode:
                             motion_cost=0.0,
                         )
                         self._record_geometry_gate_result(gate)
-                        depth_valid = True
+                        depth_valid = None
+                        depth_required = False
                     else:
                         continue
                     latest_required_width = _finite_pipeline_number(
@@ -6945,6 +6999,7 @@ class RemoteGrasp6DNode:
                         ),
                         physical_open_width_m=self.gripper_physical_open_width_m,
                         depth_valid=depth_valid,
+                        depth_required=depth_required,
                         transform_valid=True,
                         geometry_valid=isinstance(gate, CandidateGateResult),
                         collision_free=bool(gate.ok),
@@ -7812,11 +7867,7 @@ class RemoteGrasp6DNode:
         remote_failure_code = str(
             getattr(prepared, 'remote_failure_code', '') or ''
         )
-        if (
-            isinstance(promotion_proposal, dict)
-            and isinstance(prepared, PreparedPrediction)
-            and remote_failure_code == 'WSL_UNAVAILABLE'
-        ):
+        if isinstance(prepared, PreparedPrediction) and remote_failure_code:
             promotion_decision = PromotionDecision(
                 False,
                 remote_failure_code,
@@ -7831,6 +7882,14 @@ class RemoteGrasp6DNode:
                 stable_count=len(stable),
                 preview_count=preview_count,
                 promotion_count=0,
+            )
+            self._publish_invalid_plan_pair(
+                remote_failure_code,
+                str(
+                    getattr(prepared, 'remote_failure_reason', '')
+                    or 'remote GraspNet inference failed'
+                ),
+                stamp=prepared.stamp,
             )
             self._finalize_streaming_gate_audit(
                 prepared,
@@ -8025,7 +8084,9 @@ class RemoteGrasp6DNode:
                     )
                 )
             trusted_performance = (
-                dict(getattr(prepared, 'remote_performance', {}) or {})
+                _thaw_request_evidence(
+                    getattr(prepared, 'remote_performance', {}) or {}
+                )
                 if final_accepted and prepared is not None
                 else {}
             )
@@ -9319,6 +9380,35 @@ class RemoteGrasp6DNode:
         return float(default)
 
     def _refresh_runtime_params(self):
+        """Stage, validate, and atomically publish the full runtime contract."""
+
+        staged = copy(self)
+        continuous_config = self._stage_runtime_params(staged)
+        missing = object()
+        staged_updates = {
+            name: value
+            for name, value in staged.__dict__.items()
+            if self.__dict__.get(name, missing) is not value
+        }
+        condition = getattr(self, '_stream_condition', None)
+        if condition is None:
+            raise RuntimeError(
+                'runtime refresh requires initialized streaming state'
+            )
+        with condition:
+            with self._geometry_state_guard():
+                for name, value in staged_updates.items():
+                    setattr(self, name, value)
+                self._apply_continuous_runtime_config_locked(
+                    continuous_config
+                )
+                condition.notify_all()
+
+    @staticmethod
+    def _stage_runtime_params(staged):
+        """Validate runtime values on a shallow request-local node copy."""
+
+        self = staged
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
         continuous_config = load_continuous_runtime_config(
@@ -10029,7 +10119,7 @@ class RemoteGrasp6DNode:
                 )
             ),
         )
-        self._apply_continuous_runtime_config(continuous_config)
+        return continuous_config
 
     @staticmethod
     def _parse_orientation_variant_quaternions(value):
@@ -10361,8 +10451,13 @@ class RemoteGrasp6DNode:
         camera_candidate,
         grasp_pose,
         plan,
+        geometry=None,
     ):
-        estimate = getattr(self, '_latest_geometry_estimate', None)
+        estimate = (
+            geometry
+            if geometry is not None
+            else getattr(self, '_latest_geometry_estimate', None)
+        )
         if estimate is None or not bool(getattr(estimate, 'ok', False)):
             result = CandidateGateResult(
                 ok=False,
@@ -10555,7 +10650,7 @@ class RemoteGrasp6DNode:
         summary['baseline_approach_cos'] = float(
             getattr(self, 'candidate_min_downward_approach_cos', 0.45)
         )
-        input_audit = dict(
+        input_audit = _thaw_request_evidence(
             getattr(self, '_active_graspnet_input_audit', {}) or {}
             if graspnet_input_audit is None
             else graspnet_input_audit
@@ -10601,7 +10696,9 @@ class RemoteGrasp6DNode:
             'target_cloud_center_base': self._json_vector(
                 getattr(self, 'latest_target_cloud_base_xyz', None)
             ),
-            'remote_diagnostics': dict(remote_diagnostics or {}),
+            'remote_diagnostics': _thaw_request_evidence(
+                remote_diagnostics or {}
+            ),
             'graspnet_input': input_audit,
             'summary': summary,
             'rows': rows,

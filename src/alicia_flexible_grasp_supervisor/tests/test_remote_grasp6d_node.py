@@ -2503,6 +2503,92 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIs(node.execution_plan_controller, controller)
         self.assertEqual(controller.replan_cooldown_sec, 1.0)
 
+    def test_full_runtime_refresh_is_request_atomic_on_late_validation_failure(self):
+        node = make_processing_node()
+        node._initialize_streaming_state(
+            result_max_age_sec=1.2,
+            performance_window_size=100,
+            tracking_config=remote_node.TrackingConfig(),
+            start_worker=False,
+        )
+        node.execution_plan_controller = remote_node.ExecutionPlanController()
+        node.rate_hz = 1.5
+        node.target_instance_association_threshold_m = 0.08
+        node.target_absolute_sanity_distance_m = 0.15
+        node.moveit_top_n = 5
+        node.candidate_frame_convention = 'opencv_optical'
+        node.tabletop_geometry_enabled = True
+        node.tabletop_geometry_config = remote_node.TabletopGeometryConfig()
+        node.hybrid_merge_config = remote_node.MergeConfig()
+        node._refresh_runtime_params = types.MethodType(
+            remote_node.RemoteGrasp6DNode._refresh_runtime_params,
+            node,
+        )
+        original_grasp_config = dict(node.grasp_config)
+        original_gripper_geometry = node.gripper_geometry
+        refresh_blocked = threading.Event()
+        release_refresh = threading.Event()
+        errors = []
+        remote_cfg = {
+            'gripper_geometry': {'max_inner_gap_m': 0.049},
+            'tabletop_geometry_candidates': {
+                'enabled': True,
+                'angle_step_deg': 30.0,
+            },
+            'camera_visibility_margin_px': 'not-an-integer',
+        }
+        refreshed_grasp = {
+            **original_grasp_config,
+            'pregrasp_distance_m': 0.12,
+        }
+        original_get_param = remote_node.rospy.get_param
+
+        def staged_get_param(name, default=None):
+            if name == '/grasp_6d/remote':
+                return remote_cfg
+            if name == '/grasp':
+                return refreshed_grasp
+            if name == '/grasp_6d/remote/max_candidates':
+                refresh_blocked.set()
+                if not release_refresh.wait(2.0):
+                    raise RuntimeError('test did not release runtime refresh')
+            return default
+
+        remote_node.rospy.get_param = staged_get_param
+        refresh_thread = threading.Thread(
+            target=lambda: self._capture_runtime_refresh_error(
+                node,
+                errors,
+            )
+        )
+        try:
+            refresh_thread.start()
+            self.assertTrue(refresh_blocked.wait(2.0))
+            with node._stream_condition:
+                self.assertEqual(node.grasp_config, original_grasp_config)
+                self.assertIs(node.gripper_geometry, original_gripper_geometry)
+            release_refresh.set()
+            refresh_thread.join(2.0)
+            self.assertFalse(refresh_thread.is_alive())
+        finally:
+            release_refresh.set()
+            refresh_thread.join(2.0)
+            remote_node.rospy.get_param = original_get_param
+            node.shutdown_streaming_worker()
+
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], ValueError)
+        self.assertEqual(node.grasp_config, original_grasp_config)
+        self.assertIs(node.gripper_geometry, original_gripper_geometry)
+        self.assertEqual(node.rate_hz, 1.5)
+
+    @staticmethod
+    def _capture_runtime_refresh_error(node, errors):
+        try:
+            node._refresh_runtime_params()
+        except Exception as exc:
+            errors.append(exc)
+
     def test_runtime_audit_path_refresh_rejects_conflict_without_partial_update(self):
         node = make_processing_node()
         node._refresh_runtime_params = types.MethodType(

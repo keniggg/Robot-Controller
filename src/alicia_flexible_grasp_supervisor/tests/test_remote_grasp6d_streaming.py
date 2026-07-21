@@ -1321,6 +1321,94 @@ def test_empty_remote_batch_creates_explicit_no_candidates_rejection():
     assert funnel['rejection_ratios'] == {'REMOTE_NO_CANDIDATES': 1.0}
 
 
+def test_real_graspnet_normalization_and_analytical_gate_use_prepared_geometry():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.require_candidate_depth = True
+    node.model_grasp_to_tool_quaternion = np.asarray(
+        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+        dtype=float,
+    )
+    node.candidate_frame_convention = 'ros_camera_link'
+    node.grasp_config = {
+        'tool_approach_axis': 'z',
+        'pregrasp_distance_m': 0.08,
+        'final_approach_offset_m': 0.020,
+        'lift_height_m': 0.05,
+    }
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.gripper_physical_open_width_m = 0.05
+    node.target_instance_epoch = 4
+    node.target_absolute_sanity_distance_m = 0.15
+    node.soft_score_weights = SoftScoreWeights()
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    node._record_geometry_gate_result = lambda _gate: None
+    size = np.asarray([0.040, 0.040, 0.060])
+    prepared_geometry = types.SimpleNamespace(
+        ok=True,
+        center_base=np.asarray([0.0, 0.0, 0.080]),
+        axes_base=np.eye(3),
+        size_xyz_m=size,
+        support_normal_base=np.asarray([0.0, 0.0, 1.0]),
+        support_offset_m=0.0,
+        object_points_base=(
+            tabletop_box_cloud(size) + np.asarray([0.0, 0.0, 0.050])
+        ),
+    )
+    live_geometry = types.SimpleNamespace(
+        ok=False,
+        center_base=np.asarray([9.0, 9.0, 9.0]),
+    )
+    node._latest_geometry_estimate = live_geometry
+    stamp = remote_node.rospy.Time.from_sec(20.0)
+    base_from_optical = np.eye(4)
+    base_from_optical[:3, :3] = remote_node.OPTICAL_TO_ROS_CAMERA
+    estimator = remote_node.FrozenSnapshotCandidatePoseEstimator(
+        base_from_optical,
+        stamp,
+        'camera_link',
+        raw_candidate_convention='ros_camera_link',
+    )
+    prepared = types.SimpleNamespace(
+        ticket=InferenceTicket(
+            request_id=4,
+            generation=1,
+            snapshot_stamp_sec=20.0,
+            target_epoch=4,
+            payload=None,
+            submitted_monotonic_sec=20.0,
+        ),
+        stamp=stamp,
+        geometry=prepared_geometry,
+        pose_estimator=estimator,
+        snapshot=types.SimpleNamespace(
+            object_msg=types.SimpleNamespace(detected=True, label='carton')
+        ),
+        model_choice='carton_segment',
+    )
+    raw_candidate = RemoteGraspCandidate(
+        score=0.9,
+        translation_m=(0.0, 0.0, 0.080),
+        quaternion_xyzw=(0.0, 0.0, 0.0, 1.0),
+        width_m=0.012,
+        depth_m=0.030,
+    )
+
+    normalized = node._normalize_graspnet_candidate(
+        prepared,
+        raw_candidate,
+        0,
+    )
+    safety = node._normalized_candidate_safety(prepared, normalized)
+
+    assert normalized.geometry_gate.ok is True
+    assert normalized.geometry_gate.required_open_width_m > 0.0
+    assert safety.ok is True
+    assert node._latest_geometry_estimate is live_geometry
+
+
 def test_local_pipeline_keeps_tabletop_candidate_when_graspnet_hits_table(
     monkeypatch,
 ):
@@ -1475,13 +1563,42 @@ def test_target_epoch_invalidation_clears_tracks_from_both_sources():
     assert tracker.track_count == 0
 
 
-def test_geometry_preview_survives_remote_failure_without_promotion(monkeypatch):
+@pytest.mark.parametrize(
+    'failure_code',
+    [
+        'WSL_UNAVAILABLE',
+        'WSL_PREDICT_FAILED',
+        'GRASPNET_PROTOCOL_INVALID',
+    ],
+)
+def test_remote_failure_preview_revokes_old_execution_without_actuation(
+    monkeypatch,
+    failure_code,
+):
     node = streaming_node(clock=MutableClock(20.0), start_worker=False)
     try:
         node.start_streaming()
         node.submit_stream_snapshot(snapshot(19.8))
         ticket = node._stream_worker_ticket
         node.moveit_top_n = 5
+        node._geometry_state_lock = threading.RLock()
+        node.execution_plan_controller = ExecutionPlanController()
+        node.execution_plan_controller.commit_execution(
+            'old-plan',
+            'old-signature',
+            score=0.1,
+            now_sec=10.0,
+        )
+        node.latest_rich_plan = types.SimpleNamespace(
+            valid=True,
+            plan_id='old-plan',
+        )
+        node.latest_plan = types.SimpleNamespace(poses=('old-pose',))
+        node.rich_plan_pub = RecordingPublisher()
+        node.plan_pub = RecordingPublisher()
+        node._latest_geometry_estimate = tabletop_geometry()
+        node._active_execution_audit_report = None
+        node._latest_execution_audit_reference = {}
         prepared = remote_node.PreparedPrediction(
             ticket=ticket,
             snapshot=types.SimpleNamespace(
@@ -1495,7 +1612,7 @@ def test_geometry_preview_survives_remote_failure_without_promotion(monkeypatch)
             remote_diagnostics={},
             remote_performance={},
             tabletop_candidates=('geometry-candidate',),
-            remote_failure_code='WSL_UNAVAILABLE',
+            remote_failure_code=failure_code,
             remote_failure_reason='connection refused',
             model_choice='carton_segment',
         )
@@ -1513,9 +1630,9 @@ def test_geometry_preview_survives_remote_failure_without_promotion(monkeypatch)
                 'graspnet': {'input': 0, 'locally_valid': 0},
                 'tabletop_geometry': {'input': 1, 'locally_valid': 1},
             },
-            'rejection_counts': {'WSL_UNAVAILABLE': 1},
-            'rejection_ratios': {'WSL_UNAVAILABLE': 1.0},
-            'primary_failure': 'WSL_UNAVAILABLE',
+            'rejection_counts': {failure_code: 1},
+            'rejection_ratios': {failure_code: 1.0},
+            'primary_failure': failure_code,
         }
         node._evaluate_local_candidates = lambda _prepared: (
             ('geometry-observation',),
@@ -1553,7 +1670,24 @@ def test_geometry_preview_survives_remote_failure_without_promotion(monkeypatch)
             'expected_generation': 1,
         }
         node._finalize_promotion_transaction = lambda *_args, **_kwargs: (
-            pytest.fail('known WSL failure must not enter MuJoCo promotion')
+            pytest.fail('remote failure must not enter MuJoCo promotion')
+        )
+        node.stop_streaming = lambda *_args, **_kwargs: pytest.fail(
+            'remote failure invalidation must not stop or actuate the robot'
+        )
+        monkeypatch.setattr(
+            remote_node.rospy,
+            'wait_for_service',
+            lambda *_args, **_kwargs: pytest.fail(
+                'remote failure invalidation must not call a ROS service'
+            ),
+        )
+        monkeypatch.setattr(
+            remote_node.rospy,
+            'ServiceProxy',
+            lambda *_args, **_kwargs: pytest.fail(
+                'remote failure invalidation must not create a ROS service'
+            ),
         )
         finalized = []
         node._finalize_streaming_gate_audit = (
@@ -1570,10 +1704,53 @@ def test_geometry_preview_survives_remote_failure_without_promotion(monkeypatch)
         assert result['status'] == 'PREVIEW_READY'
         assert result['funnel']['stage_counts']['preview']['passed'] == 1
         assert result['funnel']['stage_counts']['promoted']['passed'] == 0
-        assert result['funnel']['primary_failure'] == 'WSL_UNAVAILABLE'
-        assert finalized[0].code == 'WSL_UNAVAILABLE'
+        assert result['funnel']['primary_failure'] == failure_code
+        assert finalized[0].code == failure_code
+        assert node.execution_plan_controller.execution_plan_id is None
+        assert node.latest_rich_plan is None
+        assert node.latest_plan is None
+        assert node.rich_plan_pub.messages[-1].valid is False
+        assert node.plan_pub.messages[-1].poses == []
     finally:
         node.shutdown_streaming_worker()
+
+
+def test_prepared_prediction_deep_freezes_request_evidence():
+    diagnostics = {
+        'transport': {'attempts': [1, 2]},
+        'samples': np.asarray([1.0, 2.0]),
+    }
+    performance = {'latency': {'components_ms': [3.0, 4.0]}}
+    input_audit = {'mask': {'shape': [480, 640]}}
+
+    prepared = remote_node.PreparedPrediction(
+        ticket=object(),
+        snapshot=object(),
+        stamp=object(),
+        geometry=object(),
+        pose_estimator=object(),
+        graspnet_input=object(),
+        candidates=(),
+        remote_diagnostics=diagnostics,
+        remote_performance=performance,
+        graspnet_input_audit=input_audit,
+    )
+    diagnostics['transport']['attempts'].append(3)
+    diagnostics['samples'][0] = 99.0
+    performance['latency']['components_ms'][0] = 99.0
+    input_audit['mask']['shape'][0] = 1
+
+    assert prepared.remote_diagnostics['transport']['attempts'] == (1, 2)
+    assert prepared.remote_diagnostics['samples'].tolist() == [1.0, 2.0]
+    assert prepared.remote_performance['latency']['components_ms'] == (
+        3.0,
+        4.0,
+    )
+    assert prepared.graspnet_input_audit['mask']['shape'] == (480, 640)
+    with pytest.raises(TypeError):
+        prepared.remote_diagnostics['transport']['attempts'] = ()
+    with pytest.raises(ValueError):
+        prepared.remote_diagnostics['samples'][0] = 0.0
 
 
 def test_generic_strict_moveit_failure_does_not_invent_hard_states(monkeypatch):
@@ -2765,7 +2942,19 @@ def test_current_recheck_binds_conservative_latest_required_width():
         failed_gate='',
         passed_gate_count=6,
     )
-    node._evaluate_candidate_geometry = lambda *_args: latest_gate
+    evaluated_geometries = []
+
+    def record_request_geometry(
+        _raw_candidate,
+        _camera_candidate,
+        _grasp_pose,
+        _sequence,
+        geometry,
+    ):
+        evaluated_geometries.append(geometry)
+        return latest_gate
+
+    node._evaluate_candidate_geometry = record_request_geometry
     camera_candidate = RemoteGraspCandidate(
         score=0.8,
         translation_m=(0.1, 0.0, 0.2),
@@ -2878,6 +3067,7 @@ def test_current_recheck_binds_conservative_latest_required_width():
     scored = node._recheck_and_score_stable(prepared, (stable,))
 
     assert len(scored) == 2
+    assert evaluated_geometries == [prepared.geometry, prepared.geometry]
     assert all(
         item.stable_candidate.required_open_width_m == pytest.approx(0.045)
         for item in scored
@@ -2886,6 +3076,8 @@ def test_current_recheck_binds_conservative_latest_required_width():
         item.latest_safety.required_open_width_m == pytest.approx(0.045)
         for item in scored
     )
+    assert all(item.latest_safety.depth_required is True for item in scored)
+    assert all(item.latest_safety.depth_valid is True for item in scored)
     assert all(item.soft_features.model_score == 0.0 for item in scored)
     assert all(item.soft_features.contact_balance > 0.0 for item in scored)
     assert all(
@@ -2994,7 +3186,8 @@ def test_tabletop_stable_recheck_uses_fused_pose_without_depth(monkeypatch):
     scored = node._recheck_and_score_stable(prepared, (stable,))
 
     assert len(scored) == 2
-    assert all(item.latest_safety.depth_valid is True for item in scored)
+    assert all(item.latest_safety.depth_required is False for item in scored)
+    assert all(item.latest_safety.depth_valid is None for item in scored)
     assert all(item.stable_candidate.model_width_m is None for item in scored)
 
 

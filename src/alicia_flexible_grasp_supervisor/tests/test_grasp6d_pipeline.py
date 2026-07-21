@@ -397,6 +397,40 @@ def test_preference_thresholds_do_not_become_hard_gates():
     assert result.code == 'OK'
 
 
+def test_depth_not_applicable_passes_only_without_claimed_depth_evidence():
+    result = mandatory_safety_gate(
+        valid_safety_input(depth_required=False, depth_valid=None)
+    )
+
+    assert result.ok is True
+    assert result.code == 'OK'
+
+
+@pytest.mark.parametrize('claimed_depth_evidence', [False, True, 0, 1])
+def test_depth_not_applicable_rejects_claimed_depth_evidence(
+    claimed_depth_evidence,
+):
+    result = mandatory_safety_gate(
+        valid_safety_input(
+            depth_required=False,
+            depth_valid=claimed_depth_evidence,
+        )
+    )
+
+    assert result.ok is False
+    assert result.code == 'DEPTH_EVIDENCE_INVALID'
+
+
+@pytest.mark.parametrize('depth_required', [None, 0, 1, 'false'])
+def test_depth_applicability_requires_a_strict_boolean(depth_required):
+    result = mandatory_safety_gate(
+        valid_safety_input(depth_required=depth_required)
+    )
+
+    assert result.ok is False
+    assert result.code == 'SAFETY_INPUT_INVALID'
+
+
 @pytest.mark.parametrize(
     ('overrides', 'code'),
     [
