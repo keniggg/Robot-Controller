@@ -2795,6 +2795,41 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIsNone(node.latest_grasp6d_plan)
 
+    def test_invalid_plan_rejection_warning_is_throttled(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.latest_grasp6d_plan = None
+        node.active = False
+        invalid = self._rich_plan(plan_id='target-lost', stamp_sec=9.6)
+        invalid.valid = False
+        invalid.diagnostic = 'TARGET_LOST: target object is not detected'
+        original_get_param = grasp_task_node.rospy.get_param
+        original_now = grasp_task_node.rospy.Time.now
+        original_logwarn = grasp_task_node.rospy.logwarn
+        original_logwarn_throttle = grasp_task_node.rospy.logwarn_throttle
+        plain_warnings = []
+        throttled_warnings = []
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp_6d/plan_validity_sec': 2.0,
+        }.get(name, default)
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        grasp_task_node.rospy.logwarn = lambda *args: plain_warnings.append(args)
+        grasp_task_node.rospy.logwarn_throttle = (
+            lambda *args: throttled_warnings.append(args)
+        )
+        try:
+            node.grasp6d_plan_cb(invalid)
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.logwarn = original_logwarn
+            grasp_task_node.rospy.logwarn_throttle = original_logwarn_throttle
+
+        self.assertEqual(plain_warnings, [])
+        self.assertEqual(len(throttled_warnings), 1)
+        self.assertEqual(throttled_warnings[0][0], 1.0)
+
     def test_negative_object_invalidation_removes_cached_targets_and_plan_without_motion(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True

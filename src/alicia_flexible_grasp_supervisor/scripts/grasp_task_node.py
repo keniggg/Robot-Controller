@@ -690,7 +690,8 @@ class GraspTaskNode:
                 if self._grasp6d_watermark_stamp_ns > 0:
                     self._grasp6d_watermark_tombstoned = True
                 self.latest_grasp6d_plan = None
-                rospy.logwarn(
+                rospy.logwarn_throttle(
+                    1.0,
                     'Rejected rich 6D plan %s: %s',
                     result.code,
                     result.reason,

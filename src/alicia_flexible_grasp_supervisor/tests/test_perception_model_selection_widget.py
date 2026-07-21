@@ -232,6 +232,33 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         self.assertEqual(widget.mask_status_chip.text(), 'mask ready')
         self.assertTrue(np.array_equal(mask, original))
 
+    def test_unlocalized_segment_evidence_draws_mask_bbox_and_confidence(self):
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        mask[20:51, 30:61] = 255
+        widget = make_mask_widget(mask)
+        widget._current_object_detected = False
+        widget._current_visual_detected = True
+        widget.last_object = SimpleNamespace(
+            detected=False,
+            header=SimpleNamespace(stamp=FakeStamp(123)),
+            label='carton',
+            confidence=0.934,
+            depth_m=0.235,
+            u=45,
+            v=35,
+            bbox_x=5,
+            bbox_y=5,
+            bbox_width=70,
+            bbox_height=50,
+        )
+
+        PerceptionWidget.update_mask(widget, make_mask_message(mask))
+
+        self.assertEqual(widget.camera_preview.overlay['bbox'], (5, 5, 70, 50))
+        self.assertEqual(widget.camera_preview.overlay['label'], 'carton 0.934')
+        self.assertIsNotNone(widget.camera_preview.overlay['contour_xy'])
+        self.assertEqual(widget.mask_status_chip.text(), 'mask ready')
+
     def test_locked_no_detection_preserves_bbox_but_invalidates_ready_contour(self):
         mask = np.zeros((60, 80), dtype=np.uint8)
         mask[20:51, 30:61] = 255
@@ -384,7 +411,7 @@ class PerceptionModelSelectionWidgetTest(unittest.TestCase):
         camera._last_color_rgb = None
         camera._detection_overlay = None
         camera._refresh_color_pixmap = lambda: None
-        camera._render_pixmaps = lambda: None
+        camera._render_pixmaps = lambda *_args: None
         camera.color_frame_updated = FakeCallbackSignal()
         camera.color_frame_updated.connect(
             lambda rgb: PerceptionWidget._on_camera_color_frame(widget, rgb)

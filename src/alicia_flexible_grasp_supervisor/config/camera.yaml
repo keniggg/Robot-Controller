@@ -5,6 +5,8 @@ camera:
   width: 640
   height: 480
   fps: 30
+  # D405 以 30 FPS 取帧；ROS 限制发布速率，避免多订阅者重复拷贝拖慢 GUI。
+  publish_fps: 20
   fallback_to_simulation: false
   read_failure_limit: 3
   color_topic: "/supervisor/camera/color/image_raw"
@@ -31,7 +33,7 @@ perception:
   enabled: true
   # yolov8 / simple_hsv。默认使用 YOLOv8，HSV 仅作为无模型时的备用调试模式。
   detector: "yolov8"
-  yolo_model_choice: "original"
+  yolo_model_choice: "carton_segment"
   yolo_models:
     original:
       display_name: "YOLOv8 原模型"
@@ -51,14 +53,14 @@ perception:
       target_class_mode: "fixed"
       target_class: "carton"
       require_instance_mask: true
-  target_description: "鼠标"
+  target_description: "carton"
   yolo_model: "yolov8n.pt"
   yolo_target_class: "mouse"
-  yolo_conf: 0.35
+  yolo_conf: 0.50
   yolo_iou: 0.45
   yolo_device: "cpu"
-  # CPU 上实时跟随优先，降低 YOLO 输入尺寸并只处理最新帧，避免红框落后于画面。
-  yolo_imgsz: 416
+  # 640 保留小纸盒实例的分割召回；节点仍只处理最新帧，避免红框积压。
+  yolo_imgsz: 640
   detect_hz: 8.0
   hsv_lower: [28, 35, 35]
   hsv_upper: [95, 255, 255]
@@ -66,8 +68,8 @@ perception:
   shape: "any"
   min_area: 300
   detection_hold_sec: 0.35
-  tracking_max_jump_px: 180.0
-  tracking_switch_confirmations: 2
+  tracking_max_jump_px: 80.0
+  tracking_switch_confirmations: 5
   # project_pixel_to_3d 输出的是 OpenCV 光学坐标；当前手眼标定的 camera_link
   # 已由 charuco_tracker 转成 ROS 相机坐标，所以这里需要转换成 [z, -x, -y]。
   # 如果以后 TF 直接使用 camera_color_optical_frame，改成 "opencv_optical"。

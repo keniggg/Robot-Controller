@@ -51,6 +51,7 @@ class FakeRate:
 class FakeRospy:
     def __init__(self, camera_cfg=None, perception_cfg=None):
         self.shutdown = False
+        self.shutdown_after_stamp = False
         self.sleep_count = 0
         self.publishers = []
         self.params = {}
@@ -63,6 +64,8 @@ class FakeRospy:
         def now():
             index = min(self.time_calls, len(self.time_values) - 1)
             self.time_calls += 1
+            if self.shutdown_after_stamp:
+                self.shutdown = True
             return self.time_values[index]
 
         self.Time = type('FakeTime', (), {'now': staticmethod(now)})
@@ -304,6 +307,7 @@ class CameraNodeRecoveryTest(unittest.TestCase):
     def test_published_color_and_depth_share_one_acquisition_stamp(self):
         module = load_camera_node()
         fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        fake_rospy.shutdown_after_stamp = True
         fake_rospy.time_values = ['pair-stamp', 'separate-stamp']
         SinglePairCamera.created = []
         CameraWithDepthScale.created = []
@@ -318,9 +322,82 @@ class CameraNodeRecoveryTest(unittest.TestCase):
         self.assertEqual(node.pub_depth.messages[-1].header.stamp, 'pair-stamp')
         self.assertEqual(fake_rospy.time_calls, 1)
 
+    def test_real_camera_does_not_sleep_after_blocking_frame_acquisition(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        blocking_read = node.cam.read
+
+        def read_one_frame_then_shutdown():
+            frame_pair = blocking_read()
+            fake_rospy.shutdown = True
+            return frame_pair
+
+        node.cam.read = read_one_frame_then_shutdown
+        node.spin()
+
+        self.assertEqual(fake_rospy.sleep_count, 0)
+
+    def test_real_camera_limits_ros_publications_without_sleeping(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({
+            'fallback_to_simulation': False,
+            'fps': 30,
+            'publish_fps': 15,
+        })
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        frame_pair = node.cam.read()
+        read_count = [0]
+        monotonic_times = iter((0.0, 0.01, 0.07))
+
+        def read_three_hardware_frames():
+            read_count[0] += 1
+            if read_count[0] >= 3:
+                fake_rospy.shutdown = True
+            return frame_pair
+
+        node.cam.read = read_three_hardware_frames
+        node._monotonic = lambda: next(monotonic_times)
+        node.spin()
+
+        self.assertEqual(len(node.pub_color.messages), 2)
+        self.assertEqual(len(node.pub_depth.messages), 2)
+        self.assertEqual(fake_rospy.sleep_count, 0)
+
+    def test_simulated_camera_keeps_rate_sleep(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({
+            'simulate': True,
+            'fallback_to_simulation': False,
+        })
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        fake_rospy.shutdown_after_stamp = True
+        node.spin()
+
+        self.assertEqual(fake_rospy.sleep_count, 1)
+
     def test_read_timeout_falls_back_without_exiting(self):
         module = load_camera_node()
         fake_rospy = FakeRospy()
+        fake_rospy.shutdown_after_stamp = True
         FailingThenSimulatedCamera.created = []
         module.rospy = fake_rospy
         module.CvBridge = FakeBridge
@@ -338,6 +415,7 @@ class CameraNodeRecoveryTest(unittest.TestCase):
     def test_read_timeout_restarts_real_camera_when_fallback_disabled(self):
         module = load_camera_node()
         fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        fake_rospy.shutdown_after_stamp = True
         FailingThenRestartedCamera.created = []
         module.rospy = fake_rospy
         module.CvBridge = FakeBridge
@@ -355,6 +433,7 @@ class CameraNodeRecoveryTest(unittest.TestCase):
     def test_startup_device_busy_keeps_node_alive_and_retries_real_camera(self):
         module = load_camera_node()
         fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        fake_rospy.shutdown_after_stamp = True
         StartupFailThenRestartedCamera.created = []
         module.rospy = fake_rospy
         module.CvBridge = FakeBridge

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import time
+
 import rospy
 from sensor_msgs.msg import Image
 try:
@@ -16,6 +18,13 @@ class CameraNode:
         self.width = self.cfg.get('width', 640)
         self.height = self.cfg.get('height', 480)
         self.fps = self.cfg.get('fps', 30)
+        self.publish_fps = min(
+            float(self.fps),
+            max(0.1, float(self.cfg.get('publish_fps', self.fps))),
+        )
+        self._publish_period_sec = 1.0 / self.publish_fps
+        self._last_publish_monotonic = None
+        self._monotonic = time.monotonic
         self.align_depth_to_color = self.cfg.get('align_depth_to_color', True)
         self.fallback_to_simulation = bool(self.cfg.get('fallback_to_simulation', False))
         self.read_failure_limit = max(1, int(self.cfg.get('read_failure_limit', 3)))
@@ -125,6 +134,19 @@ class CameraNode:
             rospy.set_param('/camera/depth_scale', depth_scale)
             rospy.loginfo('Camera depth scale set to %.7f m/unit', depth_scale)
 
+    def _publication_is_due(self):
+        now = self._monotonic()
+        previous = self._last_publish_monotonic
+        if previous is not None and now >= previous:
+            if (now - previous) < self._publish_period_sec:
+                return False
+        self._last_publish_monotonic = now
+        return True
+
+    def _pace_simulated_camera(self):
+        if bool(getattr(self.cam, 'simulate', False)):
+            self.rate.sleep()
+
     def spin(self):
         while not rospy.is_shutdown():
             if not self._camera_started:
@@ -139,12 +161,18 @@ class CameraNode:
                 if not recovered:
                     self.rate.sleep()
                 continue
+            if not self._publication_is_due():
+                self._pace_simulated_camera()
+                continue
             stamp = rospy.Time.now()
             if color is not None:
                 self.publish_image(self.pub_color, color, 'bgr8', stamp)
             if depth is not None:
                 self.publish_image(self.pub_depth, depth, '16UC1', stamp)
-            self.rate.sleep()
+            # RealSense wait_for_frames() already blocks until the next hardware
+            # frame. Sleeping again here halves the effective camera rate.
+            # Simulated reads return immediately, so they still need pacing.
+            self._pace_simulated_camera()
 
 if __name__ == '__main__':
     rospy.init_node('camera_node')

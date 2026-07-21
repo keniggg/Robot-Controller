@@ -367,7 +367,14 @@ class PerceptionNode:
             pose_cam, pose_base = self.pose_estimator.make_poses(p_cam, stamp, camera_frame or self.color_frame_id)
         except Exception as exc:
             if segment_mode:
-                self._publish_invalid_segment(obj, stamp, camera_frame)
+                self._publish_unlocalized_segment(
+                    obj,
+                    payload,
+                    mask,
+                    z,
+                    stamp,
+                    camera_frame,
+                )
             else:
                 obj.detected = False
                 self.publish_object(obj)
@@ -472,6 +479,24 @@ class PerceptionNode:
         obj.detected = False
         self._publish_mask(None, stamp, frame_id)
         self.publish_object(obj)
+
+    def _publish_unlocalized_segment(self, obj, payload, mask, depth_m, stamp, frame_id):
+        """Expose valid camera evidence while keeping base-frame motion blocked."""
+        obj.detected = False
+        obj.label = payload.label
+        obj.confidence = payload.confidence
+        obj.u, obj.v = payload.centroid
+        obj.depth_m = float(depth_m)
+        x, y, width, height = payload.bbox
+        obj.bbox_x = int(max(0, x))
+        obj.bbox_y = int(max(0, y))
+        obj.bbox_width = int(max(0, width))
+        obj.bbox_height = int(max(0, height))
+        self._publish_mask(mask, stamp, frame_id)
+        self.stabilizer.update(obj, rospy.get_time())
+        self.pub_raw_detected.publish(Bool(True))
+        self.pub_obj.publish(obj)
+        self.pub_detected.publish(Bool(False))
 
     def publish_object(self, obj):
         # Keep raw visibility separate from the short detection hold used by the
@@ -758,7 +783,7 @@ class PerceptionNode:
                 yolo_target_class = selected_model['target_class']
                 yolo_task = selected_model['task']
                 require_instance_mask = bool(selected_model['require_instance_mask'])
-                resolved_yolo_model = resolve_yolo_model_path(yolo_model)
+                resolved_yolo_model = resolve_yolo_model_path(selected_model['model_path'])
             except Exception as exc:
                 path_error = exc
         yolo_conf = float(pcfg.get('yolo_conf', 0.35))

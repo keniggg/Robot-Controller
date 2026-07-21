@@ -15,6 +15,27 @@ from gui.widgets.camera_widget import CameraWidget
 
 
 class CameraOverlayTest(unittest.TestCase):
+    def test_color_update_renders_only_color_stream(self):
+        class FakeSignal:
+            def emit(self, *_args):
+                pass
+
+        widget = CameraWidget.__new__(CameraWidget)
+        widget._alive = True
+        widget.color_frame_updated = FakeSignal()
+        widget._refresh_color_pixmap = lambda: None
+        rendered_streams = []
+        widget._render_pixmaps = (
+            lambda stream=None: rendered_streams.append(stream)
+        )
+
+        CameraWidget.update_color_image(
+            widget,
+            np.zeros((60, 80, 3), dtype=np.uint8),
+        )
+
+        self.assertEqual(rendered_streams, ['color'])
+
     def test_detection_overlay_draws_bbox_on_rgb_image(self):
         rgb = np.zeros((80, 100, 3), dtype=np.uint8)
 
@@ -67,7 +88,7 @@ class CameraOverlayTest(unittest.TestCase):
         widget._last_color_rgb = np.zeros((80, 100, 3), dtype=np.uint8)
         refreshed = []
         widget._refresh_color_pixmap = lambda: refreshed.append(True)
-        widget._render_pixmaps = lambda: None
+        widget._render_pixmaps = lambda *_args: None
 
         CameraWidget.set_detection_overlay(
             widget,
@@ -82,7 +103,7 @@ class CameraOverlayTest(unittest.TestCase):
         widget = CameraWidget.__new__(CameraWidget)
         widget._alive = True
         widget._last_color_rgb = None
-        widget._render_pixmaps = lambda: None
+        widget._render_pixmaps = lambda *_args: None
         contour = np.array([[20, 15], [50, 15], [50, 40]], dtype=np.int64)
 
         CameraWidget.set_detection_overlay(

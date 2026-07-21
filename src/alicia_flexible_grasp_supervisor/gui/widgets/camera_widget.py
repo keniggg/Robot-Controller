@@ -140,7 +140,7 @@ class CameraWidget(QtWidgets.QWidget):
             self._last_color_rgb = rgb.copy()
             self.color_frame_updated.emit(self._last_color_rgb)
             self._refresh_color_pixmap()
-            self._render_pixmaps()
+            self._render_pixmaps('color')
         except RuntimeError:
             self._shutdown_ros()
         finally:
@@ -155,7 +155,7 @@ class CameraWidget(QtWidgets.QWidget):
             qimg = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
             self._last_depth_pixmap = QtGui.QPixmap.fromImage(qimg.copy())
             self.depth_status.setText('深度 %d x %d' % (w, h))
-            self._render_pixmaps()
+            self._render_pixmaps('depth')
         except RuntimeError:
             self._shutdown_ros()
         finally:
@@ -172,12 +172,14 @@ class CameraWidget(QtWidgets.QWidget):
         self.depth_label.setVisible(mode in ('depth', 'split'))
         self._render_pixmaps()
 
-    def _render_pixmaps(self):
+    def _render_pixmaps(self, stream=None):
         if not self.__dict__.get('_alive', False):
             return
         try:
-            self._render_one(self.color_label, self._last_color_pixmap)
-            self._render_one(self.depth_label, self._last_depth_pixmap)
+            if stream in (None, 'color'):
+                self._render_one(self.color_label, self._last_color_pixmap)
+            if stream in (None, 'depth'):
+                self._render_one(self.depth_label, self._last_depth_pixmap)
         except RuntimeError:
             self._shutdown_ros()
 
@@ -219,7 +221,7 @@ class CameraWidget(QtWidgets.QWidget):
                 }
             if self.__dict__.get('_last_color_rgb', None) is not None:
                 self._refresh_color_pixmap()
-            self._render_pixmaps()
+            self._render_pixmaps('color')
         except RuntimeError:
             self._shutdown_ros()
 

@@ -280,6 +280,39 @@ class PerceptionDetectorSelectionTest(unittest.TestCase):
             'ready:carton:/resolved/models/custom.pt',
         ])
 
+    def test_model_choice_uses_profile_model_path_not_legacy_yolo_model(self):
+        module = load_perception_node()
+        config = segment_perception_config()
+        config['yolo_model'] = 'yolov8n.pt'
+        module.rospy = FakeRospy(config)
+        status_pub = FakePublisher()
+        node = types.SimpleNamespace(
+            detector=None,
+            detector_signature=None,
+            detector_status_pub=status_pub,
+            stabilizer=module.DetectionStabilizer(),
+        )
+        FakeYOLODetector.created = []
+        module.HSVObjectDetector = FakeHSVDetector
+        module.YOLOv8ObjectDetector = FakeYOLODetector
+
+        with mock.patch.object(module, 'resolve_yolo_model_path') as resolver:
+            resolver.side_effect = lambda path: '/resolved/' + path
+            module.PerceptionNode.refresh_detector(node, force=True)
+
+        resolver.assert_called_once_with('carton_segment_model/best.pt')
+        self.assertEqual(
+            FakeYOLODetector.created[0]['model_path'],
+            '/resolved/carton_segment_model/best.pt',
+        )
+        self.assertEqual(FakeYOLODetector.created[0]['target_class'], 'carton')
+        self.assertEqual(FakeYOLODetector.created[0]['expected_task'], 'segment')
+        self.assertTrue(FakeYOLODetector.created[0]['require_instance_mask'])
+        self.assertEqual(status_pub.messages, [
+            'loading:carton_segment',
+            'ready:carton_segment:/resolved/carton_segment_model/best.pt',
+        ])
+
     def test_segment_task_without_mask_fails_closed_even_if_profile_flag_is_false(self):
         module = load_perception_node()
         module.rospy = FakeRospy({})
@@ -418,6 +451,43 @@ class PerceptionDetectorSelectionTest(unittest.TestCase):
         self.assertIs(mask_message.header.stamp, stamp)
         self.assertEqual(mask_message.encoding, 'mono8')
         self.assertEqual(np.count_nonzero(mask_message.data), 0)
+
+    def test_segment_tf_failure_preserves_raw_mask_but_blocks_localized_target(self):
+        module = load_perception_node()
+        module.rospy = FakeRospy({})
+        node = make_localizing_segment_node(module, FakeValidSegmentDetector())
+
+        def fail_transform(_point, _stamp, _frame_id):
+            raise RuntimeError('base_link is unavailable')
+
+        node.pose_estimator.make_poses = fail_transform
+        stamp = types.SimpleNamespace(secs=57, nsecs=79)
+
+        module.PerceptionNode.try_detect(
+            node,
+            stamp=stamp,
+            camera_frame='camera_link',
+        )
+
+        self.assertEqual(len(node.pub_mask.messages), 1)
+        mask_message = node.pub_mask.messages[-1]
+        self.assertIs(mask_message.header.stamp, stamp)
+        self.assertEqual(mask_message.header.frame_id, 'camera_link')
+        self.assertEqual(np.count_nonzero(mask_message.data), 100)
+        self.assertTrue(node.pub_raw_detected.messages[-1].data)
+        self.assertFalse(node.pub_detected.messages[-1].data)
+        obj = node.pub_obj.messages[-1]
+        self.assertFalse(obj.detected)
+        self.assertEqual(obj.label, 'carton')
+        self.assertAlmostEqual(obj.confidence, 0.9)
+        self.assertEqual((obj.u, obj.v), (10, 10))
+        self.assertEqual(
+            (obj.bbox_x, obj.bbox_y, obj.bbox_width, obj.bbox_height),
+            (5, 5, 10, 10),
+        )
+        self.assertAlmostEqual(obj.depth_m, 0.22)
+        self.assertEqual(node.pub_cam.messages, [])
+        self.assertEqual(node.pub_base.messages, [])
 
     def test_malformed_segment_masks_clear_a_primed_segment_result(self):
         module = load_perception_node()

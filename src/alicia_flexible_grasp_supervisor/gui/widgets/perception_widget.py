@@ -127,6 +127,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         self.last_object = None
         self._current_object_stamp = None
         self._current_object_detected = False
+        self._current_visual_detected = False
         self._latest_mask = None
         self._latest_mask_stamp = None
         self._mask_status = 'mask waiting'
@@ -457,7 +458,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         msg = self.__dict__.get('last_object', None)
         if camera_preview is None:
             return
-        if msg is None or not getattr(msg, 'detected', False):
+        if msg is None or not self._has_visual_detection(msg):
             camera_preview.set_detection_overlay(None)
             if self.__dict__.get('_latest_mask', None) is not None:
                 self._set_mask_status('mask stale')
@@ -469,7 +470,7 @@ class PerceptionWidget(QtWidgets.QWidget):
         label = msg.label or self.label_edit.text()
         camera_preview.set_detection_overlay(
             bbox,
-            label,
+            self._overlay_label(label, getattr(msg, 'confidence', 0.0)),
             self._overlay_color_rgb(label or self.description_edit.text()),
             self._matching_mask_contour(msg),
         )
@@ -478,7 +479,10 @@ class PerceptionWidget(QtWidgets.QWidget):
         mask = self.__dict__.get('_latest_mask', None)
         mask_stamp = self.__dict__.get('_latest_mask_stamp', None)
         current_stamp = self.__dict__.get('_current_object_stamp', None)
-        current_detected = bool(self.__dict__.get('_current_object_detected', False))
+        current_detected = bool(self.__dict__.get(
+            '_current_visual_detected',
+            self.__dict__.get('_current_object_detected', False),
+        ))
         if mask is None:
             if self.__dict__.get('_mask_status', '') not in ('mask empty', 'mask size mismatch', 'mask error'):
                 self._set_mask_status('mask stale')
@@ -509,6 +513,7 @@ class PerceptionWidget(QtWidgets.QWidget):
     def _clear_mask_state(self):
         self._current_object_stamp = None
         self._current_object_detected = False
+        self._current_visual_detected = False
         self._latest_mask = None
         self._latest_mask_stamp = None
         self._set_mask_status('mask waiting')
@@ -665,6 +670,7 @@ class PerceptionWidget(QtWidgets.QWidget):
             return
         self._current_object_stamp = self._stamp_key(getattr(msg, 'header', None))
         self._current_object_detected = bool(getattr(msg, 'detected', False))
+        self._current_visual_detected = self._has_visual_detection(msg)
         self._last_object_receive_time = time.monotonic()
         if (
             not getattr(msg, 'detected', False)
@@ -678,6 +684,23 @@ class PerceptionWidget(QtWidgets.QWidget):
             return
         self.last_object = msg
         if not msg.detected:
+            if self._current_visual_detected:
+                self.pregrasp_pose = None
+                self._reset_target_stability()
+                self._localization_error_m = None
+                label = msg.label or self.label_edit.text()
+                self.detected_chip.setText('已分割 %s（未定位）' % label)
+                self.pixel_chip.setText('像素 u=%d v=%d' % (msg.u, msg.v))
+                self.depth_chip.setText('深度 %.3f m' % msg.depth_m)
+                self.conf_chip.setText('置信度 %.3f' % msg.confidence)
+                self.camera_chip.setText('相机坐标：等待 TF')
+                self.base_chip.setText('基座坐标：不可用')
+                self.pregrasp_chip.setText('预抓取：已禁止')
+                self._set_perception_status(
+                    '实例分割有效，但缺少相机到基座的 TF；当前仅显示视觉结果，禁止规划和抓取'
+                )
+                self._refresh_detection_overlay()
+                return
             self._invalidate_current_mask()
             self.pregrasp_pose = None
             self._reset_target_stability()
@@ -1312,7 +1335,8 @@ class PerceptionWidget(QtWidgets.QWidget):
     def _list_text(self, values):
         return ','.join(str(int(v)) for v in values[:3])
 
-    def _object_bbox(self, msg):
+    @staticmethod
+    def _object_bbox(msg):
         width = int(getattr(msg, 'bbox_width', 0))
         height = int(getattr(msg, 'bbox_height', 0))
         if width <= 0 or height <= 0:
@@ -1323,6 +1347,37 @@ class PerceptionWidget(QtWidgets.QWidget):
             width,
             height,
         )
+
+    @classmethod
+    def _has_visual_detection(cls, msg):
+        if msg is None:
+            return False
+        if bool(getattr(msg, 'detected', False)):
+            return True
+        bbox = cls._object_bbox(msg)
+        try:
+            confidence = float(getattr(msg, 'confidence', 0.0))
+            depth_m = float(getattr(msg, 'depth_m', 0.0))
+        except (TypeError, ValueError):
+            return False
+        return (
+            bbox is not None
+            and np.isfinite(confidence)
+            and confidence > 0.0
+            and np.isfinite(depth_m)
+            and depth_m > 0.01
+        )
+
+    @staticmethod
+    def _overlay_label(label, confidence):
+        text = str(label or '')
+        try:
+            value = float(confidence)
+        except (TypeError, ValueError):
+            return text
+        if not np.isfinite(value) or value <= 0.0:
+            return text
+        return '%s %.3f' % (text, value) if text else '%.3f' % value
 
     def _overlay_color_rgb(self, description):
         text = str(description or '').lower()
