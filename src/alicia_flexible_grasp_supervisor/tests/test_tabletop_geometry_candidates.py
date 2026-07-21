@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import pathlib
 import sys
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -12,8 +13,22 @@ for path in (ROOT, ROOT / 'src'):
         sys.path.insert(0, str(path))
 
 from alicia_flexible_grasp.grasp.tabletop_geometry_candidates import (  # noqa: E402
+    TabletopCandidateContractError,
     TabletopGeometryConfig,
     generate_tabletop_proposals,
+    materialize_tabletop_candidates,
+)
+from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
+    GripperGeometry,
+)
+
+
+GRIPPER = GripperGeometry(
+    max_inner_gap_m=0.050,
+    jaw_clearance_each_side_m=0.002,
+    finger_size_xyz_m=np.array([0.0434, 0.0286, 0.0600]),
+    palm_size_xyz_m=np.array([0.1175, 0.1550, 0.0774]),
+    support_clearance_m=0.003,
 )
 
 
@@ -63,6 +78,75 @@ def test_real_carton_prefers_35mm_side_and_requires_39mm():
     assert best.required_open_width_m == pytest.approx(0.039, abs=5e-4)
     assert abs(np.dot(best.jaw_axis_base, [0.0, 1.0, 0.0])) > 0.999
     assert np.dot(best.insertion_axis_base, [0.0, 0.0, 1.0]) < -0.999
+
+
+def test_materialized_carton_candidate_places_fingers_above_table():
+    candidates = materialize_tabletop_candidates(
+        proposal=carton_result().proposals[0],
+        support_point_base=np.zeros(3),
+        support_normal_base=np.array([0.0, 0.0, 1.0]),
+        gripper=GRIPPER,
+        tool_jaw_axis='y',
+        tool_finger_length_axis='z',
+    )
+
+    assert len(candidates) == 2
+    candidate = candidates[0]
+    np.testing.assert_allclose(
+        candidate.T_base_tool0[:3, 1], candidate.jaw_axis_base
+    )
+    np.testing.assert_allclose(
+        candidate.T_base_tool0[:3, 2], candidate.insertion_axis_base
+    )
+    assert candidate.minimum_finger_support_clearance_m >= 0.003 - 1e-9
+    assert candidate.required_open_width_m == pytest.approx(0.039, abs=5e-4)
+    relative = (
+        candidates[1].T_base_tool0[:3, :3].T
+        @ candidate.T_base_tool0[:3, :3]
+    )
+    np.testing.assert_allclose(
+        relative,
+        np.diag([-1.0, -1.0, 1.0]),
+        atol=1e-8,
+    )
+
+
+def test_materialization_rejects_non_top_down_approach_with_stable_code():
+    proposal = carton_result().proposals[0]
+    invalid = replace(
+        proposal,
+        insertion_axis_base=np.array([1.0, 0.0, 0.0]),
+    )
+
+    with pytest.raises(TabletopCandidateContractError) as caught:
+        materialize_tabletop_candidates(
+            proposal=invalid,
+            support_point_base=np.zeros(3),
+            support_normal_base=np.array([0.0, 0.0, 1.0]),
+            gripper=GRIPPER,
+        )
+
+    assert caught.value.code == 'TABLETOP_APPROACH_INVALID'
+
+
+def test_materialization_rejects_gripper_clearance_contract_mismatch():
+    mismatched_gripper = GripperGeometry(
+        max_inner_gap_m=0.050,
+        jaw_clearance_each_side_m=0.003,
+        finger_size_xyz_m=np.array([0.0434, 0.0286, 0.0600]),
+        palm_size_xyz_m=np.array([0.1175, 0.1550, 0.0774]),
+        support_clearance_m=0.003,
+    )
+
+    with pytest.raises(TabletopCandidateContractError) as caught:
+        materialize_tabletop_candidates(
+            proposal=carton_result().proposals[0],
+            support_point_base=np.zeros(3),
+            support_normal_base=np.array([0.0, 0.0, 1.0]),
+            gripper=mismatched_gripper,
+        )
+
+    assert caught.value.code == 'TOOL0_GEOMETRY_INVALID'
 
 
 @pytest.mark.parametrize('yaw_deg', (0.0, 17.0, 63.0, 121.0))
@@ -124,6 +208,18 @@ def test_oversized_object_has_no_fit_direction_failure():
 
 def test_aperture_above_fixed_50mm_contract_has_input_failure():
     result = carton_result(config=TabletopGeometryConfig(max_inner_gap_m=0.060))
+
+    assert not result.ok
+    assert result.failure_code == 'TABLETOP_GEOMETRY_INPUT_INVALID'
+
+
+@pytest.mark.parametrize('clearance_m', (0.001, 0.003))
+def test_jaw_clearance_must_match_fixed_two_mm_contract(clearance_m):
+    result = carton_result(
+        config=TabletopGeometryConfig(
+            jaw_clearance_each_side_m=clearance_m,
+        )
+    )
 
     assert not result.ok
     assert result.failure_code == 'TABLETOP_GEOMETRY_INPUT_INVALID'

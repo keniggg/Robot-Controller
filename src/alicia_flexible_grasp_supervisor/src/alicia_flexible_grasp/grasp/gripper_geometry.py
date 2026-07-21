@@ -255,6 +255,29 @@ def required_open_width_m(
     )
 
 
+def projected_cloud_width_m(points, jaw_axis, clearance_each_side_m):
+    """Return target-cloud span along a unit jaw axis plus jaw clearances."""
+    cloud = np.asarray(points, dtype=float)
+    if cloud.ndim != 2 or cloud.shape[1:] != (3,) or cloud.shape[0] == 0:
+        raise ValueError('points must be a non-empty Nx3 array')
+    if not np.all(np.isfinite(cloud)):
+        raise ValueError('points contain non-finite values')
+    axis = _readonly_vector(jaw_axis, 'jaw_axis')
+    if abs(float(np.linalg.norm(axis)) - 1.0) > 1e-6:
+        raise ValueError('jaw_axis must be a unit vector')
+    clearance = _finite_number(
+        clearance_each_side_m,
+        'clearance_each_side_m',
+    )
+    if clearance < 0.0:
+        raise ValueError('clearance_each_side_m must be non-negative')
+    projection = cloud @ axis
+    return _finite_number(
+        float(np.max(projection) - np.min(projection)) + 2.0 * clearance,
+        'projected cloud width',
+    )
+
+
 def gripper_box_centers(
     center_base,
     R_base_tool,
@@ -560,14 +583,13 @@ def _failed_result(
     )
 
 
-def _evaluate_candidate_impl(
+def _evaluate_physical_candidate(
     *,
     gripper,
     candidate_center_base,
     candidate_tool0_base,
-    candidate_depth_m,
     R_base_tool,
-    candidate_width_m,
+    required_width_m,
     obb_center_base,
     R_base_obb,
     obb_size_xyz_m,
@@ -581,7 +603,7 @@ def _evaluate_candidate_impl(
     tool_finger_length_axis='z',
     motion_cost=0.0,
 ):
-    """Fail-closed analytical prefilter for one base-frame 6D grasp."""
+    """Run source-independent physical gates for an explicit tool0 pose."""
     required_width = 0.0
     center_distance = 0.0
     support_clearance = -1.0e6
@@ -594,38 +616,12 @@ def _evaluate_candidate_impl(
         center = _readonly_vector(candidate_center_base, 'candidate_center_base')
         tool0 = _readonly_vector(candidate_tool0_base, 'candidate_tool0_base')
         tool_rotation = _validated_rotation(R_base_tool, 'R_base_tool')
-        if isinstance(candidate_depth_m, (bool, np.bool_)):
-            raise AnalyticalGripperContractError(
-                'DEPTH_INVALID',
-                'candidate_depth_m must be a numeric GraspNet depth bin',
-            )
-        try:
-            depth = _finite_number(candidate_depth_m, 'candidate_depth_m')
-        except Exception as exc:
-            raise AnalyticalGripperContractError(
-                'DEPTH_INVALID',
-                'candidate_depth_m must be finite',
-            ) from exc
-        nearest_depth = min(
-            ANALYTICAL_GRASPNET_DEPTH_BINS_M,
-            key=lambda item: abs(depth - item),
+        required_width = _finite_number(
+            required_width_m,
+            'required_width_m',
         )
-        if abs(depth - nearest_depth) > ANALYTICAL_GRASPNET_DEPTH_TOLERANCE_M:
-            raise AnalyticalGripperContractError(
-                'DEPTH_OUT_OF_RANGE',
-                'candidate_depth_m %.9g is not a GraspNet depth bin' % depth,
-            )
-        expected_tool0 = center + float(nearest_depth) * tool_rotation[:, 2]
-        if not np.all(np.isfinite(expected_tool0)):
-            raise AnalyticalGripperContractError(
-                'TOOL0_INVALID',
-                'derived candidate tool0 is non-finite',
-            )
-        if not np.allclose(tool0, expected_tool0, atol=1e-7):
-            raise AnalyticalGripperContractError(
-                'TOOL0_INCONSISTENT',
-                'candidate tool0 must equal center + depth * tool +Z',
-            )
+        if required_width < 0.0:
+            raise ValueError('required_width_m must be non-negative')
         obb_center = _readonly_vector(obb_center_base, 'obb_center_base')
         obb_rotation = _validated_rotation(R_base_obb, 'R_base_obb')
         obb_size = _readonly_vector(obb_size_xyz_m, 'obb_size_xyz_m')
@@ -644,9 +640,6 @@ def _evaluate_candidate_impl(
                 'support_normal_base must align with OBB positive z'
             )
         support_offset = _finite_number(support_offset_m, 'support_offset_m')
-        _finite_number(candidate_width_m, 'candidate_width_m')
-        if float(candidate_width_m) < 0.0:
-            raise ValueError('candidate_width_m must be non-negative')
         safe_motion_cost = _finite_number(motion_cost, 'motion_cost')
         if safe_motion_cost < 0.0:
             raise ValueError('motion_cost must be non-negative')
@@ -656,11 +649,9 @@ def _evaluate_candidate_impl(
             _validated_transform(grasp_T_base_tool, 'grasp_T_base_tool'),
             _validated_transform(lift_T_base_tool, 'lift_T_base_tool'),
         ]
-        # ``center`` is GraspNet's jaw/contact center.  The transforms are the
-        # physical Alicia tool0 trajectory and differ from the center by the
-        # model insertion depth.  Keeping the two positions distinct lets the
-        # OBB and jaw-line gates use the model center while static/swept boxes
-        # remain anchored to the real robot tool frame.
+        # ``center`` is the source's jaw/contact center.  The transforms are
+        # the physical Alicia tool0 trajectory, so analytical boxes remain
+        # anchored to the actual robot frame for every candidate source.
         if not np.allclose(transforms[2][:3, 3], tool0, atol=1e-7):
             raise AnalyticalGripperContractError(
                 'TOOL0_INCONSISTENT',
@@ -768,12 +759,6 @@ def _evaluate_candidate_impl(
             safe_motion_cost,
             geometry_cost,
         )
-    required_width = required_open_width_m(
-        obb_size,
-        obb_rotation,
-        jaw_axis,
-        gripper.jaw_clearance_each_side_m,
-    )
     physical_gap = min(
         float(gripper.max_inner_gap_m),
         ANALYTICAL_MAX_INNER_GAP_M,
@@ -931,6 +916,216 @@ def _evaluate_candidate_impl(
     )
 
 
+def _evaluate_candidate_impl(
+    *,
+    gripper,
+    candidate_center_base,
+    candidate_tool0_base,
+    candidate_depth_m,
+    R_base_tool,
+    candidate_width_m,
+    obb_center_base,
+    R_base_obb,
+    obb_size_xyz_m,
+    support_normal_base,
+    support_offset_m,
+    pregrasp_T_base_tool,
+    approach_T_base_tool,
+    grasp_T_base_tool,
+    lift_T_base_tool,
+    tool_jaw_axis='y',
+    tool_finger_length_axis='z',
+    motion_cost=0.0,
+):
+    """Validate the strict GraspNet source contract, then run physical gates."""
+    required_width = 0.0
+    try:
+        if not isinstance(gripper, GripperGeometry):
+            raise ValueError('gripper must be a GripperGeometry')
+        center = _readonly_vector(candidate_center_base, 'candidate_center_base')
+        tool0 = _readonly_vector(candidate_tool0_base, 'candidate_tool0_base')
+        tool_rotation = _validated_rotation(R_base_tool, 'R_base_tool')
+        if isinstance(candidate_depth_m, (bool, np.bool_)):
+            raise AnalyticalGripperContractError(
+                'DEPTH_INVALID',
+                'candidate_depth_m must be a numeric GraspNet depth bin',
+            )
+        try:
+            depth = _finite_number(candidate_depth_m, 'candidate_depth_m')
+        except Exception as exc:
+            raise AnalyticalGripperContractError(
+                'DEPTH_INVALID',
+                'candidate_depth_m must be finite',
+            ) from exc
+        nearest_depth = min(
+            ANALYTICAL_GRASPNET_DEPTH_BINS_M,
+            key=lambda item: abs(depth - item),
+        )
+        if abs(depth - nearest_depth) > ANALYTICAL_GRASPNET_DEPTH_TOLERANCE_M:
+            raise AnalyticalGripperContractError(
+                'DEPTH_OUT_OF_RANGE',
+                'candidate_depth_m %.9g is not a GraspNet depth bin' % depth,
+            )
+        expected_tool0 = center + float(nearest_depth) * tool_rotation[:, 2]
+        if not np.all(np.isfinite(expected_tool0)):
+            raise AnalyticalGripperContractError(
+                'TOOL0_INVALID',
+                'derived candidate tool0 is non-finite',
+            )
+        if not np.allclose(tool0, expected_tool0, atol=1e-7):
+            raise AnalyticalGripperContractError(
+                'TOOL0_INCONSISTENT',
+                'candidate tool0 must equal center + depth * tool +Z',
+            )
+        model_width = _finite_number(candidate_width_m, 'candidate_width_m')
+        if model_width < 0.0:
+            raise ValueError('candidate_width_m must be non-negative')
+        obb_rotation = _validated_rotation(R_base_obb, 'R_base_obb')
+        obb_size = _readonly_vector(obb_size_xyz_m, 'obb_size_xyz_m')
+        if np.any(obb_size <= 0.0):
+            raise ValueError('obb_size_xyz_m values must be positive')
+        jaw_local, jaw_index = parse_tool_axis(tool_jaw_axis)
+        _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
+        if jaw_index == finger_index:
+            raise ValueError('jaw and finger length axes must be different')
+        required_width = required_open_width_m(
+            obb_size,
+            obb_rotation,
+            tool_rotation @ jaw_local,
+            gripper.jaw_clearance_each_side_m,
+        )
+    except Exception as exc:
+        failure_code = (
+            str(exc.code)
+            if isinstance(exc, AnalyticalGripperContractError)
+            else 'GRIPPER_SWEEP_COLLISION'
+        )
+        return _failed_result(
+            'transform',
+            failure_code,
+            'invalid analytical gripper input: %s' % exc,
+            0,
+            required_width,
+            0.0,
+            -1.0e6,
+            0.0,
+            0.0,
+            0.0,
+        )
+    return _evaluate_physical_candidate(
+        gripper=gripper,
+        candidate_center_base=candidate_center_base,
+        candidate_tool0_base=candidate_tool0_base,
+        R_base_tool=R_base_tool,
+        required_width_m=required_width,
+        obb_center_base=obb_center_base,
+        R_base_obb=R_base_obb,
+        obb_size_xyz_m=obb_size_xyz_m,
+        support_normal_base=support_normal_base,
+        support_offset_m=support_offset_m,
+        pregrasp_T_base_tool=pregrasp_T_base_tool,
+        approach_T_base_tool=approach_T_base_tool,
+        grasp_T_base_tool=grasp_T_base_tool,
+        lift_T_base_tool=lift_T_base_tool,
+        tool_jaw_axis=tool_jaw_axis,
+        tool_finger_length_axis=tool_finger_length_axis,
+        motion_cost=motion_cost,
+    )
+
+
+def _evaluate_explicit_candidate_impl(
+    *,
+    gripper,
+    candidate_center_base,
+    candidate_tool0_base,
+    R_base_tool,
+    required_open_width_m,
+    target_points_base,
+    obb_center_base,
+    R_base_obb,
+    obb_size_xyz_m,
+    support_normal_base,
+    support_offset_m,
+    pregrasp_T_base_tool,
+    approach_T_base_tool,
+    grasp_T_base_tool,
+    lift_T_base_tool,
+    tool_jaw_axis='y',
+    tool_finger_length_axis='z',
+    motion_cost=0.0,
+):
+    """Validate an explicit target-cloud width, then run physical gates."""
+    try:
+        if not isinstance(gripper, GripperGeometry):
+            raise ValueError('gripper must be a GripperGeometry')
+        rotation = _validated_rotation(R_base_tool, 'R_base_tool')
+        jaw_local, jaw_index = parse_tool_axis(tool_jaw_axis)
+        _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
+        if jaw_index == finger_index:
+            raise ValueError('jaw and finger length axes must be different')
+        recomputed = projected_cloud_width_m(
+            target_points_base,
+            rotation @ jaw_local,
+            gripper.jaw_clearance_each_side_m,
+        )
+        supplied_width = _finite_number(
+            required_open_width_m,
+            'required_open_width_m',
+        )
+        if supplied_width < 0.0:
+            raise ValueError('required_open_width_m must be non-negative')
+        if abs(supplied_width - recomputed) > 5e-4:
+            return _failed_result(
+                'jaw_width',
+                'GRIPPER_WIDTH_INVALID',
+                'explicit width does not match target-cloud projection',
+                2,
+                recomputed,
+                0.0,
+                -1.0e6,
+                0.0,
+                motion_cost,
+                0.0,
+            )
+    except Exception as exc:
+        failure_code = (
+            str(exc.code)
+            if isinstance(exc, AnalyticalGripperContractError)
+            else 'GRIPPER_SWEEP_COLLISION'
+        )
+        return _failed_result(
+            'transform',
+            failure_code,
+            'invalid explicit analytical gripper input: %s' % exc,
+            0,
+            0.0,
+            0.0,
+            -1.0e6,
+            0.0,
+            motion_cost,
+            0.0,
+        )
+    return _evaluate_physical_candidate(
+        gripper=gripper,
+        candidate_center_base=candidate_center_base,
+        candidate_tool0_base=candidate_tool0_base,
+        R_base_tool=R_base_tool,
+        required_width_m=recomputed,
+        obb_center_base=obb_center_base,
+        R_base_obb=R_base_obb,
+        obb_size_xyz_m=obb_size_xyz_m,
+        support_normal_base=support_normal_base,
+        support_offset_m=support_offset_m,
+        pregrasp_T_base_tool=pregrasp_T_base_tool,
+        approach_T_base_tool=approach_T_base_tool,
+        grasp_T_base_tool=grasp_T_base_tool,
+        lift_T_base_tool=lift_T_base_tool,
+        tool_jaw_axis=tool_jaw_axis,
+        tool_finger_length_axis=tool_finger_length_axis,
+        motion_cost=motion_cost,
+    )
+
+
 def evaluate_candidate(
     *,
     gripper,
@@ -977,8 +1172,74 @@ def evaluate_candidate(
     except Exception as exc:
         return _failed_result(
             'transform',
-            'GRIPPER_SWEEP_COLLISION',
+            (
+                str(exc.code)
+                if isinstance(exc, AnalyticalGripperContractError)
+                else 'GRIPPER_SWEEP_COLLISION'
+            ),
             'analytical gripper evaluation failed closed: %s' % exc,
+            0,
+            0.0,
+            0.0,
+            -1.0e6,
+            0.0,
+            0.0,
+            0.0,
+        )
+
+
+def evaluate_explicit_candidate(
+    *,
+    gripper,
+    candidate_center_base,
+    candidate_tool0_base,
+    R_base_tool,
+    required_open_width_m,
+    target_points_base,
+    obb_center_base,
+    R_base_obb,
+    obb_size_xyz_m,
+    support_normal_base,
+    support_offset_m,
+    pregrasp_T_base_tool,
+    approach_T_base_tool,
+    grasp_T_base_tool,
+    lift_T_base_tool,
+    tool_jaw_axis='y',
+    tool_finger_length_axis='z',
+    motion_cost=0.0,
+):
+    """Evaluate an explicit tool0 candidate without a GraspNet depth field."""
+    try:
+        return _evaluate_explicit_candidate_impl(
+            gripper=gripper,
+            candidate_center_base=candidate_center_base,
+            candidate_tool0_base=candidate_tool0_base,
+            R_base_tool=R_base_tool,
+            required_open_width_m=required_open_width_m,
+            target_points_base=target_points_base,
+            obb_center_base=obb_center_base,
+            R_base_obb=R_base_obb,
+            obb_size_xyz_m=obb_size_xyz_m,
+            support_normal_base=support_normal_base,
+            support_offset_m=support_offset_m,
+            pregrasp_T_base_tool=pregrasp_T_base_tool,
+            approach_T_base_tool=approach_T_base_tool,
+            grasp_T_base_tool=grasp_T_base_tool,
+            lift_T_base_tool=lift_T_base_tool,
+            tool_jaw_axis=tool_jaw_axis,
+            tool_finger_length_axis=tool_finger_length_axis,
+            motion_cost=motion_cost,
+        )
+    except Exception as exc:
+        return _failed_result(
+            'transform',
+            (
+                str(exc.code)
+                if isinstance(exc, AnalyticalGripperContractError)
+                else 'GRIPPER_SWEEP_COLLISION'
+            ),
+            'explicit analytical gripper evaluation failed closed: %s' % exc,
             0,
             0.0,
             0.0,

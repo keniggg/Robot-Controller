@@ -6,6 +6,18 @@ from typing import Mapping
 
 import numpy as np
 
+from .gripper_geometry import (
+    ANALYTICAL_FINGER_BOX_PADDING_XYZ_M,
+    ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M,
+    ANALYTICAL_JAW_CLEARANCE_EACH_SIDE_M,
+    ANALYTICAL_MAX_INNER_GAP_M,
+    ANALYTICAL_PALM_CENTER_TOOL_XYZ_M,
+    GripperGeometry,
+    gripper_box_centers,
+    parse_tool_axis,
+    projected_cloud_width_m,
+)
+
 
 _ALICIA_MAX_INNER_GAP_M = 0.050
 
@@ -20,6 +32,13 @@ class _TargetCloudInvalid(ValueError):
 
 class _SupportPlaneInvalid(ValueError):
     pass
+
+
+class TabletopCandidateContractError(ValueError):
+    def __init__(self, code, reason):
+        self.code = str(code)
+        self.reason = str(reason)
+        super().__init__(self.reason)
 
 
 @dataclass(frozen=True)
@@ -52,6 +71,43 @@ class TabletopProposal:
         object.__setattr__(self, 'contact_center_base', _frozen_array(self.contact_center_base))
         object.__setattr__(self, 'insertion_axis_base', _frozen_array(self.insertion_axis_base))
         object.__setattr__(self, 'jaw_axis_base', _frozen_array(self.jaw_axis_base))
+        object.__setattr__(self, 'audit', MappingProxyType(dict(self.audit)))
+
+
+@dataclass(frozen=True)
+class TabletopCandidate:
+    source_index: int
+    variant_index: int
+    contact_center_base: np.ndarray
+    T_base_tool0: np.ndarray
+    insertion_axis_base: np.ndarray
+    jaw_axis_base: np.ndarray
+    required_open_width_m: float
+    minimum_finger_support_clearance_m: float
+    source_score: float
+    audit: Mapping
+
+    def __post_init__(self):
+        object.__setattr__(
+            self,
+            'contact_center_base',
+            _frozen_array(self.contact_center_base),
+        )
+        object.__setattr__(
+            self,
+            'T_base_tool0',
+            _frozen_array(self.T_base_tool0),
+        )
+        object.__setattr__(
+            self,
+            'insertion_axis_base',
+            _frozen_array(self.insertion_axis_base),
+        )
+        object.__setattr__(
+            self,
+            'jaw_axis_base',
+            _frozen_array(self.jaw_axis_base),
+        )
         object.__setattr__(self, 'audit', MappingProxyType(dict(self.audit)))
 
 
@@ -114,7 +170,11 @@ def generate_tabletop_proposals(
         lower = float(np.min(projection))
         upper = float(np.max(projection))
         span = upper - lower
-        required = span + 2.0 * checked_config.jaw_clearance_each_side_m
+        required = projected_cloud_width_m(
+            points,
+            jaw_axis,
+            checked_config.jaw_clearance_each_side_m,
+        )
         if span <= 1e-9 or not 0.0 < required <= checked_config.max_inner_gap_m:
             continue
         width_valid_count += 1
@@ -168,6 +228,302 @@ def generate_tabletop_proposals(
     )
 
 
+def materialize_tabletop_candidates(
+    proposal,
+    support_point_base,
+    support_normal_base,
+    gripper,
+    tool_jaw_axis='y',
+    tool_finger_length_axis='z',
+):
+    """Materialize one proposal as two CAD-grounded 180-degree variants."""
+    if not isinstance(proposal, TabletopProposal):
+        raise TabletopCandidateContractError(
+            'TOOL0_GEOMETRY_INVALID',
+            'proposal must be a TabletopProposal',
+        )
+    if not isinstance(gripper, GripperGeometry):
+        raise TabletopCandidateContractError(
+            'TOOL0_GEOMETRY_INVALID',
+            'gripper must be a GripperGeometry',
+        )
+    if (
+        gripper.jaw_clearance_each_side_m
+        != ANALYTICAL_JAW_CLEARANCE_EACH_SIDE_M
+    ):
+        raise TabletopCandidateContractError(
+            'TOOL0_GEOMETRY_INVALID',
+            'gripper jaw clearance must match the fixed 2 mm contract',
+        )
+    try:
+        support_point = _finite_vector(support_point_base, 'support_point_base')
+        support_normal = _unit_vector(
+            support_normal_base,
+            'support_normal_base',
+        )
+    except (TypeError, ValueError) as error:
+        raise TabletopCandidateContractError(
+            'TABLETOP_APPROACH_INVALID',
+            str(error),
+        ) from error
+
+    insertion = np.asarray(proposal.insertion_axis_base, dtype=float)
+    jaw = np.asarray(proposal.jaw_axis_base, dtype=float)
+    if (
+        insertion.shape != (3,)
+        or not np.all(np.isfinite(insertion))
+        or abs(float(np.linalg.norm(insertion)) - 1.0) > 1e-6
+        or float(np.dot(insertion, support_normal)) > -1.0 + 1e-6
+    ):
+        raise TabletopCandidateContractError(
+            'TABLETOP_APPROACH_INVALID',
+            'insertion axis must be antiparallel to the support normal',
+        )
+    if (
+        jaw.shape != (3,)
+        or not np.all(np.isfinite(jaw))
+        or abs(float(np.linalg.norm(jaw)) - 1.0) > 1e-6
+        or abs(float(np.dot(jaw, support_normal))) > 1e-6
+    ):
+        raise TabletopCandidateContractError(
+            'TABLETOP_APPROACH_INVALID',
+            'jaw axis must be a unit vector parallel to the support plane',
+        )
+
+    variants = []
+    for variant_index, jaw_axis in enumerate((jaw, -jaw)):
+        try:
+            rotation = semantic_axes_to_tool_rotation(
+                insertion_axis_base=insertion,
+                jaw_axis_base=jaw_axis,
+                tool_jaw_axis=tool_jaw_axis,
+                tool_finger_length_axis=tool_finger_length_axis,
+            )
+            translation = solve_tool0_translation_for_support_clearance(
+                rotation=rotation,
+                lateral_target=proposal.contact_center_base,
+                support_point=support_point,
+                support_normal=support_normal,
+                clearance_m=gripper.support_clearance_m,
+                gripper=gripper,
+                tool_jaw_axis=tool_jaw_axis,
+                tool_finger_length_axis=tool_finger_length_axis,
+            )
+            transform = np.eye(4, dtype=float)
+            transform[:3, :3] = rotation
+            transform[:3, 3] = translation
+            finger_corners = _open_finger_corners(
+                transform,
+                gripper,
+                tool_jaw_axis,
+                tool_finger_length_axis,
+            )
+            finger_heights = (finger_corners - support_point) @ support_normal
+            minimum_clearance = float(np.min(finger_heights))
+            if abs(minimum_clearance - gripper.support_clearance_m) > 1e-8:
+                raise ValueError('unable to solve the configured CAD clearance')
+            contact_height = float(
+                np.dot(
+                    np.asarray(proposal.contact_center_base) - support_point,
+                    support_normal,
+                )
+            )
+            if not (
+                float(np.min(finger_heights)) - 1e-9
+                <= contact_height
+                <= float(np.max(finger_heights)) + 1e-9
+            ):
+                raise ValueError(
+                    'usable finger side band does not overlap contact height'
+                )
+            finger_pair_center = translation + (
+                rotation @ ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M
+            )
+            palm_center = translation + (
+                rotation @ ANALYTICAL_PALM_CENTER_TOOL_XYZ_M
+            )
+            if float(np.dot(palm_center - finger_pair_center, insertion)) >= 0.0:
+                raise ValueError('palm lies on the object side of the fingers')
+        except TabletopCandidateContractError:
+            raise
+        except Exception as error:
+            raise TabletopCandidateContractError(
+                'TOOL0_GEOMETRY_INVALID',
+                str(error),
+            ) from error
+        audit = dict(proposal.audit)
+        audit.update({
+            'minimum_finger_support_clearance_m': minimum_clearance,
+            'tool0_translation_base': tuple(float(item) for item in translation),
+        })
+        variants.append(
+            TabletopCandidate(
+                source_index=proposal.source_index,
+                variant_index=variant_index,
+                contact_center_base=proposal.contact_center_base,
+                T_base_tool0=transform,
+                insertion_axis_base=insertion,
+                jaw_axis_base=jaw_axis,
+                required_open_width_m=proposal.required_open_width_m,
+                minimum_finger_support_clearance_m=minimum_clearance,
+                source_score=proposal.source_score,
+                audit=audit,
+            )
+        )
+    return tuple(variants)
+
+
+def semantic_axes_to_tool_rotation(
+    insertion_axis_base,
+    jaw_axis_base,
+    tool_jaw_axis='y',
+    tool_finger_length_axis='z',
+):
+    insertion = _candidate_unit_axis(
+        insertion_axis_base,
+        'insertion_axis_base',
+    )
+    jaw = _candidate_unit_axis(jaw_axis_base, 'jaw_axis_base')
+    if abs(float(np.dot(insertion, jaw))) > 1e-6:
+        raise TabletopCandidateContractError(
+            'TOOL0_GEOMETRY_INVALID',
+            'semantic insertion and jaw axes must be orthogonal',
+        )
+    try:
+        tool_jaw, jaw_index = parse_tool_axis(tool_jaw_axis)
+        tool_finger, finger_index = parse_tool_axis(tool_finger_length_axis)
+    except ValueError as error:
+        raise TabletopCandidateContractError(
+            'TOOL0_GEOMETRY_INVALID',
+            str(error),
+        ) from error
+    if jaw_index == finger_index:
+        raise TabletopCandidateContractError(
+            'TOOL0_GEOMETRY_INVALID',
+            'jaw and finger length axes must be different',
+        )
+    tool_cross = np.cross(tool_jaw, tool_finger)
+    base_cross = np.cross(jaw, insertion)
+    tool_basis = np.column_stack((tool_cross, tool_jaw, tool_finger))
+    base_basis = np.column_stack((base_cross, jaw, insertion))
+    rotation = base_basis @ tool_basis.T
+    if (
+        not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-8)
+        or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-8)
+    ):
+        raise TabletopCandidateContractError(
+            'TOOL0_GEOMETRY_INVALID',
+            'semantic axis mapping is not a right-handed orthonormal rotation',
+        )
+    return rotation
+
+
+def solve_tool0_translation_for_support_clearance(
+    rotation,
+    lateral_target,
+    support_point,
+    support_normal,
+    clearance_m,
+    gripper,
+    tool_jaw_axis='y',
+    tool_finger_length_axis='z',
+):
+    rotation = np.asarray(rotation, dtype=float)
+    if (
+        rotation.shape != (3, 3)
+        or not np.all(np.isfinite(rotation))
+        or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-8)
+        or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-8)
+    ):
+        raise ValueError('rotation must be right-handed and orthonormal')
+    target = _finite_vector(lateral_target, 'lateral_target')
+    point = _finite_vector(support_point, 'support_point')
+    normal = _unit_vector(support_normal, 'support_normal')
+    clearance = float(clearance_m)
+    if not np.isfinite(clearance) or clearance < 0.0:
+        raise ValueError('clearance_m must be finite and non-negative')
+    if not isinstance(gripper, GripperGeometry):
+        raise ValueError('gripper must be a GripperGeometry')
+
+    rotated_pair_center = rotation @ ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M
+    target_delta = target - rotated_pair_center
+    translation = target_delta - normal * float(np.dot(target_delta, normal))
+    initial = np.eye(4, dtype=float)
+    initial[:3, :3] = rotation
+    initial[:3, 3] = translation
+    corners = _open_finger_corners(
+        initial,
+        gripper,
+        tool_jaw_axis,
+        tool_finger_length_axis,
+    )
+    minimum = float(np.min((corners - point) @ normal))
+    if not np.isfinite(minimum):
+        raise ValueError('finger-corner support clearance is non-finite')
+    translation = translation + (clearance - minimum) * normal
+    return translation
+
+
+def _candidate_unit_axis(value, name):
+    try:
+        axis = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as error:
+        raise TabletopCandidateContractError(
+            'TOOL0_GEOMETRY_INVALID',
+            '%s must be a unit three-vector' % name,
+        ) from error
+    if (
+        axis.shape != (3,)
+        or not np.all(np.isfinite(axis))
+        or abs(float(np.linalg.norm(axis)) - 1.0) > 1e-6
+    ):
+        raise TabletopCandidateContractError(
+            'TOOL0_GEOMETRY_INVALID',
+            '%s must be a unit three-vector' % name,
+        )
+    return np.array(axis, dtype=float, copy=True)
+
+
+def _open_finger_corners(
+    transform,
+    gripper,
+    tool_jaw_axis,
+    tool_finger_length_axis,
+):
+    physical_gap = min(
+        float(gripper.max_inner_gap_m),
+        ANALYTICAL_MAX_INNER_GAP_M,
+    )
+    centers = gripper_box_centers(
+        transform[:3, 3],
+        transform[:3, :3],
+        physical_gap,
+        gripper,
+        tool_jaw_axis,
+        tool_finger_length_axis,
+    )
+    half = 0.5 * (
+        np.asarray(gripper.finger_size_xyz_m, dtype=float)
+        + ANALYTICAL_FINGER_BOX_PADDING_XYZ_M
+    )
+    local_corners = np.asarray(
+        [
+            [sx * half[0], sy * half[1], sz * half[2]]
+            for sx in (-1.0, 1.0)
+            for sy in (-1.0, 1.0)
+            for sz in (-1.0, 1.0)
+        ],
+        dtype=float,
+    )
+    rotation = transform[:3, :3]
+    return np.vstack(
+        tuple(
+            local_corners @ rotation.T + centers[name]
+            for name in ('left_finger', 'right_finger')
+        )
+    )
+
+
 def _failure(code, reason):
     return TabletopGenerationResult((), code, reason, ())
 
@@ -198,6 +554,13 @@ def _validated_config(config):
         raise _InputInvalid('angle_dedup_deg must be in [0, 90)')
     if values['jaw_clearance_each_side_m'] < 0.0:
         raise _InputInvalid('jaw_clearance_each_side_m must be non-negative')
+    if (
+        values['jaw_clearance_each_side_m']
+        != ANALYTICAL_JAW_CLEARANCE_EACH_SIDE_M
+    ):
+        raise _InputInvalid(
+            'jaw_clearance_each_side_m must match the fixed 2 mm gripper contract'
+        )
     if not 0.0 < values['contact_band_fraction'] < 0.5:
         raise _InputInvalid('contact_band_fraction must be in (0, 0.5)')
     for name in ('min_contact_band_points', 'max_candidates'):
@@ -315,12 +678,8 @@ def _contact_counts(projection, lower, upper, fraction):
 
 
 def _robust_contact_center(points, support_point, normal):
-    heights = (points - support_point).dot(normal)
-    minimum = float(np.min(heights))
-    maximum = float(np.max(heights))
-    band = max((maximum - minimum) * 0.12, 1e-9)
-    support_points = points[heights <= minimum + band]
-    return np.median(support_points, axis=0)
+    del support_point, normal
+    return np.median(points, axis=0)
 
 
 def _frozen_array(value):

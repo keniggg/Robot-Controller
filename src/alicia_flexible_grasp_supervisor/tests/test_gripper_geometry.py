@@ -23,8 +23,10 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
     GripperGeometry,
     candidate_rank_key,
     evaluate_candidate,
+    evaluate_explicit_candidate,
     gripper_box_centers,
     gripper_contract_mismatch_reason,
+    projected_cloud_width_m,
     required_open_width_m,
 )
 
@@ -240,6 +242,50 @@ def candidate_fixture(**overrides):
     return values
 
 
+def explicit_carton_fixture(**overrides):
+    rotation = np.diag([-1.0, 1.0, -1.0])
+    contact_center = np.array([0.0, 0.0, 0.0055])
+    tool0 = np.array([0.0004, -0.0003, 0.0034])
+    xs = (-0.0255, 0.0255)
+    ys = (-0.0175, 0.0175)
+    zs = (0.0, 0.011)
+    target_points = np.asarray(
+        [(x, y, z) for x in xs for y in ys for z in zs],
+        dtype=float,
+    )
+    values = {
+        'gripper': GRIPPER,
+        'candidate_center_base': contact_center,
+        'candidate_tool0_base': tool0,
+        'R_base_tool': rotation,
+        'required_open_width_m': 0.039,
+        'target_points_base': target_points,
+        'obb_center_base': contact_center,
+        'R_base_obb': np.eye(3),
+        'obb_size_xyz_m': np.array([0.051, 0.035, 0.011]),
+        'support_normal_base': np.array([0.0, 0.0, 1.0]),
+        'support_offset_m': 0.0,
+        'pregrasp_T_base_tool': transform(
+            tool0 + np.array([0.0, 0.0, 0.080]),
+            rotation,
+        ),
+        'approach_T_base_tool': transform(
+            tool0 + np.array([0.0, 0.0, 0.020]),
+            rotation,
+        ),
+        'grasp_T_base_tool': transform(tool0, rotation),
+        'lift_T_base_tool': transform(
+            tool0 + np.array([0.0, 0.0, 0.050]),
+            rotation,
+        ),
+        'tool_jaw_axis': 'y',
+        'tool_finger_length_axis': 'z',
+        'motion_cost': 0.0,
+    }
+    values.update(overrides)
+    return values
+
+
 def test_gripper_contract_defensively_copies_readonly_arrays():
     finger = np.array([0.0434, 0.0286, 0.0600])
     palm = np.array([0.1175, 0.1550, 0.0774])
@@ -286,6 +332,38 @@ def test_projected_carton_width_includes_both_clearances():
         clearance_each_side_m=0.002,
     )
     assert required == pytest.approx(0.044)
+
+
+def test_projected_cloud_width_includes_both_clearances():
+    points = np.array(
+        [[0.0, -0.0175, 0.0], [0.0, 0.0175, 0.0]],
+        dtype=float,
+    )
+
+    required = projected_cloud_width_m(
+        points,
+        jaw_axis=np.array([0.0, 1.0, 0.0]),
+        clearance_each_side_m=0.002,
+    )
+
+    assert required == pytest.approx(0.039)
+
+
+def test_explicit_candidate_never_requires_or_fabricates_graspnet_depth():
+    result = evaluate_explicit_candidate(**explicit_carton_fixture())
+
+    assert result.ok
+    assert result.required_open_width_m == pytest.approx(0.039, abs=5e-4)
+
+
+def test_explicit_candidate_fails_closed_when_width_disagrees_with_cloud():
+    result = evaluate_explicit_candidate(
+        **explicit_carton_fixture(required_open_width_m=0.030)
+    )
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_WIDTH_INVALID'
+    assert result.failed_gate == 'jaw_width'
 
 
 def test_tool_y_is_opposing_jaw_motion_and_finger_length_is_tool_z():
