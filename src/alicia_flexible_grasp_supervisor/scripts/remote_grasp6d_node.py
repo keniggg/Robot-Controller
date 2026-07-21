@@ -3000,6 +3000,7 @@ class RemoteGrasp6DNode:
         self._active_gate_audit_report = None
         self._latest_execution_audit_reference = {}
         self._active_execution_audit_report = None
+        self._execution_authority_ticket = None
         # These values are copied into FrozenGraspNetInputConfig at the very
         # start of each request.  Keep them uncoerced here so the pure builder
         # can reject bool/non-finite/non-integral ROS values fail-closed.
@@ -3743,6 +3744,7 @@ class RemoteGrasp6DNode:
             controller = getattr(self, 'execution_plan_controller', None)
             if controller is not None:
                 controller.clear_execution()
+            self._execution_authority_ticket = None
             self.latest_object_geometry = (
                 deepcopy(invalid_geometry)
                 if invalid_geometry is not None
@@ -3771,6 +3773,100 @@ class RemoteGrasp6DNode:
             str(failure_reason or 'plan is invalid'),
         )
         return invalid
+
+    @staticmethod
+    def _execution_authority_record(ticket):
+        return (
+            int(ticket.request_id),
+            int(ticket.generation),
+            int(ticket.target_epoch),
+            float(ticket.snapshot_stamp_sec),
+        )
+
+    @staticmethod
+    def _execution_authority_order_key(record):
+        request_id, generation, target_epoch, snapshot_stamp_sec = record
+        return (
+            int(generation),
+            int(target_epoch),
+            int(request_id),
+            float(snapshot_stamp_sec),
+        )
+
+    def _revoke_execution_authority_for_ticket(
+        self,
+        ticket,
+        failure_code,
+        failure_reason,
+        stamp=None,
+    ):
+        """Revoke execution authority owned by this or an older request."""
+
+        try:
+            with self._stream_condition:
+                self._require_stream_ticket_current_locked(ticket)
+                with self._geometry_state_guard():
+                    authority_ticket = getattr(
+                        self,
+                        '_execution_authority_ticket',
+                        None,
+                    )
+                    authority_key = None
+                    if authority_ticket is not None:
+                        authority_key = self._execution_authority_order_key(
+                            authority_ticket
+                        )
+                    incoming_key = self._execution_authority_order_key(
+                        self._execution_authority_record(ticket)
+                    )
+                    if (
+                        authority_key is not None
+                        and authority_key > incoming_key
+                    ):
+                        return False
+
+                    header = PoseArray().header
+                    header.frame_id = 'base_link'
+                    header.stamp = self._safe_time(stamp)
+                    invalid = Grasp6DPlan()
+                    invalid.header = deepcopy(header)
+                    invalid.valid = False
+                    invalid.diagnostic = '%s: %s' % (
+                        str(failure_code or 'PLAN_INVALID'),
+                        str(failure_reason or 'execution authority revoked'),
+                    )
+                    legacy = PoseArray()
+                    legacy.header = deepcopy(header)
+                    legacy.poses = []
+
+                    self.latest_rich_plan = None
+                    self.latest_plan = None
+                    controller = getattr(
+                        self,
+                        'execution_plan_controller',
+                        None,
+                    )
+                    if controller is not None:
+                        controller.clear_execution()
+                    self._active_execution_audit_report = None
+                    self._latest_execution_audit_reference = {}
+                    self._execution_authority_ticket = None
+                    rich_publisher = getattr(self, 'rich_plan_pub', None)
+                    legacy_publisher = getattr(self, 'plan_pub', None)
+        except StreamResultCancelled:
+            return False
+
+        self._publish_invalidation_safely(
+            rich_publisher,
+            deepcopy(invalid),
+            'rich plan',
+        )
+        self._publish_invalidation_safely(
+            legacy_publisher,
+            deepcopy(legacy),
+            'legacy plan',
+        )
+        return True
 
     def _revoke_execution_audit_for_invalidation(self, code, reason):
         report = deepcopy(
@@ -4474,6 +4570,7 @@ class RemoteGrasp6DNode:
         self._terminal_request_order = deque()
         self._terminal_request_limit = max(8, window_size * 2)
         self._stream_generation = 0
+        self._execution_authority_ticket = None
         self._latency_history_ms = deque(maxlen=window_size)
         self.pipeline_metrics = deque(maxlen=window_size)
         if start_worker:
@@ -6423,6 +6520,8 @@ class RemoteGrasp6DNode:
                         score=score,
                         now_sec=now_sec,
                     )
+                    authority_record = self._execution_authority_record(ticket)
+                    self._execution_authority_ticket = authority_record
                     self._record_preview_promotion_locked(
                         ticket,
                         committed,
@@ -7766,6 +7865,21 @@ class RemoteGrasp6DNode:
 
         ticket = prepared.ticket
         self._require_stream_ticket_current(ticket)
+        remote_failure_code = str(
+            getattr(prepared, 'remote_failure_code', '') or ''
+        )
+        if isinstance(prepared, PreparedPrediction) and remote_failure_code:
+            revoked = self._revoke_execution_authority_for_ticket(
+                ticket,
+                remote_failure_code,
+                str(
+                    getattr(prepared, 'remote_failure_reason', '')
+                    or 'remote GraspNet inference failed'
+                ),
+                stamp=prepared.stamp,
+            )
+            if not revoked:
+                raise StreamResultCancelled('REQUEST_STALE')
         if not self._activate_prepared_geometry(prepared):
             raise RuntimeError('prepared prediction geometry is stale')
         base_audit_report = None
@@ -7864,9 +7978,6 @@ class RemoteGrasp6DNode:
             preview_count = 1
             status = 'PREVIEW_READY'
         promotion_decision = None
-        remote_failure_code = str(
-            getattr(prepared, 'remote_failure_code', '') or ''
-        )
         if isinstance(prepared, PreparedPrediction) and remote_failure_code:
             promotion_decision = PromotionDecision(
                 False,
@@ -7882,14 +7993,6 @@ class RemoteGrasp6DNode:
                 stable_count=len(stable),
                 preview_count=preview_count,
                 promotion_count=0,
-            )
-            self._publish_invalid_plan_pair(
-                remote_failure_code,
-                str(
-                    getattr(prepared, 'remote_failure_reason', '')
-                    or 'remote GraspNet inference failed'
-                ),
-                stamp=prepared.stamp,
             )
             self._finalize_streaming_gate_audit(
                 prepared,
@@ -8043,6 +8146,13 @@ class RemoteGrasp6DNode:
             funnel = {}
             status = completion.code
             final_accepted = bool(completion.accepted)
+            if completion.accepted and error is not None:
+                self._revoke_execution_authority_for_ticket(
+                    ticket,
+                    remote_prediction_failure_code(error),
+                    str(error),
+                    stamp=rospy.Time.from_sec(ticket.snapshot_stamp_sec),
+                )
             if completion.accepted and prepared is not None and error is None:
                 try:
                     accepted_result = self._accept_prediction(prepared)

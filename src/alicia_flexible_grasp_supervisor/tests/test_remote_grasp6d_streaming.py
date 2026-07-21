@@ -153,6 +153,50 @@ def streaming_node(clock=None, prepare=None, start_worker=True):
     return node
 
 
+def seed_stream_execution_authority(node, authority_ticket=None):
+    node._geometry_state_lock = threading.RLock()
+    node.execution_plan_controller = ExecutionPlanController()
+    node.execution_plan_controller.commit_execution(
+        'old-plan',
+        'old-signature',
+        score=0.1,
+        now_sec=10.0,
+    )
+    node.latest_rich_plan = types.SimpleNamespace(
+        valid=True,
+        plan_id='old-plan',
+    )
+    node.latest_plan = types.SimpleNamespace(poses=('old-pose',))
+    node.rich_plan_pub = RecordingPublisher()
+    node.plan_pub = RecordingPublisher()
+    node._active_execution_audit_report = {
+        'plan_id': 'old-plan',
+        'outcome': {'valid_plan': True},
+    }
+    node._latest_execution_audit_reference = {
+        'report_sha256': 'old-audit',
+        'atomic_committed': True,
+    }
+    if authority_ticket is not None:
+        node._execution_authority_ticket = (
+            int(authority_ticket.request_id),
+            int(authority_ticket.generation),
+            int(authority_ticket.target_epoch),
+            float(authority_ticket.snapshot_stamp_sec),
+        )
+
+
+def assert_execution_authority_revoked(node, failure_code):
+    assert node.execution_plan_controller.execution_plan_id is None
+    assert node.latest_rich_plan is None
+    assert node.latest_plan is None
+    assert node._active_execution_audit_report is None
+    assert node._latest_execution_audit_reference == {}
+    assert node.rich_plan_pub.messages[-1].valid is False
+    assert failure_code in node.rich_plan_pub.messages[-1].diagnostic
+    assert node.plan_pub.messages[-1].poses == []
+
+
 def wait_until(predicate, timeout=2.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -1328,7 +1372,7 @@ def test_real_graspnet_normalization_and_analytical_gate_use_prepared_geometry()
         remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
         dtype=float,
     )
-    node.candidate_frame_convention = 'ros_camera_link'
+    node.candidate_frame_convention = 'opencv_optical'
     node.grasp_config = {
         'tool_approach_axis': 'z',
         'pregrasp_distance_m': 0.08,
@@ -1369,7 +1413,7 @@ def test_real_graspnet_normalization_and_analytical_gate_use_prepared_geometry()
         base_from_optical,
         stamp,
         'camera_link',
-        raw_candidate_convention='ros_camera_link',
+        raw_candidate_convention='opencv_optical',
     )
     prepared = types.SimpleNamespace(
         ticket=InferenceTicket(
@@ -1390,8 +1434,13 @@ def test_real_graspnet_normalization_and_analytical_gate_use_prepared_geometry()
     )
     raw_candidate = RemoteGraspCandidate(
         score=0.9,
-        translation_m=(0.0, 0.0, 0.080),
-        quaternion_xyzw=(0.0, 0.0, 0.0, 1.0),
+        translation_m=(0.0, -0.080, 0.0),
+        quaternion_xyzw=remote_node.quaternion_from_matrix(
+            np.block([
+                [remote_node.OPTICAL_TO_ROS_CAMERA.T, np.zeros((3, 1))],
+                [np.zeros((1, 3)), np.ones((1, 1))],
+            ])
+        ),
         width_m=0.012,
         depth_m=0.030,
     )
@@ -1571,6 +1620,187 @@ def test_target_epoch_invalidation_clears_tracks_from_both_sources():
         'GRASPNET_PROTOCOL_INVALID',
     ],
 )
+@pytest.mark.parametrize('early_return', ['observations_empty', 'stable_empty'])
+def test_remote_failure_revokes_execution_before_local_pipeline_early_return(
+    monkeypatch,
+    failure_code,
+    early_return,
+):
+    node = streaming_node(clock=MutableClock(20.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(19.8))
+        ticket = node._stream_worker_ticket
+        seed_stream_execution_authority(node)
+        prepared = remote_node.PreparedPrediction(
+            ticket=ticket,
+            snapshot=types.SimpleNamespace(
+                object_msg=types.SimpleNamespace(detected=True, label='carton')
+            ),
+            stamp=remote_node.rospy.Time.from_sec(19.8),
+            geometry=tabletop_geometry(),
+            pose_estimator=types.SimpleNamespace(transform_sha256='frozen-tf'),
+            graspnet_input=None,
+            candidates=(),
+            remote_diagnostics={},
+            remote_performance={},
+            tabletop_candidates=(),
+            remote_failure_code=failure_code,
+            remote_failure_reason='remote prediction failed',
+            model_choice='carton_segment',
+        )
+        node._activate_prepared_geometry = lambda _prepared: True
+        node._run_candidate_gate_audit = lambda *_args, **_kwargs: {
+            'summary': {},
+            'rows': [],
+        }
+        observations = (
+            ()
+            if early_return == 'observations_empty'
+            else ('geometry-observation',)
+        )
+        stable = ('retained-stable',) if not observations else ()
+        local_funnel = {
+            'input_count': 0,
+            'stage_counts': {
+                'locally_valid': {
+                    'entered': len(observations),
+                    'passed': len(observations),
+                    'rejected': 0,
+                }
+            },
+            'source_counts': {},
+            'rejection_counts': {failure_code: 1},
+            'rejection_ratios': {failure_code: 1.0},
+            'primary_failure': failure_code,
+        }
+        node._evaluate_local_candidates = lambda _prepared: (
+            observations,
+            local_funnel,
+        )
+        node._update_candidate_tracker = lambda **_kwargs: stable
+        node._recheck_and_score_stable = lambda *_args: pytest.fail(
+            'early return must not recheck stable candidates'
+        )
+        node._finalize_streaming_gate_audit = lambda *_args, **_kwargs: None
+        node._finalize_promotion_transaction = lambda *_args, **_kwargs: (
+            pytest.fail('remote failure must not enter MuJoCo promotion')
+        )
+        node.stop_streaming = lambda *_args, **_kwargs: pytest.fail(
+            'remote failure revocation must not stop streaming or the robot'
+        )
+        monkeypatch.setattr(
+            remote_node.rospy,
+            'wait_for_service',
+            lambda *_args, **_kwargs: pytest.fail(
+                'remote failure revocation must not wait for a ROS service'
+            ),
+        )
+        monkeypatch.setattr(
+            remote_node.rospy,
+            'ServiceProxy',
+            lambda *_args, **_kwargs: pytest.fail(
+                'remote failure revocation must not create a ROS service'
+            ),
+        )
+
+        result = remote_node.RemoteGrasp6DNode._accept_prediction(
+            node,
+            prepared,
+        )
+
+        assert result['funnel']['primary_failure'] == failure_code
+        assert_execution_authority_revoked(node, failure_code)
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_worker_remote_error_without_prepared_prediction_revokes_execution(
+    monkeypatch,
+):
+    def fail_before_prepared(_ticket):
+        error = RuntimeError(
+            'remote failed and tabletop produced no candidates'
+        )
+        error.__cause__ = ConnectionError('connection refused')
+        raise error
+
+    node = streaming_node(
+        clock=MutableClock(20.0),
+        prepare=fail_before_prepared,
+        start_worker=True,
+    )
+    seed_stream_execution_authority(node)
+    node.stop_streaming = lambda *_args, **_kwargs: pytest.fail(
+        'worker failure revocation must not stop streaming or the robot'
+    )
+    monkeypatch.setattr(
+        remote_node.rospy,
+        'wait_for_service',
+        lambda *_args, **_kwargs: pytest.fail(
+            'worker failure revocation must not wait for a ROS service'
+        ),
+    )
+    monkeypatch.setattr(
+        remote_node.rospy,
+        'ServiceProxy',
+        lambda *_args, **_kwargs: pytest.fail(
+            'worker failure revocation must not create a ROS service'
+        ),
+    )
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(19.8))
+        wait_until(lambda: len(node.pipeline_metrics) == 1)
+
+        assert node.pipeline_metrics[0]['status'] == 'PREDICT_FAILED'
+        assert_execution_authority_revoked(node, 'WSL_UNAVAILABLE')
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_stale_ticket_cannot_revoke_newer_execution_authority():
+    node = streaming_node(clock=MutableClock(20.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(19.7))
+        stale_ticket = node._stream_worker_ticket
+        newer_ticket = InferenceTicket(
+            request_id=stale_ticket.request_id + 1,
+            generation=stale_ticket.generation,
+            snapshot_stamp_sec=19.8,
+            target_epoch=stale_ticket.target_epoch,
+            payload=None,
+            submitted_monotonic_sec=19.8,
+        )
+        seed_stream_execution_authority(node, authority_ticket=newer_ticket)
+        initial_rich_messages = len(node.rich_plan_pub.messages)
+        initial_plan_messages = len(node.plan_pub.messages)
+
+        revoked = node._revoke_execution_authority_for_ticket(
+            stale_ticket,
+            'WSL_UNAVAILABLE',
+            'stale remote failure',
+        )
+
+        assert revoked is False
+        assert node.execution_plan_controller.execution_plan_id == 'old-plan'
+        assert node.latest_rich_plan.plan_id == 'old-plan'
+        assert node.latest_plan.poses == ('old-pose',)
+        assert len(node.rich_plan_pub.messages) == initial_rich_messages
+        assert len(node.plan_pub.messages) == initial_plan_messages
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize(
+    'failure_code',
+    [
+        'WSL_UNAVAILABLE',
+        'WSL_PREDICT_FAILED',
+        'GRASPNET_PROTOCOL_INVALID',
+    ],
+)
 def test_remote_failure_preview_revokes_old_execution_without_actuation(
     monkeypatch,
     failure_code,
@@ -1581,24 +1811,8 @@ def test_remote_failure_preview_revokes_old_execution_without_actuation(
         node.submit_stream_snapshot(snapshot(19.8))
         ticket = node._stream_worker_ticket
         node.moveit_top_n = 5
-        node._geometry_state_lock = threading.RLock()
-        node.execution_plan_controller = ExecutionPlanController()
-        node.execution_plan_controller.commit_execution(
-            'old-plan',
-            'old-signature',
-            score=0.1,
-            now_sec=10.0,
-        )
-        node.latest_rich_plan = types.SimpleNamespace(
-            valid=True,
-            plan_id='old-plan',
-        )
-        node.latest_plan = types.SimpleNamespace(poses=('old-pose',))
-        node.rich_plan_pub = RecordingPublisher()
-        node.plan_pub = RecordingPublisher()
+        seed_stream_execution_authority(node)
         node._latest_geometry_estimate = tabletop_geometry()
-        node._active_execution_audit_report = None
-        node._latest_execution_audit_reference = {}
         prepared = remote_node.PreparedPrediction(
             ticket=ticket,
             snapshot=types.SimpleNamespace(
@@ -1706,11 +1920,7 @@ def test_remote_failure_preview_revokes_old_execution_without_actuation(
         assert result['funnel']['stage_counts']['promoted']['passed'] == 0
         assert result['funnel']['primary_failure'] == failure_code
         assert finalized[0].code == failure_code
-        assert node.execution_plan_controller.execution_plan_id is None
-        assert node.latest_rich_plan is None
-        assert node.latest_plan is None
-        assert node.rich_plan_pub.messages[-1].valid is False
-        assert node.plan_pub.messages[-1].poses == []
+        assert_execution_authority_revoked(node, failure_code)
     finally:
         node.shutdown_streaming_worker()
 

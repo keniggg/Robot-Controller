@@ -614,6 +614,49 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             )
         )
 
+    def test_prepare_propagates_remote_error_when_tabletop_has_no_candidate(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node = make_processing_node()
+        geometry = make_tabletop_geometry_estimate()
+        node._require_graspnet_input_prerequisites = lambda *_args: None
+        node._prepare_snapshot_geometry = lambda *_args: (
+            geometry,
+            snapshot.depth_raw,
+            np.eye(4),
+        )
+        node._generate_tabletop_candidates = lambda _geometry: (
+            (),
+            {
+                'failure_code': 'NO_FIT_DIRECTION',
+                'failure_reason': 'no tabletop candidate fits',
+            },
+        )
+        node._gripper_contract_mismatch_reason = lambda: ''
+        node._build_frozen_graspnet_input = lambda *_args, **_kwargs: (
+            types.SimpleNamespace(
+                color_bgr=snapshot.color_bgr,
+                depth_raw=snapshot.depth_raw,
+            ),
+            {},
+        )
+        node._require_stream_ticket_current = lambda _ticket: None
+        remote_error = ConnectionError('remote endpoint unavailable')
+        node._predict_remote = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            remote_error
+        )
+        ticket = types.SimpleNamespace(
+            request_id=8,
+            generation=1,
+            snapshot_stamp_sec=snapshot.stamp_sec,
+            target_epoch=1,
+            payload=(snapshot, frozen_input_config(node)),
+        )
+
+        with self.assertRaises(ConnectionError) as raised:
+            node._prepare_and_predict(ticket)
+
+        self.assertIs(raised.exception, remote_error)
+
     def test_build_rich_plan_copies_geometry_width_and_exact_snapshot_identity(self):
         stamp_ns = 1_700_000_000_000_000_123
         geometry = make_geometry_message(stamp_ns)

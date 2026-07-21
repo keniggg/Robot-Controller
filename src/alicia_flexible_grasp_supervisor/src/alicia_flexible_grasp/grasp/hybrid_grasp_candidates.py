@@ -239,6 +239,32 @@ class NormalizedPlanningCandidate:
         object.__setattr__(self, 'audit', MappingProxyType(dict(self.audit)))
 
 
+@dataclass(frozen=True)
+class HybridCandidatePayload:
+    """Frozen dual-source evidence with an explicit physical recheck adapter."""
+
+    graspnet: NormalizedPlanningCandidate
+    tabletop: NormalizedPlanningCandidate
+
+    def __post_init__(self):
+        if not isinstance(self.graspnet, NormalizedPlanningCandidate):
+            raise TypeError('graspnet evidence must be normalized')
+        if self.graspnet.candidate_source != 'graspnet':
+            raise ValueError('graspnet evidence must come from graspnet')
+        if not isinstance(self.tabletop, NormalizedPlanningCandidate):
+            raise TypeError('tabletop evidence must be normalized')
+        if self.tabletop.candidate_source != 'tabletop_geometry':
+            raise ValueError(
+                'tabletop evidence must come from tabletop_geometry'
+            )
+
+    @property
+    def physical_recheck(self):
+        """Return the analytical geometry adapter used for physical rechecks."""
+
+        return self.tabletop
+
+
 def _vector_angle_deg(first, second, *, undirected):
     dot = float(np.dot(first, second))
     if undirected:
@@ -293,12 +319,68 @@ def _physical_rank(candidate):
     )
 
 
+def _merge_exact_physical_tie(first, second, lineage):
+    """Build one metadata-independent analytical recheck record."""
+
+    evidence = {
+        first.candidate_source: first,
+        second.candidate_source: second,
+    }
+    graspnet = evidence['graspnet']
+    tabletop = evidence['tabletop_geometry']
+    physical = _physical_rank(first)
+    if physical != _physical_rank(second):
+        raise ValueError('exact physical merge requires equal physical ranks')
+
+    common_cost = physical[0]
+    required_width = physical[1]
+    support_clearance = -physical[2]
+    center = np.asarray(physical[3], dtype=np.float64)
+    transform = np.asarray(physical[4], dtype=np.float64).reshape(4, 4)
+    insertion = np.asarray(physical[5], dtype=np.float64)
+    jaw = np.asarray(physical[6], dtype=np.float64)
+    variant_index = physical[7]
+    geometry_gate = replace(
+        tabletop.geometry_gate,
+        required_open_width_m=required_width,
+        support_clearance_m=support_clearance,
+    )
+    return NormalizedPlanningCandidate(
+        # The existing tabletop source value is the downstream contract for
+        # analytical reconstruction.  The physical identity itself is rebuilt
+        # exclusively from the source-neutral rank above.
+        candidate_source='tabletop_geometry',
+        source_index=0,
+        variant_index=variant_index,
+        source_lineage=lineage,
+        contact_center_base=center,
+        T_base_tool0=transform,
+        insertion_axis_base=insertion,
+        jaw_axis_base=jaw,
+        required_open_width_m=required_width,
+        model_width_m=None,
+        model_score=None,
+        source_local_score=common_cost,
+        common_physical_cost=common_cost,
+        geometry_gate=geometry_gate,
+        grasp_sequence=tabletop.grasp_sequence,
+        payload=HybridCandidatePayload(
+            graspnet=graspnet,
+            tabletop=tabletop,
+        ),
+        audit={
+            'merge_kind': 'cross_source_exact_physical_tie',
+            'physical_recheck_adapter': 'tabletop_geometry',
+            'evidence_sources': lineage,
+        },
+    )
+
+
 def merge_hybrid_candidates(candidates, config):
     """Merge cross-source duplicates using source-neutral physical facts.
 
-    Physically identical exact ties retain both source-specific candidates.
-    With no physical fact available to distinguish them, selecting either one
-    would necessarily introduce source name or input order as hidden policy.
+    Physically identical exact ties become one analytical recheck record that
+    retains both source-specific candidates as frozen evidence.
     """
     if not isinstance(config, MergeConfig):
         raise TypeError('config must be a MergeConfig')
@@ -332,8 +414,11 @@ def merge_hybrid_candidates(candidates, config):
         match_rank = _physical_rank(match)
         candidate_rank = _physical_rank(candidate)
         if candidate_rank == match_rank:
-            merged[match_index] = replace(match, source_lineage=lineage)
-            merged.append(replace(candidate, source_lineage=lineage))
+            merged[match_index] = _merge_exact_physical_tie(
+                match,
+                candidate,
+                lineage,
+            )
             continue
         winner = candidate if candidate_rank < match_rank else match
         merged[match_index] = replace(winner, source_lineage=lineage)

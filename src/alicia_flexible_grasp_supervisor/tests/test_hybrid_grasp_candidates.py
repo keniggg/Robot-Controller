@@ -23,6 +23,11 @@ from alicia_flexible_grasp.grasp.hybrid_grasp_candidates import (
     bilateral_contact_balance,
     merge_hybrid_candidates,
 )
+from alicia_flexible_grasp.grasp.grasp6d_stability import (
+    CandidateObservation,
+    CandidateTracker,
+    TrackingConfig,
+)
 
 
 def successful_gate(
@@ -54,6 +59,7 @@ def normalized_candidate(
     common_cost=0.20,
     required_width_m=0.040,
     support_clearance_m=0.010,
+    model_score=0.80,
 ):
     transform = np.eye(4)
     transform[:3, 3] = center
@@ -69,7 +75,7 @@ def normalized_candidate(
         jaw_axis_base=np.asarray(jaw, dtype=float),
         required_open_width_m=required_width_m,
         model_width_m=None if is_geometry else 0.038,
-        model_score=None if is_geometry else 0.80,
+        model_score=None if is_geometry else model_score,
         source_local_score=0.1,
         common_physical_cost=common_cost,
         geometry_gate=successful_gate(
@@ -297,25 +303,133 @@ def test_same_source_and_different_variant_candidates_are_not_collapsed():
     assert len(different_variants) == 2
 
 
-def test_exact_cross_source_physical_tie_retains_both_without_source_preference():
-    graspnet = normalized_candidate('graspnet')
-    geometry = normalized_candidate('tabletop_geometry')
+def test_exact_cross_source_physical_tie_deduplicates_to_one_neutral_record():
+    graspnet = normalized_candidate('graspnet', source_index=91)
+    geometry = normalized_candidate('tabletop_geometry', source_index=7)
+    low_confidence_graspnet = normalized_candidate(
+        'graspnet',
+        source_index=2,
+        model_score=0.01,
+    )
+    reverse_geometry = normalized_candidate(
+        'tabletop_geometry',
+        source_index=123,
+    )
 
     forward = merge_hybrid_candidates((graspnet, geometry), MergeConfig())
-    reverse = merge_hybrid_candidates((geometry, graspnet), MergeConfig())
+    reverse = merge_hybrid_candidates(
+        (reverse_geometry, low_confidence_graspnet),
+        MergeConfig(),
+    )
 
-    assert len(forward) == len(reverse) == 2
-    assert {item.candidate_source for item in forward} == {
+    assert len(forward) == len(reverse) == 1
+    first = forward[0]
+    second = reverse[0]
+    assert first.candidate_source == second.candidate_source == (
+        'tabletop_geometry'
+    )
+    assert first.source_index == second.source_index == 0
+    assert first.variant_index == second.variant_index == 0
+    assert first.model_width_m is second.model_width_m is None
+    assert first.model_score is second.model_score is None
+    assert first.source_local_score == second.source_local_score
+    assert first.source_lineage == second.source_lineage == (
         'graspnet',
         'tabletop_geometry',
-    }
-    assert {item.candidate_source for item in reverse} == {
-        'graspnet',
-        'tabletop_geometry',
-    }
+    )
+    assert np.array_equal(first.contact_center_base, second.contact_center_base)
+    assert np.array_equal(first.T_base_tool0, second.T_base_tool0)
+    assert np.array_equal(first.insertion_axis_base, second.insertion_axis_base)
+    assert np.array_equal(first.jaw_axis_base, second.jaw_axis_base)
+    assert first.required_open_width_m == second.required_open_width_m
+    assert type(first.payload).__name__ == 'HybridCandidatePayload'
+    assert type(second.payload).__name__ == 'HybridCandidatePayload'
+    assert first.payload.graspnet.candidate_source == 'graspnet'
+    assert first.payload.tabletop.candidate_source == 'tabletop_geometry'
+    assert second.payload.graspnet.model_score == pytest.approx(0.01)
+    assert second.payload.tabletop.source_index == 123
+    assert first.payload.physical_recheck is first.payload.tabletop
+    assert second.payload.physical_recheck is second.payload.tabletop
+
+
+def test_exact_tie_creates_one_three_hit_track_independent_of_input_metadata():
+    tracker = CandidateTracker(
+        TrackingConfig(window_size=5, min_hits=3)
+    )
+    selected_records = []
+    stable = ()
+    identity = (4, 'carton', 'carton_segment')
+    for request_id, confidence in enumerate((0.99, 0.10, 0.75), start=1):
+        graspnet = normalized_candidate(
+            'graspnet',
+            source_index=100 - request_id,
+            model_score=confidence,
+        )
+        geometry = normalized_candidate(
+            'tabletop_geometry',
+            source_index=request_id + 20,
+        )
+        inputs = (
+            (graspnet, geometry)
+            if request_id % 2
+            else (geometry, graspnet)
+        )
+        merged = merge_hybrid_candidates(inputs, MergeConfig())
+        assert len(merged) == 1
+        selected = merged[0]
+        selected_records.append(selected)
+        observation = CandidateObservation(
+            request_id=request_id,
+            snapshot_stamp_sec=10.0 + request_id,
+            target_epoch=identity[0],
+            target_label=identity[1],
+            model_choice=identity[2],
+            center_base_xyz=selected.contact_center_base,
+            tool0_position_xyz=selected.T_base_tool0[:3, 3],
+            quaternion_xyzw=(0.0, 0.0, 0.0, 1.0),
+            approach_base_xyz=selected.insertion_axis_base,
+            required_open_width_m=selected.required_open_width_m,
+            model_width_m=selected.model_width_m,
+            model_score=selected.model_score,
+            geometry_margin_m=selected.geometry_gate.support_clearance_m,
+            pre_moveit_score=selected.common_physical_cost,
+            payload=selected,
+            candidate_source=selected.candidate_source,
+            source_lineage=selected.source_lineage,
+        )
+        stable = tracker.update(
+            request_id,
+            (observation,),
+            target_identity=identity,
+        )
+
+    assert tracker.track_count == 1
+    assert len(stable) == 1
+    assert stable[0].track_id == 1
+    assert stable[0].hit_count == 3
+    assert stable[0].hit_request_ids == (1, 2, 3)
+    assert stable[0].candidate_source == selected_records[0].candidate_source
+    assert all(item.source_index == 0 for item in selected_records)
+    assert all(item.model_score is None for item in selected_records)
+    assert all(item.model_width_m is None for item in selected_records)
     assert all(
-        item.source_lineage == ('graspnet', 'tabletop_geometry')
-        for item in forward + reverse
+        np.array_equal(
+            item.T_base_tool0,
+            selected_records[0].T_base_tool0,
+        )
+        for item in selected_records
+    )
+    assert stable[0].source_lineage == (
+        'graspnet',
+        'tabletop_geometry',
+    )
+    assert np.array_equal(
+        stable[0].center_base_xyz,
+        selected_records[0].contact_center_base,
+    )
+    assert np.array_equal(
+        stable[0].tool0_position_xyz,
+        selected_records[0].T_base_tool0[:3, 3],
     )
 
 
