@@ -3793,6 +3793,47 @@ def test_final_audit_is_bound_before_execution_authority_publish(tmp_path):
         node.shutdown_streaming_worker()
 
 
+def test_promotion_source_stable_counts_use_full_tracker_pool(tmp_path):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    selected = selection.selected
+    geometry_stable = remote_node.replace(
+        selected.stable_candidate,
+        track_id=8,
+        candidate_source='tabletop_geometry',
+        source_lineage=('tabletop_geometry',),
+    )
+    second_graspnet_stable = remote_node.replace(
+        selected.stable_candidate,
+        track_id=9,
+    )
+    full_stable_pool = (
+        selected.stable_candidate,
+        geometry_stable,
+        second_graspnet_stable,
+    )
+    try:
+        funnel, _decision = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            len(full_stable_pool),
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+            stable_candidates=full_stable_pool,
+        )
+
+        counts = funnel['source_counts']
+        assert funnel['stage_counts']['stable']['passed'] == 3
+        assert counts['graspnet']['stable'] == 2
+        assert counts['tabletop_geometry']['stable'] == 1
+        assert sum(item['stable'] for item in counts.values()) == 3
+    finally:
+        node.shutdown_streaming_worker()
+
+
 def test_failed_execution_publish_rewrites_audit_as_unpublished(tmp_path):
     setup = promotion_transaction_node(tmp_path)
     node, prepared, selection, proposal, local_funnel, moveit_funnel = setup

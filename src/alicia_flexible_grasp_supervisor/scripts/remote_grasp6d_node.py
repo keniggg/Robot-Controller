@@ -6614,6 +6614,7 @@ class RemoteGrasp6DNode:
         stable_count,
         status,
         base_report,
+        stable_candidates=None,
     ):
         """Write final evidence, then publish/commit execution authority."""
 
@@ -6665,7 +6666,9 @@ class RemoteGrasp6DNode:
                 return False
 
         audit_stable_candidates = tuple(
-            getattr(selection, 'checked', ()) or ()
+            stable_candidates
+            if stable_candidates is not None
+            else (getattr(selection, 'checked', ()) or ())
         )
         audit_preview_candidate = getattr(selection, 'selected', None)
 
@@ -8142,6 +8145,7 @@ class RemoteGrasp6DNode:
                     len(stable),
                     status,
                     base_audit_report,
+                    stable_candidates=stable,
                 )
             )
             return {'status': status, 'funnel': funnel}
