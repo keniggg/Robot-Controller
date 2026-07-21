@@ -7,6 +7,9 @@ from typing import Mapping
 import numpy as np
 
 
+_ALICIA_MAX_INNER_GAP_M = 0.050
+
+
 class _InputInvalid(ValueError):
     pass
 
@@ -187,6 +190,8 @@ def _validated_config(config):
         values[name] = float(value)
     if values['max_inner_gap_m'] <= 0.0:
         raise _InputInvalid('max_inner_gap_m must be positive')
+    if values['max_inner_gap_m'] > _ALICIA_MAX_INNER_GAP_M:
+        raise _InputInvalid('max_inner_gap_m exceeds the fixed 50 mm gripper contract')
     if not 0.0 < values['angle_step_deg'] <= 180.0:
         raise _InputInvalid('angle_step_deg must be in (0, 180]')
     if not 0.0 <= values['angle_dedup_deg'] < 90.0:

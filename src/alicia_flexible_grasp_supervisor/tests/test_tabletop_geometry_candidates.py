@@ -94,6 +94,13 @@ def test_zero_support_normal_has_stable_support_failure():
     assert result.failure_code == 'SUPPORT_PLANE_INVALID'
 
 
+def test_nonunit_support_normal_has_stable_support_failure():
+    result = carton_result(support_normal_base=np.array([0.0, 0.0, 2.0]))
+
+    assert not result.ok
+    assert result.failure_code == 'SUPPORT_PLANE_INVALID'
+
+
 def test_obb_misaligned_with_support_has_stable_support_failure():
     result = carton_result(
         R_base_obb=np.array([[1.0, 0.0, 0.0],
@@ -113,6 +120,13 @@ def test_oversized_object_has_no_fit_direction_failure():
 
     assert not result.ok
     assert result.failure_code == 'NO_FIT_DIRECTION'
+
+
+def test_aperture_above_fixed_50mm_contract_has_input_failure():
+    result = carton_result(config=TabletopGeometryConfig(max_inner_gap_m=0.060))
+
+    assert not result.ok
+    assert result.failure_code == 'TABLETOP_GEOMETRY_INPUT_INVALID'
 
 
 def test_one_sided_contact_bands_have_contact_support_failure():
