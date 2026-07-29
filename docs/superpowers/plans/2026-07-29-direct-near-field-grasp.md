@@ -32,7 +32,7 @@
 **Interfaces:**
 - Produces: `/grasp/near_field_strategy=single_snapshot_direct` and direct-mode production defaults consumed by both ROS Python nodes.
 
-- [ ] **Step 1: Change the persisted-config test first**
+- [x] **Step 1: Change the persisted-config test first**
 
 Replace the 450-second and enabled-final-refine assertions with:
 
@@ -49,7 +49,7 @@ self.assertFalse(grasp['final_visual_refine_required'])
 Keep all existing assertions for snapshot frame count, target validity,
 geometry, collision, joint, and endpoint settings.
 
-- [ ] **Step 2: Run and verify the test fails**
+- [x] **Step 2: Run and verify the test fails**
 
 ```bash
 python3 -m unittest src.alicia_flexible_grasp_supervisor.tests.test_graspnet_input_default_config -v
@@ -57,7 +57,7 @@ python3 -m unittest src.alicia_flexible_grasp_supervisor.tests.test_graspnet_inp
 
 Expected: the current `450.0`, `true`, and missing strategy values fail.
 
-- [ ] **Step 3: Set production YAML**
+- [x] **Step 3: Set production YAML**
 
 Write:
 
@@ -71,13 +71,13 @@ final_visual_refine_required: false
 Retain the legacy tuning values below them for explicit legacy-mode tests; they
 have no production authority while the direct strategy is selected.
 
-- [ ] **Step 4: Run and pass the config test**
+- [x] **Step 4: Run and pass the config test**
 
 Run the command from Step 2.
 
 Expected: all persisted-config tests pass.
 
-- [ ] **Step 5: Commit the production policy**
+- [x] **Step 5: Commit the production policy**
 
 ```bash
 git add src/alicia_flexible_grasp_supervisor/config/grasp_params.yaml src/alicia_flexible_grasp_supervisor/tests/test_graspnet_input_default_config.py

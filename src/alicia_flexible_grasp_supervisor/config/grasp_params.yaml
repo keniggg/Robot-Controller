@@ -104,26 +104,27 @@ grasp:
   near_field_replan_enabled: true
   near_field_replan_required: true
   near_field_replan_request_stream: true
+  # Production second stage: one fused near-field snapshot is the requested
+  # visual correction. Rank its current hard-safe candidates and freeze the
+  # first complete sequence that passes strict MoveIt.
+  near_field_strategy: "single_snapshot_direct"
   # Repeated attempts must not rotate the wrist between alternative far-field
   # candidates when the camera is already inside the same observation region.
   # Preserve that reached view and let the fresh near-field plan choose the
   # contact pose.
   observation_reuse_position_tolerance_m: 0.025
-  # Powered evidence showed two approximately 90 s strict-MoveIt batches can
-  # legitimately find no reachable sequence before a third batch finds
-  # reachable candidates at task age about 294 s. Preserve the full configured
-  # 80 s MuJoCo candidate-selection budget plus stability/scheduling margin.
-  # This changes only the fail-closed wait horizon; no candidate gate is
-  # relaxed and no cache hit is assumed.
-  near_field_replan_timeout_sec: 450.0
+  # One fused request, authoritative rank ordering, and first-reachable
+  # selection are bounded together. The direct strategy does not run the old
+  # cross-request stability/MuJoCo/final-refine chain.
+  near_field_replan_timeout_sec: 30.0
   near_field_replan_poll_sec: 0.05
   near_field_replan_snapshot_slack_sec: 3.0
   # At the candidate-specific 36 mm pregrasp, collect one more current Preview
   # window before the last 20 mm approach. Keep the selected candidate family,
   # update only bounded xyz and support-normal yaw, and preserve the prior
   # roll/pitch. The corrected sequence must pass strict MoveIt again.
-  final_visual_refine_enabled: true
-  final_visual_refine_required: true
+  final_visual_refine_enabled: false
+  final_visual_refine_required: false
   final_visual_refine_timeout_sec: 150.0
   final_visual_refine_poll_sec: 0.05
   final_visual_refine_snapshot_slack_sec: 3.0

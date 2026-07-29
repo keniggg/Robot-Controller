@@ -27,7 +27,11 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
         )
         self.assertEqual(
             config['grasp']['near_field_replan_timeout_sec'],
-            450.0,
+            30.0,
+        )
+        self.assertEqual(
+            config['grasp']['near_field_strategy'],
+            'single_snapshot_direct',
         )
         self.assertIn('--max-snapshot-age-sec', start_script)
         self.assertIn('MUJOCO_MAX_SNAPSHOT_AGE_SEC:-120.0', start_script)
@@ -114,8 +118,8 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
             grasp['observation_endpoint_correction_attempts'],
             0,
         )
-        self.assertTrue(grasp['final_visual_refine_enabled'])
-        self.assertTrue(grasp['final_visual_refine_required'])
+        self.assertFalse(grasp['final_visual_refine_enabled'])
+        self.assertFalse(grasp['final_visual_refine_required'])
         self.assertEqual(
             grasp['final_visual_refine_max_translation_m'],
             0.025,
