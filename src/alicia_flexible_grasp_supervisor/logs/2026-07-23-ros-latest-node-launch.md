@@ -14152,3 +14152,71 @@ Implemented and verified offline:
   `catkin_make -j2` rebuilt the C++ driver, new services, messages, and nodes
   successfully. No ROS node or hardware interface was started by any offline
   verification command.
+
+### 2026-07-29 - GUI command-path proof and unconfirmed physical actuation
+
+- The GUI slider target reached the driver without being overwritten by the
+  grasp task or controller hold. Joint2's SDK target changed from about
+  `-14.9 deg` to the requested `-28.8 deg`, and the gripper target changed
+  from `995` to `1000`, while fresh encoder feedback stayed near
+  `-16.8 deg`. This reproduces the GUI no-motion symptom below the GUI and ROS
+  command layers: the command was streamed, but the actuator response remained
+  zero.
+- Exactly one additional explicitly authorized positive
+  `std_msgs/Bool(data=false)` request reached the driver at ROS time
+  `1785316280.782145890`. The driver logged
+  `Disabling zero-torque mode with SDK torque_on frame.` No
+  `/demonstration=true`, torque-off, `/grasp/stop`, controller stop, disable,
+  or emergency-stop request was sent. Encoder feedback still showed no
+  qualifying motion after the positive frame.
+- `/alicia_d/motion_enabled=true` did not prove torque acceptance. Source
+  inspection showed that startup, reconnect, and the demonstration callback
+  publish `true` immediately after or even before writing the torque-on frame;
+  the protocol provides no firmware torque acknowledgement. The existing topic
+  therefore described a software request rather than measured actuation.
+- The live driver reported run status `0xE1`. Earlier samples around
+  `55-58 C` contained isolated ambiguous spikes, but the same plausible
+  temperature channel later remained around `60-63 C` for at least three
+  consecutive fresh frames while `0xE1` persisted. This is materially
+  different from the earlier task's `44-50 C` trace and is consistent with the
+  firmware refusing positive torque under sustained temperature protection.
+  It does not retroactively explain the earlier zero-response trajectory.
+- The operator used the GUI's `同步当前关节` action before power-off. The
+  driver's target returned from about `-28.8 deg` to about `-15.2 deg`, close
+  to the `-16.8 deg` measured feedback, so the large stale GUI target was no
+  longer pending. The operator then powered the arm off. No hardware command
+  was sent after that instruction.
+
+### 2026-07-29 - approved actuation-confirmation and direct near-field route
+
+- The operator approved separating positive-enable request state from measured
+  actuator confirmation. The driver will publish confirmed motion only after
+  fresh encoder feedback moves measurably in the commanded direction. Startup
+  and reconnect will discard pre-feedback commands and require a
+  near-feedback synchronization command before admitting later motion. A
+  sustained same-channel over-limit trace with `0xE1`/`0xE2` will report
+  `OVERHEAT_BLOCKED` without sending torque-off, stop, or disable.
+- The latest second-stage task reached near field and found strict-MoveIt
+  reachable sequences, including batches with four and eight reachable
+  candidates. MuJoCo then rejected those candidates as `IK_FAILED` or
+  `CONTACT_FAILED`, and the task waited until the configured `450 s`
+  `NEAR_FIELD_REPLAN_TIMEOUT`. This proves the target was not generally outside
+  the MoveIt-reachable workspace; the production path had accumulated
+  cross-request stability, exhaustive planning, per-candidate MuJoCo
+  selection, duplicate task simulation, and a later final visual-refine wait
+  beyond the intended second-stage behavior.
+- The approved production route now uses one fused near-field RGB-D snapshot
+  as the second visual correction, deterministically ranks current hard-safe
+  candidates, and stops at the first complete sequence that passes strict
+  MoveIt. Its snapshot-and-selection budget is `30.0 s`. It preserves geometry,
+  support, collision, joint-limit, freshness, plan-ID, endpoint, and controller
+  gates while removing cross-request stability, near-field MuJoCo execution
+  authority, duplicate task simulation, and post-rebind final visual refine.
+- Added the canonical route document
+  `src/alicia_flexible_grasp_supervisor/docs/grasp_task_technical_route.md`.
+  Its body always describes the current effective proof route and every route
+  change is appended there with a date. Individual changes, problems,
+  evidence, fixes, and verification results remain in this runtime log.
+- At the time of this entry the design and route were approved but the new
+  behavior had not yet been implemented or powered-validated. All work in this
+  phase remained offline while the arm was powered off.

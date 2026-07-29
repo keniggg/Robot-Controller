@@ -305,3 +305,12 @@ cooled and is powered on.
 
 ROS nodes remain online after terminal success or failure. No stop, disable,
 or torque-off command is part of this validation.
+
+## Documentation ownership
+
+The current effective end-to-end route and its dated route-level change
+history live in
+`src/alicia_flexible_grasp_supervisor/docs/grasp_task_technical_route.md`.
+Runtime evidence, individual defects, implementation changes, fixes, and
+verification results continue to be appended to
+`src/alicia_flexible_grasp_supervisor/logs/2026-07-23-ros-latest-node-launch.md`.
