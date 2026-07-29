@@ -2398,6 +2398,113 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(actions, [])
         self.assertFalse(node.active)
 
+    def test_automatic_actuation_gate_requires_fresh_confirmed_status(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        gcfg = {
+            'require_actuation_confirmation': True,
+            'actuation_confirmation_freshness_sec': 2.0,
+        }
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            node.actuation_status_cb(
+                types.SimpleNamespace(
+                    data='CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE'
+                )
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+
+        accepted, reason = node._automatic_actuation_gate(
+            gcfg,
+            now_sec=11.9,
+        )
+        self.assertTrue(accepted)
+        self.assertEqual(reason, '')
+
+        accepted, reason = node._automatic_actuation_gate(
+            gcfg,
+            now_sec=12.01,
+        )
+        self.assertFalse(accepted)
+        self.assertIn('ACTUATION_UNCONFIRMED', reason)
+        self.assertIn('exceeds 2.000s', reason)
+
+        for status in (
+            '',
+            'PENDING:POSITIVE_ENABLE_REQUESTED',
+            'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT',
+            'OVERHEAT_BLOCKED:SUSTAINED_SAME_CHANNEL_TEMPERATURE',
+        ):
+            node.latest_actuation_status = status
+            node.latest_actuation_status_time = (
+                grasp_task_node.rospy.Time.from_sec(11.0)
+            )
+            accepted, reason = node._automatic_actuation_gate(
+                gcfg,
+                now_sec=11.1,
+            )
+            self.assertFalse(accepted, status)
+            self.assertTrue(
+                reason.startswith('ACTUATION_UNCONFIRMED:'),
+                reason,
+            )
+
+    def test_start_service_rejects_unconfirmed_actuation_before_execution(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        node.active = False
+        node.latest_actuation_status = (
+            'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT'
+        )
+        node.latest_actuation_status_time = (
+            grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        actions = []
+        node.execute = lambda *args, **kwargs: actions.append(
+            (args, kwargs)
+        ) or True
+        original_get_param = grasp_task_node.rospy.get_param
+        original_now = grasp_task_node.rospy.Time.now
+        original_logerr_throttle = grasp_task_node.rospy.logerr_throttle
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/grasp': {
+                'use_grasp6d_plan': True,
+                'calibration_interlock_active': False,
+                'require_actuation_confirmation': True,
+                'actuation_confirmation_freshness_sec': 2.0,
+            },
+        }.get(name, default)
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.1)
+        )
+        grasp_task_node.rospy.logerr_throttle = (
+            lambda *args, **kwargs: None
+        )
+        try:
+            response = node.start_cb(
+                types.SimpleNamespace(execute=True, plan_id='any-plan')
+            )
+        finally:
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.logerr_throttle = (
+                original_logerr_throttle
+            )
+
+        self.assertFalse(response.success)
+        self.assertTrue(
+            response.message.startswith('ACTUATION_UNCONFIRMED:'),
+            response.message,
+        )
+        self.assertEqual(actions, [])
+        self.assertFalse(node.active)
+
     def test_start_service_publishes_inactive_release_state_after_failure(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = False

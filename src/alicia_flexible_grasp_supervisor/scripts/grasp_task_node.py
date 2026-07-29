@@ -12,7 +12,7 @@ import time
 import rospy
 from geometry_msgs.msg import PoseArray, PoseStamped
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan, ObjectPose, GraspState
 from alicia_flexible_grasp_supervisor.srv import (
     CheckPoseSequence,
@@ -1079,6 +1079,8 @@ class GraspTaskNode:
         self._start_lock = threading.RLock()
         self._start_inflight = False
         self.latest_joint_state = None
+        self.latest_actuation_status = ''
+        self.latest_actuation_status_time = None
         self.latest_raw_detection = False
         self.latest_raw_detection_time = None
         self.active = False
@@ -1124,6 +1126,12 @@ class GraspTaskNode:
             queue_size=1,
         )
         rospy.Subscriber('/joint_states', JointState, self.joint_cb, queue_size=1)
+        rospy.Subscriber(
+            '/alicia_d/actuation_status',
+            String,
+            self.actuation_status_cb,
+            queue_size=1,
+        )
         rospy.Subscriber('/perception/raw_object_detected', Bool, self.raw_detection_cb, queue_size=1)
         rospy.Service('/grasp/start', StartGrasp, self.start_cb)
         rospy.Service(
@@ -1254,6 +1262,59 @@ class GraspTaskNode:
 
     def joint_cb(self, msg):
         self.latest_joint_state = msg
+
+    def actuation_status_cb(self, msg):
+        self.latest_actuation_status = str(
+            getattr(msg, 'data', '') or ''
+        ).strip()
+        self.latest_actuation_status_time = rospy.Time.now()
+
+    def _automatic_actuation_gate(self, gcfg, now_sec=None):
+        if not self._cfg_bool(
+            gcfg,
+            'require_actuation_confirmation',
+            False,
+        ):
+            return True, ''
+        status = str(
+            getattr(self, 'latest_actuation_status', '') or ''
+        ).strip()
+        received = getattr(
+            self,
+            'latest_actuation_status_time',
+            None,
+        )
+        if now_sec is None:
+            now_sec = _stamp_seconds(rospy.Time.now())
+        age = (
+            float('inf')
+            if received is None
+            else float(now_sec) - _stamp_seconds(received)
+        )
+        freshness = max(
+            0.0,
+            self._cfg_float(
+                gcfg,
+                'actuation_confirmation_freshness_sec',
+                2.0,
+            ),
+        )
+        if status.split(':', 1)[0] != 'CONFIRMED':
+            return (
+                False,
+                'ACTUATION_UNCONFIRMED: %s'
+                % (status or 'status missing'),
+            )
+        if not math.isfinite(age) or age < 0.0 or age > freshness:
+            return (
+                False,
+                (
+                    'ACTUATION_UNCONFIRMED: confirmation age %.3fs '
+                    'exceeds %.3fs'
+                )
+                % (age, freshness),
+            )
+        return True, ''
 
     def raw_detection_cb(self, msg):
         self.latest_raw_detection = bool(msg.data)
@@ -1511,6 +1572,14 @@ class GraspTaskNode:
             message = 'CALIBRATION_INTERLOCK: %s' % reason
             rospy.logerr_throttle(1.0, 'Rejected grasp start: %s', message)
             return StartGraspResponse(False, message)
+        actuation_ok, actuation_reason = self._automatic_actuation_gate(gcfg)
+        if not actuation_ok:
+            rospy.logerr_throttle(
+                1.0,
+                'Rejected grasp start: %s',
+                actuation_reason,
+            )
+            return StartGraspResponse(False, actuation_reason)
         bound_plan = None
         result = False
         response_message = 'failed'

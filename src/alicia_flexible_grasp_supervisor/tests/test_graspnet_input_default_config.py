@@ -101,6 +101,11 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
         self.assertGreaterEqual(adaptive['approach_max_m'], 0.060)
         self.assertGreaterEqual(adaptive['pregrasp_max_m'], 0.095)
         self.assertTrue(grasp['measured_endpoint_check_enabled'])
+        self.assertTrue(grasp['require_actuation_confirmation'])
+        self.assertEqual(
+            grasp['actuation_confirmation_freshness_sec'],
+            2.0,
+        )
         self.assertLessEqual(
             grasp['measured_endpoint_position_tolerance_m'],
             0.006,

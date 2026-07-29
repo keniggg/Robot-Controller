@@ -372,7 +372,7 @@ git commit -m "fix: confirm actuator response before reporting motion"
 - Consumes: latched `/alicia_d/actuation_status` text whose prefix is an `ActuationState` name.
 - Produces: `ACTUATION_UNCONFIRMED` start rejection before execution authority is frozen.
 
-- [ ] **Step 1: Write failing task-gate tests**
+- [x] **Step 1: Write failing task-gate tests**
 
 Add focused tests for:
 
@@ -401,7 +401,7 @@ self.assertTrue(grasp['require_actuation_confirmation'])
 self.assertEqual(grasp['actuation_confirmation_freshness_sec'], 2.0)
 ```
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
 Run:
 
@@ -414,7 +414,7 @@ python3 -m unittest \
 
 Expected: failures for the missing callback, helper, subscription, and config.
 
-- [ ] **Step 3: Implement the task-level gate**
+- [x] **Step 3: Implement the task-level gate**
 
 Subscribe in `__init__`:
 
@@ -480,13 +480,13 @@ require_actuation_confirmation: true
 actuation_confirmation_freshness_sec: 2.0
 ```
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run the command from Step 2.
 
 Expected: the new gate tests and all existing task/config tests pass.
 
-- [ ] **Step 5: Commit the automatic-execution gate**
+- [x] **Step 5: Commit the automatic-execution gate**
 
 ```bash
 git add src/alicia_flexible_grasp_supervisor/scripts/grasp_task_node.py src/alicia_flexible_grasp_supervisor/config/grasp_params.yaml src/alicia_flexible_grasp_supervisor/tests/test_grasp_task_sequence.py src/alicia_flexible_grasp_supervisor/tests/test_graspnet_input_default_config.py

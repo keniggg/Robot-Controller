@@ -5,6 +5,12 @@ grasp:
   # eye-on-hand transform has passed a static-target invariance check.
   calibration_interlock_active: true
   calibration_interlock_reason: "HAND_EYE_UNVERIFIED_AFTER_CORRECTION_COLLISION"
+  # Automatic grasp needs a live driver heartbeat whose state was established
+  # by directionally consistent encoder response after the latest positive
+  # enable/reconnect. Manual GUI synchronization and the small proof move remain
+  # available while this gate is pending or unconfirmed.
+  require_actuation_confirmation: true
+  actuation_confirmation_freshness_sec: 2.0
   grasp6d_plan_topic: "/grasp_6d/plan"
   grasp6d_enriched_plan_topic: "/grasp_6d/plan_enriched"
   # Legacy non-rich-plan fallback only. The production 6D contact sequence
