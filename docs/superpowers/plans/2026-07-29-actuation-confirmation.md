@@ -32,7 +32,7 @@
 - Consumes: six-joint encoder samples, admitted targets, successful streamed targets, monotonic seconds, and `ActuationConfirmationConfig`.
 - Produces: `ActuationState state()`, `bool motion_confirmed(double now_sec)`, `bool admit_command(...)`, `void note_feedback(...)`, `void note_streamed_target(...)`, and `std::string status_text()`.
 
-- [ ] **Step 1: Write failing transition tests**
+- [x] **Step 1: Write failing transition tests**
 
 Add gtests that instantiate this exact public interface:
 
@@ -74,19 +74,19 @@ Also assert:
 - `reset_for_positive_enable` clears synchronization and any active probe;
 - `set_disabled` is the only state-machine transition to `DISABLED`.
 
-- [ ] **Step 2: Run the test and verify it fails**
+- [x] **Step 2: Run the test and verify it fails**
 
 Run:
 
 ```bash
 source /opt/ros/noetic/setup.bash
 catkin_make -DCATKIN_ENABLE_TESTING=ON -j2
-catkin_make run_tests_alicia_d_driver_actuation_confirmation_test
+catkin_make run_tests_alicia_d_driver_gtest_actuation_confirmation_test
 ```
 
 Expected: compilation fails because `actuation_confirmation.hpp` and its types do not exist.
 
-- [ ] **Step 3: Implement the minimal C++14 state machine**
+- [x] **Step 3: Implement the minimal C++14 state machine**
 
 Define:
 
@@ -157,7 +157,7 @@ frames do not replace its baseline or deadline. `update()` changes an expired
 active probe to `UNCONFIRMED`. `status_text()` starts with the enum name and
 appends the stored reason after `:`.
 
-- [ ] **Step 4: Register and run the C++ test**
+- [x] **Step 4: Register and run the C++ test**
 
 Add:
 
@@ -179,7 +179,7 @@ Run the two commands from Step 2.
 
 Expected: `actuation_confirmation_test` passes with no serial device open.
 
-- [ ] **Step 5: Commit the independently tested state machine**
+- [x] **Step 5: Commit the independently tested state machine**
 
 ```bash
 git add src/real-arm/alicia_d_driver/include/alicia_d_driver/actuation_confirmation.hpp src/real-arm/alicia_d_driver/test/actuation_confirmation_test.cpp src/real-arm/alicia_d_driver/CMakeLists.txt
@@ -363,7 +363,7 @@ Run:
 python3 -m unittest src.alicia_flexible_grasp_supervisor.tests.test_serial_driver_resilience -v
 source /opt/ros/noetic/setup.bash
 catkin_make -DCATKIN_ENABLE_TESTING=ON -j2
-catkin_make run_tests_alicia_d_driver_actuation_confirmation_test
+catkin_make run_tests_alicia_d_driver_gtest_actuation_confirmation_test
 ```
 
 Expected: all focused Python and C++ driver tests pass.
@@ -532,7 +532,7 @@ python3 -m unittest \
   -v
 source /opt/ros/noetic/setup.bash
 catkin_make -DCATKIN_ENABLE_TESTING=ON -j2
-catkin_make run_tests_alicia_d_driver_actuation_confirmation_test
+catkin_make run_tests_alicia_d_driver_gtest_actuation_confirmation_test
 git diff --check
 ```
 

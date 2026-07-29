@@ -64,6 +64,18 @@ target_link_libraries(alicia_d_hw_interface_node
   ${catkin_LIBRARIES}
 )
 
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(
+    actuation_confirmation_test
+    test/actuation_confirmation_test.cpp
+  )
+  if(TARGET actuation_confirmation_test)
+    target_include_directories(
+      actuation_confirmation_test PRIVATE include ${catkin_INCLUDE_DIRS}
+    )
+  endif()
+endif()
+
 
 # --- Installation Rules ---
 # This section remains correct.
