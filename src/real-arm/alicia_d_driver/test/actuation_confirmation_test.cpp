@@ -186,6 +186,21 @@ TEST(ActuationConfirmationTest, OverheatBlocksWithoutAConfirmedState)
     );
 }
 
+TEST(ActuationConfirmationTest, FailedPositiveFrameIsExplicitlyUnconfirmed)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+
+    confirmation.mark_unconfirmed("TORQUE_ON_WRITE_FAILED", 10.1);
+
+    EXPECT_EQ(confirmation.state(), ActuationState::UNCONFIRMED);
+    EXPECT_FALSE(confirmation.motion_confirmed(10.2));
+    EXPECT_EQ(
+        confirmation.status_text(),
+        "UNCONFIRMED:TORQUE_ON_WRITE_FAILED"
+    );
+}
+
 TEST(ActuationConfirmationTest, EnableResetDropsSyncProbeAndPriorConfirmation)
 {
     ActuationConfirmation confirmation(test_config());

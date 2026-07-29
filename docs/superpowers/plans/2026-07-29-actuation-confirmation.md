@@ -195,51 +195,34 @@ git commit -m "feat: add measured actuation state machine"
 - Modify: `src/real-arm/alicia_d_driver/src/alicia_d_driver_node.cpp`
 - Modify: `src/real-arm/alicia_d_driver/launch/alicia_d_bringup.launch`
 - Modify: `src/real-arm/alicia_d_driver/launch/alicia_d_driver.launch`
-- Modify: `src/alicia_flexible_grasp_supervisor/tests/test_serial_driver_resilience.py`
+- Verify: `src/alicia_flexible_grasp_supervisor/tests/test_serial_driver_resilience.py`
 
 **Interfaces:**
 - Consumes: `ActuationConfirmation` from Task 1 and accepted real feedback from `parse_sdk_joint_state_frame`.
 - Produces: latched `/alicia_d/actuation_status` (`std_msgs/String`) and corrected `/alicia_d/motion_enabled` (`std_msgs/Bool`).
 
-- [ ] **Step 1: Add failing driver-structure regressions**
+- [x] **Step 1: Add a failing write-result behavior regression**
 
-Extend `test_serial_driver_resilience.py` to assert:
+Add a real C++ transition test to
+`test/actuation_confirmation_test.cpp`: after
+`reset_for_positive_enable(10.0)`, a failed serial-write boundary calls
+`mark_unconfirmed("TORQUE_ON_WRITE_FAILED", 10.1)` and must produce
+`UNCONFIRMED:TORQUE_ON_WRITE_FAILED`.
 
-```python
-self.assertIn('std_msgs/String.h', header)
-self.assertIn('ros::Publisher actuation_status_pub_', header)
-self.assertIn('ActuationConfirmation actuation_confirmation_', header)
-self.assertIn('request_positive_enable(', header)
-self.assertIn('publish_actuation_status(', header)
-```
-
-Extract constructor, reconnect, demonstration, joint-command, send-command,
-and accepted-feedback bodies with `_function_body`. Assert:
-
-- constructor, reconnect, and `/demonstration=false` call
-  `request_positive_enable(...)`;
-- none of those three bodies contains its own `torque_on_frame`;
-- positive enable publishes `motion_enabled=false`;
-- the command callback calls `actuation_confirmation_.admit_command`;
-- successful SDK streaming calls `note_streamed_target`;
-- accepted encoder feedback calls `note_feedback`;
-- sustained temperature plus `0xE1`/`0xE2` calls
-  `mark_overheat_blocked`;
-- no temperature/status body contains `torque_off_frame`;
-- only the explicit `if (msg->data)` branch keeps the existing torque-off frame.
-
-- [ ] **Step 2: Run the failing Python test**
+- [x] **Step 2: Run the C++ test and verify the missing behavior**
 
 Run:
 
 ```bash
-python3 -m unittest src.alicia_flexible_grasp_supervisor.tests.test_serial_driver_resilience -v
+source /opt/ros/noetic/setup.bash
+catkin_make run_tests_alicia_d_driver_gtest_actuation_confirmation_test
 ```
 
-Expected: new assertions fail because the shared helper and status publisher do
-not yet exist.
+Expected: compilation fails because `mark_unconfirmed` does not exist. This
+behavior test replaces planned source-text assertions, which would only prove
+that names occur in a file rather than exercising a state transition.
 
-- [ ] **Step 3: Add driver parameters and ROS state**
+- [x] **Step 3: Add driver parameters and ROS state**
 
 Add private parameters with these production defaults:
 
@@ -281,7 +264,7 @@ actuation_status_pub_ =
 Initialize the state machine config from these parameters after
 `load_parameters()` and publish an initial `DISABLED` state.
 
-- [ ] **Step 4: Route every positive-enable entry through one helper**
+- [x] **Step 4: Route every positive-enable entry through one helper**
 
 Implement:
 
@@ -309,7 +292,7 @@ Replace constructor, reconnect, and `/demonstration=false` copies with this
 helper. Keep the existing explicit `/demonstration=true` torque-off branch and
 set the confirmation state to `DISABLED` there.
 
-- [ ] **Step 5: Gate commands and feed only authoritative evidence**
+- [x] **Step 5: Gate commands and feed only authoritative evidence**
 
 In `joint_command_callback`, after forming the complete six-joint target but
 before assigning `latest_joint_angles_`, call:
@@ -353,7 +336,7 @@ actuation_confirmation_.mark_overheat_blocked(
 Do not change `motion_commands_enabled_` and do not write torque-off in this
 path.
 
-- [ ] **Step 6: Add launch defaults and pass focused tests**
+- [x] **Step 6: Add launch defaults and pass focused tests**
 
 Put the same five parameter values in both Alicia-D driver launch files.
 
@@ -368,10 +351,10 @@ catkin_make run_tests_alicia_d_driver_gtest_actuation_confirmation_test
 
 Expected: all focused Python and C++ driver tests pass.
 
-- [ ] **Step 7: Commit the driver integration**
+- [x] **Step 7: Commit the driver integration**
 
 ```bash
-git add src/real-arm/alicia_d_driver/include/alicia_d_driver/alicia_d_driver_node.hpp src/real-arm/alicia_d_driver/src/alicia_d_driver_node.cpp src/real-arm/alicia_d_driver/launch/alicia_d_bringup.launch src/real-arm/alicia_d_driver/launch/alicia_d_driver.launch src/alicia_flexible_grasp_supervisor/tests/test_serial_driver_resilience.py
+git add docs/superpowers/plans/2026-07-29-actuation-confirmation.md src/real-arm/alicia_d_driver/include/alicia_d_driver/actuation_confirmation.hpp src/real-arm/alicia_d_driver/include/alicia_d_driver/alicia_d_driver_node.hpp src/real-arm/alicia_d_driver/src/alicia_d_driver_node.cpp src/real-arm/alicia_d_driver/launch/alicia_d_bringup.launch src/real-arm/alicia_d_driver/launch/alicia_d_driver.launch src/real-arm/alicia_d_driver/test/actuation_confirmation_test.cpp
 git commit -m "fix: confirm actuator response before reporting motion"
 ```
 

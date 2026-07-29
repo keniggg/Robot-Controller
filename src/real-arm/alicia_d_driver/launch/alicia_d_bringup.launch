@@ -66,6 +66,15 @@
         <param name="max_enable_temperature_c" type="double" value="60.0"/>
         <param name="e1_confirm_consecutive_frames" type="int" value="3"/>
         <param name="temperature_over_limit_confirm_samples" type="int" value="3"/>
+        <!-- A positive torque frame is only a request. After each process
+             start/reconnect, accept one near-feedback synchronization target,
+             then require directionally consistent encoder motion before
+             publishing confirmed motion. -->
+        <param name="reconnect_sync_tolerance_rad" type="double" value="0.05"/>
+        <param name="actuation_command_probe_min_delta_rad" type="double" value="0.02"/>
+        <param name="actuation_measured_response_min_delta_rad" type="double" value="0.003"/>
+        <param name="actuation_confirmation_timeout_sec" type="double" value="1.0"/>
+        <param name="actuation_confirmation_freshness_sec" type="double" value="2.0"/>
         <!-- Reassert a held SDK position once per real-feedback interval. -->
         <param name="command_keepalive_rate_hz" type="double" value="10.0"/>
         <!-- Disabled in the ordinary driver path. The grasp task owns its

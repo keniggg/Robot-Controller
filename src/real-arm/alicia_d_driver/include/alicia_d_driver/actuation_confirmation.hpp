@@ -84,6 +84,17 @@ public:
         clear_probe();
     }
 
+    void mark_unconfirmed(
+        const std::string& reason,
+        double now_sec
+    )
+    {
+        (void)now_sec;
+        state_ = ActuationState::UNCONFIRMED;
+        reason_ = reason.empty() ? "ACTUATION_UNCONFIRMED" : reason;
+        clear_probe();
+    }
+
     void note_feedback(
         const std::vector<double>& joints,
         double stamp_sec

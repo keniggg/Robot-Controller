@@ -2,9 +2,11 @@
 #define ALICiA_D_DRIVER_NODE_H
 
 #include "ros/ros.h"
+#include "alicia_d_driver/actuation_confirmation.hpp"
 #include "serial_communicator.hpp" // Assuming this is a non-ROS helper class
 #include "std_msgs/Bool.h"
 #include "std_msgs/Float32MultiArray.h"
+#include "std_msgs/String.h"
 #include "std_msgs/UInt8.h"
 #include "std_msgs/UInt16.h"
 #include "sensor_msgs/JointState.h"
@@ -34,6 +36,9 @@ private:
    // Initialization
    void load_parameters();
    void setup_ros_communications();
+   void clear_retained_command_state();
+   bool request_positive_enable(const std::string& source);
+   void publish_actuation_status();
     
    // Callbacks for incoming commands
    void joint_command_callback(const sensor_msgs::JointState::ConstPtr& msg);
@@ -80,6 +85,7 @@ private:
 	   ros::Publisher self_check_mask_pub_;
 	   ros::Publisher protection_latched_pub_;
 	   ros::Publisher motion_enabled_pub_;
+	   ros::Publisher actuation_status_pub_;
    ros::Subscriber joint_command_sub_;
    ros::Subscriber zero_calib_sub_;
    ros::Subscriber demo_mode_sub_;
@@ -111,9 +117,14 @@ private:
 	   double endpoint_feedback_trim_max_rad_ = 0.12;
 	   double endpoint_feedback_trim_gain_ = 1.0;
 		   double protection_clear_stable_sec_ = 30.0;
-		   double max_enable_temperature_c_ = 60.0;
-		   int e1_confirm_consecutive_frames_ = 3;
-		   int temperature_over_limit_confirm_samples_ = 3;
+	   double max_enable_temperature_c_ = 60.0;
+	   int e1_confirm_consecutive_frames_ = 3;
+	   int temperature_over_limit_confirm_samples_ = 3;
+	   double reconnect_sync_tolerance_rad_ = 0.05;
+	   double actuation_command_probe_min_delta_rad_ = 0.02;
+	   double actuation_measured_response_min_delta_rad_ = 0.003;
+	   double actuation_confirmation_timeout_sec_ = 1.0;
+	   double actuation_confirmation_freshness_sec_ = 2.0;
 	   ros::Time last_process_time_;
     // Trajectory smoothing parameters
     bool use_trajectory_smoothing_ = true;
@@ -129,6 +140,7 @@ private:
 	   std::mutex topic_mutex_;
 	   std::mutex latest_cmd_mutex_;
 	   std::mutex send_mutex_;
+	   std::mutex actuation_mutex_;
    std::vector<double> servo_to_joint_map_index_;
    std::vector<double> servo_to_joint_map_direction_;
    std::vector<double> joint_to_servo_map_index_;
@@ -195,6 +207,10 @@ private:
 		   std::vector<int> consecutive_high_temperature_samples_by_channel_;
 	   bool protection_fault_latched_ = false;
 	   bool motion_commands_enabled_ = false;
+	   ActuationConfirmation actuation_confirmation_;
+	   std::string last_published_actuation_status_;
+	   bool last_published_motion_enabled_ = false;
+	   bool has_published_motion_enabled_ = false;
 	   bool has_temperature_feedback_ = false;
 	   bool has_self_check_feedback_ = false;
 	   ros::Time last_protection_time_;
