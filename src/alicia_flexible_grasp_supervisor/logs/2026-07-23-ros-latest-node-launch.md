@@ -14220,3 +14220,112 @@ Implemented and verified offline:
 - At the time of this entry the design and route were approved but the new
   behavior had not yet been implemented or powered-validated. All work in this
   phase remained offline while the arm was powered off.
+
+### 2026-07-29 - offline implementation progress before operator-requested pause
+
+- Implemented the protocol-independent measured-actuation state machine and
+  integrated it into the real-arm driver. Positive torque-on now enters
+  `PENDING`; only a fresh, correctly directed encoder response to a later
+  non-trivial streamed target can enter `CONFIRMED`. Zero response, opposite
+  response, unrelated-joint motion, stale confirmation, write failure, and
+  sustained same-channel temperature protection have explicit fail-closed
+  states. Startup/reconnect also clear retained targets and require fresh
+  feedback plus near-feedback synchronization before later commands are
+  admitted. No automatic torque-off, stop, disable, or controller-stop path
+  was added.
+- Added `/alicia_d/actuation_status` and changed
+  `/alicia_d/motion_enabled` to represent fresh measured confirmation rather
+  than a successful software request. Automatic grasp now requires a locally
+  fresh `CONFIRMED` status. The C++ state-machine suite passed `11/11`, the
+  existing serial-driver resilience suite passed `7/7`, the affected task
+  suite passed `134/134` at that checkpoint, configuration tests passed
+  `6/6`, and the complete catkin workspace build succeeded. These changes are
+  recorded in commits `6e511ca`, `189f34c`, and `dcf1710`.
+- Persisted the approved direct production policy:
+  `near_field_strategy=single_snapshot_direct`, a `30.0 s` near-field budget,
+  and both redundant final-visual-refine flags disabled. This is commit
+  `383cfd4`.
+- Implemented the remote direct near-field selector. The current fused request
+  is adapted to a one-hit stable-candidate contract for downstream hard
+  rechecking; retained tracker hits remain diagnostic only. Current hard-safe
+  candidates are deterministically ranked, every current candidate remains
+  eligible within the budget, and the first strict-MoveIt-reachable sequence
+  is selected. Direct mode does not call the MuJoCo selector. Exact terminal
+  states now include `NEAR_FIELD_NO_HARD_SAFE_CANDIDATE`,
+  `NEAR_FIELD_NO_REACHABLE_CANDIDATE`, and
+  `NEAR_FIELD_DIRECT_TIMEOUT`.
+- Remote selection first reproduced three expected failures against the old
+  implementation, then passed all five focused direct-mode tests. The full
+  streaming suite passed `217/217` before the final two terminal-status cases
+  were added; those two and the other three direct cases subsequently passed
+  together as `5/5`. The remote-node suite passed `156/156`, Python compilation
+  and `git diff --check` passed, and the remote implementation is commit
+  `0e1e6b1`.
+- Implemented, but have not yet committed, the task-layer direct path. It
+  requests one near-field stream, freezes the accepted plan, immediately
+  requests stream disable, skips duplicate task-level simulation, skips the
+  post-rebind final visual-refine layer, and retains the existing execution
+  checkpoints and motion order: near-field pregrasp, linear approach, linear
+  grasp pose, gripper close, and linear lift. Direct timeout is reported as
+  `NEAR_FIELD_DIRECT_TIMEOUT`; explicit legacy mode retains the former
+  simulation/refinement behavior.
+- The three new task contracts first failed for the expected old behaviors,
+  then passed after implementation. The complete task sequence suite passed
+  `137/137`, including legacy MuJoCo and final-refinement regressions.
+- Per the operator's instruction, work is paused at this exact point. The task
+  node and its new tests, plus this log entry, remain uncommitted. Remaining
+  offline work is source-format review, complete affected verification,
+  updating the canonical route status/changelog, committing documentation and
+  task changes, and pushing the authorized branch. Powered validation has not
+  begun.
+- No ROS node, ROS master, hardware interface, serial write, torque request,
+  motion request, stop, disable, or other hardware command was started or sent
+  during any work recorded in this entry.
+
+### 2026-07-29 - offline work resumed with all hardware ports and arm power off
+
+- The operator explicitly confirmed that all hardware serial ports and arm
+  power were off before work resumed. This phase used only source inspection,
+  compilation, local unit/protocol tests, configuration parsing, Git, and
+  documentation.
+- Source review found one remaining mismatch between the approved route and
+  the implementation. `/grasp_6d/request_plan=true` starts continuous polling;
+  although direct selection used only the current request, the poll loop could
+  submit another newer fused near-field snapshot after the first request
+  failed. A new regression supplied two successively newer fused snapshots and
+  first failed because both were submitted.
+- Direct near-field polling now records the stream generation that consumed
+  its first valid fused snapshot. Further polls in the same near-field
+  generation return before collecting another window. The latch resets only
+  at a planning-phase boundary or a new/terminated stream generation. Failed
+  fusion or a snapshot rejected before submission does not consume the latch.
+  The focused direct suite then passed `6/6`, including exact one-snapshot
+  submission.
+- The task node now freezes the accepted direct plan, requests candidate-stream
+  disable, skips duplicate task-level MuJoCo simulation and final visual
+  refinement, and keeps the existing ordered execution checkpoints for
+  near-field pregrasp, linear approach, linear grasp pose, gripper close, and
+  linear lift. Direct no-preview expiry remains
+  `NEAR_FIELD_DIRECT_TIMEOUT`; explicit legacy mode retains its prior gates.
+  These task/one-shot changes and their tests are commit `c6aa55b`.
+- Complete affected suites passed: remote streaming `220/220`, remote node
+  `156/156`, task sequence `137/137`, and combined persisted-config plus serial
+  resilience `13/13`. The complete Python suite initially reported
+  `1687 passed, 16 failed, 3 skipped`; every failure was the sandbox denying a
+  temporary `127.0.0.1` socket with `PermissionError`. Re-running the two
+  protocol files with local-loopback permission passed `135/135` with one
+  declared skip, making the equivalent complete result
+  `1703 passed, 3 skipped`.
+- Two skips require the absent genuine
+  `tests/fixtures/carton_tabletop_cloud.json` RealSense capture and explicitly
+  forbid synthetic substitution. The third is the opt-in real MuJoCo/mesh
+  smoke test guarded by `MUJOCO_SMOKE=1`; neither skip was treated as passing
+  real evidence.
+- Full `catkin_make -DCATKIN_ENABLE_TESTING=ON -j2` completed successfully.
+  The actuation-confirmation gtest passed `11/11`; both modified Python scripts
+  compiled; 28 YAML files and 42 launch XML files parsed; and
+  `git diff --check` was silent.
+- No ROS node or ROS master was started. No serial device, camera, tactile
+  device, actuator, torque service, motion service, stop, disable, or other
+  hardware command was accessed or sent. Powered validation remains pending
+  and no true hardware-response or successful-grasp claim is made here.
