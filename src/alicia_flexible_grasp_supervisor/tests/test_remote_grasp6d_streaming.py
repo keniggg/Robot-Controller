@@ -4818,6 +4818,329 @@ def test_phase_evidence_count_enters_current_recheck_and_moveit_top_n(
         == 'MUJOCO_SNAPSHOT_RESERVE_REACHED'
     )
 
+def test_direct_near_field_uses_current_request_and_first_reachable_without_mujoco(
+    monkeypatch,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.target_instance_epoch = 4
+    node._last_model_choice = 'carton_segment'
+    node._stream_condition = threading.Condition(threading.RLock())
+    node._stream_shutdown = threading.Event()
+    node.streaming_enabled = True
+    node._stream_generation = 1
+    node.tracker = CandidateTracker(
+        TrackingConfig(window_size=5, min_hits=3)
+    )
+    node.moveit_top_n = 5
+    node.candidate_max_joint_delta_rad = 1.8
+    node.near_field_strategy = 'single_snapshot_direct'
+    node.near_field_direct_timeout_sec = 30.0
+    node._execution_plan_validity_now_sec = lambda: 21.0
+    node._activate_prepared_geometry = lambda _prepared: True
+    current = (
+        matching_observation(1),
+        matching_observation(1),
+    )
+    node._evaluate_local_candidates = lambda _prepared: (
+        current,
+        {
+            'input_count': 2,
+            'stage_counts': {
+                'locally_valid': {
+                    'entered': 2,
+                    'passed': 2,
+                    'rejected': 0,
+                }
+            },
+            'rejection_counts': {},
+            'rejection_ratios': {},
+            'primary_failure': None,
+        },
+    )
+    rechecked = []
+    node._recheck_and_score_stable = lambda _prepared, stable: (
+        rechecked.append(tuple(stable)) or tuple(stable)
+    )
+    node._dedupe_scored_tabletop_candidates_for_moveit = (
+        lambda scored: tuple(scored)
+    )
+    captured = {}
+
+    def direct_selection(
+        candidates,
+        checker,
+        top_n,
+        max_joint_delta_rad=0.0,
+        ranking_key=None,
+        exhaustive=False,
+        first_reachable_by_rank=False,
+        continue_checking=None,
+        continuation_stop_reason='',
+    ):
+        del checker
+        captured.update(
+            {
+                'candidates': tuple(candidates),
+                'top_n': top_n,
+                'max_joint_delta_rad': max_joint_delta_rad,
+                'ranking_key': ranking_key,
+                'exhaustive': exhaustive,
+                'first_reachable_by_rank': first_reachable_by_rank,
+                'continue_checking': continue_checking,
+                'continuation_stop_reason': continuation_stop_reason,
+            }
+        )
+        return types.SimpleNamespace(
+            selected=tuple(candidates)[0],
+            checked=(tuple(candidates)[0],),
+            reachable=(tuple(candidates)[0],),
+            terminated_early=False,
+            termination_reason='',
+            funnel=types.SimpleNamespace(
+                to_dict=lambda: {
+                    'stage_counts': {
+                        'moveit_checked': {
+                            'entered': 1,
+                            'passed': 1,
+                            'rejected': 0,
+                        },
+                        'moveit_reachable': {
+                            'entered': 1,
+                            'passed': 1,
+                            'rejected': 0,
+                        },
+                    },
+                    'rejection_counts': {},
+                    'rejection_ratios': {},
+                    'primary_failure': None,
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        remote_node,
+        'bounded_moveit_select',
+        direct_selection,
+    )
+    node._check_moveit_stable_candidate = lambda _candidate: None
+    node._screen_near_field_selection_with_mujoco = (
+        lambda *_args, **_kwargs: pytest.fail(
+            'direct near-field mode must not call MuJoCo selection'
+        )
+    )
+    published = []
+    node._publish_selected_preview = published.append
+    prepared = prepared_prediction(1)
+    prepared.near_field = True
+
+    result = node._accept_prediction(prepared)
+
+    assert result['status'] == 'PREVIEW_READY'
+    assert len(rechecked) == 1
+    assert len(rechecked[0]) == len(current)
+    assert all(
+        isinstance(candidate, StableCandidate)
+        for candidate in rechecked[0]
+    )
+    assert all(candidate.hit_count == 1 for candidate in rechecked[0])
+    assert all(candidate.window_count == 1 for candidate in rechecked[0])
+    assert all(
+        candidate.hit_request_ids == (prepared.ticket.request_id,)
+        for candidate in rechecked[0]
+    )
+    assert all(
+        candidate.position_dispersion_m == 0.0
+        for candidate in rechecked[0]
+    )
+    assert all(
+        candidate.orientation_dispersion_rad == 0.0
+        for candidate in rechecked[0]
+    )
+    assert captured['candidates'] == rechecked[0]
+    assert captured['top_n'] == len(current)
+    assert callable(captured['ranking_key'])
+    assert captured['exhaustive'] is False
+    assert captured['first_reachable_by_rank'] is True
+    assert callable(captured['continue_checking'])
+    assert captured['continue_checking']() is True
+    assert (
+        captured['continuation_stop_reason']
+        == 'NEAR_FIELD_DIRECT_TIMEOUT'
+    )
+    assert published == [rechecked[0][0]]
+    assert (
+        result['funnel']['snapshot_evidence'][
+            'disjoint_window_required'
+        ]
+        is False
+    )
+    assert result['funnel']['tracking_evidence']['required_hits'] == 1
+
+
+def test_direct_near_field_empty_current_request_has_exact_status():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.target_instance_epoch = 4
+    node._last_model_choice = 'carton_segment'
+    node._stream_condition = threading.Condition(threading.RLock())
+    node._stream_shutdown = threading.Event()
+    node.streaming_enabled = True
+    node._stream_generation = 1
+    node.tracker = CandidateTracker(
+        TrackingConfig(window_size=5, min_hits=3)
+    )
+    node.near_field_strategy = 'single_snapshot_direct'
+    node._activate_prepared_geometry = lambda _prepared: True
+    node._evaluate_local_candidates = lambda _prepared: (
+        (),
+        {
+            'input_count': 0,
+            'stage_counts': {
+                'locally_valid': {
+                    'entered': 0,
+                    'passed': 0,
+                    'rejected': 0,
+                }
+            },
+            'rejection_counts': {},
+            'rejection_ratios': {},
+            'primary_failure': None,
+        },
+    )
+    node._observe_execution_candidate_invalid = lambda **_kwargs: None
+    prepared = prepared_prediction(1)
+    prepared.near_field = True
+
+    result = node._accept_prediction(prepared)
+
+    assert result['status'] == 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'
+    assert (
+        result['funnel']['snapshot_evidence'][
+            'disjoint_window_required'
+        ]
+        is False
+    )
+
+
+def test_direct_near_field_deadline_is_exactly_thirty_seconds():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.near_field_direct_timeout_sec = 30.0
+    clock = MutableClock(49.999)
+    node._execution_plan_validity_now_sec = clock
+    prepared = types.SimpleNamespace(
+        ticket=types.SimpleNamespace(snapshot_stamp_sec=20.0)
+    )
+
+    continue_checking = node._direct_near_field_deadline_gate(prepared)
+
+    assert continue_checking() is True
+    clock.value = 50.0
+    assert continue_checking() is False
+
+
+@pytest.mark.parametrize(
+    'terminated_early,termination_reason,expected_status',
+    (
+        (
+            True,
+            'NEAR_FIELD_DIRECT_TIMEOUT',
+            'NEAR_FIELD_DIRECT_TIMEOUT',
+        ),
+        (False, '', 'NEAR_FIELD_NO_REACHABLE_CANDIDATE'),
+    ),
+)
+def test_direct_near_field_no_selection_has_exact_terminal_status(
+    monkeypatch,
+    terminated_early,
+    termination_reason,
+    expected_status,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.target_instance_epoch = 4
+    node._last_model_choice = 'carton_segment'
+    node._stream_condition = threading.Condition(threading.RLock())
+    node._stream_shutdown = threading.Event()
+    node.streaming_enabled = True
+    node._stream_generation = 1
+    node.tracker = CandidateTracker(
+        TrackingConfig(window_size=5, min_hits=3)
+    )
+    node.moveit_top_n = 5
+    node.candidate_max_joint_delta_rad = 1.8
+    node.near_field_strategy = 'single_snapshot_direct'
+    node.near_field_direct_timeout_sec = 30.0
+    node._execution_plan_validity_now_sec = lambda: 21.0
+    node._activate_prepared_geometry = lambda _prepared: True
+    node._evaluate_local_candidates = lambda _prepared: (
+        (matching_observation(1),),
+        {
+            'input_count': 1,
+            'stage_counts': {
+                'locally_valid': {
+                    'entered': 1,
+                    'passed': 1,
+                    'rejected': 0,
+                }
+            },
+            'rejection_counts': {},
+            'rejection_ratios': {},
+            'primary_failure': None,
+        },
+    )
+    node._recheck_and_score_stable = (
+        lambda _prepared, stable: tuple(stable)
+    )
+    node._dedupe_scored_tabletop_candidates_for_moveit = (
+        lambda scored: tuple(scored)
+    )
+    node._check_moveit_stable_candidate = lambda _candidate: None
+    node._publish_selected_preview = lambda _candidate: pytest.fail(
+        'a direct near-field terminal failure cannot publish a preview'
+    )
+    node._observe_execution_candidate_invalid = lambda **_kwargs: None
+
+    def no_selection(*_args, **_kwargs):
+        return types.SimpleNamespace(
+            selected=None,
+            checked=(),
+            reachable=(),
+            terminated_early=terminated_early,
+            termination_reason=termination_reason,
+            funnel=types.SimpleNamespace(
+                to_dict=lambda: {
+                    'stage_counts': {
+                        'moveit_reachable': {
+                            'entered': 0,
+                            'passed': 0,
+                            'rejected': 0,
+                        }
+                    },
+                    'rejection_counts': {},
+                    'rejection_ratios': {},
+                    'primary_failure': None,
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        remote_node,
+        'bounded_moveit_select',
+        no_selection,
+    )
+    prepared = prepared_prediction(1)
+    prepared.near_field = True
+
+    result = node._accept_prediction(prepared)
+
+    assert result['status'] == expected_status
+
 
 def test_snapshot_budget_terminal_status_survives_primary_failure_count(
     monkeypatch,

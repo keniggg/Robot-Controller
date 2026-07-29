@@ -3099,6 +3099,25 @@ class RemoteGrasp6DNode:
         # node surface so a shared planning/execution path cannot start.
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
+        grasp_cfg = rospy.get_param('/grasp', {})
+        if not isinstance(grasp_cfg, dict):
+            grasp_cfg = {}
+        self.near_field_strategy = str(
+            grasp_cfg.get('near_field_strategy', 'legacy_gated')
+            or 'legacy_gated'
+        ).strip().lower()
+        try:
+            near_field_direct_timeout_sec = float(
+                grasp_cfg.get('near_field_replan_timeout_sec', 30.0)
+            )
+        except (TypeError, ValueError, OverflowError):
+            near_field_direct_timeout_sec = 30.0
+        if (
+            not math.isfinite(near_field_direct_timeout_sec)
+            or near_field_direct_timeout_sec <= 0.0
+        ):
+            near_field_direct_timeout_sec = 30.0
+        self.near_field_direct_timeout_sec = near_field_direct_timeout_sec
         startup_continuous_config = load_continuous_runtime_config(
             remote_cfg,
             get_param=rospy.get_param,
@@ -8244,6 +8263,110 @@ class RemoteGrasp6DNode:
 
         return continue_checking
 
+    def _configured_near_field_strategy(self):
+        return str(
+            getattr(self, 'near_field_strategy', 'legacy_gated')
+            or 'legacy_gated'
+        ).strip().lower()
+
+    def _direct_near_field_active(self, prepared):
+        return bool(
+            getattr(prepared, 'near_field', False)
+            and self._configured_near_field_strategy()
+            == 'single_snapshot_direct'
+        )
+
+    def _direct_near_field_deadline_gate(self, prepared):
+        """Bound all strict near-field checks to the fused snapshot deadline."""
+
+        ticket = getattr(prepared, 'ticket', None)
+        try:
+            snapshot_stamp_sec = float(
+                getattr(ticket, 'snapshot_stamp_sec')
+            )
+            timeout_sec = float(
+                getattr(self, 'near_field_direct_timeout_sec', 30.0)
+            )
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            snapshot_stamp_sec = float('nan')
+            timeout_sec = float('nan')
+        valid_contract = (
+            math.isfinite(snapshot_stamp_sec)
+            and snapshot_stamp_sec > 0.0
+            and math.isfinite(timeout_sec)
+            and timeout_sec > 0.0
+        )
+        deadline_sec = (
+            snapshot_stamp_sec + timeout_sec
+            if valid_contract
+            else float('-inf')
+        )
+
+        def continue_checking():
+            try:
+                now_sec = float(self._execution_plan_validity_now_sec())
+            except (TypeError, ValueError, OverflowError):
+                return False
+            return bool(
+                math.isfinite(now_sec)
+                and now_sec < deadline_sec
+            )
+
+        return continue_checking
+
+    @staticmethod
+    def _single_request_stable_candidates(observations):
+        """Adapt one hard-safe fused snapshot to the strict recheck contract."""
+
+        stable = []
+        for track_id, observation in enumerate(tuple(observations), start=1):
+            stable.append(
+                StableCandidate(
+                    track_id=track_id,
+                    hit_count=1,
+                    window_count=1,
+                    hit_request_ids=(int(observation.request_id),),
+                    request_id=int(observation.request_id),
+                    snapshot_stamp_sec=float(
+                        observation.snapshot_stamp_sec
+                    ),
+                    target_epoch=int(observation.target_epoch),
+                    target_label=str(observation.target_label),
+                    model_choice=str(observation.model_choice),
+                    center_base_xyz=observation.center_base_xyz,
+                    tool0_position_xyz=observation.tool0_position_xyz,
+                    quaternion_xyzw=observation.quaternion_xyzw,
+                    approach_base_xyz=observation.approach_base_xyz,
+                    required_open_width_m=float(
+                        observation.required_open_width_m
+                    ),
+                    model_width_m=observation.model_width_m,
+                    model_score=observation.model_score,
+                    geometry_margin_m=float(
+                        observation.geometry_margin_m
+                    ),
+                    pre_moveit_score=float(
+                        observation.pre_moveit_score
+                    ),
+                    position_dispersion_m=0.0,
+                    orientation_dispersion_rad=0.0,
+                    payload=observation.payload,
+                    candidate_source=observation.candidate_source,
+                    source_lineage=observation.source_lineage,
+                )
+            )
+        return tuple(stable)
+
+    @staticmethod
+    def _direct_near_field_moveit_rank_key(candidate):
+        """Authoritative deterministic ordering before strict MoveIt."""
+
+        return (
+            candidate.pre_moveit_score,
+            candidate.track_id,
+            candidate.variant_index,
+        )
+
     @staticmethod
     def _stamp_to_sec(stamp):
         if stamp is None:
@@ -12287,6 +12410,7 @@ class RemoteGrasp6DNode:
         )
         observations, local_funnel = self._evaluate_local_candidates(prepared)
         near_field = bool(getattr(prepared, 'near_field', False))
+        direct_near_field = self._direct_near_field_active(prepared)
         if isinstance(base_audit_report, dict):
             base_audit_report = self._append_normalized_geometry_audit_rows(
                 base_audit_report,
@@ -12299,7 +12423,11 @@ class RemoteGrasp6DNode:
             target_identity=target_identity,
             ticket=ticket,
         )
-        if near_field:
+        if direct_near_field:
+            # This strategy intentionally consumes exactly the current fused
+            # snapshot. Historical tracker hits remain diagnostic only.
+            stable = self._single_request_stable_candidates(observations)
+        elif near_field:
             # Each near-field request uses a source-frame window disjoint from
             # the prior submitted window. Two matched hits therefore contain
             # ten distinct RGB-D/mask/object samples. Keep only a track seen in
@@ -12320,7 +12448,9 @@ class RemoteGrasp6DNode:
         local_funnel = dict(local_funnel or {})
         local_funnel['snapshot_evidence'] = {
             'near_field': near_field,
-            'disjoint_window_required': near_field,
+            'disjoint_window_required': (
+                near_field and not direct_near_field
+            ),
             'source_stamp_ns': list(sample_stamps),
             'unique_source_frames': len(set(sample_stamps)),
             'source_span_ms': (
@@ -12336,13 +12466,17 @@ class RemoteGrasp6DNode:
             else {'track_count': 0, 'max_hit_count': 0, 'tracks': []}
         )
         tracking_evidence['required_hits'] = (
-            NEAR_FIELD_STABILITY_MIN_HITS
-            if near_field
-            else int(
-                getattr(
-                    getattr(self.tracker, 'config', None),
-                    'min_hits',
-                    PRODUCTION_STABILITY_MIN_HITS,
+            1
+            if direct_near_field
+            else (
+                NEAR_FIELD_STABILITY_MIN_HITS
+                if near_field
+                else int(
+                    getattr(
+                        getattr(self.tracker, 'config', None),
+                        'min_hits',
+                        PRODUCTION_STABILITY_MIN_HITS,
+                    )
                 )
             )
         )
@@ -12360,7 +12494,11 @@ class RemoteGrasp6DNode:
                 stable_count=0,
                 preview_count=0,
             )
-            status = 'STABILITY_PENDING'
+            status = (
+                'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'
+                if direct_near_field
+                else 'STABILITY_PENDING'
+            )
             local_stage = dict(
                 funnel.get('stage_counts', {}).get(
                     'locally_valid',
@@ -12368,7 +12506,10 @@ class RemoteGrasp6DNode:
                 )
                 or {}
             )
-            if _pipeline_count(local_stage.get('passed', 0)) == 0:
+            if (
+                not direct_near_field
+                and _pipeline_count(local_stage.get('passed', 0)) == 0
+            ):
                 primary = funnel.get('primary_failure')
                 if primary:
                     count = int(
@@ -12397,14 +12538,22 @@ class RemoteGrasp6DNode:
             scored
         )
         moveit_ranking_key = (
-            None
-            if near_field
-            else self._far_field_observation_moveit_rank_key
+            self._direct_near_field_moveit_rank_key
+            if direct_near_field
+            else (
+                None
+                if near_field
+                else self._far_field_observation_moveit_rank_key
+            )
         )
         selection = bounded_moveit_select(
             moveit_candidates,
             self._check_moveit_stable_candidate,
-            top_n=int(self.moveit_top_n),
+            top_n=(
+                max(1, len(moveit_candidates))
+                if direct_near_field
+                else int(self.moveit_top_n)
+            ),
             max_joint_delta_rad=float(
                 getattr(self, 'candidate_max_joint_delta_rad', 0.0) or 0.0
             ),
@@ -12414,23 +12563,31 @@ class RemoteGrasp6DNode:
             # hard geometry, collision, and dedupe.  Check the complete
             # bounded set so an arbitrary Top-N cutoff cannot be reported as
             # evidence that all contact sequences are unreachable.
-            exhaustive=bool(near_field),
+            exhaustive=bool(near_field and not direct_near_field),
             # Far-field's information/translation ranking is also its final
             # selection rule.  The first strictly reachable item in this
             # ordering is the exact optimum, so checking lower-ranked poses
             # cannot change the result and only makes live plans stale.
-            first_reachable_by_rank=not bool(near_field),
+            first_reachable_by_rank=bool(
+                direct_near_field or not near_field
+            ),
             # Near-field MoveIt checks can each run the deterministic
             # orientation resolver. Stop starting new checks before the
             # server-advertised snapshot lifetime is consumed, preserving
             # enough time for the unchanged fail-closed MuJoCo gate.
             continue_checking=(
-                self._near_field_moveit_continuation_gate(prepared)
-                if near_field
-                else None
+                self._direct_near_field_deadline_gate(prepared)
+                if direct_near_field
+                else (
+                    self._near_field_moveit_continuation_gate(prepared)
+                    if near_field
+                    else None
+                )
             ),
             continuation_stop_reason=(
-                'MUJOCO_SNAPSHOT_RESERVE_REACHED'
+                'NEAR_FIELD_DIRECT_TIMEOUT'
+                if direct_near_field
+                else 'MUJOCO_SNAPSHOT_RESERVE_REACHED'
             ),
         )
         if (
@@ -12449,7 +12606,7 @@ class RemoteGrasp6DNode:
                 ),
             )
         mujoco_selection_status = ''
-        if near_field:
+        if near_field and not direct_near_field:
             (
                 selection,
                 mujoco_selection_status,
@@ -12472,7 +12629,11 @@ class RemoteGrasp6DNode:
                 )
                 else ''
             )
-            or 'NO_REACHABLE_STABLE_CANDIDATE'
+            or (
+                'NEAR_FIELD_NO_REACHABLE_CANDIDATE'
+                if direct_near_field
+                else 'NO_REACHABLE_STABLE_CANDIDATE'
+            )
         )
         if selection.selected is not None:
             promotion_proposal = self._publish_selected_preview(
