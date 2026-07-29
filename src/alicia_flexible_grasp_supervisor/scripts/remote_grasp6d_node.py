@@ -4220,6 +4220,8 @@ class RemoteGrasp6DNode:
             self.near_field_planning_active = active
         if active == previous:
             return
+        with self._stream_condition:
+            self._direct_near_field_submission_generation = None
         phase = 'near_field' if active else 'far_field'
         if self._advance_target_instance_epoch(
             'PLANNING_PHASE_%s' % phase.upper()
@@ -5186,6 +5188,7 @@ class RemoteGrasp6DNode:
         self._stream_worker = None
         self._stream_worker_busy = False
         self.streaming_enabled = False
+        self._direct_near_field_submission_generation = None
         self.last_submitted_stamp_ns = 0
         self.target_instance_epoch = int(
             getattr(self, 'target_instance_epoch', 0)
@@ -5367,6 +5370,7 @@ class RemoteGrasp6DNode:
             self.tracker = CandidateTracker(self._tracking_config)
             self._stable_variant_runtime = {}
             self._stream_generation = self.inference_coordinator.start()
+            self._direct_near_field_submission_generation = None
             self.streaming_enabled = True
             self._stream_condition.notify_all()
             return True
@@ -5389,6 +5393,7 @@ class RemoteGrasp6DNode:
             self.inference_coordinator.stop()
             self.tracker = CandidateTracker(self._tracking_config)
             self._stable_variant_runtime = {}
+            self._direct_near_field_submission_generation = None
             self._stream_condition.notify_all()
         if pending_request_id is not None:
             self._emit_pending_drop_metrics(
@@ -8140,6 +8145,18 @@ class RemoteGrasp6DNode:
         with self._stream_condition:
             if not self.streaming_enabled:
                 return False
+            direct_single_snapshot = bool(
+                getattr(self, 'near_field_planning_active', False)
+                and self._configured_near_field_strategy()
+                == 'single_snapshot_direct'
+            )
+            submission_generation = int(self._stream_generation)
+            if (
+                direct_single_snapshot
+                and self._direct_near_field_submission_generation
+                == submission_generation
+            ):
+                return False
             target_identity = self._current_stream_target_identity()
             newest_after_ns = self.last_submitted_stamp_ns
         try:
@@ -8183,10 +8200,30 @@ class RemoteGrasp6DNode:
         )
         if not snapshot.ok:
             return False
-        return self.submit_stream_snapshot(
+        submitted = self.submit_stream_snapshot(
             snapshot,
             graspnet_input_config=input_config,
         )
+        if submitted and direct_single_snapshot:
+            with self._stream_condition:
+                if (
+                    self.streaming_enabled
+                    and int(self._stream_generation)
+                    == submission_generation
+                    and bool(
+                        getattr(
+                            self,
+                            'near_field_planning_active',
+                            False,
+                        )
+                    )
+                    and self._configured_near_field_strategy()
+                    == 'single_snapshot_direct'
+                ):
+                    self._direct_near_field_submission_generation = (
+                        submission_generation
+                    )
+        return submitted
 
     def _promotion_controller(self):
         controller = getattr(self, 'execution_plan_controller', None)

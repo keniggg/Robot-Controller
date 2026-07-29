@@ -1822,7 +1822,16 @@ class GraspTaskNode:
             return False
 
         pregrasp, approach, grasp, lift = split_rich_plan_poses(plan)
-        if not self._execution_checkpoint(plan, gcfg, 'MuJoCo gate'):
+        direct_near_field = self._direct_near_field_enabled(gcfg)
+        if not self._execution_checkpoint(
+            plan,
+            gcfg,
+            (
+                'direct near-field gate'
+                if direct_near_field
+                else 'MuJoCo gate'
+            ),
+        ):
             return False
         plan_phase = _plan_phase(plan)
         near_field_enabled = self._cfg_bool(
@@ -1857,10 +1866,13 @@ class GraspTaskNode:
                 'far-field observation plan; contact simulation deferred '
                 'until near-field replan',
             )
-        elif not self._simulate_grasp6d_plan_if_required(
-            gcfg,
-            gripper_cfg,
-            plan,
+        elif (
+            not direct_near_field
+            and not self._simulate_grasp6d_plan_if_required(
+                gcfg,
+                gripper_cfg,
+                plan,
+            )
         ):
             return False
         if not self._execution_checkpoint(plan, gcfg, 'gripper open'):
@@ -2034,7 +2046,7 @@ class GraspTaskNode:
             self.set_state(
                 GraspStages.FAILED,
                 'NEAR_FIELD_PLAN_PHASE_INVALID: observation authority cannot '
-                'continue without a simulated contact execution plan',
+                'continue without a strictly checked contact execution plan',
             )
             return False
         if not strict_plan_id_equal(
@@ -2069,10 +2081,14 @@ class GraspTaskNode:
                 ):
                     return False
 
-        refined = self._maybe_final_refine_grasp6d_plan(
-            gcfg,
-            gripper_cfg,
-            plan,
+        refined = (
+            plan
+            if direct_near_field
+            else self._maybe_final_refine_grasp6d_plan(
+                gcfg,
+                gripper_cfg,
+                plan,
+            )
         )
         if refined is None:
             return False
@@ -2180,6 +2196,20 @@ class GraspTaskNode:
         self.set_state(GraspStages.SUCCESS, '6D grasp done', True)
         return True
 
+    @staticmethod
+    def _near_field_strategy(gcfg):
+        config = gcfg if isinstance(gcfg, dict) else {}
+        return str(
+            config.get('near_field_strategy', 'legacy_gated')
+            or 'legacy_gated'
+        ).strip().lower()
+
+    def _direct_near_field_enabled(self, gcfg):
+        return (
+            self._near_field_strategy(gcfg)
+            == 'single_snapshot_direct'
+        )
+
     def _maybe_rebind_near_field_grasp6d_plan(
         self,
         gcfg,
@@ -2188,6 +2218,7 @@ class GraspTaskNode:
     ):
         if not self._cfg_bool(gcfg, 'near_field_replan_enabled', False):
             return current_plan
+        direct_near_field = self._direct_near_field_enabled(gcfg)
         required = self._cfg_bool(gcfg, 'near_field_replan_required', True)
         timeout = max(
             0.0,
@@ -2216,7 +2247,12 @@ class GraspTaskNode:
             GraspStages.PLAN_PREGRASP,
             'waiting for near-field 6D preview',
         )
-        if not self._request_near_field_preview_stream(gcfg):
+        stream_requested = (
+            self._set_near_field_preview_stream(gcfg, True)
+            if direct_near_field
+            else self._request_near_field_preview_stream(gcfg)
+        )
+        if not stream_requested:
             if required:
                 self.set_state(
                     GraspStages.FAILED,
@@ -2246,6 +2282,16 @@ class GraspTaskNode:
             )
             if last_result.ok:
                 frozen = self._freeze_execution_plan(candidate)
+                if direct_near_field:
+                    if not self._set_near_field_preview_stream(
+                        gcfg,
+                        False,
+                    ):
+                        rospy.logwarn(
+                            'Direct near-field plan %s is frozen but the '
+                            'preview stream disable request failed',
+                            str(getattr(frozen, 'plan_id', '') or ''),
+                        )
                 rospy.loginfo(
                     'Rebound 6D execution authority to near-field plan %s '
                     'from Preview stamp age %.3fs',
@@ -2257,26 +2303,45 @@ class GraspTaskNode:
                     'near-field 6D plan rebound: %s'
                     % str(getattr(frozen, 'plan_id', '') or ''),
                 )
-                if not self._simulate_grasp6d_plan_if_required(
-                    gcfg,
-                    gripper_cfg,
-                    frozen,
+                if (
+                    not direct_near_field
+                    and not self._simulate_grasp6d_plan_if_required(
+                        gcfg,
+                        gripper_cfg,
+                        frozen,
+                    )
                 ):
                     return None
                 return frozen
             rospy.sleep(poll_sec)
 
+        if direct_near_field:
+            if not self._set_near_field_preview_stream(gcfg, False):
+                rospy.logwarn(
+                    'Direct near-field preview stream disable request failed '
+                    'after terminal replan wait'
+                )
+        timeout_code = (
+            'NEAR_FIELD_DIRECT_TIMEOUT'
+            if direct_near_field
+            else 'NEAR_FIELD_REPLAN_TIMEOUT'
+        )
         message = (
-            'NEAR_FIELD_REPLAN_TIMEOUT: no fresh near-field 6D preview after '
+            '%s: no fresh near-field 6D preview after '
             '%.1fs; last=%s: %s'
-        ) % (timeout, last_result.code, last_result.reason)
+        ) % (
+            timeout_code,
+            timeout,
+            last_result.code,
+            last_result.reason,
+        )
         if required:
             self.set_state(GraspStages.FAILED, message)
             return None
         rospy.logwarn('%s; keeping existing bound plan', message)
         return current_plan
 
-    def _request_near_field_preview_stream(self, gcfg):
+    def _set_near_field_preview_stream(self, gcfg, enabled):
         if not self._cfg_bool(gcfg, 'near_field_replan_request_stream', True):
             return True
         timeout = max(
@@ -2287,22 +2352,31 @@ class GraspTaskNode:
                 3.0,
             ),
         )
+        desired = bool(enabled)
         try:
             rospy.wait_for_service('/grasp_6d/request_plan', timeout=timeout)
             response = rospy.ServiceProxy(
                 '/grasp_6d/request_plan',
                 TriggerZero,
-            )(True)
+            )(desired)
         except Exception as exc:
-            rospy.logwarn('Near-field 6D stream request failed: %s', exc)
+            rospy.logwarn(
+                'Near-field 6D stream %s request failed: %s',
+                'enable' if desired else 'disable',
+                exc,
+            )
             return False
         if bool(getattr(response, 'success', False)):
             return True
         rospy.logwarn(
-            'Near-field 6D stream request rejected: %s',
+            'Near-field 6D stream %s request rejected: %s',
+            'enable' if desired else 'disable',
             str(getattr(response, 'message', '') or ''),
         )
         return False
+
+    def _request_near_field_preview_stream(self, gcfg):
+        return self._set_near_field_preview_stream(gcfg, True)
 
     def _check_final_refine_sequence(self, plan, gcfg):
         timeout = max(

@@ -3059,6 +3059,60 @@ def test_stream_poll_waits_for_fresh_window_and_submits_only_once(
         node.shutdown_streaming_worker()
 
 
+def test_direct_near_field_poll_submits_exactly_one_fused_snapshot(
+    monkeypatch,
+):
+    class RecordingFrames:
+        def __init__(self):
+            self.calls = []
+
+        def wait_for_samples(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return [object(), object(), object()]
+
+    node = streaming_node(start_worker=False)
+    try:
+        node.frames = RecordingFrames()
+        node.near_field_planning_active = True
+        node.near_field_strategy = 'single_snapshot_direct'
+        node.rate_hz = 2.0
+        node.planning_snapshot_timeout_sec = 4.0
+        node.planning_snapshot_frames = 3
+        node.planning_snapshot_max_age_sec = 0.35
+        node.planning_snapshot_max_span_sec = 3.0
+        node.planning_snapshot_max_inference_latency_sec = 1.2
+        node.planning_mask_min_iou = 0.85
+        node.planning_mask_max_centroid_shift_px = 5.0
+        node.planning_max_joint_delta_rad = 0.01
+        node.mask_erosion_px = 2
+        node.mask_internal_hole_max_area_px = 25
+        node.depth_mad_scale = 3.5
+        node.depth_mad_absolute_floor_m = 0.002
+        node._snapshot_depth_config = lambda: (0.001, 0.03, 2.0)
+        node._freeze_graspnet_input_config = lambda: types.SimpleNamespace(
+            requires_instance_mask=False
+        )
+        node._active_profile_requires_mask = lambda: False
+        fused_snapshots = [snapshot(9.9), snapshot(10.0)]
+        for fused in fused_snapshots:
+            fused.ok = True
+        monkeypatch.setattr(
+            remote_node,
+            'fuse_stable_samples',
+            lambda *_args, **_kwargs: fused_snapshots.pop(0),
+        )
+
+        node.start_streaming()
+
+        assert node._poll_stream_snapshot() is True
+        assert node._poll_stream_snapshot() is False
+        assert len(node.frames.calls) == 1
+        assert node.last_submitted_stamp_ns == 9_900_000_000
+        assert node.inference_coordinator.pending_count == 0
+    finally:
+        node.shutdown_streaming_worker()
+
+
 def test_submit_atomically_rejects_snapshot_from_previous_target_identity():
     node = streaming_node(clock=MutableClock(30.0), start_worker=False)
     try:

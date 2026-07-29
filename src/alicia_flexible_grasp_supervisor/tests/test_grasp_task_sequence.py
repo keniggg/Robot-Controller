@@ -1671,6 +1671,247 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(node._bound_execution_plan.plan_id, preview.plan_id)
         self.assertEqual(calls, ['request', ('simulate', preview.plan_id)])
 
+    def test_direct_near_field_replan_freezes_once_without_duplicate_simulation(
+        self,
+    ):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
+        preview = self._rich_plan(plan_id='preview', stamp_sec=10.0)
+        node.latest_grasp6d_plan = bound
+        node.latest_grasp6d_preview_plan = preview
+        node.latest_obj = self._object_at(
+            0.40,
+            0.0,
+            0.20,
+            stamp_sec=10.0,
+        )
+        node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(10.0)
+        node.active = True
+        node.set_state = lambda *args, **kwargs: None
+        node._freeze_execution_plan(bound)
+        stream_calls = []
+        node._set_near_field_preview_stream = (
+            lambda _gcfg, enabled: (
+                stream_calls.append(bool(enabled)) or True
+            )
+        )
+        node._request_near_field_preview_stream = (
+            lambda _gcfg: self.fail(
+                'direct mode must use the explicit stream state setter'
+            )
+        )
+        node._simulate_grasp6d_plan_if_required = (
+            lambda *_args, **_kwargs: self.fail(
+                'direct near-field selection already performed strict '
+                'MoveIt and must not repeat task-level MuJoCo'
+            )
+        )
+
+        original_now = grasp_task_node.rospy.Time.now
+        original_get_param = grasp_task_node.rospy.get_param
+        original_sleep = grasp_task_node.rospy.sleep
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.05)
+        )
+        grasp_task_node.rospy.get_param = lambda _name, default=None: default
+        grasp_task_node.rospy.sleep = lambda *_args, **_kwargs: None
+        try:
+            result = node._maybe_rebind_near_field_grasp6d_plan(
+                {
+                    'near_field_strategy': 'single_snapshot_direct',
+                    'near_field_replan_enabled': True,
+                    'near_field_replan_required': True,
+                    'near_field_replan_timeout_sec': 30.0,
+                    'near_field_replan_snapshot_slack_sec': 1.0,
+                    'plan_validity_sec': 5.0,
+                    'target_max_drift_m': 0.02,
+                    'target_observation_validity_sec': 1.5,
+                },
+                {},
+                bound,
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.get_param = original_get_param
+            grasp_task_node.rospy.sleep = original_sleep
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.plan_id, preview.plan_id)
+        self.assertEqual(node._bound_execution_plan.plan_id, preview.plan_id)
+        self.assertEqual(stream_calls, [True, False])
+
+    def test_direct_near_field_timeout_has_exact_status_and_stops_stream(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
+        node.latest_grasp6d_plan = bound
+        node.latest_grasp6d_preview_plan = None
+        node.active = True
+        states = []
+        node.set_state = lambda stage, message='', *_args, **_kwargs: (
+            states.append((stage, message))
+        )
+        node._freeze_execution_plan(bound)
+        stream_calls = []
+        node._set_near_field_preview_stream = (
+            lambda _gcfg, enabled: (
+                stream_calls.append(bool(enabled)) or True
+            )
+        )
+        node._request_near_field_preview_stream = lambda _gcfg: True
+        node._copy_near_field_preview_candidate = (
+            lambda *_args, **_kwargs: (
+                grasp_task_node.PlanValidationResult(
+                    False,
+                    'NEAR_FIELD_PLAN_WAITING',
+                    'no current direct preview',
+                ),
+                None,
+            )
+        )
+
+        original_now = grasp_task_node.rospy.Time.now
+        original_sleep = grasp_task_node.rospy.sleep
+        original_monotonic = grasp_task_node.time.monotonic
+        clock = [0.0]
+
+        def monotonic():
+            clock[0] += 0.06
+            return clock[0]
+
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.05)
+        )
+        grasp_task_node.rospy.sleep = lambda *_args, **_kwargs: None
+        grasp_task_node.time.monotonic = monotonic
+        try:
+            result = node._maybe_rebind_near_field_grasp6d_plan(
+                {
+                    'near_field_strategy': 'single_snapshot_direct',
+                    'near_field_replan_enabled': True,
+                    'near_field_replan_required': True,
+                    'near_field_replan_timeout_sec': 0.1,
+                    'near_field_replan_snapshot_slack_sec': 1.0,
+                    'plan_validity_sec': 5.0,
+                },
+                {},
+                bound,
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.sleep = original_sleep
+            grasp_task_node.time.monotonic = original_monotonic
+
+        self.assertIsNone(result)
+        self.assertEqual(stream_calls, [True, False])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('NEAR_FIELD_DIRECT_TIMEOUT', states[-1][1])
+
+    def test_direct_near_field_executes_frozen_plan_without_final_refine(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        plan = self._rich_plan(plan_id='far', stamp_sec=9.0)
+        plan.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        rebound = grasp_task_node.deepcopy(plan)
+        rebound.poses[0].position.x += 0.03
+        rebound.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+        rebound.plan_id = compute_plan_id(rebound)
+        reached = grasp_task_node.deepcopy(
+            grasp_task_node.split_rich_plan_poses(plan)[0]
+        )
+        node.active = True
+        node._near_field_active = False
+        node._grasp6d_plan_lock = threading.RLock()
+        node._bound_target_occlusion_allowed = False
+        node.set_state = lambda *_args, **_kwargs: None
+        node._position_only_execute_globally_enabled = lambda: False
+        node._execution_checkpoint = lambda *_args, **_kwargs: True
+        node._current_tool_pose_base = lambda: reached
+        node._current_observation_view_reusable = (
+            lambda *_args, **_kwargs: True
+        )
+        node._wait_for_motion_settle = lambda *_args, **_kwargs: None
+        node._command_gripper_position = lambda *_args, **_kwargs: True
+        node._wait_for_fresh_observation_camera_target_range = (
+            lambda *_args, **_kwargs: grasp_task_node.PlanValidationResult(
+                True
+            )
+        )
+        node._set_near_field_active = (
+            lambda active: setattr(
+                node,
+                '_near_field_active',
+                bool(active),
+            )
+        )
+        node._maybe_rebind_near_field_grasp6d_plan = (
+            lambda *_args, **_kwargs: rebound
+        )
+        node._simulate_grasp6d_plan_if_required = (
+            lambda *_args, **_kwargs: self.fail(
+                'direct execution must not repeat simulation'
+            )
+        )
+        node._maybe_final_refine_grasp6d_plan = (
+            lambda *_args, **_kwargs: self.fail(
+                'the fused near-field snapshot is the final visual correction'
+            )
+        )
+        events = []
+
+        def move(_stage, label, *_args, **_kwargs):
+            events.append(label)
+            return True
+
+        node._plan_and_execute_pose = move
+        node._close_gripper = lambda *_args, **_kwargs: (
+            events.append('gripper close') or (True, 'closed')
+        )
+
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        try:
+            result = node._execute_grasp6d_plan(
+                {
+                    'near_field_strategy': 'single_snapshot_direct',
+                    'plan_validity_sec': 5.0,
+                    'near_field_replan_enabled': True,
+                    'near_field_replan_required': True,
+                    'observation_reuse_position_tolerance_m': 0.025,
+                },
+                {
+                    'open_position_m': 0.05,
+                    'use_compliant_close': False,
+                },
+                0.05,
+                object(),
+                object(),
+                object(),
+                None,
+                plan,
+                strict_execute_pose=lambda *_args, **_kwargs: None,
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertTrue(result)
+        self.assertEqual(
+            events,
+            [
+                '6D near-field pregrasp',
+                'linear 6D approach',
+                'linear 6D grasp pose',
+                'gripper close',
+                'linear 6D lift',
+            ],
+        )
+
     def test_near_field_rebind_reuses_identical_reached_pregrasp(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
