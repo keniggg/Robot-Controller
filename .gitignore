@@ -6,6 +6,7 @@ build/
 devel/
 build.bak_*/
 devel.bak_*/
+.catkin_tools/
 
 # Python caches and local test output
 __pycache__/
@@ -13,3 +14,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 **/.pytest_cache/
+
+# Captured ROS console streams are local runtime artifacts. Curated Markdown
+# runbooks and evidence summaries under logs/ remain versioned.
+src/alicia_flexible_grasp_supervisor/logs/*.log

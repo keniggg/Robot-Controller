@@ -13,6 +13,7 @@ from .gripper_geometry import (
     ANALYTICAL_MAX_INNER_GAP_M,
     ANALYTICAL_PALM_CENTER_TOOL_XYZ_M,
     GripperGeometry,
+    bilateral_contact_height_bounds_m,
     gripper_box_centers,
     parse_tool_axis,
     projected_cloud_width_m,
@@ -20,6 +21,12 @@ from .gripper_geometry import (
 
 
 _ALICIA_MAX_INNER_GAP_M = 0.050
+_MAX_TABLETOP_CANDIDATES = 32
+# Runtime materialization combines at most four adaptive interior samples with
+# at most four continuously solved contact-boundary samples.  The external ROS
+# configuration remains capped at four; this larger internal bound exists only
+# so those two finite evidence sets can be evaluated together.
+_MAX_MATERIALIZED_APPROACH_TILTS = 8
 
 
 class _InputInvalid(ValueError):
@@ -47,9 +54,11 @@ class TabletopGeometryConfig:
     angle_step_deg: float = 15.0
     angle_dedup_deg: float = 2.0
     jaw_clearance_each_side_m: float = 0.002
+    opening_fit_clearance_each_side_m: float = 0.002
     min_contact_band_points: int = 6
     contact_band_fraction: float = 0.12
     max_candidates: int = 8
+    approach_tilt_degrees: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -164,7 +173,7 @@ def generate_tabletop_proposals(
     proposals = []
     width_valid_count = 0
     contact_valid_count = 0
-    contact_center = _robust_contact_center(points, support_point, normal)
+    contact_center = center
     for angle_deg, jaw_axis in angles:
         projection = points.dot(jaw_axis)
         lower = float(np.min(projection))
@@ -173,7 +182,7 @@ def generate_tabletop_proposals(
         required = projected_cloud_width_m(
             points,
             jaw_axis,
-            checked_config.jaw_clearance_each_side_m,
+            checked_config.opening_fit_clearance_each_side_m,
         )
         if span <= 1e-9 or not 0.0 < required <= checked_config.max_inner_gap_m:
             continue
@@ -182,6 +191,15 @@ def generate_tabletop_proposals(
             projection, lower, upper, checked_config.contact_band_fraction
         )
         if min(negative, positive) < checked_config.min_contact_band_points:
+            continue
+        contact_height_bounds = bilateral_contact_height_bounds_m(
+            points,
+            contact_center,
+            jaw_axis,
+            normal,
+            checked_config.contact_band_fraction,
+        )
+        if contact_height_bounds is None:
             continue
         contact_valid_count += 1
         symmetry = min(negative, positive) / float(max(negative, positive))
@@ -201,6 +219,12 @@ def generate_tabletop_proposals(
                 audit={
                     'projection_min_m': lower,
                     'projection_max_m': upper,
+                    'bilateral_contact_height_min_m': float(
+                        contact_height_bounds[0]
+                    ),
+                    'bilateral_contact_height_max_m': float(
+                        contact_height_bounds[1]
+                    ),
                 },
             )
         )
@@ -235,8 +259,9 @@ def materialize_tabletop_candidates(
     gripper,
     tool_jaw_axis='y',
     tool_finger_length_axis='z',
+    approach_tilt_degrees=(),
 ):
-    """Materialize one proposal as two CAD-grounded 180-degree variants."""
+    """Materialize one proposal as CAD-grounded approach/jaw variants."""
     if not isinstance(proposal, TabletopProposal):
         raise TabletopCandidateContractError(
             'TOOL0_GEOMETRY_INVALID',
@@ -266,6 +291,13 @@ def materialize_tabletop_candidates(
             'TABLETOP_APPROACH_INVALID',
             str(error),
         ) from error
+    try:
+        tilt_degrees = _validated_approach_tilt_degrees(approach_tilt_degrees)
+    except _InputInvalid as error:
+        raise TabletopCandidateContractError(
+            'TABLETOP_APPROACH_INVALID',
+            str(error),
+        ) from error
 
     insertion = np.asarray(proposal.insertion_axis_base, dtype=float)
     jaw = np.asarray(proposal.jaw_axis_base, dtype=float)
@@ -291,85 +323,152 @@ def materialize_tabletop_candidates(
         )
 
     variants = []
-    for variant_index, jaw_axis in enumerate((jaw, -jaw)):
-        try:
-            rotation = semantic_axes_to_tool_rotation(
-                insertion_axis_base=insertion,
-                jaw_axis_base=jaw_axis,
-                tool_jaw_axis=tool_jaw_axis,
-                tool_finger_length_axis=tool_finger_length_axis,
-            )
-            translation = solve_tool0_translation_for_support_clearance(
-                rotation=rotation,
-                lateral_target=proposal.contact_center_base,
-                support_point=support_point,
-                support_normal=support_normal,
-                clearance_m=gripper.support_clearance_m,
-                gripper=gripper,
-                tool_jaw_axis=tool_jaw_axis,
-                tool_finger_length_axis=tool_finger_length_axis,
-            )
-            transform = np.eye(4, dtype=float)
-            transform[:3, :3] = rotation
-            transform[:3, 3] = translation
-            finger_corners = _open_finger_corners(
-                transform,
-                gripper,
-                tool_jaw_axis,
-                tool_finger_length_axis,
-            )
-            finger_heights = (finger_corners - support_point) @ support_normal
-            minimum_clearance = float(np.min(finger_heights))
-            if abs(minimum_clearance - gripper.support_clearance_m) > 1e-8:
-                raise ValueError('unable to solve the configured CAD clearance')
-            contact_height = float(
-                np.dot(
-                    np.asarray(proposal.contact_center_base) - support_point,
-                    support_normal,
-                )
-            )
-            if not (
-                float(np.min(finger_heights)) - 1e-9
-                <= contact_height
-                <= float(np.max(finger_heights)) + 1e-9
-            ):
-                raise ValueError(
-                    'usable finger side band does not overlap contact height'
-                )
-            finger_pair_center = translation + (
-                rotation @ ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M
-            )
-            palm_center = translation + (
-                rotation @ ANALYTICAL_PALM_CENTER_TOOL_XYZ_M
-            )
-            if float(np.dot(palm_center - finger_pair_center, insertion)) >= 0.0:
-                raise ValueError('palm lies on the object side of the fingers')
-        except TabletopCandidateContractError:
-            raise
-        except Exception as error:
-            raise TabletopCandidateContractError(
-                'TOOL0_GEOMETRY_INVALID',
-                str(error),
-            ) from error
-        audit = dict(proposal.audit)
-        audit.update({
-            'minimum_finger_support_clearance_m': minimum_clearance,
-            'tool0_translation_base': tuple(float(item) for item in translation),
-        })
-        variants.append(
-            TabletopCandidate(
-                source_index=proposal.source_index,
-                variant_index=variant_index,
-                contact_center_base=proposal.contact_center_base,
-                T_base_tool0=transform,
-                insertion_axis_base=insertion,
-                jaw_axis_base=jaw_axis,
-                required_open_width_m=proposal.required_open_width_m,
-                minimum_finger_support_clearance_m=minimum_clearance,
-                source_score=proposal.source_score,
-                audit=audit,
-            )
+    approach_variant_count = 1 + 2 * len(tilt_degrees)
+    for jaw_variant_index, jaw_axis in enumerate((jaw, -jaw)):
+        insertion_variants = _approach_insertion_variants(
+            insertion,
+            jaw_axis,
+            support_normal,
+            tilt_degrees,
         )
+        for approach_variant_index, (
+            tilted_insertion,
+            tilt_deg,
+            tilt_polarity,
+        ) in enumerate(insertion_variants):
+            try:
+                rotation = semantic_axes_to_tool_rotation(
+                    insertion_axis_base=tilted_insertion,
+                    jaw_axis_base=jaw_axis,
+                    tool_jaw_axis=tool_jaw_axis,
+                    tool_finger_length_axis=tool_finger_length_axis,
+                )
+                translation = solve_tool0_translation_for_support_clearance(
+                    rotation=rotation,
+                    lateral_target=proposal.contact_center_base,
+                    support_point=support_point,
+                    support_normal=support_normal,
+                    clearance_m=gripper.support_clearance_m,
+                    gripper=gripper,
+                    tool_jaw_axis=tool_jaw_axis,
+                    tool_finger_length_axis=tool_finger_length_axis,
+                )
+                transform = np.eye(4, dtype=float)
+                transform[:3, :3] = rotation
+                transform[:3, 3] = translation
+                finger_corners = _open_finger_corners(
+                    transform,
+                    gripper,
+                    tool_jaw_axis,
+                    tool_finger_length_axis,
+                )
+                finger_heights = (finger_corners - support_point) @ support_normal
+                minimum_clearance = float(np.min(finger_heights))
+                if abs(minimum_clearance - gripper.support_clearance_m) > 1e-8:
+                    raise ValueError('unable to solve the configured CAD clearance')
+                contact_height = float(
+                    np.dot(
+                        np.asarray(proposal.contact_center_base) - support_point,
+                        support_normal,
+                    )
+                )
+                if not (
+                    float(np.min(finger_heights)) - 1e-9
+                    <= contact_height
+                    <= float(np.max(finger_heights)) + 1e-9
+                ):
+                    raise ValueError(
+                        'usable finger side band does not overlap contact height'
+                    )
+                finger_pair_center = translation + (
+                    rotation @ ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M
+                )
+                center_delta = (
+                    finger_pair_center
+                    - np.asarray(proposal.contact_center_base, dtype=float)
+                )
+                center_lateral = center_delta - (
+                    float(np.dot(center_delta, support_normal)) * support_normal
+                )
+                center_lateral_error = float(np.linalg.norm(center_lateral))
+                if center_lateral_error > 1e-8:
+                    raise ValueError(
+                        'finger-pair center is not on the contact-center normal'
+                    )
+                palm_center = translation + (
+                    rotation @ ANALYTICAL_PALM_CENTER_TOOL_XYZ_M
+                )
+                if (
+                    float(np.dot(palm_center - finger_pair_center, tilted_insertion))
+                    >= 0.0
+                ):
+                    raise ValueError('palm lies on the object side of the fingers')
+            except TabletopCandidateContractError:
+                raise
+            except Exception as error:
+                raise TabletopCandidateContractError(
+                    'TOOL0_GEOMETRY_INVALID',
+                    str(error),
+                ) from error
+            audit = dict(proposal.audit)
+            audit.update({
+                'proposal_source_index': int(proposal.source_index),
+                'approach_variant_index': int(approach_variant_index),
+                'approach_tilt_deg': float(tilt_deg),
+                'approach_tilt_polarity': float(tilt_polarity),
+                'minimum_finger_support_clearance_m': minimum_clearance,
+                'tool0_translation_base': tuple(float(item) for item in translation),
+                'finger_pair_center_base': tuple(
+                    float(item) for item in finger_pair_center
+                ),
+                'finger_pair_center_lateral_error_m': center_lateral_error,
+            })
+            variants.append(
+                TabletopCandidate(
+                    source_index=(
+                        int(proposal.source_index) * approach_variant_count
+                        + int(approach_variant_index)
+                    ),
+                    variant_index=int(jaw_variant_index),
+                    contact_center_base=proposal.contact_center_base,
+                    T_base_tool0=transform,
+                    insertion_axis_base=tilted_insertion,
+                    jaw_axis_base=jaw_axis,
+                    required_open_width_m=proposal.required_open_width_m,
+                    minimum_finger_support_clearance_m=minimum_clearance,
+                    source_score=proposal.source_score,
+                    audit=audit,
+                )
+            )
+    return tuple(variants)
+
+
+def _approach_insertion_variants(
+    insertion,
+    jaw_axis,
+    support_normal,
+    tilt_degrees,
+):
+    variants = [(np.array(insertion, dtype=float, copy=True), 0.0, 0.0)]
+    if not tilt_degrees:
+        return tuple(variants)
+    finger_tilt_axis = np.cross(jaw_axis, support_normal)
+    norm = float(np.linalg.norm(finger_tilt_axis))
+    if norm <= 1e-12:
+        raise TabletopCandidateContractError(
+            'TABLETOP_APPROACH_INVALID',
+            'jaw axis cannot define a finger-length tilt direction',
+        )
+    finger_tilt_axis = finger_tilt_axis / norm
+    for tilt_deg in tilt_degrees:
+        radians = float(np.deg2rad(tilt_deg))
+        for polarity in (-1.0, 1.0):
+            tilted = (
+                np.cos(radians) * np.asarray(insertion, dtype=float)
+                + polarity * np.sin(radians) * finger_tilt_axis
+            )
+            tilted /= float(np.linalg.norm(tilted))
+            variants.append((tilted, float(tilt_deg), float(polarity)))
     return tuple(variants)
 
 
@@ -536,6 +635,7 @@ def _validated_config(config):
         'angle_step_deg',
         'angle_dedup_deg',
         'jaw_clearance_each_side_m',
+        'opening_fit_clearance_each_side_m',
         'contact_band_fraction',
     )
     values = {}
@@ -561,6 +661,16 @@ def _validated_config(config):
         raise _InputInvalid(
             'jaw_clearance_each_side_m must match the fixed 2 mm gripper contract'
         )
+    if values['opening_fit_clearance_each_side_m'] < 0.0:
+        raise _InputInvalid('opening_fit_clearance_each_side_m must be non-negative')
+    if (
+        values['opening_fit_clearance_each_side_m']
+        > ANALYTICAL_JAW_CLEARANCE_EACH_SIDE_M
+    ):
+        raise _InputInvalid(
+            'opening_fit_clearance_each_side_m must not exceed the fixed '
+            '2 mm gripper contract'
+        )
     if not 0.0 < values['contact_band_fraction'] < 0.5:
         raise _InputInvalid('contact_band_fraction must be in (0, 0.5)')
     for name in ('min_contact_band_points', 'max_candidates'):
@@ -570,9 +680,50 @@ def _validated_config(config):
         values[name] = int(value)
     if values['min_contact_band_points'] <= 0:
         raise _InputInvalid('min_contact_band_points must be positive')
-    if not 1 <= values['max_candidates'] <= 8:
-        raise _InputInvalid('max_candidates must be between 1 and 8')
+    if not 1 <= values['max_candidates'] <= _MAX_TABLETOP_CANDIDATES:
+        raise _InputInvalid(
+            'max_candidates must be between 1 and %d'
+            % _MAX_TABLETOP_CANDIDATES
+        )
+    values['approach_tilt_degrees'] = _validated_approach_tilt_degrees(
+        getattr(config, 'approach_tilt_degrees', ())
+    )
     return TabletopGeometryConfig(**values)
+
+
+def _validated_approach_tilt_degrees(value):
+    if value is None:
+        return ()
+    if isinstance(value, bool):
+        raise _InputInvalid('approach_tilt_degrees must be a sequence')
+    if np.isscalar(value):
+        items = (value,)
+    else:
+        try:
+            items = tuple(value)
+        except TypeError as error:
+            raise _InputInvalid(
+                'approach_tilt_degrees must be a sequence'
+            ) from error
+    cleaned = []
+    for raw in items:
+        if isinstance(raw, bool) or not np.isscalar(raw):
+            raise _InputInvalid('approach_tilt_degrees entries must be finite')
+        tilt = float(raw)
+        if not np.isfinite(tilt):
+            raise _InputInvalid('approach_tilt_degrees entries must be finite')
+        if not 0.0 < tilt <= 45.0:
+            raise _InputInvalid(
+                'approach_tilt_degrees entries must be in (0, 45]'
+            )
+        if not any(abs(tilt - prior) <= 1e-9 for prior in cleaned):
+            cleaned.append(tilt)
+    if len(cleaned) > _MAX_MATERIALIZED_APPROACH_TILTS:
+        raise _InputInvalid(
+            'approach_tilt_degrees must contain at most %d values'
+            % _MAX_MATERIALIZED_APPROACH_TILTS
+        )
+    return tuple(cleaned)
 
 
 def _finite_points(points, config):

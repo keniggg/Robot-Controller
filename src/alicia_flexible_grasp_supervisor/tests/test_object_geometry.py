@@ -166,6 +166,36 @@ def test_mask_geometry_recovers_box_and_excludes_support_points(scene):
     assert np.linalg.det(estimate.axes_base) > 0.999
 
 
+def test_obb_height_is_anchored_to_support_for_top_surface_only_points():
+    normal = np.asarray([0.0, 0.0, 1.0], dtype=float)
+    offset = 0.0
+    xs = np.linspace(-0.025, 0.025, 9)
+    ys = np.linspace(-0.015, 0.015, 7)
+    points = []
+    for x in xs:
+        for y in ys:
+            # Mimic a depth camera observing only the visible top surface of a
+            # small carton resting on the table.  The vertical spread is just
+            # sensor/pose noise, not the physical box thickness.
+            z = 0.020 + 0.0004 * np.sin(100.0 * x + 50.0 * y)
+            points.append((x, y, z))
+    points = np.asarray(points, dtype=float)
+
+    center, axes, size = geometry_module._fit_obb(
+        points,
+        normal,
+        offset,
+        min_size_m=0.001,
+        max_size_m=0.200,
+        max_height_m=0.100,
+        previous_axes_base=None,
+    )
+
+    assert size[2] > 0.018
+    np.testing.assert_allclose(center @ normal + offset, 0.5 * size[2], atol=0.001)
+    np.testing.assert_allclose(axes[:, 2], normal, atol=1e-9)
+
+
 def test_support_plane_never_uses_mask_pixels(scene):
     corrupted = scene.full_depth_raw.copy()
     corrupted[scene.mask > 0] = 1

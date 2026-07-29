@@ -10,4 +10,6 @@ python tools/mujoco_digital_twin_server.py \
   --host "${MUJOCO_TWIN_HOST:-0.0.0.0}" \
   --port "${MUJOCO_TWIN_PORT:-8000}" \
   --device "${GRASPNET_DEVICE:-cuda:0}" \
+  --max-snapshot-age-sec "${MUJOCO_MAX_SNAPSHOT_AGE_SEC:-120.0}" \
+  --lift-speed-m-s "${MUJOCO_LIFT_SPEED_M_S:-0.10}" \
   "$@"

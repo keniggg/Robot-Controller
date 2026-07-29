@@ -2,9 +2,9 @@
   <arg name="use_remote_grasp6d" default="true" />
   <arg name="remote_grasp6d_url" default="$(optenv GRASP6D_URL http://172.23.132.97:8000)" />
 
-  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/grasp_params.yaml" />
-  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/safety_limits.yaml" />
-  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/joint_limits.yaml" />
+  <rosparam command="load" file="$(dirname)/../config/grasp_params.yaml" />
+  <rosparam command="load" file="$(dirname)/../config/safety_limits.yaml" />
+  <rosparam command="load" file="$(dirname)/../config/joint_limits.yaml" />
 
   <!-- Predict and MuJoCo deliberately share one resident WSL service URL. -->
   <param name="/grasp_6d/remote/server_url" value="$(arg remote_grasp6d_url)" />

@@ -225,6 +225,14 @@ class Grasp6DReadinessTracker:
         with self._lock:
             return state.fresh and strict_plan_id_equal(self.plan_id, plan_id)
 
+    def source_stamp_ns(self):
+        with self._lock:
+            if self._plan is None:
+                return 0
+            return _stamp_nanoseconds(
+                getattr(getattr(self._plan, 'header', None), 'stamp', None)
+            )
+
 
 def local_plan_execution_notice(use_remote_grasp6d):
     if bool(use_remote_grasp6d):
@@ -557,6 +565,13 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         if not plan_state.fresh:
             self._set_command_status(False, '没有新鲜的 6D 抓取候选，无法执行；请确认 WSL2 推理端和相机画面')
             return
+        superseded = self._preview_supersedes_execution(
+            str(self._readiness.plan_id),
+            plan_state=plan_state,
+        )
+        if superseded:
+            self._set_command_status(False, superseded)
+            return
         self._execution_plan_id = str(self._readiness.plan_id)
         self._command_active = True
         self.execute_btn.setEnabled(False)
@@ -567,11 +582,19 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
 
     def _run_start_grasp(self):
         plan_id = str(getattr(self, '_execution_plan_id', '') or '')
+        superseded = self._preview_supersedes_execution(plan_id)
+        if superseded:
+            self._emit_command_result_if_alive(False, superseded)
+            return
         if not self._readiness.matches_current(plan_id):
             self._emit_command_result_if_alive(False, 'PLAN_REPLACED: 富计划在服务调用前失效')
             return
         try:
             rospy.wait_for_service('/grasp/start', timeout=1.5)
+            superseded = self._preview_supersedes_execution(plan_id)
+            if superseded:
+                self._emit_command_result_if_alive(False, superseded)
+                return
             if not self._readiness.matches_current(plan_id):
                 self._emit_command_result_if_alive(False, 'PLAN_REPLACED: 富计划在等待服务时失效')
                 return
@@ -632,6 +655,50 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         self._grasp_message = prefix + str(message)
         self._refresh_view()
 
+    def _preview_supersedes_execution(
+        self,
+        execution_plan_id,
+        plan_state=None,
+        preview_state=None,
+    ):
+        execution = self.__dict__.get('_readiness', None)
+        preview = self.__dict__.get('_preview_readiness', None)
+        if execution is None or preview is None:
+            return ''
+        plan_state = plan_state or execution.state()
+        preview_state = preview_state or preview.state()
+        if not plan_state.fresh or not preview_state.fresh:
+            return ''
+        execution_id = str(execution_plan_id or getattr(execution, 'plan_id', '') or '')
+        preview_id = str(getattr(preview, 'plan_id', '') or '')
+        if (
+            not execution_id
+            or not preview_id
+            or strict_plan_id_equal(execution_id, preview_id)
+        ):
+            return ''
+        execution_stamp_ns = (
+            execution.source_stamp_ns()
+            if hasattr(execution, 'source_stamp_ns')
+            else 0
+        )
+        preview_stamp_ns = (
+            preview.source_stamp_ns()
+            if hasattr(preview, 'source_stamp_ns')
+            else 0
+        )
+        if (
+            execution_stamp_ns <= 0
+            or preview_stamp_ns <= 0
+            or preview_stamp_ns < execution_stamp_ns
+        ):
+            return ''
+        return (
+            'PLAN_SUPERSEDED_BY_PREVIEW: Preview 富计划 %s 比 Execution %s 更新，'
+            '等待 Execution 同步后再执行'
+            % (preview_id, execution_id)
+        )
+
     def _refresh_view(self):
         self._plan_validity_sec = float(
             rospy.get_param(
@@ -652,6 +719,13 @@ class Grasp6DControlWidget(QtWidgets.QWidget):
         self._use_remote_grasp6d = configured_remote and not self._legacy_only_status
         plan_state = self._readiness.state()
         preview_state = self._preview_readiness.state()
+        superseded = self._preview_supersedes_execution(
+            str(getattr(self._readiness, 'plan_id', '') or ''),
+            plan_state=plan_state,
+            preview_state=preview_state,
+        )
+        if superseded:
+            plan_state = Grasp6DPlanState(False, plan_state.age_sec, superseded)
         local_notice = local_plan_execution_notice(self._use_remote_grasp6d)
         if local_notice and not plan_state.fresh:
             plan_state = Grasp6DPlanState(False, plan_state.age_sec, local_notice)

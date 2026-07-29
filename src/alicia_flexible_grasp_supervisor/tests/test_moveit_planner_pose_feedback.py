@@ -29,9 +29,19 @@ class SuccessfulPlan:
 
 
 class JointPlan:
-    def __init__(self, positions):
+    def __init__(self, positions, duration_sec=None):
+        points = []
+        for index, values in enumerate(positions):
+            point = types.SimpleNamespace(positions=list(values))
+            if duration_sec is not None:
+                denominator = max(1, len(positions) - 1)
+                point.time_from_start = types.SimpleNamespace(
+                    to_sec=lambda value=float(duration_sec) * index / denominator: value
+                )
+            points.append(point)
         self.joint_trajectory = types.SimpleNamespace(
-            points=[types.SimpleNamespace(positions=list(values)) for values in positions]
+            joint_names=['Joint%d' % (index + 1) for index in range(len(positions[0]))],
+            points=points,
         )
 
 
@@ -43,6 +53,7 @@ class FakeManipulator:
         current_pose=None,
         execute_result=True,
         cartesian_result=None,
+        current_joint_values=None,
     ):
         self.go_results = list(go_result) if isinstance(go_result, (list, tuple)) else [go_result]
         if isinstance(plan_result, (list, tuple)):
@@ -52,6 +63,7 @@ class FakeManipulator:
         self.current_pose = current_pose
         self.execute_result = execute_result
         self.cartesian_result = cartesian_result
+        self.current_joint_values = current_joint_values
         self.target = None
         self.pose_targets = []
         self.position_targets = []
@@ -63,6 +75,8 @@ class FakeManipulator:
         self.planning_time = 2.0
         self.planning_time_updates = []
         self.cartesian_calls = []
+        self.start_state_to_current_calls = 0
+        self.start_states = []
 
     def set_pose_target(self, pose):
         self.target = pose
@@ -102,12 +116,26 @@ class FakeManipulator:
     def get_current_pose(self):
         return self.current_pose
 
+    def get_current_joint_values(self):
+        if self.current_joint_values is None:
+            raise RuntimeError('joint feedback unavailable')
+        return list(self.current_joint_values)
+
     def get_planning_time(self):
         return self.planning_time
 
     def set_planning_time(self, value):
         self.planning_time = float(value)
         self.planning_time_updates.append(float(value))
+
+    def set_start_state_to_current_state(self):
+        self.start_state_to_current_calls += 1
+
+    def set_start_state(self, state):
+        self.start_states.append(state)
+
+    def get_end_effector_link(self):
+        return 'tool0'
 
 
 class FakeNoeticManipulator(FakeManipulator):
@@ -133,13 +161,382 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         planner.error = None
         planner.manipulator = manipulator
         planner.strict_pose_planning_time = 0.25
+        planner.orientation_resolution_planning_time = 2.0
+        planner.orientation_resolution_step_rad = 0.4
+        planner.orientation_resolution_max_candidates = 8
+        planner.orientation_resolution_ik_timeout_sec = 0.05
+        planner.orientation_resolution_repeatability_tolerance_rad = 1e-9
         planner.cached_plan_position_tolerance_m = 0.002
         planner.cached_plan_orientation_tolerance_rad = 0.02
+        planner.execution_goal_tolerance_rad = 0.03
+        planner.execution_goal_tolerance_slack_rad = 0.005
+        planner.strict_execution_retime_enabled = False
         planner.cartesian_eef_step_m = 0.003
         planner.cartesian_jump_threshold = 0.0
         planner.cartesian_min_fraction = 0.98
         planner.cartesian_max_segment_m = 0.08
         return planner
+
+    @staticmethod
+    def robot_state(*positions):
+        return types.SimpleNamespace(
+            joint_state=types.SimpleNamespace(
+                name=['Joint%d' % (index + 1) for index in range(len(positions))],
+                position=list(positions),
+                velocity=[],
+                effort=[],
+            )
+        )
+
+    def test_strict_sequence_uses_each_planned_terminal_state(self):
+        pregrasp_plan = JointPlan([[0.0, 0.0], [0.2, 0.3]])
+        approach_plan = JointPlan([[0.2, 0.3], [0.25, 0.35]])
+        grasp_plan = JointPlan([[0.25, 0.35], [0.3, 0.4]])
+        manipulator = FakeManipulator(plan_result=pregrasp_plan)
+        planner = self.make_planner(manipulator)
+        planner.manipulator_group = 'alicia'
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+        cartesian_states = []
+        cartesian_plans = iter([approach_plan, grasp_plan])
+
+        def cartesian(start_state, _target):
+            cartesian_states.append(list(start_state.joint_state.position))
+            return next(cartesian_plans), 'planned'
+
+        planner._plan_cartesian_from_start_state = cartesian
+        targets = [make_pose(x=0.1), make_pose(x=0.2), make_pose(x=0.3)]
+
+        ok, code, failed_stage, metrics, message = (
+            planner.check_pose_sequence(
+                targets,
+                ['pregrasp', 'approach', 'grasp'],
+                [False, True, True],
+            )
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(code, '')
+        self.assertEqual(failed_stage, '')
+        self.assertEqual(
+            cartesian_states,
+            [[0.2, 0.3], [0.25, 0.35]],
+        )
+        self.assertAlmostEqual(metrics['path_cost'], 0.5019764838)
+        self.assertAlmostEqual(metrics['max_delta'], 0.3)
+        self.assertIn('stages=pregrasp,approach,grasp', message)
+
+    def test_strict_sequence_reports_failed_virtual_stage(self):
+        pregrasp_plan = JointPlan([[0.0, 0.0], [0.2, 0.3]])
+        manipulator = FakeManipulator(plan_result=pregrasp_plan)
+        planner = self.make_planner(manipulator)
+        planner.manipulator_group = 'alicia'
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+        planner._plan_cartesian_from_start_state = (
+            lambda _state, _target: (None, 'fraction 0.50')
+        )
+
+        ok, code, failed_stage, _metrics, message = (
+            planner.check_pose_sequence(
+                [make_pose(x=0.1), make_pose(x=0.2)],
+                ['pregrasp', 'approach'],
+                [False, True],
+            )
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(code, 'MOVEIT_UNREACHABLE')
+        self.assertEqual(failed_stage, 'approach')
+        self.assertIn('fraction 0.50', message)
+
+    def test_strict_sequence_accepts_full_five_stage_execution_order(self):
+        observation_plan = JointPlan([[0.0, 0.0], [0.1, 0.1]])
+        pregrasp_plan = JointPlan([[0.1, 0.1], [0.2, 0.2]])
+        approach_plan = JointPlan([[0.2, 0.2], [0.25, 0.25]])
+        grasp_plan = JointPlan([[0.25, 0.25], [0.3, 0.3]])
+        lift_plan = JointPlan([[0.3, 0.3], [0.4, 0.4]])
+        planner = self.make_planner(FakeManipulator())
+        planner.manipulator_group = 'alicia'
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+        pose_plans = iter(
+            [observation_plan, pregrasp_plan, lift_plan]
+        )
+        cartesian_plans = iter([approach_plan, grasp_plan])
+        planner._plan_pose_from_start_state = (
+            lambda _state, _target: (next(pose_plans), 'planned')
+        )
+        planner._plan_cartesian_from_start_state = (
+            lambda _state, _target: (next(cartesian_plans), 'planned')
+        )
+
+        ok, code, failed_stage, _metrics, message = (
+            planner.check_pose_sequence(
+                [make_pose(x=0.1 * index) for index in range(1, 6)],
+                [
+                    'observation',
+                    'pregrasp',
+                    'approach',
+                    'grasp',
+                    'lift',
+                ],
+                [False, False, True, True, False],
+            )
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(code, '')
+        self.assertEqual(failed_stage, '')
+        self.assertIn(
+            'stages=observation,pregrasp,approach,grasp,lift',
+            message,
+        )
+
+    def test_free_space_resolver_uses_repeatable_geodesic_ik_and_preserves_xyz(self):
+        manipulator = FakeManipulator()
+        planner = self.make_planner(manipulator)
+        planner.manipulator_group = 'alicia'
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+        target = make_pose(
+            x=0.10,
+            y=-0.20,
+            z=0.30,
+            q=(0.0, 0.0, 0.0, 1.0),
+        )
+        fk_states = []
+
+        def forward_kinematics(state, _header):
+            positions = list(state.joint_state.position)
+            fk_states.append(positions)
+            if positions == [0.0, 0.0]:
+                return (
+                    make_pose(
+                        x=0.0,
+                        y=0.0,
+                        z=0.0,
+                        q=(0.0, 0.0, 0.70710678, 0.70710678),
+                    ),
+                    'initial anchor',
+                )
+            return (
+                make_pose(
+                    x=0.101,
+                    y=-0.20,
+                    z=0.30,
+                    q=(0.0, 0.0, 0.3, 0.953939201),
+                ),
+                'resolved',
+            )
+
+        planner._forward_kinematics_from_state = forward_kinematics
+        ik_quaternions = []
+
+        def inverse_kinematics(_state, candidate):
+            quaternion = candidate.orientation
+            ik_quaternions.append(
+                (
+                    quaternion.x,
+                    quaternion.y,
+                    quaternion.z,
+                    quaternion.w,
+                )
+            )
+            magnitude = abs(float(quaternion.z))
+            if magnitude < 0.1:
+                return None, 'unreachable'
+            return self.robot_state(magnitude, -0.5 * magnitude), 'resolved'
+
+        planner._inverse_kinematics_from_state = inverse_kinematics
+
+        ok, code, failed_stage, resolved, metrics, message = (
+            planner.resolve_free_space_orientations(
+                [target],
+                ['pregrasp'],
+                [False],
+                [True],
+            )
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(code, '')
+        self.assertEqual(failed_stage, '')
+        self.assertEqual(fk_states[0], [0.0, 0.0])
+        self.assertEqual(len(fk_states), 2)
+        self.assertGreaterEqual(len(ik_quaternions), 3)
+        self.assertIn(ik_quaternions[-1], ik_quaternions[:-1])
+        self.assertEqual(ik_quaternions.count(ik_quaternions[-1]), 2)
+        self.assertEqual(manipulator.position_targets, [])
+        self.assertEqual(len(manipulator.pose_targets), 0)
+        self.assertEqual(manipulator.planning_time_updates, [])
+        self.assertAlmostEqual(resolved[0].position.x, 0.10)
+        self.assertAlmostEqual(resolved[0].position.y, -0.20)
+        self.assertAlmostEqual(resolved[0].position.z, 0.30)
+        self.assertAlmostEqual(resolved[0].orientation.x, 0.0)
+        self.assertAlmostEqual(resolved[0].orientation.y, 0.0)
+        self.assertAlmostEqual(resolved[0].orientation.z, 0.3)
+        self.assertAlmostEqual(resolved[0].orientation.w, 0.953939201)
+        self.assertAlmostEqual(metrics['max_position_error'], 0.001)
+        self.assertIsNone(planner._last_pose_plan)
+        self.assertIn('stages=pregrasp', message)
+        self.assertIn('policy=deterministic_geodesic_collision_ik', message)
+        self.assertIn('max_repeatability_error=0.000000000', message)
+
+    def test_free_space_resolver_rejects_nonrepeatable_selected_ik_seed(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.orientation_resolution_max_candidates = 2
+        planner.orientation_resolution_repeatability_tolerance_rad = 1e-6
+        calls = []
+
+        def inverse_kinematics(_state, _candidate):
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                return self.robot_state(0.1, -0.1), 'first sample'
+            if len(calls) == 2:
+                return self.robot_state(0.2, -0.2), 'second sample'
+            return self.robot_state(0.1001, -0.1), 'repeat changed'
+
+        planner._inverse_kinematics_from_state = inverse_kinematics
+        start = self.robot_state(0.0, 0.0)
+        target = make_pose(q=(0.0, 0.0, 0.0, 1.0))
+        anchor = make_pose(q=(0.0, 0.0, 0.70710678, 0.70710678))
+
+        seed, code, reason = planner._resolve_orientation_from_state(
+            start,
+            target,
+            anchor,
+        )
+
+        self.assertIsNone(seed)
+        self.assertEqual(code, 'MOVEIT_RESOLVE_NONDETERMINISTIC')
+        self.assertIn('repeatability error', reason)
+        self.assertEqual(len(calls), 3)
+
+    def test_free_space_lift_seed_uses_virtual_grasp_terminal_state(self):
+        approach_plan = JointPlan([[0.1, 0.2], [0.2, 0.3]])
+        grasp_plan = JointPlan([[0.2, 0.3], [0.3, 0.4]])
+        planner = self.make_planner(FakeManipulator())
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+        cartesian_plans = iter([approach_plan, grasp_plan])
+        planner._plan_cartesian_from_start_state = (
+            lambda _state, _target: (next(cartesian_plans), 'planned')
+        )
+        planner._forward_kinematics_from_state = (
+            lambda _state, _header: (
+                make_pose(q=(0.0, 0.0, 0.0, 1.0)),
+                'initial anchor',
+            )
+        )
+        resolver_calls = []
+
+        def resolve_orientation(start_state, target, anchor):
+            resolver_calls.append(
+                (
+                    list(start_state.joint_state.position),
+                    (
+                        anchor.orientation.x,
+                        anchor.orientation.y,
+                        anchor.orientation.z,
+                        anchor.orientation.w,
+                    ),
+                )
+            )
+            index = len(resolver_calls)
+            if index == 1:
+                resolved = make_pose(
+                    x=target.position.x,
+                    y=target.position.y,
+                    z=target.position.z,
+                    q=(0.1, 0.2, 0.3, 0.9),
+                )
+                terminal = self.robot_state(0.1, 0.2)
+            else:
+                resolved = make_pose(
+                    x=target.position.x,
+                    y=target.position.y,
+                    z=target.position.z,
+                    q=(0.4, 0.3, 0.2, 0.8),
+                )
+                terminal = self.robot_state(0.6, 0.7)
+            return (
+                {
+                    'resolved_target': resolved,
+                    'terminal_state': terminal,
+                    'path_cost': 0.5,
+                    'max_delta': 0.3,
+                    'position_error': 0.0,
+                    'candidates_tested': 4,
+                    'repeatability_error': 0.0,
+                },
+                '',
+                'resolved',
+            )
+
+        planner._resolve_orientation_from_state = resolve_orientation
+        targets = [
+            make_pose(z=0.05),
+            make_pose(z=0.08),
+            make_pose(z=0.10),
+            make_pose(z=0.15),
+        ]
+
+        ok, _code, _failed_stage, resolved, _metrics, message = (
+            planner.resolve_free_space_orientations(
+                targets,
+                ['pregrasp', 'approach', 'grasp', 'lift'],
+                [False, True, True, False],
+                [True, False, False, True],
+            )
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(resolver_calls[0][0], [0.0, 0.0])
+        self.assertEqual(resolver_calls[1][0], [0.3, 0.4])
+        self.assertEqual(
+            resolver_calls[1][1],
+            (0.1, 0.2, 0.3, 0.9),
+        )
+        self.assertEqual(
+            (
+                resolved[3].orientation.x,
+                resolved[3].orientation.y,
+                resolved[3].orientation.z,
+                resolved[3].orientation.w,
+            ),
+            (0.4, 0.3, 0.2, 0.8),
+        )
+
+    def test_free_space_resolver_rejects_cartesian_position_only_stage(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+
+        ok, code, failed_stage, resolved, _metrics, message = (
+            planner.resolve_free_space_orientations(
+                [make_pose()],
+                ['lift'],
+                [True],
+                [True],
+            )
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(code, 'MOVEIT_RESOLVE_ERROR')
+        self.assertEqual(failed_stage, 'lift')
+        self.assertEqual(resolved, ())
+        self.assertIn(
+            'cannot be both free-space orientation resolution and Cartesian',
+            message,
+        )
+        self.assertEqual(planner.manipulator.plan_calls, 0)
 
     def test_execute_failure_message_includes_target_xyz(self):
         manipulator = FakeManipulator(go_result=False)
@@ -180,11 +577,16 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertIn('strict pose', message)
         self.assertEqual(len(manipulator.pose_targets), 1)
         self.assertEqual(manipulator.position_targets, [])
+        self.assertEqual(manipulator.start_state_to_current_calls, 1)
         self.assertEqual(manipulator.planning_time_updates, [0.25, 2.0])
 
     def test_strict_plan_then_cached_only_execute_uses_exact_planned_trajectory(self):
         planned = SuccessfulPlan()
-        manipulator = FakeManipulator(plan_result=planned, execute_result=True)
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=True,
+            current_joint_values=[0.0, 0.0],
+        )
         planner = self.make_planner(manipulator)
         target = make_pose(q=(0.0, 0.7071, 0.0, 0.7071))
 
@@ -201,6 +603,76 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertEqual(manipulator.executed_plans, [planned])
         self.assertEqual(manipulator.plan_calls, 1)
         self.assertEqual(manipulator.go_calls, 0)
+        self.assertIsNone(planner._last_pose_plan)
+
+    def test_failed_cached_execute_succeeds_when_joint_feedback_reached_hardware_tolerance(self):
+        planned = JointPlan([[0.0, 0.0], [0.10, 0.20]])
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=False,
+            current_joint_values=[0.099, 0.226],
+        )
+        planner = self.make_planner(manipulator)
+        target = make_pose(q=(0.0, 0.7071, 0.0, 0.7071))
+
+        plan_ok, plan_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(target)
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        self.assertIn('within hardware goal tolerance', execute_message)
+        self.assertEqual(manipulator.executed_plans, [planned])
+        self.assertIsNone(planner._last_pose_plan)
+
+    def test_failed_cached_execute_accepts_real_quantized_goal_boundary(self):
+        planned = JointPlan([[0.0, 0.0], [0.10, 0.20]])
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=False,
+            current_joint_values=[0.099, 0.2300047],
+        )
+        planner = self.make_planner(manipulator)
+        target = make_pose(q=(0.0, 0.7071, 0.0, 0.7071))
+
+        plan_ok, plan_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(target)
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        self.assertIn('including slack', execute_message)
+        self.assertIn('max_error=0.030005rad', execute_message)
+        self.assertEqual(manipulator.executed_plans, [planned])
+        self.assertIsNone(planner._last_pose_plan)
+
+    def test_failed_cached_execute_stays_failed_when_joint_feedback_misses_hardware_tolerance_slack(self):
+        planned = JointPlan([[0.0, 0.0], [0.10, 0.20]])
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=False,
+            current_joint_values=[0.099, 0.236],
+        )
+        planner = self.make_planner(manipulator)
+        target = make_pose(q=(0.0, 0.7071, 0.0, 0.7071))
+
+        plan_ok, plan_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(target)
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertFalse(execute_ok)
+        self.assertIn('execute failed from cached plan', execute_message)
+        self.assertEqual(manipulator.executed_plans, [planned])
         self.assertIsNone(planner._last_pose_plan)
 
     def test_cached_only_strict_execute_reports_missing_cache_without_planning(self):
@@ -396,6 +868,284 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertTrue(execute_ok, execute_message)
         self.assertIn('cached plan', execute_message)
         self.assertEqual(manipulator.executed_plans, [planned])
+
+    def test_strict_cached_execute_retimes_same_geometry_before_motion(self):
+        planned = JointPlan([[0.0, 0.0], [1.0, -0.2]])
+        retimed = JointPlan([[0.0, 0.0], [1.0, -0.2]], duration_sec=20.0)
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=True,
+            current_joint_values=[0.0, 0.0],
+        )
+        manipulator.retime_trajectory = (
+            lambda _state, _plan, **_kwargs: retimed
+        )
+        planner = self.make_planner(manipulator)
+        planner.robot = types.SimpleNamespace(get_current_state=lambda: object())
+        planner.strict_execution_retime_enabled = True
+        planner.strict_execution_velocity_scaling = 0.20
+        planner.strict_execution_acceleration_scaling = 0.30
+        planner.strict_execution_max_joint_velocity_rad_s = 0.08
+        planner.strict_execution_start_tolerance_rad = 0.08
+
+        plan_ok, plan_message = planner.move_to_pose(
+            make_pose(),
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(
+            make_pose()
+        )
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        self.assertEqual(manipulator.executed_plans, [retimed])
+        self.assertIn('strict trajectory retimed duration=20.000s', execute_message)
+
+    def test_strict_cached_execute_stretches_under_timed_retimed_path(self):
+        planned = JointPlan([[0.0, 0.0], [1.0, -0.2]])
+        retimed = JointPlan([[0.0, 0.0], [1.0, -0.2]], duration_sec=1.0)
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=True,
+            current_joint_values=[0.0, 0.0],
+        )
+        manipulator.retime_trajectory = (
+            lambda _state, _plan, **_kwargs: retimed
+        )
+        planner = self.make_planner(manipulator)
+        planner.robot = types.SimpleNamespace(get_current_state=lambda: object())
+        planner.strict_execution_retime_enabled = True
+        planner.strict_execution_velocity_scaling = 0.20
+        planner.strict_execution_acceleration_scaling = 0.30
+        planner.strict_execution_max_joint_velocity_rad_s = 0.08
+        planner.strict_execution_start_tolerance_rad = 0.08
+
+        plan_ok, plan_message = planner.move_to_pose(
+            make_pose(),
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(
+            make_pose()
+        )
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        self.assertEqual(len(manipulator.executed_plans), 1)
+        executed = manipulator.executed_plans[0]
+        self.assertAlmostEqual(
+            planner._trajectory_duration_sec(executed),
+            12.5,
+        )
+        self.assertEqual(
+            [
+                list(point.positions)
+                for point in executed.joint_trajectory.points
+            ],
+            [[0.0, 0.0], [1.0, -0.2]],
+        )
+        self.assertIn('velocity_time_scale=4.167', execute_message)
+        self.assertIn('time_scale=12.500', execute_message)
+        self.assertIn('peak_velocity=0.080rad/s', execute_message)
+
+    def test_strict_cached_execute_stretches_local_peak_missed_by_endpoint_average(self):
+        positions = [
+            [0.0, 0.0],
+            [0.04, -0.01],
+            [0.08, -0.02],
+            [1.0, -0.2],
+        ]
+        planned = JointPlan(positions)
+        retimed = JointPlan(positions, duration_sec=20.0)
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=True,
+            current_joint_values=[0.0, 0.0],
+        )
+        manipulator.retime_trajectory = (
+            lambda _state, _plan, **_kwargs: retimed
+        )
+        planner = self.make_planner(manipulator)
+        planner.robot = types.SimpleNamespace(get_current_state=lambda: object())
+        planner.strict_execution_retime_enabled = True
+        planner.strict_execution_velocity_scaling = 0.20
+        planner.strict_execution_acceleration_scaling = 0.30
+        planner.strict_execution_max_joint_velocity_rad_s = 0.08
+        planner.strict_execution_min_duration_sec = 3.0
+        planner.strict_execution_start_tolerance_rad = 0.08
+
+        plan_ok, plan_message = planner.move_to_pose(
+            make_pose(),
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(
+            make_pose()
+        )
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        executed = manipulator.executed_plans[0]
+        self.assertGreater(
+            planner._trajectory_duration_sec(executed),
+            20.0,
+        )
+        peaks, peak_error = planner._trajectory_peak_joint_velocities_rad_s(
+            executed
+        )
+        self.assertEqual(peak_error, '')
+        self.assertLessEqual(max(peaks), 0.08 + 1e-9)
+        self.assertEqual(
+            [
+                list(point.positions)
+                for point in executed.joint_trajectory.points
+            ],
+            positions,
+        )
+
+    def test_strict_cached_execute_honors_generic_per_joint_velocity_limit(self):
+        positions = [[0.0, 0.0], [0.4, 0.4]]
+        planned = JointPlan(positions)
+        retimed = JointPlan(positions, duration_sec=8.0)
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=True,
+            current_joint_values=[0.0, 0.0],
+        )
+        manipulator.retime_trajectory = (
+            lambda _state, _plan, **_kwargs: retimed
+        )
+        planner = self.make_planner(manipulator)
+        planner.robot = types.SimpleNamespace(get_current_state=lambda: object())
+        planner.strict_execution_retime_enabled = True
+        planner.strict_execution_velocity_scaling = 0.20
+        planner.strict_execution_acceleration_scaling = 0.30
+        planner.strict_execution_max_joint_velocity_rad_s = 0.08
+        planner.strict_execution_joint_velocity_limits_rad_s = {
+            'Joint2': 0.02,
+        }
+        planner.strict_execution_min_duration_sec = 3.0
+        planner.strict_execution_start_tolerance_rad = 0.08
+
+        plan_ok, plan_message = planner.move_to_pose(
+            make_pose(),
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(
+            make_pose()
+        )
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        executed = manipulator.executed_plans[0]
+        self.assertAlmostEqual(
+            planner._trajectory_duration_sec(executed),
+            20.0,
+        )
+        peaks, peak_error = planner._trajectory_peak_joint_velocities_rad_s(
+            executed
+        )
+        self.assertEqual(peak_error, '')
+        self.assertLessEqual(peaks[1], 0.02 + 1e-9)
+        self.assertIn('limiting_joint=Joint2', execute_message)
+        self.assertIn('limiting_velocity=0.020rad/s', execute_message)
+
+    def test_short_strict_cached_execute_stretches_timing_without_changing_path(self):
+        planned = JointPlan([[0.0, 0.0], [0.06, -0.02]])
+        retimed = JointPlan(
+            [[0.0, 0.0], [0.06, -0.02]],
+            duration_sec=1.2,
+        )
+        for point in retimed.joint_trajectory.points:
+            point.velocities = [0.05, -0.02]
+            point.accelerations = [0.10, -0.04]
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=True,
+            current_joint_values=[0.0, 0.0],
+        )
+        manipulator.retime_trajectory = (
+            lambda _state, _plan, **_kwargs: retimed
+        )
+        planner = self.make_planner(manipulator)
+        planner.robot = types.SimpleNamespace(get_current_state=lambda: object())
+        planner.strict_execution_retime_enabled = True
+        planner.strict_execution_velocity_scaling = 0.20
+        planner.strict_execution_acceleration_scaling = 0.30
+        planner.strict_execution_max_joint_velocity_rad_s = 0.08
+        planner.strict_execution_min_duration_sec = 3.0
+        planner.strict_execution_start_tolerance_rad = 0.08
+
+        plan_ok, plan_message = planner.move_to_pose(
+            make_pose(),
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(
+            make_pose()
+        )
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        self.assertEqual(len(manipulator.executed_plans), 1)
+        executed = manipulator.executed_plans[0]
+        self.assertIsNot(executed, retimed)
+        self.assertAlmostEqual(
+            planner._trajectory_duration_sec(executed),
+            3.0,
+        )
+        self.assertEqual(
+            [
+                list(point.positions)
+                for point in executed.joint_trajectory.points
+            ],
+            [[0.0, 0.0], [0.06, -0.02]],
+        )
+        self.assertAlmostEqual(
+            executed.joint_trajectory.points[-1].velocities[0],
+            0.02,
+        )
+        self.assertAlmostEqual(
+            executed.joint_trajectory.points[-1].accelerations[0],
+            0.016,
+        )
+        self.assertIn('minimum_duration=3.000s', execute_message)
+        self.assertIn('time_scale=2.500', execute_message)
+
+    def test_strict_cached_execute_blocks_stale_trajectory_start_state(self):
+        planned = JointPlan([[0.0, 0.0], [0.2, -0.1]])
+        retimed = JointPlan([[0.0, 0.0], [0.2, -0.1]], duration_sec=5.0)
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=True,
+            current_joint_values=[0.0, 0.2],
+        )
+        manipulator.retime_trajectory = (
+            lambda _state, _plan, **_kwargs: retimed
+        )
+        planner = self.make_planner(manipulator)
+        planner.robot = types.SimpleNamespace(get_current_state=lambda: object())
+        planner.strict_execution_retime_enabled = True
+        planner.strict_execution_velocity_scaling = 0.20
+        planner.strict_execution_acceleration_scaling = 0.30
+        planner.strict_execution_max_joint_velocity_rad_s = 0.08
+        planner.strict_execution_start_tolerance_rad = 0.08
+
+        plan_ok, plan_message = planner.move_to_pose(
+            make_pose(),
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(
+            make_pose()
+        )
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertFalse(execute_ok)
+        self.assertIn('trajectory start mismatch', execute_message)
+        self.assertEqual(manipulator.executed_plans, [])
 
     def test_cached_noetic_tuple_plan_executes_inner_trajectory(self):
         planned = SuccessfulPlan()

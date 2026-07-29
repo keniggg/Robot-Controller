@@ -9,6 +9,8 @@ It also publishes a debug image with the pose axis drawn on it to the
 /charuco/result topic.
 """
 
+import json
+
 import rospy
 import cv2
 import cv2.aruco as aruco
@@ -17,8 +19,10 @@ import tf2_ros
 import tf2_geometry_msgs
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped, TransformStamped
+from std_msgs.msg import String
 from cv_bridge import CvBridge, CvBridgeError
 import message_filters
+import yaml
 
 class CharucoTracker:
     def __init__(self):
@@ -52,12 +56,19 @@ class CharucoTracker:
         self.board_frame = rospy.get_param('~board_frame', 'charuco_board')
         self.image_topic = rospy.get_param('~image_topic', '/usb_cam/image_raw')
         self.camera_info_topic = rospy.get_param('~camera_info_topic', '/usb_cam/camera_info')
+        self.camera_info_yaml = rospy.get_param('~camera_info_yaml', '')
+        self.quality_topic = rospy.get_param('~quality_topic', '/charuco/quality')
+        self.max_input_age_sec = float(rospy.get_param('~max_input_age_sec', 0.35))
         
         # Camera calibration parameters (should be loaded from camera_info)
         self.camera_matrix = None
         self.dist_coeffs = None
         self.last_marker_count = 0
         self.last_charuco_count = 0
+        self.last_edge_clearance_px = None
+        self.last_reprojection_rms_px = None
+        self.last_pose_ok = False
+        self.stale_drop_count = 0
         
         # ChArUco board setup
         self.dictionary = aruco.getPredefinedDictionary(getattr(aruco, self.dictionary_id))
@@ -82,14 +93,30 @@ class CharucoTracker:
         
         # Publisher for the result image
         self.result_pub = rospy.Publisher('/charuco/result', Image, queue_size=1)
+        self.quality_pub = rospy.Publisher(self.quality_topic, String, queue_size=1)
+
+        if self.camera_info_yaml:
+            self._load_camera_info_yaml(self.camera_info_yaml)
         
         # Subscribers
-        self.image_sub = message_filters.Subscriber(self.image_topic, Image)
-        self.camera_info_sub = message_filters.Subscriber(self.camera_info_topic, CameraInfo)
-        
-        # Synchronize image and camera info
-        self.ts = message_filters.TimeSynchronizer([self.image_sub, self.camera_info_sub], 10)
-        self.ts.registerCallback(self.callback)
+        if self.camera_matrix is not None:
+            self.image_sub = rospy.Subscriber(
+                self.image_topic,
+                Image,
+                self.image_callback,
+                queue_size=1,
+                buff_size=2 ** 24,
+                tcp_nodelay=True,
+            )
+            self.camera_info_sub = None
+            self.ts = None
+        else:
+            self.image_sub = message_filters.Subscriber(self.image_topic, Image)
+            self.camera_info_sub = message_filters.Subscriber(self.camera_info_topic, CameraInfo)
+
+            # Synchronize image and camera info
+            self.ts = message_filters.TimeSynchronizer([self.image_sub, self.camera_info_sub], 10)
+            self.ts.registerCallback(self.callback)
         
         rospy.loginfo("ChArUco tracker initialized")
         rospy.loginfo(f"Board size: {self.board_size[0]}x{self.board_size[1]}")
@@ -97,15 +124,47 @@ class CharucoTracker:
         rospy.loginfo(f"Marker length: {self.marker_length*1000:.1f}mm")
         rospy.loginfo(f"Image topic: {self.image_topic}")
         rospy.loginfo(f"Camera info topic: {self.camera_info_topic}")
+        rospy.loginfo(f"Quality topic: {self.quality_topic}")
+        rospy.loginfo(f"Max input age: {self.max_input_age_sec:.3f}s")
+
+    def _load_camera_info_yaml(self, path):
+        """Load a static CameraInfo YAML so this tracker can reuse an existing image stream."""
+        try:
+            with open(path, 'r') as handle:
+                data = yaml.safe_load(handle)
+            self.camera_matrix = np.array(
+                data['camera_matrix']['data'], dtype=float
+            ).reshape(3, 3)
+            self.dist_coeffs = np.array(
+                data.get('distortion_coefficients', {}).get('data', []), dtype=float
+            )
+            rospy.loginfo("Camera parameters loaded from YAML: %s", path)
+        except Exception as exc:
+            self.camera_matrix = None
+            self.dist_coeffs = None
+            rospy.logwarn("Failed to load camera_info_yaml %s: %s", path, exc)
+
+    def image_callback(self, image_msg):
+        self.callback(image_msg, None)
     
     def callback(self, image_msg, camera_info_msg):
         """Process synchronized image and camera info messages."""
+
+        if self._drop_if_stale(image_msg.header.stamp):
+            return
         
         # Update camera parameters if needed
-        if self.camera_matrix is None:
+        if self.camera_matrix is None and camera_info_msg is not None:
             self.camera_matrix = np.array(camera_info_msg.K).reshape(3, 3)
             self.dist_coeffs = np.array(camera_info_msg.D)
             rospy.loginfo("Camera parameters loaded")
+        if self.camera_matrix is None:
+            rospy.logwarn_throttle(
+                2.0,
+                "No camera intrinsics available; provide CameraInfo or ~camera_info_yaml.",
+            )
+            self.publish_quality(image_msg.header.stamp, None, False)
+            return
         
         # Convert ROS image to OpenCV format
         try:
@@ -115,6 +174,7 @@ class CharucoTracker:
             return
         
         # Detect ChArUco board
+        self.last_reprojection_rms_px = None
         charuco_corners, charuco_ids = self.detect_charuco_board(cv_image)
         pose_ok = False
         
@@ -195,6 +255,24 @@ class CharucoTracker:
             self.result_pub.publish(result_msg)
         except CvBridgeError as e:
             rospy.logerr(f"Failed to publish result image: {e}")
+        self.last_pose_ok = pose_ok
+        self.publish_quality(image_msg.header.stamp, cv_image.shape, pose_ok)
+
+    def _drop_if_stale(self, stamp):
+        if self.max_input_age_sec <= 0.0 or stamp is None or stamp.to_sec() <= 0.0:
+            return False
+        age = (rospy.Time.now() - stamp).to_sec()
+        if age <= self.max_input_age_sec:
+            return False
+        self.stale_drop_count += 1
+        rospy.logwarn_throttle(
+            2.0,
+            "Dropping stale ChArUco input frame: age=%.3fs limit=%.3fs dropped=%d",
+            age,
+            self.max_input_age_sec,
+            self.stale_drop_count,
+        )
+        return True
 
     def detect_charuco_board(self, image):
         """Detect ChArUco board in the image."""
@@ -220,6 +298,7 @@ class CharucoTracker:
             if marker_ids is None or len(marker_ids) == 0:
                 self.last_marker_count = 0
                 self.last_charuco_count = 0
+                self.last_edge_clearance_px = None
                 return None, None
             self.last_marker_count = len(marker_ids)
             
@@ -232,6 +311,7 @@ class CharucoTracker:
                     marker_corners, marker_ids, gray, self.board
                 )
             self.last_charuco_count = 0 if charuco_ids is None else len(charuco_ids)
+            self.last_edge_clearance_px = self._edge_clearance_px(gray.shape, charuco_corners)
             
             return charuco_corners, charuco_ids
             
@@ -287,6 +367,9 @@ class CharucoTracker:
                     retval = False
             
             if retval:
+                self.last_reprojection_rms_px = self._reprojection_rms_px(
+                    charuco_corners, charuco_ids, rvec, tvec
+                )
                 # Convert rotation vector to rotation matrix
                 R, _ = cv2.Rodrigues(rvec)
                 
@@ -302,6 +385,58 @@ class CharucoTracker:
         except Exception as e:
             rospy.logwarn(f"Pose estimation failed: {e}")
             return None, None, None
+
+    def _edge_clearance_px(self, image_shape, charuco_corners):
+        if charuco_corners is None or len(charuco_corners) == 0:
+            return None
+        height, width = image_shape[:2]
+        points = np.asarray(charuco_corners, dtype=float).reshape(-1, 2)
+        x_min = float(np.min(points[:, 0]))
+        x_max = float(np.max(points[:, 0]))
+        y_min = float(np.min(points[:, 1]))
+        y_max = float(np.max(points[:, 1]))
+        return float(min(x_min, y_min, width - 1.0 - x_max, height - 1.0 - y_max))
+
+    def _reprojection_rms_px(self, charuco_corners, charuco_ids, rvec, tvec):
+        try:
+            object_points, image_points = self.board.matchImagePoints(
+                charuco_corners, charuco_ids
+            )
+            if object_points is None or image_points is None or len(object_points) < 4:
+                return None
+            projected, _ = cv2.projectPoints(
+                object_points,
+                rvec,
+                tvec,
+                self.camera_matrix,
+                self.dist_coeffs,
+            )
+            projected = np.asarray(projected, dtype=float).reshape(-1, 2)
+            image_points = np.asarray(image_points, dtype=float).reshape(-1, 2)
+            residual = projected - image_points
+            return float(np.sqrt(np.mean(np.sum(np.square(residual), axis=1))))
+        except Exception as exc:
+            rospy.logwarn_throttle(2.0, "Failed to compute ChArUco reprojection RMS: %s", exc)
+            return None
+
+    def publish_quality(self, timestamp, image_shape, pose_ok):
+        height = None
+        width = None
+        if image_shape is not None:
+            height, width = image_shape[:2]
+        payload = {
+            'stamp': float(timestamp.to_sec()) if timestamp else None,
+            'pose_ok': bool(pose_ok),
+            'marker_count': int(self.last_marker_count),
+            'charuco_count': int(self.last_charuco_count),
+            'edge_clearance_px': self.last_edge_clearance_px,
+            'reprojection_rms_px': self.last_reprojection_rms_px,
+            'image_width': int(width) if width is not None else None,
+            'image_height': int(height) if height is not None else None,
+            'camera_frame': self.camera_frame,
+            'board_frame': self.board_frame,
+        }
+        self.quality_pub.publish(String(data=json.dumps(payload, sort_keys=True)))
 
     def publish_tf(self, pose_matrix, timestamp):
         """Publish the board pose as a TF transform."""

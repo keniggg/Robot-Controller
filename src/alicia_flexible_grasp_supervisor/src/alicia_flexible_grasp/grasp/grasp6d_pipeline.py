@@ -18,6 +18,7 @@ from alicia_flexible_grasp.grasp.grasp6d_stability import StableCandidate
 _PHYSICAL_MAX_OPEN_WIDTH_M = 0.050
 _PHYSICAL_CONTRACT_MIN_OPEN_WIDTH_M = 0.0495
 _PHYSICAL_CONTRACT_MAX_OPEN_WIDTH_M = 0.0505
+_MOVEIT_TOP_N_MAX = 24
 _SAFETY_STAMP_TOLERANCE_SEC = 1e-9
 _SAFETY_POSITION_TOLERANCE_M = 1e-8
 _SAFETY_DIRECTION_TOLERANCE = 1e-8
@@ -137,6 +138,8 @@ class SafetyGateInput:
     geometry_valid: bool
     collision_free: bool
     depth_required: bool = True
+    visibility_required: bool = False
+    visibility_valid: object = None
     request_id: object = None
     snapshot_stamp_sec: object = None
     target_epoch: object = None
@@ -186,6 +189,11 @@ def mandatory_safety_gate(gate):
             'SAFETY_INPUT_INVALID',
             'depth applicability must be an explicit boolean',
         )
+    if type(gate.visibility_required) is not bool:
+        return _gate_failure(
+            'SAFETY_INPUT_INVALID',
+            'visibility applicability must be an explicit boolean',
+        )
     if gate.depth_required:
         if not _strict_true(gate.depth_valid):
             return _gate_failure(
@@ -208,6 +216,13 @@ def mandatory_safety_gate(gate):
         return _gate_failure(
             'TARGET_INSTANCE_MISMATCH',
             'candidate does not belong to the current target instance',
+        )
+    if gate.visibility_required and not _strict_true(
+        gate.visibility_valid
+    ):
+        return _gate_failure(
+            'CAMERA_TARGET_OUT_OF_VIEW',
+            'the exact phase trajectory does not preserve the required target view',
         )
 
     if (
@@ -449,6 +464,7 @@ class SoftCandidateFeatures:
     position_dispersion_m: float
     orientation_dispersion_rad: float
     contact_balance: float = 0.0
+    final_approach_lateral_m: float = 0.0
 
     def __post_init__(self):
         for item in fields(self):
@@ -483,6 +499,7 @@ class SoftScoreWeights:
     position_dispersion_weight: float = 0.4
     orientation_dispersion_weight: float = 0.4
     contact_balance_weight: float = 0.3
+    final_approach_lateral_weight: float = 1.0
     cloud_distance_knee_m: float = 0.020
     center_distance_knee_m: float = 0.040
     downward_approach_cos_knee: float = 0.75
@@ -494,6 +511,7 @@ class SoftScoreWeights:
     joint_max_delta_knee_rad: float = 1.0
     position_dispersion_knee_m: float = 0.010
     orientation_dispersion_knee_rad: float = 0.20
+    final_approach_lateral_knee_m: float = 0.010
 
     def __post_init__(self):
         for item in fields(self):
@@ -637,6 +655,11 @@ def soft_candidate_cost(features, weights):
         ),
         'contact_balance': -weights.contact_balance_weight
         * features.contact_balance,
+        'final_approach_lateral': weights.final_approach_lateral_weight
+        * _normalized_positive(
+            features.final_approach_lateral_m,
+            weights.final_approach_lateral_knee_m,
+        ),
     }
     return SoftScore(total=math.fsum(components.values()), components=components)
 
@@ -759,6 +782,9 @@ class BoundedMoveItSelection:
     reachable: tuple
     funnel: CandidateStageFunnel
     configured_top_n: int
+    shortlist_count: int = 0
+    terminated_early: bool = False
+    termination_reason: str = ''
 
 
 # Concise compatibility name for downstream callers.
@@ -774,7 +800,7 @@ def _clamped_top_n(value):
         raise ValueError('top_n must be an integer')
     if converted != value:
         raise ValueError('top_n must be an integer')
-    return min(10, max(3, converted))
+    return min(_MOVEIT_TOP_N_MAX, max(3, converted))
 
 
 def _safety_binding_gate(candidate):
@@ -957,12 +983,69 @@ def _validated_moveit_result(result):
     )
 
 
-def bounded_moveit_select(candidates, checker, top_n=5):
-    """Strictly check only the pre-ranked, latest-hard-safe Top N variants."""
+def bounded_moveit_select(
+    candidates,
+    checker,
+    top_n=5,
+    max_joint_delta_rad=0.0,
+    ranking_key=None,
+    exhaustive=False,
+    first_reachable_by_rank=False,
+    continue_checking=None,
+    continuation_stop_reason='MOVEIT_CHECK_BUDGET_EXHAUSTED',
+):
+    """Strictly check ranked, latest-hard-safe variants.
+
+    ``top_n`` keeps the normal bounded preflight behavior.  Contact planning
+    may request ``exhaustive=True`` because every input is already a bounded,
+    deduplicated, stable and hard-safe variant; silently discarding the tail
+    there can turn an unchecked candidate into a false "all unreachable"
+    result.
+
+    ``first_reachable_by_rank`` is for phases whose supplied ``ranking_key``
+    is itself the final selection policy.  Candidates are strictly checked in
+    that order and the first reachable result is therefore the exact optimum;
+    checking any lower-ranked tail cannot change the decision.  This mode is
+    deliberately incompatible with exhaustive checking and with the default
+    post-MoveIt score selection.
+
+    ``continue_checking`` is an optional fail-closed continuation gate checked
+    immediately before each expensive MoveIt evaluation.  Returning ``False``
+    leaves the unchecked tail explicitly unclassified while preserving every
+    strict result already obtained.  This lets a caller reserve bounded
+    downstream validity time without weakening any per-candidate gate.
+    """
 
     if not callable(checker):
         raise TypeError('checker must be callable')
+    if ranking_key is not None and not callable(ranking_key):
+        raise TypeError('ranking_key must be callable or None')
+    if type(exhaustive) is not bool:
+        raise TypeError('exhaustive must be a bool')
+    if type(first_reachable_by_rank) is not bool:
+        raise TypeError('first_reachable_by_rank must be a bool')
+    if continue_checking is not None and not callable(continue_checking):
+        raise TypeError('continue_checking must be callable or None')
+    if not isinstance(continuation_stop_reason, str):
+        raise TypeError('continuation_stop_reason must be a string')
+    continuation_stop_reason = continuation_stop_reason.strip()
+    if continue_checking is not None and not continuation_stop_reason:
+        raise ValueError(
+            'continuation_stop_reason must be non-empty when '
+            'continue_checking is configured'
+        )
+    if first_reachable_by_rank and ranking_key is None:
+        raise ValueError(
+            'first_reachable_by_rank requires an explicit ranking_key'
+        )
+    if first_reachable_by_rank and exhaustive:
+        raise ValueError(
+            'first_reachable_by_rank is incompatible with exhaustive'
+        )
     configured_top_n = _clamped_top_n(top_n)
+    max_joint_delta = _finite_float(max_joint_delta_rad)
+    if max_joint_delta is None or max_joint_delta < 0.0:
+        raise ValueError('max_joint_delta_rad must be finite and non-negative')
     batch = tuple(candidates)
     if not all(isinstance(item, ScoredStableCandidate) for item in batch):
         raise TypeError('candidates must contain ScoredStableCandidate values')
@@ -990,21 +1073,20 @@ def bounded_moveit_select(candidates, checker, top_n=5):
         rejected=len(batch) - len(hard_safe),
     )
 
-    ranked = sorted(
-        hard_safe,
-        key=lambda item: (
+    if ranking_key is None:
+        ranking_key = lambda item: (
             item.pre_moveit_score,
             item.track_id,
             item.variant_index,
-        ),
-    )
+        )
+    ranked = sorted(hard_safe, key=ranking_key)
     funnel.record_stage(
         'soft_ranked',
         entered=len(hard_safe),
         passed=len(ranked),
         rejected=0,
     )
-    shortlist = tuple(ranked[:configured_top_n])
+    shortlist = tuple(ranked if exhaustive else ranked[:configured_top_n])
     funnel.record_stage(
         'moveit_shortlist',
         entered=len(ranked),
@@ -1014,7 +1096,17 @@ def bounded_moveit_select(candidates, checker, top_n=5):
 
     checked = []
     reachable = []
+    continuation_stopped = False
     for candidate in shortlist:
+        if continue_checking is not None:
+            continue_decision = continue_checking()
+            if type(continue_decision) is not bool:
+                raise TypeError(
+                    'continue_checking must return a bool'
+                )
+            if not continue_decision:
+                continuation_stopped = True
+                break
         try:
             raw_result = checker(candidate)
         except Exception:
@@ -1038,6 +1130,23 @@ def bounded_moveit_select(candidates, checker, top_n=5):
                 stage='moveit_reachable',
             )
             continue
+        if max_joint_delta > 0.0 and result.joint_max_delta_rad > max_joint_delta:
+            limited_result = MoveItResult(
+                reachable=False,
+                joint_path_cost=result.joint_path_cost,
+                joint_max_delta_rad=result.joint_max_delta_rad,
+                reason=(
+                    'joint_max_delta %.3frad exceeds configured limit %.3frad; %s'
+                    % (result.joint_max_delta_rad, max_joint_delta, result.reason)
+                ),
+                failure_code='MOVEIT_JOINT_DELTA_LIMIT',
+            )
+            checked[-1] = replace(candidate, moveit_result=limited_result)
+            funnel.record_rejection(
+                _moveit_failure_code(limited_result),
+                stage='moveit_reachable',
+            )
+            continue
         final_score = soft_candidate_cost(
             replace(
                 candidate.soft_features,
@@ -1049,10 +1158,12 @@ def bounded_moveit_select(candidates, checker, top_n=5):
         evaluated = replace(evaluated, final_score=final_score)
         checked[-1] = evaluated
         reachable.append(evaluated)
+        if first_reachable_by_rank:
+            break
 
     funnel.record_stage(
         'moveit_checked',
-        entered=len(shortlist),
+        entered=len(checked),
         passed=len(checked),
         rejected=0,
     )
@@ -1084,6 +1195,26 @@ def bounded_moveit_select(candidates, checker, top_n=5):
         reachable=tuple(reachable),
         funnel=funnel,
         configured_top_n=configured_top_n,
+        shortlist_count=len(shortlist),
+        terminated_early=bool(
+            continuation_stopped
+            or (
+                first_reachable_by_rank
+                and len(checked) < len(shortlist)
+            )
+        ),
+        termination_reason=(
+            continuation_stop_reason
+            if continuation_stopped
+            else (
+                'FIRST_REACHABLE_BY_AUTHORITATIVE_RANK'
+                if (
+                    first_reachable_by_rank
+                    and len(checked) < len(shortlist)
+                )
+                else ''
+            )
+        ),
     )
 
 
@@ -1246,6 +1377,13 @@ class ExecutionPlanController:
                 False,
                 'REPLAN_COOLDOWN',
                 'execution-plan promotion cooldown has not elapsed',
+            )
+
+        if self.explicit_replan_requested:
+            return self._decision(
+                True,
+                'PROMOTE_REPLAN',
+                'explicit execution replan requested',
             )
 
         required_improvement = self.selection_hysteresis_ratio * max(

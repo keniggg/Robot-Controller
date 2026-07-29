@@ -80,6 +80,47 @@ def test_real_carton_prefers_35mm_side_and_requires_39mm():
     assert np.dot(best.insertion_axis_base, [0.0, 0.0, 1.0]) < -0.999
 
 
+def test_visible_cloud_bias_does_not_move_tabletop_contact_center():
+    base_points = box_cloud((0.051, 0.035, 0.011))
+    visible_side_and_top = base_points[
+        (base_points[:, 1] > 0.0) & (base_points[:, 2] > 0.0055)
+    ]
+    biased_points = np.vstack((base_points, np.repeat(visible_side_and_top, 6, axis=0)))
+    obb_center = np.array([0.0, 0.0, 0.0055])
+
+    assert np.linalg.norm(np.median(biased_points, axis=0) - obb_center) > 0.003
+
+    result = carton_result(object_points_base=biased_points)
+
+    assert result.ok
+    for proposal in result.proposals:
+        np.testing.assert_allclose(proposal.contact_center_base, obb_center)
+
+
+def test_opening_fit_clearance_allows_near_limit_tabletop_short_side():
+    size = (0.060, 0.049, 0.011)
+    strict = carton_result(
+        object_points_base=box_cloud(size),
+        obb_size_xyz_m=np.array(size),
+    )
+    relaxed_fit = carton_result(
+        object_points_base=box_cloud(size),
+        obb_size_xyz_m=np.array(size),
+        config=TabletopGeometryConfig(
+            jaw_clearance_each_side_m=0.002,
+            opening_fit_clearance_each_side_m=0.0005,
+        ),
+    )
+
+    assert not strict.ok
+    assert strict.failure_code == 'NO_FIT_DIRECTION'
+    assert relaxed_fit.ok
+    assert relaxed_fit.proposals[0].required_open_width_m == pytest.approx(
+        0.050,
+        abs=5e-4,
+    )
+
+
 def test_materialized_carton_candidate_places_fingers_above_table():
     candidates = materialize_tabletop_candidates(
         proposal=carton_result().proposals[0],
@@ -109,6 +150,68 @@ def test_materialized_carton_candidate_places_fingers_above_table():
         np.diag([-1.0, -1.0, 1.0]),
         atol=1e-8,
     )
+
+
+def test_materialized_jaw_center_stays_on_contact_center_normal():
+    proposal = carton_result().proposals[0]
+    assert (
+        proposal.audit['bilateral_contact_height_max_m']
+        > proposal.audit['bilateral_contact_height_min_m']
+    )
+    candidates = materialize_tabletop_candidates(
+        proposal=proposal,
+        support_point_base=np.zeros(3),
+        support_normal_base=np.array([0.0, 0.0, 1.0]),
+        gripper=GRIPPER,
+        tool_jaw_axis='y',
+        tool_finger_length_axis='z',
+        approach_tilt_degrees=(10.0,),
+    )
+
+    assert candidates
+    for candidate in candidates:
+        assert candidate.audit['finger_pair_center_lateral_error_m'] < 1e-9
+        finger_center = np.asarray(
+            candidate.audit['finger_pair_center_base'],
+            dtype=float,
+        )
+        delta = finger_center - proposal.contact_center_base
+        np.testing.assert_allclose(delta[:2], np.zeros(2), atol=1e-9)
+
+
+def test_materialized_candidate_adds_finger_length_tilt_variants():
+    proposal = carton_result().proposals[0]
+    candidates = materialize_tabletop_candidates(
+        proposal=proposal,
+        support_point_base=np.zeros(3),
+        support_normal_base=np.array([0.0, 0.0, 1.0]),
+        gripper=GRIPPER,
+        tool_jaw_axis='y',
+        tool_finger_length_axis='z',
+        approach_tilt_degrees=(10.0, 15.0),
+    )
+
+    assert len(candidates) == 10
+    assert {item.variant_index for item in candidates} == {0, 1}
+    assert len({(item.source_index, item.variant_index) for item in candidates}) == 10
+    normals = [
+        -float(np.dot(item.insertion_axis_base, [0.0, 0.0, 1.0]))
+        for item in candidates
+    ]
+    assert normals.count(pytest.approx(1.0)) == 2
+    assert any(value == pytest.approx(np.cos(np.deg2rad(10.0))) for value in normals)
+    assert any(value == pytest.approx(np.cos(np.deg2rad(15.0))) for value in normals)
+    tilted = [item for item in candidates if item.audit['approach_tilt_deg'] > 0.0]
+    assert tilted
+    for candidate in tilted:
+        assert abs(float(np.dot(
+            candidate.insertion_axis_base,
+            candidate.jaw_axis_base,
+        ))) < 1e-8
+        assert candidate.minimum_finger_support_clearance_m >= 0.003 - 1e-9
+        assert candidate.required_open_width_m == pytest.approx(
+            proposal.required_open_width_m
+        )
 
 
 def test_materialization_rejects_non_top_down_approach_with_stable_code():
@@ -251,6 +354,17 @@ def test_output_respects_configured_candidate_bound():
     assert [proposal.source_index for proposal in result.proposals] == list(
         range(len(result.proposals))
     )
+
+
+def test_production_tabletop_candidate_bound_accepts_twenty_four():
+    result = carton_result(
+        object_points_base=box_cloud((0.030, 0.030, 0.011)),
+        obb_size_xyz_m=np.array([0.030, 0.030, 0.011]),
+        config=TabletopGeometryConfig(max_candidates=24),
+    )
+
+    assert result.ok
+    assert len(result.proposals) <= 24
 
 
 def test_returned_proposal_data_is_defensively_immutable():

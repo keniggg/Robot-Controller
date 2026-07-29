@@ -1,18 +1,42 @@
 grasp:
   use_grasp6d_plan: true
+  # A real correction-pregrasp motion contacted the target on 2026-07-25.
+  # Keep joints enabled, but reject every new grasp start until the live
+  # eye-on-hand transform has passed a static-target invariance check.
+  calibration_interlock_active: true
+  calibration_interlock_reason: "HAND_EYE_UNVERIFIED_AFTER_CORRECTION_COLLISION"
   grasp6d_plan_topic: "/grasp_6d/plan"
   grasp6d_enriched_plan_topic: "/grasp_6d/plan_enriched"
-  pregrasp_distance_m: 0.08
+  # Legacy non-rich-plan fallback only. The production 6D contact sequence
+  # derives its candidate-specific pregrasp from live geometry and gripper CAD.
+  pregrasp_distance_m: 0.036
+  # The first 6D result only authorizes a camera observation move.  Construct
+  # that pose from the live target and calibrated tool0->camera transform so
+  # the RGB-D optical centre is nominally 200 mm from the target.  The actual
+  # reached view is accepted inclusively in [180, 220] mm; TCP-to-contact-pose
+  # distance is derived and is not a camera working-distance surrogate.
+  observation_camera_target_nominal_distance_m: 0.200
+  observation_camera_target_min_distance_m: 0.180
+  observation_camera_target_max_distance_m: 0.220
+  observation_camera_target_range_check_enabled: true
+  # If the reached view is outside the accepted interval, permit exactly one
+  # measured radial correction. The signed displacement is recomputed from
+  # the live camera-target ray and the current run's measured endpoint error:
+  # too close retreats, too far continues toward the same 200 mm observation
+  # target. It never repeats or stores an object/joint correction, and the
+  # resulting view still has to pass the inclusive [180, 220] mm measurement.
+  observation_camera_target_retreat_correction_enabled: true
   # The Alicia tool0 frame points through the fingertips along +Z. After the
   # GraspNet grasp frame is aligned to tool0, all approach offsets must use Z.
   tool_approach_axis: "z"
   pregrasp_offset_mode: "camera_ray"
-  # Waypoint staging only: the 6D model still defines the final grasp pose.
-  # Keep the last visually confirmed Cartesian contact segment short.
+  # Legacy non-rich-plan fallback only; production 6D derives this distance.
   final_approach_offset_m: 0.020
   approach_step_m: 0.002
   approach_rate_hz: 10
-  lift_height_m: 0.05
+  # Legacy non-rich-plan fallback only; production 6D derives lift from the
+  # current object geometry, depth uncertainty, and gripper CAD.
+  lift_height_m: 0.035
   timeout_sec: 25.0
   default_orientation_xyzw: [0.0, 0.7071, 0.0, 0.7071]
   pregrasp_reached_tolerance_m: 0.04
@@ -23,6 +47,21 @@ grasp:
   motion_settle_sample_sec: 0.05
   motion_settle_position_epsilon_rad: 0.0025
   motion_settle_required_samples: 3
+  # Controller success is not sufficient for contact work: after settling,
+  # compare the measured base->tool0 pose with the requested rich-6D pose.
+  # Far-field observation records this residual for the near-field generator;
+  # every contact-phase stage additionally fails closed outside these bounds.
+  # This execution tolerance is not an absolute contact-patch threshold. The
+  # near-field overlap gate is derived at runtime from frozen-snapshot depth
+  # uncertainty plus the measured observation endpoint residual.
+  measured_endpoint_check_enabled: true
+  measured_endpoint_position_tolerance_m: 0.006
+  measured_endpoint_orientation_tolerance_deg: 5.0
+  # The observation stage records tool0 execution error for the fresh
+  # near-field uncertainty model, but it does not reuse the 6 mm contact
+  # endpoint gate and does not issue a second same-pose correction.  Actual
+  # observation success is the fresh camera-to-target range above.
+  observation_endpoint_correction_attempts: 0
   min_object_confidence: 0.50
   max_object_jump_m: 0.12
   object_jump_filter_window_sec: 4.0
@@ -52,6 +91,62 @@ grasp:
   # Strict 6D mode: do not let MoveIt replace the model-predicted wrist
   # orientation with the current wrist orientation.
   accept_orientation_fallback: false
+  # After the arm reaches the coarse/far-field pregrasp view, wait for one
+  # current Preview rich plan from the eye-in-hand camera and bind that plan for
+  # the final approach/close. This does not move the object or translate an old
+  # plan; it chooses a fresh 6D pose from the current target geometry.
+  near_field_replan_enabled: true
+  near_field_replan_required: true
+  near_field_replan_request_stream: true
+  # Repeated attempts must not rotate the wrist between alternative far-field
+  # candidates when the camera is already inside the same observation region.
+  # Preserve that reached view and let the fresh near-field plan choose the
+  # contact pose.
+  observation_reuse_position_tolerance_m: 0.025
+  # Powered evidence showed two approximately 90 s strict-MoveIt batches can
+  # legitimately find no reachable sequence before a third batch finds
+  # reachable candidates at task age about 294 s. Preserve the full configured
+  # 80 s MuJoCo candidate-selection budget plus stability/scheduling margin.
+  # This changes only the fail-closed wait horizon; no candidate gate is
+  # relaxed and no cache hit is assumed.
+  near_field_replan_timeout_sec: 450.0
+  near_field_replan_poll_sec: 0.05
+  near_field_replan_snapshot_slack_sec: 3.0
+  # At the candidate-specific 36 mm pregrasp, collect one more current Preview
+  # window before the last 20 mm approach. Keep the selected candidate family,
+  # update only bounded xyz and support-normal yaw, and preserve the prior
+  # roll/pitch. The corrected sequence must pass strict MoveIt again.
+  final_visual_refine_enabled: true
+  final_visual_refine_required: true
+  final_visual_refine_timeout_sec: 150.0
+  final_visual_refine_poll_sec: 0.05
+  final_visual_refine_snapshot_slack_sec: 3.0
+  final_visual_refine_service_timeout_sec: 3.0
+  # The 2026-07-25 contact-pregrasp sample showed about 20 mm of stable
+  # surface-center drift after accounting for half the OBB height.
+  final_visual_refine_max_translation_m: 0.025
+  final_visual_refine_max_yaw_deg: 10.0
+  final_visual_refine_max_roll_pitch_change_deg: 4.0
+  # The 2026-07-25 collision showed that a clipped mask centroid is not a
+  # physical object center. Keep center-only fallback disabled. The edge gate
+  # remains mandatory if this fallback is re-enabled after calibration.
+  final_visual_refine_center_fallback_enabled: false
+  final_visual_refine_center_fallback_delay_sec: 3.0
+  final_visual_refine_center_fallback_required_samples: 5
+  final_visual_refine_center_fallback_max_jitter_m: 0.006
+  final_visual_refine_center_fallback_edge_margin_px: 4
+  # After the corrected pregrasp is physically reached, measure again before
+  # approach. Contact remains blocked unless five new stable frames show that
+  # the support-surface center residual is within 6 mm.
+  final_visual_refine_post_move_confirm_enabled: true
+  final_visual_refine_post_move_confirm_timeout_sec: 12.0
+  final_visual_refine_post_move_confirm_required_samples: 5
+  final_visual_refine_post_move_confirm_max_jitter_m: 0.006
+  final_visual_refine_post_move_confirm_max_residual_m: 0.006
+  # An unchanged candidate is not a new plan. It may be preserved only after
+  # five genuinely newer post-move observations independently confirm its
+  # support-surface center within the same 6 mm residual gate.
+  final_visual_refine_accept_unchanged_after_post_move_confirm: true
 
 force:
   contact_threshold_mn: 200.0
@@ -64,29 +159,39 @@ gripper:
   # Alicia-D real gripper reports 0.05 m at the physically open posture and
   # 0.0 m at the closed posture.
   open_position_m: 0.05
+  open_skip_tolerance_m: 0.001
   close_limit_m: 0.0
   close_step_fast_m: 0.002
   close_step_slow_m: 0.0007
   open_step_safe_m: 0.003
   command_rate_hz: 25
-  # 夹爪未完成力/位置标定前，先使用固定开合，不走电子皮肤柔顺闭合。
+  # 当前电子皮肤尚未标定：6D 抓取只使用夹爪位置闭合，不读取力反馈，
+  # 不调用柔顺闭合服务，也不把触觉状态作为抓取成功条件。
   use_compliant_close: false
   simple_close_position_m: 0.0
   simple_close_wait_sec: 0.8
   open_wait_sec: 1.0
   hold_arm_during_gripper_commands: true
   arm_hold_timeout_sec: 0.5
-  require_tactile_feedback: true
+  require_tactile_feedback: false
   tactile_feedback_timeout_sec: 1.0
 
 grasp_6d:
   enabled: true
   use_remote_grasp6d: true
-  # Execution authority remains fresh long enough for 3-of-5 confirmation at
-  # the initial 1.5 Hz rate. Preview freshness never grants execution rights.
-  plan_validity_sec: 5.0
-  target_max_drift_m: 0.02
-  target_observation_validity_sec: 1.5
+  # Keep the promoted execution plan available while the operator reviews the
+  # preview. Live target freshness and drift gates are still checked at start.
+  plan_validity_sec: 120.0
+  # The 2026-07-24 real run showed about 46 mm apparent target drift after the
+  # wrist camera moved from far-field to near-field. Keep this guard at 40 mm:
+  # that level of drift must force a new near-field 6D plan, not a translated
+  # old plan or a widened close gate.
+  target_max_drift_m: 0.04
+  # YOLO segmentation plus RGB-D synchronization can deliver a valid target
+  # observation several seconds after its camera stamp during remote 6D
+  # inference + MuJoCo gating. Keep this as a short live-drift guard, not an
+  # operator review window.
+  target_observation_validity_sec: 8.0
   backend: "remote_graspnet_baseline"
   root: ""
   checkpoint_path: ""
@@ -108,13 +213,14 @@ grasp_6d:
     server_url: "http://172.23.132.97:8000"
     timeout_sec: 30.0
     auto_request: false
-    # Begin at 1.5 Hz. Raise to 2/3/4/5 Hz only after measured P95 latency,
-    # expiration/replacement rates and GPU reserved memory remain acceptable.
+    # Use the documented first-live acceptance rate. The latest-only scheduler
+    # still permits at most one request in flight and one newest pending
+    # snapshot, so this rate cannot create an unbounded queue. Increase beyond
+    # 1.5 Hz only after an independent performance window passes.
     request_hz: 1.5
-    # Measured ROS preparation + resident WSL inference is 3.2-4.0 s on the
-    # deployed host; keep one second of margin while retaining epoch/drift and
-    # plan-validity gates for every accepted result.
-    result_max_age_sec: 5.0
+    # This only bounds planning-result freshness. Rich-plan validity, target
+    # epoch/drift, and execution-time freshness are checked independently.
+    result_max_age_sec: 15.0
     stability_window_size: 5
     stability_min_hits: 3
     tracking_position_threshold_m: 0.025
@@ -123,9 +229,12 @@ grasp_6d:
     tracking_width_threshold_m: 0.008
     target_instance_association_threshold_m: 0.08
     target_absolute_sanity_distance_m: 0.15
-    # Strict MoveIt is bounded to stable candidates only; production accepts
-    # 3..10, with five as the initial latency/safety trade-off.
-    moveit_top_n: 5
+    # Strict MoveIt is bounded to stable candidates only.  Near-field contact
+    # planning checks its complete hard-safe, deduplicated set.  Far-field
+    # checks this deterministic information-ranked shortlist only until its
+    # first reachable item, which is already the exact optimum under that
+    # phase's final selection rule.
+    moveit_top_n: 24
     replan_position_delta_m: 0.012
     replan_orientation_delta_deg: 12.0
     replan_target_drift_m: 0.025
@@ -133,14 +242,16 @@ grasp_6d:
     selection_hysteresis_ratio: 0.12
     candidate_consecutive_invalidations: 2
     performance_window_size: 100
-    planning_snapshot_frames: 3
-    planning_snapshot_timeout_sec: 4.0
+    # Fuse five synchronized RGB-D/mask/object samples at the observation pose
+    # before evaluating candidates. This bounds single-frame depth jitter.
+    planning_snapshot_frames: 5
+    planning_snapshot_timeout_sec: 8.0
     # A synchronized frame may spend bounded time in YOLO inference, but once
     # RGB-D-mask-object is complete it must be admitted promptly.  Admitted
     # frames may then accumulate within max_span for a 1-2 Hz three-frame window.
     planning_snapshot_max_inference_latency_sec: 1.2
     planning_snapshot_max_age_sec: 0.35
-    planning_snapshot_max_span_sec: 3.0
+    planning_snapshot_max_span_sec: 6.0
     planning_mask_min_iou: 0.85
     planning_mask_max_centroid_shift_px: 5.0
     planning_max_joint_delta_rad: 0.01
@@ -171,11 +282,44 @@ grasp_6d:
     candidate_width_tolerance_m: 0.0
     gripper_geometry:
       max_inner_gap_m: 0.05
+      # Collision envelopes keep the fixed 2 mm/side conservative contract below,
+      # but opening-fit checks use this smaller real-grasp clearance so near-50 mm
+      # narrow-side carton grasps are not rejected before MuJoCo/preview.
+      opening_fit_clearance_each_side_m: 0.0005
       width_safety_margin_per_side_m: 0.002
       tool_jaw_axis: "y"
       tool_finger_length_axis: "z"
       finger_box_xyz_m: [0.0434, 0.0286, 0.0600]
       palm_box_xyz_m: [0.1175, 0.1550, 0.0774]
+    # Contact-stage distances and tilt samples are deterministic functions of
+    # the current OBB, same-pixel temporal depth repeatability, support plane,
+    # gripper CAD, and these object-independent physical/task bounds. Spatial
+    # fused-surface MAD remains a geometry diagnostic and is not treated as
+    # measurement uncertainty. No object label or base-frame coordinate is an
+    # input.
+    adaptive_stage_generation:
+      enabled: true
+      tilt_sample_count: 4
+      max_tilt_deg: 45.0
+      approach_min_m: 0.010
+      approach_max_m: 0.060
+      pregrasp_min_m: 0.025
+      pregrasp_max_m: 0.095
+      pregrasp_approach_gap_min_m: 0.005
+      lift_min_m: 0.020
+      lift_max_m: 0.080
+      depth_uncertainty_scale: 2.0
+      # General contact-patch baseline. The live requirement is
+      # max(this value, same-pixel depth repeatability * uncertainty scale);
+      # support-plane collision clearance remains a separate 3 mm contract.
+      contact_overlap_min_m: 0.002
+      approach_finger_fraction: 0.25
+      pregrasp_finger_fraction: 0.20
+      lift_finger_fraction: 0.50
+    # A near-field request consumes only a fresh Cartesian endpoint residual
+    # measured by the active task. It is ignored for far-field generation and
+    # is never inferred from an object label or workspace coordinate.
+    runtime_execution_error_max_age_sec: 180.0
     tabletop_geometry_candidates:
       enabled: true
       angle_step_deg: 15.0
@@ -184,7 +328,9 @@ grasp_6d:
       min_contact_band_points: 6
       contact_band_fraction: 0.12
       min_finger_support_clearance_m: 0.003
-      max_candidates: 8
+      max_candidates: 24
+      # Populated at runtime by adaptive_stage_generation.
+      approach_tilt_degrees: []
       merge_center_distance_m: 0.005
       merge_insertion_angle_deg: 10.0
       merge_jaw_angle_deg: 10.0
@@ -243,13 +389,28 @@ grasp_6d:
     candidate_center_distance_weight: 0.25
     candidate_model_score_weight_m: 0.015
     candidate_joint_path_cost_weight_m: 0.004
-    # Reject technically reachable poses that require a large base/wrist flip.
-    candidate_max_joint_delta_rad: 1.8
+    # Joint travel is a ranking cost, not a physical-invalidity gate. A value
+    # of zero disables the legacy hard cutoff; strict MoveIt joint limits,
+    # collision and reachability remain mandatory. This lets the two exact
+    # parallel-jaw wrist symmetries compete by measured path cost instead of
+    # discarding one at an empirically chosen 2.15 rad threshold.
+    candidate_max_joint_delta_rad: 0.0
     candidate_downward_approach_weight_m: 0.020
     # tool0 +Z is the insertion direction. Keep a meaningful downward
-    # component while allowing collision-safe diagonal grasps. The separate
-    # jaw/support-plane gate rejects the former above/below-table failure mode.
-    candidate_min_downward_approach_cos: 0.45
+    # component while leaving yaw free. This rejects side-sweep insertions like
+    # the 2026-07-24 a836 plan while still allowing task-dependent jaw angles.
+    candidate_min_downward_approach_cos: 0.65
+    # Object-independent motion envelope: bound pregrasp-to-grasp lateral
+    # travel to one third of the 60 mm CAD finger length. Runtime OBB, depth
+    # uncertainty, support clearance, swept-volume collision, and strict
+    # four-stage MoveIt checks still determine every actual stage pose.
+    candidate_max_final_approach_lateral_m: 0.020
+    # Prefer a center-normal pregrasp whenever it is reachable. Inclined poses
+    # remain available, but their support-plane sweep loses to an otherwise
+    # equivalent vertical candidate.
+    soft_score_weights:
+      final_approach_lateral_weight: 1.0
+      final_approach_lateral_knee_m: 0.010
     # For an object resting on a support plane, the jaw-closing axis must stay
     # close to the plane. Otherwise one finger is commanded above the object
     # and the opposing finger through the table. This is geometric and does not
@@ -302,19 +463,95 @@ grasp_6d:
     # Predict eye-in-hand camera view for each strict 6D candidate. The target
     # must remain fully visible at pregrasp. Final insertion uses the locked 6D
     # pose because the wrist camera is naturally occluded close to contact.
-    camera_visibility_gate_enabled: true
+    # Predicted image position is a soft ranking/diagnostic signal. The
+    # far-field observation move is followed by a fresh near-field target
+    # acquisition, so a prediction outside the preferred image margin must not
+    # independently erase an otherwise physical candidate.
+    camera_visibility_gate_enabled: false
     camera_visibility_diagnostic_enabled: true
     camera_visibility_require_approach: false
     camera_visibility_margin_px: 36
     # Add the depth-scaled detector box half-size and this padding to the base
     # margin so a candidate cannot pass with only its center still in frame.
     camera_visibility_bbox_padding_px: 8
-    camera_visibility_min_depth_m: 0.035
-    camera_visibility_max_depth_m: 1.20
+    # Current RGB-D specified working interval: 70-500 mm.
+    camera_visibility_min_depth_m: 0.070
+    camera_visibility_max_depth_m: 0.50
     camera_visibility_rank_weight_m: 0.012
+    # MoveIt does not contain the measured tabletop/target geometry. Reject a
+    # non-contact observation endpoint unless the fully open Link6/7/8 CAD
+    # boxes clear both the live support plane and live target OBB.
+    observation_envelope_gate_enabled: true
+robot:
+  # Real Alicia-D serial feedback can settle about 0.026 rad from the endpoint
+  # after large 6D pregrasp moves; observed controller quantization reached
+  # 0.030005 rad on Joint3. Treat cached MoveIt execution as successful only
+  # when final joint feedback is within the tight band plus this tiny slack.
+  execution_goal_tolerance_rad: 0.03
+  execution_goal_tolerance_slack_rad: 0.005
+  # Re-time the exact cached strict path immediately before execution. The
+  # physical controller accepts 15 deg/s commands, while an under-timed MoveIt
+  # path previously jumped to the endpoint and tripped Joint2 path tolerance.
+  strict_execution_retime_enabled: true
+  strict_execution_velocity_scaling: 0.20
+  strict_execution_acceleration_scaling: 0.30
+  strict_execution_max_joint_velocity_rad_s: 0.08
+  # Enforce the bound against every local trajectory segment, not only
+  # endpoint displacement / total duration. Three independent observation
+  # runs reached Joint3's 0.120 rad path boundary. In the latest raw trace,
+  # Joint3 advanced 5.2 deg over 4.397 s (0.0206 rad/s) while the reference
+  # advanced near 0.052 rad/s and feedback stalled for the final interval.
+  # Use the measured sustained following rate as a hardware-joint limit.
+  # This applies to every target and stage; it is not an object pose constant.
+  strict_execution_joint_velocity_limits_rad_s:
+    Joint3: 0.02
+  # Historical real-arm strict paths of 2.777 s and longer completed, while
+  # the 2026-07-26 same-pose endpoint correction retimed to 1.200 s and ended
+  # with Joint2 error 0.053877 rad. Stretch only shorter trajectories to this
+  # evidence-backed floor; preserve every joint path point while scaling time,
+  # velocity, and acceleration consistently.
+  strict_execution_min_duration_sec: 3.0
+  # The cached trajectory must start at the execution-time hardware feedback.
+  # This remains below the controller's 0.12 rad path tolerance.
+  strict_execution_start_tolerance_rad: 0.08
+  # A previously aborted JointTrajectoryController goal can retain its old
+  # endpoint as the internal desired state. Before strict execution, bridge to
+  # current feedback in one 50 Hz control period, then require desired+actual
+  # to remain tightly settled for a continuous window. This keeps the
+  # controller running and does not alter arm enable state.
+  strict_execution_controller_sync_enabled: true
+  strict_execution_controller_sync_bridge_duration_sec: 0.02
+  strict_execution_controller_sync_duration_sec: 0.30
+  strict_execution_controller_sync_timeout_sec: 2.0
+  # Match the already accepted MoveIt/controller endpoint band
+  # (execution_goal_tolerance_rad + slack). A completed segment with measured
+  # 0.03068 rad residual must not be rejected by a tighter next-segment gate.
+  strict_execution_controller_sync_tolerance_rad: 0.035
+  strict_execution_controller_sync_max_feedback_age_sec: 0.5
+  # Failure recovery distinguishes a completely unresponsive actuator from a
+  # partially executed path. The SDK resolves one revolution into 4096 counts;
+  # command and feedback are independently quantized, so two counts
+  # (4*pi/4096 rad) are the smallest defensible round-trip motion band.
+  strict_execution_no_actuation_actual_delta_rad: 0.0030679615757712823
+  # Match the configured JointTrajectoryController per-joint path tolerance.
+  # Only after desired motion reaches that boundary while measured motion
+  # remains inside the two-count band may the latent desired target be replaced
+  # with current feedback. This is controller/hardware-wide, not object-specific.
+  strict_execution_no_actuation_min_desired_delta_rad: 0.12
 mujoco_digital_twin:
   enabled: true
   execution_gate_enabled: true
+  # Near-field selection screens only candidates that already passed every
+  # analytical hard gate and the complete MoveIt sequence. Candidates are
+  # evaluated in deterministic final-score order; the task node independently
+  # revalidates the selected plan immediately before physical contact motion.
+  selection_gate_enabled: true
+  selection_max_candidates: 12
+  selection_time_budget_sec: 80.0
+  # Stop starting expensive near-field MoveIt checks this long before the
+  # MuJoCo server's /health max_snapshot_age_sec deadline. The live client
+  # timeout is 20 s; 30 s preserves that interval plus scheduling margin.
+  selection_snapshot_reserve_sec: 30.0
   # Every rich-plan simulation attempt is bound to its request/payload/echoed
   # plan_id in one strict-JSON, fsync+replace audit. An empty path, or a write
   # failure after an otherwise passing response, blocks physical motion.
@@ -331,9 +568,18 @@ mujoco_digital_twin:
   open_width_m: 0.05
   object_model:
     type: "obb_box"
-    label: "carton"
-    mass_kg: 0.08
-    friction: [1.2, 0.08, 0.02]
+    # Category-independent conservative dynamics envelope. The request mass is
+    # recomputed from every live OBB volume, then clamped to the configured
+    # operational range. Fixed per-object mass/friction values are rejected.
+    density_upper_bound_kg_m3: 20000.0
+    mass_floor_kg: 0.02
+    operational_mass_ceiling_kg: 0.50
+    friction_lower_bound: [0.10, 0.005, 0.0001]
   gripper_model:
     name: "Alicia_D_v5_6_gripper_50mm"
     max_inner_gap_m: 0.05
+    # Mirror the generic real gripper command contract, not target geometry.
+    # The simulated fingers close toward the same hardware limit and settle
+    # for the same command interval used by the task node.
+    close_target_inner_gap_m: 0.0
+    close_settle_sec: 0.8

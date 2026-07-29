@@ -16,8 +16,12 @@ _GRIPPER_MODEL_NAME = 'Alicia_D_v5_6_gripper_50mm'
 _MAX_INNER_GAP_M = 0.050
 _FINGER_SIZE_XYZ_M = (0.0434, 0.0286, 0.0600)
 _PALM_SIZE_XYZ_M = (0.1175, 0.1550, 0.0774)
-_DEFAULT_CARTON_MASS_KG = 0.08
-_DEFAULT_CARTON_FRICTION = (1.2, 0.08, 0.02)
+_DEFAULT_CLOSE_TARGET_INNER_GAP_M = 0.0
+_DEFAULT_CLOSE_SETTLE_SEC = 0.8
+_DEFAULT_DENSITY_UPPER_BOUND_KG_M3 = 20000.0
+_DEFAULT_OBJECT_MASS_FLOOR_KG = 0.02
+_DEFAULT_OPERATIONAL_MASS_CEILING_KG = 0.50
+_DEFAULT_FRICTION_LOWER_BOUND = (0.10, 0.005, 0.0001)
 _SAFETY_KEYS = (
     'simulation_ok',
     'ik_success',
@@ -124,6 +128,76 @@ def _configured_vector(config, keys, default, field_name):
     return list(default)
 
 
+def _conservative_object_dynamics(object_size_xyz_m, object_config):
+    """Derive a category-independent dynamics envelope from the live OBB."""
+
+    if not isinstance(object_config, dict):
+        raise TypeError('object_model must be a mapping')
+    legacy = sorted(
+        key for key in ('mass_kg', 'friction') if key in object_config
+    )
+    if legacy:
+        raise ValueError(
+            'object_model fixed %s is category-specific; configure the '
+            'live-OBB dynamics envelope instead'
+            % ','.join(legacy)
+        )
+    size = _finite_vector3(
+        object_size_xyz_m,
+        'object_model.size_xyz_m',
+        positive=True,
+    )
+    density = _finite_float(
+        object_config.get(
+            'density_upper_bound_kg_m3',
+            _DEFAULT_DENSITY_UPPER_BOUND_KG_M3,
+        ),
+        'object_model.density_upper_bound_kg_m3',
+    )
+    mass_floor = _finite_float(
+        object_config.get(
+            'mass_floor_kg',
+            _DEFAULT_OBJECT_MASS_FLOOR_KG,
+        ),
+        'object_model.mass_floor_kg',
+    )
+    mass_ceiling = _finite_float(
+        object_config.get(
+            'operational_mass_ceiling_kg',
+            _DEFAULT_OPERATIONAL_MASS_CEILING_KG,
+        ),
+        'object_model.operational_mass_ceiling_kg',
+    )
+    if (
+        density <= 0.0
+        or mass_floor <= 0.0
+        or mass_ceiling < mass_floor
+    ):
+        raise ValueError(
+            'object_model dynamics bounds must be positive and ordered'
+        )
+    volume = float(size[0] * size[1] * size[2])
+    unclamped_mass = volume * density
+    mass = min(mass_ceiling, max(mass_floor, unclamped_mass))
+    friction = _finite_vector3(
+        object_config.get(
+            'friction_lower_bound',
+            _DEFAULT_FRICTION_LOWER_BOUND,
+        ),
+        'object_model.friction_lower_bound',
+        positive=True,
+    )
+    return mass, friction, {
+        'source': 'live_obb_conservative_envelope',
+        'obb_volume_m3': volume,
+        'density_upper_bound_kg_m3': density,
+        'unclamped_mass_kg': unclamped_mass,
+        'mass_floor_kg': mass_floor,
+        'operational_mass_ceiling_kg': mass_ceiling,
+        'friction_lower_bound': list(friction),
+    }
+
+
 def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None):
     """Build the finite, JSON-only schema-v3 request for one immutable plan."""
     if plan is None:
@@ -215,6 +289,29 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
         _PALM_SIZE_XYZ_M,
         'gripper.palm_size_xyz_m',
     )
+    close_target_inner_gap = _finite_float(
+        model_config.get(
+            'close_target_inner_gap_m',
+            _DEFAULT_CLOSE_TARGET_INNER_GAP_M,
+        ),
+        'gripper.close_target_inner_gap_m',
+    )
+    close_settle_sec = _finite_float(
+        model_config.get(
+            'close_settle_sec',
+            _DEFAULT_CLOSE_SETTLE_SEC,
+        ),
+        'gripper.close_settle_sec',
+    )
+    if (
+        close_target_inner_gap < 0.0
+        or close_target_inner_gap > _MAX_INNER_GAP_M
+    ):
+        raise ValueError(
+            'gripper.close_target_inner_gap_m must be within the 50 mm range'
+        )
+    if close_settle_sec <= 0.0:
+        raise ValueError('gripper.close_settle_sec must be positive')
 
     geometry = getattr(plan, 'object_geometry', None)
     if geometry is None or getattr(geometry, 'valid', None) is not True:
@@ -246,18 +343,10 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
     object_type = object_config.get('type', 'obb_box')
     if object_type != 'obb_box':
         raise ValueError('object_model.type must be obb_box')
-    mass = _finite_float(
-        object_config.get('mass_kg', _DEFAULT_CARTON_MASS_KG),
-        'object_model.mass_kg',
+    mass, friction, dynamics_assumptions = _conservative_object_dynamics(
+        object_size,
+        object_config,
     )
-    if mass <= 0.0:
-        raise ValueError('object_model.mass_kg must be positive')
-    friction = _finite_vector3(
-        object_config.get('friction', _DEFAULT_CARTON_FRICTION),
-        'object_model.friction',
-    )
-    if any(value < 0.0 for value in friction):
-        raise ValueError('object_model.friction values must be non-negative')
 
     payload = {
         'schema_version': 3,
@@ -276,6 +365,8 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
             'max_inner_gap_m': _MAX_INNER_GAP_M,
             'finger_size_xyz_m': finger_size,
             'palm_size_xyz_m': palm_size,
+            'close_target_inner_gap_m': close_target_inner_gap,
+            'close_settle_sec': close_settle_sec,
         },
         'object_model': {
             'type': 'obb_box',
@@ -283,6 +374,7 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
             'size_xyz_m': object_size,
             'mass_kg': mass,
             'friction': friction,
+            'dynamics_assumptions': dynamics_assumptions,
         },
         'support_plane': {
             'normal_base': support_normal,
@@ -291,6 +383,102 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
     }
     json.dumps(payload, allow_nan=False)
     return payload
+
+
+def _validate_lift_evidence(response, score):
+    evidence = response.get('lift_evidence')
+    if not isinstance(evidence, dict):
+        return MujocoGateValidationResult(
+            False,
+            'WSL_UNAVAILABLE',
+            'MuJoCo response lacks structured strict dynamic-lift evidence',
+            score,
+        )
+    if evidence.get('contract_version') != 1:
+        return MujocoGateValidationResult(
+            False,
+            'WSL_UNAVAILABLE',
+            'MuJoCo lift evidence contract_version must be 1',
+            score,
+        )
+    numeric_names = (
+        'object_lift_m',
+        'commanded_lift_m',
+        'minimum_lift_m',
+    )
+    numeric = {}
+    try:
+        for name in numeric_names:
+            numeric[name] = _finite_float(
+                evidence.get(name),
+                'lift_evidence.%s' % name,
+            )
+    except (TypeError, ValueError):
+        return MujocoGateValidationResult(
+            False,
+            'WSL_UNAVAILABLE',
+            'MuJoCo lift evidence distances must be finite numbers',
+            score,
+        )
+    count_names = (
+        'two_sided_lift_samples',
+        'lost_contact_samples',
+        'lift_sample_count',
+        'max_lost_contact_streak',
+        'contact_loss_grace_samples',
+    )
+    counts = {}
+    for name in count_names:
+        value = evidence.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return MujocoGateValidationResult(
+                False,
+                'WSL_UNAVAILABLE',
+                'MuJoCo lift evidence %s must be a non-negative integer'
+                % name,
+                score,
+            )
+        counts[name] = value
+    if (
+        counts['lift_sample_count'] <= 0
+        or (
+            counts['two_sided_lift_samples']
+            + counts['lost_contact_samples']
+            != counts['lift_sample_count']
+        )
+    ):
+        return MujocoGateValidationResult(
+            False,
+            'WSL_UNAVAILABLE',
+            'MuJoCo lift evidence sample accounting is inconsistent',
+            score,
+        )
+    if (
+        counts['lost_contact_samples']
+        > counts['contact_loss_grace_samples']
+        or counts['max_lost_contact_streak']
+        > counts['contact_loss_grace_samples']
+    ):
+        return MujocoGateValidationResult(
+            False,
+            'MUJOCO_CONTACT_FAILED',
+            'MuJoCo lift lost two-sided contact beyond the strict grace bound',
+            score,
+        )
+    if (
+        numeric['minimum_lift_m'] <= 0.0
+        or numeric['commanded_lift_m'] + 1e-9
+        < numeric['minimum_lift_m']
+        or numeric['object_lift_m'] + 1e-9
+        < numeric['minimum_lift_m']
+    ):
+        return MujocoGateValidationResult(
+            False,
+            'MUJOCO_LIFT_FAILED',
+            'MuJoCo dynamic object lift is below the strict minimum',
+            score,
+        )
+    return None
 
 
 def _failure_details(response, default_code, default_reason):
@@ -341,6 +529,24 @@ def validate_mujoco_gate_response(
             'PLAN_ID_MISMATCH',
             'MuJoCo response plan_id does not exactly match the bound plan',
         )
+
+    if (
+        response.get('simulation_ok') is False
+        and isinstance(response.get('failure_code'), str)
+        and response.get('failure_code')
+    ):
+        raw_score = response.get('score', 0.0)
+        score = None
+        if not isinstance(raw_score, bool) and isinstance(raw_score, Real):
+            score = float(raw_score)
+            if not math.isfinite(score):
+                score = None
+        code, reason = _failure_details(
+            response,
+            'WSL_UNAVAILABLE',
+            'MuJoCo simulation preflight failed',
+        )
+        return MujocoGateValidationResult(False, code, reason, score)
 
     try:
         response_source, response_lineage = validate_candidate_source(
@@ -431,6 +637,9 @@ def validate_mujoco_gate_response(
             'MuJoCo simulation_ok is false',
         )
         return MujocoGateValidationResult(False, code, reason, score)
+    lift_evidence_failure = _validate_lift_evidence(response, score)
+    if lift_evidence_failure is not None:
+        return lift_evidence_failure
     return MujocoGateValidationResult(True, score=score)
 
 

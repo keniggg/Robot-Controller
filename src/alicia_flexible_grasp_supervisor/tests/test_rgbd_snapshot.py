@@ -446,6 +446,36 @@ def test_mad_filter_removes_fly_point_from_target_depth():
     assert result.target_depth_raw[9, 12] == 0
 
 
+def test_static_surface_shape_does_not_inflate_temporal_repeatability():
+    mask = stable_mask()
+    shaped_depth = np.full((20, 30), 2200, dtype=np.uint16)
+    shaped_depth += np.arange(30, dtype=np.uint16)[np.newaxis, :]
+
+    result = fuse([
+        sample(shaped_depth, mask, 1.00),
+        sample(shaped_depth, mask, 1.03),
+        sample(shaped_depth, mask, 1.06),
+    ])
+
+    assert result.ok
+    assert result.quality.depth_mad_m > 0.0
+    assert result.quality.depth_repeatability_m == 0.0
+
+
+def test_same_pixel_temporal_mad_reports_robust_repeatability_sigma():
+    mask = stable_mask()
+
+    result = fuse([
+        sample(2199, mask, 1.00),
+        sample(2200, mask, 1.03),
+        sample(2201, mask, 1.06),
+    ])
+
+    assert result.ok
+    assert result.quality.depth_mad_m == 0.0
+    assert np.isclose(result.quality.depth_repeatability_m, 0.00014826)
+
+
 def test_fully_enclosed_nine_pixel_depth_hole_is_filled():
     mask = np.zeros((20, 30), dtype=np.uint8)
     mask[2:18, 4:26] = 255
@@ -592,6 +622,55 @@ def test_wait_for_samples_requires_newest_stamp_after_previous_window():
 
     assert repeated == []
     assert [sample.stamp_sec for sample in advanced] == [9.2, 9.3, 9.4]
+
+
+def test_wait_for_samples_can_require_a_disjoint_source_window():
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: 10_000_000_000,
+        monotonic_clock=lambda: 10.0,
+    )
+    for stamp in (9.1, 9.2, 9.3):
+        add_complete_sample(buffer, stamp)
+    boundary_ns = 9_300_000_000
+
+    for stamp in (9.4, 9.5):
+        add_complete_sample(buffer, stamp)
+    overlapping = buffer.wait_for_samples(
+        3,
+        0.01,
+        True,
+        1.0,
+        newest_after_ns=boundary_ns,
+        require_all_after_ns=True,
+    )
+    add_complete_sample(buffer, 9.6)
+    disjoint = buffer.wait_for_samples(
+        3,
+        0.01,
+        True,
+        1.0,
+        newest_after_ns=boundary_ns,
+        require_all_after_ns=True,
+    )
+
+    assert overlapping == []
+    assert [item.stamp_sec for item in disjoint] == [9.4, 9.5, 9.6]
+
+
+def test_fused_snapshot_records_every_source_frame_stamp():
+    samples = [
+        sample(1200 + index, stable_mask(), 4.0 + index * 0.1)
+        for index in range(3)
+    ]
+
+    result = fuse(samples)
+
+    assert result.ok is True
+    assert result.sample_stamp_ns == (
+        4_000_000_000,
+        4_100_000_000,
+        4_200_000_000,
+    )
 
 
 def test_synchronized_buffer_requires_exact_timestamp_components_and_returns_copies():

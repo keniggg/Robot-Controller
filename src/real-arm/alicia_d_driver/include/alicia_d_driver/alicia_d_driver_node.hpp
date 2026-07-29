@@ -98,7 +98,18 @@ private:
 	   bool suppress_redundant_commands_ = true;
 	   bool pause_commands_when_feedback_stale_ = true;
 	   double feedback_stale_timeout_sec_ = 1.0;
-	   double command_keepalive_rate_hz_ = 0.0;
+	   double command_keepalive_rate_hz_ = 10.0;
+	   bool reject_implausible_joint_feedback_ = true;
+	   double feedback_max_velocity_rad_s_ = 1.0;
+	   double feedback_jump_base_tolerance_rad_ = 0.02;
+	   double feedback_jump_confirmation_tolerance_rad_ = 0.05;
+	   int feedback_jump_confirm_samples_ = 2;
+	   bool reject_command_inconsistent_joint_feedback_ = true;
+	   bool endpoint_feedback_trim_enabled_ = false;
+	   double endpoint_feedback_trim_stable_sec_ = 0.30;
+	   double endpoint_feedback_trim_activation_error_rad_ = 0.035;
+	   double endpoint_feedback_trim_max_rad_ = 0.12;
+	   double endpoint_feedback_trim_gain_ = 1.0;
 		   double protection_clear_stable_sec_ = 30.0;
 		   double max_enable_temperature_c_ = 60.0;
 		   int e1_confirm_consecutive_frames_ = 3;
@@ -128,6 +139,10 @@ private:
    std::vector<double> current_joint_positions_;
    double current_gripper_position_;
    std::vector<std::string> joint_names_;
+	   ros::Time last_accepted_joint_feedback_time_;
+	   ros::Time last_joint_feedback_frame_time_;
+	   std::vector<double> pending_joint_feedback_;
+	   int pending_joint_feedback_count_ = 0;
 
    void publish_joint_state();
    bool has_data;
@@ -136,9 +151,25 @@ private:
    std::vector<double> latest_joint_angles_; // size 6
    double latest_gripper_rad_ = 0.0;          // radians
    bool has_latest_command_ = false;
+	   std::vector<double> endpoint_trim_reference_joint_angles_;
+	   ros::Time endpoint_trim_reference_since_;
+	   bool endpoint_feedback_trim_active_ = false;
+	   bool endpoint_feedback_trim_quiescent_ = false;
+	   std::vector<double> endpoint_feedback_trim_offsets_;
+	   std::vector<double> endpoint_trim_feedback_anchor_joint_angles_;
+	   ros::Time endpoint_trim_feedback_stable_since_;
+	   ros::Time endpoint_trim_last_feedback_sample_time_;
+	   bool endpoint_trim_waiting_for_feedback_response_ = false;
+	   std::vector<double> endpoint_trim_response_start_joint_angles_;
+	   ros::Time endpoint_trim_response_wait_since_;
+	   double endpoint_trim_last_response_latency_sec_ = 0.0;
+	   size_t endpoint_trim_stalled_retry_count_ = 0;
+	   size_t endpoint_feedback_trim_iteration_ = 0;
 	   ros::Time last_command_sent_time_;
 	   std::vector<uint8_t> last_sent_sdk_command_frame_;
 	   ros::Time last_sent_sdk_command_time_;
+	   std::vector<double> last_streamed_joint_positions_;
+	   ros::Time last_streamed_joint_positions_time_;
 
    // Throttling/gripper smooth send
    double gripper_send_rate_hz_ = 50.0;        // default gripper send rate
@@ -151,6 +182,7 @@ private:
     std::vector<double> cmd_joint_velocities_;  // size 6, rad/s
     double cmd_gripper_rad_ = 0.0;              // radians
     double cmd_gripper_vel_rad_s_ = 0.0;        // rad/s
+    bool command_state_seeded_from_feedback_ = false;
 
     // Timestamp of the last feedback received from hardware. When stale, we
     // fall back to publishing the commanded state so visualizers remain in sync.
@@ -159,6 +191,8 @@ private:
 		   uint8_t last_run_status_ = 0x00;
 		   int consecutive_e1_frames_ = 0;
 		   int consecutive_high_temperature_samples_ = 0;
+		   int consecutive_high_temperature_channel_index_ = -1;
+		   std::vector<int> consecutive_high_temperature_samples_by_channel_;
 	   bool protection_fault_latched_ = false;
 	   bool motion_commands_enabled_ = false;
 	   bool has_temperature_feedback_ = false;

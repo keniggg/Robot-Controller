@@ -98,6 +98,17 @@ def _passing_response(plan_id='0123456789abcdef01234567'):
         'score': 92.5,
     }
     response.update({key: True for key in SAFETY_KEYS})
+    response['lift_evidence'] = {
+        'contract_version': 1,
+        'object_lift_m': 0.020,
+        'commanded_lift_m': 0.050,
+        'minimum_lift_m': 0.015,
+        'two_sided_lift_samples': 39,
+        'lost_contact_samples': 1,
+        'lift_sample_count': 40,
+        'max_lost_contact_streak': 1,
+        'contact_loss_grace_samples': 3,
+    }
     return response
 
 
@@ -202,6 +213,8 @@ def test_build_mujoco_payload_serializes_exact_v3_rich_plan_schema():
         'max_inner_gap_m': 0.050,
         'finger_size_xyz_m': [0.0434, 0.0286, 0.0600],
         'palm_size_xyz_m': [0.1175, 0.1550, 0.0774],
+        'close_target_inner_gap_m': 0.0,
+        'close_settle_sec': 0.8,
     }
     assert payload['object_model']['type'] == 'obb_box'
     assert payload['object_model']['pose_base']['position_m'] == pytest.approx(
@@ -210,9 +223,12 @@ def test_build_mujoco_payload_serializes_exact_v3_rich_plan_schema():
     assert payload['object_model']['size_xyz_m'] == pytest.approx(
         [0.24, 0.16, 0.10]
     )
-    assert payload['object_model']['mass_kg'] == pytest.approx(0.08)
+    assert payload['object_model']['mass_kg'] == pytest.approx(0.50)
     assert payload['object_model']['friction'] == pytest.approx(
-        [1.2, 0.08, 0.02]
+        [0.10, 0.005, 0.0001]
+    )
+    assert payload['object_model']['dynamics_assumptions']['source'] == (
+        'live_obb_conservative_envelope'
     )
     assert payload['support_plane']['normal_base'] == pytest.approx(
         [0.0, 0.0, 1.0]
@@ -274,6 +290,23 @@ def test_build_mujoco_payload_rejects_category_specific_object_types(object_type
 
 
 @pytest.mark.parametrize(
+    'legacy',
+    (
+        {'mass_kg': 0.08},
+        {'friction': [1.2, 0.08, 0.02]},
+    ),
+)
+def test_build_mujoco_payload_rejects_fixed_object_dynamics(legacy):
+    with pytest.raises(ValueError, match='category-specific'):
+        client_module.build_mujoco_payload(
+            _rich_plan(),
+            ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'],
+            [0.0] * 6,
+            {'object_model': {'type': 'obb_box', **legacy}},
+        )
+
+
+@pytest.mark.parametrize(
     'mutation',
     [
         lambda plan, names, positions, config: setattr(
@@ -331,6 +364,48 @@ def test_validate_mujoco_gate_response_accepts_only_complete_correlated_pass():
     assert result.code == ''
     assert result.reason == ''
     assert result.score == pytest.approx(92.5)
+
+
+def test_validate_mujoco_gate_response_requires_structured_dynamic_lift():
+    response = _passing_response()
+    response.pop('lift_evidence')
+
+    result = client_module.validate_mujoco_gate_response(
+        response,
+        '0123456789abcdef01234567',
+        80,
+    )
+
+    assert not result.ok
+    assert result.code == 'WSL_UNAVAILABLE'
+
+
+@pytest.mark.parametrize(
+    ('field', 'value', 'expected_code'),
+    (
+        ('object_lift_m', 0.0, 'MUJOCO_LIFT_FAILED'),
+        ('lost_contact_samples', 4, 'MUJOCO_CONTACT_FAILED'),
+        ('max_lost_contact_streak', 4, 'MUJOCO_CONTACT_FAILED'),
+    ),
+)
+def test_validate_mujoco_gate_response_rejects_weak_lift_evidence(
+    field,
+    value,
+    expected_code,
+):
+    response = _passing_response()
+    response['lift_evidence'][field] = value
+    if field == 'lost_contact_samples':
+        response['lift_evidence']['two_sided_lift_samples'] = 36
+
+    result = client_module.validate_mujoco_gate_response(
+        response,
+        '0123456789abcdef01234567',
+        80,
+    )
+
+    assert not result.ok
+    assert result.code == expected_code
 
 
 @pytest.mark.parametrize(
@@ -442,6 +517,28 @@ def test_validate_mujoco_gate_response_preserves_wsl_preflight_failure():
     assert not result.ok
     assert result.code == 'GRIPPER_MODEL_MISMATCH'
     assert result.reason == 'WSL rejected the configured gripper contract'
+
+
+def test_validate_mujoco_gate_response_preserves_preflight_failure_without_provenance():
+    response = _passing_response()
+    response.pop('candidate_source')
+    response.pop('candidate_source_lineage')
+    response.update({key: False for key in SAFETY_KEYS})
+    response['score'] = 0.0
+    response['failure_code'] = 'PLAN_INVALID'
+    response['failure_reason'] = 'schema_version must be 2'
+
+    result = client_module.validate_mujoco_gate_response(
+        response,
+        '0123456789abcdef01234567',
+        80,
+        expected_candidate_source='tabletop_geometry',
+        expected_candidate_source_lineage=['tabletop_geometry'],
+    )
+
+    assert not result.ok
+    assert result.code == 'PLAN_INVALID'
+    assert result.reason == 'schema_version must be 2'
 
 
 @pytest.mark.parametrize('key', SAFETY_KEYS)

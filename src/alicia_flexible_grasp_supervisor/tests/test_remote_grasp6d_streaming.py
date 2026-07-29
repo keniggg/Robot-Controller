@@ -26,6 +26,8 @@ remote_node = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(remote_node)
 
 from alicia_flexible_grasp.grasp.grasp6d_pipeline import (  # noqa: E402
+    BoundedMoveItSelection,
+    CandidateStageFunnel,
     ExecutionPlanController,
     MoveItResult,
     PromotionDecision,
@@ -45,6 +47,7 @@ from alicia_flexible_grasp.grasp.grasp6d_stability import (  # noqa: E402
 from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
     CandidateGateResult,
     GripperGeometry,
+    evaluate_open_gripper_observation_envelope,
 )
 from alicia_flexible_grasp.grasp.tabletop_geometry_candidates import (  # noqa: E402
     TabletopGeometryConfig,
@@ -131,6 +134,8 @@ def streaming_node(clock=None, prepare=None, start_worker=True):
     node.pipeline_metrics_pub = RecordingPublisher()
     node.preview_plan_pub = RecordingPublisher()
     node.preview_rich_plan_pub = RecordingPublisher()
+    node.robot_execution_active = False
+    node.near_field_planning_active = False
     node._prepare_and_predict = prepare or (
         lambda ticket: types.SimpleNamespace(
             ticket=ticket,
@@ -151,6 +156,41 @@ def streaming_node(clock=None, prepare=None, start_worker=True):
         start_worker=start_worker,
     )
     return node
+
+
+def test_explicit_near_field_phase_resets_tracker_and_invalidates_prior_epoch():
+    node = streaming_node(start_worker=False)
+    assert node.start_streaming() is True
+    original_epoch = node.target_instance_epoch
+    original_tracker = node.tracker
+    node._stable_variant_runtime = {(7, 1): {'phase': 'far_field'}}
+
+    node.grasp_state_cb(types.SimpleNamespace(active=True))
+
+    assert node.robot_execution_active is True
+    assert node.near_field_planning_active is False
+    assert node.target_instance_epoch == original_epoch
+    assert node.tracker is original_tracker
+
+    node.near_field_state_cb(remote_node.Bool(data=True))
+
+    assert node.near_field_planning_active is True
+    assert node.target_instance_epoch == original_epoch + 1
+    assert node.tracker is not original_tracker
+    assert node._stable_variant_runtime == {}
+
+    near_field_epoch = node.target_instance_epoch
+    near_field_tracker = node.tracker
+    node.near_field_state_cb(remote_node.Bool(data=True))
+
+    assert node.target_instance_epoch == near_field_epoch
+    assert node.tracker is near_field_tracker
+
+    node.near_field_state_cb(remote_node.Bool(data=False))
+
+    assert node.near_field_planning_active is False
+    assert node.target_instance_epoch == near_field_epoch + 1
+    node.shutdown_streaming_worker()
 
 
 def seed_stream_execution_authority(node, authority_ticket=None):
@@ -195,6 +235,16 @@ def assert_execution_authority_revoked(node, failure_code):
     assert node.rich_plan_pub.messages[-1].valid is False
     assert failure_code in node.rich_plan_pub.messages[-1].diagnostic
     assert node.plan_pub.messages[-1].poses == []
+
+
+def assert_execution_authority_retained(node, plan_id='old-plan'):
+    assert node.execution_plan_controller.execution_plan_id == plan_id
+    assert node.latest_rich_plan.plan_id == plan_id
+    assert node.latest_plan.poses == ('old-pose',)
+    assert node._active_execution_audit_report['plan_id'] == plan_id
+    assert node._latest_execution_audit_reference['report_sha256'] == 'old-audit'
+    assert not node.rich_plan_pub.messages
+    assert not node.plan_pub.messages
 
 
 def wait_until(predicate, timeout=2.0):
@@ -276,6 +326,13 @@ def tabletop_gripper():
         palm_size_xyz_m=np.asarray([0.1175, 0.1550, 0.0774]),
         support_clearance_m=0.003,
     )
+
+
+def configure_identity_handeye(node):
+    node.handeye_translation_xyz = (0.0, 0.0, 0.0)
+    node.handeye_rotation_xyzw = (0.0, 0.0, 0.0, 1.0)
+    node.camera_visibility_min_depth_m = 0.035
+    node.camera_visibility_max_depth_m = 1.20
 
 
 def tabletop_candidates_for(geometry):
@@ -368,7 +425,7 @@ def test_continuous_runtime_config_enforces_production_stability_contract(
     assert 'min_hits=3' in str(raised.value)
 
 
-@pytest.mark.parametrize(('raw', 'expected'), [(1, 3), (5, 5), (99, 10)])
+@pytest.mark.parametrize(('raw', 'expected'), [(1, 3), (5, 5), (99, 24)])
 def test_continuous_runtime_config_strict_integer_moveit_top_n_clamps(
     raw, expected
 ):
@@ -647,6 +704,19 @@ def test_request_service_starts_and_stops_without_waiting_for_inference():
         stopped = node.request_plan_cb(types.SimpleNamespace(trigger=False))
         assert stopped.success is True
         assert node.streaming_enabled is False
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_submit_snapshot_after_coordinator_stop_is_dropped_not_crashed():
+    node = streaming_node(start_worker=False)
+    try:
+        node.start_streaming()
+        with node._stream_condition:
+            node.inference_coordinator.stop()
+
+        assert node.submit_stream_snapshot(snapshot(9.8)) is False
+        assert node._pipeline_counters['submitted'] == 0
     finally:
         node.shutdown_streaming_worker()
 
@@ -1389,7 +1459,7 @@ def test_real_graspnet_normalization_and_analytical_gate_use_prepared_geometry()
     node.camera_visibility_gate_enabled = False
     node.camera_visibility_diagnostic_enabled = False
     node._record_geometry_gate_result = lambda _gate: None
-    size = np.asarray([0.040, 0.040, 0.060])
+    size = np.asarray([0.040, 0.040, 0.040])
     prepared_geometry = types.SimpleNamespace(
         ok=True,
         center_base=np.asarray([0.0, 0.0, 0.080]),
@@ -1437,7 +1507,16 @@ def test_real_graspnet_normalization_and_analytical_gate_use_prepared_geometry()
         translation_m=(0.0, -0.080, 0.0),
         quaternion_xyzw=remote_node.quaternion_from_matrix(
             np.block([
-                [remote_node.OPTICAL_TO_ROS_CAMERA.T, np.zeros((3, 1))],
+                [
+                    np.asarray(
+                        [
+                            [0.0, 1.0, 0.0],
+                            [1.0, 0.0, 0.0],
+                            [0.0, 0.0, -1.0],
+                        ]
+                    ),
+                    np.zeros((3, 1)),
+                ],
                 [np.zeros((1, 3)), np.ones((1, 1))],
             ])
         ),
@@ -1454,8 +1533,157 @@ def test_real_graspnet_normalization_and_analytical_gate_use_prepared_geometry()
 
     assert normalized.geometry_gate.ok is True
     assert normalized.geometry_gate.required_open_width_m > 0.0
+    assert normalized.audit['adaptive_orientation_projection'][
+        'projected'
+    ] is False
     assert safety.ok is True
     assert node._latest_geometry_estimate is live_geometry
+
+
+def test_graspnet_orientation_projection_is_minimal_and_preserves_contact():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.grasp_config = {'tool_approach_axis': 'z'}
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node._adaptive_stage_profiles = lambda *_args, **_kwargs: (
+        types.SimpleNamespace(tilt_deg=0.0),
+        types.SimpleNamespace(tilt_deg=30.0),
+    )
+    stamp = remote_node.rospy.Time.from_sec(20.0)
+    base_from_optical = np.eye(4)
+    base_from_optical[:3, :3] = remote_node.OPTICAL_TO_ROS_CAMERA
+    estimator = remote_node.FrozenSnapshotCandidatePoseEstimator(
+        base_from_optical,
+        stamp,
+        'camera_link',
+        raw_candidate_convention='opencv_optical',
+    )
+    assert np.allclose(estimator.T_base_camera_link, np.eye(4))
+    prepared = types.SimpleNamespace(
+        stamp=stamp,
+        pose_estimator=estimator,
+        geometry=types.SimpleNamespace(
+            support_normal_base=np.asarray([0.0, 0.0, 1.0]),
+        ),
+        snapshot=types.SimpleNamespace(),
+    )
+    jaw = np.asarray([0.0, 1.0, 0.0])
+    raw_tilt_deg = 60.0
+    raw_insertion = np.asarray([
+        math.sin(math.radians(raw_tilt_deg)),
+        0.0,
+        -math.cos(math.radians(raw_tilt_deg)),
+    ])
+    rotation = remote_node.semantic_axes_to_tool_rotation(
+        insertion_axis_base=raw_insertion,
+        jaw_axis_base=jaw,
+        tool_jaw_axis='y',
+        tool_finger_length_axis='z',
+    )
+    transform = np.eye(4)
+    transform[:3, :3] = rotation
+    center = np.asarray([0.01, -0.02, 0.10])
+    depth_m = 0.03
+    transform[:3, 3] = center + depth_m * raw_insertion
+    candidate = RemoteGraspCandidate(
+        score=0.91,
+        translation_m=center.copy(),
+        quaternion_xyzw=remote_node.quaternion_from_matrix(transform),
+        width_m=0.024,
+        height_m=0.018,
+        depth_m=depth_m,
+        tool0_translation_m=transform[:3, 3].copy(),
+    )
+    grasp_pose = remote_node.make_pose_stamped(
+        'base_link',
+        transform[:3, 3],
+        candidate.quaternion_xyzw,
+        stamp=stamp,
+    )
+
+    projected, projected_pose, recovered_center, audit = (
+        node._project_graspnet_stage_orientation(
+            prepared,
+            candidate,
+            grasp_pose,
+            center,
+        )
+    )
+
+    projected_insertion = node._pose_approach_base_xyz(projected_pose)
+    projected_tilt_deg = math.degrees(
+        math.acos(
+            np.clip(
+                float(np.dot(projected_insertion, [0.0, 0.0, -1.0])),
+                -1.0,
+                1.0,
+            )
+        )
+    )
+    projected_tool0 = remote_node.pose_matrix(projected_pose)[:3, 3]
+    assert audit['projected'] is True
+    assert audit['raw_tilt_deg'] == pytest.approx(60.0)
+    assert audit['projected_tilt_deg'] == pytest.approx(30.0)
+    assert audit['maximum_admissible_tilt_deg'] == pytest.approx(30.0)
+    assert audit['orientation_correction_deg'] == pytest.approx(30.0)
+    assert projected_tilt_deg == pytest.approx(30.0)
+    assert np.allclose(recovered_center, center)
+    assert np.allclose(projected.translation_m, center)
+    assert np.linalg.norm(projected_tool0 - center) == pytest.approx(depth_m)
+    assert projected.score == pytest.approx(candidate.score)
+    assert projected.width_m == pytest.approx(candidate.width_m)
+    assert projected.depth_m == pytest.approx(candidate.depth_m)
+
+
+def test_graspnet_orientation_projection_fails_closed_without_downward_axis():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.grasp_config = {'tool_approach_axis': 'z'}
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node._adaptive_stage_profiles = lambda *_args, **_kwargs: (
+        types.SimpleNamespace(tilt_deg=0.0),
+        types.SimpleNamespace(tilt_deg=30.0),
+    )
+    prepared = types.SimpleNamespace(
+        geometry=types.SimpleNamespace(
+            support_normal_base=np.asarray([0.0, 1.0, 0.0]),
+        ),
+        snapshot=types.SimpleNamespace(),
+    )
+    rotation = remote_node.semantic_axes_to_tool_rotation(
+        insertion_axis_base=np.asarray([1.0, 0.0, 0.0]),
+        jaw_axis_base=np.asarray([0.0, 1.0, 0.0]),
+        tool_jaw_axis='y',
+        tool_finger_length_axis='z',
+    )
+    transform = np.eye(4)
+    transform[:3, :3] = rotation
+    candidate = RemoteGraspCandidate(
+        score=0.9,
+        translation_m=np.zeros(3),
+        quaternion_xyzw=remote_node.quaternion_from_matrix(transform),
+        width_m=0.02,
+        depth_m=0.03,
+        tool0_translation_m=np.asarray([0.03, 0.0, 0.0]),
+    )
+    grasp_pose = remote_node.make_pose_stamped(
+        'base_link',
+        candidate.tool0_translation_m,
+        candidate.quaternion_xyzw,
+    )
+
+    with pytest.raises(
+        remote_node.CandidateContractError,
+        match='no downward insertion direction exists',
+    ) as caught:
+        node._project_graspnet_stage_orientation(
+            prepared,
+            candidate,
+            grasp_pose,
+            np.zeros(3),
+        )
+
+    assert caught.value.code == 'GRASPNET_STAGE_PROFILE_UNAVAILABLE'
 
 
 def test_local_pipeline_keeps_tabletop_candidate_when_graspnet_hits_table(
@@ -1583,6 +1811,584 @@ def test_prepared_geometry_generation_fails_closed_with_stable_code(
     assert diagnostics['failure_code'] == expected_code
 
 
+def test_adaptive_stage_profiles_ignore_object_label_and_workspace_position():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    geometry = tabletop_geometry()
+    shift = np.asarray([0.23, -0.41, 0.17])
+    translated = types.SimpleNamespace(
+        **{
+            **geometry.__dict__,
+            'center_base': np.asarray(geometry.center_base) + shift,
+            'object_points_base': (
+                np.asarray(geometry.object_points_base) + shift
+            ),
+            'support_offset_m': (
+                float(geometry.support_offset_m)
+                - float(np.dot(geometry.support_normal_base, shift))
+            ),
+        }
+    )
+    carton_snapshot = types.SimpleNamespace(
+        object_msg=types.SimpleNamespace(label='carton'),
+        quality=types.SimpleNamespace(
+            depth_mad_m=0.009,
+            depth_repeatability_m=0.0015,
+        ),
+    )
+    bottle_snapshot = types.SimpleNamespace(
+        object_msg=types.SimpleNamespace(label='bottle'),
+        quality=types.SimpleNamespace(
+            depth_mad_m=0.004,
+            depth_repeatability_m=0.0015,
+        ),
+    )
+
+    carton = node._adaptive_stage_profiles(geometry, carton_snapshot)
+    bottle = node._adaptive_stage_profiles(translated, bottle_snapshot)
+
+    assert carton == bottle
+    assert len(carton) > 1
+    assert all(
+        profile.lateral_sweep_m <= 0.010 + 1e-12
+        for profile in carton
+    )
+
+
+def test_near_field_profiles_consume_fresh_measured_execution_error(
+    monkeypatch,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.020
+    node.runtime_execution_error_max_age_sec = 180.0
+    geometry = tabletop_geometry()
+    snapshot = types.SimpleNamespace(
+        quality=types.SimpleNamespace(
+            depth_mad_m=0.009,
+            depth_repeatability_m=0.0015,
+        ),
+    )
+
+    monkeypatch.setattr(
+        remote_node.rospy,
+        'get_param',
+        lambda name, default=None: (
+            {
+                'stamp_sec': 100.0,
+                'position_error_m': 0.0228,
+            }
+            if name == '/grasp_6d/runtime_execution_error'
+            else default
+        ),
+    )
+    monkeypatch.setattr(
+        remote_node.rospy.Time,
+        'now',
+        staticmethod(lambda: remote_node.rospy.Time.from_sec(101.0)),
+    )
+
+    node.robot_execution_active = True
+    node.near_field_planning_active = False
+    baseline = node._adaptive_stage_profiles(geometry, snapshot)
+
+    node.near_field_planning_active = True
+    measured = node._adaptive_stage_profiles(geometry, snapshot)
+
+    assert baseline[0].execution_position_error_m == pytest.approx(0.0)
+    assert measured[0].execution_position_error_m == pytest.approx(0.0228)
+    assert measured[0].pregrasp_distance_m > baseline[0].pregrasp_distance_m
+    assert measured[-1].tilt_deg < baseline[-1].tilt_deg
+
+
+def test_contact_sequence_lifts_along_live_support_normal():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    node.robot_execution_active = False
+    support = np.asarray([0.12, -0.16, 0.9797958971], dtype=float)
+    support /= np.linalg.norm(support)
+    geometry = types.SimpleNamespace(
+        axes_base=np.eye(3),
+        size_xyz_m=np.asarray([0.040, 0.035, 0.020]),
+        support_normal_base=support,
+        object_points_base=tabletop_box_cloud((0.040, 0.035, 0.020)),
+    )
+    grasp_pose = remote_node.make_pose_stamped(
+        'base_link',
+        np.asarray([0.2, -0.3, 0.1]),
+        np.asarray([0.0, 0.0, 0.0, 1.0]),
+        stamp=remote_node.rospy.Time.from_sec(10.0),
+    )
+
+    sequence, profile = node._make_contact_sequence(
+        grasp_pose,
+        geometry,
+        insertion_axis_base=-support,
+    )
+
+    grasp_xyz = remote_node.pose_matrix(sequence.grasp)[:3, 3]
+    lift_xyz = remote_node.pose_matrix(sequence.lift)[:3, 3]
+    np.testing.assert_allclose(
+        lift_xyz - grasp_xyz,
+        profile.lift_height_m * support,
+        atol=1e-12,
+    )
+
+
+def test_centered_observation_pose_uses_camera_distance_and_centers_target():
+    grasp_pose = remote_node.make_pose_stamped(
+        'base_link',
+        np.asarray([0.0, 0.0, 0.0]),
+        np.asarray([0.0, 0.0, 0.0, 1.0]),
+        stamp=remote_node.rospy.Time.from_sec(10.0),
+    )
+    target = np.asarray([0.10, 0.06, 0.0])
+
+    observation, audit = (
+        remote_node.centered_observation_pose_at_camera_distance(
+            grasp_pose,
+            target,
+            np.eye(4),
+            0.20,
+            0.19,
+            0.21,
+        )
+    )
+
+    observation_xyz = remote_node.pose_matrix(observation)[:3, 3]
+    np.testing.assert_allclose(observation_xyz, [-0.10, 0.06, 0.0])
+    u, v, depth = remote_node.project_base_target_at_tool_pose(
+        observation,
+        target,
+        np.eye(4),
+        remote_node.CameraIntrinsics(
+            640,
+            480,
+            600.0,
+            600.0,
+            320.0,
+            240.0,
+            0.001,
+        ),
+    )
+    assert u == pytest.approx(320.0)
+    assert v == pytest.approx(240.0)
+    assert depth == pytest.approx(0.20)
+    assert audit['actual_camera_target_distance_m'] == pytest.approx(0.20)
+    assert audit['min_camera_target_distance_m'] == pytest.approx(0.19)
+    assert audit['max_camera_target_distance_m'] == pytest.approx(0.21)
+    assert audit[
+        'derived_tool0_to_grasp_tool0_distance_m'
+    ] == pytest.approx(math.sqrt(0.10 ** 2 + 0.06 ** 2))
+    assert audit['center_residual_m'] == pytest.approx(0.0, abs=1e-12)
+    assert (
+        audit['selection_rule']
+        == 'configured_nominal_camera_target_distance'
+    )
+
+
+def test_centered_observation_pose_rejects_nominal_outside_success_range():
+    grasp_pose = remote_node.make_pose_stamped(
+        'base_link',
+        np.asarray([0.0, 0.0, 0.0]),
+        np.asarray([0.0, 0.0, 0.0, 1.0]),
+        stamp=remote_node.rospy.Time.from_sec(10.0),
+    )
+
+    with pytest.raises(remote_node.CandidateContractError) as caught:
+        remote_node.centered_observation_pose_at_camera_distance(
+            grasp_pose,
+            np.asarray([0.10, 0.11, 0.0]),
+            np.eye(4),
+            0.18,
+            0.19,
+            0.21,
+        )
+
+    assert caught.value.code == 'OBSERVATION_VIEW_GEOMETRY_INVALID'
+
+
+def test_200mm_observation_real_plan_fixture_increases_table_clearance():
+    orientation = np.asarray(
+        [
+            0.7787295814561642,
+            0.5887404775969284,
+            -0.14461075927228956,
+            0.16140823184317438,
+        ]
+    )
+    grasp_pose = remote_node.make_pose_stamped(
+        'base_link',
+        np.asarray(
+            [
+                -0.1215109865272657,
+                -0.45201426390555255,
+                0.05700888776151803,
+            ]
+        ),
+        orientation,
+    )
+    old_observation = remote_node.make_pose_stamped(
+        'base_link',
+        np.asarray(
+            [
+                -0.0918402400634709,
+                -0.3571621596383056,
+                0.06808702480510659,
+            ]
+        ),
+        orientation,
+    )
+    target = np.asarray(
+        [
+            -0.11806379974380408,
+            -0.441570058070009,
+            0.054769604796107964,
+        ]
+    )
+    tool_from_camera = remote_node.quaternion_matrix(
+        [
+            0.0229081321,
+            -0.6787668594,
+            0.0278470194,
+            0.7334680031,
+        ]
+    )
+    tool_from_camera[:3, 3] = [
+        -0.0866127223,
+        -0.0063407198,
+        -0.1034120675,
+    ]
+    new_observation, audit = (
+        remote_node.centered_observation_pose_at_camera_distance(
+            grasp_pose,
+            target,
+            tool_from_camera,
+            0.200,
+            0.190,
+            0.210,
+        )
+    )
+    gripper = GripperGeometry(
+        max_inner_gap_m=0.050,
+        jaw_clearance_each_side_m=0.002,
+        finger_size_xyz_m=np.asarray([0.0434, 0.0286, 0.0600]),
+        palm_size_xyz_m=np.asarray([0.1175, 0.1550, 0.0774]),
+        support_clearance_m=0.003,
+    )
+    support_normal = np.asarray(
+        [
+            -0.06761897336170623,
+            0.06130672642656254,
+            0.9958258681799582,
+        ]
+    )
+    support_normal /= np.linalg.norm(support_normal)
+    obb_rotation = remote_node.quaternion_matrix(
+        [
+            0.003930067374661929,
+            -0.045515057733144966,
+            -0.7321585531099706,
+            0.6796004614462041,
+        ]
+    )[:3, :3]
+    envelope_kwargs = {
+        'gripper': gripper,
+        'opening_width_m': 0.050,
+        'support_normal_base': support_normal,
+        'support_offset_m': -0.025322463363409042,
+        'obb_center_base': target,
+        'R_base_obb': obb_rotation,
+        'obb_size_xyz_m': np.asarray(
+            [
+                0.055169997074668284,
+                0.03624848213702317,
+                0.020261329136952385,
+            ]
+        ),
+        'tool_jaw_axis': 'y',
+        'tool_finger_length_axis': 'z',
+    }
+    old_result = evaluate_open_gripper_observation_envelope(
+        T_base_tool0=remote_node.pose_matrix(old_observation),
+        **envelope_kwargs,
+    )
+    new_result = evaluate_open_gripper_observation_envelope(
+        T_base_tool0=remote_node.pose_matrix(new_observation),
+        **envelope_kwargs,
+    )
+
+    assert old_result.ok is True
+    assert new_result.ok is True
+    assert old_result.minimum_support_clearance_m == pytest.approx(
+        0.017840662,
+        abs=1e-9,
+    )
+    assert new_result.minimum_support_clearance_m == pytest.approx(
+        0.063109846,
+        abs=1e-9,
+    )
+    assert (
+        new_result.minimum_support_clearance_m
+        - old_result.minimum_support_clearance_m
+    ) > 0.045
+    assert audit['actual_camera_target_distance_m'] == pytest.approx(0.200)
+    assert audit[
+        'derived_tool0_to_grasp_tool0_distance_m'
+    ] == pytest.approx(0.128335548, abs=1e-9)
+
+
+def test_tabletop_generation_materializes_geometry_derived_stage_profiles():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=24)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        tabletop_geometry(),
+        contact_execution_phase=False,
+    )
+
+    profiles = diagnostics['adaptive_stage_profiles']
+    assert candidates
+    assert diagnostics['plan_phase'] == remote_node.FAR_FIELD_OBSERVATION_PLAN
+    assert len(profiles) == 5
+    assert profiles[0]['tilt_deg'] == pytest.approx(0.0)
+    assert profiles[-1]['lateral_sweep_m'] <= 0.010 + 1e-12
+    assert any(
+        abs(profile['tilt_deg'] - 15.0) > 1e-3
+        for profile in profiles[1:]
+    )
+    assert all(
+        'adaptive_stage_profile' in candidate.audit
+        for candidate in candidates
+    )
+    materialized_tilts = {
+        round(float(candidate.audit['approach_tilt_deg']), 6)
+        for candidate in candidates
+    }
+    assert {
+        round(float(profile['tilt_deg']), 6)
+        for profile in profiles
+    }.issubset(materialized_tilts)
+
+
+def test_tabletop_contact_boundary_resolves_live_uncertainty_and_is_stratified():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=24)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    snapshot = types.SimpleNamespace(
+        quality=types.SimpleNamespace(
+            depth_mad_m=0.009,
+            depth_repeatability_m=0.0015,
+        ),
+    )
+
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        tabletop_geometry((0.040, 0.035, 0.011)),
+        snapshot=snapshot,
+    )
+
+    assert candidates
+    live_uncertainty_m = 0.003
+    assert diagnostics['required_contact_patch_overlap_m'] == pytest.approx(
+        live_uncertainty_m
+    )
+    assert diagnostics['depth_spatial_mad_m'] == pytest.approx(0.009)
+    assert diagnostics['depth_repeatability_m'] == pytest.approx(0.0015)
+    assert diagnostics['contact_overlap_requirement_source'] == (
+        'live_perception_uncertainty_only'
+    )
+    assert diagnostics['contact_boundary_profiles']
+    for profile in diagnostics['contact_boundary_profiles']:
+        for branch in profile['branches']:
+            assert branch['required_contact_patch_overlap_m'] == pytest.approx(
+                live_uncertainty_m
+            )
+            assert branch['sample_count'] >= 1
+            assert branch['maximum_observed_contact_patch_overlap_m'] is not None
+            assert branch['maximum_observed_tilt_deg'] is not None
+    assert any(
+        item.audit['approach_tilt_deg'] > 0.0
+        for item in candidates
+    )
+    assert all(
+        item.audit['contact_patch_overlap_m'] >= live_uncertainty_m - 1e-9
+        for item in candidates
+    )
+    assert all(
+        item.audit['contact_patch_signal_to_uncertainty'] >= 1.0 - 1e-9
+        and item.audit['contact_patch_uncertainty_margin_m'] >= -1e-9
+        and 0.0 <= item.audit['contact_patch_coverage_fraction'] <= 1.0
+        for item in candidates
+    )
+    first_by_proposal = {}
+    for item in candidates:
+        proposal_index = int(item.audit['proposal_source_index'])
+        first_by_proposal.setdefault(proposal_index, item)
+    for proposal_index, item in first_by_proposal.items():
+        polarity_index = (
+            0
+            if float(item.audit['approach_tilt_polarity']) < 0.0
+            else 1
+        )
+        branch_index = 2 * polarity_index + int(item.variant_index)
+        assert branch_index == proposal_index % 4
+
+
+def test_far_field_defers_contact_while_near_field_uses_snapshot_uncertainty():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=24)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    geometry = tabletop_geometry((0.040, 0.035, 0.011))
+    snapshot = types.SimpleNamespace(
+        quality=types.SimpleNamespace(
+            depth_mad_m=0.012,
+            depth_repeatability_m=0.003,
+        ),
+    )
+
+    contact_candidates, contact_diagnostics = (
+        node._generate_tabletop_candidates(
+            geometry,
+            snapshot=snapshot,
+            contact_execution_phase=True,
+        )
+    )
+    observation_candidates, observation_diagnostics = (
+        node._generate_tabletop_candidates(
+            geometry,
+            snapshot=snapshot,
+            contact_execution_phase=False,
+        )
+    )
+
+    assert contact_candidates
+    assert contact_diagnostics['required_contact_patch_overlap_m'] == (
+        pytest.approx(0.006)
+    )
+    assert contact_diagnostics['contact_overlap_requirement_source'] == (
+        'live_perception_uncertainty_only'
+    )
+    assert all(
+        item.audit['contact_patch_uncertainty_m'] == pytest.approx(0.006)
+        and item.audit['contact_patch_signal_to_uncertainty'] >= 1.0 - 1e-9
+        for item in contact_candidates
+    )
+    assert observation_candidates
+    assert observation_diagnostics['plan_phase'] == (
+        remote_node.FAR_FIELD_OBSERVATION_PLAN
+    )
+    assert observation_diagnostics['contact_execution_gate_deferred'] is True
+    assert observation_diagnostics[
+        'contact_overlap_requirement_source'
+    ] == 'deferred_to_near_field_contact_plan'
+    assert observation_diagnostics['required_contact_patch_overlap_m'] == (
+        pytest.approx(0.0)
+    )
+    assert all(
+        item.audit['contact_patch_required_overlap_m']
+        == pytest.approx(0.0)
+        for item in observation_candidates
+    )
+    assert all(
+        item.audit['contact_patch_overlap_m'] >= 0.0
+        for item in observation_candidates
+    )
+    assert all(
+        item.audit['contact_patch_signal_to_uncertainty'] is None
+        and item.audit['contact_overlap_decision_rule']
+        == 'deferred_to_near_field_contact_plan'
+        for item in observation_candidates
+    )
+
+
+def test_contact_overlap_requirement_fails_closed_without_live_profile():
+    with pytest.raises(
+        remote_node.CandidateContractError,
+        match='live adaptive-stage uncertainty',
+    ):
+        remote_node.RemoteGrasp6DNode._phase_contact_overlap_requirement_m(
+            True,
+            None,
+        )
+
+
+def test_contact_overlap_requirement_excludes_cartesian_tracking_residual():
+    profile = types.SimpleNamespace(
+        depth_uncertainty_m=0.0162,
+        execution_position_error_m=0.0132,
+        contact_overlap_requirement_m=0.002,
+    )
+
+    assert remote_node.RemoteGrasp6DNode._phase_contact_overlap_requirement_m(
+        True,
+        profile,
+    ) == pytest.approx(0.002)
+
+    assert (
+        remote_node.RemoteGrasp6DNode
+        ._phase_contact_overlap_requirement_m(False, None)
+        == pytest.approx(0.0)
+    )
+
+
+def test_tabletop_bounded_batch_represents_each_live_proposal_before_repeats():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=5)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        tabletop_geometry((0.040, 0.035, 0.011))
+    )
+
+    proposal_indices = [
+        int(candidate.audit['proposal_source_index'])
+        for candidate in candidates
+    ]
+    assert diagnostics['proposal_count'] > 1
+    assert len(candidates) == 5
+    assert len(set(proposal_indices)) == diagnostics['proposal_count']
+    assert diagnostics['materialized_proposal_count'] == len(
+        set(proposal_indices)
+    )
+    assert diagnostics['bounded_proposal_count'] == len(set(proposal_indices))
+    assert len(set(proposal_indices[:diagnostics['proposal_count']])) == (
+        diagnostics['proposal_count']
+    )
+
+
 def test_target_epoch_invalidation_clears_tracks_from_both_sources():
     tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
     graspnet = matching_observation(1)
@@ -1652,7 +2458,7 @@ def test_source_funnel_exposes_bounded_hybrid_outcomes():
     ],
 )
 @pytest.mark.parametrize('early_return', ['observations_empty', 'stable_empty'])
-def test_remote_failure_revokes_execution_before_local_pipeline_early_return(
+def test_remote_failure_only_records_invalid_before_local_pipeline_early_return(
     monkeypatch,
     failure_code,
     early_return,
@@ -1713,7 +2519,12 @@ def test_remote_failure_revokes_execution_before_local_pipeline_early_return(
         node._recheck_and_score_stable = lambda *_args: pytest.fail(
             'early return must not recheck stable candidates'
         )
-        node._finalize_streaming_gate_audit = lambda *_args, **_kwargs: None
+        def finalize_audit(*_args, **kwargs):
+            callback = kwargs.get('lifecycle_commit_callback')
+            if callback is not None:
+                callback()
+
+        node._finalize_streaming_gate_audit = finalize_audit
         node._finalize_promotion_transaction = lambda *_args, **_kwargs: (
             pytest.fail('remote failure must not enter MuJoCo promotion')
         )
@@ -1741,12 +2552,13 @@ def test_remote_failure_revokes_execution_before_local_pipeline_early_return(
         )
 
         assert result['funnel']['primary_failure'] == failure_code
-        assert_execution_authority_revoked(node, failure_code)
+        assert node.execution_plan_controller.invalid_streak == 1
+        assert_execution_authority_retained(node)
     finally:
         node.shutdown_streaming_worker()
 
 
-def test_worker_remote_error_without_prepared_prediction_revokes_execution(
+def test_worker_remote_error_without_prepared_prediction_keeps_execution(
     monkeypatch,
 ):
     def fail_before_prepared(_ticket):
@@ -1785,7 +2597,8 @@ def test_worker_remote_error_without_prepared_prediction_revokes_execution(
         wait_until(lambda: len(node.pipeline_metrics) == 1)
 
         assert node.pipeline_metrics[0]['status'] == 'PREDICT_FAILED'
-        assert_execution_authority_revoked(node, 'WSL_UNAVAILABLE')
+        assert node.execution_plan_controller.invalid_streak == 1
+        assert_execution_authority_retained(node)
     finally:
         node.shutdown_streaming_worker()
 
@@ -1824,6 +2637,31 @@ def test_stale_ticket_cannot_revoke_newer_execution_authority():
         node.shutdown_streaming_worker()
 
 
+def test_target_loss_during_robot_execution_keeps_frozen_authority():
+    node = streaming_node(clock=MutableClock(20.0), start_worker=False)
+    try:
+        seed_stream_execution_authority(node)
+        node.robot_execution_active = True
+        node.geometry_pub = RecordingPublisher()
+
+        invalid_geometry = node._invalidate_geometry(
+            'TARGET_LOST',
+            'target object is not detected',
+        )
+
+        assert 'TARGET_LOST' in invalid_geometry.failure_reason
+        assert node._geometry_invalidation_generation == 1
+        assert node.latest_object_geometry.failure_reason == (
+            invalid_geometry.failure_reason
+        )
+        assert node.geometry_pub.messages[-1].failure_reason == (
+            invalid_geometry.failure_reason
+        )
+        assert_execution_authority_retained(node)
+    finally:
+        node.shutdown_streaming_worker()
+
+
 @pytest.mark.parametrize(
     'failure_code',
     [
@@ -1832,7 +2670,7 @@ def test_stale_ticket_cannot_revoke_newer_execution_authority():
         'GRASPNET_PROTOCOL_INVALID',
     ],
 )
-def test_remote_failure_preview_revokes_old_execution_without_actuation(
+def test_remote_failure_preview_keeps_old_execution_without_actuation(
     monkeypatch,
     failure_code,
 ):
@@ -1951,7 +2789,8 @@ def test_remote_failure_preview_revokes_old_execution_without_actuation(
         assert result['funnel']['stage_counts']['promoted']['passed'] == 0
         assert result['funnel']['primary_failure'] == failure_code
         assert finalized[0].code == failure_code
-        assert_execution_authority_revoked(node, failure_code)
+        assert node.execution_plan_controller.invalid_streak == 1
+        assert_execution_authority_retained(node)
     finally:
         node.shutdown_streaming_worker()
 
@@ -2162,7 +3001,15 @@ def test_streaming_hard_facts_remain_rejected(overrides, expected_code):
     assert decision.code == expected_code
 
 
-def test_stream_poll_is_nonblocking_and_only_submits_an_advanced_window(monkeypatch):
+@pytest.mark.parametrize(
+    'near_field_planning_active, require_all_after_ns',
+    [(False, False), (True, True)],
+)
+def test_stream_poll_waits_for_fresh_window_and_submits_only_once(
+    monkeypatch,
+    near_field_planning_active,
+    require_all_after_ns,
+):
     class RecordingFrames:
         def __init__(self):
             self.calls = []
@@ -2176,6 +3023,9 @@ def test_stream_poll_is_nonblocking_and_only_submits_an_advanced_window(monkeypa
     node = streaming_node(clock=clock)
     try:
         node.frames = RecordingFrames()
+        node.near_field_planning_active = near_field_planning_active
+        node.rate_hz = 2.0
+        node.planning_snapshot_timeout_sec = 4.0
         node.planning_snapshot_frames = 3
         node.planning_snapshot_max_age_sec = 0.35
         node.planning_snapshot_max_span_sec = 3.0
@@ -2201,8 +3051,9 @@ def test_stream_poll_is_nonblocking_and_only_submits_an_advanced_window(monkeypa
         assert node._poll_stream_snapshot() is False
 
         first_args, first_kwargs = node.frames.calls[0]
-        assert first_args[1] == 0.0
+        assert first_args[1] == 0.5
         assert first_kwargs['newest_after_ns'] == 0
+        assert first_kwargs['require_all_after_ns'] is require_all_after_ns
         assert node.last_submitted_stamp_ns == 9_900_000_000
     finally:
         node.shutdown_streaming_worker()
@@ -2349,6 +3200,12 @@ def test_stop_during_inflight_moveit_discards_result_and_metrics(
         node.submit_stream_snapshot(snapshot(49.8))
         ticket = node._stream_worker_ticket
         pose = remote_node.PoseStamped()
+        sequence = types.SimpleNamespace(
+            pregrasp=remote_node.PoseStamped(),
+            approach=remote_node.PoseStamped(),
+            grasp=pose,
+            lift=remote_node.PoseStamped(),
+        )
         node._candidate_plan_metrics = {}
         node._position_only_rejected_count = 0
         node._orientation_fallback_rejected_count = 0
@@ -2356,6 +3213,10 @@ def test_stop_during_inflight_moveit_discards_result_and_metrics(
             (3, 1): {
                 'prepared': types.SimpleNamespace(ticket=ticket),
                 'grasp_pose': pose,
+                'observation_sequence': types.SimpleNamespace(
+                    pregrasp=remote_node.PoseStamped(),
+                ),
+                'sequence': sequence,
             }
         }
         response = types.SimpleNamespace(
@@ -2425,6 +3286,667 @@ def test_missing_stable_runtime_is_generic_moveit_check_error():
         assert result.within_joint_limits is None
         assert result.ik_valid is None
         assert result.planning_success is None
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_far_field_moveit_checks_only_observation_pose():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        grasp_pose = remote_node.PoseStamped()
+        observation_pose = remote_node.PoseStamped()
+        node._stable_variant_runtime = {
+            (3, 1): {
+                'prepared': types.SimpleNamespace(ticket=ticket),
+                'grasp_pose': grasp_pose,
+                'observation_sequence': types.SimpleNamespace(
+                    pregrasp=observation_pose,
+                    approach=remote_node.PoseStamped(),
+                    grasp=grasp_pose,
+                    lift=remote_node.PoseStamped(),
+                ),
+                'sequence': types.SimpleNamespace(
+                    pregrasp=remote_node.PoseStamped(),
+                    approach=remote_node.PoseStamped(),
+                    grasp=grasp_pose,
+                    lift=remote_node.PoseStamped(),
+                ),
+            }
+        }
+        checked = []
+
+        def strict_checker(pose):
+            checked.append(pose)
+            return (
+                MoveItResult(
+                    reachable=False,
+                    joint_path_cost=0.0,
+                    joint_max_delta_rad=0.0,
+                    reason='observation unreachable',
+                    failure_code='MOVEIT_UNREACHABLE',
+                ),
+                {},
+                '',
+            )
+
+        node._strict_moveit_evaluation = strict_checker
+
+        result = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=3, variant_index=1)
+        )
+
+        assert checked == [observation_pose]
+        assert result.reachable is False
+        assert result.failure_code == 'MOVEIT_UNREACHABLE'
+        assert result.reason == 'observation unreachable'
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_request_frozen_near_field_checks_ordered_sequence_after_state_changes():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        reached = promotion_plan('reached')
+        reached.poses[0].position.x = 0.31
+        node.latest_rich_plan = reached
+        node.robot_execution_active = False
+        new_pregrasp = remote_node.PoseStamped()
+        new_pregrasp.pose.position.x = 0.72
+        approach_pose = remote_node.PoseStamped()
+        approach_pose.pose.position.x = 0.41
+        grasp_pose = remote_node.PoseStamped()
+        grasp_pose.pose.position.x = 0.42
+        lift_pose = remote_node.PoseStamped()
+        node._stable_variant_runtime = {
+            (3, 1): {
+                'prepared': types.SimpleNamespace(
+                    ticket=ticket,
+                    near_field=True,
+                ),
+                'grasp_pose': grasp_pose,
+                'sequence': types.SimpleNamespace(
+                    pregrasp=new_pregrasp,
+                    approach=approach_pose,
+                    grasp=grasp_pose,
+                    lift=lift_pose,
+                ),
+            }
+        }
+        checked = []
+        node._strict_moveit_sequence_evaluation = lambda stages: (
+            checked.extend(stages)
+            or MoveItResult(
+                reachable=True,
+                joint_path_cost=0.6,
+                joint_max_delta_rad=0.1,
+                reason='ordered sequence reachable',
+                collision_free=True,
+                within_joint_limits=True,
+                ik_valid=True,
+                planning_success=True,
+            ),
+            {'joint_path_cost': 0.6, 'joint_max_delta': 0.1},
+        )
+
+        result = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=3, variant_index=1)
+        )
+
+        assert result.reachable is True
+        assert result.joint_path_cost == pytest.approx(0.6)
+        assert result.joint_max_delta_rad == pytest.approx(0.1)
+        assert result.evidence_code == ''
+        assert checked == [
+            ('pregrasp', new_pregrasp),
+            ('approach', approach_pose),
+            ('grasp', grasp_pose),
+            ('lift', lift_pose),
+        ]
+        assert node._candidate_plan_metrics[
+            node._pose_key(grasp_pose)
+        ] == {
+            'joint_path_cost': 0.6,
+            'joint_max_delta': 0.1,
+        }
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_near_field_strict_sequence_checks_linear_lift_like_execution():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    original_wait = remote_node.rospy.wait_for_service
+    original_proxy = remote_node.rospy.ServiceProxy
+    observed = []
+    remote_node.rospy.wait_for_service = (
+        lambda name, timeout=None: observed.append(('wait', name, timeout))
+    )
+
+    def service_proxy(name, service_type):
+        observed.append(('proxy', name, service_type))
+
+        def invoke(request):
+            observed.append(
+                (
+                    'invoke',
+                    list(request.stage_names),
+                    list(request.linear),
+                )
+            )
+            return types.SimpleNamespace(
+                success=True,
+                failure_code='',
+                failed_stage='',
+                joint_path_cost=0.4,
+                joint_max_delta=0.1,
+                message='ordered sequence planned',
+            )
+
+        return invoke
+
+    remote_node.rospy.ServiceProxy = service_proxy
+    try:
+        stages = tuple(
+            (name, remote_node.PoseStamped())
+            for name in ('pregrasp', 'approach', 'grasp', 'lift')
+        )
+        result, metrics = node._strict_moveit_sequence_evaluation(stages)
+    finally:
+        remote_node.rospy.wait_for_service = original_wait
+        remote_node.rospy.ServiceProxy = original_proxy
+        node.shutdown_streaming_worker()
+
+    assert result.reachable is True
+    assert result.collision_free is True
+    assert result.within_joint_limits is True
+    assert result.ik_valid is True
+    assert result.planning_success is True
+    assert result.failure_code == ''
+    assert result.evidence_code == ''
+    assert metrics == {
+        'joint_path_cost': pytest.approx(0.4),
+        'joint_max_delta': pytest.approx(0.1),
+    }
+    invoke = [item for item in observed if item[0] == 'invoke']
+    assert invoke == [
+        (
+            'invoke',
+            ['pregrasp', 'approach', 'grasp', 'lift'],
+            [False, True, True, True],
+        )
+    ]
+
+
+def test_free_space_sequence_resolver_preserves_xyz_and_contact_orientations(
+    monkeypatch,
+):
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    observed = []
+    try:
+        stages = []
+        for index, name in enumerate(
+            ('pregrasp', 'approach', 'grasp', 'lift')
+        ):
+            pose = remote_node.PoseStamped()
+            pose.header.frame_id = 'base_link'
+            pose.pose.position.x = 0.1 * index
+            pose.pose.position.y = -0.2
+            pose.pose.position.z = 0.3
+            pose.pose.orientation.w = 1.0
+            stages.append((name, pose))
+        resolved = [remote_node.deepcopy(pose) for _name, pose in stages]
+        resolved[0].pose.orientation.z = 0.1
+        resolved[0].pose.orientation.w = math.sqrt(0.99)
+        resolved[3].pose.orientation.y = 0.2
+        resolved[3].pose.orientation.w = math.sqrt(0.96)
+
+        def service_proxy(name, service_type):
+            observed.append((name, service_type))
+
+            def invoke(request):
+                observed.append(
+                    (
+                        list(request.stage_names),
+                        list(request.linear),
+                        list(request.resolve_orientation),
+                    )
+                )
+                return types.SimpleNamespace(
+                    success=True,
+                    failure_code='',
+                    failed_stage='',
+                    resolved_targets=resolved,
+                    joint_path_cost=0.8,
+                    joint_max_delta=0.4,
+                    max_position_error=0.0002,
+                    message=(
+                        'policy=deterministic_geodesic_collision_ik '
+                        'candidates_tested=12 '
+                        'max_repeatability_error=0.000000000'
+                    ),
+                )
+
+            return invoke
+
+        monkeypatch.setattr(
+            remote_node.rospy,
+            'wait_for_service',
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            remote_node.rospy,
+            'ServiceProxy',
+            service_proxy,
+        )
+        monkeypatch.setattr(
+            remote_node.rospy,
+            'get_param',
+            lambda _name, default=None: default,
+        )
+
+        sequence, audit, code, reason = node._resolve_free_space_sequence(
+            stages
+        )
+
+        assert sequence is not None, reason
+        assert code == ''
+        assert audit['available'] is True
+        assert audit['policy'] == 'deterministic_geodesic_collision_ik'
+        assert audit['joint_path_cost'] == pytest.approx(0.8)
+        assert audit['joint_max_delta'] == pytest.approx(0.4)
+        assert audit['max_position_error'] == pytest.approx(0.0002)
+        assert sequence.pregrasp.pose.orientation.z == pytest.approx(0.1)
+        assert sequence.lift.pose.orientation.y == pytest.approx(0.2)
+        assert sequence.approach.pose.orientation.w == pytest.approx(1.0)
+        assert sequence.grasp.pose.orientation.w == pytest.approx(1.0)
+        assert observed[-1] == (
+            ['pregrasp', 'approach', 'grasp', 'lift'],
+            [False, True, True, False],
+            [True, False, False, True],
+        )
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_near_field_fallback_rechecks_resolved_geometry_before_strict_plan():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        original = remote_node.Grasp6DSequence(
+            pregrasp=remote_node.PoseStamped(),
+            approach=remote_node.PoseStamped(),
+            grasp=remote_node.PoseStamped(),
+            lift=remote_node.PoseStamped(),
+        )
+        original.grasp.pose.position.x = 0.42
+        resolved = remote_node.deepcopy(original)
+        resolved.pregrasp.pose.orientation.z = 0.1
+        resolved.pregrasp.pose.orientation.w = math.sqrt(0.99)
+        resolved.lift.pose.orientation.y = 0.2
+        resolved.lift.pose.orientation.w = math.sqrt(0.96)
+        prepared = types.SimpleNamespace(
+            ticket=ticket,
+            near_field=True,
+            geometry=object(),
+        )
+        node._stable_variant_runtime = {
+            (3, 1): {
+                'prepared': prepared,
+                'grasp_pose': original.grasp,
+                'sequence': original,
+                'scored_candidate': object(),
+            }
+        }
+        strict_calls = []
+
+        def strict_sequence(stages):
+            strict_calls.append(tuple(stages))
+            if len(strict_calls) == 1:
+                return (
+                    MoveItResult(
+                        reachable=False,
+                        joint_path_cost=0.2,
+                        joint_max_delta_rad=0.1,
+                        reason='original pregrasp unreachable',
+                        failure_code='MOVEIT_UNREACHABLE',
+                    ),
+                    {'joint_path_cost': 0.2, 'joint_max_delta': 0.1},
+                )
+            return (
+                MoveItResult(
+                    reachable=True,
+                    joint_path_cost=0.7,
+                    joint_max_delta_rad=0.3,
+                    reason='resolved sequence reachable',
+                    collision_free=True,
+                    within_joint_limits=True,
+                    ik_valid=True,
+                    planning_success=True,
+                ),
+                {'joint_path_cost': 0.7, 'joint_max_delta': 0.3},
+            )
+
+        passing_gate = CandidateGateResult(
+            ok=True,
+            failure_code='',
+            failure_reason='',
+            required_open_width_m=0.04,
+            center_distance_m=0.0,
+            support_clearance_m=0.003,
+            jaw_alignment=1.0,
+            motion_cost=0.0,
+            geometry_cost=0.0,
+            failed_gate='',
+            passed_gate_count=6,
+        )
+        geometry_calls = []
+        node._strict_moveit_sequence_evaluation = strict_sequence
+        node._resolve_free_space_sequence = lambda _stages: (
+            resolved,
+            {
+                'available': True,
+                'policy': 'deterministic_geodesic_collision_ik',
+            },
+            '',
+            'resolved',
+        )
+        node._resolved_sequence_geometry_gate = (
+            lambda runtime, sequence: (
+                geometry_calls.append((runtime, sequence)) or passing_gate
+            )
+        )
+
+        result = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=3, variant_index=1)
+        )
+
+        assert result.reachable is True
+        assert result.joint_path_cost == pytest.approx(0.7)
+        assert len(strict_calls) == 2
+        assert len(geometry_calls) == 1
+        runtime = node._stable_variant_runtime[(3, 1)]
+        assert runtime['sequence'] is resolved
+        assert runtime['geometry_gate'] is passing_gate
+        assert runtime['orientation_resolution']['available'] is True
+        assert [
+            stage[1]
+            for stage in strict_calls[1]
+        ] == [
+            resolved.pregrasp,
+            resolved.approach,
+            resolved.grasp,
+            resolved.lift,
+        ]
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_near_field_exact_sequence_cache_reuses_only_attested_safe_work():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        node.latest_joint_state = types.SimpleNamespace(
+            name=['Joint%d' % index for index in range(1, 7)],
+            position=[0.1 * index for index in range(6)],
+        )
+        node._candidate_plan_metrics = {}
+        original = remote_node.Grasp6DSequence(
+            pregrasp=remote_node.PoseStamped(),
+            approach=remote_node.PoseStamped(),
+            grasp=remote_node.PoseStamped(),
+            lift=remote_node.PoseStamped(),
+        )
+        original.grasp.pose.position.x = 0.42
+        resolved = remote_node.deepcopy(original)
+        resolved.pregrasp.pose.orientation.z = 0.1
+        resolved.pregrasp.pose.orientation.w = math.sqrt(0.99)
+        resolved.lift.pose.orientation.y = 0.2
+        resolved.lift.pose.orientation.w = math.sqrt(0.96)
+        prepared = types.SimpleNamespace(
+            ticket=ticket,
+            near_field=True,
+            geometry=object(),
+        )
+        node._stable_variant_runtime = {
+            (3, 0): {
+                'prepared': prepared,
+                'grasp_pose': original.grasp,
+                'sequence': remote_node.deepcopy(original),
+                'scored_candidate': object(),
+            },
+            (4, 0): {
+                'prepared': prepared,
+                'grasp_pose': remote_node.deepcopy(original.grasp),
+                'sequence': remote_node.deepcopy(original),
+                'scored_candidate': object(),
+            },
+        }
+        strict_calls = []
+
+        def strict_sequence(stages):
+            strict_calls.append(tuple(stages))
+            is_resolved = (
+                abs(stages[0][1].pose.orientation.z - 0.1) < 1e-12
+            )
+            if not is_resolved:
+                return (
+                    MoveItResult(
+                        reachable=False,
+                        joint_path_cost=0.2,
+                        joint_max_delta_rad=0.1,
+                        reason='original pregrasp unreachable',
+                        failure_code='MOVEIT_UNREACHABLE',
+                    ),
+                    {'joint_path_cost': 0.2, 'joint_max_delta': 0.1},
+                )
+            return (
+                MoveItResult(
+                    reachable=True,
+                    joint_path_cost=0.7,
+                    joint_max_delta_rad=0.3,
+                    reason='resolved sequence reachable',
+                    collision_free=True,
+                    within_joint_limits=True,
+                    ik_valid=True,
+                    planning_success=True,
+                ),
+                {'joint_path_cost': 0.7, 'joint_max_delta': 0.3},
+            )
+
+        resolver_calls = []
+
+        def resolve(stages):
+            resolver_calls.append(tuple(stages))
+            return (
+                remote_node.deepcopy(resolved),
+                {
+                    'available': True,
+                    'policy': 'deterministic_geodesic_collision_ik',
+                    'policy_attested': True,
+                },
+                '',
+                'resolved',
+            )
+
+        passing_gate = CandidateGateResult(
+            ok=True,
+            failure_code='',
+            failure_reason='',
+            required_open_width_m=0.04,
+            center_distance_m=0.0,
+            support_clearance_m=0.003,
+            jaw_alignment=1.0,
+            motion_cost=0.0,
+            geometry_cost=0.0,
+            failed_gate='',
+            passed_gate_count=6,
+        )
+        geometry_calls = []
+        node._strict_moveit_sequence_evaluation = strict_sequence
+        node._resolve_free_space_sequence = resolve
+        node._resolved_sequence_geometry_gate = (
+            lambda runtime, sequence: (
+                geometry_calls.append((runtime, sequence)) or passing_gate
+            )
+        )
+
+        first = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=3, variant_index=0)
+        )
+        second = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=4, variant_index=0)
+        )
+
+        assert first.reachable is True
+        assert second.reachable is True
+        # Original strict failures remain independent stochastic attempts.
+        # Only the deterministic resolver and an already-proven strict
+        # success may be reused at the exact unchanged joint state.
+        assert len(strict_calls) == 3
+        assert len(resolver_calls) == 1
+        assert len(geometry_calls) == 2
+        second_cache = node._stable_variant_runtime[(4, 0)][
+            'request_plan_cache'
+        ]
+        assert second_cache['original_strict_sequence']['hit'] is False
+        assert second_cache[
+            'free_space_orientation_resolution'
+        ]['hit'] is True
+        assert second_cache['resolved_strict_sequence']['hit'] is True
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_near_field_cache_reuses_attested_deterministic_unreachable_result():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        node.latest_joint_state = types.SimpleNamespace(
+            name=['Joint%d' % index for index in range(1, 7)],
+            position=[0.0] * 6,
+        )
+        stages = tuple(
+            (name, remote_node.PoseStamped())
+            for name in ('pregrasp', 'approach', 'grasp', 'lift')
+        )
+        prepared = types.SimpleNamespace(ticket=ticket)
+        calls = []
+
+        def resolve(received):
+            calls.append(tuple(received))
+            return (
+                None,
+                {
+                    'available': False,
+                    'policy': 'deterministic_geodesic_collision_ik',
+                    'policy_attested': True,
+                    'failed_stage': 'approach',
+                },
+                'MOVEIT_UNREACHABLE',
+                'Cartesian planning fraction is below the hard bound',
+            )
+
+        node._resolve_free_space_sequence = resolve
+        first_runtime = {}
+        second_runtime = {}
+
+        first = node._cached_free_space_sequence_resolution(
+            stages,
+            prepared,
+            first_runtime,
+        )
+        second = node._cached_free_space_sequence_resolution(
+            stages,
+            prepared,
+            second_runtime,
+        )
+
+        assert first == second
+        assert len(calls) == 1
+        assert first_runtime['request_plan_cache'][
+            'free_space_orientation_resolution'
+        ]['stored'] is True
+        assert second_runtime['request_plan_cache'][
+            'free_space_orientation_resolution'
+        ]['hit'] is True
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize(
+    'failed_stage',
+    ['pregrasp', 'approach', 'grasp', 'lift'],
+)
+def test_active_near_field_moveit_rejects_unreachable_remaining_stage(
+    failed_stage,
+):
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        node.latest_rich_plan = promotion_plan('reached')
+        node.robot_execution_active = True
+        node.near_field_planning_active = True
+        approach_pose = remote_node.PoseStamped()
+        grasp_pose = remote_node.PoseStamped()
+        node._stable_variant_runtime = {
+            (3, 1): {
+                'prepared': types.SimpleNamespace(ticket=ticket),
+                'grasp_pose': grasp_pose,
+                'sequence': types.SimpleNamespace(
+                    pregrasp=remote_node.PoseStamped(),
+                    approach=approach_pose,
+                    grasp=grasp_pose,
+                    lift=remote_node.PoseStamped(),
+                ),
+            }
+        }
+        checked = []
+
+        def strict_checker(stages):
+            checked.extend(name for name, _pose in stages)
+            return (
+                MoveItResult(
+                    reachable=False,
+                    joint_path_cost=0.2,
+                    joint_max_delta_rad=0.1,
+                    reason='strict sequence %s unreachable: planning failed'
+                    % failed_stage,
+                    failure_code='MOVEIT_UNREACHABLE',
+                ),
+                {'joint_path_cost': 0.2, 'joint_max_delta': 0.1},
+            )
+
+        node._strict_moveit_sequence_evaluation = strict_checker
+
+        result = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=3, variant_index=1)
+        )
+
+        assert result.reachable is False
+        assert result.failure_code == 'MOVEIT_UNREACHABLE'
+        assert result.reason == (
+            'strict sequence %s unreachable: planning failed'
+            % failed_stage
+        )
+        assert tuple(checked) == (
+            'pregrasp',
+            'approach',
+            'grasp',
+            'lift',
+        )
     finally:
         node.shutdown_streaming_worker()
 
@@ -2513,9 +4035,19 @@ def test_top_n_uses_node_strict_moveit_checker_for_only_three_candidates():
                     evaluation_context_revision='ctx-3',
                 )
             )
+            grasp_pose = remote_node.PoseStamped()
             runtime[(track_id, 0)] = {
                 'prepared': types.SimpleNamespace(ticket=ticket),
-                'grasp_pose': object(),
+                'grasp_pose': grasp_pose,
+                'observation_sequence': types.SimpleNamespace(
+                    pregrasp=remote_node.PoseStamped(),
+                ),
+                'sequence': types.SimpleNamespace(
+                    pregrasp=remote_node.PoseStamped(),
+                    approach=remote_node.PoseStamped(),
+                    grasp=grasp_pose,
+                    lift=remote_node.PoseStamped(),
+                ),
             }
         node._stable_variant_runtime = runtime
         calls = []
@@ -3090,8 +4622,92 @@ def prepared_prediction(request_id):
     )
 
 
-def test_third_matching_prediction_enters_current_recheck_and_moveit_top_n(
+def test_near_field_moveit_continuation_gate_reserves_server_lifetime():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.mujoco_server_max_snapshot_age_sec = 120.0
+    node.mujoco_selection_snapshot_reserve_sec = 30.0
+    clock = MutableClock(109.999)
+    node._execution_plan_validity_now_sec = clock
+    prepared = types.SimpleNamespace(
+        ticket=types.SimpleNamespace(snapshot_stamp_sec=20.0)
+    )
+
+    continue_checking = node._near_field_moveit_continuation_gate(
+        prepared
+    )
+
+    assert continue_checking() is True
+    clock.value = 110.0
+    assert continue_checking() is False
+
+
+@pytest.mark.parametrize(
+    ('max_age_sec', 'reserve_sec'),
+    [
+        (float('nan'), 30.0),
+        (120.0, float('nan')),
+        (120.0, 120.0),
+        (20.0, 30.0),
+    ],
+)
+def test_near_field_moveit_continuation_gate_fails_closed_on_bad_contract(
+    max_age_sec,
+    reserve_sec,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.mujoco_server_max_snapshot_age_sec = max_age_sec
+    node.mujoco_selection_snapshot_reserve_sec = reserve_sec
+    node._execution_plan_validity_now_sec = lambda: 25.0
+    prepared = types.SimpleNamespace(
+        ticket=types.SimpleNamespace(snapshot_stamp_sec=20.0)
+    )
+
+    assert (
+        node._near_field_moveit_continuation_gate(prepared)()
+        is False
+    )
+
+
+def test_remote_health_binds_mujoco_server_snapshot_age(monkeypatch):
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.mujoco_server_max_snapshot_age_sec = 30.0
+    node.require_candidate_depth = True
+    node.client = types.SimpleNamespace(
+        server_url='http://127.0.0.1:8000',
+        health=lambda: {
+            'ok': True,
+            'backend': 'graspnet_baseline',
+            'loaded': True,
+            'protocol_version': 3,
+            'candidate_fields': ['depth_m'],
+            'digital_twin': {
+                'max_snapshot_age_sec': 120.0,
+            },
+        },
+    )
+    node.status_pub = RecordingPublisher()
+    monkeypatch.setattr(remote_node.rospy, 'loginfo', lambda *_args: None)
+
+    node._check_remote_health()
+
+    assert node.mujoco_server_max_snapshot_age_sec == 120.0
+    assert node.status_pub.messages == []
+
+
+@pytest.mark.parametrize(
+    'near_field, ready_request_id',
+    [(False, 3), (True, 2)],
+)
+def test_phase_evidence_count_enters_current_recheck_and_moveit_top_n(
     monkeypatch,
+    near_field,
+    ready_request_id,
 ):
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node.target_instance_epoch = 4
@@ -3102,6 +4718,7 @@ def test_third_matching_prediction_enters_current_recheck_and_moveit_top_n(
     node._stream_generation = 1
     node.tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
     node.moveit_top_n = 5
+    node.candidate_max_joint_delta_rad = 1.8
     node._activate_prepared_geometry = lambda _prepared: True
     node._evaluate_local_candidates = lambda prepared: (
         (matching_observation(prepared.ticket.request_id),),
@@ -3114,9 +4731,30 @@ def test_third_matching_prediction_enters_current_recheck_and_moveit_top_n(
     )
     bounded_calls = []
 
-    def fake_bounded(candidates, checker, top_n):
+    def fake_bounded(
+        candidates,
+        checker,
+        top_n,
+        max_joint_delta_rad=0.0,
+        ranking_key=None,
+        exhaustive=False,
+        first_reachable_by_rank=False,
+        continue_checking=None,
+        continuation_stop_reason='',
+    ):
         del checker
-        bounded_calls.append((tuple(candidates), top_n))
+        bounded_calls.append(
+            (
+                tuple(candidates),
+                top_n,
+                max_joint_delta_rad,
+                ranking_key,
+                exhaustive,
+                first_reachable_by_rank,
+                continue_checking,
+                continuation_stop_reason,
+            )
+        )
         return types.SimpleNamespace(
             selected=tuple(candidates)[0],
             checked=tuple(candidates),
@@ -3142,21 +4780,144 @@ def test_third_matching_prediction_enters_current_recheck_and_moveit_top_n(
     published = []
     node._publish_selected_preview = published.append
 
-    first = node._accept_prediction(prepared_prediction(1))
-    second = node._accept_prediction(prepared_prediction(2))
-    third = node._accept_prediction(prepared_prediction(3))
+    predictions = [prepared_prediction(request_id) for request_id in (1, 2, 3)]
+    for prepared in predictions:
+        prepared.near_field = near_field
+    first = node._accept_prediction(predictions[0])
+    second = node._accept_prediction(predictions[1])
+    third = (
+        node._accept_prediction(predictions[2])
+        if ready_request_id == 3
+        else None
+    )
 
     assert first['status'] == 'STABILITY_PENDING'
-    assert second['status'] == 'STABILITY_PENDING'
+    if ready_request_id == 3:
+        assert second['status'] == 'STABILITY_PENDING'
+        assert third['status'] == 'PREVIEW_READY'
+    else:
+        assert second['status'] == 'PREVIEW_READY'
+        assert third is None
     assert published == [bounded_calls[0][0][0]]
-    assert recheck_calls[0][0] == 3
+    assert recheck_calls[0][0] == ready_request_id
     assert len(recheck_calls[0][1]) == 1
     assert bounded_calls[0][1] == 5
-    assert third['status'] == 'PREVIEW_READY'
+    assert bounded_calls[0][2] == 1.8
+    if near_field:
+        assert bounded_calls[0][3] is None
+    else:
+        assert callable(bounded_calls[0][3])
+    assert bounded_calls[0][4] is near_field
+    assert bounded_calls[0][5] is (not near_field)
+    if near_field:
+        assert callable(bounded_calls[0][6])
+    else:
+        assert bounded_calls[0][6] is None
+    assert (
+        bounded_calls[0][7]
+        == 'MUJOCO_SNAPSHOT_RESERVE_REACHED'
+    )
+
+
+def test_snapshot_budget_terminal_status_survives_primary_failure_count(
+    monkeypatch,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.target_instance_epoch = 4
+    node._last_model_choice = 'carton_segment'
+    node._stream_condition = threading.Condition(threading.RLock())
+    node._stream_shutdown = threading.Event()
+    node.streaming_enabled = True
+    node._stream_generation = 1
+    node.tracker = CandidateTracker(
+        TrackingConfig(window_size=5, min_hits=3)
+    )
+    node.moveit_top_n = 5
+    node.candidate_max_joint_delta_rad = 1.8
+    node.mujoco_server_max_snapshot_age_sec = 120.0
+    node.mujoco_selection_snapshot_reserve_sec = 30.0
+    node._execution_plan_validity_now_sec = lambda: 20.0
+    node._activate_prepared_geometry = lambda _prepared: True
+    node._evaluate_local_candidates = lambda prepared: (
+        (matching_observation(prepared.ticket.request_id),),
+        {
+            'input_count': 20,
+            'stage_counts': {
+                'locally_valid': {
+                    'entered': 20,
+                    'passed': 20,
+                    'rejected': 0,
+                }
+            },
+            'rejection_counts': {},
+            'rejection_ratios': {},
+            'primary_failure': None,
+        },
+    )
+    node._recheck_and_score_stable = lambda _prepared, stable: tuple(stable)
+    node._screen_near_field_selection_with_mujoco = (
+        lambda _prepared, selection: (selection, '')
+    )
+    node._publish_selected_preview = lambda _candidate: pytest.fail(
+        'an early-terminated unreachable subset cannot publish a preview'
+    )
+    node._observe_execution_candidate_invalid = lambda **_kwargs: None
+
+    def stopped_selection(*_args, **_kwargs):
+        return types.SimpleNamespace(
+            selected=None,
+            checked=tuple(range(17)),
+            reachable=(),
+            terminated_early=True,
+            termination_reason='MUJOCO_SNAPSHOT_RESERVE_REACHED',
+            funnel=types.SimpleNamespace(
+                to_dict=lambda: {
+                    'input_count': 20,
+                    'stage_counts': {
+                        'moveit_checked': {
+                            'entered': 17,
+                            'passed': 17,
+                            'rejected': 0,
+                        },
+                        'moveit_reachable': {
+                            'entered': 17,
+                            'passed': 0,
+                            'rejected': 17,
+                        },
+                    },
+                    'rejection_counts': {'MOVEIT_UNREACHABLE': 17},
+                    'rejection_ratios': {
+                        'MOVEIT_UNREACHABLE': 17.0 / 20.0
+                    },
+                    'primary_failure': 'MOVEIT_UNREACHABLE',
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        remote_node,
+        'bounded_moveit_select',
+        stopped_selection,
+    )
+
+    first = prepared_prediction(1)
+    second = prepared_prediction(2)
+    first.near_field = True
+    second.near_field = True
+
+    assert node._accept_prediction(first)['status'] == 'STABILITY_PENDING'
+    result = node._accept_prediction(second)
+
+    assert result['status'] == 'MUJOCO_SNAPSHOT_RESERVE_REACHED'
+    assert result['funnel']['primary_failure'] == 'MOVEIT_UNREACHABLE'
+    assert result['funnel']['rejection_counts']['MOVEIT_UNREACHABLE'] == 17
 
 
 def test_current_recheck_binds_conservative_latest_required_width():
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    configure_identity_handeye(node)
     node.target_instance_epoch = 4
     node.grasp_config = {
         'tool_approach_axis': 'z',
@@ -3167,9 +4928,28 @@ def test_current_recheck_binds_conservative_latest_required_width():
     node.gripper_physical_open_width_m = 0.05
     node.target_absolute_sanity_distance_m = 0.15
     node.soft_score_weights = SoftScoreWeights()
-    node.camera_visibility_gate_enabled = False
-    node.camera_visibility_diagnostic_enabled = False
+    node.camera_visibility_gate_enabled = True
+    node.camera_visibility_diagnostic_enabled = True
+    visibility_sequences = []
+
+    def record_visibility(_pose, _target, sequence=None):
+        visibility_sequences.append(sequence)
+        return True, [
+            {
+                'stage': 'pregrasp',
+                'u': 320.0,
+                'v': 240.0,
+                'depth_m': 0.2,
+                'center_cost': 0.0,
+                'margin_x_px': 36,
+                'margin_y_px': 36,
+            }
+        ], 'visible'
+
+    node._candidate_visibility_metrics = record_visibility
     node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.gripper_geometry = tabletop_gripper()
     latest_gate = CandidateGateResult(
         ok=True,
         failure_code='',
@@ -3191,7 +4971,9 @@ def test_current_recheck_binds_conservative_latest_required_width():
         _grasp_pose,
         _sequence,
         geometry,
+        contact_execution_phase=True,
     ):
+        assert contact_execution_phase is False
         evaluated_geometries.append(geometry)
         return latest_gate
 
@@ -3302,6 +5084,7 @@ def test_current_recheck_binds_conservative_latest_required_width():
         snapshot=types.SimpleNamespace(
             object_msg=types.SimpleNamespace(detected=True, label='carton')
         ),
+        near_field=False,
         model_choice='carton_segment',
     )
 
@@ -3319,6 +5102,8 @@ def test_current_recheck_binds_conservative_latest_required_width():
     )
     assert all(item.latest_safety.depth_required is True for item in scored)
     assert all(item.latest_safety.depth_valid is True for item in scored)
+    assert all(item.latest_safety.visibility_required is True for item in scored)
+    assert all(item.latest_safety.visibility_valid is True for item in scored)
     assert all(item.soft_features.model_score == 0.0 for item in scored)
     assert all(item.soft_features.contact_balance > 0.0 for item in scored)
     assert all(
@@ -3329,10 +5114,21 @@ def test_current_recheck_binds_conservative_latest_required_width():
         item.soft_features.orientation_dispersion_rad == pytest.approx(0.03)
         for item in scored
     )
+    observation_sequences = {
+        id(value['observation_sequence'])
+        for value in node._stable_variant_runtime.values()
+    }
+    contact_sequences = {
+        id(value['sequence'])
+        for value in node._stable_variant_runtime.values()
+    }
+    assert {id(value) for value in visibility_sequences} == observation_sequences
+    assert observation_sequences.isdisjoint(contact_sequences)
 
 
 def test_tabletop_stable_recheck_uses_fused_pose_without_depth(monkeypatch):
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    configure_identity_handeye(node)
     node.target_instance_epoch = 4
     node.grasp_config = {
         'tool_approach_axis': 'z',
@@ -3427,9 +5223,346 @@ def test_tabletop_stable_recheck_uses_fused_pose_without_depth(monkeypatch):
     scored = node._recheck_and_score_stable(prepared, (stable,))
 
     assert len(scored) == 2
+    # Both exact parallel-jaw wrist symmetries must retain a safety record that
+    # binds to the materialized pose. The tabletop reprojection must not make
+    # variant 1 apply tool Rz(pi) a second time before MoveIt.
+    selection = bounded_moveit_select(
+        scored,
+        lambda _candidate: MoveItResult(
+            reachable=True,
+            joint_path_cost=1.0,
+            joint_max_delta_rad=1.0,
+            reason='reachable',
+            collision_free=True,
+            within_joint_limits=True,
+            ik_valid=True,
+            planning_success=True,
+        ),
+        top_n=3,
+        max_joint_delta_rad=0.0,
+    )
+    assert len(selection.checked) == 2
+    assert len(selection.reachable) == 2
+    assert 'SAFETY_BINDING_MISMATCH' not in selection.funnel.rejection_counts
     assert all(item.latest_safety.depth_required is False for item in scored)
     assert all(item.latest_safety.depth_valid is None for item in scored)
     assert all(item.stable_candidate.model_width_m is None for item in scored)
+    fusion_audits = [
+        value['fusion_vs_latest_observation']
+        for value in node._stable_variant_runtime.values()
+    ]
+    assert len(fusion_audits) == 2
+    assert all(item['available'] is True for item in fusion_audits)
+    assert all(
+        item['source_is_current_evaluation'] is False
+        for item in fusion_audits
+    )
+    assert all(
+        math.isfinite(item['position_delta_m'])
+        and item['position_delta_m'] >= 0.0
+        for item in fusion_audits
+    )
+    assert all(
+        math.isfinite(item['rotation_delta_deg'])
+        and item['rotation_delta_deg'] >= 0.0
+        for item in fusion_audits
+    )
+
+
+def test_fusion_vs_latest_observation_audit_is_diagnostic_only():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.grasp_config = {
+        'tool_approach_axis': 'z',
+        'pregrasp_distance_m': 0.08,
+        'final_approach_offset_m': 0.015,
+        'lift_height_m': 0.05,
+    }
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.gripper_physical_open_width_m = 0.05
+    node.target_absolute_sanity_distance_m = 0.15
+    node.soft_score_weights = SoftScoreWeights()
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    geometry = tabletop_geometry()
+    ticket = InferenceTicket(
+        request_id=4,
+        generation=1,
+        snapshot_stamp_sec=20.0,
+        target_epoch=4,
+        payload=None,
+        submitted_monotonic_sec=20.0,
+    )
+    prepared = types.SimpleNamespace(
+        ticket=ticket,
+        stamp=remote_node.rospy.Time.from_sec(20.0),
+        geometry=geometry,
+        pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
+        snapshot=types.SimpleNamespace(
+            object_msg=types.SimpleNamespace(detected=True, label='carton')
+        ),
+        near_field=True,
+        model_choice='carton_segment',
+    )
+    normalized = node._normalize_tabletop_candidate(
+        prepared,
+        tabletop_candidates_for(geometry)[0],
+    )
+    latest_transform = np.asarray(normalized.T_base_tool0, dtype=float)
+    latest_quaternion = remote_node.quaternion_from_matrix(latest_transform)
+    offset = np.asarray([0.001, -0.002, 0.003], dtype=float)
+    fused_pose = remote_node.make_pose_stamped(
+        'base_link',
+        latest_transform[:3, 3] + offset,
+        latest_quaternion,
+        stamp=remote_node.rospy.Time.from_sec(20.0),
+    )
+
+    audit = node._fusion_vs_latest_observation_audit(
+        fused_grasp_pose=fused_pose,
+        latest_observation=normalized,
+        evaluation_variant_index=0,
+        source_request_id=4,
+        evaluation_request_id=4,
+    )
+
+    assert audit['available'] is True
+    assert audit['source_is_current_evaluation'] is True
+    assert audit['fused_minus_latest_position_m'] == pytest.approx(offset)
+    assert audit['position_delta_m'] == pytest.approx(np.linalg.norm(offset))
+    assert audit['rotation_delta_deg'] == pytest.approx(0.0)
+
+
+def test_common_soft_features_rewards_real_opening_margin_not_support_floor():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.gripper_physical_open_width_m = 0.050
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    geometry = types.SimpleNamespace(
+        object_points_base=np.asarray(
+            [
+                [-0.010, 0.000, 0.000],
+                [0.010, 0.000, 0.000],
+                [0.000, -0.010, 0.000],
+                [0.000, 0.010, 0.000],
+            ],
+            dtype=float,
+        ),
+        center_base=np.asarray([0.0, 0.0, 0.0], dtype=float),
+        support_normal_base=np.asarray([0.0, 0.0, 1.0], dtype=float),
+    )
+    prepared = types.SimpleNamespace(geometry=geometry)
+
+    def features(required_width):
+        return node._common_soft_features(
+            prepared=prepared,
+            contact_center_base=np.asarray([0.0, 0.0, 0.0], dtype=float),
+            grasp_pose=None,
+            approach_axis_base=np.asarray([0.0, 0.0, -1.0], dtype=float),
+            jaw_axis_base=np.asarray([1.0, 0.0, 0.0], dtype=float),
+            gate=types.SimpleNamespace(
+                support_clearance_m=0.003,
+                required_open_width_m=required_width,
+            ),
+        )
+
+    narrow = features(0.036)
+    near_limit = features(0.046)
+
+    assert narrow.geometry_margin_m == pytest.approx(0.014)
+    assert near_limit.geometry_margin_m == pytest.approx(0.004)
+    assert remote_node.source_neutral_candidate_cost(
+        narrow, SoftScoreWeights()
+    ).total < remote_node.source_neutral_candidate_cost(
+        near_limit, SoftScoreWeights()
+    ).total
+
+
+def test_tabletop_stable_recheck_refreshes_width_from_current_cloud():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    configure_identity_handeye(node)
+    node.target_instance_epoch = 4
+    node.grasp_config = {
+        'tool_approach_axis': 'z',
+        'pregrasp_distance_m': 0.08,
+        'final_approach_offset_m': 0.015,
+        'lift_height_m': 0.05,
+    }
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.gripper_physical_open_width_m = 0.05
+    node.target_absolute_sanity_distance_m = 0.15
+    node.soft_score_weights = SoftScoreWeights()
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    geometry = tabletop_geometry()
+    ticket = InferenceTicket(
+        request_id=4,
+        generation=1,
+        snapshot_stamp_sec=20.0,
+        target_epoch=4,
+        payload=None,
+        submitted_monotonic_sec=20.0,
+    )
+    prepared = types.SimpleNamespace(
+        ticket=ticket,
+        stamp=remote_node.rospy.Time.from_sec(20.0),
+        geometry=geometry,
+        pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
+        snapshot=types.SimpleNamespace(
+            object_msg=types.SimpleNamespace(detected=True, label='carton')
+        ),
+        model_choice='carton_segment',
+    )
+    normalized = node._normalize_tabletop_candidate(
+        prepared,
+        tabletop_candidates_for(geometry)[0],
+    )
+    stale_width = normalized.required_open_width_m + 0.001
+    stable = StableCandidate(
+        track_id=1,
+        hit_count=3,
+        window_count=5,
+        hit_request_ids=(1, 2, 3),
+        request_id=3,
+        snapshot_stamp_sec=19.9,
+        target_epoch=4,
+        target_label='carton',
+        model_choice='carton_segment',
+        center_base_xyz=normalized.contact_center_base,
+        tool0_position_xyz=normalized.T_base_tool0[:3, 3],
+        quaternion_xyzw=remote_node.quaternion_from_matrix(
+            normalized.T_base_tool0
+        ),
+        approach_base_xyz=normalized.insertion_axis_base,
+        required_open_width_m=stale_width,
+        model_width_m=None,
+        model_score=None,
+        geometry_margin_m=0.003,
+        pre_moveit_score=normalized.common_physical_cost,
+        position_dispersion_m=0.002,
+        orientation_dispersion_rad=0.03,
+        payload=normalized,
+        candidate_source='tabletop_geometry',
+        source_lineage=('tabletop_geometry',),
+    )
+
+    scored = node._recheck_and_score_stable(prepared, (stable,))
+
+    assert len(scored) == 2
+    assert all(item.latest_safety.collision_free is True for item in scored)
+    assert all(
+        item.stable_candidate.required_open_width_m == pytest.approx(stale_width)
+        for item in scored
+    )
+    assert all(
+        runtime['geometry_gate'].required_open_width_m == pytest.approx(stale_width)
+        for runtime in node._stable_variant_runtime.values()
+    )
+
+
+def test_tabletop_stable_recheck_reprojects_tracker_drift_to_support_clearance():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    configure_identity_handeye(node)
+    node.target_instance_epoch = 4
+    node.grasp_config = {
+        'tool_approach_axis': 'z',
+        'pregrasp_distance_m': 0.08,
+        'final_approach_offset_m': 0.015,
+        'lift_height_m': 0.05,
+    }
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.gripper_physical_open_width_m = 0.05
+    node.target_absolute_sanity_distance_m = 0.15
+    node.soft_score_weights = SoftScoreWeights()
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    geometry = tabletop_geometry()
+    ticket = InferenceTicket(
+        request_id=4,
+        generation=1,
+        snapshot_stamp_sec=20.0,
+        target_epoch=4,
+        payload=None,
+        submitted_monotonic_sec=20.0,
+    )
+    prepared = types.SimpleNamespace(
+        ticket=ticket,
+        stamp=remote_node.rospy.Time.from_sec(20.0),
+        geometry=geometry,
+        pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
+        snapshot=types.SimpleNamespace(
+            object_msg=types.SimpleNamespace(detected=True, label='carton')
+        ),
+        model_choice='carton_segment',
+    )
+    normalized = node._normalize_tabletop_candidate(
+        prepared,
+        tabletop_candidates_for(geometry)[0],
+    )
+    drifted_tool0 = np.array(
+        normalized.T_base_tool0[:3, 3],
+        dtype=float,
+        copy=True,
+    )
+    drifted_tool0[2] -= 0.00025
+    fused_orientation_with_axis_drift = remote_node.quaternion_multiply(
+        remote_node.quaternion_from_matrix(normalized.T_base_tool0),
+        remote_node.quaternion_from_euler(0.010, 0.0, 0.0),
+    )
+    stable = StableCandidate(
+        track_id=1,
+        hit_count=3,
+        window_count=5,
+        hit_request_ids=(1, 2, 3),
+        request_id=3,
+        snapshot_stamp_sec=19.9,
+        target_epoch=4,
+        target_label='carton',
+        model_choice='carton_segment',
+        center_base_xyz=normalized.contact_center_base,
+        tool0_position_xyz=drifted_tool0,
+        quaternion_xyzw=fused_orientation_with_axis_drift,
+        approach_base_xyz=normalized.insertion_axis_base,
+        required_open_width_m=normalized.required_open_width_m,
+        model_width_m=None,
+        model_score=None,
+        geometry_margin_m=0.003,
+        pre_moveit_score=normalized.common_physical_cost,
+        position_dispersion_m=0.002,
+        orientation_dispersion_rad=0.03,
+        payload=normalized,
+        candidate_source='tabletop_geometry',
+        source_lineage=('tabletop_geometry',),
+    )
+
+    scored = node._recheck_and_score_stable(prepared, (stable,))
+
+    assert len(scored) == 2
+    assert all(item.latest_safety.collision_free is True for item in scored)
+    assert all(
+        item.stable_candidate.tool0_position_xyz[2] > drifted_tool0[2]
+        for item in scored
+    )
+    assert all(
+        runtime['geometry_gate'].support_clearance_m + 1e-9
+        >= node.gripper_geometry.support_clearance_m
+        for runtime in node._stable_variant_runtime.values()
+    )
+    jaw_local, _jaw_index = remote_node.parse_tool_axis('y')
+    assert all(
+        abs(float(np.dot(
+            remote_node.pose_matrix(runtime['grasp_pose'])[:3, :3]
+            @ jaw_local,
+            geometry.support_normal_base,
+        )))
+        <= 1e-10
+        for runtime in node._stable_variant_runtime.values()
+    )
 
 
 def promotion_plan(
@@ -3477,6 +5610,10 @@ def promotion_node(clock=None):
         replan_target_drift_m=0.025,
     )
     node._stream_source_clock = clock or MutableClock(10.0)
+    node._execution_plan_validity_now_sec = lambda: max(
+        20.0,
+        float(node._stream_source_clock()),
+    )
     node.plan_pub = RecordingPublisher()
     node.rich_plan_pub = RecordingPublisher()
     node.preview_plan_pub = RecordingPublisher()
@@ -3484,6 +5621,8 @@ def promotion_node(clock=None):
     node.latest_rich_plan = None
     node.latest_plan = None
     node.latest_preview_rich_plan = None
+    node._latest_preview_proposal = None
+    node._latest_preview_gate_audit_report = None
     node._execution_promotion_audit_ready = lambda _plan: True
     return node
 
@@ -3508,6 +5647,7 @@ def promotion_transaction_node(tmp_path):
     node._geometry_invalidation_generation = 0
     node._last_geometry_invalidation_code = ''
     node.robot_execution_active = False
+    node._execution_plan_validity_now_sec = lambda: 20.0
     node.execution_plan_controller = ExecutionPlanController()
     node.plan_pub = RecordingPublisher()
     node.rich_plan_pub = RecordingPublisher()
@@ -3638,7 +5778,29 @@ def promotion_transaction_node(tmp_path):
         (7, 1): {
             'prepared': types.SimpleNamespace(ticket=ticket),
             'scored_candidate': evaluated,
-            'soft_evidence': {'source': 'latest-rgbd'},
+            'soft_evidence': {
+                'source': 'latest-rgbd',
+                'observation_incidence_angle_deg': 18.0,
+                'observation_projected_side_evidence_m': 0.006,
+                'observation_side_uncertainty_m': 0.003,
+                'observation_side_evidence_deficit_m': 0.0,
+            },
+            'observation_envelope': {
+                'ok': True,
+                'failure_code': '',
+                'failure_reason': '',
+                'minimum_support_clearance_m': 0.015,
+            },
+            'observation_view': {
+                'construction': (
+                    'camera_optical_axis_fixed_camera_target_distance'
+                ),
+                'nominal_camera_target_distance_m': 0.200,
+                'min_camera_target_distance_m': 0.190,
+                'max_camera_target_distance_m': 0.210,
+                'actual_camera_target_distance_m': 0.200,
+                'center_residual_m': 0.0,
+            },
         }
     }
     prepared = types.SimpleNamespace(ticket=ticket)
@@ -3785,10 +5947,219 @@ def test_final_audit_is_bound_before_execution_authority_publish(tmp_path):
         assert preview_report['pipeline_funnel']['stage_counts']['promoted'][
             'passed'
         ] == 1
+        assert preview_report['selected']['observation_envelope']['ok'] is True
+        assert preview_report['selected']['observation_view'][
+            'actual_camera_target_distance_m'
+        ] == pytest.approx(0.200)
+        assert preview_report['selected']['observation_side_evidence'][
+            'observation_side_evidence_deficit_m'
+        ] == pytest.approx(0.0)
+        execution_report = json.loads(audit_path.read_text())
+        assert execution_report['selected']['observation_envelope']['ok'] is True
+        assert execution_report['selected']['observation_view'][
+            'actual_camera_target_distance_m'
+        ] == pytest.approx(0.200)
+        assert execution_report['selected']['observation_side_evidence'][
+            'observation_projected_side_evidence_m'
+        ] == pytest.approx(0.006)
         assert node._latest_promotion_decision.code == 'PROMOTED'
         assert [item.plan_id for item in node.rich_plan_pub.messages] == [
             'plan-A'
         ]
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_execution_audit_excludes_unreachable_checked_without_final_score(
+    tmp_path,
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
+    selected = selection.selected
+    unreachable_moveit = MoveItResult(
+        reachable=False,
+        joint_path_cost=0.0,
+        joint_max_delta_rad=0.0,
+        reason='strict plan failed',
+        collision_free=True,
+        within_joint_limits=True,
+        ik_valid=True,
+        planning_success=False,
+        failure_code='MOVEIT_UNREACHABLE',
+    )
+    rejected_stable = remote_node.replace(
+        selected.stable_candidate,
+        track_id=8,
+    )
+    rejected = remote_node.replace(
+        selected,
+        stable_candidate=rejected_stable,
+        variant_index=0,
+        moveit_result=unreachable_moveit,
+        final_score=None,
+    )
+    selection.checked = (rejected, selected)
+    selection.reachable = (selected,)
+    selection.selected = selected
+    node._stable_variant_runtime[(8, 0)] = {
+        'prepared': types.SimpleNamespace(ticket=prepared.ticket),
+        'scored_candidate': rejected,
+        'soft_evidence': {'source': 'latest-rgbd'},
+    }
+    try:
+        _funnel, decision = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            2,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
+
+        report = json.loads(
+            pathlib.Path(
+                '{}.execution'.format(node.gate_audit_output_path)
+            ).read_text()
+        )
+        assert decision.promote is True
+        assert report['outcome']['valid_plan'] is True
+        assert len(report['stable_evaluations']) == 1
+        assert report['stable_evaluations'][0]['selected'] is True
+        assert report['stable_evaluations'][0]['moveit']['reachable'] is True
+        assert report['stable_evaluations'][0]['final_score'] == 1.0
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_streaming_audit_records_exact_moveit_sequence_and_pre_call_joints(
+    tmp_path,
+):
+    setup = promotion_transaction_node(tmp_path)
+    node, prepared, selection, _proposal, local_funnel, _moveit_funnel = setup
+    prepared.near_field = True
+    replay_points = np.asarray(
+        [
+            [0.10, -0.20, 0.02],
+            [0.12, -0.20, 0.02],
+            [0.10, -0.16, 0.04],
+        ],
+        dtype=float,
+    )
+    prepared.geometry = types.SimpleNamespace(
+        ok=True,
+        failure_code='',
+        failure_reason='',
+        center_base=np.asarray([0.11, -0.18, 0.03], dtype=float),
+        axes_base=np.eye(3, dtype=float),
+        size_xyz_m=np.asarray([0.02, 0.04, 0.02], dtype=float),
+        support_normal_base=np.asarray([0.0, 0.0, 1.0], dtype=float),
+        support_offset_m=0.0,
+        support_inlier_ratio=0.75,
+        object_points_base=replay_points,
+        source_mode='instance_mask',
+    )
+    grasp_pose = remote_node.make_pose_stamped(
+        'base_link',
+        (0.1, -0.2, 0.1),
+        (0.0, 0.0, 0.0, 1.0),
+        stamp=9.8,
+    )
+    sequence = remote_node.make_grasp_sequence_from_grasp_pose(
+        grasp_pose,
+        pregrasp_distance_m=0.08,
+        approach_offset_m=0.03,
+        lift_height_m=0.05,
+        approach_direction_base=(0.0, 0.0, -1.0),
+        pregrasp_direction_base=(0.0, 0.0, -1.0),
+        lift_direction_base=(0.0, 0.0, 1.0),
+    )
+    profile = types.SimpleNamespace(
+        tilt_deg=0.0,
+        pregrasp_distance_m=0.08,
+        approach_offset_m=0.03,
+        lift_height_m=0.05,
+        lateral_sweep_m=0.0,
+        object_height_m=0.02,
+        depth_uncertainty_m=0.004,
+        execution_position_error_m=0.0,
+        contact_overlap_requirement_m=0.002,
+    )
+    joint_state = types.SimpleNamespace(
+        header=types.SimpleNamespace(frame_id='base_link', stamp=9.7),
+        name=['Joint1', 'Joint2'],
+        position=[0.1, -0.2],
+    )
+    runtime = node._stable_variant_runtime[(7, 1)]
+    runtime.update({
+        'sequence': sequence,
+        'adaptive_stage_profile': profile,
+        'moveit_input_joint_state': node._joint_state_audit(joint_state),
+    })
+    try:
+        report, _summary, _selected = (
+            node._build_streaming_gate_audit_report(
+                prepared,
+                selection,
+                local_funnel,
+                'PREVIEW_READY',
+                base_report={'summary': {}, 'rows': []},
+            )
+        )
+        evaluation = report['stable_evaluations'][0]
+        sequence_audit = evaluation['execution_sequence']
+        assert sequence_audit['available'] is True
+        assert sequence_audit['kind'] == 'near_field_contact'
+        assert [
+            stage['stage'] for stage in sequence_audit['stages']
+        ] == ['pregrasp', 'approach', 'grasp', 'lift']
+        assert [
+            stage['position_m'][2] for stage in sequence_audit['stages']
+        ] == pytest.approx([0.18, 0.13, 0.10, 0.15])
+        assert all(
+            stage['quaternion_xyzw']
+            == pytest.approx([0.0, 0.0, 0.0, 1.0])
+            for stage in sequence_audit['stages']
+        )
+        assert evaluation['adaptive_stage_profile'] == {
+            'tilt_deg': 0.0,
+            'pregrasp_distance_m': 0.08,
+            'approach_offset_m': 0.03,
+            'lift_height_m': 0.05,
+            'lateral_sweep_m': 0.0,
+            'object_height_m': 0.02,
+            'depth_uncertainty_m': 0.004,
+            'execution_position_error_m': 0.0,
+            'contact_overlap_requirement_m': 0.002,
+            'pregrasp_direction_mode': 'support_normal',
+            'lateral_sweep_reference': 'final_approach',
+        }
+        joint_audit = evaluation['moveit_input_joint_state']
+        assert joint_audit['available'] is True
+        assert joint_audit['service_start_state_exact'] is False
+        assert joint_audit['stamp_ns'] == 9_700_000_000
+        assert joint_audit['name'] == ['Joint1', 'Joint2']
+        assert joint_audit['position_rad'] == pytest.approx([0.1, -0.2])
+        replay = report['replay_geometry']
+        assert replay['available'] is True
+        assert replay['frame_id'] == 'base_link'
+        assert replay['source_mode'] == 'instance_mask'
+        assert replay['obb_center_base_m'] == pytest.approx(
+            [0.11, -0.18, 0.03]
+        )
+        assert np.asarray(replay['R_base_obb']) == pytest.approx(np.eye(3))
+        assert replay['obb_size_xyz_m'] == pytest.approx([0.02, 0.04, 0.02])
+        assert replay['support_normal_base'] == pytest.approx([0.0, 0.0, 1.0])
+        assert replay['support_offset_m'] == pytest.approx(0.0)
+        assert replay['support_inlier_ratio'] == pytest.approx(0.75)
+        assert replay['object_points_count'] == 3
+        assert np.asarray(replay['object_points_base_m']) == pytest.approx(
+            replay_points
+        )
+        assert replay['object_points_sha256'] == remote_node.array_sha256(
+            replay_points
+        )
     finally:
         node.shutdown_streaming_worker()
 
@@ -4180,7 +6551,9 @@ def test_promotion_rejects_contradictory_structured_moveit_success(
         node.shutdown_streaming_worker()
 
 
-def test_promotion_rejects_duplicate_selected_candidate_lineage(tmp_path):
+def test_promotion_uses_only_selected_lineage_when_duplicate_tracks_exist(
+    tmp_path,
+):
     setup = promotion_transaction_node(tmp_path)
     node, prepared, selection, proposal, local_funnel, moveit_funnel = setup
     selected = selection.selected
@@ -4200,21 +6573,27 @@ def test_promotion_rejects_duplicate_selected_candidate_lineage(tmp_path):
         'soft_evidence': {'source': 'latest-rgbd'},
     }
     try:
-        with pytest.raises(remote_node.CandidateContractError) as exc_info:
-            node._finalize_promotion_transaction(
-                prepared,
-                selection,
-                proposal,
-                local_funnel,
-                moveit_funnel,
-                2,
-                'PREVIEW_READY',
-                {'summary': {}, 'rows': []},
-            )
+        _funnel, decision = node._finalize_promotion_transaction(
+            prepared,
+            selection,
+            proposal,
+            local_funnel,
+            moveit_funnel,
+            2,
+            'PREVIEW_READY',
+            {'summary': {}, 'rows': []},
+        )
 
-        assert exc_info.value.code == remote_node.PLANNING_AUDIT_FAILED
-        assert node.rich_plan_pub.messages == []
-        assert node.execution_plan_controller.execution_plan_id is None
+        report = json.loads(
+            pathlib.Path(
+                '{}.execution'.format(node.gate_audit_output_path)
+            ).read_text()
+        )
+        assert decision.promote is True
+        assert node.execution_plan_controller.execution_plan_id == 'plan-A'
+        assert len(report['stable_evaluations']) == 1
+        assert report['stable_evaluations'][0]['selected'] is True
+        assert report['stable_evaluations'][0]['tracking']['track_id'] == 7
     finally:
         node.shutdown_streaming_worker()
 
@@ -4767,6 +7146,379 @@ def test_replan_service_idle_request_allows_better_preview_after_cooldown():
     assert node.execution_plan_controller.execution_plan_id == 'plan-A'
 
 
+def test_replan_service_promotes_cached_preview_when_streaming_is_stopped():
+    clock = MutableClock(10.0)
+    node = promotion_node(clock=clock)
+    seed_execution(node, promotion_plan('plan-A'), signature='target-A')
+    preview = promotion_plan('plan-B', x=0.15)
+    node.latest_preview_rich_plan = remote_node.deepcopy(preview)
+    node._latest_preview_proposal = {
+        'plan_id': preview.plan_id,
+        'signature': 'target-B',
+        'score': 0.5,
+        'expected_generation': 0,
+    }
+    node.streaming_enabled = False
+    clock.value = 11.1
+
+    response = node.replan_execution_cb(types.SimpleNamespace(trigger=True))
+
+    assert response.success is True
+    assert 'cached Preview' in response.message
+    assert node.latest_rich_plan.plan_id == 'plan-B'
+    assert node.execution_plan_controller.execution_plan_id == 'plan-B'
+    assert node.execution_plan_controller.execution_signature == 'target-B'
+    assert [item.plan_id for item in node.rich_plan_pub.messages] == [
+        'plan-A',
+        'plan-B',
+    ]
+
+
+def test_replan_service_promotes_cached_preview_while_streaming_runs():
+    clock = MutableClock(10.0)
+    node = promotion_node(clock=clock)
+    seed_execution(node, promotion_plan('plan-A'), signature='target-A')
+    preview = promotion_plan('plan-B', x=0.15)
+    node.latest_preview_rich_plan = remote_node.deepcopy(preview)
+    node._latest_preview_proposal = {
+        'plan_id': preview.plan_id,
+        'signature': 'target-B',
+        'score': 0.5,
+        'expected_generation': 0,
+    }
+    node.streaming_enabled = True
+    clock.value = 11.1
+
+    response = node.replan_execution_cb(types.SimpleNamespace(trigger=True))
+
+    assert response.success is True
+    assert 'cached Preview' in response.message
+    assert node.latest_rich_plan.plan_id == 'plan-B'
+    assert node.execution_plan_controller.execution_plan_id == 'plan-B'
+    assert node.execution_plan_controller.execution_signature == 'target-B'
+    assert [item.plan_id for item in node.rich_plan_pub.messages] == [
+        'plan-A',
+        'plan-B',
+    ]
+
+
+def test_cached_replan_and_worker_share_execution_publication_transaction():
+    node = promotion_node()
+    node._execution_publication_lock = threading.RLock()
+    cached_entered = threading.Event()
+    release_cached = threading.Event()
+    worker_entered = threading.Event()
+    cached_results = []
+    worker_results = []
+
+    def cached_transaction():
+        cached_entered.set()
+        assert release_cached.wait(2.0)
+        return PromotionDecision(
+            True,
+            'PROMOTED_CACHED_PREVIEW',
+            'cached authority committed',
+        )
+
+    def worker_transaction(*_args):
+        worker_entered.set()
+        return PromotionDecision(
+            False,
+            'PROMOTION_SUPERSEDED',
+            'older worker transaction superseded',
+        )
+
+    node._try_promote_cached_preview_after_replan_serialized = (
+        cached_transaction
+    )
+    node._publish_execution_with_token_serialized = worker_transaction
+
+    cached_thread = threading.Thread(
+        target=lambda: cached_results.append(
+            node._try_promote_cached_preview_after_replan()
+        )
+    )
+    worker_thread = threading.Thread(
+        target=lambda: worker_results.append(
+            node._publish_execution_with_token(
+                None,
+                '',
+                0.0,
+                0.0,
+                None,
+                None,
+            )
+        )
+    )
+    cached_thread.start()
+    assert cached_entered.wait(1.0)
+    worker_thread.start()
+    try:
+        assert not worker_entered.wait(0.1)
+    finally:
+        release_cached.set()
+        cached_thread.join(2.0)
+        worker_thread.join(2.0)
+
+    assert not cached_thread.is_alive()
+    assert not worker_thread.is_alive()
+    assert cached_results[0].promote is True
+    assert worker_results[0].code == 'PROMOTION_SUPERSEDED'
+    assert worker_entered.is_set()
+
+
+def test_replan_policy_mutation_waits_for_worker_publication_transaction():
+    node = promotion_node()
+    node._execution_publication_lock = threading.RLock()
+    worker_entered = threading.Event()
+    release_worker = threading.Event()
+    replan_entered = threading.Event()
+    worker_results = []
+    replan_results = []
+
+    def worker_transaction(*_args):
+        worker_entered.set()
+        assert release_worker.wait(2.0)
+        return PromotionDecision(
+            True,
+            'PROMOTED',
+            'worker authority committed',
+        )
+
+    def replan_transaction(_req):
+        replan_entered.set()
+        node.execution_plan_controller.request_replan(robot_active=False)
+        return types.SimpleNamespace(success=True, message='requested')
+
+    node._publish_execution_with_token_serialized = worker_transaction
+    node._replan_execution_cb_serialized = replan_transaction
+    worker_thread = threading.Thread(
+        target=lambda: worker_results.append(
+            node._publish_execution_with_token(
+                None,
+                '',
+                0.0,
+                0.0,
+                None,
+                None,
+            )
+        )
+    )
+    replan_thread = threading.Thread(
+        target=lambda: replan_results.append(
+            node.replan_execution_cb(types.SimpleNamespace(trigger=True))
+        )
+    )
+    worker_thread.start()
+    assert worker_entered.wait(1.0)
+    replan_thread.start()
+    try:
+        assert not replan_entered.wait(0.1)
+        assert (
+            node.execution_plan_controller.explicit_replan_requested is False
+        )
+    finally:
+        release_worker.set()
+        worker_thread.join(2.0)
+        replan_thread.join(2.0)
+
+    assert not worker_thread.is_alive()
+    assert not replan_thread.is_alive()
+    assert worker_results[0].promote is True
+    assert replan_results[0].success is True
+    assert replan_entered.is_set()
+    assert node.execution_plan_controller.explicit_replan_requested is True
+
+
+def cached_preview_audit_report(plan_id='plan-B'):
+    selected = {
+        'candidate_source': 'graspnet',
+        'source_lineage': ['graspnet'],
+        'source_index': 4,
+        'candidate_index': 4,
+        'variant_index': 0,
+        'selected': True,
+        'tracking': {
+            'track_id': 7,
+            'hit_count': 3,
+            'window_count': 5,
+            'hit_request_ids': [1, 2, 3],
+        },
+        'lineage_binding': {
+            'source_request_id': 8,
+            'source_snapshot_stamp_sec': 20.0,
+            'source_raw_candidate_index': 4,
+            'source_variant_index': 0,
+            'evaluation_request_id': 9,
+            'evaluation_snapshot_stamp_sec': 20.0,
+            'evaluation_variant_index': 0,
+        },
+        'final_score': 0.5,
+        'moveit': {
+            'reachable': True,
+            'collision_free': True,
+            'within_joint_limits': True,
+            'ik_valid': True,
+            'planning_success': True,
+            'failure_code': '',
+            'evidence_code': '',
+            'joint_path_cost': 0.1,
+            'joint_max_delta_rad': 0.2,
+        },
+    }
+    return {
+        'mode': 'continuous_preview',
+        'request_id': 9,
+        'generation': 1,
+        'target_epoch': 2,
+        'snapshot_stamp_sec': 20.0,
+        'plan_id': str(plan_id),
+        'pipeline_funnel': {'stage_counts': {}},
+        'summary': {},
+        'rows': [remote_node.deepcopy(selected)],
+        'stable_evaluations': [
+            remote_node.deepcopy(selected),
+            {'candidate_source': 'graspnet', 'source_index': 9},
+        ],
+        'lineage': [remote_node.deepcopy(selected)],
+        'selected': remote_node.deepcopy(selected),
+        'outcome': {'valid_plan': False, 'preview_valid': True},
+    }
+
+
+def test_cached_preview_promotion_writes_execution_audit(tmp_path):
+    node = promotion_node()
+    node.gate_audit_enabled = True
+    node.gate_audit_output_path = str(tmp_path / 'preview.json')
+    node.mujoco_audit_output_path = str(tmp_path / 'mujoco.json')
+    node.gate_audit_pub = RecordingPublisher()
+    node._execution_promotion_audit_ready = (
+        remote_node.RemoteGrasp6DNode._execution_promotion_audit_ready
+        .__get__(node, remote_node.RemoteGrasp6DNode)
+    )
+    node._active_gate_audit_report = cached_preview_audit_report('plan-B')
+    decision = PromotionDecision(
+        True,
+        'PROMOTE_REPLAN',
+        'explicit execution replan requested',
+    )
+
+    ready, reason = node._write_cached_preview_execution_audit(
+        promotion_plan('plan-B'),
+        decision,
+    )
+
+    execution_report = json.loads(
+        pathlib.Path(
+            '{}.execution'.format(node.gate_audit_output_path)
+        ).read_text()
+    )
+    assert ready is True
+    assert reason == ''
+    assert execution_report['mode'] == 'continuous_execution'
+    assert execution_report['plan_id'] == 'plan-B'
+    assert execution_report['outcome']['valid_plan'] is True
+    assert execution_report['promotion']['code'] == 'PROMOTE_REPLAN'
+    assert execution_report['stable_evaluations'] == [
+        execution_report['selected']
+    ]
+
+
+def test_cached_preview_promotion_uses_bound_audit_after_active_audit_overwrite(
+    tmp_path,
+):
+    node = promotion_node()
+    node.gate_audit_enabled = True
+    node.gate_audit_output_path = str(tmp_path / 'preview.json')
+    node.mujoco_audit_output_path = str(tmp_path / 'mujoco.json')
+    node.gate_audit_pub = RecordingPublisher()
+    node._execution_promotion_audit_ready = (
+        remote_node.RemoteGrasp6DNode._execution_promotion_audit_ready
+        .__get__(node, remote_node.RemoteGrasp6DNode)
+    )
+    node._latest_preview_gate_audit_report = (
+        cached_preview_audit_report('plan-B')
+    )
+    node._active_gate_audit_report = {
+        'mode': 'continuous_preview',
+        'request_id': 10,
+        'generation': 1,
+        'target_epoch': 2,
+        'snapshot_stamp_sec': 21.0,
+        'plan_id': '',
+        'summary': {},
+        'rows': [],
+        'stable_evaluations': [],
+        'lineage': [],
+        'selected': None,
+        'outcome': {'valid_plan': False, 'preview_valid': False},
+    }
+    decision = PromotionDecision(
+        True,
+        'PROMOTE_REPLAN',
+        'explicit execution replan requested',
+    )
+
+    ready, reason = node._write_cached_preview_execution_audit(
+        promotion_plan('plan-B'),
+        decision,
+    )
+
+    assert ready is True, reason
+    assert reason == ''
+    execution_report = json.loads(
+        pathlib.Path(
+            '{}.execution'.format(node.gate_audit_output_path)
+        ).read_text()
+    )
+    assert execution_report['plan_id'] == 'plan-B'
+
+
+def test_expired_execution_plan_allows_fresh_preview_promotion():
+    clock = MutableClock(50.0)
+    node = promotion_node(clock=clock)
+    node.execution_plan_validity_sec = 30.0
+    expired = promotion_plan('plan-A')
+    expired.header.stamp = 10.0
+    seed_execution(node, expired)
+
+    decision = node._maybe_promote_preview(
+        promotion_plan('plan-B', x=0.13),
+        signature='candidate-B',
+        score=0.5,
+    )
+
+    assert decision.promote is True
+    assert decision.code == 'PROMOTE_INITIAL'
+    assert node.execution_plan_controller.execution_plan_id is None
+    assert node.latest_rich_plan is None
+    assert node.latest_plan is None
+    assert node._latest_promotion_decision.code == 'EXECUTION_EXPIRED'
+
+
+def test_epoch_stamped_execution_plan_expires_against_ros_time_not_monotonic():
+    clock = MutableClock(50.0)
+    node = promotion_node(clock=clock)
+    node.execution_plan_validity_sec = 30.0
+    node._execution_plan_validity_now_sec = lambda: 1784955350.0
+    expired = promotion_plan('plan-A')
+    expired.header.stamp = 1784955000.0
+    seed_execution(node, expired)
+
+    decision = node._maybe_promote_preview(
+        promotion_plan('plan-B', x=0.13),
+        signature='candidate-B',
+        score=0.5,
+    )
+
+    assert decision.promote is True
+    assert decision.code == 'PROMOTE_INITIAL'
+    assert node.execution_plan_controller.execution_plan_id is None
+    assert node.latest_rich_plan is None
+    assert node.latest_plan is None
+    assert node._latest_promotion_decision.code == 'EXECUTION_EXPIRED'
+
+
 def test_preview_failure_only_updates_invalid_streak_not_execution_topics():
     node = promotion_node()
     seed_execution(node, promotion_plan('plan-A'))
@@ -4967,3 +7719,342 @@ def test_request_local_promotion_count_ignores_unrelated_decision():
         assert node._request_promotion_count(ticket) == 1
     finally:
         node.shutdown_streaming_worker()
+
+
+def test_far_field_rank_resolves_live_side_uncertainty_before_distance():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    candidates = [
+        types.SimpleNamespace(
+            track_id=1,
+            variant_index=0,
+            pre_moveit_score=0.1,
+        ),
+        types.SimpleNamespace(
+            track_id=2,
+            variant_index=0,
+            pre_moveit_score=0.2,
+        ),
+        types.SimpleNamespace(
+            track_id=3,
+            variant_index=0,
+            pre_moveit_score=0.3,
+        ),
+    ]
+    node._stable_variant_runtime = {
+        (1, 0): {
+            'soft_evidence': {
+                'observation_side_evidence_deficit_m': 0.001,
+                'observation_projected_side_evidence_m': 0.002,
+                'observation_translation_delta_m': 0.010,
+            }
+        },
+        (2, 0): {
+            'soft_evidence': {
+                'observation_side_evidence_deficit_m': 0.0,
+                'observation_projected_side_evidence_m': 0.005,
+                'observation_translation_delta_m': 0.040,
+            }
+        },
+        (3, 0): {
+            'soft_evidence': {
+                'observation_side_evidence_deficit_m': 0.0,
+                'observation_projected_side_evidence_m': 0.004,
+                'observation_translation_delta_m': 0.020,
+            }
+        },
+    }
+
+    ranked = sorted(
+        candidates,
+        key=node._far_field_observation_moveit_rank_key,
+    )
+
+    assert [candidate.track_id for candidate in ranked] == [3, 2, 1]
+    assert node._select_far_field_observation(candidates).track_id == 3
+
+
+def test_far_field_rank_never_prefers_missing_side_evidence():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    evidenced = types.SimpleNamespace(
+        track_id=1,
+        variant_index=0,
+        pre_moveit_score=100.0,
+    )
+    missing = types.SimpleNamespace(
+        track_id=2,
+        variant_index=0,
+        pre_moveit_score=0.0,
+    )
+    node._stable_variant_runtime = {
+        (1, 0): {
+            'soft_evidence': {
+                'observation_side_evidence_deficit_m': 0.0,
+                'observation_projected_side_evidence_m': 0.003,
+                'observation_translation_delta_m': 0.100,
+            }
+        },
+        (2, 0): {'soft_evidence': {}},
+    }
+
+    ranked = sorted(
+        [missing, evidenced],
+        key=node._far_field_observation_moveit_rank_key,
+    )
+
+    assert [candidate.track_id for candidate in ranked] == [1, 2]
+
+
+def test_observation_side_evidence_uses_live_height_and_uncertainty():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    configure_identity_handeye(node)
+    geometry = tabletop_geometry(size_xyz=(0.051, 0.035, 0.011))
+    geometry.support_normal_base.setflags(write=False)
+    stage_profile = types.SimpleNamespace(depth_uncertainty_m=0.003)
+
+    def observation_at_camera_incidence(incidence_deg):
+        rotation = np.eye(4, dtype=float)
+        rotation[:3, :3] = remote_node.quaternion_matrix(
+            remote_node.quaternion_from_euler(
+                0.0,
+                math.radians(90.0 - incidence_deg),
+                0.0,
+            )
+        )[:3, :3]
+        return remote_node.make_pose_stamped(
+            'base_link',
+            np.array([0.0, 0.0, 0.2]),
+            remote_node.quaternion_from_matrix(rotation),
+            stamp=remote_node.rospy.Time.from_sec(20.0),
+        )
+
+    top_down = node._observation_side_evidence(
+        geometry,
+        observation_at_camera_incidence(0.0),
+        stage_profile,
+    )
+    tilted = node._observation_side_evidence(
+        geometry,
+        observation_at_camera_incidence(30.0),
+        stage_profile,
+    )
+
+    assert top_down['observation_incidence_angle_deg'] == pytest.approx(0.0)
+    assert top_down['observation_object_height_m'] == pytest.approx(0.011)
+    assert top_down['observation_projected_side_evidence_m'] == pytest.approx(
+        0.0
+    )
+    assert top_down['observation_side_evidence_deficit_m'] == pytest.approx(
+        0.003
+    )
+    assert tilted['observation_incidence_angle_deg'] == pytest.approx(30.0)
+    assert tilted['observation_projected_side_evidence_m'] == pytest.approx(
+        0.011 * math.sin(math.radians(30.0))
+    )
+    assert tilted['observation_side_evidence_deficit_m'] == pytest.approx(0.0)
+
+
+def _mujoco_selection_candidate(track_id, final_score):
+    return types.SimpleNamespace(
+        track_id=int(track_id),
+        variant_index=0,
+        final_score=float(final_score),
+        evaluation_snapshot_stamp_sec=20.0,
+        stable_candidate=types.SimpleNamespace(
+            candidate_source='tabletop_geometry',
+        ),
+    )
+
+
+def _mujoco_selection_node(candidates):
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.mujoco_config = {
+        'enabled': True,
+        'execution_gate_enabled': True,
+        'server_url': 'http://127.0.0.1:8000',
+        'timeout_sec': 20.0,
+        'min_score': 80,
+    }
+    node.mujoco_selection_gate_enabled = True
+    node.mujoco_selection_max_candidates = 10
+    node.mujoco_selection_time_budget_sec = 80.0
+    node.latest_joint_state = types.SimpleNamespace(
+        name=['Joint%d' % index for index in range(1, 7)],
+        position=[0.0] * 6,
+    )
+    node._stable_variant_runtime = {
+        (candidate.track_id, candidate.variant_index): {}
+        for candidate in candidates
+    }
+    node._require_stream_ticket_current = lambda _ticket: None
+    node._build_selected_preview_bundle = lambda candidate: {
+        'rich_plan': types.SimpleNamespace(
+            plan_id='plan-%d' % candidate.track_id,
+            candidate_source='tabletop_geometry',
+            candidate_source_lineage=['tabletop_geometry'],
+        )
+    }
+    node._mujoco_client_factory = lambda _url, timeout_sec: types.SimpleNamespace(
+        simulate_grasp=lambda payload: {'plan_id': payload['plan_id']}
+    )
+    return node
+
+
+def test_near_field_mujoco_selection_tries_next_reachable_candidate(
+    monkeypatch,
+):
+    first = _mujoco_selection_candidate(1, 0.1)
+    second = _mujoco_selection_candidate(2, 0.2)
+    node = _mujoco_selection_node((first, second))
+    monkeypatch.setattr(
+        remote_node,
+        'build_mujoco_payload',
+        lambda plan, _names, _positions, _cfg: {
+            'plan_id': plan.plan_id,
+        },
+    )
+
+    def validate(_response, plan_id, _score, **_kwargs):
+        if plan_id == 'plan-1':
+            return types.SimpleNamespace(
+                ok=False,
+                code='MUJOCO_CONTACT_FAILED',
+                reason='contact lost during prescribed lift',
+                score=55.0,
+            )
+        return types.SimpleNamespace(
+            ok=True,
+            code='',
+            reason='',
+            score=91.0,
+        )
+
+    monkeypatch.setattr(
+        remote_node,
+        'validate_mujoco_gate_response',
+        validate,
+    )
+    funnel = CandidateStageFunnel(2)
+    selection = BoundedMoveItSelection(
+        selected=first,
+        checked=(first, second),
+        reachable=(second, first),
+        funnel=funnel,
+        configured_top_n=2,
+    )
+    prepared = types.SimpleNamespace(
+        near_field=True,
+        ticket=object(),
+    )
+
+    screened, status = node._screen_near_field_selection_with_mujoco(
+        prepared,
+        selection,
+    )
+
+    assert screened.selected is second
+    assert status == 'MUJOCO_SELECTION_PASSED'
+    assert node._stable_variant_runtime[(1, 0)]['mujoco_selection'][
+        'code'
+    ] == 'MUJOCO_CONTACT_FAILED'
+    assert node._stable_variant_runtime[(2, 0)]['mujoco_selection'][
+        'passed'
+    ] is True
+    stage = funnel.to_dict()['stage_counts']['mujoco_screened']
+    assert stage == {'entered': 2, 'passed': 1, 'rejected': 1}
+
+
+def test_near_field_mujoco_selection_stops_on_authority_failure(monkeypatch):
+    first = _mujoco_selection_candidate(1, 0.1)
+    second = _mujoco_selection_candidate(2, 0.2)
+    node = _mujoco_selection_node((first, second))
+    monkeypatch.setattr(
+        remote_node,
+        'build_mujoco_payload',
+        lambda plan, _names, _positions, _cfg: {
+            'plan_id': plan.plan_id,
+        },
+    )
+    monkeypatch.setattr(
+        remote_node,
+        'validate_mujoco_gate_response',
+        lambda *_args, **_kwargs: types.SimpleNamespace(
+            ok=False,
+            code='PLAN_ID_MISMATCH',
+            reason='response does not bind the requested plan',
+            score=0.0,
+        ),
+    )
+    funnel = CandidateStageFunnel(2)
+    selection = BoundedMoveItSelection(
+        selected=first,
+        checked=(first, second),
+        reachable=(first, second),
+        funnel=funnel,
+        configured_top_n=2,
+    )
+
+    screened, status = node._screen_near_field_selection_with_mujoco(
+        types.SimpleNamespace(near_field=True, ticket=object()),
+        selection,
+    )
+
+    assert screened.selected is None
+    assert status == 'PLAN_ID_MISMATCH'
+    assert 'mujoco_selection' in node._stable_variant_runtime[(1, 0)]
+    assert 'mujoco_selection' not in node._stable_variant_runtime[(2, 0)]
+    stage = funnel.to_dict()['stage_counts']['mujoco_screened']
+    assert stage == {'entered': 1, 'passed': 0, 'rejected': 1}
+
+
+def test_mujoco_response_audit_preserves_strict_contact_loss_evidence():
+    response = {
+        'plan_id': 'plan-7',
+        'failure_code': 'MUJOCO_CONTACT_FAILED',
+        'failure_reason': 'contact lost during prescribed lift',
+        'score': 54.0,
+        'simulation_ok': False,
+        'ik_success': True,
+        'collision_free': True,
+        'contact_success': False,
+        'lift_success': False,
+        'used_joint_state_source': 'request.current_joint_state',
+        'diagnosis': [
+            'initial bilateral contact established',
+            'right contact lost at lift alpha 0.083',
+        ],
+        'ik_results': [
+            {'stage': 'pregrasp', 'success': True},
+            {'stage': 'lift', 'success': True},
+        ],
+        'lift_evidence': {
+            'samples': [
+                {
+                    'alpha': 0.083,
+                    'left_contact': True,
+                    'right_contact': False,
+                    'object_lift_m': 0.000055,
+                }
+            ],
+            'maximum_object_lift_m': 0.000055,
+        },
+    }
+
+    audit = remote_node.RemoteGrasp6DNode._mujoco_response_audit(response)
+    response['lift_evidence']['samples'][0]['right_contact'] = True
+
+    assert audit['strict_json'] is True
+    assert len(audit['response_sha256']) == 64
+    assert audit['diagnosis'][1].endswith('lift alpha 0.083')
+    assert audit['ik_results'][1] == {'stage': 'lift', 'success': True}
+    assert audit['lift_evidence']['samples'][0]['right_contact'] is False
+    assert audit['used_joint_state_source'] == (
+        'request.current_joint_state'
+    )

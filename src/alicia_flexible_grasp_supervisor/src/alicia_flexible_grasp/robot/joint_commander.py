@@ -8,6 +8,7 @@ class JointCommander:
         self._name_to_index = {name: index for index, name in enumerate(self.joint_names)}
         self.pub = rospy.Publisher(topic, JointState, queue_size=10)
         self.last_positions = [0.0] * len(self.joint_names)
+        self.last_state_time_sec = None
         self.state_sub = None
         if state_topic:
             try:
@@ -26,6 +27,10 @@ class JointCommander:
             changed = True
         if changed:
             self.last_positions = positions
+            try:
+                self.last_state_time_sec = float(rospy.get_time())
+            except Exception:
+                self.last_state_time_sec = None
 
     def publish(self, positions):
         if len(positions) < len(self.joint_names):

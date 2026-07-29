@@ -1,0 +1,13 @@
+geometry_msgs/PoseStamped[] targets
+string[] stage_names
+bool[] linear
+bool[] resolve_orientation
+---
+bool success
+string failure_code
+string failed_stage
+geometry_msgs/PoseStamped[] resolved_targets
+float64 joint_path_cost
+float64 joint_max_delta
+float64 max_position_error
+string message

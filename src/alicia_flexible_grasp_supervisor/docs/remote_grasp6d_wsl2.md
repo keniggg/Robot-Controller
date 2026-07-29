@@ -548,6 +548,82 @@ score >= /mujoco_digital_twin/min_score
 `MUJOCO_CONTACT_FAILED`、`MUJOCO_LIFT_FAILED`、`MUJOCO_SCORE_BELOW_THRESHOLD` 和
 `MUJOCO_INTERNAL_ERROR`。
 
+## 9.1 RealSense 几何回归与 Preview-only 验收
+
+只在纸箱已分割且保持静止、RealSense/规划节点和组合 WSL v3 服务已经由现场操作者
+启动后采集一次真实 fixture。采集工具只订阅 depth、mask、`ObjectGeometry`，并且只调用
+`/grasp_6d/request_plan`；它无论成功或失败都会用 `trigger:false` 清理持续 Preview。
+不得用手工点、规则盒点云或其他合成点替代真实采集：
+
+```bash
+source devel/setup.bash
+python3 src/alicia_flexible_grasp_supervisor/tools/benchmark_tabletop_geometry.py \
+  --dump-tabletop-fixture \
+  src/alicia_flexible_grasp_supervisor/tests/fixtures/carton_tabletop_cloud.json
+```
+
+成功输出必须为 `captured tabletop fixture points=N`，其中 `120 <= N <= 512`。
+fixture 的 `source` 必须是 `realsense`；`depth_stamp_ns` 必须与 schema-v3 规划审计的
+snapshot 完全一致，`audit_sha256` 必须是该审计文件精确字节的 SHA-256，且审计至少有
+一行 `candidate_source=tabletop_geometry`、`analytical_result.ok=true`。随后运行不可跳过的
+回归和 CPU 基准：
+
+```bash
+source devel/setup.bash
+python3 -m pytest \
+  src/alicia_flexible_grasp_supervisor/tests/test_tabletop_geometry_realsense_fixture.py -q
+python3 src/alicia_flexible_grasp_supervisor/tools/benchmark_tabletop_geometry.py \
+  --fixture src/alicia_flexible_grasp_supervisor/tests/fixtures/carton_tabletop_cloud.json \
+  --iterations 100 --max-median-ms 30
+```
+
+基准在 10 次 warmup 后测量 100 次，记录输出的 median 和 p95；ROS 主机上 median
+超过 30 ms 即失败。fixture 回归必须显示 production generator 成功、候选不超过 8 个、
+`required_open_width_m < 0.050`、插入轴与支撑法向点积小于 `-0.99`，且 jaw 轴点积
+绝对值小于 `0.01`。
+
+Preview-only 现场验收只启动持续候选，不授予任何物理执行命令：
+
+```bash
+source devel/setup.bash
+preview_cleanup() {
+  rosservice call /grasp_6d/request_plan "trigger: false" >/dev/null
+}
+trap preview_cleanup EXIT INT TERM
+rosservice call /grasp_6d/request_plan "trigger: true"
+preview_status=0
+timeout 30s rostopic echo /grasp_6d/pipeline_metrics || preview_status=$?
+if [ "$preview_status" -ne 0 ] && [ "$preview_status" -ne 124 ]; then
+  exit "$preview_status"
+fi
+rosservice call /grasp_6d/request_plan "trigger: false"
+trap - EXIT INT TERM
+```
+
+保存三次稳定 observation 和同批规划审计。每次都要记录
+`pipeline_funnel.source_counts.graspnet` 与 `.tabletop_geometry` 的 `generated`、
+`locally_valid`、`stable`、`preview`、`promoted`，以及 `rejection_counts`、
+`rejection_ratios` 和非空的失败时 `primary_failure`。验收行必须同时满足：
+
+```text
+candidate_source=tabletop_geometry
+required_open_width_m < 0.050
+insertion_dot_support_normal < -0.99
+abs(jaw_dot_support_normal) < 0.01
+analytical_result.ok = true
+strict_reachability.ok = true
+MuJoCo result = accepted
+```
+
+常见 source-local 失败码为 `TARGET_CLOUD_INVALID`、`SUPPORT_PLANE_INVALID`、
+`TABLETOP_GEOMETRY_INPUT_INVALID`、`NO_FIT_DIRECTION`、`CONTACT_SUPPORT_INVALID`、
+`TABLETOP_APPROACH_INVALID` 和 `TOOL0_GEOMETRY_INVALID`；它们必须保留在 source-aware
+漏斗和审计中，不能改写成 GraspNet 血缘或通过放宽物理门消除。
+
+以上 fixture、基准、Preview、严格可达性和 MuJoCo accepted 都只是证据，不是动作授权。
+物理执行仍必须由操作者在单独步骤显式发起；本验收不得调用 `/grasp/start`、
+`/grasp/stop`、torque、joint、Cartesian 或任何 execution/motion service。
+
 ## 10. 安全恢复
 
 WSL 服务异常时：

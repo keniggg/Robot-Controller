@@ -81,6 +81,32 @@ def test_moveit_result_exposes_structured_strict_hard_states():
     } <= result_fields
 
 
+def test_visibility_gate_is_explicit_phase_bound_hard_evidence():
+    required_missing = mandatory_safety_gate(
+        valid_safety_input(
+            visibility_required=True,
+            visibility_valid=False,
+        )
+    )
+    required_visible = mandatory_safety_gate(
+        valid_safety_input(
+            visibility_required=True,
+            visibility_valid=True,
+        )
+    )
+    diagnostic_only = mandatory_safety_gate(
+        valid_safety_input(
+            visibility_required=False,
+            visibility_valid=False,
+        )
+    )
+
+    assert required_missing.ok is False
+    assert required_missing.code == 'CAMERA_TARGET_OUT_OF_VIEW'
+    assert required_visible.ok is True
+    assert diagnostic_only.ok is True
+
+
 def valid_safety_input(**overrides):
     values = {
         'depth_valid': True,
@@ -650,6 +676,23 @@ def test_better_bilateral_contact_balance_improves_common_physical_cost():
     )
 
 
+def test_center_normal_final_approach_outranks_lateral_sweep():
+    center_normal = soft_features(final_approach_lateral_m=0.0)
+    lateral = replace(center_normal, final_approach_lateral_m=0.006)
+
+    center_normal_cost = source_neutral_candidate_cost(
+        center_normal,
+        weights(),
+    )
+    lateral_cost = source_neutral_candidate_cost(lateral, weights())
+
+    assert center_normal_cost.total < lateral_cost.total
+    assert center_normal_cost.components['final_approach_lateral'] == 0.0
+    assert lateral_cost.components['final_approach_lateral'] == pytest.approx(
+        0.6
+    )
+
+
 @pytest.mark.parametrize('invalid', [-0.001, 1.001, float('nan')])
 def test_contact_balance_must_be_a_finite_unit_interval_feature(invalid):
     with pytest.raises(ValueError, match='contact_balance'):
@@ -688,6 +731,7 @@ def test_soft_penalties_saturate_for_large_finite_inputs():
         joint_max_delta_rad=1e300,
         position_dispersion_m=1e300,
         orientation_dispersion_rad=1e300,
+        final_approach_lateral_m=1e300,
     )
 
     score = soft_candidate_cost(huge, weights())
@@ -761,6 +805,219 @@ def test_moveit_checks_only_top_n_stable_candidates():
     assert result.funnel.remaining_by_stage['moveit_reachable'] == 1
 
 
+def test_exhaustive_moveit_checks_hard_safe_tail_beyond_top_n():
+    calls = []
+
+    def check(candidate):
+        calls.append(candidate.track_id)
+        if candidate.track_id == 29:
+            return reachable_moveit_result(0.2, 0.1)
+        return failed_moveit_result('ik_valid')
+
+    candidates = [
+        scored_candidate(track_id=i, score=float(i)) for i in range(30)
+    ]
+
+    result = bounded_moveit_select(
+        candidates,
+        check,
+        top_n=24,
+        exhaustive=True,
+    )
+
+    assert calls == list(range(30))
+    assert result.selected.track_id == 29
+    assert result.configured_top_n == 24
+    assert result.funnel.to_dict()['stage_counts']['moveit_shortlist'] == {
+        'entered': 30,
+        'passed': 30,
+        'rejected': 0,
+    }
+    assert result.funnel.remaining_by_stage['moveit_reachable'] == 1
+
+
+def test_exhaustive_moveit_continuation_gate_preserves_checked_results():
+    calls = []
+    decisions = iter((True, True, False))
+
+    def check(candidate):
+        calls.append(candidate.track_id)
+        if candidate.track_id == 1:
+            return reachable_moveit_result(0.2, 0.1)
+        return failed_moveit_result('ik_valid')
+
+    result = bounded_moveit_select(
+        [
+            scored_candidate(track_id=i, score=float(i))
+            for i in range(5)
+        ],
+        check,
+        top_n=3,
+        exhaustive=True,
+        continue_checking=lambda: next(decisions),
+        continuation_stop_reason='MUJOCO_SNAPSHOT_RESERVE_REACHED',
+    )
+
+    assert calls == [0, 1]
+    assert result.selected.track_id == 1
+    assert tuple(item.track_id for item in result.checked) == (0, 1)
+    assert tuple(item.track_id for item in result.reachable) == (1,)
+    assert result.shortlist_count == 5
+    assert result.terminated_early is True
+    assert (
+        result.termination_reason
+        == 'MUJOCO_SNAPSHOT_RESERVE_REACHED'
+    )
+    assert result.funnel.rejection_counts == {
+        'MOVEIT_IK_FAILED': 1,
+    }
+
+
+def test_moveit_continuation_gate_can_stop_before_first_check():
+    calls = []
+    result = bounded_moveit_select(
+        [scored_candidate(track_id=i, score=float(i)) for i in range(4)],
+        lambda candidate: calls.append(candidate.track_id),
+        top_n=4,
+        exhaustive=True,
+        continue_checking=lambda: False,
+        continuation_stop_reason='MUJOCO_SNAPSHOT_RESERVE_REACHED',
+    )
+
+    assert calls == []
+    assert result.selected is None
+    assert result.checked == ()
+    assert result.reachable == ()
+    assert result.shortlist_count == 4
+    assert result.terminated_early is True
+    assert (
+        result.termination_reason
+        == 'MUJOCO_SNAPSHOT_RESERVE_REACHED'
+    )
+    assert result.funnel.rejection_counts == {}
+
+
+@pytest.mark.parametrize(
+    ('kwargs', 'error'),
+    [
+        ({'continue_checking': True}, TypeError),
+        (
+            {
+                'continue_checking': lambda: False,
+                'continuation_stop_reason': '',
+            },
+            ValueError,
+        ),
+        ({'continuation_stop_reason': None}, TypeError),
+        ({'continue_checking': lambda: 1}, TypeError),
+    ],
+)
+def test_moveit_continuation_gate_requires_strict_contract(kwargs, error):
+    with pytest.raises(error):
+        bounded_moveit_select(
+            [scored_candidate(0, 0.0)],
+            lambda _candidate: reachable_moveit_result(),
+            **kwargs
+        )
+
+
+def test_exhaustive_moveit_flag_requires_strict_bool():
+    with pytest.raises(TypeError, match='exhaustive'):
+        bounded_moveit_select(
+            [scored_candidate(0, 0.0)],
+            lambda _candidate: reachable_moveit_result(),
+            exhaustive=1,
+        )
+
+
+def test_first_reachable_by_rank_stops_at_exact_ranked_optimum():
+    calls = []
+
+    def check(candidate):
+        calls.append(candidate.track_id)
+        if candidate.track_id == 2:
+            return reachable_moveit_result(0.8, 0.4)
+        if candidate.track_id == 3:
+            return reachable_moveit_result(0.1, 0.1)
+        return failed_moveit_result('ik_valid')
+
+    candidates = [
+        scored_candidate(track_id=i, score=float(i)) for i in range(8)
+    ]
+    result = bounded_moveit_select(
+        candidates,
+        check,
+        top_n=8,
+        ranking_key=lambda item: (item.track_id,),
+        first_reachable_by_rank=True,
+    )
+
+    assert calls == [0, 1, 2]
+    assert result.selected.track_id == 2
+    assert tuple(item.track_id for item in result.reachable) == (2,)
+    assert result.shortlist_count == 8
+    assert result.terminated_early is True
+    assert (
+        result.termination_reason
+        == 'FIRST_REACHABLE_BY_AUTHORITATIVE_RANK'
+    )
+    assert result.funnel.to_dict()['stage_counts']['moveit_checked'] == {
+        'entered': 3,
+        'passed': 3,
+        'rejected': 0,
+    }
+    assert result.funnel.rejection_counts == {
+        'MOVEIT_IK_FAILED': 2,
+    }
+
+
+def test_first_reachable_by_rank_checks_entire_shortlist_when_none_reachable():
+    calls = []
+    candidates = [
+        scored_candidate(track_id=i, score=float(i)) for i in range(5)
+    ]
+    result = bounded_moveit_select(
+        candidates,
+        lambda candidate: (
+            calls.append(candidate.track_id)
+            or failed_moveit_result('ik_valid')
+        ),
+        top_n=5,
+        ranking_key=lambda item: (item.track_id,),
+        first_reachable_by_rank=True,
+    )
+
+    assert calls == [0, 1, 2, 3, 4]
+    assert result.selected is None
+    assert result.shortlist_count == 5
+    assert result.terminated_early is False
+    assert result.termination_reason == ''
+
+
+@pytest.mark.parametrize(
+    ('kwargs', 'error'),
+    [
+        ({'first_reachable_by_rank': 1}, TypeError),
+        ({'first_reachable_by_rank': True}, ValueError),
+        (
+            {
+                'first_reachable_by_rank': True,
+                'ranking_key': lambda item: (item.track_id,),
+                'exhaustive': True,
+            },
+            ValueError,
+        ),
+    ],
+)
+def test_first_reachable_by_rank_requires_unambiguous_policy(kwargs, error):
+    with pytest.raises(error):
+        bounded_moveit_select(
+            [scored_candidate(0, 0.0)],
+            lambda _candidate: reachable_moveit_result(),
+            **kwargs
+        )
+
+
 def test_stable_metadata_score_cannot_override_soft_ranking():
     soft_best = scored_candidate(1, 0.0)
     soft_best = replace(
@@ -829,8 +1086,8 @@ def test_final_score_recomputes_full_soft_cost_with_actual_moveit_motion():
     assert result.selected.final_score == pytest.approx(expected)
 
 
-@pytest.mark.parametrize(('configured', 'expected'), [(1, 3), (99, 10)])
-def test_moveit_top_n_is_clamped_between_three_and_ten(configured, expected):
+@pytest.mark.parametrize(('configured', 'expected'), [(1, 3), (99, 24)])
+def test_moveit_top_n_is_clamped_between_three_and_twenty_four(configured, expected):
     calls = []
 
     def check(candidate):
@@ -838,7 +1095,7 @@ def test_moveit_top_n_is_clamped_between_three_and_ten(configured, expected):
         return failed_moveit_result('ik_valid')
 
     candidates = [
-        scored_candidate(track_id=i, score=float(i)) for i in range(20)
+        scored_candidate(track_id=i, score=float(i)) for i in range(30)
     ]
 
     result = bounded_moveit_select(candidates, check, top_n=configured)
@@ -1238,6 +1495,48 @@ def test_strict_moveit_failures_do_not_stop_the_rest_of_the_shortlist():
     }
 
 
+def test_phase_specific_ranking_key_controls_only_the_bounded_shortlist():
+    calls = []
+    candidates = [
+        scored_candidate(track_id, float(track_id))
+        for track_id in range(5)
+    ]
+
+    def check(candidate):
+        calls.append(candidate.track_id)
+        return MoveItResult(
+            reachable=False,
+            joint_path_cost=0.0,
+            joint_max_delta_rad=0.0,
+            reason='not reachable',
+            failure_code='MOVEIT_UNREACHABLE',
+        )
+
+    result = bounded_moveit_select(
+        candidates,
+        check,
+        top_n=3,
+        ranking_key=lambda candidate: -candidate.track_id,
+    )
+
+    assert calls == [4, 3, 2]
+    assert len(result.checked) == 3
+    assert result.funnel.to_dict()['stage_counts']['moveit_shortlist'] == {
+        'entered': 5,
+        'passed': 3,
+        'rejected': 2,
+    }
+
+
+def test_moveit_ranking_key_must_be_callable():
+    with pytest.raises(TypeError, match='ranking_key'):
+        bounded_moveit_select(
+            [scored_candidate(0, 0.0)],
+            lambda _candidate: reachable_moveit_result(),
+            ranking_key='not-callable',
+        )
+
+
 @pytest.mark.parametrize(
     ('failed_state', 'expected_code'),
     [
@@ -1385,6 +1684,36 @@ def test_moveit_motion_cost_can_reorder_reachable_candidates():
         result.selected.pre_moveit_score
     )
     assert result.reachable[0].final_score > result.reachable[1].final_score
+
+
+def test_moveit_joint_delta_limit_rejects_large_wrist_flip_before_selection():
+    candidates = [
+        scored_candidate(0, 0.0),
+        scored_candidate(1, 0.1),
+    ]
+
+    def check(candidate):
+        if candidate.track_id == 0:
+            return reachable_moveit_result(3.254, 3.254)
+        return reachable_moveit_result(2.239, 1.730)
+
+    result = bounded_moveit_select(
+        candidates,
+        check,
+        top_n=3,
+        max_joint_delta_rad=1.8,
+    )
+
+    assert result.selected.track_id == 1
+    assert [item.track_id for item in result.reachable] == [1]
+    assert result.checked[0].moveit_result.reachable is False
+    assert (
+        result.checked[0].moveit_result.failure_code
+        == 'MOVEIT_JOINT_DELTA_LIMIT'
+    )
+    assert result.funnel.rejection_counts == {
+        'MOVEIT_JOINT_DELTA_LIMIT': 1
+    }
 
 
 def test_malformed_moveit_result_fails_closed_and_records_dominant_failure():
@@ -1592,6 +1921,19 @@ def test_explicit_replan_can_replan_same_signature_when_score_improves():
         'candidate-A', score=0.5, now_sec=3.0, robot_active=False
     )
 
+    assert promoted.promote is True
+    assert promoted.code == 'PROMOTE_REPLAN'
+
+
+def test_explicit_replan_promotes_without_hysteresis_score_improvement():
+    controller = committed_execution_controller(score=1.0)
+    requested = controller.request_replan(robot_active=False)
+
+    promoted = controller.observe_preview(
+        'candidate-B', score=0.95, now_sec=3.0, robot_active=False
+    )
+
+    assert requested.code == 'REPLAN_REQUESTED'
     assert promoted.promote is True
     assert promoted.code == 'PROMOTE_REPLAN'
 

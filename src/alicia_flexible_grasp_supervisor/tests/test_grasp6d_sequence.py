@@ -101,6 +101,41 @@ class Grasp6DSequenceTest(unittest.TestCase):
         self.assertAlmostEqual(plan.pregrasp.pose.position.z, 0.28)
         self.assertAlmostEqual(plan.approach.pose.position.z, 0.215)
 
+    def test_sequence_can_center_pregrasp_on_support_normal(self):
+        grasp_pose = self._pose()
+
+        plan = make_grasp_sequence_from_grasp_pose(
+            grasp_pose,
+            pregrasp_distance_m=0.08,
+            approach_offset_m=0.02,
+            approach_direction_base=(0.6, 0.0, -0.8),
+            pregrasp_direction_base=(0.0, 0.0, -1.0),
+        )
+
+        self.assertAlmostEqual(plan.pregrasp.pose.position.x, 0.4)
+        self.assertAlmostEqual(plan.pregrasp.pose.position.z, 0.28)
+        self.assertAlmostEqual(plan.approach.pose.position.x, 0.388)
+        self.assertAlmostEqual(plan.approach.pose.position.z, 0.216)
+
+    def test_sequence_can_lift_along_live_support_normal(self):
+        grasp_pose = self._pose()
+        support = np.asarray([-0.04, 0.08, 0.996], dtype=float)
+        support /= np.linalg.norm(support)
+
+        plan = make_grasp_sequence_from_grasp_pose(
+            grasp_pose,
+            lift_height_m=0.035,
+            lift_direction_base=support,
+        )
+
+        actual = np.asarray([
+            plan.lift.pose.position.x,
+            plan.lift.pose.position.y,
+            plan.lift.pose.position.z,
+        ])
+        expected = np.asarray([0.4, 0.1, 0.2]) + 0.035 * support
+        np.testing.assert_allclose(actual, expected, atol=1e-12)
+
     def test_sequence_rejects_invalid_explicit_approach_direction(self):
         grasp_pose = self._pose()
 
@@ -109,6 +144,17 @@ class Grasp6DSequenceTest(unittest.TestCase):
                 make_grasp_sequence_from_grasp_pose(
                     grasp_pose,
                     approach_direction_base=direction,
+                )
+
+    def test_sequence_rejects_invalid_explicit_pregrasp_direction(self):
+        grasp_pose = self._pose()
+
+        for direction in ((0.0, 0.0, 0.0), (1.0, 2.0), (np.nan, 0.0, 1.0)):
+            with self.subTest(direction=direction), self.assertRaises(ValueError):
+                make_grasp_sequence_from_grasp_pose(
+                    grasp_pose,
+                    approach_direction_base=(0.0, 0.0, -1.0),
+                    pregrasp_direction_base=direction,
                 )
 
     def test_rich_plan_fixed_order_is_split_into_independent_stamped_poses(self):

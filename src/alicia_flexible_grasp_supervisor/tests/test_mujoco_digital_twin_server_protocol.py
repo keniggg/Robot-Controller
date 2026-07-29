@@ -107,6 +107,8 @@ def valid_payload(now_sec=100.0):
             'max_inner_gap_m': 0.050,
             'finger_size_xyz_m': [0.0434, 0.0286, 0.0600],
             'palm_size_xyz_m': [0.1175, 0.1550, 0.0774],
+            'close_target_inner_gap_m': 0.0,
+            'close_settle_sec': 0.8,
         },
         'object_model': {
             'type': 'obb_box',
@@ -213,6 +215,87 @@ def test_snapshot_age_boundary_is_accepted_but_zero_and_future_are_stale():
         assert _invalid_code(payload) == 'PLAN_STALE'
 
 
+def test_grip_preload_reduces_contact_width_for_lift_without_going_negative():
+    assert server_module._preloaded_contact_width(0.045, 0.003) == pytest.approx(0.042)
+    assert server_module._preloaded_contact_width(0.001, 0.003) == pytest.approx(0.0)
+
+
+def test_dynamic_lift_samples_follow_distance_speed_and_physics_timestep():
+    assert server_module._dynamic_lift_sample_count(
+        0.060,
+        0.10,
+        0.002,
+    ) == 301
+    assert server_module._dynamic_lift_sample_count(
+        0.001,
+        0.10,
+        0.002,
+    ) == server_module.MIN_DYNAMIC_LIFT_SAMPLES
+    assert server_module._joint_limited_lift_sample_count(
+        0.060,
+        0.10,
+        0.002,
+        [0.0, 0.0],
+        [0.048, -0.096],
+        0.08,
+    ) == 601
+
+
+def test_joint_reference_time_scaling_interpolates_once_and_meets_speed():
+    (
+        alphas,
+        joint_positions,
+        base_peak_speed,
+        final_peak_speed,
+    ) = server_module._time_scaled_joint_reference(
+        [0.0, 0.5, 1.0],
+        [[0.0, 0.0], [0.04, -0.02], [0.12, -0.04]],
+        simulation_timestep_s=0.1,
+        max_joint_speed_rad_s=0.2,
+    )
+
+    assert len(alphas) == 9
+    assert joint_positions[0] == pytest.approx([0.0, 0.0])
+    assert joint_positions[-1] == pytest.approx([0.12, -0.04])
+    assert base_peak_speed == pytest.approx(0.8)
+    assert final_peak_speed <= 0.2 + 1e-12
+
+
+def test_cartesian_rotation_slerp_preserves_endpoints_and_midpoint():
+    start = server_module.np.eye(3)
+    end = server_module._quat_xyzw_to_matrix(
+        [0.0, 0.0, math.sin(math.pi / 4.0), math.cos(math.pi / 4.0)]
+    )
+
+    assert server_module._slerp_rotation_matrix(
+        start,
+        end,
+        0.0,
+    ) == pytest.approx(start)
+    assert server_module._slerp_rotation_matrix(
+        start,
+        end,
+        1.0,
+    ) == pytest.approx(end)
+    midpoint = server_module._slerp_rotation_matrix(start, end, 0.5)
+    expected = server_module._quat_xyzw_to_matrix(
+        [0.0, 0.0, math.sin(math.pi / 8.0), math.cos(math.pi / 8.0)]
+    )
+    assert midpoint == pytest.approx(expected)
+
+    position_tolerance, orientation_tolerance = (
+        server_module._reference_ik_tolerances(
+            4001,
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.060],
+            start,
+            start,
+        )
+    )
+    assert position_tolerance == pytest.approx(3.75e-6)
+    assert orientation_tolerance == pytest.approx(1e-5)
+
+
 def test_plan_shape_failure_precedes_other_validation_failures():
     payload = valid_payload()
     payload['trajectory'] = payload['trajectory'][:3]
@@ -297,7 +380,7 @@ def test_source_width_mismatches_fail_closed(mutation):
     assert _invalid_code(payload) == 'PLAN_INVALID'
 
 
-def test_carton_size_is_quantized_to_one_millimetre_for_cache_key():
+def test_target_size_is_quantized_to_one_millimetre_for_cache_key():
     first = valid_payload()
     second = valid_payload()
     first['object_model']['size_xyz_m'] = [0.2004, 0.1004, 0.0804]
@@ -306,20 +389,20 @@ def test_carton_size_is_quantized_to_one_millimetre_for_cache_key():
     assert server_module._model_cache_key(first) == server_module._model_cache_key(second)
 
 
-def test_same_cache_key_injects_the_same_canonical_quantized_carton_size():
+def test_same_cache_key_injects_the_same_canonical_quantized_target_size():
     first = valid_payload()['object_model']
     second = copy_mapping(first)
     first['size_xyz_m'] = [0.2004, 0.1004, 0.0804]
     second['size_xyz_m'] = [0.20049, 0.10049, 0.08049]
 
-    first_carton = ElementTree.fromstring(
+    first_target = ElementTree.fromstring(
         server_module._inject_dynamic_scene(BASE_XML, first)
-    ).find(".//geom[@name='target_carton']")
-    second_carton = ElementTree.fromstring(
+    ).find(".//geom[@name='target_obb']")
+    second_target = ElementTree.fromstring(
         server_module._inject_dynamic_scene(BASE_XML, second)
-    ).find(".//geom[@name='target_carton']")
-    assert first_carton.attrib['size'] == second_carton.attrib['size']
-    assert first_carton.attrib['size'] == '0.10000 0.05000 0.04000'
+    ).find(".//geom[@name='target_obb']")
+    assert first_target.attrib['size'] == second_target.attrib['size']
+    assert first_target.attrib['size'] == '0.10000 0.05000 0.04000'
 
 
 def copy_mapping(value):
@@ -327,7 +410,7 @@ def copy_mapping(value):
 
 
 @pytest.mark.parametrize('field', ['mass_kg', 'friction'])
-def test_model_cache_key_includes_dynamic_carton_material(field):
+def test_model_cache_key_includes_dynamic_target_material(field):
     first = valid_payload()
     second = valid_payload()
     if field == 'mass_kg':
@@ -458,17 +541,39 @@ def test_compiled_model_path_invokes_runtime_gripper_contract_validator(monkeypa
     assert calls[0][2] is meta
 
 
-def test_injected_carton_uses_half_extents_and_dynamic_support_body():
+def test_injected_target_uses_half_extents_and_dynamic_support_body():
     xml = server_module._inject_dynamic_scene(BASE_XML, valid_payload()['object_model'])
     root = ElementTree.fromstring(xml)
-    carton = root.find(".//geom[@name='target_carton']")
-    assert carton is not None
-    assert carton.attrib['size'] == '0.10000 0.05000 0.04000'
-    assert carton.attrib['mass'] == '0.08000'
-    assert carton.attrib['friction'] == '1.20000 0.08000 0.02000'
+    target = root.find(".//geom[@name='target_obb']")
+    assert target is not None
+    assert target.attrib['size'] == '0.10000 0.05000 0.04000'
+    assert target.attrib['mass'] == '0.08000'
+    assert target.attrib['friction'] == '1.20000 0.08000 0.02000'
     assert root.find(".//body[@name='target_object']/freejoint[@name='target_object_joint']") is not None
     assert root.find(".//body[@name='detected_support']").attrib['mocap'] == 'true'
     assert root.find(".//body[@name='detected_support']/geom").attrib['type'] == 'plane'
+
+
+def test_injected_gripper_servo_uses_urdf_effort_limited_stiffness():
+    root = ElementTree.fromstring(
+        server_module._inject_actuators(BASE_XML)
+    )
+
+    for actuator_name in ('left_finger_act', 'right_finger_act'):
+        actuator = root.find(
+            ".//actuator/position[@name='%s']" % actuator_name
+        )
+        assert float(actuator.attrib['kp']) == pytest.approx(
+            server_module.GRIPPER_JOINT_EFFORT_LIMIT_N
+            / server_module.GRIPPER_FINGER_STROKE_M
+        )
+        assert float(actuator.attrib['kv']) == pytest.approx(
+            server_module.GRIPPER_POSITION_DAMPING_N_S_M
+        )
+        assert [
+            float(value)
+            for value in actuator.attrib['forcerange'].split()
+        ] == pytest.approx([-5.0, 5.0])
 
 
 def test_schema_v3_dynamic_scene_disables_legacy_floor_collision_authority():
@@ -603,7 +708,7 @@ def test_closure_widths_are_monotonic_and_have_at_least_35_increments():
     assert all(next_width < width for width, next_width in zip(widths, widths[1:]))
 
 
-def test_arm_and_gripper_targets_hold_qpos_qvel_and_position_actuator_ctrl():
+def test_arm_targets_hold_state_but_contact_grip_command_preserves_response():
     class FakeMujoco:
         forward_calls = 0
 
@@ -646,6 +751,38 @@ def test_arm_and_gripper_targets_hold_qpos_qvel_and_position_actuator_ctrl():
     assert data.qvel == pytest.approx([0.0, 0.0])
     assert data.ctrl[:2] == pytest.approx([-0.0095, 0.0095])
 
+    data.qpos[:] = [-0.004, 0.004]
+    data.qvel[:] = [0.2, -0.2]
+    backend._command_gripper_inner_gap(FakeModel(), data, 0.025, meta)
+    assert data.qpos == pytest.approx([-0.004, 0.004])
+    assert data.qvel == pytest.approx([0.2, -0.2])
+    assert data.ctrl[:2] == pytest.approx([-0.0125, 0.0125])
+
+    backend._command_arm_joint_positions(
+        FakeModel(),
+        data,
+        joints=[0, 1],
+        actuator_ids=[2, 3],
+        values=[0.35, -0.45],
+    )
+    assert data.qpos == pytest.approx([-0.004, 0.004])
+    assert data.qvel == pytest.approx([0.2, -0.2])
+    assert data.ctrl[2:] == pytest.approx([0.35, -0.45])
+
+    max_speed = backend._apply_velocity_consistent_arm_reference(
+        FakeModel(),
+        data,
+        joints=[0, 1],
+        actuator_ids=[2, 3],
+        start_values=[0.10, -0.20],
+        target_values=[0.11, -0.18],
+        timestep_s=0.02,
+    )
+    assert data.qpos == pytest.approx([0.10, -0.20])
+    assert data.qvel == pytest.approx([0.5, 1.0])
+    assert data.ctrl[2:] == pytest.approx([0.11, -0.18])
+    assert max_speed == pytest.approx(1.0)
+
 
 def test_single_finger_contact_never_passes():
     contacts = [FakeContact('Link7', 'target_object')]
@@ -667,6 +804,42 @@ def test_contact_body_pair_order_is_symmetric():
     assert result.two_sided
 
 
+def test_opposed_contact_pair_requires_normal_alignment_and_opposite_sides():
+    aligned = [
+        {
+            'finger': 'left',
+            'position_base_m': [-0.02, 0.0, 0.0],
+            'abs_normal_jaw_axis_cos': 0.95,
+        },
+        {
+            'finger': 'right',
+            'position_base_m': [0.02, 0.0, 0.0],
+            'abs_normal_jaw_axis_cos': 0.96,
+        },
+    ]
+
+    assert server_module._has_opposed_finger_contact_pair(
+        aligned,
+        object_position=[0.0, 0.0, 0.0],
+        jaw_axis=[1.0, 0.0, 0.0],
+    )
+    same_side = [dict(item) for item in aligned]
+    same_side[0]['position_base_m'] = [0.01, 0.0, 0.0]
+    assert not server_module._has_opposed_finger_contact_pair(
+        same_side,
+        object_position=[0.0, 0.0, 0.0],
+        jaw_axis=[1.0, 0.0, 0.0],
+    )
+    support_normal_contacts = [dict(item) for item in aligned]
+    for item in support_normal_contacts:
+        item['abs_normal_jaw_axis_cos'] = 0.001
+    assert not server_module._has_opposed_finger_contact_pair(
+        support_normal_contacts,
+        object_position=[0.0, 0.0, 0.0],
+        jaw_axis=[1.0, 0.0, 0.0],
+    )
+
+
 def test_palm_first_contact_is_disallowed():
     result = server_module._classify_close_contacts(
         [FakeContact('Link6', 'target_object')],
@@ -679,7 +852,7 @@ def test_palm_first_contact_is_disallowed():
 
 def test_object_support_penetration_is_disallowed():
     result = server_module._classify_close_contacts(
-        [FakeContact('target_object', 'detected_support', distance_m=-0.002)],
+        [FakeContact('target_object', 'detected_support', distance_m=-0.005)],
         left_body='Link7',
         right_body='Link8',
     )
@@ -781,9 +954,24 @@ def test_single_finger_push_beyond_stability_threshold_fails_immediately():
 
 
 def test_lift_holds_retained_contact_width_and_checks_every_step(monkeypatch):
+    class FakeModel:
+        jnt_qposadr = server_module.np.asarray([0], dtype=int)
+
     class FakeData:
         def __init__(self):
-            self.xpos = server_module.np.asarray([[0.0, 0.0, 0.04]], dtype=float)
+            self.qpos = server_module.np.zeros(1, dtype=float)
+            self.xpos = server_module.np.asarray(
+                [
+                    [0.0, 0.0, 0.04],
+                    [0.0, -0.02, 0.20],
+                    [0.0, 0.02, 0.20],
+                ],
+                dtype=float,
+            )
+            self.xmat = server_module.np.tile(
+                server_module.np.eye(3).reshape(1, 9),
+                (3, 1),
+            )
 
     class FakeMujoco:
         @staticmethod
@@ -794,11 +982,16 @@ def test_lift_holds_retained_contact_width_and_checks_every_step(monkeypatch):
         def mj_step(_model, data):
             data.xpos[0, 2] += 0.0015
 
-    backend = server_module.MujocoDigitalTwinBackend(model_xml=MODEL_XML)
+    backend = server_module.MujocoDigitalTwinBackend(
+        model_xml=MODEL_XML,
+        max_lift_joint_speed_rad_s=100.0,
+    )
     backend._mujoco = FakeMujoco
     retained_data = FakeData()
+    reference_data = FakeData()
     widths = []
     classifications = []
+    ik_seeds = []
     safe_contact = None
 
     def classify_every_step(_model, _data, _meta):
@@ -815,11 +1008,53 @@ def test_lift_holds_retained_contact_width_and_checks_every_step(monkeypatch):
         classifications.append(safe_contact)
         return safe_contact
 
-    monkeypatch.setattr(backend, '_copy_data', lambda _model, data: data)
+    copy_count = [0]
+
+    def copy_plant_then_reference(_model, data):
+        copy_count[0] += 1
+        if copy_count[0] == 1:
+            return data
+        return reference_data
+
+    def solve_from_reference(_model, seed, *_args, **_kwargs):
+        ik_seeds.append(seed)
+        return {
+            'success': True,
+            'joint_positions': [0.0],
+            'position_error_m': 0.0,
+            'orientation_error': 0.0,
+            'iterations': 1,
+        }
+
+    monkeypatch.setattr(backend, '_copy_data', copy_plant_then_reference)
     monkeypatch.setattr(backend, '_set_arm_qpos', lambda *args, **kwargs: None)
     monkeypatch.setattr(
         backend,
-        '_apply_gripper_inner_gap',
+        '_command_arm_joint_positions',
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        backend,
+        '_apply_velocity_consistent_arm_reference',
+        lambda *args, **kwargs: 0.0,
+    )
+    monkeypatch.setattr(
+        backend,
+        '_solve_ik',
+        solve_from_reference,
+    )
+    monkeypatch.setattr(
+        backend,
+        '_validate_cartesian_joint_reference',
+        lambda *args, **kwargs: {
+            'success': True,
+            'position_error_m': 0.0,
+            'orientation_error': 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        backend,
+        '_command_gripper_inner_gap',
         lambda _model, _data, width_m, _meta: widths.append(width_m),
         raising=False,
     )
@@ -831,9 +1066,16 @@ def test_lift_holds_retained_contact_width_and_checks_every_step(monkeypatch):
     )
 
     result = backend._simulate_lift(
-        model=object(),
+        model=FakeModel(),
         retained_data=retained_data,
-        meta={'arm_joints': [0], 'arm_actuators': [0], 'object_body': 0},
+        meta={
+            'arm_joints': [0],
+            'arm_actuators': [0],
+            'object_body': 0,
+            'left_body': 1,
+            'right_body': 2,
+            'orientation_body': 1,
+        },
         grasp_q=[0.0],
         lift_q=[1.0],
         payload=valid_payload(),
@@ -846,8 +1088,10 @@ def test_lift_holds_retained_contact_width_and_checks_every_step(monkeypatch):
     assert result.lift_success
     assert len(widths) >= 35
     assert len(classifications) == len(widths)
-    assert all(width == pytest.approx(0.031) for width in widths)
+    assert all(width == pytest.approx(0.0) for width in widths)
     assert all(item.two_sided and not item.disallowed_collision for item in classifications)
+    assert ik_seeds
+    assert all(seed is reference_data for seed in ik_seeds)
 
 
 @pytest.mark.parametrize(
@@ -877,8 +1121,22 @@ def test_lift_holds_retained_contact_width_and_checks_every_step(monkeypatch):
             0.0005,
             (True, True, False, 'MUJOCO_LIFT_FAILED'),
         ),
+        (
+            server_module.ContactClassification(
+                left_contact=True,
+                right_contact=True,
+                two_sided=True,
+            ),
+            -0.0001,
+            (True, True, False, 'MUJOCO_LIFT_FAILED'),
+        ),
     ],
-    ids=('collision', 'contact-lost', 'insufficient-displacement'),
+    ids=(
+        'collision',
+        'contact-lost',
+        'insufficient-dynamic-lift-rejected',
+        'falling-despite-contact',
+    ),
 )
 def test_lift_result_preserves_failure_component_and_backend_threshold(
     monkeypatch,
@@ -886,9 +1144,24 @@ def test_lift_result_preserves_failure_component_and_backend_threshold(
     step_delta_m,
     expected,
 ):
+    class FakeModel:
+        jnt_qposadr = server_module.np.asarray([0], dtype=int)
+
     class FakeData:
         def __init__(self):
-            self.xpos = server_module.np.asarray([[0.0, 0.0, 0.04]], dtype=float)
+            self.qpos = server_module.np.zeros(1, dtype=float)
+            self.xpos = server_module.np.asarray(
+                [
+                    [0.0, 0.0, 0.04],
+                    [0.0, -0.02, 0.20],
+                    [0.0, 0.02, 0.20],
+                ],
+                dtype=float,
+            )
+            self.xmat = server_module.np.tile(
+                server_module.np.eye(3).reshape(1, 9),
+                (3, 1),
+            )
 
     class FakeMujoco:
         @staticmethod
@@ -898,11 +1171,43 @@ def test_lift_result_preserves_failure_component_and_backend_threshold(
     backend = server_module.MujocoDigitalTwinBackend(
         model_xml=MODEL_XML,
         min_lift_success_m=0.030,
+        lift_speed_m_s=1.0,
+        max_lift_joint_speed_rad_s=100.0,
     )
     backend._mujoco = FakeMujoco
     monkeypatch.setattr(backend, '_copy_data', lambda _model, data: data)
     monkeypatch.setattr(backend, '_set_arm_qpos', lambda *args, **kwargs: None)
-    monkeypatch.setattr(backend, '_apply_gripper_inner_gap', lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        backend,
+        '_command_arm_joint_positions',
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        backend,
+        '_apply_velocity_consistent_arm_reference',
+        lambda *args, **kwargs: 0.0,
+    )
+    monkeypatch.setattr(
+        backend,
+        '_solve_ik',
+        lambda *args, **kwargs: {
+            'success': True,
+            'joint_positions': [0.0],
+            'position_error_m': 0.0,
+            'orientation_error': 0.0,
+            'iterations': 1,
+        },
+    )
+    monkeypatch.setattr(
+        backend,
+        '_validate_cartesian_joint_reference',
+        lambda *args, **kwargs: {
+            'success': True,
+            'position_error_m': 0.0,
+            'orientation_error': 0.0,
+        },
+    )
+    monkeypatch.setattr(backend, '_command_gripper_inner_gap', lambda *args, **kwargs: None)
     monkeypatch.setattr(
         backend,
         '_classify_current_contacts',
@@ -914,9 +1219,16 @@ def test_lift_result_preserves_failure_component_and_backend_threshold(
     payload['min_lift_success_m'] = 0.001
 
     result = backend._simulate_lift(
-        model=object(),
+        model=FakeModel(),
         retained_data=FakeData(),
-        meta={'arm_joints': [0], 'arm_actuators': [0], 'object_body': 0},
+        meta={
+            'arm_joints': [0],
+            'arm_actuators': [0],
+            'object_body': 0,
+            'left_body': 1,
+            'right_body': 2,
+            'orientation_body': 1,
+        },
         grasp_q=[0.0],
         lift_q=[1.0],
         payload=payload,
@@ -1164,6 +1476,11 @@ class PassingBackend(server_module.MockDigitalTwinBackend):
     name = 'test_passing_mujoco'
 
     def simulate_grasp(self, payload):
+        payload = server_module._validate_v3_payload(
+            payload,
+            now_sec=server_module.time.time(),
+            max_snapshot_age_sec=self.max_snapshot_age_sec,
+        )
         return server_module._build_component_response(
             plan_id=payload.get('plan_id', ''),
             pass_score=80,
@@ -1174,6 +1491,32 @@ class PassingBackend(server_module.MockDigitalTwinBackend):
             lift_success=True,
             backend=self.name,
         )
+
+
+def test_http_simulate_uses_configured_snapshot_age_window():
+    http_server = server_module.make_server(
+        '127.0.0.1',
+        0,
+        grasp_backend=server_module.MockGraspNetBackend(),
+        sim_backend=PassingBackend(max_snapshot_age_sec=120.0),
+    )
+    thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        payload = valid_payload(now_sec=server_module.time.time())
+        payload['snapshot_stamp_sec'] = server_module.time.time() - 35.0
+        response = _json_post(
+            'http://127.0.0.1:%d/simulate_grasp' % http_server.server_port,
+            payload,
+        )
+    finally:
+        http_server.shutdown()
+        http_server.server_close()
+        thread.join(timeout=2.0)
+
+    assert response['ok'] is True
+    assert response['plan_id'] == payload['plan_id']
+    assert response['simulation_ok'] is True
 
 
 class DiagnosticGraspBackend:

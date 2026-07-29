@@ -37,9 +37,12 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         plan.valid = True
         plan.model_choice = 'carton_segment:' + str(plan_id)
         plan.score = 0.9
-        plan.candidate_source = 'graspnet'
-        plan.candidate_source_lineage = ['graspnet']
-        plan.has_candidate_model_width = True
+        if hasattr(plan, 'candidate_source'):
+            plan.candidate_source = 'graspnet'
+        if hasattr(plan, 'candidate_source_lineage'):
+            plan.candidate_source_lineage = ['graspnet']
+        if hasattr(plan, 'has_candidate_model_width'):
+            plan.has_candidate_model_width = True
         plan.candidate_width_m = 0.039
         plan.required_open_width_m = 0.044
         for index in range(4):
@@ -658,6 +661,103 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         finally:
             control_widget.rospy.get_param = original_get_param
 
+    def test_newer_mismatched_preview_disables_execution_button(self):
+        class Control:
+            def __init__(self):
+                self.enabled = None
+                self.text = ''
+
+            def setEnabled(self, enabled):
+                self.enabled = bool(enabled)
+
+            def setText(self, text):
+                self.text = str(text)
+
+        widget = control_widget.Grasp6DControlWidget.__new__(
+            control_widget.Grasp6DControlWidget
+        )
+        widget._plan_validity_sec = 120.0
+        widget._readiness = control_widget.Grasp6DReadinessTracker(
+            validity_sec=120.0
+        )
+        widget._preview_readiness = control_widget.Grasp6DReadinessTracker(
+            validity_sec=120.0
+        )
+        execution = self._rich_plan(stamp_sec=30.0, plan_id='execution-old')
+        preview = self._rich_plan(stamp_sec=90.0, plan_id='preview-new')
+        widget._readiness.update_enriched(execution, now_sec=100.0)
+        widget._preview_readiness.update_enriched(preview, now_sec=100.0)
+        widget._use_remote_grasp6d = True
+        widget._legacy_only_status = False
+        widget._remote_status = 'continuous remote 6D inference started'
+        widget._grasp_state = 'IDLE'
+        widget._grasp_message = ''
+        widget._last_plan_pose_count = 4
+        widget._requesting_plan = False
+        widget._streaming_enabled = True
+        widget._command_active = False
+        widget.summary = Control()
+        widget.remote_chip = None
+        widget.preview_chip = None
+        widget.plan_chip = None
+        widget.pose_chip = None
+        widget.grasp_chip = None
+        widget.request_plan_btn = Control()
+        widget.execute_btn = Control()
+        original_get_param = control_widget.rospy.get_param
+        original_now = control_widget._ros_now_seconds
+        control_widget.rospy.get_param = lambda _name, default=None: default
+        control_widget._ros_now_seconds = lambda: 100.0
+        try:
+            widget._refresh_view()
+        finally:
+            control_widget.rospy.get_param = original_get_param
+            control_widget._ros_now_seconds = original_now
+
+        self.assertFalse(widget.execute_btn.enabled)
+        self.assertIn('PLAN_SUPERSEDED_BY_PREVIEW', widget.summary.text)
+
+    def test_start_service_blocks_when_preview_supersedes_execution_plan(self):
+        widget = control_widget.Grasp6DControlWidget.__new__(
+            control_widget.Grasp6DControlWidget
+        )
+        widget._execution_plan_id = ''
+        widget._readiness = control_widget.Grasp6DReadinessTracker(
+            validity_sec=120.0
+        )
+        widget._preview_readiness = control_widget.Grasp6DReadinessTracker(
+            validity_sec=120.0
+        )
+        execution = self._rich_plan(stamp_sec=30.0, plan_id='execution-old')
+        preview = self._rich_plan(stamp_sec=90.0, plan_id='preview-new')
+        widget._readiness.update_enriched(execution, now_sec=100.0)
+        widget._preview_readiness.update_enriched(preview, now_sec=100.0)
+        widget._execution_plan_id = widget._readiness.plan_id
+        results = []
+        widget._emit_command_result_if_alive = (
+            lambda ok, message: results.append((ok, message))
+        )
+        calls = []
+        original_wait = control_widget.rospy.wait_for_service
+        original_proxy = control_widget.rospy.ServiceProxy
+        original_now = control_widget._ros_now_seconds
+        control_widget.rospy.wait_for_service = lambda *_args, **_kwargs: None
+        control_widget.rospy.ServiceProxy = lambda *_args, **_kwargs: (
+            lambda **kwargs: calls.append(kwargs)
+        )
+        control_widget._ros_now_seconds = lambda: 100.0
+        try:
+            widget._run_start_grasp()
+        finally:
+            control_widget.rospy.wait_for_service = original_wait
+            control_widget.rospy.ServiceProxy = original_proxy
+            control_widget._ros_now_seconds = original_now
+
+        self.assertEqual(calls, [])
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0][0])
+        self.assertIn('PLAN_SUPERSEDED_BY_PREVIEW', results[0][1])
+
     def test_state_summary_labels_preview_separately_from_execution(self):
         preview_state = format_grasp6d_plan_state(
             99.5, now_sec=100.0, max_age_sec=5.0
@@ -685,7 +785,7 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
             config = yaml.safe_load(stream)
 
         remote = config['grasp_6d']['remote']
-        self.assertEqual(config['grasp_6d']['plan_validity_sec'], 5.0)
+        self.assertEqual(config['grasp_6d']['plan_validity_sec'], 120.0)
         self.assertEqual(
             {
                 key: remote[key]
@@ -712,7 +812,7 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
             },
             {
                 'request_hz': 1.5,
-                'result_max_age_sec': 5.0,
+                'result_max_age_sec': 15.0,
                 'stability_window_size': 5,
                 'stability_min_hits': 3,
                 'tracking_position_threshold_m': 0.025,
@@ -721,7 +821,7 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
                 'tracking_width_threshold_m': 0.008,
                 'target_instance_association_threshold_m': 0.08,
                 'target_absolute_sanity_distance_m': 0.15,
-                'moveit_top_n': 5,
+                'moveit_top_n': 24,
                 'replan_position_delta_m': 0.012,
                 'replan_orientation_delta_deg': 12.0,
                 'replan_target_drift_m': 0.025,

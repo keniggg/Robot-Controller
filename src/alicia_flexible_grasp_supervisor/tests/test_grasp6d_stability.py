@@ -1,3 +1,4 @@
+import json
 import math
 import pathlib
 import sys
@@ -118,6 +119,30 @@ def test_candidate_track_requires_three_distinct_hits_in_last_five_requests():
     assert stable[0].hit_count == 3
     assert stable[0].window_count == 3
     assert stable[0].request_id == 3
+
+
+def test_explicit_two_hit_query_is_non_mutating_and_reports_track_evidence():
+    tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
+    tracker.update(1, [observation(1, center_x=0.100)])
+    assert tracker.update(2, [observation(2, center_x=0.104)]) == []
+
+    candidates = tracker.candidates_with_min_hits(2)
+    evidence = tracker.evidence_summary()
+
+    assert len(candidates) == 1
+    assert candidates[0].hit_request_ids == (1, 2)
+    assert tracker.stable_candidates() == []
+    assert evidence['window_request_ids'] == [1, 2]
+    assert evidence['track_count'] == 1
+    assert evidence['max_hit_count'] == 2
+    assert evidence['tracks'][0] == {
+        'track_id': 1,
+        'hit_count': 2,
+        'hit_request_ids': [1, 2],
+        'latest_request_id': 2,
+        'candidate_source': 'graspnet',
+    }
+    assert json.loads(json.dumps(evidence, allow_nan=False)) == evidence
 
 
 def test_physical_track_expands_lineage_uses_latest_source_and_still_needs_three_hits():

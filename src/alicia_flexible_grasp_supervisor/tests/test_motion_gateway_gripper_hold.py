@@ -20,6 +20,8 @@ for name in (
     'SetJointCommand',
     'SetFloat',
     'SetTargetPose',
+    'CheckPoseSequence',
+    'ResolveFreeSpaceOrientations',
     'CartesianJog',
     'TriggerZero',
 ):
@@ -28,6 +30,8 @@ for name in (
     'SetJointCommandResponse',
     'SetFloatResponse',
     'SetTargetPoseResponse',
+    'CheckPoseSequenceResponse',
+    'ResolveFreeSpaceOrientationsResponse',
     'CartesianJogResponse',
     'TriggerZeroResponse',
 ):

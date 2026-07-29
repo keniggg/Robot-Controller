@@ -55,7 +55,7 @@ perception:
       require_instance_mask: true
   target_description: "carton"
   yolo_model: "yolov8n.pt"
-  yolo_target_class: "mouse"
+  yolo_target_class: "carton"
   yolo_conf: 0.50
   yolo_iou: 0.45
   yolo_device: "cpu"
@@ -82,7 +82,7 @@ perception:
   depth_min_valid_px: 24
   localization_warn_error_m: 0.08
   max_object_age_sec: 1.5
-  object_label: "鼠标"
+  object_label: "carton"
   output_pose_camera_topic: "/perception/object_pose_camera"
   output_pose_base_topic: "/perception/object_pose_base"
   output_object_topic: "/perception/object"

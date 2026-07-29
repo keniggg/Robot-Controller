@@ -18,6 +18,13 @@ robot:
   planning_time: 2.0
   # Candidate reachability preflight only; final planning/execution keeps planning_time.
   strict_pose_planning_time: 0.25
+  # Free-space orientation seeds use a deterministic contact-to-anchor
+  # quaternion geodesic and collision-aware IK from an explicit joint seed.
+  # These are generic numerical/search bounds, not target-specific poses.
+  orientation_resolution_step_rad: 0.02
+  orientation_resolution_max_candidates: 96
+  orientation_resolution_ik_timeout_sec: 0.05
+  orientation_resolution_repeatability_tolerance_rad: 0.000001
   # Plan and execute must refer to the same millimetre-level target.
   cached_plan_position_tolerance_m: 0.002
   cached_plan_orientation_tolerance_rad: 0.02

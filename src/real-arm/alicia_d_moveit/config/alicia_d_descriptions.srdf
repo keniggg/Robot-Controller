@@ -25,10 +25,10 @@
         <joint name="Joint6" value="0"/>
     </group_state>
     <group_state name="open" group="hand">
-        <joint name="right_finger" value="0"/>
+        <joint name="right_finger" value="0.05"/>
     </group_state>
     <group_state name="close" group="hand">
-        <joint name="right_finger" value="0.05"/>
+        <joint name="right_finger" value="0"/>
     </group_state>
     <!--VIRTUAL JOINT: Purpose: this element defines a virtual joint between a robot link and an external frame of reference (considered fixed with respect to the robot)-->
     <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="base_link"/>

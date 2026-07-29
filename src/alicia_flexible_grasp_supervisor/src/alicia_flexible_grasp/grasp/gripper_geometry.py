@@ -20,6 +20,47 @@ ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M = np.asarray(
     [0.0004, 0.0003, -0.0302],
     dtype=float,
 )
+# The usable opposing contact patch of Link7/Link8 expressed as tool0 X/Z
+# coordinates relative to ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M.  This is
+# the boundary of the connected, planar inner-face triangles in the checked-in
+# Alicia-D v5.6 50 mm collision meshes, not the larger collision AABB:
+#   Link7.STL sha256 d546b7ab908c74281a41261412089a2f83f7519c2444739afe8ffff46450d19d
+#   Link8.STL sha256 5e5b548734269b731c1d60502c742e3d70d5a97a1e8316db523e2232b4c5043b
+# The two meshes map to the same counter-clockwise tool0 X/Z polygon.  Keeping
+# this hardware contract distinct from ANALYTICAL_FINGER_BOX_PADDING_XYZ_M is
+# essential: collision padding may conservatively reject a near miss, but it
+# cannot create a physical gripping surface.
+ANALYTICAL_FINGER_CONTACT_PATCH_TOOL_XZ_M = np.asarray(
+    [
+        [-0.0211033, -0.0275186],
+        [-0.0209239, -0.0280557],
+        [-0.0206282, -0.0285385],
+        [-0.0202314, -0.0289425],
+        [-0.0197540, -0.0292468],
+        [-0.0192202, -0.0294359],
+        [-0.0186577, -0.0295000],
+        [-0.0050000, -0.0295000],
+        [-0.0050000, -0.0250000],
+        [0.0050000, -0.0250000],
+        [0.0050000, -0.0295000],
+        [0.0186577, -0.0295000],
+        [0.0192202, -0.0294359],
+        [0.0197540, -0.0292468],
+        [0.0202314, -0.0289425],
+        [0.0206282, -0.0285385],
+        [0.0209239, -0.0280557],
+        [0.0211033, -0.0275186],
+        [0.0211573, -0.0269550],
+        [0.0210830, -0.0263937],
+        [0.0075417, 0.0277715],
+        [0.0053279, 0.0295000],
+        [-0.0053279, 0.0295000],
+        [-0.0075417, 0.0277715],
+        [-0.0210830, -0.0263937],
+        [-0.0211573, -0.0269550],
+    ],
+    dtype=float,
+)
 # Total (not per-face) expansion applied to the configured CAD envelope.  It
 # leaves at least GRIPPER_CONTRACT_TOLERANCE_M around every Link7/Link8 STL
 # face at both the fully open and fully closed joint limits.
@@ -187,6 +228,41 @@ class CandidateGateResult:
         object.__setattr__(self, 'passed_gate_count', passed)
 
 
+@dataclass(frozen=True)
+class ObservationEnvelopeResult:
+    """Open-gripper CAD clearance at one non-contact observation endpoint."""
+
+    ok: bool
+    failure_code: str
+    failure_reason: str
+    minimum_support_clearance_m: float
+
+    def __post_init__(self):
+        clearance = _finite_number(
+            self.minimum_support_clearance_m,
+            'minimum_support_clearance_m',
+        )
+        code = str(self.failure_code or '')
+        reason = str(self.failure_reason or '')
+        if bool(self.ok):
+            if code or reason:
+                raise ValueError(
+                    'successful observation envelope cannot contain a failure'
+                )
+        elif not code or not reason:
+            raise ValueError(
+                'failed observation envelope requires a code and reason'
+            )
+        object.__setattr__(self, 'ok', bool(self.ok))
+        object.__setattr__(self, 'failure_code', code)
+        object.__setattr__(self, 'failure_reason', reason)
+        object.__setattr__(
+            self,
+            'minimum_support_clearance_m',
+            clearance,
+        )
+
+
 def parse_tool_axis(axis_name):
     name = str(axis_name or '').strip().lower()
     sign = -1.0 if name.startswith('-') else 1.0
@@ -255,6 +331,18 @@ def required_open_width_m(
     )
 
 
+def _opening_fit_clearance_each_side_m(value, gripper):
+    if value is None:
+        return float(gripper.jaw_clearance_each_side_m)
+    clearance = _finite_number(
+        value,
+        'opening_fit_clearance_each_side_m',
+    )
+    if clearance < 0.0:
+        raise ValueError('opening_fit_clearance_each_side_m must be non-negative')
+    return clearance
+
+
 def projected_cloud_width_m(points, jaw_axis, clearance_each_side_m):
     """Return target-cloud span along a unit jaw axis plus jaw clearances."""
     cloud = np.asarray(points, dtype=float)
@@ -314,6 +402,298 @@ def gripper_box_centers(
         'right_finger': finger_pair_center - finger_offset,
         'palm': palm_center,
     }
+
+
+def _signed_polygon_margin(point, polygon):
+    """Return positive interior distance or negative exterior distance."""
+
+    sample = np.asarray(point, dtype=float)
+    boundary = np.asarray(polygon, dtype=float)
+    if (
+        sample.shape != (2,)
+        or boundary.ndim != 2
+        or boundary.shape[0] < 3
+        or boundary.shape[1] != 2
+        or not np.all(np.isfinite(sample))
+        or not np.all(np.isfinite(boundary))
+    ):
+        raise ValueError('contact patch point and polygon must be finite 2D data')
+    following = np.roll(boundary, -1, axis=0)
+    edge = following - boundary
+    length_squared = np.sum(edge * edge, axis=1)
+    if np.any(length_squared <= 1e-18):
+        raise ValueError('contact patch polygon contains a degenerate edge')
+    fraction = np.clip(
+        np.sum((sample - boundary) * edge, axis=1) / length_squared,
+        0.0,
+        1.0,
+    )
+    closest = boundary + fraction[:, None] * edge
+    distance = float(np.min(np.linalg.norm(sample - closest, axis=1)))
+    if distance <= 1e-12:
+        return 0.0
+
+    inside = False
+    previous = boundary[-1]
+    for current in boundary:
+        crosses = (
+            (current[1] > sample[1]) != (previous[1] > sample[1])
+        )
+        if crosses:
+            crossing_x = (
+                (previous[0] - current[0])
+                * (sample[1] - current[1])
+                / (previous[1] - current[1])
+                + current[0]
+            )
+            if sample[0] < crossing_x:
+                inside = not inside
+        previous = current
+    return distance if inside else -distance
+
+
+def finger_contact_patch_margin_m(
+    candidate_center_base,
+    candidate_tool0_base,
+    R_base_tool,
+):
+    """Measure whether a semantic contact center lands on the real finger pad.
+
+    The result is the shortest tool0-X/Z distance to the Link7/Link8 inner
+    contact-patch boundary. Positive values are inside, zero is on the mesh
+    boundary, and negative values miss the physical patch.
+    """
+
+    center = _readonly_vector(candidate_center_base, 'candidate_center_base')
+    tool0 = _readonly_vector(candidate_tool0_base, 'candidate_tool0_base')
+    rotation = _validated_rotation(R_base_tool, 'R_base_tool')
+    pair_center = (
+        tool0 + rotation @ ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M
+    )
+    local_center = rotation.T @ (center - pair_center)
+    return _signed_polygon_margin(
+        local_center[[0, 2]],
+        ANALYTICAL_FINGER_CONTACT_PATCH_TOOL_XZ_M,
+    )
+
+
+def contact_height_axis_base(jaw_axis_base, support_normal_base):
+    """Return the support-derived height axis inside the jaw contact plane.
+
+    Opposing finger faces are perpendicular to the jaw axis.  For an
+    arbitrarily oriented 6D grasp, the world support normal is generally not
+    contained in those faces.  Its normalized projection into the contact
+    plane is the unique category-independent direction along which target
+    height and finger-pad coverage can be compared in common metric units.
+    """
+
+    jaw = _readonly_vector(jaw_axis_base, 'jaw_axis_base')
+    support = _readonly_vector(
+        support_normal_base,
+        'support_normal_base',
+    )
+    jaw_norm = float(np.linalg.norm(jaw))
+    support_norm = float(np.linalg.norm(support))
+    if not math.isclose(jaw_norm, 1.0, rel_tol=0.0, abs_tol=1e-6):
+        raise ValueError('jaw_axis_base must be a unit vector')
+    if not math.isclose(support_norm, 1.0, rel_tol=0.0, abs_tol=1e-6):
+        raise ValueError('support_normal_base must be a unit vector')
+    projected = support - float(np.dot(support, jaw)) * jaw
+    projected_norm = float(np.linalg.norm(projected))
+    if projected_norm <= 1e-6:
+        raise ValueError(
+            'jaw axis parallel to support normal has no support-derived '
+            'contact-height direction'
+        )
+    return projected / projected_norm
+
+
+def bilateral_contact_height_bounds_m(
+    target_points_base,
+    candidate_center_base,
+    jaw_axis_base,
+    support_normal_base,
+    contact_band_fraction=0.12,
+):
+    """Return the common measured height interval on both jaw-side bands.
+
+    Heights are expressed along the projection of the live support normal
+    into the candidate's jaw contact plane, relative to the candidate contact
+    center.  This is identical to the support normal for tabletop-parallel
+    jaws and remains metrically valid for a general 6D jaw orientation.
+    Intersecting the negative and positive jaw-side bands prevents a one-sided
+    cloud edge from creating fictitious opposing contact support.
+    """
+
+    points = np.asarray(target_points_base, dtype=float)
+    if (
+        points.ndim != 2
+        or points.shape[1] != 3
+        or points.shape[0] < 2
+        or not np.all(np.isfinite(points))
+    ):
+        raise ValueError('target_points_base must be finite Nx3 data')
+    center = _readonly_vector(candidate_center_base, 'candidate_center_base')
+    jaw = _readonly_vector(jaw_axis_base, 'jaw_axis_base')
+    height_axis = contact_height_axis_base(jaw, support_normal_base)
+    fraction = _finite_number(
+        contact_band_fraction,
+        'contact_band_fraction',
+    )
+    if not 0.0 < fraction < 0.5:
+        raise ValueError('contact_band_fraction must be in (0, 0.5)')
+
+    delta = points - center
+    jaw_projection = delta @ jaw
+    lower = float(np.min(jaw_projection))
+    upper = float(np.max(jaw_projection))
+    span = upper - lower
+    if not math.isfinite(span) or span <= 1e-9:
+        return None
+    band_width = span * fraction
+    negative = delta[jaw_projection <= lower + band_width]
+    positive = delta[jaw_projection >= upper - band_width]
+    if negative.shape[0] == 0 or positive.shape[0] == 0:
+        return None
+    negative_heights = negative @ height_axis
+    positive_heights = positive @ height_axis
+    lower_height = max(
+        float(np.min(negative_heights)),
+        float(np.min(positive_heights)),
+    )
+    upper_height = min(
+        float(np.max(negative_heights)),
+        float(np.max(positive_heights)),
+    )
+    if (
+        not math.isfinite(lower_height)
+        or not math.isfinite(upper_height)
+        or upper_height < lower_height
+    ):
+        return None
+    return float(lower_height), float(upper_height)
+
+
+def _cross_2d(first, second):
+    return float(first[0] * second[1] - first[1] * second[0])
+
+
+def finger_contact_patch_height_intervals_m(
+    candidate_center_base,
+    candidate_tool0_base,
+    R_base_tool,
+    support_normal_base,
+    height_min_m,
+    height_max_m,
+):
+    """Intersect a live support-normal height line with the CAD contact patch.
+
+    Returned intervals are continuous height ranges relative to the candidate
+    center.  The exact polygon is concave, so this uses all polygon-edge
+    crossings rather than a convex support-function approximation.
+    """
+
+    center = _readonly_vector(candidate_center_base, 'candidate_center_base')
+    tool0 = _readonly_vector(candidate_tool0_base, 'candidate_tool0_base')
+    rotation = _validated_rotation(R_base_tool, 'R_base_tool')
+    support = _readonly_vector(
+        support_normal_base,
+        'support_normal_base',
+    )
+    support_norm = float(np.linalg.norm(support))
+    if not math.isclose(support_norm, 1.0, rel_tol=0.0, abs_tol=1e-6):
+        raise ValueError('support_normal_base must be a unit vector')
+    lower = _finite_number(height_min_m, 'height_min_m')
+    upper = _finite_number(height_max_m, 'height_max_m')
+    if upper < lower:
+        raise ValueError('contact height bounds must be ordered')
+
+    pair_center = (
+        tool0 + rotation @ ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M
+    )
+    local_center = rotation.T @ (center - pair_center)
+    local_direction = rotation.T @ support
+    point = local_center[[0, 2]]
+    direction = local_direction[[0, 2]]
+    polygon = ANALYTICAL_FINGER_CONTACT_PATCH_TOOL_XZ_M
+    direction_norm_squared = float(np.dot(direction, direction))
+    if direction_norm_squared <= 1e-18:
+        if _signed_polygon_margin(point, polygon) >= -1e-12:
+            return ((float(lower), float(upper)),)
+        return ()
+
+    breakpoints = [float(lower), float(upper)]
+    for edge_start, edge_end in zip(polygon, np.roll(polygon, -1, axis=0)):
+        edge = edge_end - edge_start
+        denominator = _cross_2d(direction, edge)
+        offset = edge_start - point
+        if abs(denominator) > 1e-14:
+            height = _cross_2d(offset, edge) / denominator
+            edge_fraction = _cross_2d(offset, direction) / denominator
+            if (
+                lower - 1e-12 <= height <= upper + 1e-12
+                and -1e-12 <= edge_fraction <= 1.0 + 1e-12
+            ):
+                breakpoints.append(
+                    min(float(upper), max(float(lower), float(height)))
+                )
+            continue
+        if abs(_cross_2d(offset, direction)) > 1e-12:
+            continue
+        first_height = float(
+            np.dot(edge_start - point, direction)
+            / direction_norm_squared
+        )
+        second_height = float(
+            np.dot(edge_end - point, direction)
+            / direction_norm_squared
+        )
+        for height in (first_height, second_height):
+            if lower - 1e-12 <= height <= upper + 1e-12:
+                breakpoints.append(
+                    min(float(upper), max(float(lower), height))
+                )
+
+    ordered = []
+    for value in sorted(breakpoints):
+        if not ordered or abs(value - ordered[-1]) > 1e-11:
+            ordered.append(float(value))
+    intervals = []
+    for first, second in zip(ordered, ordered[1:]):
+        if second - first <= 1e-12:
+            continue
+        midpoint = 0.5 * (first + second)
+        sample = point + midpoint * direction
+        if _signed_polygon_margin(sample, polygon) < -1e-10:
+            continue
+        if intervals and first - intervals[-1][1] <= 1e-10:
+            intervals[-1] = (intervals[-1][0], second)
+        else:
+            intervals.append((first, second))
+    return tuple((float(first), float(second)) for first, second in intervals)
+
+
+def finger_contact_patch_overlap_m(
+    candidate_center_base,
+    candidate_tool0_base,
+    R_base_tool,
+    support_normal_base,
+    height_min_m,
+    height_max_m,
+):
+    """Return the longest continuous target-height/CAD-patch intersection."""
+
+    intervals = finger_contact_patch_height_intervals_m(
+        candidate_center_base,
+        candidate_tool0_base,
+        R_base_tool,
+        support_normal_base,
+        height_min_m,
+        height_max_m,
+    )
+    if not intervals:
+        return 0.0
+    return max(float(upper - lower) for lower, upper in intervals)
 
 
 def _obb_line_interval(center, direction, obb_center, rotation, size):
@@ -435,6 +815,26 @@ def _interpolate_transforms(first, second, samples=_INTERPOLATION_SAMPLES):
     return output
 
 
+def _carried_obb_pose(
+    transform,
+    grasp_transform,
+    obb_center,
+    obb_rotation,
+):
+    """Transport a grasped target rigidly with the current tool transform."""
+
+    current = np.asarray(transform, dtype=float)
+    grasp = np.asarray(grasp_transform, dtype=float)
+    center = np.asarray(obb_center, dtype=float)
+    rotation = np.asarray(obb_rotation, dtype=float)
+    relative_rotation = current[:3, :3] @ grasp[:3, :3].T
+    return (
+        current[:3, 3]
+        + relative_rotation @ (center - grasp[:3, 3]),
+        relative_rotation @ rotation,
+    )
+
+
 def _stage_boxes(
     transform,
     gripper,
@@ -467,7 +867,9 @@ def _intended_finger_contact(
     jaw_axis,
     jaw_index,
     finger_size,
+    finger_padding_size,
     opening_width_m,
+    contact_gap_tolerance_m,
     obb_center,
     obb_rotation,
     obb_size,
@@ -486,7 +888,15 @@ def _intended_finger_contact(
     object_face = object_center + side * object_radius
     penetration = side * (object_face - inner_face)
     finger_thickness = float(finger_size[jaw_index])
-    return -1e-6 <= penetration <= 0.5 * finger_thickness + 1e-6
+    tolerated_gap = max(
+        0.0,
+        float(contact_gap_tolerance_m),
+    ) + 0.5 * float(finger_padding_size[jaw_index])
+    return (
+        -tolerated_gap - 1e-6
+        <= penetration
+        <= 0.5 * finger_thickness + 1e-6
+    )
 
 
 def _check_boxes(
@@ -501,6 +911,7 @@ def _check_boxes(
     obb_rotation,
     obb_size,
     allow_finger_contact,
+    contact_gap_tolerance_m=0.0,
 ):
     rotation = transform[:3, :3]
     stage_center = transform[:3, 3]
@@ -538,15 +949,117 @@ def _check_boxes(
                 jaw_axis,
                 jaw_index,
                 gripper.finger_size_xyz_m,
+                ANALYTICAL_FINGER_BOX_PADDING_XYZ_M,
                 opening_width_m,
+                contact_gap_tolerance_m,
                 obb_center,
                 obb_rotation,
                 obb_size,
             )
         ):
             continue
-        return False, minimum_clearance, '%s intrudes into carton OBB' % name
+        return False, minimum_clearance, '%s intrudes into target OBB' % name
     return True, minimum_clearance, ''
+
+
+def evaluate_open_gripper_observation_envelope(
+    *,
+    gripper,
+    T_base_tool0,
+    opening_width_m,
+    support_normal_base,
+    support_offset_m,
+    obb_center_base,
+    R_base_obb,
+    obb_size_xyz_m,
+    tool_jaw_axis='y',
+    tool_finger_length_axis='z',
+):
+    """Check an open, non-contact observation pose against live geometry.
+
+    MoveIt does not necessarily contain the measured support plane or target
+    OBB.  This endpoint-only gate therefore checks the same conservative palm
+    and finger CAD boxes used by the contact sequence, while allowing no
+    target contact at an observation pose.
+    """
+
+    minimum_clearance = -1.0e6
+    try:
+        if not isinstance(gripper, GripperGeometry):
+            raise ValueError('gripper must be a GripperGeometry')
+        transform = _validated_transform(T_base_tool0, 'T_base_tool0')
+        opening = _finite_number(opening_width_m, 'opening_width_m')
+        if opening < 0.0 or opening > gripper.max_inner_gap_m + 1e-9:
+            raise ValueError(
+                'opening_width_m must be inside the physical gripper range'
+            )
+        support_normal = _readonly_vector(
+            support_normal_base,
+            'support_normal_base',
+        )
+        if not math.isclose(
+            float(np.linalg.norm(support_normal)),
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1e-6,
+        ):
+            raise ValueError('support_normal_base must be a unit vector')
+        support_offset = _finite_number(
+            support_offset_m,
+            'support_offset_m',
+        )
+        obb_center = _readonly_vector(
+            obb_center_base,
+            'obb_center_base',
+        )
+        obb_rotation = _validated_rotation(
+            R_base_obb,
+            'R_base_obb',
+        )
+        obb_size = _readonly_vector(
+            obb_size_xyz_m,
+            'obb_size_xyz_m',
+        )
+        if np.any(obb_size <= 0.0):
+            raise ValueError('obb_size_xyz_m values must be positive')
+        safe, minimum_clearance, reason = _check_boxes(
+            transform,
+            gripper,
+            opening,
+            tool_jaw_axis,
+            tool_finger_length_axis,
+            support_normal,
+            support_offset,
+            obb_center,
+            obb_rotation,
+            obb_size,
+            False,
+        )
+    except Exception as exc:
+        return ObservationEnvelopeResult(
+            ok=False,
+            failure_code='OBSERVATION_ENVELOPE_INVALID',
+            failure_reason='invalid observation envelope input: %s' % exc,
+            minimum_support_clearance_m=minimum_clearance,
+        )
+    if not safe:
+        code = (
+            'OBSERVATION_SUPPORT_COLLISION'
+            if 'support clearance' in reason
+            else 'OBSERVATION_TARGET_COLLISION'
+        )
+        return ObservationEnvelopeResult(
+            ok=False,
+            failure_code=code,
+            failure_reason=str(reason),
+            minimum_support_clearance_m=minimum_clearance,
+        )
+    return ObservationEnvelopeResult(
+        ok=True,
+        failure_code='',
+        failure_reason='',
+        minimum_support_clearance_m=minimum_clearance,
+    )
 
 
 def _failed_result(
@@ -602,6 +1115,9 @@ def _evaluate_physical_candidate(
     tool_jaw_axis='y',
     tool_finger_length_axis='z',
     motion_cost=0.0,
+    opening_fit_clearance_each_side_m=None,
+    contact_height_bounds_m=None,
+    minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Run source-independent physical gates for an explicit tool0 pose."""
     required_width = 0.0
@@ -613,6 +1129,10 @@ def _evaluate_physical_candidate(
     try:
         if not isinstance(gripper, GripperGeometry):
             raise ValueError('gripper must be a GripperGeometry')
+        fit_clearance = _opening_fit_clearance_each_side_m(
+            opening_fit_clearance_each_side_m,
+            gripper,
+        )
         center = _readonly_vector(candidate_center_base, 'candidate_center_base')
         tool0 = _readonly_vector(candidate_tool0_base, 'candidate_tool0_base')
         tool_rotation = _validated_rotation(R_base_tool, 'R_base_tool')
@@ -640,6 +1160,46 @@ def _evaluate_physical_candidate(
                 'support_normal_base must align with OBB positive z'
             )
         support_offset = _finite_number(support_offset_m, 'support_offset_m')
+        minimum_contact_overlap = _finite_number(
+            minimum_contact_patch_overlap_m,
+            'minimum_contact_patch_overlap_m',
+        )
+        if minimum_contact_overlap < 0.0:
+            raise ValueError(
+                'minimum_contact_patch_overlap_m must be non-negative'
+            )
+        contact_height_axis = contact_height_axis_base(
+            tool_rotation @ parse_tool_axis(tool_jaw_axis)[0],
+            support_normal,
+        )
+        obb_height_center = float(
+            np.dot(obb_center - center, contact_height_axis)
+        )
+        obb_height_half_extent = 0.5 * float(
+            np.sum(
+                np.abs(obb_rotation.T @ contact_height_axis) * obb_size
+            )
+        )
+        obb_height_bounds = (
+            obb_height_center - obb_height_half_extent,
+            obb_height_center + obb_height_half_extent,
+        )
+        if contact_height_bounds_m is None:
+            contact_height_bounds = obb_height_bounds
+        else:
+            bounds = np.asarray(contact_height_bounds_m, dtype=float)
+            if (
+                bounds.shape != (2,)
+                or not np.all(np.isfinite(bounds))
+                or float(bounds[1]) < float(bounds[0])
+            ):
+                raise ValueError(
+                    'contact_height_bounds_m must be two ordered finite values'
+                )
+            contact_height_bounds = (
+                max(float(bounds[0]), obb_height_bounds[0]),
+                min(float(bounds[1]), obb_height_bounds[1]),
+            )
         safe_motion_cost = _finite_number(motion_cost, 'motion_cost')
         if safe_motion_cost < 0.0:
             raise ValueError('motion_cost must be non-negative')
@@ -658,10 +1218,12 @@ def _evaluate_physical_candidate(
                 'candidate tool0 does not match grasp transform translation',
             )
         if not all(
-            np.allclose(transform[:3, :3], tool_rotation, atol=1e-7)
-            for transform in transforms
+            np.allclose(transforms[index][:3, :3], tool_rotation, atol=1e-7)
+            for index in (1, 2)
         ):
-            raise ValueError('candidate rotation does not match grasp transform')
+            raise ValueError(
+                'approach/grasp rotation does not match contact candidate'
+            )
         jaw_local, jaw_index = parse_tool_axis(tool_jaw_axis)
         _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
         if jaw_index == finger_index:
@@ -725,7 +1287,7 @@ def _evaluate_physical_candidate(
         return _failed_result(
             'center',
             'CENTER_OUTSIDE_OBB',
-            'candidate center is outside the carton OBB tolerance',
+            'candidate center is outside the target OBB tolerance',
             1,
             required_width,
             center_distance,
@@ -750,7 +1312,7 @@ def _evaluate_physical_candidate(
         return _failed_result(
             'jaw_width',
             'GRIPPER_SWEEP_COLLISION',
-            'candidate jaw line does not cross both sides of the carton OBB',
+            'candidate jaw line does not cross both sides of the target OBB',
             2,
             required_width,
             center_distance,
@@ -778,8 +1340,8 @@ def _evaluate_physical_candidate(
             geometry_cost,
         )
 
-    negative_reach = -float(interval[0]) + gripper.jaw_clearance_each_side_m
-    positive_reach = float(interval[1]) + gripper.jaw_clearance_each_side_m
+    negative_reach = -float(interval[0]) + fit_clearance
+    positive_reach = float(interval[1]) + fit_clearance
     maximum_side_reach = 0.5 * physical_gap
     if (
         negative_reach > maximum_side_reach + 1e-9
@@ -799,17 +1361,48 @@ def _evaluate_physical_candidate(
             geometry_cost,
         )
 
+    if contact_height_bounds[1] < contact_height_bounds[0]:
+        contact_patch_overlap = 0.0
+    else:
+        contact_patch_overlap = finger_contact_patch_overlap_m(
+            center,
+            tool0,
+            tool_rotation,
+            contact_height_axis,
+            contact_height_bounds[0],
+            contact_height_bounds[1],
+        )
+    if contact_patch_overlap + 1e-9 < minimum_contact_overlap:
+        return _failed_result(
+            'finger_reach',
+            'GRIPPER_CONTACT_PATCH_MISS',
+            (
+                'continuous bilateral target/CAD contact overlap %.6fm '
+                'is below required %.6fm'
+                % (contact_patch_overlap, minimum_contact_overlap)
+            ),
+            3,
+            required_width,
+            center_distance,
+            support_clearance,
+            jaw_alignment,
+            safe_motion_cost,
+            geometry_cost,
+        )
+
     minimum_box_clearance = float('inf')
     endpoint_contact = (False, False, True, True)
     for endpoint_index, (transform, allow_contact) in enumerate(
         zip(transforms, endpoint_contact)
     ):
         endpoint_obb_center = obb_center
+        endpoint_obb_rotation = obb_rotation
         if endpoint_index == 3:
-            endpoint_obb_center = (
-                obb_center
-                + transform[:3, 3]
-                - transforms[2][:3, 3]
+            endpoint_obb_center, endpoint_obb_rotation = _carried_obb_pose(
+                transform,
+                transforms[2],
+                obb_center,
+                obb_rotation,
             )
         safe, clearance, reason = _check_boxes(
             transform,
@@ -820,9 +1413,10 @@ def _evaluate_physical_candidate(
             support_normal,
             support_offset,
             endpoint_obb_center,
-            obb_rotation,
+            endpoint_obb_rotation,
             obb_size,
             allow_contact,
+            fit_clearance,
         )
         minimum_box_clearance = min(minimum_box_clearance, clearance)
         if not safe:
@@ -855,7 +1449,7 @@ def _evaluate_physical_candidate(
             return _failed_result(
                 'swept_envelope',
                 'GRIPPER_SWEEP_COLLISION',
-                'approach enters the carton from the support-plane side',
+                'approach enters the target from the support-plane side',
                 5,
                 required_width,
                 center_distance,
@@ -866,11 +1460,13 @@ def _evaluate_physical_candidate(
             )
         for transform in _interpolate_transforms(first, second):
             swept_obb_center = obb_center
+            swept_obb_rotation = obb_rotation
             if segment_index == 2:
-                swept_obb_center = (
-                    obb_center
-                    + transform[:3, 3]
-                    - transforms[2][:3, 3]
+                swept_obb_center, swept_obb_rotation = _carried_obb_pose(
+                    transform,
+                    transforms[2],
+                    obb_center,
+                    obb_rotation,
                 )
             safe, clearance, reason = _check_boxes(
                 transform,
@@ -881,9 +1477,10 @@ def _evaluate_physical_candidate(
                 support_normal,
                 support_offset,
                 swept_obb_center,
-                obb_rotation,
+                swept_obb_rotation,
                 obb_size,
                 segment_contact[segment_index],
+                fit_clearance,
             )
             minimum_box_clearance = min(minimum_box_clearance, clearance)
             if not safe:
@@ -936,12 +1533,21 @@ def _evaluate_candidate_impl(
     tool_jaw_axis='y',
     tool_finger_length_axis='z',
     motion_cost=0.0,
+    opening_fit_clearance_each_side_m=None,
+    target_points_base=None,
+    contact_band_fraction=0.12,
+    minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Validate the strict GraspNet source contract, then run physical gates."""
     required_width = 0.0
+    contact_height_bounds = None
     try:
         if not isinstance(gripper, GripperGeometry):
             raise ValueError('gripper must be a GripperGeometry')
+        fit_clearance = _opening_fit_clearance_each_side_m(
+            opening_fit_clearance_each_side_m,
+            gripper,
+        )
         center = _readonly_vector(candidate_center_base, 'candidate_center_base')
         tool0 = _readonly_vector(candidate_tool0_base, 'candidate_tool0_base')
         tool_rotation = _validated_rotation(R_base_tool, 'R_base_tool')
@@ -992,8 +1598,29 @@ def _evaluate_candidate_impl(
             obb_size,
             obb_rotation,
             tool_rotation @ jaw_local,
-            gripper.jaw_clearance_each_side_m,
+            fit_clearance,
         )
+        if target_points_base is not None:
+            contact_height_bounds = bilateral_contact_height_bounds_m(
+                target_points_base,
+                center,
+                tool_rotation @ jaw_local,
+                support_normal_base,
+                contact_band_fraction,
+            )
+            if contact_height_bounds is None:
+                return _failed_result(
+                    'finger_reach',
+                    'GRIPPER_CONTACT_PATCH_MISS',
+                    'target cloud has no common bilateral contact height',
+                    3,
+                    required_width,
+                    0.0,
+                    -1.0e6,
+                    0.0,
+                    0.0,
+                    0.0,
+                )
     except Exception as exc:
         failure_code = (
             str(exc.code)
@@ -1030,6 +1657,9 @@ def _evaluate_candidate_impl(
         tool_jaw_axis=tool_jaw_axis,
         tool_finger_length_axis=tool_finger_length_axis,
         motion_cost=motion_cost,
+        opening_fit_clearance_each_side_m=fit_clearance,
+        contact_height_bounds_m=contact_height_bounds,
+        minimum_contact_patch_overlap_m=minimum_contact_patch_overlap_m,
     )
 
 
@@ -1053,11 +1683,19 @@ def _evaluate_explicit_candidate_impl(
     tool_jaw_axis='y',
     tool_finger_length_axis='z',
     motion_cost=0.0,
+    opening_fit_clearance_each_side_m=None,
+    contact_band_fraction=0.12,
+    minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Validate an explicit target-cloud width, then run physical gates."""
+    contact_height_bounds = None
     try:
         if not isinstance(gripper, GripperGeometry):
             raise ValueError('gripper must be a GripperGeometry')
+        fit_clearance = _opening_fit_clearance_each_side_m(
+            opening_fit_clearance_each_side_m,
+            gripper,
+        )
         rotation = _validated_rotation(R_base_tool, 'R_base_tool')
         jaw_local, jaw_index = parse_tool_axis(tool_jaw_axis)
         _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
@@ -1066,8 +1704,28 @@ def _evaluate_explicit_candidate_impl(
         recomputed = projected_cloud_width_m(
             target_points_base,
             rotation @ jaw_local,
-            gripper.jaw_clearance_each_side_m,
+            fit_clearance,
         )
+        contact_height_bounds = bilateral_contact_height_bounds_m(
+            target_points_base,
+            candidate_center_base,
+            rotation @ jaw_local,
+            support_normal_base,
+            contact_band_fraction,
+        )
+        if contact_height_bounds is None:
+            return _failed_result(
+                'finger_reach',
+                'GRIPPER_CONTACT_PATCH_MISS',
+                'target cloud has no common bilateral contact height',
+                3,
+                recomputed,
+                0.0,
+                -1.0e6,
+                0.0,
+                motion_cost,
+                0.0,
+            )
         supplied_width = _finite_number(
             required_open_width_m,
             'required_open_width_m',
@@ -1123,6 +1781,9 @@ def _evaluate_explicit_candidate_impl(
         tool_jaw_axis=tool_jaw_axis,
         tool_finger_length_axis=tool_finger_length_axis,
         motion_cost=motion_cost,
+        opening_fit_clearance_each_side_m=fit_clearance,
+        contact_height_bounds_m=contact_height_bounds,
+        minimum_contact_patch_overlap_m=minimum_contact_patch_overlap_m,
     )
 
 
@@ -1146,6 +1807,10 @@ def evaluate_candidate(
     tool_jaw_axis='y',
     tool_finger_length_axis='z',
     motion_cost=0.0,
+    opening_fit_clearance_each_side_m=None,
+    target_points_base=None,
+    contact_band_fraction=0.12,
+    minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Evaluate one candidate and always fail closed on invalid derived state."""
     try:
@@ -1168,6 +1833,12 @@ def evaluate_candidate(
             tool_jaw_axis=tool_jaw_axis,
             tool_finger_length_axis=tool_finger_length_axis,
             motion_cost=motion_cost,
+            opening_fit_clearance_each_side_m=opening_fit_clearance_each_side_m,
+            target_points_base=target_points_base,
+            contact_band_fraction=contact_band_fraction,
+            minimum_contact_patch_overlap_m=(
+                minimum_contact_patch_overlap_m
+            ),
         )
     except Exception as exc:
         return _failed_result(
@@ -1208,6 +1879,9 @@ def evaluate_explicit_candidate(
     tool_jaw_axis='y',
     tool_finger_length_axis='z',
     motion_cost=0.0,
+    opening_fit_clearance_each_side_m=None,
+    contact_band_fraction=0.12,
+    minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Evaluate an explicit tool0 candidate without a GraspNet depth field."""
     try:
@@ -1230,6 +1904,11 @@ def evaluate_explicit_candidate(
             tool_jaw_axis=tool_jaw_axis,
             tool_finger_length_axis=tool_finger_length_axis,
             motion_cost=motion_cost,
+            opening_fit_clearance_each_side_m=opening_fit_clearance_each_side_m,
+            contact_band_fraction=contact_band_fraction,
+            minimum_contact_patch_overlap_m=(
+                minimum_contact_patch_overlap_m
+            ),
         )
     except Exception as exc:
         return _failed_result(

@@ -20,14 +20,26 @@ def make_grasp_sequence_from_grasp_pose(
     lift_height_m=0.05,
     tool_approach_axis='x',
     approach_direction_base=None,
+    pregrasp_direction_base=None,
+    lift_direction_base=None,
 ):
     """Create a motion sequence from a 6D gripper pose in base frame."""
     if approach_direction_base is None:
-        pregrasp = _offset_along_approach_axis(
-            grasp_pose,
-            -abs(float(pregrasp_distance_m)),
-            tool_approach_axis,
-        )
+        if pregrasp_direction_base is None:
+            pregrasp = _offset_along_approach_axis(
+                grasp_pose,
+                -abs(float(pregrasp_distance_m)),
+                tool_approach_axis,
+            )
+        else:
+            pregrasp_direction = _validated_approach_direction(
+                pregrasp_direction_base
+            )
+            pregrasp = _offset_along_vector(
+                grasp_pose,
+                -abs(float(pregrasp_distance_m)),
+                pregrasp_direction,
+            )
         approach = _offset_along_approach_axis(
             grasp_pose,
             -abs(float(approach_offset_m)),
@@ -35,10 +47,15 @@ def make_grasp_sequence_from_grasp_pose(
         )
     else:
         direction = _validated_approach_direction(approach_direction_base)
+        pregrasp_direction = (
+            direction
+            if pregrasp_direction_base is None
+            else _validated_approach_direction(pregrasp_direction_base)
+        )
         pregrasp = _offset_along_vector(
             grasp_pose,
             -abs(float(pregrasp_distance_m)),
-            direction,
+            pregrasp_direction,
         )
         approach = _offset_along_vector(
             grasp_pose,
@@ -46,8 +63,16 @@ def make_grasp_sequence_from_grasp_pose(
             direction,
         )
     grasp = deepcopy(grasp_pose)
-    lift = deepcopy(grasp_pose)
-    lift.pose.position.z += float(lift_height_m)
+    if lift_direction_base is None:
+        lift = deepcopy(grasp_pose)
+        lift.pose.position.z += float(lift_height_m)
+    else:
+        lift_direction = _validated_approach_direction(lift_direction_base)
+        lift = _offset_along_vector(
+            grasp_pose,
+            abs(float(lift_height_m)),
+            lift_direction,
+        )
     return Grasp6DPlan(pregrasp=pregrasp, approach=approach, grasp=grasp, lift=lift)
 
 

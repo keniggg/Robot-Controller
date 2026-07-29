@@ -29,6 +29,10 @@ from alicia_flexible_grasp.vision.rgbd_snapshot import (
     RgbdSample,
     SnapshotResult,
 )
+from alicia_flexible_grasp.grasp.grasp6d_pipeline import (
+    BoundedMoveItSelection,
+    CandidateStageFunnel,
+)
 
 
 SCRIPT = ROOT / 'scripts' / 'remote_grasp6d_node.py'
@@ -255,23 +259,41 @@ def make_geometry_estimate(
     axes_base=None,
     size_xyz_m=None,
 ):
+    center = np.asarray(
+        [0.40, -0.10, 0.22] if center_base is None else center_base,
+        dtype=float,
+    )
+    size = np.asarray(
+        [0.24, 0.16, 0.10] if size_xyz_m is None else size_xyz_m,
+        dtype=float,
+    )
+    points = np.asarray(
+        [
+            center
+            + np.asarray(
+                [
+                    x_sign * 0.5 * size[0],
+                    y_sign * 0.5 * size[1],
+                    z_sign * 0.5 * size[2],
+                ]
+            )
+            for x_sign in (-1.0, 1.0)
+            for y_sign in (-1.0, 1.0)
+            for z_sign in (-1.0, 1.0)
+        ],
+        dtype=float,
+    )
     return remote_node.GeometryEstimate(
         ok=bool(ok),
         failure_code=str(code),
         failure_reason=str(reason),
-        center_base=np.asarray(
-            [0.40, -0.10, 0.22] if center_base is None else center_base
-        ),
+        center_base=center,
         axes_base=np.asarray(np.eye(3) if axes_base is None else axes_base),
-        size_xyz_m=np.asarray(
-            [0.24, 0.16, 0.10] if size_xyz_m is None else size_xyz_m
-        ),
+        size_xyz_m=size,
         support_normal_base=np.asarray([0.0, 0.0, 1.0]),
         support_offset_m=0.0,
         support_inlier_ratio=0.82,
-        object_points_base=np.asarray(
-            [[0.39, -0.10, 0.20], [0.41, -0.10, 0.21], [0.40, -0.09, 0.22]]
-        ),
+        object_points_base=points,
         source_mode=source_mode,
     )
 
@@ -494,6 +516,263 @@ def frozen_input_config(node, mode=None, **overrides):
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
+    @staticmethod
+    def _dedupe_gate(width=0.04):
+        return remote_node.CandidateGateResult(
+            ok=True,
+            failure_code='',
+            failure_reason='',
+            required_open_width_m=width,
+            center_distance_m=0.0,
+            support_clearance_m=0.01,
+            jaw_alignment=1.0,
+            motion_cost=0.0,
+            geometry_cost=0.0,
+            failed_gate='',
+            passed_gate_count=6,
+        )
+
+    def _scored_for_moveit_dedupe(
+        self,
+        *,
+        track_id,
+        candidate_source='tabletop_geometry',
+        source_index=0,
+        source_variant_index=0,
+        evaluation_variant_index=0,
+        score=0.01,
+    ):
+        width = 0.04
+        center = (0.1 + 0.001 * track_id, 0.0, 0.2)
+        transform = np.eye(4)
+        transform[:3, 3] = center
+        gate = self._dedupe_gate(width=width)
+        if candidate_source == 'tabletop_geometry':
+            model_width = None
+            model_score = None
+        else:
+            model_width = width
+            model_score = 0.8
+        normalized = remote_node.NormalizedPlanningCandidate(
+            candidate_source=candidate_source,
+            source_index=source_index,
+            variant_index=source_variant_index,
+            source_lineage=(candidate_source,),
+            contact_center_base=center,
+            T_base_tool0=transform,
+            insertion_axis_base=(0.0, 0.0, -1.0),
+            jaw_axis_base=(0.0, 1.0, 0.0),
+            required_open_width_m=width,
+            model_width_m=model_width,
+            model_score=model_score,
+            source_local_score=float(score),
+            common_physical_cost=float(score),
+            geometry_gate=gate,
+            grasp_sequence=None,
+            payload={'source_index': source_index},
+            audit={},
+        )
+        stable = remote_node.StableCandidate(
+            track_id=track_id,
+            hit_count=3,
+            window_count=5,
+            hit_request_ids=(1, 2, 3),
+            request_id=3,
+            snapshot_stamp_sec=10.0,
+            target_epoch=7,
+            target_label='carton',
+            model_choice='carton_segmentation',
+            center_base_xyz=center,
+            tool0_position_xyz=center,
+            quaternion_xyzw=(0.0, 0.0, 0.0, 1.0),
+            approach_base_xyz=(0.0, 0.0, -1.0),
+            required_open_width_m=width,
+            model_width_m=model_width,
+            model_score=model_score,
+            geometry_margin_m=0.01,
+            pre_moveit_score=float(score),
+            position_dispersion_m=0.002,
+            orientation_dispersion_rad=0.03,
+            payload=normalized,
+            candidate_source=candidate_source,
+            source_lineage=(candidate_source,),
+        )
+        safety = remote_node.SafetyGateInput(
+            depth_valid=True,
+            transform_valid=True,
+            target_present=True,
+            same_target_instance=True,
+            target_absolute_distance_m=0.01,
+            target_absolute_limit_m=0.15,
+            required_open_width_m=width,
+            physical_open_width_m=0.05,
+            geometry_valid=True,
+            collision_free=True,
+            request_id=3,
+            snapshot_stamp_sec=10.0,
+            target_epoch=7,
+            target_label='carton',
+            model_choice='carton_segmentation',
+            track_id=track_id,
+            variant_index=evaluation_variant_index,
+            center_base_xyz=center,
+            tool0_position_xyz=center,
+            quaternion_xyzw=(
+                (0.0, 0.0, 0.0, 1.0)
+                if evaluation_variant_index == 0
+                else (0.0, 0.0, 1.0, 0.0)
+            ),
+            approach_base_xyz=(0.0, 0.0, -1.0),
+            snapshot_context_revision='ctx-3',
+        )
+        features = remote_node.SoftCandidateFeatures(
+            model_score=model_score,
+            cloud_distance_m=0.01,
+            center_distance_m=float(score),
+            downward_approach_cos=1.0,
+            visibility_center_cost=0.0,
+            support_margin_m=0.01,
+            jaw_tilt_cos=1.0,
+            geometry_margin_m=0.01,
+            joint_path_cost=0.0,
+            joint_max_delta_rad=0.0,
+            stability_hit_ratio=0.6,
+            position_dispersion_m=0.002,
+            orientation_dispersion_rad=0.03,
+        )
+        return remote_node.ScoredStableCandidate(
+            stable_candidate=stable,
+            variant_index=evaluation_variant_index,
+            latest_safety=safety,
+            soft_features=features,
+            score_weights=remote_node.SoftScoreWeights(),
+            evaluation_request_id=3,
+            evaluation_snapshot_stamp_sec=10.0,
+            evaluation_context_revision='ctx-3',
+        )
+
+    def test_tabletop_moveit_dedupe_keeps_best_per_source_pose(self):
+        duplicate_slow = self._scored_for_moveit_dedupe(
+            track_id=5,
+            source_index=2,
+            source_variant_index=1,
+            evaluation_variant_index=0,
+            score=0.020,
+        )
+        duplicate_best = self._scored_for_moveit_dedupe(
+            track_id=4,
+            source_index=2,
+            source_variant_index=1,
+            evaluation_variant_index=0,
+            score=0.004,
+        )
+        different_source_pose = self._scored_for_moveit_dedupe(
+            track_id=6,
+            source_index=3,
+            source_variant_index=0,
+            evaluation_variant_index=0,
+            score=0.010,
+        )
+        jaw_symmetric_variant = self._scored_for_moveit_dedupe(
+            track_id=7,
+            source_index=2,
+            source_variant_index=1,
+            evaluation_variant_index=1,
+            score=0.001,
+        )
+
+        result = (
+            remote_node.RemoteGrasp6DNode
+            ._dedupe_scored_tabletop_candidates_for_moveit(
+                (
+                    duplicate_slow,
+                    duplicate_best,
+                    different_source_pose,
+                    jaw_symmetric_variant,
+                )
+            )
+        )
+
+        self.assertEqual(
+            [item.track_id for item in result],
+            [7, 4, 6],
+        )
+
+    def test_tabletop_moveit_dedupe_does_not_merge_graspnet_tracks(self):
+        first = self._scored_for_moveit_dedupe(
+            track_id=1,
+            candidate_source='graspnet',
+            source_index=0,
+            source_variant_index=0,
+            evaluation_variant_index=0,
+            score=0.020,
+        )
+        second = self._scored_for_moveit_dedupe(
+            track_id=2,
+            candidate_source='graspnet',
+            source_index=0,
+            source_variant_index=0,
+            evaluation_variant_index=0,
+            score=0.010,
+        )
+
+        result = (
+            remote_node.RemoteGrasp6DNode
+            ._dedupe_scored_tabletop_candidates_for_moveit((first, second))
+        )
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual({item.track_id for item in result}, {1, 2})
+
+    def test_far_field_observation_ranking_uses_frozen_move_distance(self):
+        node = object.__new__(remote_node.RemoteGrasp6DNode)
+        near = self._scored_for_moveit_dedupe(
+            track_id=1,
+            score=0.020,
+        )
+        far = self._scored_for_moveit_dedupe(
+            track_id=2,
+            score=0.001,
+        )
+        node._stable_variant_runtime = {
+            (1, 0): {
+                'soft_evidence': {
+                    'observation_translation_delta_m': 0.18,
+                },
+            },
+            (2, 0): {
+                'soft_evidence': {
+                    'observation_translation_delta_m': 0.24,
+                },
+            },
+        }
+
+        ranked = sorted(
+            (far, near),
+            key=node._far_field_observation_moveit_rank_key,
+        )
+
+        self.assertEqual([item.track_id for item in ranked], [1, 2])
+
+    def test_observation_move_distance_uses_frozen_tool_and_camera_chain(self):
+        node = object.__new__(remote_node.RemoteGrasp6DNode)
+        node._tool_from_camera_matrix = lambda: np.eye(4)
+        prepared = types.SimpleNamespace(
+            pose_estimator=types.SimpleNamespace(
+                T_base_camera_link=np.eye(4),
+            ),
+        )
+        observation = remote_node.PoseStamped()
+        observation.pose.position.x = 3.0
+        observation.pose.position.y = 4.0
+
+        distance = node._frozen_observation_translation_delta_m(
+            prepared,
+            observation,
+        )
+
+        self.assertAlmostEqual(distance, 5.0)
+
     def test_tabletop_runtime_config_is_immutable_and_uses_gripper_aperture(self):
         gripper = make_processing_node().gripper_geometry
         values = {
@@ -505,7 +784,8 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 'min_contact_band_points': 6,
                 'contact_band_fraction': 0.12,
                 'min_finger_support_clearance_m': 0.003,
-                'max_candidates': 8,
+                'max_candidates': 24,
+                'approach_tilt_degrees': [10.0, 20.0, 30.0, 40.0],
                 'merge_center_distance_m': 0.005,
                 'merge_insertion_angle_deg': 10.0,
                 'merge_jaw_angle_deg': 10.0,
@@ -519,10 +799,29 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         self.assertTrue(enabled)
         self.assertEqual(geometry.max_inner_gap_m, gripper.max_inner_gap_m)
-        self.assertEqual(geometry.max_candidates, 8)
+        self.assertEqual(geometry.max_candidates, 24)
+        self.assertEqual(
+            geometry.approach_tilt_degrees, (10.0, 20.0, 30.0, 40.0)
+        )
+        self.assertEqual(
+            geometry.opening_fit_clearance_each_side_m,
+            gripper.jaw_clearance_each_side_m,
+        )
         self.assertEqual(merge.center_distance_m, 0.005)
         with self.assertRaises(Exception):
             geometry.max_candidates = 99
+
+    def test_tabletop_runtime_config_uses_separate_opening_fit_clearance(self):
+        gripper = make_processing_node().gripper_geometry
+
+        _enabled, geometry, _merge = remote_node.load_tabletop_geometry_config(
+            {'tabletop_geometry_candidates': {}},
+            gripper,
+            opening_fit_clearance_each_side_m=0.0005,
+        )
+
+        self.assertEqual(geometry.jaw_clearance_each_side_m, 0.002)
+        self.assertEqual(geometry.opening_fit_clearance_each_side_m, 0.0005)
 
     def test_tabletop_runtime_config_rejects_physical_clearance_mismatch(self):
         gripper = make_processing_node().gripper_geometry
@@ -535,6 +834,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             'contact_band_fraction': 0.12,
             'min_finger_support_clearance_m': 0.003,
             'max_candidates': 8,
+            'approach_tilt_degrees': [10.0, 15.0],
             'merge_center_distance_m': 0.005,
             'merge_insertion_angle_deg': 10.0,
             'merge_jaw_angle_deg': 10.0,
@@ -557,6 +857,61 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                     raised.exception.code,
                     remote_node.CONTINUOUS_CONFIG_INVALID,
                 )
+
+    def test_tabletop_runtime_config_rejects_bad_approach_tilts(self):
+        gripper = make_processing_node().gripper_geometry
+        for value in (True, [0.0], [46.0], [1.0, 2.0, 3.0, 4.0, 5.0], ['10']):
+            with self.subTest(value=value):
+                with self.assertRaises(
+                    remote_node.CandidateContractError
+                ) as raised:
+                    remote_node.load_tabletop_geometry_config(
+                        {
+                            'tabletop_geometry_candidates': {
+                                'approach_tilt_degrees': value,
+                            }
+                        },
+                        gripper,
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    remote_node.CONTINUOUS_CONFIG_INVALID,
+                )
+
+    def test_adaptive_stage_config_uses_generic_bounds_and_global_hard_gates(self):
+        limits = remote_node.load_adaptive_stage_config({
+            'candidate_min_downward_approach_cos': 0.72,
+            'candidate_max_final_approach_lateral_m': 0.008,
+            'adaptive_stage_generation': {
+                'enabled': True,
+                'tilt_sample_count': 3,
+                'approach_max_m': 0.050,
+                'pregrasp_max_m': 0.055,
+                'lift_max_m': 0.070,
+            },
+        })
+
+        self.assertIsInstance(limits, remote_node.AdaptiveStageLimits)
+        self.assertEqual(limits.tilt_sample_count, 3)
+        self.assertEqual(limits.min_downward_cos, 0.72)
+        self.assertEqual(limits.max_lateral_sweep_m, 0.008)
+        self.assertEqual(limits.pregrasp_max_m, 0.055)
+        self.assertEqual(limits.lift_max_m, 0.070)
+        with self.assertRaises(Exception):
+            limits.max_tilt_deg = 10.0
+
+    def test_adaptive_stage_config_cannot_disable_geometry_driven_stages(self):
+        with self.assertRaises(
+            remote_node.CandidateContractError
+        ) as raised:
+            remote_node.load_adaptive_stage_config({
+                'adaptive_stage_generation': {'enabled': False},
+            })
+
+        self.assertEqual(
+            raised.exception.code,
+            remote_node.CONTINUOUS_CONFIG_INVALID,
+        )
 
     def test_prepare_keeps_frozen_geometry_when_graspnet_transport_fails(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
@@ -614,6 +969,75 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             )
         )
 
+    def test_prepare_uses_current_snapshot_support_plane_before_activation(self):
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node = make_processing_node()
+        geometry = make_geometry_estimate()
+        node.latest_support_plane_camera_point = None
+        node.latest_support_plane_camera_normal = None
+        node._require_graspnet_input_prerequisites = lambda *_args: None
+        node._prepare_snapshot_geometry = lambda *_args: (
+            geometry,
+            snapshot.depth_raw,
+            np.eye(4),
+        )
+        node._generate_tabletop_candidates = (
+            lambda _geometry, **_kwargs: ((), {})
+        )
+        node._gripper_contract_mismatch_reason = lambda: ''
+        captured = {}
+
+        def capture_input(*_args, **kwargs):
+            captured.update(kwargs)
+            return (
+                types.SimpleNamespace(
+                    color_bgr=snapshot.color_bgr,
+                    depth_raw=snapshot.depth_raw,
+                ),
+                {},
+            )
+
+        node._build_frozen_graspnet_input = capture_input
+        node._require_stream_ticket_current = lambda _ticket: None
+        node._predict_remote = lambda *_args, **_kwargs: (
+            (),
+            {},
+            {},
+            0.0,
+            0.0,
+            0.0,
+        )
+        config = frozen_input_config(
+            node,
+            remote_node.CONTEXT_ROI,
+            candidate_target_gate_enabled=True,
+        )
+        ticket = types.SimpleNamespace(
+            request_id=9,
+            generation=1,
+            snapshot_stamp_sec=snapshot.stamp_sec,
+            target_epoch=1,
+            payload=(snapshot, config),
+        )
+
+        prepared = node._prepare_and_predict(ticket)
+
+        self.assertIs(prepared.geometry, geometry)
+        self.assertIn('support_plane_point_camera', captured)
+        self.assertIn('support_plane_normal_camera', captured)
+        np.testing.assert_allclose(
+            captured['support_plane_point_camera'],
+            [0.0, 0.0, 0.0],
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            captured['support_plane_normal_camera'],
+            [1.0, 0.0, 0.0],
+            atol=1e-8,
+        )
+        self.assertIsNone(node.latest_support_plane_camera_point)
+        self.assertIsNone(node.latest_support_plane_camera_normal)
+
     def test_prepare_propagates_remote_error_when_tabletop_has_no_candidate(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
         node = make_processing_node()
@@ -624,7 +1048,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             snapshot.depth_raw,
             np.eye(4),
         )
-        node._generate_tabletop_candidates = lambda _geometry: (
+        node._generate_tabletop_candidates = lambda _geometry, **_kwargs: (
             (),
             {
                 'failure_code': 'NO_FIT_DIRECTION',
@@ -1357,7 +1781,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertAlmostEqual(message.depth_mad_m, 0.0015)
         self.assertEqual(message.fused_frames, 3)
         self.assertAlmostEqual(message.support_inlier_ratio, 0.82)
-        self.assertEqual(message.object_point_count, 3)
+        self.assertEqual(message.object_point_count, 8)
         quaternion = np.asarray(
             [
                 message.pose_base.orientation.x,
@@ -2917,7 +3341,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 RemoteGraspCandidate(
                     0.99,
                     np.array([0.40, -0.10, 0.25]),
-                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    np.array(
+                        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                        dtype=float,
+                    ),
                     0.001,
                     depth_m=0.03,
                 )
@@ -2966,7 +3393,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 RemoteGraspCandidate(
                     0.40,
                     np.array([0.40, -0.10, 0.25]),
-                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    np.array(
+                        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                        dtype=float,
+                    ),
                     0.090,
                     depth_m=0.03,
                 ),
@@ -2978,7 +3408,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.04, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.02],
         )
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
@@ -3019,7 +3449,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 RemoteGraspCandidate(
                     0.90,
                     np.array([0.40, -0.10, 0.25]),
-                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    np.array(
+                        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                        dtype=float,
+                    ),
                     0.04,
                     depth_m=0.03,
                 )
@@ -3042,7 +3475,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.04, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.02],
         )
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
@@ -3069,7 +3502,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 RemoteGraspCandidate(
                     0.90,
                     np.array([0.40, -0.10, 0.25]),
-                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    np.array(
+                        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                        dtype=float,
+                    ),
                     0.04,
                     depth_m=0.03,
                 )
@@ -3092,7 +3528,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.04, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.02],
         )
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
@@ -3118,7 +3554,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 RemoteGraspCandidate(
                     0.90,
                     np.array([0.40, -0.10, 0.25]),
-                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    np.array(
+                        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                        dtype=float,
+                    ),
                     0.04,
                     depth_m=0.03,
                 )
@@ -3134,7 +3573,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.04, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.02],
         )
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
@@ -3164,7 +3603,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 RemoteGraspCandidate(
                     0.90,
                     np.array([0.40, -0.10, 0.25]),
-                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    np.array(
+                        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                        dtype=float,
+                    ),
                     0.04,
                     depth_m=0.03,
                 )
@@ -3179,7 +3621,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.04, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.02],
         )
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
@@ -3226,7 +3668,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 RemoteGraspCandidate(
                     0.90,
                     np.array([0.40, -0.10, 0.25]),
-                    np.array([0.0, 0.0, 0.0, 1.0]),
+                    np.array(
+                        remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                        dtype=float,
+                    ),
                     0.04,
                     depth_m=0.03,
                 )
@@ -3258,7 +3703,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.04, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.02],
         )
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
@@ -4657,7 +5102,25 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node.target_cloud_candidate_min_support_clearance_m = -0.002
         node.latest_support_plane_camera_point = None
         node.latest_support_plane_camera_normal = None
-        node.camera_visibility_gate_enabled = False
+        node.camera_visibility_gate_enabled = True
+        expected_visibility_sequence = object()
+        observed_visibility_sequences = []
+
+        def record_visibility(_pose, _target, sequence=None):
+            observed_visibility_sequences.append(sequence)
+            return True, [
+                {
+                    'stage': 'pregrasp',
+                    'u': 320.0,
+                    'v': 240.0,
+                    'depth_m': 0.2,
+                    'center_cost': 0.0,
+                    'margin_x_px': 36,
+                    'margin_y_px': 36,
+                }
+            ], 'visible'
+
+        node._candidate_visibility_metrics = record_visibility
         node._target_gate_rejected_count = 0
         node._approach_gate_rejected_count = 0
         node._target_base_xyz = lambda: (np.array([0.30, 0.0, 0.10]), 'test')
@@ -4687,7 +5150,14 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertTrue(
             node._candidate_matches_target(None, candidate, tool0_pose)
         )
-        row = node._candidate_gate_audit_row(0, 0, candidate, tool0_pose)
+        observed_visibility_sequences.clear()
+        row = node._candidate_gate_audit_row(
+            0,
+            0,
+            candidate,
+            tool0_pose,
+            visibility_sequence=expected_visibility_sequence,
+        )
 
         self.assertTrue(row['target_ok'])
         self.assertAlmostEqual(row['center_distance_m'], 0.0)
@@ -4701,6 +5171,12 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertAlmostEqual(row['tool0_contract_residual_base_m'], 0.0)
         np.testing.assert_allclose(row['translation_camera_m'], row['center_camera_m'])
         self.assertAlmostEqual(row['depth_offset_m'], 0.03)
+        self.assertEqual(
+            observed_visibility_sequences,
+            [expected_visibility_sequence],
+        )
+        self.assertTrue(row['visibility_ok'])
+        self.assertEqual(row['visibility_metrics'][0]['stage'], 'pregrasp')
 
     def test_full_gate_audit_is_atomic_on_disk_and_topic_stays_bounded(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
@@ -4777,7 +5253,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         candidate = RemoteGraspCandidate(
             0.90,
             np.array([0.40, -0.10, 0.25]),
-            np.array([0.0, 0.0, 0.0, 1.0]),
+            np.array(
+                remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                dtype=float,
+            ),
             0.04,
             depth_m=0.03,
         )
@@ -4791,7 +5270,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.04, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.02],
         )
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
@@ -5217,7 +5696,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         good = RemoteGraspCandidate(
             0.80,
             np.array([0.40, -0.10, 0.25]),
-            np.array([0.0, 0.0, 0.0, 1.0]),
+            np.array(
+                remote_node.STRICT_MODEL_GRASP_TO_TOOL_QUATERNION,
+                dtype=float,
+            ),
             0.04,
             depth_m=0.03,
         )
@@ -5231,7 +5713,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         original_estimator = remote_node.estimate_object_geometry
         remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
-            size_xyz_m=[0.04, 0.04, 0.06],
+            size_xyz_m=[0.04, 0.04, 0.02],
         )
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
@@ -6090,6 +6572,58 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(node._approach_gate_rejected_count, 1)
 
+    def test_final_approach_lateral_gate_rejects_a836_side_sweep(self):
+        node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+        node.candidate_max_final_approach_lateral_m = 0.010
+
+        def pose_at(x, y, z):
+            pose = PoseStamped()
+            pose.header.frame_id = 'base_link'
+            pose.pose.position.x = float(x)
+            pose.pose.position.y = float(y)
+            pose.pose.position.z = float(z)
+            pose.pose.orientation.w = 1.0
+            return pose
+
+        sequence = types.SimpleNamespace(
+            pregrasp=pose_at(-0.1956047454, -0.4433950852, 0.1169873896),
+            approach=pose_at(-0.1904689871, -0.4550000000, 0.1000000000),
+            grasp=pose_at(-0.1904689871, -0.4677581320, 0.0856813847),
+        )
+        passing_gate = remote_node.CandidateGateResult(
+            ok=True,
+            failure_code='',
+            failure_reason='',
+            required_open_width_m=0.04035,
+            center_distance_m=0.0,
+            support_clearance_m=0.003,
+            jaw_alignment=1.0,
+            motion_cost=0.0,
+            geometry_cost=0.0,
+            failed_gate='',
+            passed_gate_count=6,
+        )
+
+        support_normal = np.asarray((0.0, 0.0, 1.0), dtype=float)
+        support_normal.setflags(write=False)
+        lateral_m = node._sequence_final_approach_lateral_m(
+            sequence,
+            support_normal,
+        )
+        rejected = node._apply_final_approach_lateral_gate(
+            passing_gate,
+            sequence,
+            support_normal,
+        )
+
+        self.assertAlmostEqual(lateral_m, 0.012758, places=6)
+        self.assertFalse(rejected.ok)
+        self.assertEqual(
+            rejected.failure_code,
+            'TABLETOP_APPROACH_LATERAL_SWEEP',
+        )
+        self.assertEqual(rejected.failed_gate, 'approach_lateral_sweep')
+
     def test_candidate_rank_includes_model_motion_and_approach_quality(self):
         node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
         pose = PoseStamped()
@@ -6202,6 +6736,182 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIs(tf_listener.buffer, tf_buffer)
         self.assertIs(estimator.tf_buffer, tf_buffer)
         self.assertFalse(estimator.allow_static_fallback)
+
+    @staticmethod
+    def _make_mujoco_selection_node(candidates):
+        node = remote_node.RemoteGrasp6DNode.__new__(
+            remote_node.RemoteGrasp6DNode
+        )
+        node.mujoco_config = {
+            'enabled': True,
+            'execution_gate_enabled': True,
+            'server_url': 'http://127.0.0.1:8000',
+            'timeout_sec': 20.0,
+            'min_score': 80,
+        }
+        node.mujoco_selection_gate_enabled = True
+        node.mujoco_selection_max_candidates = 10
+        node.mujoco_selection_time_budget_sec = 80.0
+        node.latest_joint_state = types.SimpleNamespace(
+            name=['Joint%d' % index for index in range(1, 7)],
+            position=[0.0] * 6,
+        )
+        node._stable_variant_runtime = {
+            (candidate.track_id, candidate.variant_index): {}
+            for candidate in candidates
+        }
+        node._require_stream_ticket_current = lambda _ticket: None
+        node._build_selected_preview_bundle = lambda candidate: {
+            'rich_plan': types.SimpleNamespace(
+                plan_id='plan-%d' % candidate.track_id,
+                candidate_source='tabletop_geometry',
+                candidate_source_lineage=['tabletop_geometry'],
+            )
+        }
+        node._mujoco_client_factory = (
+            lambda _url, timeout_sec: types.SimpleNamespace(
+                simulate_grasp=lambda payload: {
+                    'plan_id': payload['plan_id']
+                }
+            )
+        )
+        return node
+
+    @staticmethod
+    def _mujoco_selection_candidate(track_id, final_score):
+        return types.SimpleNamespace(
+            track_id=int(track_id),
+            variant_index=0,
+            final_score=float(final_score),
+            evaluation_snapshot_stamp_sec=20.0,
+            stable_candidate=types.SimpleNamespace(
+                candidate_source='tabletop_geometry',
+            ),
+        )
+
+    def test_mujoco_selection_tries_next_reachable_candidate(self):
+        first = self._mujoco_selection_candidate(1, 0.1)
+        second = self._mujoco_selection_candidate(2, 0.2)
+        node = self._make_mujoco_selection_node((first, second))
+        original_builder = remote_node.build_mujoco_payload
+        original_validator = remote_node.validate_mujoco_gate_response
+        remote_node.build_mujoco_payload = (
+            lambda plan, _names, _positions, _cfg: {
+                'plan_id': plan.plan_id
+            }
+        )
+
+        def validate(_response, plan_id, _score, **_kwargs):
+            if plan_id == 'plan-1':
+                return types.SimpleNamespace(
+                    ok=False,
+                    code='MUJOCO_CONTACT_FAILED',
+                    reason='contact lost during prescribed lift',
+                    score=55.0,
+                )
+            return types.SimpleNamespace(
+                ok=True,
+                code='',
+                reason='',
+                score=91.0,
+            )
+
+        remote_node.validate_mujoco_gate_response = validate
+        try:
+            funnel = CandidateStageFunnel(2)
+            selection = BoundedMoveItSelection(
+                selected=first,
+                checked=(first, second),
+                reachable=(second, first),
+                funnel=funnel,
+                configured_top_n=2,
+            )
+            screened, status = (
+                node._screen_near_field_selection_with_mujoco(
+                    types.SimpleNamespace(
+                        near_field=True,
+                        ticket=object(),
+                    ),
+                    selection,
+                )
+            )
+        finally:
+            remote_node.build_mujoco_payload = original_builder
+            remote_node.validate_mujoco_gate_response = original_validator
+
+        self.assertIs(screened.selected, second)
+        self.assertEqual(status, 'MUJOCO_SELECTION_PASSED')
+        self.assertEqual(
+            node._stable_variant_runtime[(1, 0)]['mujoco_selection'][
+                'code'
+            ],
+            'MUJOCO_CONTACT_FAILED',
+        )
+        self.assertTrue(
+            node._stable_variant_runtime[(2, 0)]['mujoco_selection'][
+                'passed'
+            ]
+        )
+        self.assertEqual(
+            funnel.to_dict()['stage_counts']['mujoco_screened'],
+            {'entered': 2, 'passed': 1, 'rejected': 1},
+        )
+
+    def test_mujoco_selection_stops_on_authority_failure(self):
+        first = self._mujoco_selection_candidate(1, 0.1)
+        second = self._mujoco_selection_candidate(2, 0.2)
+        node = self._make_mujoco_selection_node((first, second))
+        original_builder = remote_node.build_mujoco_payload
+        original_validator = remote_node.validate_mujoco_gate_response
+        remote_node.build_mujoco_payload = (
+            lambda plan, _names, _positions, _cfg: {
+                'plan_id': plan.plan_id
+            }
+        )
+        remote_node.validate_mujoco_gate_response = (
+            lambda *_args, **_kwargs: types.SimpleNamespace(
+                ok=False,
+                code='PLAN_ID_MISMATCH',
+                reason='response does not bind the requested plan',
+                score=0.0,
+            )
+        )
+        try:
+            funnel = CandidateStageFunnel(2)
+            selection = BoundedMoveItSelection(
+                selected=first,
+                checked=(first, second),
+                reachable=(first, second),
+                funnel=funnel,
+                configured_top_n=2,
+            )
+            screened, status = (
+                node._screen_near_field_selection_with_mujoco(
+                    types.SimpleNamespace(
+                        near_field=True,
+                        ticket=object(),
+                    ),
+                    selection,
+                )
+            )
+        finally:
+            remote_node.build_mujoco_payload = original_builder
+            remote_node.validate_mujoco_gate_response = original_validator
+
+        self.assertIsNone(screened.selected)
+        self.assertEqual(status, 'PLAN_ID_MISMATCH')
+        self.assertIn(
+            'mujoco_selection',
+            node._stable_variant_runtime[(1, 0)],
+        )
+        self.assertNotIn(
+            'mujoco_selection',
+            node._stable_variant_runtime[(2, 0)],
+        )
+        self.assertEqual(
+            funnel.to_dict()['stage_counts']['mujoco_screened'],
+            {'entered': 1, 'passed': 0, 'rejected': 1},
+        )
 
 
 if __name__ == '__main__':

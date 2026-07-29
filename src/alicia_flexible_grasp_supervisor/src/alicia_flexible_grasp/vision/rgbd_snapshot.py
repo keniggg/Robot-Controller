@@ -30,6 +30,9 @@ class DepthQuality:
     valid_depth_ratio: float
     depth_median_m: float
     depth_mad_m: float
+    # Robust sigma estimate of repeated depth measurements at the same target
+    # pixels.  Unlike depth_mad_m, this excludes real spatial object shape.
+    depth_repeatability_m: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -50,12 +53,18 @@ class SnapshotResult:
     stamp_ns: int = 0
     target_epoch: int = 0
     target_identity: tuple = ()
+    sample_stamp_ns: tuple = ()
 
     def __post_init__(self):
         for name in ('color_bgr', 'depth_raw', 'target_depth_raw', 'object_mask'):
             object.__setattr__(self, name, _readonly_copy(getattr(self, name)))
         object.__setattr__(self, 'bbox', tuple(self.bbox or ()))
         object.__setattr__(self, 'target_identity', tuple(self.target_identity or ()))
+        object.__setattr__(
+            self,
+            'sample_stamp_ns',
+            tuple(int(value) for value in (self.sample_stamp_ns or ())),
+        )
 
 
 def mask_iou(first, second):
@@ -106,6 +115,7 @@ def _empty_quality(fused_frames=0):
         valid_depth_ratio=0.0,
         depth_median_m=0.0,
         depth_mad_m=0.0,
+        depth_repeatability_m=0.0,
     )
 
 
@@ -129,6 +139,17 @@ def _failure(samples, code, reason, source_mode):
         stamp_sec = float(latest.stamp_sec)
         stamp_ns = int(getattr(latest, 'stamp_ns', round(stamp_sec * 1e9)))
         frame_id = str(latest.frame_id or '')
+    sample_stamp_ns = tuple(
+        int(
+            getattr(
+                item,
+                'stamp_ns',
+                round(float(getattr(item, 'stamp_sec', 0.0)) * 1e9),
+            )
+            or round(float(getattr(item, 'stamp_sec', 0.0)) * 1e9)
+        )
+        for item in samples
+    )
     return SnapshotResult(
         ok=False,
         failure_code=str(code),
@@ -144,6 +165,7 @@ def _failure(samples, code, reason, source_mode):
         quality=_empty_quality(len(samples)),
         source_mode=str(source_mode),
         stamp_ns=stamp_ns,
+        sample_stamp_ns=sample_stamp_ns,
     )
 
 
@@ -354,6 +376,41 @@ def fuse_stable_samples(
     else:
         final_median_raw = median_raw
         final_mad_raw = mad_raw
+    # Estimate sensor/registration repeatability without conflating it with
+    # genuine surface depth variation.  Each observation is compared only
+    # with the temporal median at the same target pixel.  Pooling those
+    # same-pixel residuals gives a robust window statistic; 1.4826 converts a
+    # Gaussian MAD to a robust standard-deviation estimate.  Pixels need at
+    # least two valid target observations and must survive the spatial target
+    # filter, so mask edges, support pixels, holes, and fly points cannot
+    # inflate or suppress the estimate.
+    depth_stack = np.stack(clipped_frames, axis=0).astype(np.float64)
+    mask_stack = np.stack(masks, axis=0) > 0
+    temporal_support = target_depth > 0
+    temporal_repeatability_raw = 0.0
+    if np.any(temporal_support) and len(samples) >= 2:
+        repeated_values = depth_stack[:, temporal_support].T
+        repeated_valid = (
+            mask_stack[:, temporal_support].T
+            & np.isfinite(repeated_values)
+            & (repeated_values > 0)
+        )
+        eligible = np.count_nonzero(repeated_valid, axis=1) >= 2
+        if np.any(eligible):
+            observations = np.where(
+                repeated_valid[eligible],
+                repeated_values[eligible],
+                np.nan,
+            )
+            temporal_centers = np.nanmedian(observations, axis=1)
+            residuals = np.abs(
+                observations - temporal_centers[:, np.newaxis]
+            )
+            finite_residuals = residuals[np.isfinite(residuals)]
+            if finite_residuals.size:
+                temporal_repeatability_raw = (
+                    1.4826 * float(np.median(finite_residuals))
+                )
     valid_points = int(final_values.size)
     quality = DepthQuality(
         fused_frames=len(samples),
@@ -362,8 +419,24 @@ def fuse_stable_samples(
         valid_depth_ratio=float(valid_points) / float(mask_area) if mask_area else 0.0,
         depth_median_m=final_median_raw * depth_scale if valid_points else 0.0,
         depth_mad_m=final_mad_raw * depth_scale if valid_points else 0.0,
+        depth_repeatability_m=(
+            temporal_repeatability_raw * depth_scale
+            if valid_points
+            else 0.0
+        ),
     )
     latest = samples[-1]
+    sample_stamp_ns = tuple(
+        int(
+            getattr(
+                item,
+                'stamp_ns',
+                round(float(item.stamp_sec) * 1e9),
+            )
+            or round(float(item.stamp_sec) * 1e9)
+        )
+        for item in samples
+    )
     return SnapshotResult(
         ok=True,
         failure_code='',
@@ -381,6 +454,7 @@ def fuse_stable_samples(
         stamp_ns=int(getattr(latest, 'stamp_ns', round(float(latest.stamp_sec) * 1e9))),
         target_epoch=int(getattr(latest, 'target_epoch', 0) or 0),
         target_identity=tuple(getattr(latest, 'target_identity', ()) or ()),
+        sample_stamp_ns=sample_stamp_ns,
     )
 
 
@@ -469,9 +543,11 @@ class SynchronizedRgbdBuffer:
         max_inference_latency_sec=None,
         newest_after_ns=0,
         target_identity=None,
+        require_all_after_ns=False,
     ):
         count = max(1, int(count))
         newest_after_ns = int(newest_after_ns)
+        require_all_after_ns = bool(require_all_after_ns)
         collection_span = max(0.0, float(collection_span_sec))
         collection_span_ns = int(round(collection_span * 1e9))
         max_inference_latency = max(
@@ -566,11 +642,21 @@ class SynchronizedRgbdBuffer:
                             del collected[key]
                     if len(collected) >= count:
                         selected_keys = sorted(collected)[-count:]
-                        if selected_keys[-1] > newest_after_ns:
+                        boundary_key = (
+                            selected_keys[0]
+                            if require_all_after_ns
+                            else selected_keys[-1]
+                        )
+                        if boundary_key > newest_after_ns:
                             return [collected[key][1] for key in selected_keys]
                 elif len(complete) >= count:
                     selected = complete[-count:]
-                    if selected[-1][0] > newest_after_ns:
+                    boundary_key = (
+                        selected[0][0]
+                        if require_all_after_ns
+                        else selected[-1][0]
+                    )
+                    if boundary_key > newest_after_ns:
                         return [
                             self._sample_from_entry(entry, bool(require_mask))
                             for _key, entry in selected

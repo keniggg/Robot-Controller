@@ -483,15 +483,21 @@
   <joint
     name="left_finger"
     type="prismatic">
+    <!--
+      The real SDK and /joint_states public contract is 0 m closed and
+      0.05 m open.  Keep the original CAD poses, but parameterize them in
+      that public direction: right_finger=0 is the centered/closed pose and
+      right_finger=0.05 is the original fully-open pose.
+    -->
     <origin
-      xyz="-0.0002 0.050502 0.13118"
+      xyz="-0.0002 0.000502 0.131180183660255"
       rpy="-1.5708 0 0" />
     <parent
       link="Grasp_base" />
     <child
       link="Link7" />
     <axis
-      xyz="0 0 1" />
+      xyz="0 0 -1" />
     <limit
       lower="-0.05"
       upper="0"
@@ -543,14 +549,14 @@
     name="right_finger"
     type="prismatic">
     <origin
-      xyz="-0.0002 -0.050498 0.13118"
+      xyz="-0.0002 -0.000498 0.131180183660255"
       rpy="1.5708 0 0" />
     <parent
       link="Grasp_base" />
     <child
       link="Link8" />
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
     <limit
       lower="0"
       upper="0.05"

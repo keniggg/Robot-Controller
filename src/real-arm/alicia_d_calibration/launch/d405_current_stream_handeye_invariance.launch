@@ -1,0 +1,46 @@
+<launch>
+    <arg name="image_topic" default="/supervisor/camera/color/image_raw" />
+    <arg name="camera_info_yaml" default="$(find alicia_d_calibration)/scripts/d405_factory_camera.yaml" />
+    <arg name="base_frame" default="base_link" />
+    <arg name="tool_frame" default="tool0" />
+    <arg name="camera_frame" default="camera_link" />
+    <arg name="board_frame" default="charuco_board" />
+    <arg name="quality_topic" default="/charuco/quality" />
+
+    <arg name="board_width" default="11" />
+    <arg name="board_height" default="8" />
+    <arg name="square_length" default="0.015" />
+    <arg name="marker_length" default="0.011" />
+
+    <node name="charuco_tracker_handeye_verify" pkg="alicia_d_calibration" type="charuco_tracker.py" output="screen">
+        <param name="board_size" value="[$(arg board_width), $(arg board_height)]" />
+        <param name="square_length" value="$(arg square_length)" />
+        <param name="marker_length" value="$(arg marker_length)" />
+        <param name="dictionary_id" value="DICT_4X4_100" />
+        <param name="camera_frame" value="$(arg camera_frame)" />
+        <param name="board_frame" value="$(arg board_frame)" />
+        <param name="image_topic" value="$(arg image_topic)" />
+        <param name="camera_info_yaml" value="$(arg camera_info_yaml)" />
+        <param name="quality_topic" value="$(arg quality_topic)" />
+        <param name="max_input_age_sec" value="0.35" />
+    </node>
+
+    <node name="handeye_invariance_verifier" pkg="alicia_d_calibration" type="handeye_invariance_verifier.py" output="screen">
+        <param name="base_frame" value="$(arg base_frame)" />
+        <param name="tool_frame" value="$(arg tool_frame)" />
+        <param name="camera_frame" value="$(arg camera_frame)" />
+        <param name="board_frame" value="$(arg board_frame)" />
+        <param name="quality_topic" value="$(arg quality_topic)" />
+        <param name="sample_window_sec" value="1.0" />
+        <param name="sample_rate_hz" value="15.0" />
+        <param name="min_window_samples" value="8" />
+        <param name="min_pose_samples" value="6" />
+        <param name="min_charuco_corners" value="35" />
+        <param name="min_edge_clearance_px" value="12.0" />
+        <param name="max_reprojection_rms_px" value="1.5" />
+        <param name="pass_translation_rms_m" value="0.003" />
+        <param name="pass_translation_max_m" value="0.005" />
+        <param name="pass_orientation_rms_deg" value="1.0" />
+        <param name="pass_orientation_max_deg" value="2.0" />
+    </node>
+</launch>

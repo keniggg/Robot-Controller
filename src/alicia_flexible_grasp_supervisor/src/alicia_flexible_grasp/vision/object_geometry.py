@@ -526,7 +526,15 @@ def _fit_obb(
         if flipped_trace > unflipped_trace:
             axes = flipped
 
-    bottom, top = np.percentile(signed_height, [2.0, 98.0])
+    raw_bottom, top = np.percentile(signed_height, [2.0, 98.0])
+    # The instance-mask point cloud is usually dominated by the visible upper
+    # surface of a tabletop object.  Using only the spread of those visible
+    # points makes a box-shaped object look like a thin slab floating above the
+    # support plane; MuJoCo then lets it drop before/during lift and rejects
+    # otherwise plausible grasps.  For tabletop geometry the physical object is
+    # support-resting, so anchor the modeled bottom face to the fitted support
+    # plane and use the visible upper surface height as the box height.
+    bottom = min(0.0, float(raw_bottom))
     height = float(top - bottom)
     plane_center = basis @ center_2d - float(offset) * normal
     center = plane_center + normal * (0.5 * (float(bottom) + float(top)))

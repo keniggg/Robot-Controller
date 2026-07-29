@@ -35,6 +35,8 @@ add_service_files(
   StopGrasp.srv
   SetForceParams.srv
   SetTargetPose.srv
+  CheckPoseSequence.srv
+  ResolveFreeSpaceOrientations.srv
   SetJointCommand.srv
   SetFloat.srv
   CartesianJog.srv

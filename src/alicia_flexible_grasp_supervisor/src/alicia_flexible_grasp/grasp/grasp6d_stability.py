@@ -494,12 +494,60 @@ class CandidateTracker:
         stable, _pending_continuity = self._compute_stable_candidates()
         return stable
 
-    def _compute_stable_candidates(self):
+    def candidates_with_min_hits(self, min_hits):
+        """Fuse tracks meeting an explicit evidence count without mutating state."""
+
+        required = _validated_integer(min_hits, 'min_hits', 1)
+        if required > self.config.window_size:
+            raise ValueError('min_hits must not exceed window_size')
+        stable, _pending_continuity = self._compute_stable_candidates(required)
+        return stable
+
+    def evidence_summary(self, max_tracks=8):
+        """Return bounded, deterministic evidence for pending-track diagnosis."""
+
+        limit = _validated_integer(max_tracks, 'max_tracks', 1)
+        rows = []
+        for track_id, track in self._tracks.items():
+            request_ids = tuple(sorted(track.observations))
+            latest = track.latest
+            rows.append(
+                {
+                    'track_id': int(track_id),
+                    'hit_count': len(request_ids),
+                    'hit_request_ids': list(request_ids),
+                    'latest_request_id': int(latest.request_id),
+                    'candidate_source': str(latest.candidate_source),
+                }
+            )
+        rows.sort(
+            key=lambda row: (
+                -row['hit_count'],
+                -row['latest_request_id'],
+                row['track_id'],
+            )
+        )
+        return {
+            'window_request_ids': list(self._request_ids),
+            'track_count': len(self._tracks),
+            'max_hit_count': max(
+                (row['hit_count'] for row in rows),
+                default=0,
+            ),
+            'tracks': list(rows[:limit]),
+        }
+
+    def _compute_stable_candidates(self, min_hits=None):
+        required = (
+            self.config.min_hits
+            if min_hits is None
+            else _validated_integer(min_hits, 'min_hits', 1)
+        )
         stable = []
         pending_continuity = {}
         for track_id in sorted(self._tracks):
             track = self._tracks[track_id]
-            if len(track.observations) >= self.config.min_hits:
+            if len(track.observations) >= required:
                 fused = self._fuse(track)
                 stable.append(fused)
                 pending_continuity[track_id] = fused.quaternion_xyzw
