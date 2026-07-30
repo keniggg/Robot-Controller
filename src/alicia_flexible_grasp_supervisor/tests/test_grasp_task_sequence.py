@@ -1429,7 +1429,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(len(preflight), 1)
         self.assertFalse(preflight[0][1])
         self.assertEqual(len(executed), 1)
-        self.assertFalse(
+        self.assertTrue(
             execute_kwargs[0][
                 'allow_post_failure_observation_validation'
             ]

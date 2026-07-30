@@ -4631,7 +4631,7 @@ class GraspTaskNode:
             execution_plan=plan,
             gcfg=gcfg,
             execute_pose=strict_execute_pose,
-            allow_post_failure_observation_validation=False,
+            allow_post_failure_observation_validation=True,
         ):
             return None
         return True
