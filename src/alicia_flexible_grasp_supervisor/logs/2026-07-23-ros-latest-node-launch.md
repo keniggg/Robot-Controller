@@ -14527,3 +14527,88 @@ Implemented and verified offline:
   encoder, and endpoint gates remain unchanged.
 - The implementation plan is
   `docs/superpowers/plans/2026-07-29-unified-near-field-deadline.md`.
+
+### 2026-07-29 - offline implementation of the unified near-field deadline
+
+- The arm remained powered off and hardware serial ports remained outside
+  this work. No ROS service, topic write, serial access, hardware-node start,
+  motion, enable, disable, stop, torque-off, controller-stop, or emergency
+  command was issued.
+- Added `NearFieldPlanningPhase.msg` with one header timestamp, active flag,
+  monotonically increasing phase ID, and absolute ROS deadline. The task
+  publishes it on `/grasp/near_field_phase`; the existing
+  `/grasp/near_field_active` Bool remains compatibility-only.
+- Added an absolute `time deadline` request field to
+  `CheckPoseSequence.srv` and `ResolveFreeSpaceOrientations.srv`. This changes
+  both ROS service MD5 contracts, so the next powered validation must start
+  the rebuilt task, remote 6D node, motion gateway, and generated interfaces
+  together. A partial hot replacement across old/new service definitions is
+  not valid.
+- The first focused RED run failed at the intended old boundaries:
+  `_set_near_field_active` rejected `budget_sec`; the task returned
+  `NEAR_FIELD_PLAN_PHASE_INVALID` instead of the fresh direct terminal; the
+  direct selector still remained live at the phase deadline because it used
+  `snapshot_stamp + 30`; no terminal Preview publisher existed; the motion
+  gateway forwarded `0.0` instead of request deadlines `42.0/43.0`; and the
+  planner rejected both `deadline_sec` arguments.
+- The task now creates the deadline before requesting the direct Preview
+  stream, so stream start, RGB-D fusion, WSL inference, local gates, and
+  strict selection consume the same total window. It no longer starts a
+  second monotonic 30-second wait after the stream service returns.
+- Each `PreparedPrediction` freezes the current phase ID and deadline. The
+  remote candidate gate uses that immutable request value rather than the
+  later snapshot timestamp or a mutable future phase. It also rechecks the
+  deadline after candidate selection and before publishing a valid Preview.
+- Both MoveIt service requests carry the same absolute deadline. The motion
+  gateway forwards it without changing any execution/controller behavior.
+  `MoveItPlanner` checks it before and after each strict sequence stage,
+  before and after each deterministic IK sample, and around the repeatability
+  IK. Pose/IK timeouts are clamped to remaining time. A strict timeout returns
+  `MOVEIT_TIMEOUT` and cannot start the orientation resolver.
+- Direct failures now publish one fresh, ticket-bound, invalid
+  `Grasp6DPlan` Preview with
+  `candidate_source=near_field_terminal`. The task accepts only a
+  current-window invalid terminal with an allowlisted exact code and exits
+  immediately; it never freezes or executes that message.
+- Focused RED cases turned GREEN. Complete affected suites passed:
+  task sequence `140/140`, remote streaming `222/222`, motion gateway
+  `28/28`, and MoveIt planner feedback `39/39`.
+- Final `catkin_make` succeeded and generated all supervisor interfaces
+  (`8` messages, `11` services). Full supervisor unittest discovery passed
+  `653/653`; the remote pytest suite independently passed `222/222`.
+  All changed Python files compiled, and `git diff --check` was silent.
+- These results prove the offline timing and classification contracts, not
+  powered second-stage contact. The next live proof must show one phase ID
+  and absolute deadline across task/remote/MoveIt logs, then either a valid
+  contact Preview before that deadline or a fresh exact terminal with no
+  unchecked candidate misreported as unreachable.
+
+### 2026-07-30 - current-phase Preview window binding closeout
+
+- The arm remained powered off. No ROS master/node launch, service or topic
+  write, serial access, motion, enable, disable, stop, torque-off,
+  controller-stop, or emergency command was issued.
+- Final code review found one narrower implementation defect without changing
+  the approved route: the task's Preview minimum timestamp still used the
+  maximum of the old plan timestamp and snapshot slack. A terminal published
+  immediately before a new near-field phase could therefore have been
+  mistaken for the new phase's terminal. It could not become execution
+  authority because invalid plans remain non-executable, but it could have
+  ended the new phase early.
+- A focused RED test observed the old lower bound as
+  `9.000000001 s` for a phase that started at `10.0 s`. The task now validates
+  a finite positive phase start/deadline pair and clamps the valid/terminal
+  Preview window to the current phase start. The same test then passed with
+  the exact `10.0 s` lower bound.
+- Both task-side fallback values for `near_field_replan_timeout_sec` were
+  changed from the legacy `8.0 s` to the approved and configured `30.0 s`.
+  This does not add time to the configured production route; it makes
+  missing-key behavior agree with the single 30-second contract.
+- Final offline verification passed: task sequence `141/141`, full supervisor
+  unittest discovery `654/654`, remote streaming pytest `222/222`, changed
+  Python compilation, and `git diff --check`. `catkin_make` also succeeded
+  with `8` supervisor messages and `11` services, including
+  `NearFieldPlanningPhase` and both deadline-aware planning services.
+- This closes the offline implementation only. It does not prove powered
+  second-stage contact, grasp closure, or lift; those still require the next
+  unified rebuilt-stack live run.

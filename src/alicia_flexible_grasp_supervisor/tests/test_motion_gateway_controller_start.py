@@ -35,13 +35,20 @@ class FakePlanner:
         self.calls.append(('strict_cached', target))
         return True, 'strict cached executed'
 
-    def check_pose_sequence(self, targets, stage_names, linear):
+    def check_pose_sequence(
+        self,
+        targets,
+        stage_names,
+        linear,
+        deadline_sec=0.0,
+    ):
         self.calls.append(
             (
                 'strict_sequence',
                 list(targets),
                 list(stage_names),
                 list(linear),
+                float(deadline_sec),
             )
         )
         return (
@@ -58,6 +65,7 @@ class FakePlanner:
         stage_names,
         linear,
         resolve_orientation,
+        deadline_sec=0.0,
     ):
         self.calls.append(
             (
@@ -66,6 +74,7 @@ class FakePlanner:
                 list(stage_names),
                 list(linear),
                 list(resolve_orientation),
+                float(deadline_sec),
             )
         )
         return (
@@ -211,6 +220,7 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
             targets=['pregrasp', 'approach', 'grasp'],
             stage_names=['pregrasp', 'approach', 'grasp'],
             linear=[False, True, True],
+            deadline=types.SimpleNamespace(to_sec=lambda: 42.0),
         )
 
         res = MotionGateway.handle_pose_sequence_strict(gateway, req)
@@ -227,6 +237,7 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
                 ['pregrasp', 'approach', 'grasp'],
                 ['pregrasp', 'approach', 'grasp'],
                 [False, True, True],
+                42.0,
             )],
         )
 
@@ -674,6 +685,7 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
             stage_names=['pregrasp'],
             linear=[False],
             resolve_orientation=[True],
+            deadline=types.SimpleNamespace(to_sec=lambda: 43.0),
         )
 
         res = MotionGateway.handle_resolve_free_space_orientations(
@@ -700,6 +712,7 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
                     ['pregrasp'],
                     [False],
                     [True],
+                    43.0,
                 )
             ],
         )

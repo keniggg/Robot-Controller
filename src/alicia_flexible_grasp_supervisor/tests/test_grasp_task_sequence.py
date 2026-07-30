@@ -367,6 +367,82 @@ class GraspTaskSequenceTest(unittest.TestCase):
         source = SCRIPT.read_text(encoding='utf-8')
         self.assertIn("'/grasp/near_field_active'", source)
 
+    def test_direct_near_field_phase_publishes_one_absolute_deadline(self):
+        class RecordingPublisher:
+            def __init__(self):
+                self.messages = []
+
+            def publish(self, message):
+                self.messages.append(message)
+
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        node._near_field_active = False
+        node._near_field_phase_id = 0
+        node._near_field_phase_deadline_sec = 0.0
+        node.near_field_pub = RecordingPublisher()
+        node.near_field_phase_pub = RecordingPublisher()
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(100.0)
+        )
+        try:
+            changed = node._set_near_field_active(
+                True,
+                budget_sec=30.0,
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertTrue(changed)
+        self.assertEqual(len(node.near_field_phase_pub.messages), 1)
+        phase = node.near_field_phase_pub.messages[0]
+        self.assertTrue(phase.active)
+        self.assertEqual(phase.phase_id, 1)
+        self.assertAlmostEqual(phase.header.stamp.to_sec(), 100.0)
+        self.assertAlmostEqual(phase.deadline.to_sec(), 130.0)
+        self.assertAlmostEqual(node._near_field_phase_deadline_sec, 130.0)
+
+    def test_fresh_direct_terminal_preview_returns_exact_failure(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
+        bound.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        bound.plan_id = compute_plan_id(bound)
+        terminal = Grasp6DPlan()
+        terminal.header.frame_id = 'base_link'
+        terminal.header.stamp = grasp_task_node.rospy.Time.from_sec(10.1)
+        terminal.valid = False
+        terminal.candidate_source = 'near_field_terminal'
+        terminal.diagnostic = (
+            'NEAR_FIELD_DIRECT_TIMEOUT: shared phase deadline consumed'
+        )
+        node.latest_grasp6d_preview_plan = terminal
+        node._grasp6d_plan_lock = threading.RLock()
+
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.2)
+        )
+        try:
+            result, candidate = node._copy_near_field_preview_candidate(
+                bound,
+                int(10.0 * 1e9),
+                {
+                    'near_field_strategy': 'single_snapshot_direct',
+                    'plan_validity_sec': 5.0,
+                },
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertIsNone(candidate)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.code, 'NEAR_FIELD_DIRECT_TIMEOUT')
+        self.assertIn('shared phase deadline', result.reason)
+
     def test_active_execution_ignores_new_valid_plan_replacement(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
@@ -1627,6 +1703,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_obj = self._object_at(0.40, 0.0, 0.20, stamp_sec=10.0)
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(10.0)
         node.active = True
+        node._near_field_phase_started_sec = 10.0
+        node._near_field_phase_deadline_sec = 40.0
         node.set_state = lambda *args, **kwargs: None
         node._freeze_execution_plan(bound)
         calls = []
@@ -1689,6 +1767,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
         )
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(10.0)
         node.active = True
+        node._near_field_phase_started_sec = 10.0
+        node._near_field_phase_deadline_sec = 40.0
         node.set_state = lambda *args, **kwargs: None
         node._freeze_execution_plan(bound)
         stream_calls = []
@@ -1750,6 +1830,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.latest_grasp6d_plan = bound
         node.latest_grasp6d_preview_plan = None
         node.active = True
+        node._near_field_phase_started_sec = 9.95
+        node._near_field_phase_deadline_sec = 10.20
         states = []
         node.set_state = lambda stage, message='', *_args, **_kwargs: (
             states.append((stage, message))
@@ -1775,18 +1857,16 @@ class GraspTaskSequenceTest(unittest.TestCase):
 
         original_now = grasp_task_node.rospy.Time.now
         original_sleep = grasp_task_node.rospy.sleep
-        original_monotonic = grasp_task_node.time.monotonic
-        clock = [0.0]
+        clock = [10.0]
 
-        def monotonic():
+        def now():
             clock[0] += 0.06
-            return clock[0]
+            return grasp_task_node.rospy.Time.from_sec(clock[0])
 
         grasp_task_node.rospy.Time.now = staticmethod(
-            lambda: grasp_task_node.rospy.Time.from_sec(10.05)
+            now
         )
         grasp_task_node.rospy.sleep = lambda *_args, **_kwargs: None
-        grasp_task_node.time.monotonic = monotonic
         try:
             result = node._maybe_rebind_near_field_grasp6d_plan(
                 {
@@ -1803,12 +1883,123 @@ class GraspTaskSequenceTest(unittest.TestCase):
         finally:
             grasp_task_node.rospy.Time.now = original_now
             grasp_task_node.rospy.sleep = original_sleep
-            grasp_task_node.time.monotonic = original_monotonic
 
         self.assertIsNone(result)
         self.assertEqual(stream_calls, [True, False])
         self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
         self.assertIn('NEAR_FIELD_DIRECT_TIMEOUT', states[-1][1])
+
+    def test_direct_near_field_terminal_preview_ends_wait_immediately(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
+        bound.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        bound.plan_id = compute_plan_id(bound)
+        node.active = True
+        node._near_field_phase_started_sec = 9.5
+        node._near_field_phase_deadline_sec = 40.0
+        states = []
+        node.set_state = lambda stage, message='', *_args, **_kwargs: (
+            states.append((stage, message))
+        )
+        stream_calls = []
+        node._set_near_field_preview_stream = (
+            lambda _gcfg, enabled: (
+                stream_calls.append(bool(enabled)) or True
+            )
+        )
+        node._copy_near_field_preview_candidate = (
+            lambda *_args, **_kwargs: (
+                grasp_task_node.PlanValidationResult(
+                    False,
+                    'NEAR_FIELD_NO_REACHABLE_CANDIDATE',
+                    'all checked candidates failed strict MoveIt',
+                ),
+                None,
+            )
+        )
+        original_now = grasp_task_node.rospy.Time.now
+        original_sleep = grasp_task_node.rospy.sleep
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        grasp_task_node.rospy.sleep = lambda *_args, **_kwargs: self.fail(
+            'fresh direct terminal must not wait for the phase deadline'
+        )
+        try:
+            result = node._maybe_rebind_near_field_grasp6d_plan(
+                {
+                    'near_field_strategy': 'single_snapshot_direct',
+                    'near_field_replan_enabled': True,
+                    'near_field_replan_required': True,
+                    'near_field_replan_timeout_sec': 30.0,
+                },
+                {},
+                bound,
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.sleep = original_sleep
+
+        self.assertIsNone(result)
+        self.assertEqual(stream_calls, [True, False])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertEqual(
+            states[-1][1],
+            (
+                'NEAR_FIELD_NO_REACHABLE_CANDIDATE: all checked candidates '
+                'failed strict MoveIt'
+            ),
+        )
+
+    def test_direct_near_field_preview_window_starts_at_phase_boundary(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
+        node.active = True
+        node._near_field_phase_started_sec = 10.0
+        node._near_field_phase_deadline_sec = 40.0
+        node.set_state = lambda *_args, **_kwargs: None
+        node._set_near_field_preview_stream = (
+            lambda _gcfg, _enabled: True
+        )
+        observed_minimum_stamps = []
+
+        def terminal_result(_plan, minimum_stamp_ns, _gcfg):
+            observed_minimum_stamps.append(int(minimum_stamp_ns))
+            return (
+                grasp_task_node.PlanValidationResult(
+                    False,
+                    'NEAR_FIELD_NO_REACHABLE_CANDIDATE',
+                    'current phase terminal',
+                ),
+                None,
+            )
+
+        node._copy_near_field_preview_candidate = terminal_result
+        original_now = grasp_task_node.rospy.Time.now
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.25)
+        )
+        try:
+            result = node._maybe_rebind_near_field_grasp6d_plan(
+                {
+                    'near_field_strategy': 'single_snapshot_direct',
+                    'near_field_replan_enabled': True,
+                    'near_field_replan_required': True,
+                    'near_field_replan_timeout_sec': 30.0,
+                    'near_field_replan_snapshot_slack_sec': 3.0,
+                },
+                {},
+                bound,
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+
+        self.assertIsNone(result)
+        self.assertEqual(observed_minimum_stamps, [int(10.0 * 1e9)])
 
     def test_direct_near_field_executes_frozen_plan_without_final_refine(self):
         node = grasp_task_node.GraspTaskNode.__new__(
@@ -1842,7 +2033,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             )
         )
         node._set_near_field_active = (
-            lambda active: setattr(
+            lambda active, **_kwargs: setattr(
                 node,
                 '_near_field_active',
                 bool(active),

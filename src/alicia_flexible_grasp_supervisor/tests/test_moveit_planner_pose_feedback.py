@@ -252,6 +252,37 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertEqual(failed_stage, 'approach')
         self.assertIn('fraction 0.50', message)
 
+    def test_strict_sequence_stops_before_stage_after_shared_deadline(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+        clock = iter([10.0, 10.5, 11.0])
+        planner._planning_now_sec = lambda: next(clock)
+        calls = []
+        planner._plan_pose_from_start_state = (
+            lambda _state, _target, **_kwargs: (
+                calls.append('pregrasp')
+                or JointPlan([[0.0, 0.0], [0.1, 0.1]]),
+                'planned',
+            )
+        )
+
+        ok, code, failed_stage, _metrics, message = (
+            planner.check_pose_sequence(
+                [make_pose(x=0.1), make_pose(x=0.2)],
+                ['pregrasp', 'lift'],
+                [False, False],
+                deadline_sec=11.0,
+            )
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(code, 'MOVEIT_TIMEOUT')
+        self.assertEqual(failed_stage, 'lift')
+        self.assertEqual(calls, ['pregrasp'])
+        self.assertIn('deadline', message)
+
     def test_strict_sequence_accepts_full_five_stage_execution_order(self):
         observation_plan = JointPlan([[0.0, 0.0], [0.1, 0.1]])
         pregrasp_plan = JointPlan([[0.1, 0.1], [0.2, 0.2]])
@@ -416,6 +447,31 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertEqual(code, 'MOVEIT_RESOLVE_NONDETERMINISTIC')
         self.assertIn('repeatability error', reason)
         self.assertEqual(len(calls), 3)
+
+    def test_orientation_resolver_does_not_start_ik_after_shared_deadline(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.orientation_resolution_max_candidates = 8
+        clock = iter([20.0, 20.1, 21.0])
+        planner._planning_now_sec = lambda: next(clock)
+        calls = []
+        planner._inverse_kinematics_from_state = (
+            lambda *_args, **_kwargs: (
+                calls.append(True) or self.robot_state(0.1, -0.1),
+                'resolved',
+            )
+        )
+
+        seed, code, reason = planner._resolve_orientation_from_state(
+            self.robot_state(0.0, 0.0),
+            make_pose(q=(0.0, 0.0, 0.0, 1.0)),
+            make_pose(q=(0.0, 0.0, 0.70710678, 0.70710678)),
+            deadline_sec=21.0,
+        )
+
+        self.assertIsNone(seed)
+        self.assertEqual(code, 'MOVEIT_TIMEOUT')
+        self.assertEqual(len(calls), 1)
+        self.assertIn('deadline', reason)
 
     def test_free_space_lift_seed_uses_virtual_grasp_terminal_state(self):
         approach_plan = JointPlan([[0.1, 0.2], [0.2, 0.3]])

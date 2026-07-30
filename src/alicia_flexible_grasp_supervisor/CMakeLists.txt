@@ -26,6 +26,7 @@ add_message_files(
   ObjectGeometry.msg
   Grasp6DPlan.msg
   GraspState.msg
+  NearFieldPlanningPhase.msg
   SafetyState.msg
 )
 

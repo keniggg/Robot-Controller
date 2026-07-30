@@ -127,6 +127,17 @@ def snapshot(stamp_sec):
     )
 
 
+def near_field_phase(active, phase_id=1, start_sec=20.0, deadline_sec=50.0):
+    message = remote_node.NearFieldPlanningPhase()
+    message.header.stamp = remote_node.rospy.Time.from_sec(float(start_sec))
+    message.active = bool(active)
+    message.phase_id = int(phase_id)
+    message.deadline = remote_node.rospy.Time.from_sec(
+        float(deadline_sec) if active else 0.0
+    )
+    return message
+
+
 def streaming_node(clock=None, prepare=None, start_worker=True):
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node.enabled = True
@@ -172,7 +183,7 @@ def test_explicit_near_field_phase_resets_tracker_and_invalidates_prior_epoch():
     assert node.target_instance_epoch == original_epoch
     assert node.tracker is original_tracker
 
-    node.near_field_state_cb(remote_node.Bool(data=True))
+    node.near_field_state_cb(near_field_phase(True))
 
     assert node.near_field_planning_active is True
     assert node.target_instance_epoch == original_epoch + 1
@@ -181,12 +192,12 @@ def test_explicit_near_field_phase_resets_tracker_and_invalidates_prior_epoch():
 
     near_field_epoch = node.target_instance_epoch
     near_field_tracker = node.tracker
-    node.near_field_state_cb(remote_node.Bool(data=True))
+    node.near_field_state_cb(near_field_phase(True))
 
     assert node.target_instance_epoch == near_field_epoch
     assert node.tracker is near_field_tracker
 
-    node.near_field_state_cb(remote_node.Bool(data=False))
+    node.near_field_state_cb(near_field_phase(False))
 
     assert node.near_field_planning_active is False
     assert node.target_instance_epoch == near_field_epoch + 1
@@ -3472,6 +3483,67 @@ def test_request_frozen_near_field_checks_ordered_sequence_after_state_changes()
         node.shutdown_streaming_worker()
 
 
+def test_direct_near_field_strict_timeout_does_not_start_orientation_resolver():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        node.near_field_strategy = 'single_snapshot_direct'
+        node.near_field_planning_active = True
+        node._near_field_phase_id = 1
+        node._near_field_phase_deadline_sec = 55.0
+        grasp_pose = remote_node.PoseStamped()
+        sequence = types.SimpleNamespace(
+            pregrasp=remote_node.PoseStamped(),
+            approach=remote_node.PoseStamped(),
+            grasp=grasp_pose,
+            lift=remote_node.PoseStamped(),
+        )
+        node._stable_variant_runtime = {
+            (3, 1): {
+                'prepared': types.SimpleNamespace(
+                    ticket=ticket,
+                    near_field=True,
+                ),
+                'grasp_pose': grasp_pose,
+                'sequence': sequence,
+                'scored_candidate': object(),
+            }
+        }
+        deadlines = []
+
+        def strict_timeout(_stages, deadline_sec=0.0):
+            deadlines.append(float(deadline_sec))
+            return (
+                MoveItResult(
+                    reachable=False,
+                    joint_path_cost=0.0,
+                    joint_max_delta_rad=0.0,
+                    reason='shared deadline consumed',
+                    failure_code='MOVEIT_TIMEOUT',
+                ),
+                {'joint_path_cost': 0.0, 'joint_max_delta': 0.0},
+            )
+
+        node._strict_moveit_sequence_evaluation = strict_timeout
+        node._resolve_free_space_sequence = (
+            lambda *_args, **_kwargs: pytest.fail(
+                'strict timeout must not start orientation resolution'
+            )
+        )
+
+        result = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=3, variant_index=1)
+        )
+
+        assert result.reachable is False
+        assert result.failure_code == 'MOVEIT_TIMEOUT'
+        assert deadlines == [55.0]
+    finally:
+        node.shutdown_streaming_worker()
+
+
 def test_near_field_strict_sequence_checks_linear_lift_like_execution():
     node = streaming_node(clock=MutableClock(50.0), start_worker=False)
     original_wait = remote_node.rospy.wait_for_service
@@ -3490,6 +3562,7 @@ def test_near_field_strict_sequence_checks_linear_lift_like_execution():
                     'invoke',
                     list(request.stage_names),
                     list(request.linear),
+                    request.deadline.to_sec(),
                 )
             )
             return types.SimpleNamespace(
@@ -3509,7 +3582,10 @@ def test_near_field_strict_sequence_checks_linear_lift_like_execution():
             (name, remote_node.PoseStamped())
             for name in ('pregrasp', 'approach', 'grasp', 'lift')
         )
-        result, metrics = node._strict_moveit_sequence_evaluation(stages)
+        result, metrics = node._strict_moveit_sequence_evaluation(
+            stages,
+            deadline_sec=55.0,
+        )
     finally:
         remote_node.rospy.wait_for_service = original_wait
         remote_node.rospy.ServiceProxy = original_proxy
@@ -3532,6 +3608,7 @@ def test_near_field_strict_sequence_checks_linear_lift_like_execution():
             'invoke',
             ['pregrasp', 'approach', 'grasp', 'lift'],
             [False, True, True, True],
+            55.0,
         )
     ]
 
@@ -3568,6 +3645,7 @@ def test_free_space_sequence_resolver_preserves_xyz_and_contact_orientations(
                         list(request.stage_names),
                         list(request.linear),
                         list(request.resolve_orientation),
+                        request.deadline.to_sec(),
                     )
                 )
                 return types.SimpleNamespace(
@@ -3604,7 +3682,8 @@ def test_free_space_sequence_resolver_preserves_xyz_and_contact_orientations(
         )
 
         sequence, audit, code, reason = node._resolve_free_space_sequence(
-            stages
+            stages,
+            deadline_sec=56.0,
         )
 
         assert sequence is not None, reason
@@ -3622,6 +3701,7 @@ def test_free_space_sequence_resolver_preserves_xyz_and_contact_orientations(
             ['pregrasp', 'approach', 'grasp', 'lift'],
             [False, True, True, False],
             [True, False, False, True],
+            56.0,
         )
     finally:
         node.shutdown_streaming_worker()
@@ -4891,6 +4971,9 @@ def test_direct_near_field_uses_current_request_and_first_reachable_without_mujo
     node.candidate_max_joint_delta_rad = 1.8
     node.near_field_strategy = 'single_snapshot_direct'
     node.near_field_direct_timeout_sec = 30.0
+    node.near_field_planning_active = True
+    node._near_field_phase_id = 1
+    node._near_field_phase_deadline_sec = 50.0
     node._execution_plan_validity_now_sec = lambda: 21.0
     node._activate_prepared_geometry = lambda _prepared: True
     current = (
@@ -5047,6 +5130,12 @@ def test_direct_near_field_empty_current_request_has_exact_status():
         TrackingConfig(window_size=5, min_hits=3)
     )
     node.near_field_strategy = 'single_snapshot_direct'
+    terminals = []
+    node._publish_direct_near_field_terminal = (
+        lambda prepared, code, reason: terminals.append(
+            (prepared, code, reason)
+        )
+    )
     node._activate_prepared_geometry = lambda _prepared: True
     node._evaluate_local_candidates = lambda _prepared: (
         (),
@@ -5071,6 +5160,7 @@ def test_direct_near_field_empty_current_request_has_exact_status():
     result = node._accept_prediction(prepared)
 
     assert result['status'] == 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'
+    assert terminals[0][1] == 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'
     assert (
         result['funnel']['snapshot_evidence'][
             'disjoint_window_required'
@@ -5079,15 +5169,21 @@ def test_direct_near_field_empty_current_request_has_exact_status():
     )
 
 
-def test_direct_near_field_deadline_is_exactly_thirty_seconds():
+def test_direct_near_field_deadline_uses_phase_contract_not_snapshot():
     node = remote_node.RemoteGrasp6DNode.__new__(
         remote_node.RemoteGrasp6DNode
     )
     node.near_field_direct_timeout_sec = 30.0
+    node.near_field_planning_active = True
+    node._near_field_phase_id = 7
+    node._near_field_phase_deadline_sec = 80.0
     clock = MutableClock(49.999)
     node._execution_plan_validity_now_sec = clock
     prepared = types.SimpleNamespace(
-        ticket=types.SimpleNamespace(snapshot_stamp_sec=20.0)
+        near_field=True,
+        near_field_phase_id=7,
+        near_field_phase_deadline_sec=50.0,
+        ticket=types.SimpleNamespace(snapshot_stamp_sec=40.0)
     )
 
     continue_checking = node._direct_near_field_deadline_gate(prepared)
@@ -5095,6 +5191,38 @@ def test_direct_near_field_deadline_is_exactly_thirty_seconds():
     assert continue_checking() is True
     clock.value = 50.0
     assert continue_checking() is False
+
+
+def test_direct_near_field_terminal_publishes_fresh_invalid_preview():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    published = []
+    node._publish_preview_plan = (
+        lambda rich, legacy, **kwargs: published.append(
+            (rich, legacy, kwargs)
+        )
+    )
+    prepared = prepared_prediction(12)
+    prepared.near_field = True
+    node._execution_plan_validity_now_sec = lambda: 42.5
+
+    node._publish_direct_near_field_terminal(
+        prepared,
+        'NEAR_FIELD_DIRECT_TIMEOUT',
+        'shared phase deadline consumed',
+    )
+
+    assert len(published) == 1
+    rich, legacy, kwargs = published[0]
+    assert rich.valid is False
+    assert rich.candidate_source == 'near_field_terminal'
+    assert rich.header.stamp.to_sec() == 42.5
+    assert rich.diagnostic == (
+        'NEAR_FIELD_DIRECT_TIMEOUT: shared phase deadline consumed'
+    )
+    assert list(legacy.poses) == []
+    assert kwargs['ticket'] is prepared.ticket
 
 
 @pytest.mark.parametrize(
@@ -5130,6 +5258,9 @@ def test_direct_near_field_no_selection_has_exact_terminal_status(
     node.candidate_max_joint_delta_rad = 1.8
     node.near_field_strategy = 'single_snapshot_direct'
     node.near_field_direct_timeout_sec = 30.0
+    node.near_field_planning_active = True
+    node._near_field_phase_id = 1
+    node._near_field_phase_deadline_sec = 50.0
     node._execution_plan_validity_now_sec = lambda: 21.0
     node._activate_prepared_geometry = lambda _prepared: True
     node._evaluate_local_candidates = lambda _prepared: (
@@ -5159,6 +5290,12 @@ def test_direct_near_field_no_selection_has_exact_terminal_status(
         'a direct near-field terminal failure cannot publish a preview'
     )
     node._observe_execution_candidate_invalid = lambda **_kwargs: None
+    terminals = []
+    node._publish_direct_near_field_terminal = (
+        lambda prepared, code, reason: terminals.append(
+            (prepared, code, reason)
+        )
+    )
 
     def no_selection(*_args, **_kwargs):
         return types.SimpleNamespace(
@@ -5194,6 +5331,7 @@ def test_direct_near_field_no_selection_has_exact_terminal_status(
     result = node._accept_prediction(prepared)
 
     assert result['status'] == expected_status
+    assert terminals[0][1] == expected_status
 
 
 def test_snapshot_budget_terminal_status_survives_primary_failure_count(

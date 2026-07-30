@@ -13,7 +13,12 @@ import rospy
 from geometry_msgs.msg import PoseArray, PoseStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String
-from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan, ObjectPose, GraspState
+from alicia_flexible_grasp_supervisor.msg import (
+    Grasp6DPlan,
+    GraspState,
+    NearFieldPlanningPhase,
+    ObjectPose,
+)
 from alicia_flexible_grasp_supervisor.srv import (
     CheckPoseSequence,
     SetFloat,
@@ -68,6 +73,16 @@ _MUJOCO_AUDIT_SCHEMA_VERSION = 1
 _MUJOCO_AUDIT_DEFAULT_PATH = '~/.ros/grasp6d_mujoco_audit_latest.json'
 _FAR_FIELD_OBSERVATION_PLAN = 'FAR_FIELD_OBSERVATION_PLAN'
 _CONTACT_EXECUTION_PLAN = 'CONTACT_EXECUTION_PLAN'
+_DIRECT_NEAR_FIELD_TERMINAL_CODES = frozenset(
+    (
+        'NEAR_FIELD_DIRECT_TIMEOUT',
+        'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE',
+        'NEAR_FIELD_NO_REACHABLE_CANDIDATE',
+        'WSL_PREDICT_FAILED',
+        'WSL_UNAVAILABLE',
+    )
+)
+_DIRECT_NEAR_FIELD_TERMINAL_SOURCE = 'near_field_terminal'
 _MUJOCO_SAFETY_KEYS = (
     'simulation_ok',
     'ik_success',
@@ -1085,6 +1100,9 @@ class GraspTaskNode:
         self.latest_raw_detection_time = None
         self.active = False
         self._near_field_active = None
+        self._near_field_phase_id = 0
+        self._near_field_phase_started_sec = 0.0
+        self._near_field_phase_deadline_sec = 0.0
         self.stage = GraspStages.IDLE
         self.tf_buffer = None
         self.tf_listener = None
@@ -1100,6 +1118,12 @@ class GraspTaskNode:
         self.near_field_pub = rospy.Publisher(
             '/grasp/near_field_active',
             Bool,
+            queue_size=1,
+            latch=True,
+        )
+        self.near_field_phase_pub = rospy.Publisher(
+            '/grasp/near_field_phase',
+            NearFieldPlanningPhase,
             queue_size=1,
             latch=True,
         )
@@ -1492,7 +1516,12 @@ class GraspTaskNode:
         self.pub.publish(msg)
         rospy.loginfo('[Grasp] %s %s', msg.state, message)
 
-    def _set_near_field_active(self, active, force=False):
+    def _set_near_field_active(
+        self,
+        active,
+        force=False,
+        budget_sec=None,
+    ):
         """Publish the explicit near-field planning phase without moving hardware."""
 
         active = bool(active)
@@ -1500,6 +1529,52 @@ class GraspTaskNode:
         self._near_field_active = active
         if previous == active and not force:
             return False
+        try:
+            now = rospy.Time.now()
+        except Exception:
+            # Unit-constructed nodes have no initialized ROS clock. Production
+            # construction always runs after rospy.init_node.
+            now = rospy.Time(0)
+        now_sec = _stamp_seconds(now)
+        phase_id = int(getattr(self, '_near_field_phase_id', 0) or 0)
+        if active:
+            phase_id += 1
+            try:
+                requested_budget_sec = float(
+                    30.0 if budget_sec is None else budget_sec
+                )
+            except (TypeError, ValueError, OverflowError):
+                requested_budget_sec = float('nan')
+            if (
+                not math.isfinite(requested_budget_sec)
+                or requested_budget_sec <= 0.0
+            ):
+                raise ValueError(
+                    'near-field phase budget must be finite and positive'
+                )
+            deadline_sec = now_sec + requested_budget_sec
+            self._near_field_phase_started_sec = now_sec
+            self._near_field_phase_deadline_sec = deadline_sec
+        else:
+            deadline_sec = 0.0
+            self._near_field_phase_started_sec = 0.0
+            self._near_field_phase_deadline_sec = 0.0
+        self._near_field_phase_id = phase_id
+        phase = NearFieldPlanningPhase()
+        phase.header.stamp = now
+        phase.header.frame_id = 'base_link'
+        phase.active = active
+        phase.phase_id = phase_id
+        phase.deadline = (
+            rospy.Time.from_sec(deadline_sec)
+            if deadline_sec > 0.0
+            else rospy.Time(0)
+        )
+        phase_publisher = getattr(self, 'near_field_phase_pub', None)
+        if phase_publisher is not None and callable(
+            getattr(phase_publisher, 'publish', None)
+        ):
+            phase_publisher.publish(phase)
         publisher = getattr(self, 'near_field_pub', None)
         if publisher is not None and callable(
             getattr(publisher, 'publish', None)
@@ -2030,7 +2105,25 @@ class GraspTaskNode:
                     % (observation_range.code, observation_range.reason),
                 )
                 return False
-            self._set_near_field_active(True)
+            phase_budget_sec = self._cfg_float(
+                gcfg,
+                'near_field_replan_timeout_sec',
+                30.0,
+            )
+            if (
+                not math.isfinite(phase_budget_sec)
+                or phase_budget_sec <= 0.0
+            ):
+                self.set_state(
+                    GraspStages.FAILED,
+                    'NEAR_FIELD_PHASE_BUDGET_INVALID: near-field budget '
+                    'must be finite and positive',
+                )
+                return False
+            self._set_near_field_active(
+                True,
+                budget_sec=phase_budget_sec,
+            )
 
         rebound = self._maybe_rebind_near_field_grasp6d_plan(
             gcfg,
@@ -2222,7 +2315,7 @@ class GraspTaskNode:
         required = self._cfg_bool(gcfg, 'near_field_replan_required', True)
         timeout = max(
             0.0,
-            self._cfg_float(gcfg, 'near_field_replan_timeout_sec', 8.0),
+            self._cfg_float(gcfg, 'near_field_replan_timeout_sec', 30.0),
         )
         poll_sec = max(
             0.02,
@@ -2264,17 +2357,51 @@ class GraspTaskNode:
             )
             return current_plan
 
+        phase_started_sec = float(
+            getattr(self, '_near_field_phase_started_sec', 0.0) or 0.0
+        )
+        phase_deadline_sec = float(
+            getattr(self, '_near_field_phase_deadline_sec', 0.0) or 0.0
+        )
+        if direct_near_field and (
+            not math.isfinite(phase_started_sec)
+            or phase_started_sec <= 0.0
+            or not math.isfinite(phase_deadline_sec)
+            or phase_deadline_sec <= phase_started_sec
+            or phase_deadline_sec <= _stamp_seconds(rospy.Time.now())
+        ):
+            self._set_near_field_preview_stream(gcfg, False)
+            message = (
+                'NEAR_FIELD_PHASE_DEADLINE_INVALID: direct near-field '
+                'selection has no current positive phase deadline'
+            )
+            if required:
+                self.set_state(GraspStages.FAILED, message)
+                return None
+            rospy.logwarn('%s; keeping existing bound plan', message)
+            return current_plan
+        if direct_near_field:
+            minimum_stamp_ns = max(
+                minimum_stamp_ns,
+                _stamp_nanoseconds(
+                    rospy.Time.from_sec(phase_started_sec)
+                ),
+            )
+
         start = time.monotonic()
         last_result = PlanValidationResult(
             False,
             'NEAR_FIELD_PLAN_WAITING',
             'waiting for fresh Preview rich plan',
         )
-        while (
-            self.active
-            and not rospy.is_shutdown()
-            and time.monotonic() - start <= timeout
-        ):
+        while self.active and not rospy.is_shutdown():
+            within_budget = (
+                _stamp_seconds(rospy.Time.now()) < phase_deadline_sec
+                if direct_near_field
+                else time.monotonic() - start <= timeout
+            )
+            if not within_budget:
+                break
             last_result, candidate = self._copy_near_field_preview_candidate(
                 current_plan,
                 minimum_stamp_ns,
@@ -2313,6 +2440,24 @@ class GraspTaskNode:
                 ):
                     return None
                 return frozen
+            if (
+                direct_near_field
+                and last_result.code in _DIRECT_NEAR_FIELD_TERMINAL_CODES
+            ):
+                if not self._set_near_field_preview_stream(gcfg, False):
+                    rospy.logwarn(
+                        'Direct near-field preview stream disable request '
+                        'failed after terminal Preview'
+                    )
+                message = '%s: %s' % (
+                    last_result.code,
+                    last_result.reason,
+                )
+                if required:
+                    self.set_state(GraspStages.FAILED, message)
+                    return None
+                rospy.logwarn('%s; keeping existing bound plan', message)
+                return current_plan
             rospy.sleep(poll_sec)
 
         if direct_near_field:
@@ -2792,6 +2937,31 @@ class GraspTaskNode:
             )
         preview_id = str(getattr(preview, 'plan_id', '') or '')
         current_id = str(getattr(current_plan, 'plan_id', '') or '')
+        stamp_ns = _stamp_nanoseconds(
+            getattr(getattr(preview, 'header', None), 'stamp', None)
+        )
+        diagnostic = str(getattr(preview, 'diagnostic', '') or '')
+        terminal_code, separator, terminal_reason = diagnostic.partition(':')
+        terminal_code = terminal_code.strip()
+        terminal_reason = terminal_reason.strip()
+        if (
+            self._direct_near_field_enabled(gcfg)
+            and not bool(getattr(preview, 'valid', False))
+            and str(getattr(preview, 'candidate_source', '') or '')
+            == _DIRECT_NEAR_FIELD_TERMINAL_SOURCE
+            and stamp_ns > 0
+            and stamp_ns >= int(minimum_stamp_ns)
+            and separator
+            and terminal_code in _DIRECT_NEAR_FIELD_TERMINAL_CODES
+        ):
+            return (
+                PlanValidationResult(
+                    False,
+                    terminal_code,
+                    terminal_reason or 'direct near-field planning failed',
+                ),
+                None,
+            )
         current_phase = _plan_phase(current_plan)
         if (
             current_phase
@@ -2815,9 +2985,6 @@ class GraspTaskNode:
                 ),
                 None,
             )
-        stamp_ns = _stamp_nanoseconds(
-            getattr(getattr(preview, 'header', None), 'stamp', None)
-        )
         if stamp_ns <= 0 or stamp_ns < int(minimum_stamp_ns):
             return (
                 PlanValidationResult(

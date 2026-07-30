@@ -19,7 +19,7 @@ import rospy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseArray, PoseStamped
 from sensor_msgs.msg import Image, JointState
-from std_msgs.msg import Bool, String
+from std_msgs.msg import String
 from tf.transformations import quaternion_from_euler, quaternion_from_matrix, quaternion_matrix, quaternion_multiply
 
 try:
@@ -144,6 +144,7 @@ from alicia_flexible_grasp.vision.rgbd_snapshot import (
 from alicia_flexible_grasp_supervisor.msg import (
     Grasp6DPlan,
     GraspState,
+    NearFieldPlanningPhase,
     ObjectGeometry,
     ObjectPose,
 )
@@ -515,6 +516,8 @@ class PreparedPrediction:
     transport_ms: float = 0.0
     decode_ms: float = 0.0
     near_field: bool = False
+    near_field_phase_id: int = 0
+    near_field_phase_deadline_sec: float = 0.0
 
     def __post_init__(self):
         for name in (
@@ -3320,6 +3323,9 @@ class RemoteGrasp6DNode:
         self._last_model_choice = str(pcfg.get('yolo_model_choice', 'original'))
         self.robot_execution_active = False
         self.near_field_planning_active = False
+        self._near_field_phase_id = 0
+        self._near_field_phase_started_sec = 0.0
+        self._near_field_phase_deadline_sec = 0.0
         self.execution_plan_controller = ExecutionPlanController(
             replan_cooldown_sec=(
                 startup_continuous_config.replan_cooldown_sec
@@ -4142,8 +4148,8 @@ class RemoteGrasp6DNode:
             tracking_config=tracking_config,
         )
         rospy.Subscriber(
-            '/grasp/near_field_active',
-            Bool,
+            '/grasp/near_field_phase',
+            NearFieldPlanningPhase,
             self.near_field_state_cb,
             queue_size=1,
         )
@@ -4212,13 +4218,65 @@ class RemoteGrasp6DNode:
     def near_field_state_cb(self, msg):
         """Reset candidate evidence only at the explicit near-field boundary."""
 
-        active = bool(getattr(msg, 'data', False))
+        requested_active = bool(getattr(msg, 'active', False))
+        phase_id = int(getattr(msg, 'phase_id', 0) or 0)
+        started_sec = self._stamp_to_sec(
+            getattr(getattr(msg, 'header', None), 'stamp', None)
+        )
+        deadline_sec = self._stamp_to_sec(getattr(msg, 'deadline', None))
+        started_sec = (
+            float(started_sec)
+            if started_sec is not None
+            else float('nan')
+        )
+        deadline_sec = (
+            float(deadline_sec)
+            if deadline_sec is not None
+            else float('nan')
+        )
+        try:
+            maximum_budget_sec = float(
+                getattr(self, 'near_field_direct_timeout_sec', 30.0)
+            )
+        except (TypeError, ValueError, OverflowError):
+            maximum_budget_sec = float('nan')
+        phase_budget_sec = deadline_sec - started_sec
+        valid_active_contract = bool(
+            requested_active
+            and phase_id > 0
+            and math.isfinite(started_sec)
+            and started_sec > 0.0
+            and math.isfinite(deadline_sec)
+            and deadline_sec > started_sec
+            and math.isfinite(maximum_budget_sec)
+            and maximum_budget_sec > 0.0
+            and phase_budget_sec <= maximum_budget_sec + 1e-6
+        )
+        active = bool(requested_active and valid_active_contract)
         with self._geometry_state_guard():
             previous = bool(
                 getattr(self, 'near_field_planning_active', False)
             )
+            previous_phase_id = int(
+                getattr(self, '_near_field_phase_id', 0) or 0
+            )
             self.near_field_planning_active = active
-        if active == previous:
+            self._near_field_phase_id = phase_id
+            self._near_field_phase_started_sec = (
+                started_sec if active else 0.0
+            )
+            self._near_field_phase_deadline_sec = (
+                deadline_sec if active else 0.0
+            )
+        if requested_active and not valid_active_contract:
+            rospy.logwarn(
+                'Rejected invalid near-field phase contract '
+                'phase_id=%d start=%.9f deadline=%.9f',
+                phase_id,
+                started_sec,
+                deadline_sec,
+            )
+        if active == previous and phase_id == previous_phase_id:
             return
         with self._stream_condition:
             self._direct_near_field_submission_generation = None
@@ -5177,6 +5235,18 @@ class RemoteGrasp6DNode:
         self.tracker = CandidateTracker(self._tracking_config)
         self._stable_variant_runtime = {}
         self._near_field_request_plan_cache = {}
+        self.near_field_planning_active = bool(
+            getattr(self, 'near_field_planning_active', False)
+        )
+        self._near_field_phase_id = int(
+            getattr(self, '_near_field_phase_id', 0) or 0
+        )
+        self._near_field_phase_started_sec = float(
+            getattr(self, '_near_field_phase_started_sec', 0.0) or 0.0
+        )
+        self._near_field_phase_deadline_sec = float(
+            getattr(self, '_near_field_phase_deadline_sec', 0.0) or 0.0
+        )
         self._stream_condition = threading.Condition(threading.RLock())
         # A cached-Preview replan runs in a ROS service thread while the
         # latest-only worker may already be finalizing another promotion.
@@ -6802,9 +6872,21 @@ class RemoteGrasp6DNode:
         """Prepare immutable request facts and perform one correlated WSL call."""
 
         prepare_started = time.perf_counter()
-        near_field = bool(
-            getattr(self, 'near_field_planning_active', False)
-        )
+        with self._geometry_state_guard():
+            near_field = bool(
+                getattr(self, 'near_field_planning_active', False)
+            )
+            near_field_phase_id = int(
+                getattr(self, '_near_field_phase_id', 0) or 0
+            )
+            near_field_phase_deadline_sec = float(
+                getattr(
+                    self,
+                    '_near_field_phase_deadline_sec',
+                    0.0,
+                )
+                or 0.0
+            )
         try:
             snapshot, input_config = ticket.payload
         except (TypeError, ValueError):
@@ -6932,6 +7014,10 @@ class RemoteGrasp6DNode:
             transport_ms=transport_ms,
             decode_ms=decode_ms,
             near_field=near_field,
+            near_field_phase_id=near_field_phase_id,
+            near_field_phase_deadline_sec=(
+                near_field_phase_deadline_sec
+            ),
         )
 
     def _update_candidate_tracker(
@@ -8314,30 +8400,32 @@ class RemoteGrasp6DNode:
         )
 
     def _direct_near_field_deadline_gate(self, prepared):
-        """Bound all strict near-field checks to the fused snapshot deadline."""
+        """Bound direct checks to the task-owned phase deadline."""
 
-        ticket = getattr(prepared, 'ticket', None)
         try:
-            snapshot_stamp_sec = float(
-                getattr(ticket, 'snapshot_stamp_sec')
-            )
-            timeout_sec = float(
-                getattr(self, 'near_field_direct_timeout_sec', 30.0)
+            deadline_sec = float(
+                getattr(
+                    prepared,
+                    'near_field_phase_deadline_sec',
+                    0.0,
+                )
+                or getattr(self, '_near_field_phase_deadline_sec')
             )
         except (AttributeError, TypeError, ValueError, OverflowError):
-            snapshot_stamp_sec = float('nan')
-            timeout_sec = float('nan')
+            deadline_sec = float('nan')
         valid_contract = (
-            math.isfinite(snapshot_stamp_sec)
-            and snapshot_stamp_sec > 0.0
-            and math.isfinite(timeout_sec)
-            and timeout_sec > 0.0
+            bool(getattr(prepared, 'near_field', False))
+            and bool(getattr(self, 'near_field_planning_active', False))
+            and int(
+                getattr(prepared, 'near_field_phase_id', 0)
+                or getattr(self, '_near_field_phase_id', 0)
+                or 0
+            ) > 0
+            and math.isfinite(deadline_sec)
+            and deadline_sec > 0.0
         )
-        deadline_sec = (
-            snapshot_stamp_sec + timeout_sec
-            if valid_contract
-            else float('-inf')
-        )
+        if not valid_contract:
+            deadline_sec = float('-inf')
 
         def continue_checking():
             try:
@@ -8350,6 +8438,73 @@ class RemoteGrasp6DNode:
             )
 
         return continue_checking
+
+    def _direct_near_field_deadline_sec(self, prepared):
+        if (
+            not bool(getattr(prepared, 'near_field', False))
+            or not bool(
+                getattr(self, 'near_field_planning_active', False)
+            )
+            or int(
+                getattr(prepared, 'near_field_phase_id', 0)
+                or getattr(self, '_near_field_phase_id', 0)
+                or 0
+            ) <= 0
+        ):
+            return 0.0
+        try:
+            deadline_sec = float(
+                getattr(
+                    prepared,
+                    'near_field_phase_deadline_sec',
+                    0.0,
+                )
+                or getattr(
+                    self,
+                    '_near_field_phase_deadline_sec',
+                    0.0,
+                )
+                or 0.0
+            )
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        return (
+            deadline_sec
+            if math.isfinite(deadline_sec) and deadline_sec > 0.0
+            else 0.0
+        )
+
+    def _publish_direct_near_field_terminal(
+        self,
+        prepared,
+        code,
+        reason,
+    ):
+        """Publish a non-executable terminal bound to the current ticket."""
+
+        terminal_code = str(code or 'NEAR_FIELD_DIRECT_TIMEOUT')
+        terminal_reason = str(reason or 'direct near-field planning failed')
+        now_sec = float(self._execution_plan_validity_now_sec())
+        stamp = rospy.Time.from_sec(now_sec)
+        rich = Grasp6DPlan()
+        rich.header.frame_id = 'base_link'
+        rich.header.stamp = stamp
+        rich.valid = False
+        rich.candidate_source = 'near_field_terminal'
+        rich.diagnostic = '%s: %s' % (
+            terminal_code,
+            terminal_reason,
+        )
+        legacy = PoseArray()
+        legacy.header = deepcopy(rich.header)
+        self._publish_preview_plan(
+            rich,
+            legacy,
+            ticket=prepared.ticket,
+        )
+        publisher = getattr(self, 'status_pub', None)
+        if publisher is not None:
+            publisher.publish(String(rich.diagnostic))
 
     @staticmethod
     def _single_request_stable_candidates(observations):
@@ -10887,6 +11042,7 @@ class RemoteGrasp6DNode:
         prepared,
         runtime,
         operation,
+        deadline_sec=0.0,
     ):
         """Reuse only a proven success at the exact unchanged arm state."""
 
@@ -10914,9 +11070,15 @@ class RemoteGrasp6DNode:
             )
             return deepcopy(cached[0]), deepcopy(cached[1])
 
-        result, metrics = self._strict_moveit_sequence_evaluation(
-            stage_poses
-        )
+        if float(deadline_sec) > 0.0:
+            result, metrics = self._strict_moveit_sequence_evaluation(
+                stage_poses,
+                deadline_sec=deadline_sec,
+            )
+        else:
+            result, metrics = self._strict_moveit_sequence_evaluation(
+                stage_poses
+            )
         after_key = self._near_field_plan_cache_key(
             stage_poses,
             deepcopy(getattr(self, 'latest_joint_state', None)),
@@ -10955,6 +11117,7 @@ class RemoteGrasp6DNode:
         stage_poses,
         prepared,
         runtime,
+        deadline_sec=0.0,
     ):
         """Reuse deterministic resolver results for one exact static request."""
 
@@ -10982,7 +11145,13 @@ class RemoteGrasp6DNode:
             )
             return tuple(deepcopy(value) for value in cached)
 
-        outcome = self._resolve_free_space_sequence(stage_poses)
+        if float(deadline_sec) > 0.0:
+            outcome = self._resolve_free_space_sequence(
+                stage_poses,
+                deadline_sec=deadline_sec,
+            )
+        else:
+            outcome = self._resolve_free_space_sequence(stage_poses)
         after_key = self._near_field_plan_cache_key(
             stage_poses,
             deepcopy(getattr(self, 'latest_joint_state', None)),
@@ -11095,12 +11264,24 @@ class RemoteGrasp6DNode:
                     moveit_pose,
                     evaluation,
                 )
+        deadline_sec = (
+            self._direct_near_field_deadline_sec(prepared)
+            if self._direct_near_field_active(prepared)
+            else 0.0
+        )
         result, metrics = self._cached_strict_moveit_sequence_evaluation(
             stage_poses,
             prepared,
             runtime,
             'original_strict_sequence',
+            deadline_sec=deadline_sec,
         )
+        if (
+            not result.reachable
+            and str(getattr(result, 'failure_code', '') or '')
+            == 'MOVEIT_TIMEOUT'
+        ):
+            return result
         can_resolve_with_authority = bool(
             runtime.get('scored_candidate') is not None
             and getattr(prepared, 'geometry', None) is not None
@@ -11115,6 +11296,7 @@ class RemoteGrasp6DNode:
                 stage_poses,
                 prepared,
                 runtime,
+                deadline_sec=deadline_sec,
             )
             runtime['orientation_resolution'] = deepcopy(resolver_audit)
             if resolved_sequence is None:
@@ -11180,6 +11362,7 @@ class RemoteGrasp6DNode:
                     prepared,
                     runtime,
                     'resolved_strict_sequence',
+                    deadline_sec=deadline_sec,
                 )
             )
         with self._stream_condition:
@@ -12568,6 +12751,12 @@ class RemoteGrasp6DNode:
                 )
             else:
                 self._observe_execution_candidate_invalid(ticket=ticket)
+            if direct_near_field:
+                self._publish_direct_near_field_terminal(
+                    prepared,
+                    status,
+                    'current fused snapshot has no hard-safe candidate',
+                )
             return {'status': status, 'funnel': funnel}
 
         scored = self._recheck_and_score_stable(prepared, stable)
@@ -12628,6 +12817,17 @@ class RemoteGrasp6DNode:
             ),
         )
         if (
+            direct_near_field
+            and selection.selected is not None
+            and not self._direct_near_field_deadline_gate(prepared)()
+        ):
+            selection = replace(
+                selection,
+                selected=None,
+                terminated_early=True,
+                termination_reason='NEAR_FIELD_DIRECT_TIMEOUT',
+            )
+        if (
             not near_field
             and selection.reachable
             and all(
@@ -12680,6 +12880,8 @@ class RemoteGrasp6DNode:
             status = 'PREVIEW_READY'
         promotion_decision = None
         if isinstance(prepared, PreparedPrediction) and remote_failure_code:
+            if preview_count == 0:
+                status = remote_failure_code
             invalid_decision = self._observe_stream_prediction_failure(
                 ticket,
                 remote_failure_code,
@@ -12714,6 +12916,15 @@ class RemoteGrasp6DNode:
                 base_report=base_audit_report,
                 promotion_decision=promotion_decision,
             )
+            if direct_near_field and preview_count == 0:
+                self._publish_direct_near_field_terminal(
+                    prepared,
+                    remote_failure_code,
+                    str(
+                        getattr(prepared, 'remote_failure_reason', '')
+                        or 'remote 6D prediction failed'
+                    ),
+                )
             return {'status': status, 'funnel': funnel}
         if (
             isinstance(promotion_proposal, dict)
@@ -12775,6 +12986,21 @@ class RemoteGrasp6DNode:
             )
         elif preview_count == 0:
             self._observe_execution_candidate_invalid(ticket=ticket)
+        if direct_near_field and preview_count == 0:
+            terminal_reason = (
+                'shared near-field phase deadline consumed before a '
+                'strictly reachable candidate was selected'
+                if status == 'NEAR_FIELD_DIRECT_TIMEOUT'
+                else (
+                    'all candidates checked before the shared deadline '
+                    'failed strict MoveIt reachability'
+                )
+            )
+            self._publish_direct_near_field_terminal(
+                prepared,
+                status,
+                terminal_reason,
+            )
         return {'status': status, 'funnel': funnel}
 
     def shutdown_streaming_worker(self, timeout_sec=2.0):
@@ -17697,7 +17923,11 @@ class RemoteGrasp6DNode:
             raise ValueError('xyz parameter must contain exactly 3 values')
         return parts
 
-    def _resolve_free_space_sequence(self, stage_poses):
+    def _resolve_free_space_sequence(
+        self,
+        stage_poses,
+        deadline_sec=0.0,
+    ):
         """Resolve only pregrasp/lift rotations through the planning-only API."""
 
         stages = tuple(stage_poses or ())
@@ -17731,6 +17961,11 @@ class RemoteGrasp6DNode:
             request.stage_names = [str(name) for name, _pose in stages]
             request.linear = [False, True, True, False]
             request.resolve_orientation = [True, False, False, True]
+            request.deadline = (
+                rospy.Time.from_sec(float(deadline_sec))
+                if float(deadline_sec) > 0.0
+                else rospy.Time(0)
+            )
             response = rospy.ServiceProxy(
                 service_name,
                 ResolveFreeSpaceOrientations,
@@ -18015,7 +18250,11 @@ class RemoteGrasp6DNode:
             ),
         )
 
-    def _strict_moveit_sequence_evaluation(self, stage_poses):
+    def _strict_moveit_sequence_evaluation(
+        self,
+        stage_poses,
+        deadline_sec=0.0,
+    ):
         """Validate an ordered near-field path from each prior virtual state."""
 
         stages = tuple(stage_poses or ())
@@ -18042,6 +18281,11 @@ class RemoteGrasp6DNode:
                 str(name) in ('approach', 'grasp', 'lift')
                 for name, _pose in stages
             ]
+            request.deadline = (
+                rospy.Time.from_sec(float(deadline_sec))
+                if float(deadline_sec) > 0.0
+                else rospy.Time(0)
+            )
             response = rospy.ServiceProxy(
                 service_name,
                 CheckPoseSequence,

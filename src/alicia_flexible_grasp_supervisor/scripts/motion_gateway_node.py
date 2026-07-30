@@ -174,6 +174,7 @@ class MotionGateway:
                 req.targets,
                 req.stage_names,
                 req.linear,
+                deadline_sec=self._request_deadline_sec(req),
             )
         response = CheckPoseSequenceResponse(
             bool(ok),
@@ -225,6 +226,7 @@ class MotionGateway:
                 req.stage_names,
                 req.linear,
                 req.resolve_orientation,
+                deadline_sec=self._request_deadline_sec(req),
             )
         policy_attestation = (
             'policy=deterministic_geodesic_collision_ik'
@@ -251,6 +253,22 @@ class MotionGateway:
             response.message,
         )
         return response
+
+    @staticmethod
+    def _request_deadline_sec(req):
+        deadline = getattr(req, 'deadline', None)
+        converter = getattr(deadline, 'to_sec', None)
+        if not callable(converter):
+            return 0.0
+        try:
+            deadline_sec = float(converter())
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        return (
+            deadline_sec
+            if math.isfinite(deadline_sec) and deadline_sec > 0.0
+            else 0.0
+        )
 
     def handle_pose_strict_execute(self, req):
         self._log_pose_request(req, operation='execute_pose_strict')

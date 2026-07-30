@@ -2,6 +2,7 @@ geometry_msgs/PoseStamped[] targets
 string[] stage_names
 bool[] linear
 bool[] resolve_orientation
+time deadline
 ---
 bool success
 string failure_code

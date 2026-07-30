@@ -448,7 +448,34 @@ class MoveItPlanner:
             return None
         return self.manipulator.get_current_pose()
 
-    def check_pose_sequence(self, targets, stage_names=None, linear=None):
+    @staticmethod
+    def _planning_now_sec():
+        return float(rospy.Time.now().to_sec())
+
+    def _planning_deadline_remaining_sec(self, deadline_sec):
+        try:
+            value = float(deadline_sec)
+        except (TypeError, ValueError, OverflowError):
+            return float('-inf')
+        if value == 0.0:
+            return float('inf')
+        if not math.isfinite(value) or value < 0.0:
+            return float('-inf')
+        try:
+            now_sec = float(self._planning_now_sec())
+        except (TypeError, ValueError, OverflowError):
+            return float('-inf')
+        if not math.isfinite(now_sec):
+            return float('-inf')
+        return value - now_sec
+
+    def check_pose_sequence(
+        self,
+        targets,
+        stage_names=None,
+        linear=None,
+        deadline_sec=0.0,
+    ):
         """Plan a collision-aware pose sequence without moving or caching it."""
 
         poses = tuple(targets or ())
@@ -497,6 +524,21 @@ class MoveItPlanner:
             for index, (target, stage_name, use_linear) in enumerate(
                 zip(poses, names, linear_flags)
             ):
+                remaining_sec = self._planning_deadline_remaining_sec(
+                    deadline_sec
+                )
+                if remaining_sec <= 0.0:
+                    return (
+                        False,
+                        'MOVEIT_TIMEOUT',
+                        str(stage_name),
+                        {
+                            'path_cost': total_path_cost,
+                            'max_delta': max_joint_delta,
+                        },
+                        'strict sequence deadline consumed before %s'
+                        % stage_name,
+                    )
                 pose = getattr(target, 'pose', target)
                 if bool(use_linear):
                     plan, reason = self._plan_cartesian_from_start_state(
@@ -504,9 +546,28 @@ class MoveItPlanner:
                         target,
                     )
                 else:
-                    plan, reason = self._plan_pose_from_start_state(
-                        start_state,
-                        pose,
+                    if math.isfinite(remaining_sec):
+                        plan, reason = self._plan_pose_from_start_state(
+                            start_state,
+                            pose,
+                            planning_time_limit_sec=remaining_sec,
+                        )
+                    else:
+                        plan, reason = self._plan_pose_from_start_state(
+                            start_state,
+                            pose,
+                        )
+                if self._planning_deadline_remaining_sec(deadline_sec) <= 0.0:
+                    return (
+                        False,
+                        'MOVEIT_TIMEOUT',
+                        str(stage_name),
+                        {
+                            'path_cost': total_path_cost,
+                            'max_delta': max_joint_delta,
+                        },
+                        'strict sequence deadline consumed during %s'
+                        % stage_name,
                     )
                 if plan is None:
                     return (
@@ -576,6 +637,7 @@ class MoveItPlanner:
         stage_names=None,
         linear=None,
         resolve_orientation=None,
+        deadline_sec=0.0,
     ):
         """Return deterministic FK-derived orientation seeds without motion.
 
@@ -682,6 +744,15 @@ class MoveItPlanner:
             start_state = deepcopy(self.robot.get_current_state())
             if getattr(start_state, 'joint_state', None) is None:
                 raise RuntimeError('current robot state has no joint_state')
+            if self._planning_deadline_remaining_sec(deadline_sec) <= 0.0:
+                return (
+                    False,
+                    'MOVEIT_TIMEOUT',
+                    str(names[0]),
+                    (),
+                    empty_metrics,
+                    'orientation resolver deadline consumed before initial FK',
+                )
             initial_fk, initial_fk_reason = self._forward_kinematics_from_state(
                 start_state,
                 getattr(poses[0], 'header', None),
@@ -703,6 +774,23 @@ class MoveItPlanner:
                 linear_flags,
                 resolve_flags,
             ):
+                remaining_sec = self._planning_deadline_remaining_sec(
+                    deadline_sec
+                )
+                if remaining_sec <= 0.0:
+                    return (
+                        False,
+                        'MOVEIT_TIMEOUT',
+                        str(stage_name),
+                        tuple(resolved),
+                        {
+                            'path_cost': total_path_cost,
+                            'max_delta': max_joint_delta,
+                            'max_position_error': max_position_error,
+                        },
+                        'orientation resolver deadline consumed before %s'
+                        % stage_name,
+                    )
                 pose = getattr(target, 'pose', target)
                 if bool(should_resolve):
                     if bool(use_linear):
@@ -722,13 +810,23 @@ class MoveItPlanner:
                             )
                             % stage_name,
                         )
-                    seed, code, reason = (
-                        self._resolve_orientation_from_state(
-                            start_state,
-                            target,
-                            free_space_anchor,
+                    if math.isfinite(remaining_sec):
+                        seed, code, reason = (
+                            self._resolve_orientation_from_state(
+                                start_state,
+                                target,
+                                free_space_anchor,
+                                deadline_sec=deadline_sec,
+                            )
                         )
-                    )
+                    else:
+                        seed, code, reason = (
+                            self._resolve_orientation_from_state(
+                                start_state,
+                                target,
+                                free_space_anchor,
+                            )
+                        )
                     if seed is None:
                         return (
                             False,
@@ -766,9 +864,33 @@ class MoveItPlanner:
                             target,
                         )
                     else:
-                        plan, reason = self._plan_pose_from_start_state(
-                            start_state,
-                            pose,
+                        if math.isfinite(remaining_sec):
+                            plan, reason = self._plan_pose_from_start_state(
+                                start_state,
+                                pose,
+                                planning_time_limit_sec=remaining_sec,
+                            )
+                        else:
+                            plan, reason = self._plan_pose_from_start_state(
+                                start_state,
+                                pose,
+                            )
+                    if (
+                        self._planning_deadline_remaining_sec(deadline_sec)
+                        <= 0.0
+                    ):
+                        return (
+                            False,
+                            'MOVEIT_TIMEOUT',
+                            str(stage_name),
+                            tuple(resolved),
+                            {
+                                'path_cost': total_path_cost,
+                                'max_delta': max_joint_delta,
+                                'max_position_error': max_position_error,
+                            },
+                            'orientation resolver deadline consumed during %s'
+                            % stage_name,
                         )
                     if plan is None:
                         return (
@@ -882,6 +1004,7 @@ class MoveItPlanner:
         start_state,
         target,
         anchor_target,
+        deadline_sec=0.0,
     ):
         """Return one repeatable geodesic IK seed and its measured metrics."""
 
@@ -926,6 +1049,15 @@ class MoveItPlanner:
         successes = []
         attempted = 0
         for fraction, quaternion in samples:
+            remaining_sec = self._planning_deadline_remaining_sec(
+                deadline_sec
+            )
+            if remaining_sec <= 0.0:
+                return (
+                    None,
+                    'MOVEIT_TIMEOUT',
+                    'orientation resolver deadline consumed before IK sample',
+                )
             attempted += 1
             candidate_target = deepcopy(target)
             candidate_pose = getattr(
@@ -934,10 +1066,23 @@ class MoveItPlanner:
                 candidate_target,
             )
             self._assign_quaternion(candidate_pose.orientation, quaternion)
-            ik_state, _ik_reason = self._inverse_kinematics_from_state(
-                start_state,
-                candidate_target,
-            )
+            if math.isfinite(remaining_sec):
+                ik_state, _ik_reason = self._inverse_kinematics_from_state(
+                    start_state,
+                    candidate_target,
+                    timeout_sec=remaining_sec,
+                )
+            else:
+                ik_state, _ik_reason = self._inverse_kinematics_from_state(
+                    start_state,
+                    candidate_target,
+                )
+            if self._planning_deadline_remaining_sec(deadline_sec) <= 0.0:
+                return (
+                    None,
+                    'MOVEIT_TIMEOUT',
+                    'orientation resolver deadline consumed during IK sample',
+                )
             if ik_state is None:
                 continue
             try:
@@ -970,10 +1115,34 @@ class MoveItPlanner:
         path_cost, max_delta, fraction, selected_target, selected_state = (
             successes[0]
         )
-        repeated_state, repeated_reason = self._inverse_kinematics_from_state(
-            start_state,
-            selected_target,
-        )
+        remaining_sec = self._planning_deadline_remaining_sec(deadline_sec)
+        if remaining_sec <= 0.0:
+            return (
+                None,
+                'MOVEIT_TIMEOUT',
+                'orientation resolver deadline consumed before repeatability IK',
+            )
+        if math.isfinite(remaining_sec):
+            repeated_state, repeated_reason = (
+                self._inverse_kinematics_from_state(
+                    start_state,
+                    selected_target,
+                    timeout_sec=remaining_sec,
+                )
+            )
+        else:
+            repeated_state, repeated_reason = (
+                self._inverse_kinematics_from_state(
+                    start_state,
+                    selected_target,
+                )
+            )
+        if self._planning_deadline_remaining_sec(deadline_sec) <= 0.0:
+            return (
+                None,
+                'MOVEIT_TIMEOUT',
+                'orientation resolver deadline consumed during repeatability IK',
+            )
         if repeated_state is None:
             return (
                 None,
@@ -1051,7 +1220,12 @@ class MoveItPlanner:
             % (fraction, attempted),
         )
 
-    def _inverse_kinematics_from_state(self, start_state, target):
+    def _inverse_kinematics_from_state(
+        self,
+        start_state,
+        target,
+        timeout_sec=None,
+    ):
         """Solve one exact collision-aware IK request from an explicit seed."""
 
         try:
@@ -1083,17 +1257,23 @@ class MoveItPlanner:
                     )
                 pose_stamped.pose = deepcopy(getattr(target, 'pose', target))
                 request.ik_request.pose_stamped = pose_stamped
-            request.ik_request.timeout = rospy.Duration.from_sec(
-                max(
-                    1e-3,
-                    float(
-                        getattr(
-                            self,
-                            'orientation_resolution_ik_timeout_sec',
-                            0.05,
-                        )
-                    ),
+            configured_timeout_sec = max(
+                1e-3,
+                float(
+                    getattr(
+                        self,
+                        'orientation_resolution_ik_timeout_sec',
+                        0.05,
+                    )
+                ),
+            )
+            if timeout_sec is not None:
+                configured_timeout_sec = min(
+                    configured_timeout_sec,
+                    max(1e-3, float(timeout_sec)),
                 )
+            request.ik_request.timeout = rospy.Duration.from_sec(
+                configured_timeout_sec
             )
             response = service(request)
             error_code = int(
@@ -1243,13 +1423,27 @@ class MoveItPlanner:
             for name, position in zip(first_names, first_positions)
         )
 
-    def _plan_pose_from_start_state(self, start_state, pose):
+    def _plan_pose_from_start_state(
+        self,
+        start_state,
+        pose,
+        planning_time_limit_sec=None,
+    ):
         previous_planning_time = None
         if hasattr(self.manipulator, 'get_planning_time'):
             previous_planning_time = self.manipulator.get_planning_time()
         if hasattr(self.manipulator, 'set_planning_time'):
+            planning_time = max(
+                0.05,
+                float(getattr(self, 'strict_pose_planning_time', 0.25)),
+            )
+            if planning_time_limit_sec is not None:
+                planning_time = min(
+                    planning_time,
+                    max(1e-3, float(planning_time_limit_sec)),
+                )
             self.manipulator.set_planning_time(
-                max(0.05, float(getattr(self, 'strict_pose_planning_time', 0.25)))
+                planning_time
             )
         try:
             if not hasattr(self.manipulator, 'set_start_state'):
