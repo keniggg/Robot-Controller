@@ -14612,3 +14612,55 @@ Implemented and verified offline:
 - This closes the offline implementation only. It does not prove powered
   second-stage contact, grasp closure, or lift; those still require the next
   unified rebuilt-stack live run.
+
+### 2026-07-30 - neon ROS GUI layout and interaction refresh
+
+- The operator approved preserving the existing cyan/violet neon HUD while
+  making action buttons more prominent, adding momentary pressed feedback,
+  and removing overlapping controls. The detailed design is
+  `docs/superpowers/specs/2026-07-30-neon-gui-layout-refresh-design.md`; the
+  implementation plan is
+  `docs/superpowers/plans/2026-07-30-neon-gui-layout-refresh.md`.
+- Runtime inspection used only `roscore` and
+  `alicia_flexible_grasp_supervisor/gui.launch`. No arm driver, motion
+  gateway, MoveIt execution node, camera hardware node, tactile hardware node,
+  enable, disable, motion, stop, torque-off, controller-stop, or emergency
+  command was started or issued.
+- The old `1120 x 720` render reproduced the reported overlap. The overview
+  page had a `1239 x 916` size hint and compressed the robot, tactile, and
+  compact 6D panels into each other. The target-recognition page had a
+  `999 x 1100` size hint and compressed visual alignment, metrics, status, and
+  action controls into the same vertical space. The checkable advanced group
+  also used the unstyled Fusion `14 px` indicator.
+- The root cause was fixed at layout containment rather than by shrinking
+  controls. The overview right status stack and target-recognition left
+  control stack now use independent borderless vertical scroll areas. Compact
+  6D actions use a `2 x 2` grid. Tab width/padding now fits all eight existing
+  tabs at the minimum window size. The corresponding rendered size hints are
+  now `1036 x 659` for overview and `1037 x 532` for target recognition, with
+  no horizontal scroll.
+- The shared theme keeps the navy/cyan/violet identity, increases panel and
+  button contrast, adds explicit input focus, checkbox, checkable-group,
+  scrollbar, disabled-button, hover, and pressed states. A primary button
+  press changes a sampled background lightness from `109` to `192`, strengthens
+  the border, and shifts the label downward through asymmetric padding.
+  Disabled primary/danger buttons now lose their active gradient instead of
+  looking executable.
+- The first focused RED run proved the old boundaries: the group indicator
+  measured `14 px`, `OverviewStatusScroll` and the scroll helper were absent,
+  and normal/pressed primary-button renders were identical. A later RED test
+  proved object-specific primary/danger styles overrode the generic disabled
+  background. All of those cases turned GREEN.
+- The production change is layout/style-only. Existing widgets, labels,
+  callbacks, publishers, subscribers, topics, services, parameters, timers,
+  confirmation dialogs, enabled-state rules, and hardware behavior remain
+  unchanged. One unused import and unused module-global `QCoreApplication`
+  allocation were removed from `test_pregrasp_async.py` because that import
+  side effect prevented the real GUI regression from creating a
+  `QApplication`; the asynchronous production behavior was not changed.
+- Final focused GUI regression passed `64/64`; complete supervisor unittest
+  discovery passed `659/659`. All changed Python files compiled and
+  `git diff --check` was silent. Every tab was rendered at `1120 x 720` and
+  `1320 x 860`; the complete tab row, scroll containment, readable button
+  labels, non-overlapping controls, disabled state, and normal/pressed visual
+  states were confirmed from the production `MainWindow`.

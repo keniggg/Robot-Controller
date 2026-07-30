@@ -20,7 +20,12 @@ from gui.widgets.tcp_calibration_widget import TcpCalibrationWidget
 from gui.widgets.grasp6d_control_widget import Grasp6DControlWidget
 from gui.widgets.perception_widget import PerceptionWidget
 from gui.widgets.log_widget import LogWidget
-from gui.theme import HudFrame, HudRoot, apply_app_theme
+from gui.theme import (
+    HudFrame,
+    HudRoot,
+    apply_app_theme,
+    make_vertical_scroll_area,
+)
 
 try:
     from controller_manager_msgs.srv import SwitchController, SwitchControllerRequest
@@ -60,7 +65,9 @@ class MainWindow(QtWidgets.QMainWindow):
         h.setContentsMargins(14, 14, 14, 14)
         h.setSpacing(14)
         self.camera = CameraWidget(color_topic, depth_topic)
-        right = QtWidgets.QVBoxLayout()
+        right_content = QtWidgets.QWidget()
+        right = QtWidgets.QVBoxLayout(right_content)
+        right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(14)
         self.robot = RobotStateWidget(rospy.get_param('/gui/joint_state_topic','/joint_states'))
         self.tactile = TactileWidget(rospy.get_param('/gui/tactile_topic','/tactile/state'))
@@ -71,7 +78,15 @@ class MainWindow(QtWidgets.QMainWindow):
             compact=True,
         )
         right.addWidget(self.robot); right.addWidget(self.tactile); right.addWidget(self.grasp)
-        h.addWidget(self.camera, 7); h.addLayout(right, 4)
+        right.addStretch(1)
+        h.addWidget(self.camera, 7)
+        h.addWidget(
+            make_vertical_scroll_area(
+                right_content,
+                'OverviewStatusScroll',
+            ),
+            4,
+        )
         tabs.addTab(home, '总览监控')
 
         tabs.addTab(JointControlWidget(color_topic, depth_topic), '关节控制')

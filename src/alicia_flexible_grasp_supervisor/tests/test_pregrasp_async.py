@@ -5,7 +5,6 @@ import time
 import types
 import unittest
 
-from PyQt5 import QtCore
 from geometry_msgs.msg import PoseStamped
 import rospy
 
@@ -17,8 +16,6 @@ for path in (ROOT, ROOT / 'src'):
 
 from gui.widgets.perception_widget import PerceptionWidget
 from alicia_flexible_grasp.grasp.grasp_pose_generator import make_pregrasp_pose
-
-APP = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
 
 
 class FakeLabel:

@@ -24,7 +24,7 @@ from alicia_flexible_grasp.vision.model_selection import (
     select_yolo_model,
 )
 from gui.widgets.camera_widget import CameraWidget
-from gui.theme import metric_chip, panel
+from gui.theme import make_vertical_scroll_area, metric_chip, panel
 
 
 def perception_grasp_action_mode(use_grasp6d_plan):
@@ -177,7 +177,9 @@ class PerceptionWidget(QtWidgets.QWidget):
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(14)
-        controls = QtWidgets.QVBoxLayout()
+        controls_content = QtWidgets.QWidget()
+        controls = QtWidgets.QVBoxLayout(controls_content)
+        controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(0)
         frame, body = panel('目标识别与抓取位姿')
         controls.addWidget(frame)
@@ -352,7 +354,13 @@ class PerceptionWidget(QtWidgets.QWidget):
         self.status.setWordWrap(True)
         body.addWidget(self.status)
         controls.addStretch(1)
-        layout.addLayout(controls, 4)
+        layout.addWidget(
+            make_vertical_scroll_area(
+                controls_content,
+                'PerceptionControlsScroll',
+            ),
+            4,
+        )
         if color_topic and depth_topic:
             self.camera_preview = CameraWidget(color_topic, depth_topic, compact=True, default_mode='split')
             self.camera_preview.color_frame_updated.connect(self._on_camera_color_frame)

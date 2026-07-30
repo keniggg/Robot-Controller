@@ -105,13 +105,13 @@ QTabWidget::pane {
     background: rgba(4, 10, 24, 178);
 }
 QTabBar::tab {
-    background: rgba(7, 16, 37, 214);
-    color: #8fa4c7;
-    border: 1px solid rgba(54, 139, 189, 95);
-    border-bottom-color: rgba(54, 139, 189, 60);
-    padding: 11px 20px;
-    margin-right: 4px;
-    min-width: 112px;
+    background: rgba(7, 18, 42, 224);
+    color: #9bb4d9;
+    border: 1px solid rgba(54, 154, 205, 112);
+    border-bottom-color: rgba(54, 139, 189, 70);
+    padding: 10px 12px;
+    margin-right: 2px;
+    min-width: 88px;
     font-weight: 600;
 }
 QTabBar::tab:selected {
@@ -129,10 +129,10 @@ QTabBar::tab:hover {
 }
 QFrame#Panel {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(6, 20, 44, 222),
-        stop:0.55 rgba(8, 14, 38, 212),
-        stop:1 rgba(23, 10, 42, 206));
-    border: 1px solid rgba(69, 220, 255, 132);
+        stop:0 rgba(7, 23, 49, 236),
+        stop:0.55 rgba(8, 16, 42, 228),
+        stop:1 rgba(25, 11, 45, 220));
+    border: 1px solid rgba(76, 227, 255, 154);
     border-radius: 10px;
 }
 QFrame#Panel[variant="soft"] {
@@ -207,20 +207,34 @@ QHeaderView::section {
 }
 QPushButton {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(15, 31, 68, 236),
-        stop:1 rgba(22, 20, 58, 232));
-    border: 1px solid rgba(79, 182, 238, 135);
+        stop:0 rgba(14, 36, 76, 242),
+        stop:1 rgba(31, 22, 72, 238));
+    border: 1px solid rgba(90, 211, 255, 178);
     border-radius: 7px;
     color: #edf8ff;
     padding: 9px 14px;
     font-weight: 700;
 }
 QPushButton:hover {
-    background: rgba(16, 55, 94, 240);
-    border-color: rgba(86, 243, 255, 210);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(12, 74, 112, 248),
+        stop:1 rgba(72, 35, 116, 244));
+    border-color: rgba(118, 250, 255, 238);
+    color: #ffffff;
 }
 QPushButton:pressed {
-    background: rgba(9, 24, 52, 245);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #22d3ee,
+        stop:0.58 #38bdf8,
+        stop:1 #a855f7);
+    border: 2px solid #dffeff;
+    color: #ffffff;
+    padding: 11px 13px 7px 13px;
+}
+QPushButton:disabled {
+    background: rgba(15, 23, 43, 188);
+    border: 1px solid rgba(86, 112, 150, 94);
+    color: rgba(145, 164, 195, 128);
 }
 QPushButton#PrimaryButton {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -236,6 +250,15 @@ QPushButton#PrimaryButton:hover {
         stop:0.56 #22d3ee,
         stop:1 #9b5cff);
 }
+QPushButton#PrimaryButton:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #67f4ff,
+        stop:0.52 #36ddff,
+        stop:1 #c084fc);
+    border: 2px solid #ffffff;
+    color: #071426;
+    padding: 11px 13px 7px 13px;
+}
 QPushButton#DangerButton {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #a7193c,
@@ -244,6 +267,20 @@ QPushButton#DangerButton {
 }
 QPushButton#DangerButton:hover {
     background: #ff315c;
+}
+QPushButton#DangerButton:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #ff5e7d,
+        stop:0.55 #ff3b69,
+        stop:1 #ff79b0);
+    border: 2px solid #ffe9f0;
+    color: #250611;
+    padding: 11px 13px 7px 13px;
+}
+QPushButton#PrimaryButton:disabled, QPushButton#DangerButton:disabled {
+    background: rgba(9, 15, 29, 214);
+    border: 1px solid rgba(86, 112, 150, 92);
+    color: rgba(145, 164, 195, 118);
 }
 QPushButton#AxisButton {
     min-height: 44px;
@@ -282,6 +319,10 @@ QSpinBox, QLineEdit, QComboBox {
     color: #f7fbff;
     padding: 7px 10px;
 }
+QDoubleSpinBox:focus, QSpinBox:focus, QLineEdit:focus, QComboBox:focus {
+    border: 1px solid #5cf6ff;
+    background: rgba(5, 22, 45, 240);
+}
 QComboBox::drop-down {
     border: 0;
     width: 24px;
@@ -294,18 +335,60 @@ QComboBox QAbstractItemView {
 }
 QCheckBox {
     color: #e9f7ff;
-    spacing: 8px;
+    spacing: 10px;
+    padding: 4px 2px;
 }
 QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-    border: 1px solid rgba(70, 245, 255, 170);
+    width: 17px;
+    height: 17px;
+    border-radius: 5px;
+    border: 1px solid rgba(88, 241, 255, 210);
     background: rgba(3, 8, 21, 230);
 }
 QCheckBox::indicator:checked {
-    background: #42f7ff;
-    border-color: #bf5cff;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #67f4ff,
+        stop:0.55 #22d3ee,
+        stop:1 #a855f7);
+    border: 2px solid #e8feff;
+}
+QGroupBox {
+    background: rgba(6, 14, 34, 206);
+    border: 1px solid rgba(73, 188, 238, 122);
+    border-radius: 8px;
+    color: #dff8ff;
+    font-weight: 700;
+    margin-top: 13px;
+    padding: 16px 10px 10px 10px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 35px;
+    padding: 0 8px 0 4px;
+    color: #bff8ff;
+    background: #09142e;
+}
+QGroupBox::indicator {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 11px;
+    width: 17px;
+    height: 17px;
+    border-radius: 5px;
+    border: 1px solid rgba(88, 241, 255, 210);
+    background: rgba(3, 8, 21, 244);
+}
+QGroupBox::indicator:checked {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #67f4ff,
+        stop:0.55 #22d3ee,
+        stop:1 #a855f7);
+    border: 2px solid #e8feff;
+}
+QScrollArea, QScrollArea > QWidget > QWidget {
+    background: transparent;
+    border: 0;
 }
 QScrollBar:vertical {
     background: rgba(4, 10, 24, 210);
@@ -318,6 +401,18 @@ QScrollBar::handle:vertical {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0;
+}
+QScrollBar:horizontal {
+    background: rgba(4, 10, 24, 210);
+    height: 10px;
+    margin: 0;
+}
+QScrollBar::handle:horizontal {
+    background: rgba(71, 220, 255, 120);
+    border-radius: 5px;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
 }
 """
 
@@ -338,6 +433,17 @@ def apply_app_theme(app):
     palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor("#ffffff"))
     app.setPalette(palette)
     app.setStyleSheet(APP_QSS)
+
+
+def make_vertical_scroll_area(widget, object_name):
+    scroll = QtWidgets.QScrollArea()
+    scroll.setObjectName(str(object_name))
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+    scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+    scroll.setWidget(widget)
+    return scroll
 
 
 def panel(title, caption=None, variant=None):

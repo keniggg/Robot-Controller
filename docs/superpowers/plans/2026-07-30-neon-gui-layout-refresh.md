@@ -48,28 +48,32 @@ the compact 6D action row becomes a two-column grid.
 
 **Interfaces:**
 
-- Consumes: existing `APP_QSS`, `MainWindow`, `PerceptionWidget`, and
-  `Grasp6DControlWidget` source contracts.
-- Produces: tests for `make_vertical_scroll_area(widget, object_name)`,
+- Consumes: real `MainWindow`, `PerceptionWidget`, and
+  `Grasp6DControlWidget` Qt components with only external ROS endpoints
+  replaced by inert test doubles.
+- Produces: behavioral tests for
+  `make_vertical_scroll_area(widget, object_name)`,
   `OverviewStatusScroll`, `PerceptionControlsScroll`, compact action-grid
   layout, pressed selectors, disabled selectors, and group-box indicators.
 
-- [ ] **Step 1: Add theme contract tests**
+- [ ] **Step 1: Add real Qt interaction-state tests**
 
-Create a test module that imports `APP_QSS` and asserts:
+Create an offscreen `QApplication`, apply the production theme, and render a
+real `PrimaryButton` before and during `QTest.mousePress`. Assert the two images
+differ, the pressed center pixel is brighter, and the styled content rectangle
+moves downward. Release the mouse and assert the original render returns.
 
 ```python
-def test_neon_theme_has_distinct_interaction_states(self):
-    assert 'QPushButton:pressed' in APP_QSS
-    assert 'QPushButton#PrimaryButton:pressed' in APP_QSS
-    assert 'QPushButton#DangerButton:pressed' in APP_QSS
-    assert 'QPushButton:disabled' in APP_QSS
-    assert 'QGroupBox::indicator' in APP_QSS
-    assert 'QGroupBox::indicator:checked' in APP_QSS
+QtTest.QTest.mousePress(button, QtCore.Qt.LeftButton)
+app.processEvents()
+pressed = button.grab().toImage()
+assert pressed != normal
+assert pressed_content.top() > normal_content.top()
 ```
 
-Add assertions that the pressed block contains a brighter border and asymmetric
-top/bottom padding, and that the tab style no longer uses `min-width: 112px`.
+Render a real checkable `QGroupBox` and use
+`QStyle.subControlRect(QStyle.CC_GroupBox, ...)` to assert its indicator is at
+least `17 x 17` and does not intersect its title rectangle.
 
 - [ ] **Step 2: Add scroll-helper behavior tests**
 
@@ -86,25 +90,33 @@ assert scroll.verticalScrollBarPolicy() == QtCore.Qt.ScrollBarAsNeeded
 assert scroll.frameShape() == QtWidgets.QFrame.NoFrame
 ```
 
-- [ ] **Step 3: Add source-level containment tests**
+- [ ] **Step 3: Add real component containment tests**
 
-Read the three production source files and assert:
+Patch only `rospy.Publisher`, `rospy.Subscriber`, and `rospy.get_param`, then
+instantiate the real `MainWindow` at `1120 x 720`. Assert:
 
 ```python
-assert "'OverviewStatusScroll'" in main_source
-assert "'PerceptionControlsScroll'" in perception_source
-assert 'QtWidgets.QGridLayout()' in grasp6d_source
-assert 'if self._compact:' in grasp6d_source
+overview = window.findChild(QtWidgets.QScrollArea, 'OverviewStatusScroll')
+perception = window.findChild(
+    QtWidgets.QScrollArea,
+    'PerceptionControlsScroll',
+)
+assert overview is not None
+assert perception is not None
+assert window.findChild(QtWidgets.QTabWidget).count() == 8
 ```
 
-Also assert each of the existing compact actions is still connected to the
-same callback:
+Find the compact `Grasp6DControlWidget` and its named `CompactActionGrid`.
+Assert the four existing button objects occupy four distinct grid cells and
+that all button labels remain fully contained by their rectangles after
+layout. Select every tab and assert every tab rectangle fits inside the tab
+bar without visible scroll buttons.
 
 ```python
-assert 'self.check_btn.clicked.connect(self.check_remote)' in grasp6d_source
-assert 'self.request_plan_btn.clicked.connect(self.request_plan)' in grasp6d_source
-assert 'self.execute_btn.clicked.connect(self.execute_grasp)' in grasp6d_source
-assert 'self.stop_btn.clicked.connect(self.stop_grasp)' in grasp6d_source
+assert grid.itemAtPosition(0, 0).widget() is compact.check_btn
+assert grid.itemAtPosition(0, 1).widget() is compact.request_plan_btn
+assert grid.itemAtPosition(1, 0).widget() is compact.execute_btn
+assert grid.itemAtPosition(1, 1).widget() is compact.stop_btn
 ```
 
 - [ ] **Step 4: Run the focused test and record RED**
@@ -201,7 +213,7 @@ space. Preserve the existing `QGroupBox.toggled` behavior.
 
 Run the focused command from Task 1.
 
-Expected: theme/helper assertions pass; containment assertions remain RED until
+Expected: theme/helper behavior passes; containment behavior remains RED until
 Tasks 3 and 4.
 
 ---
@@ -424,4 +436,3 @@ git push origin codex/protocol-v3-upgrade
 
 Verify local `HEAD` equals `origin/codex/protocol-v3-upgrade` and the worktree
 is clean.
-
