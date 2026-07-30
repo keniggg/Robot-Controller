@@ -14491,3 +14491,39 @@ Implemented and verified offline:
   was still active after task expiry. No near-field pregrasp, contact
   approach, grasp pose, gripper close, lift, `/grasp/stop`, torque-off,
   disable, controller-stop, or emergency command ran.
+
+### 2026-07-29 - approved unified near-field absolute-deadline design
+
+- The operator selected design A while the arm was powered off. No ROS
+  service, topic write, serial access, hardware node start, motion, enable,
+  disable, stop, torque-off, controller-stop, or emergency command was used
+  during this design work.
+- Source inspection confirmed that the task currently starts a local
+  monotonic 30-second wait after requesting the Preview stream, while the
+  remote selector starts another 30-second gate from the later fused snapshot
+  stamp. The task does not subscribe to `/grasp_6d/status`, and a direct
+  terminal currently does not publish a fresh invalid Preview for the task to
+  consume.
+- The strict candidate path may synchronously call the original four-stage
+  strict sequence, deterministic free-space orientation resolution, and a
+  second resolved four-stage strict sequence. The current services carry no
+  deadline. The configured resolver alone can request up to 96 collision-aware
+  IK samples for each of pregrasp and lift, with `0.05 s` per IK request,
+  followed by a repeatability solve. This explains why checking only between
+  whole candidates cannot bound the in-flight tail.
+- The approved repair introduces one task-owned structured near-field phase
+  contract containing phase ID, start, and absolute deadline. The task wait,
+  remote direct selector, strict sequence service, and deterministic
+  orientation resolver will share that exact deadline. The snapshot timestamp
+  remains evidence of sensor freshness but no longer owns a second planning
+  budget.
+- Both MoveIt services will check the remaining budget at their internal
+  stage/sample boundaries and return `MOVEIT_TIMEOUT` rather than classifying
+  an unchecked remainder as unreachable. A direct terminal will be returned
+  as a current-window invalid Preview with a dedicated terminal source marker;
+  the task may stop waiting on that invalid message but can never execute it.
+- The complete near-field budget remains `30.0 s`. Target, geometry,
+  collision, joint-limit, complete-sweep, strict-MoveIt, plan-ID, controller,
+  encoder, and endpoint gates remain unchanged.
+- The implementation plan is
+  `docs/superpowers/plans/2026-07-29-unified-near-field-deadline.md`.
