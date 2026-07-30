@@ -14329,3 +14329,70 @@ Implemented and verified offline:
   device, actuator, torque service, motion service, stop, disable, or other
   hardware command was accessed or sent. Powered validation remains pending
   and no true hardware-response or successful-grasp claim is made here.
+
+### 2026-07-29 - powered direct-route validation and first-stage radial-correction failure
+
+- The latest full system was launched from commit `0435746` with the real arm
+  on `/dev/alicia_arm` at `1000000` baud, the real camera, GUI, and remote
+  protocol-v3 6D service at `http://172.23.132.97:8000`; tactile was disabled.
+  Startup requested only the existing positive torque-on path. No
+  `/grasp/stop`, torque-off, disable, controller stop, or emergency-stop
+  request was sent.
+- After the operator synchronized current joints and made a GUI motion, fresh
+  encoder feedback established
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`. Temperatures during task setup
+  were approximately `26-36 C`; status was predominantly `0x00`. Isolated
+  `0xE1` events were logged without any automatic torque-off because measured
+  temperature did not establish sustained over-temperature.
+- The operator aligned a detected `carton`. One representative perception
+  message reported confidence `0.9163`, depth `0.3179 m`, and base-frame
+  position approximately `(-0.1051, -0.4652, 0.0612) m`.
+- The operator explicitly authorized sending the task RGB-D/point-cloud
+  payload to `http://172.23.132.97:8000`. The remote service accepted
+  `/grasp_6d/request_plan trigger:true`. A representative plan used five fused
+  frames, `3311` valid depth points, depth-valid ratio about `0.9991`, and a
+  strict-MoveIt-reachable tabletop candidate.
+- Continuous inference legitimately changed execution authority while the
+  first start request was being prepared. The start service rejected stale
+  plan `fe8de3312cbd9581f8869f74` with
+  `PLAN_ID_MISMATCH` and reported current rich plan
+  `898d248c414b43d7648babe8`; no motion ran for that rejected request.
+  Source documentation confirmed that
+  `/grasp_6d/request_plan trigger:false` only stops new candidate inference
+  and retains Execution readiness. After freezing the stream, the retained
+  execution plan was `d94be0261d64908dd67e2f38`.
+- `/grasp/start` accepted the frozen plan. The `46.5 s` far-field observation
+  trajectory physically moved the arm from approximately
+  `[-103.2, +19.9, -10.9, +0.4, -1.1, +0.4] deg` to the observation region.
+  The measured endpoint residual was `0.0134 m / 2.10 deg`; measured
+  camera-target range was `0.173114 m`, so the existing one permitted radial
+  correction planned a `0.036761 m` retreat while preserving measured tool
+  orientation.
+- The radial-correction trajectory also produced real encoder motion, but
+  MoveIt received
+  `GOAL_TOLERANCE_VIOLATED: Joint2 goal error 0.037171` and
+  `ABORTED: CONTROL_FAILED`. The motion gateway installed its existing
+  enabled-controller desired-command hold. Measured and desired maximum joint
+  deltas were `0.144194 rad` and `0.143758 rad`, but the steady Joint2
+  endpoint error remained `0.037171 rad`, above the configured
+  `execution_goal_tolerance_rad + slack = 0.035 rad`. The task therefore
+  correctly failed before opening a near-field snapshot and released the
+  execution slot. Actuation remained
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`; no stop or disable command ran.
+- This run does not prove the second-stage selector failed and does not prove
+  the target was unreachable: the task never entered near field. It exposes a
+  narrower first-stage integration defect. The task already permits a strict
+  observation trajectory whose controller reports failure to be judged by the
+  unchanged live camera-range contract after feedback settles, but the single
+  radial-correction call did not opt into that same bounded recovery path.
+- The operator approved the evidence-based repair. A controller-failed
+  observation or radial correction may continue only after motion settles and
+  a fresh observation proves the same target is inside the existing camera
+  range contract. Joint endpoint tolerance remains `0.035 rad`; driver
+  endpoint trim remains disabled; no second correction is added; and no
+  contact, close, or lift failure can use this observation-only recovery.
+- At the time of this entry, the route change is documented but production
+  code is unchanged. The arm remains powered and enabled at the failed
+  correction endpoint. No further motion, candidate generation, stop,
+  disable, torque-off, or emergency command was sent while documenting the
+  evidence.
