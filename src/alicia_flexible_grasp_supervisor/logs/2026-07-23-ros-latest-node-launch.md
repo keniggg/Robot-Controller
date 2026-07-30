@@ -14396,3 +14396,98 @@ Implemented and verified offline:
   correction endpoint. No further motion, candidate generation, stop,
   disable, torque-off, or emergency command was sent while documenting the
   evidence.
+
+### 2026-07-29 - offline radial-correction observation-contract repair
+
+- The approved implementation remained scoped to the existing observation-only
+  recovery argument. No controller, driver, range, timing, correction-count,
+  contact-stage, or persisted configuration value changed.
+- The first baseline test invocation omitted `source devel/setup.bash` and did
+  not enter the suite because ROS-generated Python messages were not on
+  `PYTHONPATH`. Re-running in the worktree environment passed the unchanged
+  task sequence suite `137/137`.
+- The focused regression changed only the radial-correction caller expectation
+  to require `allow_post_failure_observation_validation=True`. Before the
+  production change, it failed exactly with `AssertionError: False is not
+  true`, proving the old caller still denied the approved recovery.
+- Production commit `783d1a2` changes the radial-correction call from
+  `allow_post_failure_observation_validation=False` to `True`. The existing
+  callee still requires a frozen `FAR_FIELD_OBSERVATION_PLAN`, recognizes only
+  the exact cached strict-execution failure prefix, waits for motion settle,
+  records the failure marker, and leaves the following fresh camera-range
+  check authoritative.
+- Three focused tests then passed: the radial correction opts into the
+  observation contract, a recoverable far-field controller failure waits for
+  feedback settle, and a failed main observation whose live range remains
+  outside the contract cannot issue another physical correction.
+- The complete task sequence suite passed `137/137`; both modified Python
+  files compiled; `git diff --check` was silent. The scoped production/test
+  diff contained exactly the two one-line boolean expectation changes.
+- All work in this entry used local source, Git, Python import/compile, and
+  offline unit tests. It did not call a ROS service, publish a ROS topic,
+  access a serial device, generate a candidate, move a joint, or send stop,
+  disable, torque-off, controller-stop, or emergency commands.
+
+### 2026-07-29 - powered observation recovery proof and near-field deadline mismatch
+
+- The updated task node replaced only the old `/grasp_task_node`; the new PID
+  was `12878` and published `IDLE ready`. The driver, serial connection,
+  controllers, MoveIt, camera, perception, remote 6D node, and ROS master were
+  not restarted. Runtime calibration interlock remained `false`, actuation
+  remained `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`, and the target remained
+  a detected `carton` with confidence about `0.917`.
+- Remote candidate generation produced two fresh valid far-field plans. New
+  inference was then frozen using `/grasp_6d/request_plan trigger:false`,
+  which does not stop the robot or clear Execution readiness. The retained
+  plan `5499f45aa6c09ce328dce88e`, source stamp
+  `1785388702.860067367`, was bound to the live task.
+- The far-field observation trajectory physically completed. Its measured
+  endpoint residual was `0.0139 m / 2.26 deg`. Fresh camera-target distance
+  was `0.177538 m`, below the existing `0.180 m` minimum, so the task issued
+  its one permitted measured radial correction, a `0.032766 m` retreat.
+- MoveIt reported
+  `GOAL_TOLERANCE_VIOLATED: Joint2 goal error 0.037051` and
+  `ABORTED: CONTROL_FAILED`. The measured and desired maximum joint deltas
+  were `0.122718 rad` and `0.123350 rad`. The updated task did not accept
+  those deltas as endpoint success and did not change the `0.035 rad`
+  hardware review limit. It recorded the controller failure and waited
+  `0.90 s` for measured motion settle.
+- A newer observation then measured the same target at `0.1899 m`, inside the
+  unchanged inclusive `[0.1800, 0.2200] m` range. The task accepted the live
+  observation contract and switched `/grasp/near_field_active` to `true` at
+  ROS time `1785388824.067`. This is the first powered proof that commit
+  `783d1a2` fixes the radial-correction false terminal without relaxing joint
+  tolerance.
+- The remote node received the near-field phase change and cancelled prior
+  phase requests. Its one direct near-field request used snapshot stamp
+  `1785388826.249668`. The live gate audit began with 32 candidates and
+  reported eight baseline-safe/visible candidates before strict MoveIt
+  sequence checks.
+- The task's outer 30-second wait began near
+  `1785388824.069` and expired at `1785388854.110`. No new contact-phase
+  Preview had arrived, so the last visible Preview was still the earlier
+  far-field plan and the exact task terminal was
+  `NEAR_FIELD_DIRECT_TIMEOUT`, with last validation reason
+  `NEAR_FIELD_PLAN_PHASE_INVALID`. The task switched back to far field and
+  released the execution slot.
+- The near-field worker finished only at about `1785388859.556`. Its metrics
+  reported request `151`, end-to-end time `32701.604 ms`, snapshot age
+  `33297.446 ms`, ROS preparation `3926.325 ms`, and
+  `drop_reason=GENERATION_STALE` because the task had already closed that
+  generation. MoveIt logs show strict checks still completing after the
+  task-side deadline, including an orientation-resolved approach result at
+  about `1785388859.497`.
+- Source inspection proves the timer mismatch. The task starts its
+  `near_field_replan_timeout_sec` stopwatch before requesting the stream,
+  while `_direct_near_field_deadline_gate` computes a second 30-second
+  deadline from the later fused `snapshot_stamp_sec`. It checks only before
+  starting another candidate; an in-flight strict MoveIt service call may
+  finish after that deadline. Therefore the outer task can expire and
+  invalidate the generation before the remote node publishes either a
+  selected contact plan or its exact bounded terminal.
+- This run is not evidence that the target was outside the robot workspace or
+  that all eight current hard-safe candidates were unreachable. The stale
+  result never committed its near-field funnel, and at least one strict check
+  was still active after task expiry. No near-field pregrasp, contact
+  approach, grasp pose, gripper close, lift, `/grasp/stop`, torque-off,
+  disable, controller-stop, or emergency command ran.
