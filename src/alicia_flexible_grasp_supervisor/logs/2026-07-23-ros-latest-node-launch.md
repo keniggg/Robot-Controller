@@ -14864,3 +14864,85 @@ Implemented and verified offline:
   motion, grasp, stop, disable, torque-off, controller-stop or emergency
   command was issued by the repair work. Powered proof still requires a fresh
   aligned run using the restarted updated remote node.
+
+### 2026-07-31 - three-frame near field and endpoint convergence passed; transient target loss blocked approach
+
+- The first submitted execution request reused far-field plan
+  `1e0782c01d0b23059dca9822` after its allowed source interval and was rejected
+  before motion as `PLAN_STALE`. A fresh stream then produced far-field plan
+  `eae61b180a7edf536e1c317f`; candidate computation was stopped only after that
+  exact plan was frozen, and `/grasp/start` was submitted with the same ID.
+- The far-field observation motion completed. Its measured endpoint error was
+  `0.0125 m / 2.02 deg`; a new camera observation measured `0.1810 m`, inside
+  the unchanged `[0.180,0.220] m` contract, so the task entered near field.
+- The new near-field acquisition limits were exercised by live data. Contact
+  plan `c46f9538886895f6728fccce` used exactly three fused source frames and
+  reported `CONTACT_EXECUTION_PLAN`. Its target centre was
+  `(-0.121811,-0.437940,+0.058977) m`, the candidate pregrasp was
+  `(-0.122094,-0.435083,+0.090334) m`, and the grasp pose was
+  `(-0.122531,-0.442252,+0.056284) m`. The planned pregrasp horizontal offset
+  from the fused centre was about `2.9 mm`; pregrasp-to-grasp remained an
+  unexecuted approximately `34.8 mm` approach vector with about `7.2 mm`
+  horizontal component.
+- The task rebound the exact contact plan and executed its candidate-specific
+  near-field pregrasp. The controller completed, the task acquired the scoped
+  endpoint-precision lease, the driver applied two live feedback trim
+  iterations, and the measured tool0 contract stabilized at
+  `0.0025 m / 0.35 deg` for three consecutive samples, inside the unchanged
+  `0.0060 m / 5.00 deg` limits. The lease then released normally while
+  retaining compensation only for the unchanged held target.
+- At ROS time `1785567901.095`, immediately after the controller result and
+  before approach, the remote planner published one
+  `TARGET_LOST: target object is not detected` invalidation. Perception had
+  reported a valid carton at `1785567900.976` and reacquired it at
+  `1785567902.251`, so the invalid interval lasted about `1.16 s`. The old task
+  semantics treated that single invalidation as a hard execution tombstone.
+  It therefore failed `EXECUTION_AUTHORITY_REVOKED` after the endpoint proof;
+  no linear approach, grasp pose, gripper close or lift command was issued.
+- The isolated `0xE1` status at `1785567901.288` had fresh measured maximum
+  temperature `38 C`, was followed by status `0x00`, and explicitly caused no
+  torque-off. It occurred after the target-loss tombstone and is not used as
+  the failure cause.
+- Operator video
+  `/home/zhuyupei/Videos/660d175451fdc6131cb3f29dd82cd178.mp4`
+  is HEVC `720 x 1280`, `30.400 s`, 911 frames at about `29.97 fps`. The final
+  frames qualitatively show the gripper stopped above and apparently offset
+  from the carton. They are consistent with the logged elevated pregrasp and
+  missing final approach, but the uncalibrated external view is not used to
+  invent a metric correction. The plan and FK evidence prove that the arm
+  reached its planned pregrasp; they do not yet prove the unexecuted grasp pose
+  would physically centre and lift the carton.
+- Saved eye-in-hand detections moved toward the image boundary during the long
+  pregrasp trajectory and briefly disappeared, then recovered with confidence
+  `0.886`. Their partial close-range masks are not substituted for the frozen
+  three-frame target centre. No fixed object-specific offset, jaw rotation or
+  loosened drift threshold is justified by this run.
+
+### 2026-07-31 - frozen near-field authority now survives expected approach occlusion
+
+- The operator explicitly clarified that losing the target from the camera as
+  the arm approaches is normal and must not fail the task. The earlier draft
+  requirement to reacquire before approach was therefore removed before
+  deployment.
+- Direct near-field `CONTACT_EXECUTION_PLAN` freezing now atomically enables
+  the existing close-range occlusion allowance. Missing, stale or
+  low-confidence observations preserve the immutable bound plan throughout
+  candidate pregrasp, linear approach and grasp; a `TARGET_LOST` rich-plan
+  tombstone cannot revoke that plan during this expected occlusion interval.
+- Target loss before the contact plan is frozen still revokes authority. If a
+  valid observation returns, unchanged target drift and instance checks still
+  apply. Other invalid-plan codes, target jumps, plan-integrity changes,
+  explicit stops and actuation failures retain hard failure behavior.
+- Regressions prove the direct near-field rebind atomically enables occlusion
+  handling and that both the object callback and `TARGET_LOST` execution
+  tombstone preserve the same frozen plan without requiring reacquisition.
+  The pre-freeze hard-target-loss regression remains unchanged.
+- The complete grasp-task sequence passed `143/143`; complete supervisor
+  discovery passed `662/662`. Python compilation and `git diff --check` were
+  clean, and `catkin_make --pkg alicia_flexible_grasp_supervisor` rebuilt the
+  package successfully with all `8` messages and `11` services.
+- The operator began manually repositioning the arm while this offline repair
+  continued. No trajectory, gripper, enable, disable, torque-off, controller
+  stop, emergency stop or `/grasp/stop` command was sent by the repair work.
+  A restarted task node and a fresh aligned task are still required to prove
+  linear approach, grasp, close and lift on hardware.

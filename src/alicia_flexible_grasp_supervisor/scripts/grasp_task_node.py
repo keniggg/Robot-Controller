@@ -1372,6 +1372,20 @@ class GraspTaskNode:
                 )
                 return
             if not result.ok:
+                if (
+                    execution_frozen
+                    and result.code == 'TARGET_LOST'
+                    and self._target_occlusion_allowed_locked()
+                ):
+                    self._last_execution_plan_event = (
+                        'EXECUTION_FROZEN_TARGET_OCCLUDED'
+                    )
+                    rospy.logwarn_throttle(
+                        1.0,
+                        'Ignored TARGET_LOST execution tombstone during '
+                        'expected close-range occlusion',
+                    )
+                    return
                 if execution_frozen:
                     self._execution_authority_revoked = True
                     self._last_execution_plan_event = (
@@ -1484,7 +1498,11 @@ class GraspTaskNode:
         plan.serialize(wire)
         return hashlib.sha256(wire.getvalue()).hexdigest()
 
-    def _freeze_execution_plan(self, plan):
+    def _freeze_execution_plan(
+        self,
+        plan,
+        allow_target_occlusion=False,
+    ):
         frozen = deepcopy(plan)
         if not plan_id_matches_content(frozen):
             raise ValueError('cannot freeze an invalid rich execution plan')
@@ -1494,7 +1512,9 @@ class GraspTaskNode:
             self._bound_execution_plan_id = str(frozen.plan_id)
             self._bound_execution_plan_digest = digest
             self._execution_authority_revoked = False
-            self._bound_target_occlusion_allowed = False
+            self._bound_target_occlusion_allowed = bool(
+                allow_target_occlusion
+            )
             self._last_execution_plan_event = 'EXECUTION_FROZEN'
         return deepcopy(frozen)
 
@@ -2410,7 +2430,14 @@ class GraspTaskNode:
                 gcfg,
             )
             if last_result.ok:
-                frozen = self._freeze_execution_plan(candidate)
+                frozen = self._freeze_execution_plan(
+                    candidate,
+                    allow_target_occlusion=(
+                        direct_near_field
+                        and _plan_phase(candidate)
+                        == _CONTACT_EXECUTION_PLAN
+                    ),
+                )
                 if direct_near_field:
                     if not self._set_near_field_preview_stream(
                         gcfg,

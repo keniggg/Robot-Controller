@@ -1756,7 +1756,11 @@ class GraspTaskSequenceTest(unittest.TestCase):
             grasp_task_node.GraspTaskNode
         )
         bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
+        bound.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        bound.plan_id = compute_plan_id(bound)
         preview = self._rich_plan(plan_id='preview', stamp_sec=10.0)
+        preview.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+        preview.plan_id = compute_plan_id(preview)
         node.latest_grasp6d_plan = bound
         node.latest_grasp6d_preview_plan = preview
         node.latest_obj = self._object_at(
@@ -1821,6 +1825,57 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(result.plan_id, preview.plan_id)
         self.assertEqual(node._bound_execution_plan.plan_id, preview.plan_id)
         self.assertEqual(stream_calls, [True, False])
+        self.assertTrue(node._bound_target_occlusion_allowed)
+
+    def test_direct_near_field_occlusion_preserves_frozen_authority(
+        self,
+    ):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        bound = self._rich_plan(stamp_sec=9.0)
+        bound.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+        bound.plan_id = compute_plan_id(bound)
+        visible = self._object(stamp_sec=9.9)
+        node.latest_grasp6d_plan = bound
+        node.latest_obj = visible
+        node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(9.9)
+        node.latest_visual_obj = visible
+        node.latest_visual_obj_time = node.latest_obj_time
+        node.active = True
+        node._freeze_execution_plan(
+            bound,
+            allow_target_occlusion=True,
+        )
+
+        lost = self._object(stamp_sec=10.0)
+        lost.detected = False
+        tombstone = self._rich_plan(stamp_sec=10.0)
+        tombstone.valid = False
+        tombstone.diagnostic = 'TARGET_LOST: expected near-field occlusion'
+        original_now = grasp_task_node.rospy.Time.now
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.1)
+        )
+        grasp_task_node.rospy.get_param = lambda _name, default=None: default
+        try:
+            node.obj_cb(lost)
+            node.grasp6d_plan_cb(tombstone)
+            result = node._validate_bound_plan(
+                bound,
+                {
+                    'target_max_drift_m': 0.02,
+                    'target_observation_validity_sec': 1.5,
+                },
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.get_param = original_get_param
+
+        self.assertFalse(node._execution_authority_revoked)
+        self.assertIs(node.latest_obj, visible)
+        self.assertTrue(result.ok, result.reason)
 
     def test_direct_near_field_timeout_has_exact_status_and_stops_stream(self):
         node = grasp_task_node.GraspTaskNode.__new__(
