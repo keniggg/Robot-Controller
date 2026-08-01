@@ -14946,3 +14946,43 @@ Implemented and verified offline:
   stop, emergency stop or `/grasp/stop` command was sent by the repair work.
   A restarted task node and a fresh aligned task are still required to prove
   linear approach, grasp, close and lift on hardware.
+
+### 2026-08-01 - GUI joint-direct control recovered after stale actuation block
+
+- When the operator reported that GUI sliders did not move the arm, the live
+  ROS graph was intact: the launch, real driver, hardware interface, GUI and
+  both trajectory controllers were present, and the GUI had an established
+  TCPROS connection to the driver on `/joint_commands`.
+- The immediate actuator-side cause was not a missing GUI connection. The
+  latched status was
+  `OVERHEAT_BLOCKED:SUSTAINED_SAME_CHANNEL_TEMPERATURE` and
+  `/alicia_d/motion_enabled=false`. That state originated at ROS time
+  `1785568342.790`, when temperature channel 3 had reached `60 C` for three
+  consecutive samples while hardware status was `0xE1`; the driver blocked
+  later SDK command streaming without sending a torque-off frame.
+- At diagnosis time the old block had not recovered even though current
+  evidence was healthy: all three sampled run-status messages were `0x00`,
+  the ten temperature channels were `[34,34,43,38,34,32,33,32,33,34] C`, and
+  fresh joint feedback was arriving near the powered-on zero configuration.
+- Under the operator's standing positive-enable authorization, exactly one
+  `/demonstration=false` request was published. The driver cleared retained
+  command state before writing the SDK torque-on frame and transitioned from
+  the stale overheat block to `PENDING:POSITIVE_ENABLE_REQUESTED`. No
+  `/demonstration=true`, torque-off, controller-stop, `/grasp/stop`, gripper or
+  task command was sent by this session.
+- The operator clarified that ordinary manual positioning uses the GUI's
+  `关节直控模式（滑条直接驱动机械臂）`; the earlier instruction to use the
+  planning buttons was therefore withdrawn. The resulting slider stream used
+  milliradian-quantized full `JointState` targets beginning next to current
+  feedback and then advancing the selected joints. Encoder feedback followed
+  Joint1 from about `-0.006 rad` to `-1.796 rad`, and the driver changed to
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE` with
+  `/alicia_d/motion_enabled=true`. Later samples showed direct target changes
+  for Joint2, Joint3 and Joint5 as the operator continued repositioning.
+- Both trajectory controllers still reported `running` during the final
+  read-only sample. The hardware interface is configured to publish only when
+  its controller command changes, which explains why a stationary retained
+  controller target did not continuously overwrite this direct slider stream,
+  but it leaves command ownership to be resolved before claiming robust
+  simultaneous manual/direct and planned-task operation. No unsupported
+  publisher attribution or automatic controller-state change was made.
