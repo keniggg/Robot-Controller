@@ -255,9 +255,12 @@ grasp_6d:
     selection_hysteresis_ratio: 0.12
     candidate_consecutive_invalidations: 2
     performance_window_size: 100
-    # Fuse five synchronized RGB-D/mask/object samples at the observation pose
-    # before evaluating candidates. This bounds single-frame depth jitter.
+    # Far-field planning keeps five synchronized samples for stable observation
+    # selection. The direct near-field correction uses three current samples:
+    # it remains multi-frame while leaving the shared 30 s phase budget for
+    # the unchanged analytical and strict-MoveIt gates.
     planning_snapshot_frames: 5
+    near_field_planning_snapshot_frames: 3
     planning_snapshot_timeout_sec: 8.0
     # A synchronized frame may spend bounded time in YOLO inference, but once
     # RGB-D-mask-object is complete it must be admitted promptly.  Admitted
@@ -350,6 +353,10 @@ grasp_6d:
     # Return a broader score-ranked set so strict target, support-plane and
     # approach gates can find a safe pose instead of seeing only side grasps.
     max_candidates: 300
+    # Bound only the learned near-field input. The independently generated 24
+    # tabletop geometry candidates remain complete and pass every existing
+    # analytical and strict-MoveIt gate before execution authority is created.
+    near_field_max_candidates: 12
     failure_backoff_sec: 10.0
     # GraspNet baseline always predicts in OpenCV optical coordinates:
     # x right, y down, z forward. This is a production assertion, not a switch:

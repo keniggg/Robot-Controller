@@ -14797,3 +14797,70 @@ Implemented and verified offline:
   tool0 samples within `6 mm / 5 deg`, lease release, and actual execution of
   approach, grasp, close and lift. A large but otherwise valid wrist rotation
   remains eligible throughout that proof.
+
+### 2026-07-31 - powered unified-deadline run exhausted the near-field input budget
+
+- The complete rebuilt stack from `d85a555` ran as one instance with the real
+  arm, camera, GUI and remote 6D endpoint. Startup used only positive
+  torque-on. A current-joint synchronization followed by a `+0.03 rad` Joint6
+  command produced measured directional encoder response, so actuation reached
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`. No disable, torque-off,
+  controller-stop, emergency-stop or assistant-issued `/grasp/stop` was sent.
+- The operator-authorized temporary calibration override was recorded as
+  `USER_OVERRIDE_TEMPORARY_20260731_ALIGNED_AUTOMATIC_6D_RESTART_D85A555`.
+  Fresh far-field plan `1c51add24a5ccc00ce73c12f` passed strict MoveIt and was
+  frozen before task start. Its `31.226 s` observation motion completed with a
+  measured `0.0119 m / 2.03 deg` tool0 residual. A newer same-target camera
+  observation measured `0.1836 m`, within the unchanged `[0.18,0.22] m`
+  observation range, so the task entered near field.
+- The structured near-field phase began at ROS time `1785565897.809` with an
+  absolute deadline near `1785565927.809`. The near-field request snapshot was
+  stamped `1785565912.934`, already about `15.1 s` into that window. The
+  controlled gate audit did not start until `1785565919.875`, about `22.1 s`
+  after phase start, and reported `base=68`, `baseline-safe=12` and
+  `baseline-visible=12`.
+- Local analytical rejection processing continued through approximately
+  `1785565925.350`. No current-window contact Preview or exact invalid terminal
+  was committed before the task deadline. The task therefore failed closed as
+  `NEAR_FIELD_DIRECT_TIMEOUT`, with the last visible far-field Preview rejected
+  as `NEAR_FIELD_PLAN_PHASE_INVALID`, and released its execution slot. The
+  in-flight request later completed as `GENERATION_STALE`; its metrics reported
+  snapshot `1785565912.934`, `ros_prepare_ms=4408.216`, transport about
+  `494.094 ms`, and end-to-end time about `20.950 s` from its late submission.
+- This run did not classify the object as unreachable. Twelve candidates had
+  already passed the baseline safe/visible audit, but the task closed before
+  the first strict reachable candidate or a complete bounded terminal could be
+  committed. No near-field pregrasp, approach, grasp, gripper close or lift was
+  commanded, so the new contact endpoint lease was not exercised by this run.
+  Actuation remained `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`.
+
+### 2026-07-31 - offline near-field acquisition and learned-candidate budget repair
+
+- The previous successful direct near-field request provides the comparison
+  baseline: its five source frames spanned `2366.796 ms`; its local gate began
+  about `5.1 s` after phase start with `base=40`; and it produced a reachable
+  contact Preview in `23.713 s`. Pipeline evidence shows all `21` returned
+  GraspNet candidates were accounted for by `11`
+  `GRASPNET_STAGE_PROFILE_UNAVAILABLE` and `10`
+  `GRIPPER_CONTACT_PATCH_MISS` rejections. Its `14` stable tracks, including
+  the selected ninth strict-reachable candidate, were `tabletop_geometry`.
+- Production configuration now keeps the far-field five-frame fusion and
+  `max_candidates=300`, but direct near field collects three current-stage
+  synchronized samples and sends `near_field_max_candidates=12` to GraspNet.
+  The independent tabletop generator remains bounded at `24`; its candidates
+  are not counted against the learned limit. No geometry, collision, gripper,
+  joint-limit, freshness, strict-MoveIt, plan-ID, controller, endpoint or
+  actuation gate changed.
+- RED regressions first proved that the old direct poll still requested five
+  frames and that no phase-specific remote candidate bound existed. After the
+  production change, the focused four cases passed. The complete remote
+  streaming suite passed `223/223`; remote-node plus default-config tests
+  passed `162/162`; and the unchanged grasp-task sequence passed `142/142`.
+  Full supervisor unittest discovery then passed `661/661`, the supervisor
+  catkin package rebuilt successfully with all `8` messages and `11` services,
+  and Python compilation plus `git diff --check` were clean.
+- All repair work in this entry used saved ROS evidence, source edits and
+  offline tests only. While the operator manually repositioned the arm, no
+  motion, grasp, stop, disable, torque-off, controller-stop or emergency
+  command was issued by the repair work. Powered proof still requires a fresh
+  aligned run using the restarted updated remote node.

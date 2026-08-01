@@ -3374,6 +3374,21 @@ class RemoteGrasp6DNode:
                 )
             ),
         )
+        self.near_field_planning_snapshot_frames = max(
+            1,
+            min(
+                self.planning_snapshot_frames,
+                int(
+                    rospy.get_param(
+                        '/grasp_6d/remote/near_field_planning_snapshot_frames',
+                        remote_cfg.get(
+                            'near_field_planning_snapshot_frames',
+                            self.planning_snapshot_frames,
+                        ),
+                    )
+                ),
+            ),
+        )
         self.planning_snapshot_timeout_sec = max(
             0.0,
             float(
@@ -3624,6 +3639,21 @@ class RemoteGrasp6DNode:
         server_url = rospy.get_param('/grasp_6d/remote/server_url', remote_cfg.get('server_url', 'http://172.23.132.97:8000'))
         timeout_sec = float(rospy.get_param('/grasp_6d/remote/timeout_sec', remote_cfg.get('timeout_sec', 3.0)))
         self.max_candidates = int(rospy.get_param('/grasp_6d/remote/max_candidates', remote_cfg.get('max_candidates', 20)))
+        self.near_field_max_candidates = min(
+            max(1, int(self.max_candidates)),
+            max(
+                1,
+                int(
+                    rospy.get_param(
+                        '/grasp_6d/remote/near_field_max_candidates',
+                        remote_cfg.get(
+                            'near_field_max_candidates',
+                            self.max_candidates,
+                        ),
+                    )
+                ),
+            ),
+        )
         self.auto_request = bool(rospy.get_param('/grasp_6d/remote/auto_request', remote_cfg.get('auto_request', False)))
         self.failure_backoff_sec = max(0.0, float(rospy.get_param('/grasp_6d/remote/failure_backoff_sec', remote_cfg.get('failure_backoff_sec', 8.0))))
         self.candidate_frame_convention = validate_production_candidate_frame_convention(
@@ -5685,7 +5715,43 @@ class RemoteGrasp6DNode:
             pass
         return metrics
 
-    def _predict_remote(self, ticket, graspnet_input, intrinsics, frame_id):
+    def _remote_candidate_limit(self, near_field):
+        """Return the phase-specific GraspNet result bound.
+
+        Tabletop geometry candidates are generated and bounded separately;
+        this limit applies only to the learned candidates returned by WSL.
+        """
+
+        far_field_limit = max(1, int(getattr(self, 'max_candidates', 20)))
+        if not bool(near_field):
+            return far_field_limit
+        return min(
+            far_field_limit,
+            max(
+                1,
+                int(
+                    getattr(
+                        self,
+                        'near_field_max_candidates',
+                        far_field_limit,
+                    )
+                ),
+            ),
+        )
+
+    def _predict_remote(
+        self,
+        ticket,
+        graspnet_input,
+        intrinsics,
+        frame_id,
+        max_candidates=None,
+    ):
+        candidate_limit = (
+            self._remote_candidate_limit(False)
+            if max_candidates is None
+            else max(1, int(max_candidates))
+        )
         predict_bundle = getattr(self.client, 'predict_bundle', None)
         if callable(predict_bundle):
             bundle = predict_bundle(
@@ -5696,7 +5762,7 @@ class RemoteGrasp6DNode:
                 snapshot_stamp_sec=float(ticket.snapshot_stamp_sec),
                 frame_id=str(frame_id or 'camera_link'),
                 stamp_sec=float(ticket.snapshot_stamp_sec),
-                max_candidates=int(self.max_candidates),
+                max_candidates=candidate_limit,
                 max_gripper_width_m=0.0,
                 candidate_width_tolerance_m=float(
                     self.candidate_width_tolerance_m
@@ -5722,7 +5788,7 @@ class RemoteGrasp6DNode:
             snapshot_stamp_sec=float(ticket.snapshot_stamp_sec),
             frame_id=str(frame_id or 'camera_link'),
             stamp_sec=float(ticket.snapshot_stamp_sec),
-            max_candidates=int(self.max_candidates),
+            max_candidates=candidate_limit,
             max_gripper_width_m=0.0,
             candidate_width_tolerance_m=float(
                 self.candidate_width_tolerance_m
@@ -6976,6 +7042,7 @@ class RemoteGrasp6DNode:
                 graspnet_input,
                 self._camera_intrinsics(),
                 snapshot.frame_id or self.pose_estimator.camera_frame,
+                max_candidates=self._remote_candidate_limit(near_field),
             )
         except StreamResultCancelled:
             raise
@@ -8245,6 +8312,20 @@ class RemoteGrasp6DNode:
                 return False
             target_identity = self._current_stream_target_identity()
             newest_after_ns = self.last_submitted_stamp_ns
+            snapshot_frame_count = (
+                max(
+                    1,
+                    int(
+                        getattr(
+                            self,
+                            'near_field_planning_snapshot_frames',
+                            self.planning_snapshot_frames,
+                        )
+                    ),
+                )
+                if direct_single_snapshot
+                else int(self.planning_snapshot_frames)
+            )
         try:
             wait_timeout_sec = min(
                 max(0.0, float(getattr(self, 'planning_snapshot_timeout_sec', 0.0))),
@@ -8253,7 +8334,7 @@ class RemoteGrasp6DNode:
         except Exception:
             wait_timeout_sec = 0.0
         samples = self.frames.wait_for_samples(
-            self.planning_snapshot_frames,
+            snapshot_frame_count,
             wait_timeout_sec,
             require_mask=require_mask,
             max_age_sec=self.planning_snapshot_max_age_sec,
@@ -8267,7 +8348,7 @@ class RemoteGrasp6DNode:
                 getattr(self, 'near_field_planning_active', False)
             ),
         )
-        if len(samples) < self.planning_snapshot_frames:
+        if len(samples) < snapshot_frame_count:
             return False
         depth_scale, depth_min_m, depth_max_m = self._snapshot_depth_config()
         snapshot = fuse_stable_samples(
@@ -14845,6 +14926,25 @@ class RemoteGrasp6DNode:
         )
         self.max_candidates = int(
             rospy.get_param('/grasp_6d/remote/max_candidates', remote_cfg.get('max_candidates', self.max_candidates))
+        )
+        self.near_field_max_candidates = min(
+            max(1, int(self.max_candidates)),
+            max(
+                1,
+                int(
+                    rospy.get_param(
+                        '/grasp_6d/remote/near_field_max_candidates',
+                        remote_cfg.get(
+                            'near_field_max_candidates',
+                            getattr(
+                                self,
+                                'near_field_max_candidates',
+                                self.max_candidates,
+                            ),
+                        ),
+                    )
+                ),
+            ),
         )
         self.candidate_target_gate_enabled = bool(
             rospy.get_param(

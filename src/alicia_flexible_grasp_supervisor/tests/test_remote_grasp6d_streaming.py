@@ -1220,6 +1220,15 @@ def test_remote_prediction_uses_protocol3_ticket_correlation():
     assert result[2] == {'server_total_ms': 8.0}
 
 
+def test_direct_near_field_has_a_separate_remote_candidate_cap():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.max_candidates = 300
+    node.near_field_max_candidates = 12
+
+    assert node._remote_candidate_limit(near_field=False) == 300
+    assert node._remote_candidate_limit(near_field=True) == 12
+
+
 def test_remote_prediction_prefers_request_local_immutable_bundle():
     class BundleClient:
         last_diagnostics = {'stale': 'must not be read'}
@@ -3088,7 +3097,8 @@ def test_direct_near_field_poll_submits_exactly_one_fused_snapshot(
         node.near_field_strategy = 'single_snapshot_direct'
         node.rate_hz = 2.0
         node.planning_snapshot_timeout_sec = 4.0
-        node.planning_snapshot_frames = 3
+        node.planning_snapshot_frames = 5
+        node.near_field_planning_snapshot_frames = 3
         node.planning_snapshot_max_age_sec = 0.35
         node.planning_snapshot_max_span_sec = 3.0
         node.planning_snapshot_max_inference_latency_sec = 1.2
@@ -3118,6 +3128,7 @@ def test_direct_near_field_poll_submits_exactly_one_fused_snapshot(
         assert node._poll_stream_snapshot() is True
         assert node._poll_stream_snapshot() is False
         assert len(node.frames.calls) == 1
+        assert node.frames.calls[0][0][0] == 3
         assert node.last_submitted_stamp_ns == 9_900_000_000
         assert node.inference_coordinator.pending_count == 0
     finally:
