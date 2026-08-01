@@ -5856,6 +5856,198 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(len(endpoint_records), 1)
         self.assertTrue(endpoint_records[0][-1])
 
+    def test_contact_cached_cartesian_goal_tolerance_failure_recovers_only_after_fk_contract(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        node.active = True
+        node._bound_execution_plan = None
+        node._position_only_execute_globally_enabled = lambda: False
+        node._validate_bound_plan = (
+            lambda *_args, **_kwargs: grasp_task_node.PlanValidationResult(True)
+        )
+        node._invoke_plan_bound_action = (
+            lambda _plan, _cfg, _label, action: (
+                grasp_task_node.PlanValidationResult(True),
+                action(),
+            )
+        )
+        node._wait_for_motion_settle = lambda _reason: True
+        states = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        plan = self._rich_plan()
+        plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+        lease_calls = []
+        node._set_contact_endpoint_precision = (
+            lambda enabled, _cfg: lease_calls.append(bool(enabled)) or True
+        )
+        endpoint_waits = []
+        node._wait_for_measured_endpoint_contract = (
+            lambda *_args: endpoint_waits.append(_args) or (True, 0.0028, 0.42)
+        )
+        endpoint_records = []
+        node._record_and_validate_measured_endpoint = (
+            lambda *_args, **_kwargs: endpoint_records.append(
+                (_args, _kwargs)
+            )
+            or True
+        )
+        move_calls = []
+
+        def move_pose(_pose, execute):
+            move_calls.append(bool(execute))
+            if execute:
+                return FakeServiceResponse(
+                    False,
+                    'execute failed from cached plan (cartesian): target '
+                    'xyz=(-0.118, -0.432, 0.096)',
+                )
+            return FakeServiceResponse(True, 'planned Cartesian line fraction=1.000')
+
+        result = node._plan_and_execute_pose(
+            grasp_task_node.GraspStages.APPROACH_TARGET,
+            'linear 6D approach',
+            self._pose(0.10, -0.40, 0.20),
+            move_pose,
+            '6D approach',
+            execution_plan=plan,
+            gcfg={
+                'measured_endpoint_check_enabled': True,
+                'measured_endpoint_position_tolerance_m': 0.006,
+                'measured_endpoint_orientation_tolerance_deg': 5.0,
+                'contact_endpoint_precision_enabled': True,
+            },
+            execute_pose=move_pose,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(move_calls, [False, True])
+        self.assertEqual(lease_calls, [True, False])
+        self.assertEqual(len(endpoint_waits), 1)
+        self.assertEqual(len(endpoint_records), 1)
+        self.assertFalse(
+            any(state[0] == grasp_task_node.GraspStages.FAILED for state in states)
+        )
+        self.assertEqual(
+            node._last_contact_execution_failure['stage_label'],
+            'linear 6D approach',
+        )
+
+    def test_contact_cached_failure_remains_failed_when_fk_contract_times_out(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        node.active = True
+        node._bound_execution_plan = None
+        node._position_only_execute_globally_enabled = lambda: False
+        node._validate_bound_plan = (
+            lambda *_args, **_kwargs: grasp_task_node.PlanValidationResult(True)
+        )
+        node._invoke_plan_bound_action = (
+            lambda _plan, _cfg, _label, action: (
+                grasp_task_node.PlanValidationResult(True),
+                action(),
+            )
+        )
+        node._wait_for_motion_settle = lambda _reason: True
+        states = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        plan = self._rich_plan()
+        plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+        lease_calls = []
+        node._set_contact_endpoint_precision = (
+            lambda enabled, _cfg: lease_calls.append(bool(enabled)) or True
+        )
+        node._wait_for_measured_endpoint_contract = (
+            lambda *_args: (False, 0.0219, 3.06)
+        )
+        node._record_and_validate_measured_endpoint = (
+            lambda *_args, **_kwargs: True
+        )
+
+        def move_pose(_pose, execute):
+            if execute:
+                return FakeServiceResponse(
+                    False,
+                    'execute failed from cached plan (cartesian): target '
+                    'xyz=(-0.118, -0.432, 0.096)',
+                )
+            return FakeServiceResponse(
+                True,
+                'planned Cartesian line fraction=1.000',
+            )
+
+        result = node._plan_and_execute_pose(
+            grasp_task_node.GraspStages.APPROACH_TARGET,
+            'linear 6D approach',
+            self._pose(0.10, -0.40, 0.20),
+            move_pose,
+            '6D approach',
+            execution_plan=plan,
+            gcfg={
+                'measured_endpoint_check_enabled': True,
+                'measured_endpoint_position_tolerance_m': 0.006,
+                'measured_endpoint_orientation_tolerance_deg': 5.0,
+                'contact_endpoint_precision_enabled': True,
+            },
+            execute_pose=move_pose,
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(lease_calls, [True, False])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('MEASURED_ENDPOINT_STABILITY_TIMEOUT', states[-1][1])
+
+    def test_contact_execute_blocked_does_not_acquire_precision_or_recover(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        node.active = True
+        node._bound_execution_plan = None
+        node._position_only_execute_globally_enabled = lambda: False
+        node._validate_bound_plan = (
+            lambda *_args, **_kwargs: grasp_task_node.PlanValidationResult(True)
+        )
+        node._invoke_plan_bound_action = (
+            lambda _plan, _cfg, _label, action: (
+                grasp_task_node.PlanValidationResult(True),
+                action(),
+            )
+        )
+        states = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
+        plan = self._rich_plan()
+        plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+        lease_calls = []
+        node._set_contact_endpoint_precision = (
+            lambda enabled, _cfg: lease_calls.append(bool(enabled)) or True
+        )
+
+        def move_pose(_pose, execute):
+            return FakeServiceResponse(
+                not execute,
+                'planned' if not execute else 'linear execute blocked: controller unavailable',
+            )
+
+        result = node._plan_and_execute_pose(
+            grasp_task_node.GraspStages.APPROACH_TARGET,
+            'linear 6D approach',
+            self._pose(0.10, -0.40, 0.20),
+            move_pose,
+            '6D approach',
+            execution_plan=plan,
+            gcfg={
+                'measured_endpoint_check_enabled': True,
+                'contact_endpoint_precision_enabled': True,
+            },
+            execute_pose=move_pose,
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(lease_calls, [])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertIn('linear execute blocked', states[-1][1])
+
     def test_visual_retarget_entry_point_only_checks_drift_and_never_translates(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True

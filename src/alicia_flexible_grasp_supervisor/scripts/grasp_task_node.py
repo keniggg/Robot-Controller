@@ -1072,6 +1072,23 @@ def is_observation_contract_recoverable_execution_failure(message):
     )
 
 
+def is_contact_endpoint_recoverable_execution_failure(message):
+    """Identify a submitted cached contact path eligible for FK recovery.
+
+    A controller failure is never accepted by itself.  This predicate only
+    proves that the cached strict/cartesian path was actually submitted; the
+    task-scoped driver lease and unchanged measured Cartesian endpoint
+    contract remain mandatory before the contact sequence may continue.
+    """
+
+    text = str(message or '')
+    return text.startswith(
+        'execute failed from cached plan (strict pose):'
+    ) or text.startswith(
+        'execute failed from cached plan (cartesian):'
+    )
+
+
 class GraspTaskNode:
     def __init__(self):
         self.latest_obj = None
@@ -1089,6 +1106,7 @@ class GraspTaskNode:
         self._last_execution_plan_event = ''
         self._last_measured_endpoint_sample = None
         self._last_observation_camera_range_evidence = None
+        self._last_contact_execution_failure = None
         self._grasp6d_watermark_stamp_ns = 0
         self._grasp6d_watermark_plan_id = ''
         self._grasp6d_watermark_tombstoned = False
@@ -3563,6 +3581,7 @@ class GraspTaskNode:
                 return False
         else:
             resp = execute_pose(pose, True)
+        recoverable_contact_execution = False
         if not resp.success:
             response_message = str(getattr(resp, 'message', '') or '')
             may_validate_actual_observation = (
@@ -3571,24 +3590,47 @@ class GraspTaskNode:
                     response_message
                 )
             )
-            if not may_validate_actual_observation:
+            recoverable_contact_execution = (
+                precision_requested
+                and is_contact_endpoint_recoverable_execution_failure(
+                    response_message
+                )
+            )
+            if (
+                not may_validate_actual_observation
+                and not recoverable_contact_execution
+            ):
                 self.set_state(
                     GraspStages.FAILED,
                     '%s failed: %s' % (label, response_message),
                 )
                 return False
-            rospy.logwarn(
-                '%s controller reported failure after strict submission; '
-                'waiting for motion settle before the unchanged live '
-                'observation-range contract decides acceptance: %s',
-                label,
-                response_message,
-            )
-            self._last_observation_execution_failure = {
-                'plan_id': str(getattr(bound_plan, 'plan_id', '') or ''),
-                'stage_label': str(label),
-                'message': response_message,
-            }
+            if may_validate_actual_observation:
+                rospy.logwarn(
+                    '%s controller reported failure after strict submission; '
+                    'waiting for motion settle before the unchanged live '
+                    'observation-range contract decides acceptance: %s',
+                    label,
+                    response_message,
+                )
+                self._last_observation_execution_failure = {
+                    'plan_id': str(getattr(bound_plan, 'plan_id', '') or ''),
+                    'stage_label': str(label),
+                    'message': response_message,
+                }
+            if recoverable_contact_execution:
+                rospy.logwarn(
+                    '%s controller reported failure after cached contact '
+                    'submission; acquiring the task-scoped endpoint lease '
+                    'and requiring the unchanged measured FK contract: %s',
+                    label,
+                    response_message,
+                )
+                self._last_contact_execution_failure = {
+                    'plan_id': str(getattr(bound_plan, 'plan_id', '') or ''),
+                    'stage_label': str(label),
+                    'message': response_message,
+                }
         # Acquire precision only after the trajectory controller has finished
         # and is holding one stable target. This prevents the lease from
         # following intermediate trajectory setpoints or ordinary GUI motion.
@@ -3672,6 +3714,13 @@ class GraspTaskNode:
                         return False
                     if not endpoint_recorded:
                         return False
+                    if recoverable_contact_execution:
+                        rospy.loginfo(
+                            '%s cached contact execution failure recovered '
+                            'only after the measured FK endpoint contract '
+                            'passed',
+                            label,
+                        )
                 elif not self._record_and_validate_measured_endpoint(
                     pose,
                     bound_plan,

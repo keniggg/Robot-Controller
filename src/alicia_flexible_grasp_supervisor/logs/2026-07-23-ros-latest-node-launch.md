@@ -14986,3 +14986,125 @@ Implemented and verified offline:
   but it leaves command ownership to be resolved before claiming robust
   simultaneous manual/direct and planned-task operation. No unsupported
   publisher attribution or automatic controller-state change was made.
+
+### 2026-08-01 - powered approach reached the object but exposed endpoint tracking and unresolved localization error
+
+- The updated task and remote nodes were hot-loaded before this run. Frozen
+  far-field plan `cdfed80907ff454932bc5c25` executed, including the one allowed
+  radial correction. The resulting fresh camera ranges were `0.1900 m` and
+  later `0.1984 m`, both inside the unchanged `[0.180,0.220] m` observation
+  contract.
+- Direct near-field planning used exactly three source frames. Contact plan
+  `c3e0b4e69fe980066fc08d8d` had `18` stable candidates; five candidates were
+  sent through strict checking and one complete pregrasp/approach/grasp/lift
+  sequence was reachable. The exact plan was rebound and frozen before any
+  contact motion.
+- The candidate-specific pregrasp controller completed. The task then acquired
+  its scoped endpoint-precision lease and obtained three consecutive live
+  tool0 samples inside the unchanged contract at `0.0028 m / 0.42 deg`. The
+  lease released normally and retained compensation only for that unchanged
+  target.
+- The next cached Cartesian segment was a `0.026 m`, ten-point, `100%` linear
+  path to tool0 `(-0.118,-0.432,0.096) m`, quaternion
+  `(0.676,-0.729,0.081,0.064)`. During this motion the eye-in-hand target became
+  occluded. The new authority behavior worked on hardware: the task logged
+  `Preserving frozen 6D execution authority through close-range target
+  occlusion` and ignored the corresponding `TARGET_LOST` execution tombstone.
+  Target loss was not the failure cause.
+- At ROS time `1785570830.326`, after real encoder motion, the trajectory
+  controller returned
+  `GOAL_TOLERANCE_VIOLATED: Joint2 goal error 0.044598`. The rounded final
+  command was approximately
+  `[-107.2,-50.8,91.9,-4.5,-75.2,-166.4] deg`, while feedback stayed near
+  `[-107.4,-53.3,91.5,-4.8,-75.3,-166.6] deg`. MoveIt consequently returned
+  `ABORTED: CONTROL_FAILED`; the old task failed immediately, before grasp
+  pose, gripper close or lift.
+- Temperature was not the cause. The approach interval was dominated by valid
+  run status and later stable feedback at `status=0x00`; post-failure maximum
+  temperature was about `43--44 C`. No sustained measured over-temperature
+  block, torque-off or disable occurred.
+
+#### New external video and exact offset decomposition
+
+- Operator video
+  `/home/zhuyupei/Videos/948a848599f8ef9ed6503771ac3e4522.mp4`
+  is H.264 `720 x 1280`, `75.419 s`, 2262 frames at about `30 fps`. Its first
+  approximately 61 seconds show the long candidate-pregrasp posture change;
+  its final approximately 11 seconds show the short linear approach and the
+  stationary failed endpoint. These durations match the ROS pregrasp and
+  approach intervals, so the recording is qualitative evidence for this same
+  run. The uncalibrated, perspective-distorted external view is not used to
+  invent a millimetre offset.
+- Before contact motion, the stationary near-field perception stream was
+  exceptionally repeatable: from ROS `1785570734.301` through
+  `1785570755.462`, the carton stayed at `uv=(335,186)`, depth
+  `0.188--0.189 m`, and base position about
+  `(-0.118,-0.435,0.067--0.068) m`. The selected pregrasp was
+  `(-0.119,-0.435,0.119) m`; the subsequent approach target was
+  `(-0.118,-0.432,0.096) m`.
+- Using the plan quaternion, the approach tool0-minus-frozen-target vector in
+  tool coordinates is approximately
+  `[+2.756,-0.669,-28.017] mm`, where tool `+Y` is the parallel-jaw closing
+  axis and tool `+Z` is insertion. The planned jaw-closing-axis displacement is
+  therefore only `0.669 mm`. The frozen perception target and selected contact
+  plan were centred; candidate ranking did not create the visible large miss.
+- Replaying the rounded command and feedback through the active
+  `alicia_duo_with_gripper.urdf` gives tool0 positions
+  `[-0.118269,-0.431846,0.095282] m` and
+  `[-0.117194,-0.426382,0.074118] m`. The command reproduces the requested
+  Cartesian target to within rounding. Actual-minus-command is approximately
+  `[+1.075,+5.464,-21.164] mm`, norm `21.884 mm`, with about `3.062 deg`
+  orientation error. This independently confirms a large real endpoint
+  tracking residual; most of it is insertion/height error rather than
+  jaw-closing-axis centring error.
+- A second, independent uncertainty remains in localization. As the camera
+  moved close and the carton mask became clipped near the image boundary,
+  reported base positions moved through about
+  `(-0.104,-0.439,0.063) m`, `(-0.103,-0.445,0.076) m`, and finally
+  `(-0.099,-0.435,0.052) m`. Interpreted literally, the first two late samples
+  would differ from the frozen plan by roughly `13--15 mm` along the jaw-closing
+  axis. They cannot be applied as a correction because the mask was already
+  partial/near occlusion and perception uses the latest TF; the samples do
+  prove that close-range posture invariance is not established.
+- That localization uncertainty is consistent with existing independent
+  calibration evidence, not a new guess. The deployed pruned-19 hand-eye TF
+  has a saved independent six-pose ChArUco report with `passed:false`:
+  translation RMS `3.942 mm`, maximum `6.671 mm`, orientation RMS
+  `1.071 deg`, maximum `1.674 deg`. The temporary software interlock override
+  never converted that failed validation into a calibration pass. No solved
+  physical TCP calibration artifact exists either.
+- Root-cause boundary: the reason this task stopped is proven to be the
+  actuator/controller endpoint residual. The planned jaw centre relative to
+  the frozen near-field target is also proven accurate. The larger physical
+  centring impression in the video cannot be assigned solely to the arm
+  residual because that residual is mostly along insertion depth; hand-eye,
+  RGB-D/mask timing at close range, URDF-versus-physical TCP and external-view
+  perspective remain unresolved contributors. No fixed target offset, TF edit
+  or TCP correction is justified by this video or trace.
+
+#### Offline correction after the powered evidence
+
+- The task now distinguishes a cached contact trajectory that was actually
+  submitted and then returned failure from a plan/validation/controller block
+  that never submitted the trajectory. Only the former may acquire the scoped
+  endpoint-precision lease. It still cannot continue merely because the error
+  text says execution failed.
+- After such a submitted contact failure, the unchanged frozen pose must pass
+  the existing three-consecutive-sample `6 mm / 5 deg` live FK contract and a
+  final current sample. Otherwise the stage remains failed. The route does not
+  replan, retry, change candidate, relax any tolerance, or publish a stop,
+  disable or torque-off command.
+- New regressions prove success only after the FK contract, failure when that
+  contract times out, and hard failure without a lease for an unsubmitted
+  controller-blocked path. The complete grasp-task module passed `146/146`.
+  Full supervisor discovery ran `665` tests: `663` completed in the restricted
+  environment and two local HTTP cases were denied loopback socket creation;
+  the complete GraspNet protocol module was rerun with loopback permission and
+  passed `15/15`. Python compilation and `git diff --check` passed, and
+  `catkin_make --pkg alicia_flexible_grasp_supervisor` rebuilt all eight
+  messages and eleven services successfully.
+- All video extraction, ROS-log correlation, FK replay, code changes, tests and
+  documentation in this entry were offline while the operator moved the arm.
+  No ROS trajectory, gripper, enable, stop, disable, controller-switch,
+  torque-off or emergency command was issued. A restarted updated task node is
+  required before another powered run can exercise this correction.
