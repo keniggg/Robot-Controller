@@ -63,6 +63,12 @@ grasp:
   measured_endpoint_check_enabled: true
   measured_endpoint_position_tolerance_m: 0.006
   measured_endpoint_orientation_tolerance_deg: 5.0
+  # Only automatic contact-plan poses acquire this expiring driver lease.
+  # The ordinary driver trim remains disabled, so GUI/manual commands never
+  # inherit the task's encoder-derived endpoint compensation.
+  contact_endpoint_precision_enabled: true
+  contact_endpoint_precision_service: "/alicia_d_driver_node/set_task_endpoint_precision"
+  contact_endpoint_precision_service_timeout_sec: 2.0
   # The observation stage records tool0 execution error for the fresh
   # near-field uncertainty model, but it does not reuse the 6 mm contact
   # endpoint gate and does not issue a second same-pose correction.  Actual

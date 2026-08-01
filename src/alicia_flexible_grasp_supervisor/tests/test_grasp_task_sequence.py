@@ -5712,6 +5712,95 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertAlmostEqual(result[2], 0.5)
         self.assertEqual(residuals, [])
 
+    def test_contact_pose_uses_scoped_precision_lease_and_stable_fk_contract(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        node.active = True
+        node._bound_execution_plan = None
+        node._position_only_execute_globally_enabled = lambda: False
+        node._validate_bound_plan = (
+            lambda *_args, **_kwargs: grasp_task_node.PlanValidationResult(True)
+        )
+        node._invoke_plan_bound_action = (
+            lambda _plan, _cfg, _label, action: (
+                grasp_task_node.PlanValidationResult(True),
+                action(),
+            )
+        )
+        node._wait_for_motion_settle = lambda _reason: True
+        node.set_state = lambda *args, **kwargs: None
+        plan = self._rich_plan()
+        plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+        lease_calls = []
+        event_order = []
+        endpoint_waits = []
+        endpoint_records = []
+        node._set_contact_endpoint_precision = (
+            lambda enabled, _cfg: (
+                lease_calls.append(bool(enabled))
+                or event_order.append(('lease', bool(enabled)))
+                or True
+            )
+        )
+        node._wait_for_measured_endpoint_contract = (
+            lambda requested, position_tolerance, orientation_tolerance, reason: (
+                endpoint_waits.append(
+                    (
+                        requested,
+                        position_tolerance,
+                        orientation_tolerance,
+                        reason,
+                    )
+                )
+                or (True, 0.004, 1.0)
+            )
+        )
+        node._record_and_validate_measured_endpoint = (
+            lambda requested, bound, cfg, label, required: (
+                endpoint_records.append(
+                    (requested, bound, cfg, label, required)
+                )
+                or True
+            )
+        )
+        move_calls = []
+
+        def move_pose(_pose, execute):
+            move_calls.append(bool(execute))
+            event_order.append(('move', bool(execute)))
+            return FakeServiceResponse(True, 'ok')
+
+        requested = self._pose(0.10, -0.40, 0.20)
+        result = node._plan_and_execute_pose(
+            grasp_task_node.GraspStages.MOVE_PREGRASP,
+            '6D near-field pregrasp',
+            requested,
+            move_pose,
+            '6D near-field pregrasp',
+            execution_plan=plan,
+            gcfg={
+                'measured_endpoint_check_enabled': True,
+                'measured_endpoint_position_tolerance_m': 0.006,
+                'measured_endpoint_orientation_tolerance_deg': 5.0,
+                'contact_endpoint_precision_enabled': True,
+            },
+            execute_pose=move_pose,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(move_calls, [False, True])
+        self.assertEqual(lease_calls, [True, False])
+        self.assertEqual(
+            event_order[:3],
+            [('move', False), ('move', True), ('lease', True)],
+        )
+        self.assertEqual(len(endpoint_waits), 1)
+        self.assertAlmostEqual(endpoint_waits[0][1], 0.006)
+        self.assertAlmostEqual(endpoint_waits[0][2], 5.0)
+        self.assertEqual(len(endpoint_records), 1)
+        self.assertTrue(endpoint_records[0][-1])
+
     def test_visual_retarget_entry_point_only_checks_drift_and_never_translates(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.active = True

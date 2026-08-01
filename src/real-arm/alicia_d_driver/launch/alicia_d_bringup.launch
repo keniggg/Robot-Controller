@@ -77,11 +77,11 @@
         <param name="actuation_confirmation_freshness_sec" type="double" value="2.0"/>
         <!-- Reassert a held SDK position once per real-feedback interval. -->
         <param name="command_keepalive_rate_hz" type="double" value="10.0"/>
-        <!-- Disabled in the ordinary driver path. The grasp task owns its
-             measured-FK observation endpoint contract and permits at most one
-             bounded correction; GUI/manual commands must not gain extra
-             accumulated moves after their requested endpoint. -->
+        <!-- Disabled in the ordinary driver path. Automatic contact stages
+             may acquire the separate expiring precision lease; GUI/manual
+             commands never enable accumulated endpoint correction. -->
         <param name="endpoint_feedback_trim_enabled" type="bool" value="false"/>
+        <param name="endpoint_feedback_trim_task_lease_timeout_sec" type="double" value="120.0"/>
         <param name="endpoint_feedback_trim_stable_sec" type="double" value="0.30"/>
         <param name="endpoint_feedback_trim_activation_error_rad" type="double" value="0.035"/>
         <param name="endpoint_feedback_trim_max_rad" type="double" value="0.12"/>

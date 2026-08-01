@@ -14664,3 +14664,136 @@ Implemented and verified offline:
   `1320 x 860`; the complete tab row, scroll containment, readable button
   labels, non-overlapping controls, disabled state, and normal/pressed visual
   states were confirmed from the production `MainWindow`.
+
+### 2026-07-31 - direct near-field live run stopped at the pregrasp endpoint
+
+- The complete rebuilt real-hardware stack was launched with the arm driver,
+  camera, GUI and remote 6D service. Startup sent only positive torque-on. The
+  driver reached `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`; no disable,
+  torque-off, controller-stop, emergency-stop or assistant-issued grasp-stop
+  command was sent during this run.
+- The operator explicitly authorized the temporary calibration override for
+  this aligned run. The override reason was
+  `USER_OVERRIDE_TEMPORARY_20260731_ALIGNED_AUTOMATIC_6D`; this was a live-run
+  authority decision, not evidence that calibration accuracy had been
+  re-proved.
+- Fresh far-field plan `bf7af70eebe2b818a367772d` passed strict MoveIt and
+  executed. The observation trajectory was retimed to `33.864 s` with
+  `joint_path_cost=1.171` and `joint_max_delta=0.677 rad`. Its measured tool0
+  residual was `0.0121 m / 2.07 deg`; a fresh same-target camera observation
+  measured `0.1812 m`, inside the existing `[0.18, 0.22] m` observation
+  interval, so the bounded observation recovery correctly entered near field.
+- The one fused near-field request completed in `23.713 s`, within its single
+  shared `30.0 s` deadline. It produced 14 locally hard-safe candidates. Nine
+  ranked candidates received strict checks; eight were classified
+  `MOVEIT_UNREACHABLE`, and the ninth was the first strict reachable result.
+  The frozen exact plan was `4a9aac86caeea25fd8cbb50c` with
+  `joint_path_cost=4.338` and `joint_max_delta=3.455 rad`.
+- The task rebound that exact plan and requested only its near-field pregrasp.
+  The execution replan independently reproduced the discontinuity:
+  `joint_path_cost=3.814`, `joint_max_delta=3.456 rad`, and a retimed duration
+  of `69.108 s`. Encoder feedback changed Joint6 from about `+26.6 deg` to
+  `-170.8 deg`, a physical change of about `-197.4 deg`. This is not a target
+  reachability failure: both the four-stage strict check and the execution
+  pregrasp check returned success.
+- The operator explicitly classified this large wrist rotation as executable:
+  it is not the most efficient posture, but it must not be rejected as an
+  error when the complete grasp remains reachable. Consequently no hard
+  half-turn/wrist-angle gate is authorized or implemented. Motion continuity
+  remains a future soft ranking preference only and is not the cause of this
+  task failure.
+- During the fused near-field snapshot the target centre in `base_link` was
+  stable at approximately `(-0.122, -0.436, 0.065) m`. The selected pregrasp
+  was approximately `(-0.124, -0.439, 0.108) m`, only about `2--3 mm` away in
+  the horizontal plane. Its larger Z value is the intentional support-normal
+  safety offset. The planned near-field pregrasp was therefore not grossly
+  laterally displaced from the newly observed object centre.
+- The eye-in-hand target moved from approximately `uv=(350,204)` near the start
+  of this motion toward the lower image boundary around `uv=(390,459)`, with
+  degraded detection confidence. After the controller reported success, the
+  measured pregrasp tool0 residual was `0.0177 m / 2.51 deg`. The existing
+  `0.0060 m` contact-pregrasp position gate rejected it with
+  `MEASURED_ENDPOINT_POSITION_ERROR`, so approach, contact, gripper close and
+  lift were never commanded.
+- The final desired SDK/ROS joint command was approximately
+  `[-107.1, -55.0, 103.1, -3.2, -82.2, -171.3] deg`, while stable measured
+  feedback was approximately
+  `[-107.3, -56.4, 101.8, -3.2, -82.1, -170.8] deg`. Joint2 and Joint3 each
+  stopped about `1.3--1.4 deg` short. That joint-space residual still fits the
+  trajectory controller's approximately `0.035 rad` success band, but the arm
+  geometry amplifies it to the measured `17.7 mm` tool0 error. This is the
+  direct quantitative explanation for the visible held-pose offset.
+- Operator video
+  `/home/zhuyupei/Videos/7436fee02ab09160e9d032a075ef74b6.mp4`
+  is HEVC `720 x 1280`, approximately `30 fps`, 588 frames and `19.633 s`.
+  External-view frames confirm continued wrist/gripper rotation during the
+  recorded final segment and a visibly off-centre held pregrasp. The video is
+  independent qualitative evidence; the full approximately `197 deg` value
+  comes from the ROS encoder trace because the recording contains only the
+  final portion of the 69-second trajectory.
+- Root-cause boundary: the second-stage image was fused and did recalculate a
+  centred candidate. The visible video endpoint is only the elevated near-field
+  pregrasp; the later linear approach and grasp poses that place the gripper on
+  the object centre were never executed. The task stopped because controller
+  success tolerance and contact Cartesian precision are mismatched: the
+  controller accepted the remaining Joint2/Joint3 error, while the independent
+  6 mm FK gate correctly refused to continue. The missing mechanism is a
+  task-owned, same-plan endpoint convergence step before contact. It must not
+  re-enable the previously rejected global driver trim, because global trim
+  also changes GUI/manual moves. This evidence does not support blaming the
+  near-field image refresh, overheating, target unreachability, request timeout,
+  or the operator-accepted wrist rotation.
+- While the operator manually repositioned the arm after this failure, only
+  offline source, test, saved ROS-log and video analysis continued. No ROS
+  motion or actuator-state command was issued by this work.
+
+### 2026-07-31 - contact endpoint convergence implemented offline
+
+- The operator clarified that the approximately `197 deg` wrist motion is an
+  acceptable reachable grasp, although it is not the most efficient posture.
+  No wrist-angle or half-turn hard rejection was added. Motion continuity is
+  retained only as a possible future soft ranking improvement and was removed
+  from the root-cause classification for this failure.
+- Saved near-field evidence put the target centre near
+  `(-0.122, -0.436, 0.065) m` and the selected elevated pregrasp near
+  `(-0.124, -0.439, 0.108) m`. The planned horizontal difference was only
+  about `2--3 mm`; the Z difference is the intentional support-normal
+  pregrasp offset. The image refresh therefore did produce a centred contact
+  plan. The visible video endpoint was not the later grasp pose.
+- The task now obtains an endpoint-precision lease only after a contact-plan
+  trajectory controller action has completed and is holding one unchanged
+  six-joint target. While that lease is active, the existing driver feedback
+  trim may converge the measured encoders toward exactly that held ROS target.
+  The task then requires consecutive live tool0 FK samples and one final
+  current sample to satisfy the unchanged `0.006 m / 5 deg` contract before
+  authorizing the next contact segment.
+- The ordinary driver parameter `endpoint_feedback_trim_enabled` remains
+  `false`, so normal GUI/manual commands do not acquire this correction. The
+  scoped lease is bound to the held reference: any different joint target
+  immediately revokes it and clears the retained offset. Normal release keeps
+  only the live-derived compensation for the unchanged target, preventing a
+  rebound before the next stage. A `120 s` watchdog revokes a stranded lease
+  if the task process cannot release it.
+- This closes the measured mismatch exposed by the run without changing the
+  fused target, candidate pose, wrist reachability, controller goal tolerance,
+  joint limits, collision checks, `6 mm` Cartesian gate, or any torque/enable
+  policy. The implementation never publishes stop, disable, torque-off,
+  controller-stop or emergency commands.
+- RED tests first proved that the old contact path neither acquired a scoped
+  precision lease nor waited for a stable FK contract, and that the driver had
+  no expiring task lease. The new focused tests then passed. Final affected
+  results were grasp task `142/142` and trajectory/driver configuration
+  `12/12`; Python compilation, YAML parsing and `git diff --check` passed.
+  `catkin_make --pkg alicia_d_driver alicia_flexible_grasp_supervisor`
+  rebuilt the C++ driver and supervisor successfully.
+- Full supervisor discovery executed 661 tests: 659 completed successfully and
+  two local HTTP mock-server cases were denied loopback socket creation by the
+  restricted sandbox. The complete GraspNet protocol module was then rerun in
+  its approved loopback environment and passed `15/15`, including those two
+  cases. No product assertion remained failing.
+- This is an offline implementation proof, not yet a powered grasp proof. The
+  next live run must show lease acquire only after the near-field pregrasp
+  controller result, encoder residual convergence, at least three consecutive
+  tool0 samples within `6 mm / 5 deg`, lease release, and actual execution of
+  approach, grasp, close and lift. A large but otherwise valid wrist rotation
+  remains eligible throughout that proof.

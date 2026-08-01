@@ -4,6 +4,7 @@ project(alicia_flexible_grasp_supervisor)
 find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
+  std_srvs
   sensor_msgs
   geometry_msgs
   trajectory_msgs
@@ -56,6 +57,7 @@ catkin_package(
   CATKIN_DEPENDS
     rospy
     std_msgs
+    std_srvs
     sensor_msgs
     geometry_msgs
     trajectory_msgs

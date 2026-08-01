@@ -9,6 +9,7 @@
 #include "std_msgs/String.h"
 #include "std_msgs/UInt8.h"
 #include "std_msgs/UInt16.h"
+#include "std_srvs/SetBool.h"
 #include "sensor_msgs/JointState.h"
 #include <memory>
 #include <vector>
@@ -39,6 +40,10 @@ private:
    void clear_retained_command_state();
    bool request_positive_enable(const std::string& source);
    void publish_actuation_status();
+   bool set_task_endpoint_precision_callback(
+       std_srvs::SetBool::Request& request,
+       std_srvs::SetBool::Response& response
+   );
     
    // Callbacks for incoming commands
    void joint_command_callback(const sensor_msgs::JointState::ConstPtr& msg);
@@ -86,6 +91,7 @@ private:
 	   ros::Publisher protection_latched_pub_;
 	   ros::Publisher motion_enabled_pub_;
 	   ros::Publisher actuation_status_pub_;
+   ros::ServiceServer task_endpoint_precision_service_;
    ros::Subscriber joint_command_sub_;
    ros::Subscriber zero_calib_sub_;
    ros::Subscriber demo_mode_sub_;
@@ -112,6 +118,10 @@ private:
 	   int feedback_jump_confirm_samples_ = 2;
 	   bool reject_command_inconsistent_joint_feedback_ = true;
 	   bool endpoint_feedback_trim_enabled_ = false;
+	   bool endpoint_feedback_trim_task_lease_active_ = false;
+	   double endpoint_feedback_trim_task_lease_timeout_sec_ = 120.0;
+	   ros::Time endpoint_feedback_trim_task_lease_expires_at_;
+	   std::vector<double> endpoint_feedback_trim_task_lease_reference_;
 	   double endpoint_feedback_trim_stable_sec_ = 0.30;
 	   double endpoint_feedback_trim_activation_error_rad_ = 0.035;
 	   double endpoint_feedback_trim_max_rad_ = 0.12;

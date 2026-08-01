@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   std_msgs
+  std_srvs
   sensor_msgs
   hardware_interface
   controller_manager
@@ -27,7 +28,7 @@ catkin_package(
   INCLUDE_DIRS include
 #   LIBRARIES bessica_d_hw_interface # Export the library for other packages to use
   # DEPENDS is no longer needed here as catkin handles dependencies from find_package
-  CATKIN_DEPENDS roscpp std_msgs sensor_msgs hardware_interface controller_manager serial
+  CATKIN_DEPENDS roscpp std_msgs std_srvs sensor_msgs hardware_interface controller_manager serial
 )
 
 # --- Include Directories ---

@@ -398,6 +398,67 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
         self.assertNotIn('Joint2', trim_block)
         self.assertNotIn('joint_idx ==', trim_block)
 
+    def test_driver_endpoint_trim_has_task_scoped_expiring_lease(self):
+        source = DRIVER_SOURCE.read_text()
+        header = DRIVER_HEADER.read_text()
+
+        self.assertIn('#include "std_srvs/SetBool.h"', header)
+        self.assertIn(
+            'set_task_endpoint_precision_callback',
+            header,
+        )
+        self.assertIn(
+            'task_endpoint_precision_service_ = pnh_.advertiseService(',
+            source,
+        )
+        self.assertIn('"set_task_endpoint_precision",', source)
+        self.assertIn(
+            'endpoint_feedback_trim_task_lease_active_',
+            header,
+        )
+        self.assertIn(
+            'endpoint_feedback_trim_task_lease_timeout_sec_',
+            header,
+        )
+        self.assertIn(
+            'endpoint_feedback_trim_task_lease_reference_',
+            header,
+        )
+        self.assertIn(
+            'const bool endpoint_feedback_trim_update_allowed =',
+            source,
+        )
+        self.assertIn(
+            'endpoint_feedback_trim_enabled_ ||\n'
+            '        endpoint_feedback_trim_task_lease_active',
+            source,
+        )
+        self.assertIn(
+            'endpoint_feedback_trim_active &&\n'
+            '        endpoint_feedback_trim_offsets.size() == '
+            'sdk_joint_angles.size()',
+            source,
+        )
+        self.assertIn(
+            'endpoint_feedback_trim_task_lease_active_ = false;',
+            source,
+        )
+        reference_change_block = source.split(
+            'if (reference_changed) {',
+            1,
+        )[1].split(
+            'latest_joint_angles_ = joint_angles;',
+            1,
+        )[0]
+        self.assertIn(
+            'endpoint_feedback_trim_task_lease_active_ = false;',
+            reference_change_block,
+        )
+        self.assertIn(
+            'endpoint_feedback_trim_task_lease_reference_.clear();',
+            reference_change_block,
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import io
@@ -13,6 +14,7 @@ import rospy
 from geometry_msgs.msg import PoseArray, PoseStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool
 from alicia_flexible_grasp_supervisor.msg import (
     Grasp6DPlan,
     GraspState,
@@ -3316,6 +3318,85 @@ class GraspTaskNode:
         )
         return False
 
+    def _set_contact_endpoint_precision(self, enabled, gcfg):
+        config = gcfg if isinstance(gcfg, dict) else {}
+        service_name = str(
+            config.get(
+                'contact_endpoint_precision_service',
+                '/alicia_d_driver_node/set_task_endpoint_precision',
+            )
+            or '/alicia_d_driver_node/set_task_endpoint_precision'
+        ).strip()
+        timeout = max(
+            0.1,
+            self._cfg_float(
+                config,
+                'contact_endpoint_precision_service_timeout_sec',
+                2.0,
+            ),
+        )
+        try:
+            proxy_entry = getattr(
+                self,
+                '_contact_endpoint_precision_proxy',
+                None,
+            )
+            if (
+                not isinstance(proxy_entry, tuple)
+                or len(proxy_entry) != 2
+                or proxy_entry[0] != service_name
+            ):
+                rospy.wait_for_service(service_name, timeout=timeout)
+                proxy_entry = (
+                    service_name,
+                    rospy.ServiceProxy(service_name, SetBool),
+                )
+                self._contact_endpoint_precision_proxy = proxy_entry
+            response = proxy_entry[1](bool(enabled))
+        except Exception as exc:
+            self._contact_endpoint_precision_last_error = str(exc)
+            rospy.logerr(
+                'Contact endpoint precision lease %s failed: %s',
+                'acquire' if enabled else 'release',
+                exc,
+            )
+            return False
+        success = bool(getattr(response, 'success', False))
+        message = str(getattr(response, 'message', '') or '')
+        self._contact_endpoint_precision_last_error = message
+        if success:
+            rospy.loginfo(
+                'Contact endpoint precision lease %s: %s',
+                'acquired' if enabled else 'released',
+                message,
+            )
+        else:
+            rospy.logerr(
+                'Contact endpoint precision lease %s rejected: %s',
+                'acquire' if enabled else 'release',
+                message,
+            )
+        return success
+
+    @contextmanager
+    def _contact_endpoint_precision_scope(self, gcfg, requested):
+        acquired = False
+        if requested:
+            acquired = self._set_contact_endpoint_precision(True, gcfg)
+        try:
+            yield bool(not requested or acquired)
+        finally:
+            if acquired and not self._set_contact_endpoint_precision(
+                False,
+                gcfg,
+            ):
+                # The driver lease has its own finite watchdog.  Do not turn a
+                # lease-release transport fault into an actuator stop command.
+                rospy.logerr(
+                    'Contact endpoint precision lease release failed; '
+                    'driver watchdog remains the fail-safe release authority'
+                )
+
     def _plan_and_execute_pose(
         self,
         stage,
@@ -3413,7 +3494,6 @@ class GraspTaskNode:
                 orientation_fallback_rejection_message(label, getattr(resp, 'message', '')),
             )
             return False
-        self.set_state(stage, 'moving ' + label)
         if strict_rich_plan and not callable(execute_pose):
             self.set_state(
                 GraspStages.FAILED,
@@ -3422,6 +3502,24 @@ class GraspTaskNode:
             )
             return False
         execute_pose = execute_pose or move_pose
+        contact_phase = (
+            bound_plan is not None
+            and _plan_phase(bound_plan) == _CONTACT_EXECUTION_PLAN
+        )
+        precision_requested = (
+            contact_phase
+            and self._cfg_bool(
+                gcfg or {},
+                'measured_endpoint_check_enabled',
+                False,
+            )
+            and self._cfg_bool(
+                gcfg or {},
+                'contact_endpoint_precision_enabled',
+                False,
+            )
+        )
+        self.set_state(stage, 'moving ' + label)
         if bound_plan is not None:
             validation, resp = self._invoke_plan_bound_action(
                 bound_plan,
@@ -3464,33 +3562,97 @@ class GraspTaskNode:
                 'stage_label': str(label),
                 'message': response_message,
             }
-        settled = self._wait_for_motion_settle(settle_reason)
-        if settled is False:
-            self.set_state(
-                GraspStages.FAILED,
-                '%s feedback did not settle; refusing to overlap the next motion' % label,
-            )
-            return False
-        if (
-            strict_rich_plan
-            and self._cfg_bool(
-                gcfg or {},
-                'measured_endpoint_check_enabled',
-                False,
-            )
-        ):
-            contact_phase = (
-                bound_plan is not None
-                and _plan_phase(bound_plan) == _CONTACT_EXECUTION_PLAN
-            )
-            if not self._record_and_validate_measured_endpoint(
-                pose,
-                bound_plan,
-                gcfg or {},
-                label,
-                required=contact_phase,
-            ):
+        # Acquire precision only after the trajectory controller has finished
+        # and is holding one stable target. This prevents the lease from
+        # following intermediate trajectory setpoints or ordinary GUI motion.
+        with self._contact_endpoint_precision_scope(
+            gcfg or {},
+            precision_requested,
+        ) as precision_ready:
+            if not precision_ready:
+                self.set_state(
+                    GraspStages.FAILED,
+                    'CONTACT_ENDPOINT_PRECISION_UNAVAILABLE: %s cannot '
+                    'acquire the task-scoped driver lease: %s'
+                    % (
+                        label,
+                        getattr(
+                            self,
+                            '_contact_endpoint_precision_last_error',
+                            'unknown service failure',
+                        ),
+                    ),
+                )
                 return False
+            settled = self._wait_for_motion_settle(settle_reason)
+            if settled is False:
+                self.set_state(
+                    GraspStages.FAILED,
+                    '%s feedback did not settle; refusing to overlap the next motion' % label,
+                )
+                return False
+            if (
+                strict_rich_plan
+                and self._cfg_bool(
+                    gcfg or {},
+                    'measured_endpoint_check_enabled',
+                    False,
+                )
+            ):
+                if precision_requested:
+                    position_tolerance = max(
+                        0.0,
+                        self._cfg_float(
+                            gcfg or {},
+                            'measured_endpoint_position_tolerance_m',
+                            0.006,
+                        ),
+                    )
+                    orientation_tolerance_deg = max(
+                        0.0,
+                        self._cfg_float(
+                            gcfg or {},
+                            'measured_endpoint_orientation_tolerance_deg',
+                            5.0,
+                        ),
+                    )
+                    endpoint_stable, _position_error, _orientation_error = (
+                        self._wait_for_measured_endpoint_contract(
+                            pose,
+                            position_tolerance,
+                            orientation_tolerance_deg,
+                            label,
+                        )
+                    )
+                    endpoint_recorded = (
+                        self._record_and_validate_measured_endpoint(
+                            pose,
+                            bound_plan,
+                            gcfg or {},
+                            label,
+                            required=True,
+                        )
+                    )
+                    if not endpoint_stable:
+                        if endpoint_recorded:
+                            self.set_state(
+                                GraspStages.FAILED,
+                                'MEASURED_ENDPOINT_STABILITY_TIMEOUT: %s did '
+                                'not remain inside the contact endpoint '
+                                'contract for consecutive live samples'
+                                % label,
+                            )
+                        return False
+                    if not endpoint_recorded:
+                        return False
+                elif not self._record_and_validate_measured_endpoint(
+                    pose,
+                    bound_plan,
+                    gcfg or {},
+                    label,
+                    required=contact_phase,
+                ):
+                    return False
         return True
 
     def _visual_retarget_6d_poses(self, reference_obj, poses, gcfg, stage_label, required=False):
