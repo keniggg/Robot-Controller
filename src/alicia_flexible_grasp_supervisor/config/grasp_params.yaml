@@ -356,7 +356,11 @@ grasp_6d:
     # Bound only the learned near-field input. The independently generated 24
     # tabletop geometry candidates remain complete and pass every existing
     # analytical and strict-MoveIt gate before execution authority is created.
-    near_field_max_candidates: 12
+    # Direct near field keeps one learned proposal as a fallback.  Live
+    # timing evidence showed that normalizing the returned learned batch can
+    # consume the shared 30 s phase before the independently generated,
+    # repeatedly selected tabletop candidates reach strict MoveIt.
+    near_field_max_candidates: 1
     failure_backoff_sec: 10.0
     # GraspNet baseline always predicts in OpenCV optical coordinates:
     # x right, y down, z forward. This is a production assertion, not a switch:

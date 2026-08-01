@@ -3898,6 +3898,31 @@ class GraspTaskNode:
         bottom = height - (y + bbox_height)
         return min(x, y, right, bottom)
 
+    def _object_bbox_clipped_at_image_edge(self, obj, gcfg):
+        try:
+            camera_cfg = rospy.get_param('/camera', {})
+            edge_margin_px = max(
+                0,
+                int(
+                    gcfg.get(
+                        'final_visual_refine_center_fallback_edge_margin_px',
+                        4,
+                    )
+                ),
+            )
+            edge_clearance_px = self._object_bbox_edge_clearance_px(
+                obj,
+                camera_cfg.get('width', 640),
+                camera_cfg.get('height', 480),
+            )
+        except Exception:
+            return False, None, None
+        return (
+            edge_clearance_px < edge_margin_px,
+            edge_clearance_px,
+            edge_margin_px,
+        )
+
     def _object_delta_xyz(self, first, second):
         a = self._object_xyz(first)
         b = self._object_xyz(second)
@@ -4292,6 +4317,27 @@ class GraspTaskNode:
         )
         maximum = self._configured_target_max_drift(gcfg)
         if drift > maximum:
+            if self._target_occlusion_allowed_locked():
+                clipped, clearance_px, margin_px = (
+                    self._object_bbox_clipped_at_image_edge(
+                        latest_obj,
+                        gcfg,
+                    )
+                )
+                if clipped:
+                    rospy.logwarn_throttle(
+                        1.0,
+                        (
+                            'Ignoring %.3fm live target-centre drift from a '
+                            'close-range bbox with %dpx edge clearance below '
+                            '%dpx; preserving the frozen contact plan without '
+                            'retargeting'
+                        ),
+                        drift,
+                        clearance_px,
+                        margin_px,
+                    )
+                    return PlanValidationResult(True)
             return fail(
                 'TARGET_DRIFT',
                 'live target drift %.3fm exceeds %.3fm' % (drift, maximum),

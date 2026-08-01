@@ -15180,3 +15180,135 @@ Implemented and verified offline:
   repair. The failed task and candidate stream remained inactive, and this
   work issued no trajectory, gripper, enable, stop, disable, torque-off,
   controller-switch or emergency command.
+
+### 2026-08-01 - frozen-pose ordering loaded; learned batch still consumed the direct near-field deadline
+
+- Hot-loaded remote planner commit `91a2122` only. The real driver,
+  controllers, camera, GUI and updated task node remained online. An atomic
+  handoff rejected old latched plan `304eb82aecb7ac0be1b99e8c` at source age
+  `109.250 s`, froze fresh plan `560bb2a0cd296a118d644daa` at observed source
+  age `17.571 s`, reverified the same current plan ID as `VALID`, and submitted
+  it to `/grasp/start`.
+- The far-field observation endpoint settled with measured tool0 residual
+  `0.0123 m / 1.98 deg`. Its first new camera range was `0.178592 m`, just
+  below the unchanged `0.180 m` boundary, so the existing one-shot radial
+  retreat ran. The corrected endpoint residual was `0.0157 m / 2.67 deg` and
+  the next measured target range was `0.1925 m`, inside `[0.180,0.220] m`;
+  direct near field began at `1785577439.15`.
+- The request snapshot stamp was `1785577446.8201249`. ROS-side preparation
+  took `6513.742 ms` and transport took `306.691 ms`. At
+  `1785577455.139`, the controlled audit reported `base=18`,
+  `baseline-safe=6`, and `baseline-visible=6`, proving current hard-safe input
+  existed.
+- The batch represented nine learned candidates with two audited orientation
+  variants each. Stricter learned-candidate materialization then logged eight
+  concrete rejection samples, all due to existing insertion-profile,
+  contact-patch, support-clearance or sweep gates; those logs completed at
+  `1785577462.114`. No strict MoveIt check began before the task-owned deadline
+  at `1785577469.209`.
+- The task failed closed as `NEAR_FIELD_DIRECT_TIMEOUT`. The in-flight request
+  finished at `1785577474.099`, about `4.89 s` after the phase closed, with
+  `end_to_end_ms=26175.738` and was discarded as `GENERATION_STALE`. No
+  near-field pregrasp, approach, close or lift command was issued. Feedback
+  remained near `[-106.8,-10.0,30.2,-6.9,-45.4,4.9] deg`, temperatures were
+  `39--40 C`, and transient `0xE2` status was treated only as an event; no
+  torque-off was sent.
+
+#### Evidence-bound near-field learned result bound
+
+- The frozen-pose ordering is downstream of complete local candidate
+  materialization, so it could not affect this run before the deadline. This
+  is a latency-ordering defect, not evidence that all candidates are
+  unreachable and not a target-centre correction error.
+- The comparison direct-near-field run that produced a valid contact plan had
+  all `21` returned GraspNet candidates rejected and all `14` stable candidates,
+  including the selected plan, from `tabletop_geometry`. Current logs likewise
+  show the learned batch consuming time before that independent current-RGB-D
+  source can reach strict planning.
+- Production `near_field_max_candidates` is therefore reduced from `12` to
+  `1`. One learned proposal remains available, the current-snapshot tabletop
+  source remains bounded at `24`, and every retained candidate still passes
+  the unchanged geometry, CAD, collision, sweep, freshness, joint and strict
+  MoveIt gates. Far-field learned planning remains at `300`; the shared
+  `30.0 s` limit, target coordinates, TF/TCP and execution tolerances are
+  unchanged.
+- The default-configuration suite passed `6/6`; after loading the generated
+  ROS message workspace, the complete remote streaming suite passed
+  `226/226`. Python compilation and `git diff --check` passed. The first
+  streaming invocation in a fresh unsourced shell stopped during collection
+  with `ModuleNotFoundError` for the generated ROS package and ran no tests;
+  the sourced rerun above is the authoritative result.
+- Synchronized the live ROS parameter
+  `/grasp_6d/remote/near_field_max_candidates=1`. This changed no arm,
+  gripper, enable, stop, controller or torque state. The task remains inactive
+  at the prior observation pose; another powered proof requires the operator
+  to reposition and confirm alignment before a fresh plan is generated.
+
+### 2026-08-01 - learned bound reached a contact plan; clipped close-range mask caused a false drift stop
+
+- The next fresh far-field plan was `440329cc5a6717f34853abb7`. Its observation
+  endpoint settled at `0.0122 m / 1.94 deg`, and a fresh measured camera range
+  of `0.1808 m` entered direct near field at `1785578608.356`.
+- With `near_field_max_candidates=1`, the request used exactly three unique
+  current near-field frames spanning `1720.8426 ms`. The single learned
+  proposal produced two controlled-audit variants and was rejected by the
+  unchanged jaw-width gate: required opening `0.055021 m` exceeded the
+  `0.050000 m` physical inner gap.
+- All `14` current-snapshot `tabletop_geometry` candidates materialized and
+  remained locally valid. The metrics recorded `moveit_checked=1` and
+  `moveit_reachable=1`; contact plan `615d42a1e9ec25c733b91aac` rebound at
+  `1785578623.238`, about `14.88 s` after near field began and within the
+  unchanged `30.0 s` phase. This is direct powered evidence that the learned
+  workload bound repaired the previously observed phase-timeout path.
+- The candidate-specific near-field pregrasp executed. The task endpoint
+  precision lease produced a measured final residual of
+  `0.0005 m / 0.14 deg`, within the unchanged `0.006 m / 5.00 deg` contract.
+  Immediately afterward, before any approach command, the task failed as
+  `TARGET_DRIFT: live target drift 0.043m exceeds 0.040m` at
+  `1785578669.406`. No approach, grasp pose, gripper-close or lift was issued.
+
+#### Direct image evidence for clipped-centroid drift
+
+- Before the candidate pregrasp motion, repeated detections through
+  `1785578621.857` stayed near `uv=(321--322,199--200)`, depth
+  `0.179--0.180 m`, base center approximately x=`-0.116-- -0.115 m`,
+  y=`-0.438-- -0.437 m`, z=`0.069--0.070 m`, mask size
+  `11107--11500`, and an interior bbox near `(269--270,130,108--109,138--139)`.
+- During the motion, the target projection moved down in the 640x480 image
+  while its mask was progressively clipped. At `1785578662.886`, bbox
+  `(257,350,136,129)` had only one bottom pixel of clearance. At
+  `1785578664.043`, bbox `(252,360,138,118)` had two pixels. At
+  `1785578665.238`, `1785578666.756` and `1785578668.460`, the bboxes ended
+  exactly at row `480`; the centroid reached `v=438` and the mask fell to
+  `7503` points. Post-failure bboxes at `1785578670.685` and
+  `1785578672.270` also ended exactly at row `480`.
+- This proves that the fresh `43 mm` center delta was computed from a partial,
+  image-edge-clipped mask. It does not prove physical object motion, a TF/TCP
+  offset, or arm endpoint error. The near-field contact execution audit JSON
+  was not present: a read-only search found plan ID `615d42...` only in ROS
+  text logs, while the available latest execution JSON remained bound to the
+  earlier far-field plan. No contact-plan center was inferred from that file.
+
+#### Offline clipped-observation authority repair
+
+- The existing rule already prohibited a bbox with less than the configured
+  `4 px` edge clearance from driving final visual retargeting. The drift guard
+  now applies the same measured image-boundary definition only after a contact
+  plan has been frozen with explicit close-range occlusion authority.
+- If a same-label, fresh detection exceeds the unchanged drift threshold but
+  its valid bbox is inside that edge margin, the observation is treated as
+  occlusion: the exact frozen contact plan is preserved and no pose is
+  translated or regenerated. A fully visible over-limit detection still
+  fails. The same clipped observation before occlusion authority, and any
+  missing or malformed bbox, still fails and revokes execution authority.
+- Focused tests cover the evidenced bottom-clipped bbox, no-authority rejection,
+  fully visible rejection, malformed-bbox rejection and immutability of the
+  frozen pose and geometry center. The complete offline suite passed
+  `668/668`, and the default-configuration module passed `6/6`; Python
+  compilation, `git diff --check`, and the catkin build of all package targets,
+  `8` messages and `11` services passed.
+- At the operator's instruction, all hardware serial ports and arm power were
+  off during this repair. No ROS master/node, serial device, trajectory,
+  gripper, torque, enable, stop, disable, controller or emergency command was
+  accessed or issued. A later powered run is still required to validate the
+  corrected transition from near-field pregrasp into approach.

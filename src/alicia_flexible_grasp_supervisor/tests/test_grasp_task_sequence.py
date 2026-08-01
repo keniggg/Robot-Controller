@@ -1244,6 +1244,146 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertFalse(node._execution_authority_revoked)
         self.assertTrue(result.ok)
 
+    def test_close_range_clipped_target_preserves_frozen_plan_without_retarget(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
+        live = self._object_at(0.443, 0.0, 0.20, stamp_sec=9.9)
+        live.bbox_x = 247
+        live.bbox_y = 386
+        live.bbox_width = 137
+        live.bbox_height = 94
+        node.latest_grasp6d_plan = bound
+        node.latest_obj = live
+        node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(9.9)
+        node.active = True
+        frozen = node._freeze_execution_plan(
+            bound,
+            allow_target_occlusion=True,
+        )
+        original_pose_x = frozen.poses[0].position.x
+        original_center_x = frozen.object_geometry.pose_base.position.x
+
+        original_now = grasp_task_node.rospy.Time.now
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/camera': {'width': 640, 'height': 480},
+        }.get(name, default)
+        try:
+            result = node._bound_target_drift_result(
+                frozen,
+                {
+                    'target_max_drift_m': 0.040,
+                    'target_observation_validity_sec': 1.5,
+                    'final_visual_refine_center_fallback_edge_margin_px': 4,
+                },
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.get_param = original_get_param
+
+        self.assertTrue(result.ok, result.reason)
+        self.assertFalse(node._execution_authority_revoked)
+        self.assertIs(node.latest_grasp6d_plan, bound)
+        self.assertAlmostEqual(
+            frozen.poses[0].position.x,
+            original_pose_x,
+        )
+        self.assertAlmostEqual(
+            frozen.object_geometry.pose_base.position.x,
+            original_center_x,
+        )
+
+    def test_clipped_target_drift_requires_frozen_occlusion_authority(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
+        live = self._object_at(0.443, 0.0, 0.20, stamp_sec=9.9)
+        live.bbox_y = 386
+        live.bbox_height = 94
+        node.latest_grasp6d_plan = bound
+        node.latest_obj = live
+        node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(9.9)
+        node.active = True
+        frozen = node._freeze_execution_plan(bound)
+
+        original_now = grasp_task_node.rospy.Time.now
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/camera': {'width': 640, 'height': 480},
+        }.get(name, default)
+        try:
+            result = node._bound_target_drift_result(
+                frozen,
+                {
+                    'target_max_drift_m': 0.040,
+                    'target_observation_validity_sec': 1.5,
+                    'final_visual_refine_center_fallback_edge_margin_px': 4,
+                },
+            )
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.get_param = original_get_param
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.code, 'TARGET_DRIFT')
+        self.assertTrue(node._execution_authority_revoked)
+
+    def test_close_range_full_or_invalid_bbox_cannot_hide_target_drift(self):
+        original_now = grasp_task_node.rospy.Time.now
+        original_get_param = grasp_task_node.rospy.get_param
+        grasp_task_node.rospy.Time.now = staticmethod(
+            lambda: grasp_task_node.rospy.Time.from_sec(10.0)
+        )
+        grasp_task_node.rospy.get_param = lambda name, default=None: {
+            '/camera': {'width': 640, 'height': 480},
+        }.get(name, default)
+        try:
+            for case, invalidate_bbox in (
+                ('fully-visible', False),
+                ('invalid-bbox', True),
+            ):
+                with self.subTest(case=case):
+                    node = grasp_task_node.GraspTaskNode.__new__(
+                        grasp_task_node.GraspTaskNode
+                    )
+                    bound = self._rich_plan(plan_id=case, stamp_sec=9.0)
+                    live = self._object_at(0.443, 0.0, 0.20, stamp_sec=9.9)
+                    if invalidate_bbox:
+                        live.bbox_width = 0
+                    node.latest_grasp6d_plan = bound
+                    node.latest_obj = live
+                    node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(
+                        9.9
+                    )
+                    node.active = True
+                    frozen = node._freeze_execution_plan(
+                        bound,
+                        allow_target_occlusion=True,
+                    )
+                    result = node._bound_target_drift_result(
+                        frozen,
+                        {
+                            'target_max_drift_m': 0.040,
+                            'target_observation_validity_sec': 1.5,
+                            'final_visual_refine_center_fallback_edge_margin_px': 4,
+                        },
+                    )
+                    self.assertFalse(result.ok)
+                    self.assertEqual(result.code, 'TARGET_DRIFT')
+                    self.assertTrue(node._execution_authority_revoked)
+        finally:
+            grasp_task_node.rospy.Time.now = original_now
+            grasp_task_node.rospy.get_param = original_get_param
+
     def test_near_field_preview_drift_rejects_without_revoking_bound_plan(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)

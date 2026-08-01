@@ -174,7 +174,7 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
         self.assertEqual(remote['planning_snapshot_timeout_sec'], 8.0)
         self.assertEqual(remote['planning_snapshot_max_span_sec'], 6.0)
         self.assertEqual(remote['max_candidates'], 300)
-        self.assertEqual(remote['near_field_max_candidates'], 12)
+        self.assertEqual(remote['near_field_max_candidates'], 1)
 
     def test_production_default_enables_bounded_tabletop_geometry_candidates(self):
         with (ROOT / 'config' / 'grasp_params.yaml').open(
