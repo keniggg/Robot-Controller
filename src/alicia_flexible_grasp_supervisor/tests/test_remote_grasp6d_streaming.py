@@ -8301,6 +8301,114 @@ def test_far_field_rank_resolves_live_side_uncertainty_before_distance():
     assert node._select_far_field_observation(candidates).track_id == 3
 
 
+def test_direct_near_field_rank_tries_smallest_frozen_pose_change_first():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    candidates = [
+        types.SimpleNamespace(
+            track_id=1,
+            variant_index=0,
+            pre_moveit_score=0.0,
+        ),
+        types.SimpleNamespace(
+            track_id=2,
+            variant_index=0,
+            pre_moveit_score=100.0,
+        ),
+        types.SimpleNamespace(
+            track_id=3,
+            variant_index=0,
+            pre_moveit_score=50.0,
+        ),
+    ]
+    node._stable_variant_runtime = {
+        (1, 0): {
+            'soft_evidence': {
+                'contact_start_orientation_delta_rad': math.pi,
+                'contact_start_translation_delta_m': 0.010,
+            }
+        },
+        (2, 0): {
+            'soft_evidence': {
+                'contact_start_orientation_delta_rad': 0.20,
+                'contact_start_translation_delta_m': 0.040,
+            }
+        },
+        (3, 0): {
+            'soft_evidence': {
+                'contact_start_orientation_delta_rad': 0.20,
+                'contact_start_translation_delta_m': 0.020,
+            }
+        },
+    }
+
+    ranked = sorted(
+        candidates,
+        key=node._direct_near_field_moveit_rank_key,
+    )
+
+    assert [candidate.track_id for candidate in ranked] == [3, 2, 1]
+
+
+def test_frozen_tool_pose_delta_uses_one_snapshot_for_translation_and_rotation():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    configure_identity_handeye(node)
+    prepared = types.SimpleNamespace(
+        pose_estimator=types.SimpleNamespace(
+            T_base_camera_link=np.eye(4, dtype=float),
+        )
+    )
+    requested = remote_node.make_pose_stamped(
+        'base_link',
+        np.asarray([0.03, 0.04, 0.0], dtype=float),
+        remote_node.quaternion_from_euler(0.0, 0.0, math.pi / 2.0),
+        stamp=remote_node.rospy.Time.from_sec(20.0),
+    )
+
+    translation_m, orientation_rad = node._frozen_tool_pose_delta(
+        prepared,
+        requested,
+    )
+
+    assert translation_m == pytest.approx(0.05)
+    assert orientation_rad == pytest.approx(math.pi / 2.0)
+
+
+def test_direct_near_field_rank_retains_missing_motion_evidence_as_fallback():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    evidenced = types.SimpleNamespace(
+        track_id=1,
+        variant_index=0,
+        pre_moveit_score=100.0,
+    )
+    missing = types.SimpleNamespace(
+        track_id=2,
+        variant_index=0,
+        pre_moveit_score=0.0,
+    )
+    node._stable_variant_runtime = {
+        (1, 0): {
+            'soft_evidence': {
+                'contact_start_orientation_delta_rad': 0.30,
+                'contact_start_translation_delta_m': 0.030,
+            }
+        },
+        (2, 0): {'soft_evidence': {}},
+    }
+
+    ranked = sorted(
+        [missing, evidenced],
+        key=node._direct_near_field_moveit_rank_key,
+    )
+
+    assert [candidate.track_id for candidate in ranked] == [1, 2]
+
+
 def test_far_field_rank_never_prefers_missing_side_evidence():
     node = remote_node.RemoteGrasp6DNode.__new__(
         remote_node.RemoteGrasp6DNode

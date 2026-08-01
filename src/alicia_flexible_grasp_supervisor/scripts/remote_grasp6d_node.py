@@ -8630,11 +8630,39 @@ class RemoteGrasp6DNode:
             )
         return tuple(stable)
 
-    @staticmethod
-    def _direct_near_field_moveit_rank_key(candidate):
-        """Authoritative deterministic ordering before strict MoveIt."""
+    def _direct_near_field_moveit_rank_key(self, candidate):
+        """Try the smallest frozen-pose correction before strict MoveIt.
+
+        This is only an ordering policy for candidates that already passed
+        every hard geometry and collision gate.  A large wrist rotation stays
+        in the bounded set and can still become execution authority when the
+        shorter candidates fail strict MoveIt.
+        """
+
+        runtime = getattr(self, '_stable_variant_runtime', {}).get(
+            (candidate.track_id, candidate.variant_index),
+            {},
+        )
+        evidence = (
+            runtime.get('soft_evidence', {})
+            if isinstance(runtime, dict)
+            else {}
+        )
+
+        def nonnegative_finite(name):
+            try:
+                value = float(evidence.get(name, float('inf')))
+            except (TypeError, ValueError, OverflowError):
+                return float('inf')
+            return (
+                value
+                if math.isfinite(value) and value >= 0.0
+                else float('inf')
+            )
 
         return (
+            nonnegative_finite('contact_start_orientation_delta_rad'),
+            nonnegative_finite('contact_start_translation_delta_m'),
             candidate.pre_moveit_score,
             candidate.track_id,
             candidate.variant_index,
@@ -10562,6 +10590,13 @@ class RemoteGrasp6DNode:
                             'available': False,
                             'reason': str(exc),
                         }
+                    (
+                        contact_start_translation_delta_m,
+                        contact_start_orientation_delta_rad,
+                    ) = self._frozen_tool_pose_delta(
+                        prepared,
+                        sequence.pregrasp,
+                    )
                     runtime[(stable.track_id, variant_index)] = {
                         'prepared': prepared,
                         'grasp_pose': grasp_pose,
@@ -10580,6 +10615,12 @@ class RemoteGrasp6DNode:
                             ),
                             'orientation_dispersion_rad': float(
                                 stable.orientation_dispersion_rad
+                            ),
+                            'contact_start_translation_delta_m': (
+                                contact_start_translation_delta_m
+                            ),
+                            'contact_start_orientation_delta_rad': (
+                                contact_start_orientation_delta_rad
                             ),
                             'final_approach_lateral_m': (
                                 features.final_approach_lateral_m
@@ -10679,12 +10720,12 @@ class RemoteGrasp6DNode:
             unique.append(candidate)
         return tuple(unique)
 
-    def _frozen_observation_translation_delta_m(
+    def _frozen_tool_pose_delta(
         self,
         prepared,
-        observation_pose,
+        requested_pose,
     ):
-        """Measure one observation move from the same frozen TF snapshot."""
+        """Measure one tool move from the same frozen TF snapshot."""
 
         try:
             base_from_camera = np.asarray(
@@ -10698,14 +10739,44 @@ class RemoteGrasp6DNode:
             base_from_tool = base_from_camera.dot(
                 np.linalg.inv(tool_from_camera)
             )
-            current_tool = base_from_tool[:3, 3]
-            requested_tool = pose_matrix(observation_pose)[:3, 3]
-            distance = float(np.linalg.norm(requested_tool - current_tool))
+            requested_tool = pose_matrix(requested_pose)
+            translation_delta_m = float(
+                np.linalg.norm(
+                    requested_tool[:3, 3] - base_from_tool[:3, 3]
+                )
+            )
+            relative_rotation = (
+                base_from_tool[:3, :3].T.dot(
+                    requested_tool[:3, :3]
+                )
+            )
+            cosine = max(
+                -1.0,
+                min(1.0, 0.5 * (float(np.trace(relative_rotation)) - 1.0)),
+            )
+            orientation_delta_rad = float(math.acos(cosine))
         except Exception:
-            return None
-        if not math.isfinite(distance) or distance < 0.0:
-            return None
-        return distance
+            return None, None
+        if (
+            not math.isfinite(translation_delta_m)
+            or translation_delta_m < 0.0
+            or not math.isfinite(orientation_delta_rad)
+            or orientation_delta_rad < 0.0
+        ):
+            return None, None
+        return translation_delta_m, orientation_delta_rad
+
+    def _frozen_observation_translation_delta_m(
+        self,
+        prepared,
+        observation_pose,
+    ):
+        """Measure one observation move from the same frozen TF snapshot."""
+
+        translation_delta_m, _orientation_delta_rad = (
+            self._frozen_tool_pose_delta(prepared, observation_pose)
+        )
+        return translation_delta_m
 
     def _far_field_observation_moveit_rank_key(self, candidate):
         """Choose the shortest view that resolves live side uncertainty."""

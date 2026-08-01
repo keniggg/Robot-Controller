@@ -15108,3 +15108,75 @@ Implemented and verified offline:
   No ROS trajectory, gripper, enable, stop, disable, controller-switch,
   torque-off or emergency command was issued. A restarted updated task node is
   required before another powered run can exercise this correction.
+
+### 2026-08-01 - updated endpoint task reached observation but near-field strict checks missed the shared deadline
+
+- The task node was hot-loaded from commit `08b22e4` without restarting the
+  real driver, controllers, camera or GUI. The first two start attempts were
+  rejected before motion by the unchanged guards: one exact plan-ID mismatch
+  and then one stale source timestamp. A session-local coordinator then waited
+  for a plan produced after its own request, stopped candidate replacement and
+  immediately submitted the final frozen ID. It bound fresh far-field plan
+  `b64e392e304494a066113f29`; no stale or mismatched plan moved the robot.
+- The observation motion completed and settled. Its measured tool0 residual
+  was `0.0133 m / 2.28 deg`. A fresh same-target camera sample measured
+  `0.1801 m`, inside the unchanged `[0.1800,0.2200] m` observation contract,
+  so the task correctly entered direct near field.
+- The remote node received phase `near_field` at ROS time
+  `1785575013.312` and shared the task deadline near `1785575043.312`. The
+  controlled audit began at `1785575022.161` with `base=22`,
+  `baseline-safe=12` and `baseline-visible=12`. Learned-candidate analytical
+  rejection logging completed near `1785575026.459`; the object remained
+  continuously detected around `uv=(350--352,198)`, depth
+  `0.179--0.181 m`, so target loss was not the cause.
+- Strict sequence checks began near `1785575037.609`. Before the deadline,
+  three ranked candidates were attempted: strict pregrasp planning failed for
+  the first two, their deterministic orientation resolvers produced Cartesian
+  approach fractions `0.833` and `0.838` below the unchanged `0.980`, and the
+  third strict check consumed the remaining deadline. The task failed closed
+  at `1785575043.345` without publishing a contact plan or commanding
+  pregrasp, approach, close or lift.
+- The in-flight remote request returned at `1785575043.806`, about `0.46 s`
+  after task failure, and was discarded as `GENERATION_STALE`. Its metrics
+  reported `end_to_end_ms=27896.389`, `result_age_ms=28845.315` and
+  `ros_prepare_ms=5734.043`. This proves a deadline race with an incomplete
+  checked subset; it does not prove all current candidates unreachable.
+- The comparison run beginning near-field at `1785570733.542` produced plan
+  `c3e0b4e69fe980066fc08d8d` after checking five candidates. Four failed and
+  the fifth strict sequence passed; that selected plan had
+  `joint_max_delta=2.989 rad` and later produced the large but permitted wrist
+  rotation observed by the operator. The contrast identifies the old
+  pre-MoveIt geometry-only ordering as both a latency and posture-quality
+  problem, without making the large rotation an invalid grasp.
+
+### 2026-08-01 - offline frozen-pose near-field ordering repair
+
+- Direct near-field candidates still pass the complete existing analytical
+  geometry, gripper, support, collision and sweep gates before strict MoveIt.
+  For ordering only, the remote node now reconstructs the current tool pose
+  from the same frozen snapshot transform and computes its geodesic rotation
+  and translation to each candidate's exact pregrasp pose.
+- Strict MoveIt now tries candidates by smallest rotation, then smallest
+  translation, then the original physical soft score and stable IDs. A
+  180-degree candidate remains in the bounded set and can still become
+  execution authority when shorter candidates fail. Missing motion evidence
+  sorts behind evidenced candidates rather than deleting either one.
+- The shared `30.0 s` deadline was not extended. Candidate generation,
+  hard-safety gates, strict sequence planning, endpoint contracts, TF/TCP and
+  target coordinates were not changed. No guessed offset or calibration
+  correction was introduced.
+- Three new focused regressions passed, including exact frozen translation and
+  rotation measurement, shortest-change ordering, and retained fallback
+  candidates. The complete remote streaming module passed `226/226`; Python
+  compilation and `git diff --check` passed.
+- Full supervisor pytest collected `1729` cases. In the restricted environment
+  `1710` passed and `3` skipped; the remaining `16` all failed at local
+  `127.0.0.1` test-server creation with `PermissionError`, with no product or
+  ranking assertion failure. The complete GraspNet and MuJoCo protocol modules
+  were rerun with loopback permission and passed `135` with `1` expected skip.
+  `catkin_make --pkg alicia_flexible_grasp_supervisor` also passed and rebuilt
+  all `8` messages and `11` services.
+- The operator was manually repositioning the arm throughout this offline
+  repair. The failed task and candidate stream remained inactive, and this
+  work issued no trajectory, gripper, enable, stop, disable, torque-off,
+  controller-switch or emergency command.
