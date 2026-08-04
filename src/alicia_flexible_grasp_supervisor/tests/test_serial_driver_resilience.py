@@ -114,6 +114,32 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertEqual(maxima, [1, 1, 2, 0])
         self.assertNotIn(3, maxima)
 
+    def test_physically_impossible_temperature_channel_is_excluded_without_hiding_valid_channels(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        header = DRIVER_HEADER.read_text()
+        body = _function_body(
+            source,
+            'void AliciaDDriverNode::parse_sdk_temperature_frame',
+        )
+
+        self.assertIn('max_plausible_temperature_c_', header)
+        self.assertIn(
+            'std::numeric_limits<float>::quiet_NaN()',
+            body,
+        )
+        rejection = body.index('Rejected %zu implausible SDK temperature')
+        telemetry_refresh = body.index('latest_temperatures_c_ = msg.data;')
+        self.assertLess(rejection, telemetry_refresh)
+        self.assertIn(
+            'if (std::isfinite(value))',
+            body,
+        )
+        self.assertNotIn('return;', body[rejection:telemetry_refresh])
+        self.assertIn(
+            'consecutive_high_temperature_samples_by_channel_[i]',
+            body[telemetry_refresh:],
+        )
+
     def test_temperature_telemetry_cannot_autonomously_remove_torque(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         joint_body = _function_body(
@@ -179,6 +205,100 @@ class SerialDriverResilienceTest(unittest.TestCase):
             'previous_command_error_rad +',
             body,
         )
+        self.assertNotIn(
+            'streamed_command_age_sec <= feedback_stale_timeout_sec_',
+            body,
+        )
+
+        acceptance = body.index('if (accept_joint_positions) {')
+        feedback_refresh = body.index(
+            'last_feedback_time_ = feedback_time;'
+        )
+        self.assertLess(acceptance, feedback_refresh)
+        self.assertNotIn(
+            'last_feedback_time_ = feedback_time;',
+            body[:acceptance],
+        )
+        self.assertIn(
+            'if (accept_joint_positions) {\n'
+            '        publish_joint_state();',
+            body,
+        )
+
+    def test_repeated_feedback_discontinuity_requires_command_consistent_recovery(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(
+            source,
+            'void AliciaDDriverNode::parse_sdk_joint_state_frame',
+        )
+
+        self.assertIn('has_streamed_command_reference', body)
+        self.assertIn('command_consistent_recovery', body)
+        self.assertIn(
+            'pending_joint_feedback_count_ >=\n'
+            '                    feedback_jump_confirm_samples_ &&\n'
+            '                command_consistent_recovery;',
+            body,
+        )
+        self.assertIn(
+            'Rejected repeated SDK joint feedback discontinuity without command-consistent recovery',
+            body,
+        )
+
+    def test_encoder_not_ready_frame_clears_stale_feedback_bootstrap(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(
+            source,
+            'void AliciaDDriverNode::parse_sdk_joint_state_frame',
+        )
+
+        not_ready_start = body.index('if (all_zero || all_full_scale) {')
+        conversion_start = body.index(
+            'std::vector<double> candidate_joint_positions',
+            not_ready_start,
+        )
+        not_ready_branch = body[not_ready_start:conversion_start]
+
+        self.assertIn('clear_retained_command_state();', not_ready_branch)
+        self.assertIn(
+            'actuation_confirmation_.mark_unconfirmed(\n'
+            '                "ENCODER_FEEDBACK_NOT_READY",',
+            not_ready_branch,
+        )
+        self.assertIn('publish_actuation_status();', not_ready_branch)
+        self.assertLess(
+            not_ready_branch.index('clear_retained_command_state();'),
+            not_ready_branch.index('return;'),
+        )
+        self.assertNotIn('motion_commands_enabled_ = false', not_ready_branch)
+        self.assertNotIn('torque_off', not_ready_branch)
+
+    def test_feedback_gap_cannot_expand_jump_window_or_confirm_actuation(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(
+            source,
+            'void AliciaDDriverNode::parse_sdk_joint_state_frame',
+        )
+
+        self.assertIn('maximum_jump_interval_sec', body)
+        self.assertIn('bounded_frame_interval_sec', body)
+        self.assertIn(
+            'feedback_max_velocity_rad_s_ * bounded_frame_interval_sec;',
+            body,
+        )
+        self.assertIn('accepted_joint_feedback_discontinuity', body)
+        self.assertIn(
+            'actuation_confirmation_.mark_unconfirmed(\n'
+            '                    "DISCONTINUOUS_FEEDBACK_RECOVERY",',
+            body,
+        )
+        discontinuity_reset = body.index(
+            '"DISCONTINUOUS_FEEDBACK_RECOVERY"'
+        )
+        feedback_note = body.index(
+            'actuation_confirmation_.note_feedback('
+        )
+        self.assertLess(discontinuity_reset, feedback_note)
 
     def test_driver_restart_seeds_command_interpolator_from_real_feedback(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()

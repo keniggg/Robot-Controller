@@ -47,6 +47,7 @@ from alicia_flexible_grasp.grasp.grasp6d_stability import (  # noqa: E402
 from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
     CandidateGateResult,
     GripperGeometry,
+    ObservationEnvelopeResult,
     evaluate_open_gripper_observation_envelope,
 )
 from alicia_flexible_grasp.grasp.tabletop_geometry_candidates import (  # noqa: E402
@@ -2019,6 +2020,127 @@ def test_centered_observation_pose_uses_camera_distance_and_centers_target():
     )
 
 
+def test_frozen_observation_reference_reconstructs_current_tool_pose():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    base_from_tool = remote_node.transform_matrix(
+        (-0.12, -0.31, 0.19),
+        remote_node.quaternion_from_euler(0.1, -0.2, 0.3),
+    )
+    tool_from_camera = remote_node.transform_matrix(
+        (-0.08, -0.01, -0.10),
+        remote_node.quaternion_from_euler(0.0, -1.4, 0.0),
+    )
+    prepared = types.SimpleNamespace(
+        pose_estimator=types.SimpleNamespace(
+            T_base_camera_link=base_from_tool.dot(tool_from_camera),
+        ),
+        stamp=remote_node.rospy.Time.from_sec(20.0),
+    )
+    node._tool_from_camera_matrix = lambda: tool_from_camera
+
+    reference = node._frozen_observation_reference_pose(prepared)
+
+    np.testing.assert_allclose(
+        remote_node.pose_matrix(reference),
+        base_from_tool,
+        atol=1e-9,
+    )
+    assert reference.header.frame_id == 'base_link'
+    assert reference.header.stamp.to_sec() == pytest.approx(20.0)
+
+
+def test_observation_roll_lattice_preserves_camera_optical_axis():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    tool_from_camera = remote_node.transform_matrix(
+        (-0.08, -0.01, -0.10),
+        remote_node.quaternion_from_euler(0.05, -1.35, 0.02),
+    )
+    node._tool_from_camera_matrix = lambda: tool_from_camera
+    node.observation_camera_roll_offsets_deg = (0.0, 30.0, -30.0)
+    reference = remote_node.make_pose_stamped(
+        'base_link',
+        (-0.12, -0.31, 0.19),
+        remote_node.quaternion_from_euler(0.1, -0.2, 0.3),
+        stamp=remote_node.rospy.Time.from_sec(20.0),
+    )
+
+    variants = node._observation_reference_roll_variants(reference)
+
+    assert [item['camera_roll_offset_deg'] for item in variants] == [
+        0.0,
+        30.0,
+        -30.0,
+    ]
+    reference_camera = remote_node.pose_matrix(reference).dot(
+        tool_from_camera
+    )
+    for item in variants:
+        variant_camera = remote_node.pose_matrix(
+            item['reference_pose']
+        ).dot(tool_from_camera)
+        np.testing.assert_allclose(
+            variant_camera[:3, 0],
+            reference_camera[:3, 0],
+            atol=1e-9,
+        )
+        np.testing.assert_allclose(
+            remote_node.pose_matrix(item['reference_pose'])[:3, 3],
+            remote_node.pose_matrix(reference)[:3, 3],
+            atol=1e-9,
+        )
+
+
+def test_far_field_observation_uses_reference_not_contact_orientation():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.grasp_config = {
+        'observation_camera_target_nominal_distance_m': 0.20,
+        'observation_camera_target_min_distance_m': 0.18,
+        'observation_camera_target_max_distance_m': 0.22,
+    }
+    node._tool_from_camera_matrix = lambda: np.eye(4)
+    node._contact_stage_profile = lambda *_args, **_kwargs: (
+        types.SimpleNamespace(
+            pregrasp_distance_m=0.036,
+            approach_offset_m=0.020,
+            lift_height_m=0.033,
+        )
+    )
+    contact_pose = remote_node.make_pose_stamped(
+        'base_link',
+        (0.1, -0.4, 0.1),
+        remote_node.quaternion_from_euler(0.0, 0.0, 0.0),
+    )
+    reference_pose = remote_node.make_pose_stamped(
+        'base_link',
+        (0.0, -0.2, 0.2),
+        remote_node.quaternion_from_euler(0.0, 0.0, math.pi * 0.5),
+    )
+    geometry = types.SimpleNamespace(center_base=(0.0, 0.0, 0.2))
+
+    sequence = node._make_observation_sequence(
+        contact_pose,
+        geometry,
+        insertion_axis_base=(0.0, 0.0, -1.0),
+        observation_reference_pose=reference_pose,
+    )
+
+    np.testing.assert_allclose(
+        remote_node.pose_matrix(sequence.pregrasp)[:3, :3],
+        remote_node.pose_matrix(reference_pose)[:3, :3],
+        atol=1e-9,
+    )
+    assert (
+        sequence.observation_view_audit['orientation_source']
+        == 'frozen_snapshot_current_tool0'
+    )
+
+
 def test_centered_observation_pose_rejects_nominal_outside_success_range():
     grasp_pose = remote_node.make_pose_stamped(
         'base_link',
@@ -3418,6 +3540,107 @@ def test_far_field_moveit_checks_only_observation_pose():
         assert result.reachable is False
         assert result.failure_code == 'MOVEIT_UNREACHABLE'
         assert result.reason == 'observation unreachable'
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_far_field_moveit_tries_safe_rolls_and_binds_reachable_branch():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        grasp_pose = remote_node.PoseStamped()
+        first_pose = remote_node.PoseStamped()
+        first_pose.pose.position.x = 0.10
+        second_pose = remote_node.PoseStamped()
+        second_pose.pose.position.x = 0.20
+        first_sequence = types.SimpleNamespace(pregrasp=first_pose)
+        second_sequence = types.SimpleNamespace(pregrasp=second_pose)
+        safe_envelope = ObservationEnvelopeResult(
+            ok=True,
+            failure_code='',
+            failure_reason='',
+            minimum_support_clearance_m=0.004,
+        )
+        variants = (
+            {
+                'sequence': first_sequence,
+                'observation_envelope': safe_envelope,
+                'observation_side_evidence': {
+                    'observation_side_evidence_deficit_m': 0.0,
+                },
+                'observation_view': {'camera_roll_offset_deg': 15.0},
+                'observation_translation_delta_m': 0.08,
+                'camera_roll_offset_deg': 15.0,
+                'preference_index': 1,
+            },
+            {
+                'sequence': second_sequence,
+                'observation_envelope': safe_envelope,
+                'observation_side_evidence': {
+                    'observation_side_evidence_deficit_m': 0.0,
+                },
+                'observation_view': {'camera_roll_offset_deg': -15.0},
+                'observation_translation_delta_m': 0.09,
+                'camera_roll_offset_deg': -15.0,
+                'preference_index': 2,
+            },
+        )
+        runtime = {
+            'prepared': types.SimpleNamespace(ticket=ticket),
+            'grasp_pose': grasp_pose,
+            'observation_sequence': first_sequence,
+            'observation_variants': variants,
+            'sequence': types.SimpleNamespace(
+                pregrasp=remote_node.PoseStamped(),
+                approach=remote_node.PoseStamped(),
+                grasp=grasp_pose,
+                lift=remote_node.PoseStamped(),
+            ),
+            'soft_evidence': {},
+        }
+        node._stable_variant_runtime = {(3, 1): runtime}
+        checked = []
+
+        def strict_checker(pose):
+            checked.append(pose)
+            reachable = pose is second_pose
+            return (
+                MoveItResult(
+                    reachable=reachable,
+                    joint_path_cost=0.3 if reachable else 0.0,
+                    joint_max_delta_rad=0.2 if reachable else 0.0,
+                    reason=(
+                        'reachable' if reachable else 'first roll unreachable'
+                    ),
+                    collision_free=True if reachable else None,
+                    within_joint_limits=True if reachable else None,
+                    ik_valid=True if reachable else None,
+                    planning_success=True if reachable else None,
+                    failure_code='' if reachable else 'MOVEIT_UNREACHABLE',
+                ),
+                {},
+                '',
+            )
+
+        node._strict_moveit_evaluation = strict_checker
+
+        result = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=3, variant_index=1)
+        )
+
+        assert result.reachable is True
+        assert checked == [first_pose, second_pose]
+        assert runtime['observation_sequence'] is second_sequence
+        assert runtime['observation_view']['camera_roll_offset_deg'] == -15.0
+        assert runtime['observation_envelope']['ok'] is True
+        assert runtime['observation_orientation_search'][
+            'object_yaw_used'
+        ] is False
+        assert runtime['observation_orientation_search'][
+            'attempted_variant_count'
+        ] == 2
     finally:
         node.shutdown_streaming_worker()
 
@@ -5606,7 +5829,10 @@ def test_current_recheck_binds_conservative_latest_required_width():
             ),
             support_normal_base=(0.0, 0.0, 1.0),
         ),
-        pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
+        pose_estimator=types.SimpleNamespace(
+            transform_sha256='current-tf',
+            T_base_camera_link=np.eye(4),
+        ),
         snapshot=types.SimpleNamespace(
             object_msg=types.SimpleNamespace(detected=True, label='carton')
         ),

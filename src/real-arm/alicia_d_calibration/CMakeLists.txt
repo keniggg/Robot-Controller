@@ -169,6 +169,7 @@ catkin_install_python(PROGRAMS
   scripts/d405_v4l2_camera.py
   scripts/handeye_joint_pose_panel.py
   scripts/handeye_invariance_verifier.py
+  scripts/handeye_sample_audit.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

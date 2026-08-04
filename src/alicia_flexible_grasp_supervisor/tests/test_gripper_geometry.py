@@ -628,6 +628,35 @@ def test_active_moveit_gripper_uses_real_driver_public_open_direction():
     assert named_positions['close'] == pytest.approx(0.0)
 
 
+def test_active_moveit_finger_pair_center_matches_analytical_tool0_contract():
+    workspace = ROOT.parents[1]
+    urdf_path = (
+        workspace
+        / 'src/real-arm/alicia_d_descriptions/urdf/alicia_duo_with_gripper.urdf'
+    )
+    robot = ET.parse(str(urdf_path)).getroot()
+    centers = []
+    for joint_name in ('left_finger', 'right_finger'):
+        vertices = _active_urdf_finger_vertices_at_public_position(
+            robot,
+            urdf_path,
+            joint_name,
+            0.0,
+        )
+        centers.append(0.5 * (np.min(vertices, axis=0) + np.max(vertices, axis=0)))
+    tool_origin = xml_vector(
+        robot.find("./joint[@name='Grasp2tool']/origin"),
+        'xyz',
+    )
+    pair_center_tool = 0.5 * (centers[0] + centers[1]) - tool_origin
+
+    np.testing.assert_allclose(
+        pair_center_tool,
+        ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M,
+        atol=GRIPPER_CONTRACT_TOLERANCE_M,
+    )
+
+
 @pytest.mark.parametrize(
     'opening_width_m,joint_positions',
     [

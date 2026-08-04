@@ -53,7 +53,8 @@ private:
     // Timer callbacks
    void process_serial_data_callback(const ros::TimerEvent& event);
    void reconnect_callback(const ros::TimerEvent& event);
-   void send_command_timer_callback(const ros::TimerEvent& event);
+	   void send_command_timer_callback(const ros::TimerEvent& event);
+	   bool diagnostic_query_suppressed_for_motion(const ros::Time& now);
 	   void heartbeat_publish_callback(const ros::TimerEvent& event);
 	   void state_poll_timer_callback(const ros::TimerEvent& event);
 
@@ -105,6 +106,9 @@ private:
 	   double state_poll_rate_hz_;
 	   double temperature_poll_rate_hz_ = 1.0;
 	   double self_check_poll_rate_hz_ = 0.5;
+	   bool suppress_diagnostic_queries_while_motion_active_ = true;
+	   double diagnostic_query_motion_quiet_sec_ = 0.5;
+	   double diagnostic_query_motion_error_rad_ = 0.02;
 	   bool mirror_commanded_state_when_feedback_stale_;
 	   bool log_command_flow_;
 	   bool suppress_redundant_commands_ = true;
@@ -128,6 +132,7 @@ private:
 	   double endpoint_feedback_trim_gain_ = 1.0;
 		   double protection_clear_stable_sec_ = 30.0;
 	   double max_enable_temperature_c_ = 60.0;
+	   double max_plausible_temperature_c_ = 125.0;
 	   int e1_confirm_consecutive_frames_ = 3;
 	   int temperature_over_limit_confirm_samples_ = 3;
 	   double reconnect_sync_tolerance_rad_ = 0.05;
@@ -173,16 +178,18 @@ private:
    std::vector<double> latest_joint_angles_; // size 6
    double latest_gripper_rad_ = 0.0;          // radians
    bool has_latest_command_ = false;
+	   ros::Time last_motion_reference_change_time_;
 	   std::vector<double> endpoint_trim_reference_joint_angles_;
 	   ros::Time endpoint_trim_reference_since_;
 	   bool endpoint_feedback_trim_active_ = false;
 	   bool endpoint_feedback_trim_quiescent_ = false;
 	   std::vector<double> endpoint_feedback_trim_offsets_;
 	   std::vector<double> endpoint_trim_feedback_anchor_joint_angles_;
-	   ros::Time endpoint_trim_feedback_stable_since_;
+	   std::vector<ros::Time> endpoint_trim_feedback_stable_since_;
 	   ros::Time endpoint_trim_last_feedback_sample_time_;
 	   bool endpoint_trim_waiting_for_feedback_response_ = false;
 	   std::vector<double> endpoint_trim_response_start_joint_angles_;
+	   std::vector<uint8_t> endpoint_trim_response_joint_mask_;
 	   ros::Time endpoint_trim_response_wait_since_;
 	   double endpoint_trim_last_response_latency_sec_ = 0.0;
 	   size_t endpoint_trim_stalled_retry_count_ = 0;

@@ -121,6 +121,79 @@ def _strict_json_number(value):
     return result if math.isfinite(result) else None
 
 
+def validate_calibration_centering_margin(plan, grasp_config, gripper_config):
+    """Require jaw clearance to cover measured hand-eye translation error.
+
+    This is deliberately orientation-independent: the uncertainty belongs to
+    the camera/tool transform and follows the wrist.  It must not be replaced
+    by a fixed base-frame target shift for one observed carton orientation.
+    """
+    gcfg = grasp_config if isinstance(grasp_config, dict) else {}
+    gripper_cfg = gripper_config if isinstance(gripper_config, dict) else {}
+    enabled = gcfg.get('calibration_centering_margin_gate_enabled', True)
+    override = gcfg.get('calibration_centering_margin_override', False)
+    if type(enabled) is not bool or type(override) is not bool:
+        return PlanValidationResult(
+            False,
+            'CALIBRATION_CENTERING_CONFIG_INVALID',
+            'centering margin gate and override must be booleans',
+        )
+    if not enabled or _plan_phase(plan) != _CONTACT_EXECUTION_PLAN:
+        return PlanValidationResult(True, 'NOT_APPLICABLE', '')
+
+    maximum_error_m = _strict_json_number(
+        gcfg.get('handeye_translation_max_error_m', 0.0)
+    )
+    physical_open_width_m = _strict_json_number(
+        gripper_cfg.get('open_position_m', 0.05)
+    )
+    required_open_width_m = _strict_json_number(
+        getattr(plan, 'required_open_width_m', None)
+    )
+    if (
+        maximum_error_m is None
+        or maximum_error_m < 0.0
+        or physical_open_width_m is None
+        or physical_open_width_m <= 0.0
+        or required_open_width_m is None
+        or required_open_width_m <= 0.0
+        or required_open_width_m > physical_open_width_m + 1e-12
+    ):
+        return PlanValidationResult(
+            False,
+            'CALIBRATION_CENTERING_CONFIG_INVALID',
+            'hand-eye error, physical opening, or required opening is invalid',
+        )
+
+    one_sided_margin_m = max(
+        0.0,
+        0.5 * (physical_open_width_m - required_open_width_m),
+    )
+    reason = (
+        'one-sided jaw margin %.4fm, measured hand-eye translation maximum '
+        '%.4fm (physical opening %.4fm, required opening %.4fm)'
+        % (
+            one_sided_margin_m,
+            maximum_error_m,
+            physical_open_width_m,
+            required_open_width_m,
+        )
+    )
+    if override:
+        return PlanValidationResult(
+            True,
+            'CALIBRATION_CENTERING_MARGIN_OVERRIDE',
+            reason,
+        )
+    if one_sided_margin_m + 1e-12 < maximum_error_m:
+        return PlanValidationResult(
+            False,
+            'CALIBRATION_CENTERING_MARGIN',
+            reason,
+        )
+    return PlanValidationResult(True, 'VALID', reason)
+
+
 def _wall_time_sec():
     value = _strict_json_number(time.time())
     return 0.0 if value is None else value
@@ -2182,6 +2255,28 @@ class GraspTaskNode:
                 'continue without a strictly checked contact execution plan',
             )
             return False
+        centering_validation = validate_calibration_centering_margin(
+            rebound,
+            gcfg,
+            gripper_cfg,
+        )
+        if not centering_validation.ok:
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: %s'
+                % (
+                    centering_validation.code,
+                    centering_validation.reason,
+                ),
+            )
+            return False
+        if centering_validation.code == (
+            'CALIBRATION_CENTERING_MARGIN_OVERRIDE'
+        ):
+            rospy.logwarn(
+                'Contact centering margin explicitly overridden: %s',
+                centering_validation.reason,
+            )
         if not strict_plan_id_equal(
             getattr(rebound, 'plan_id', ''),
             getattr(plan, 'plan_id', ''),
@@ -5604,11 +5699,72 @@ class GraspTaskNode:
                 resp = close(execute=True)
             return bool(resp.success), getattr(resp, 'message', '')
 
-        close_position = self._cfg_float(
+        configured_close_position = self._cfg_float(
             gripper_cfg,
             'simple_close_position_m',
             self._cfg_float(gripper_cfg, 'close_limit_m', 0.05),
         )
+        close_position = configured_close_position
+        if (
+            execution_plan is not None
+            and self._cfg_bool(
+                gripper_cfg,
+                'use_plan_bound_close_position',
+                True,
+            )
+        ):
+            try:
+                required_open_width_m = float(
+                    execution_plan.required_open_width_m
+                )
+            except (AttributeError, TypeError, ValueError):
+                return False, (
+                    'PLAN_GRIPPER_WIDTH_INVALID: frozen 6D plan has no '
+                    'finite required opening'
+                )
+            open_position_m = self._cfg_float(
+                gripper_cfg,
+                'open_position_m',
+                0.05,
+            )
+            close_limit_m = self._cfg_float(
+                gripper_cfg,
+                'close_limit_m',
+                0.0,
+            )
+            preload_m = max(
+                0.0,
+                self._cfg_float(
+                    gripper_cfg,
+                    'plan_bound_close_preload_m',
+                    0.002,
+                ),
+            )
+            lower = min(close_limit_m, open_position_m)
+            upper = max(close_limit_m, open_position_m)
+            if (
+                not math.isfinite(required_open_width_m)
+                or required_open_width_m <= lower
+                or required_open_width_m > upper
+            ):
+                return False, (
+                    'PLAN_GRIPPER_WIDTH_INVALID: frozen required opening '
+                    '%.6fm is outside (%.6f, %.6f]m'
+                    % (required_open_width_m, lower, upper)
+                )
+            close_position = max(
+                lower,
+                min(upper, required_open_width_m - preload_m),
+            )
+            rospy.loginfo(
+                'Plan-bound fixed gripper close: required_open_width=%.4fm '
+                'preload=%.4fm target=%.4fm; configured mechanical-limit '
+                'target %.4fm is not used for this frozen 6D plan',
+                required_open_width_m,
+                preload_m,
+                close_position,
+                configured_close_position,
+            )
         wait_sec = self._cfg_float(gripper_cfg, 'simple_close_wait_sec', 0.8)
         ok = self._command_gripper_position(
             set_gripper,

@@ -514,6 +514,22 @@ class MotionGateway:
                 execution_start_positions,
             )
         )
+        enable_message = Bool()
+        enable_message.data = False
+        try:
+            self.demo_pub.publish(enable_message)
+            reenable_message = 'positive joint enable re-requested'
+            rospy.logwarn(
+                '%s failed; %s after the measured failure hold; no disable, '
+                'stop, or torque-off command was published',
+                operation,
+                reenable_message,
+            )
+        except Exception as exc:
+            reenable_message = (
+                'positive joint enable re-request failed: %s' % exc
+            )
+            rospy.logerr('%s failed; %s', operation, reenable_message)
         if hold_ok:
             rospy.logwarn(
                 '%s failed; installed a feedback-evidenced controller hold '
@@ -521,18 +537,24 @@ class MotionGateway:
                 operation,
                 hold_message,
             )
-            return '%s; controller failure hold installed: %s' % (
+            return (
+                '%s; controller failure hold installed: %s; %s'
+            ) % (
                 message,
                 hold_message,
+                reenable_message,
             )
         rospy.logerr(
             '%s failed and controller failure hold was not confirmed: %s',
             operation,
             hold_message,
         )
-        return '%s; controller failure hold unconfirmed: %s' % (
+        return (
+            '%s; controller failure hold unconfirmed: %s; %s'
+        ) % (
             message,
             hold_message,
+            reenable_message,
         )
 
     def _hold_controller_command_after_failed_execution(

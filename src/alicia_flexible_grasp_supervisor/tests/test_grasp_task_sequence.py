@@ -3025,6 +3025,67 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(actions, [])
         self.assertFalse(node.active)
 
+    def test_calibration_centering_margin_rejects_narrow_contact_clearance(self):
+        plan = types.SimpleNamespace(
+            diagnostic='CONTACT_EXECUTION_PLAN',
+            required_open_width_m=0.0386,
+        )
+        result = grasp_task_node.validate_calibration_centering_margin(
+            plan,
+            {
+                'calibration_centering_margin_gate_enabled': True,
+                'handeye_translation_max_error_m': 0.009786,
+                'calibration_centering_margin_override': False,
+            },
+            {'open_position_m': 0.050},
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.code, 'CALIBRATION_CENTERING_MARGIN')
+        self.assertIn('one-sided jaw margin 0.0057m', result.reason)
+        self.assertIn('translation maximum 0.0098m', result.reason)
+
+    def test_calibration_centering_margin_is_yaw_independent_and_explicitly_overridable(self):
+        grasp_config = {
+            'calibration_centering_margin_gate_enabled': True,
+            'handeye_translation_max_error_m': 0.009786,
+            'calibration_centering_margin_override': False,
+        }
+        first_yaw = types.SimpleNamespace(
+            diagnostic='CONTACT_EXECUTION_PLAN',
+            required_open_width_m=0.028,
+            quaternion_xyzw=(0.0, 0.0, 0.0, 1.0),
+        )
+        arbitrary_yaw = types.SimpleNamespace(
+            diagnostic='CONTACT_EXECUTION_PLAN',
+            required_open_width_m=0.028,
+            quaternion_xyzw=(0.0, 0.0, 0.707, 0.707),
+        )
+
+        for plan in (first_yaw, arbitrary_yaw):
+            result = grasp_task_node.validate_calibration_centering_margin(
+                plan,
+                grasp_config,
+                {'open_position_m': 0.050},
+            )
+            self.assertTrue(result.ok)
+            self.assertEqual(result.code, 'VALID')
+
+        grasp_config['calibration_centering_margin_override'] = True
+        overridden = grasp_task_node.validate_calibration_centering_margin(
+            types.SimpleNamespace(
+                diagnostic='CONTACT_EXECUTION_PLAN',
+                required_open_width_m=0.0386,
+            ),
+            grasp_config,
+            {'open_position_m': 0.050},
+        )
+        self.assertTrue(overridden.ok)
+        self.assertEqual(
+            overridden.code,
+            'CALIBRATION_CENTERING_MARGIN_OVERRIDE',
+        )
+
     def test_automatic_actuation_gate_requires_fresh_confirmed_status(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -4415,7 +4476,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertIn(('close', True), calls)
         self.assertNotIn('/supervisor/move_to_pose', proxy_names)
 
-    def test_6d_plan_honors_configured_simple_open_and_close_positions(self):
+    def test_6d_plan_uses_frozen_required_width_for_fixed_close(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = self._object()
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(1.0)
@@ -4468,6 +4529,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 'open_position_m': 0.05,
                 'close_limit_m': 0.0,
                 'use_compliant_close': False,
+                'use_plan_bound_close_position': True,
+                'plan_bound_close_preload_m': 0.002,
                 'simple_close_position_m': 0.0,
                 'simple_close_wait_sec': 0.0,
                 'open_wait_sec': 0.0,
@@ -4490,8 +4553,41 @@ class GraspTaskSequenceTest(unittest.TestCase):
             grasp_task_node.rospy.Time.now = original_time_now
 
         self.assertEqual(calls[0], ('set_gripper', 0.05))
-        self.assertIn(('set_gripper', 0.0), calls)
+        close_values = [
+            item[1]
+            for item in calls
+            if len(item) == 2 and item[0] == 'set_gripper'
+        ]
+        self.assertTrue(
+            any(abs(value - 0.042) <= 1e-9 for value in close_values)
+        )
+        self.assertNotIn(('set_gripper', 0.0), calls)
         self.assertNotIn(('close', True), calls)
+
+    def test_non_6d_fixed_close_keeps_configured_position(self):
+        node = grasp_task_node.GraspTaskNode.__new__(
+            grasp_task_node.GraspTaskNode
+        )
+        calls = []
+        node._command_gripper_position = (
+            lambda _service, position, *_args, **_kwargs:
+            calls.append(float(position)) or True
+        )
+
+        closed, message = node._close_gripper(
+            {
+                'use_compliant_close': False,
+                'use_plan_bound_close_position': True,
+                'simple_close_position_m': 0.0,
+                'simple_close_wait_sec': 0.0,
+            },
+            object(),
+            None,
+        )
+
+        self.assertTrue(closed)
+        self.assertIn('fixed gripper close', message)
+        self.assertEqual(calls, [0.0])
 
     def test_6d_plan_blocks_execution_when_mujoco_digital_twin_rejects(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)

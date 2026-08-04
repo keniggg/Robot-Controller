@@ -177,6 +177,29 @@ void AliciaDDriverNode::load_parameters()
     pnh_.param<double>("state_poll_rate_hz", state_poll_rate_hz_, 20.0);
     pnh_.param<double>("temperature_poll_rate_hz", temperature_poll_rate_hz_, 1.0);
     pnh_.param<double>("self_check_poll_rate_hz", self_check_poll_rate_hz_, 0.5);
+    pnh_.param<bool>(
+        "suppress_diagnostic_queries_while_motion_active",
+        suppress_diagnostic_queries_while_motion_active_,
+        true
+    );
+    pnh_.param<double>(
+        "diagnostic_query_motion_quiet_sec",
+        diagnostic_query_motion_quiet_sec_,
+        0.5
+    );
+    pnh_.param<double>(
+        "diagnostic_query_motion_error_rad",
+        diagnostic_query_motion_error_rad_,
+        0.02
+    );
+    diagnostic_query_motion_quiet_sec_ = std::max(
+        0.0,
+        diagnostic_query_motion_quiet_sec_
+    );
+    diagnostic_query_motion_error_rad_ = std::max(
+        0.0,
+        diagnostic_query_motion_error_rad_
+    );
     pnh_.param<bool>("mirror_commanded_state_when_feedback_stale", mirror_commanded_state_when_feedback_stale_, false);
     pnh_.param<bool>("log_command_flow", log_command_flow_, true);
     pnh_.param<bool>("suppress_redundant_commands", suppress_redundant_commands_, true);
@@ -194,12 +217,15 @@ void AliciaDDriverNode::load_parameters()
         std::min(command_keepalive_rate_hz_, command_rate_hz_));
     // The SDK position loop can hold a repeatable measured offset from a
     // stable ROS endpoint. Apply a bounded, accumulated live-feedback outer
-    // correction only after both reference and measured feedback settle.
-    // Normally every correction must produce an observed encoder response
-    // before another iteration. Start and continue only above the
+    // correction only after the reference and each affected joint's measured
+    // feedback settle. A moving joint cannot reset another joint's stability
+    // clock. Normally every corrected joint must produce an observed encoder
+    // response before another iteration. Start and continue only above the
     // command/feedback round-trip quantization floor, then latch and hold the
     // last live-derived trim. Re-enter the latched loop only if error leaves
-    // the broader controller goal band. If fresh feedback proves a
+    // the broader controller goal band. Lease release latches the fresh
+    // measured joint pose rather than retaining an over-corrected target. If
+    // fresh feedback proves a
     // still-active stall, retry only after an adaptive dwell derived from
     // measured response latency, still under the same per-joint anti-windup
     // bound. Never bake in a joint-specific angle or integrate while the
@@ -230,6 +256,15 @@ void AliciaDDriverNode::load_parameters()
     );
     pnh_.param<double>("protection_clear_stable_sec", protection_clear_stable_sec_, 30.0);
     pnh_.param<double>("max_enable_temperature_c", max_enable_temperature_c_, 60.0);
+    pnh_.param<double>(
+        "max_plausible_temperature_c",
+        max_plausible_temperature_c_,
+        125.0
+    );
+    max_plausible_temperature_c_ = std::max(
+        max_enable_temperature_c_,
+        max_plausible_temperature_c_
+    );
     pnh_.param<int>("e1_confirm_consecutive_frames", e1_confirm_consecutive_frames_, 3);
     pnh_.param<int>("temperature_over_limit_confirm_samples", temperature_over_limit_confirm_samples_, 3);
     e1_confirm_consecutive_frames_ = std::max(1, e1_confirm_consecutive_frames_);
@@ -388,6 +423,22 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
 )
 {
     const ros::Time now = ros::Time::now();
+    std::vector<double> release_feedback;
+    bool release_feedback_is_fresh = false;
+    if (!request.data) {
+        std::lock_guard<std::mutex> data_lock(data_mutex_);
+        release_feedback_is_fresh =
+            has_real_feedback_ &&
+            current_joint_positions_.size() == 6 &&
+            !last_feedback_time_.isZero() &&
+            (now - last_feedback_time_).toSec() >= 0.0 &&
+            (now - last_feedback_time_).toSec() <=
+                feedback_stale_timeout_sec_;
+        if (release_feedback_is_fresh) {
+            release_feedback = current_joint_positions_;
+        }
+    }
+    bool measured_hold_latched = false;
     {
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
         if (request.data) {
@@ -407,6 +458,46 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
             endpoint_feedback_trim_task_lease_active_ = false;
             endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
             endpoint_feedback_trim_task_lease_reference_.clear();
+            if (
+                release_feedback_is_fresh &&
+                release_feedback.size() ==
+                    endpoint_trim_reference_joint_angles_.size()
+            ) {
+                // The correction target is only an outer-loop means to reach
+                // the requested endpoint.  Once the task releases its lease,
+                // hold the measured joint pose that actually exists instead
+                // of retaining a possibly over-corrected command.  Repeated
+                // controller messages for the unchanged reference keep this
+                // latch; the first genuinely different task/GUI target clears
+                // it in joint_command_callback.
+                endpoint_feedback_trim_offsets_.resize(
+                    release_feedback.size()
+                );
+                for (size_t i = 0; i < release_feedback.size(); ++i) {
+                    endpoint_feedback_trim_offsets_[i] = std::max(
+                        -endpoint_feedback_trim_max_rad_,
+                        std::min(
+                            endpoint_feedback_trim_max_rad_,
+                            release_feedback[i] -
+                                endpoint_trim_reference_joint_angles_[i]
+                        )
+                    );
+                }
+                endpoint_feedback_trim_active_ = true;
+                endpoint_feedback_trim_quiescent_ = true;
+                endpoint_trim_feedback_anchor_joint_angles_ =
+                    release_feedback;
+                endpoint_trim_feedback_stable_since_.assign(
+                    release_feedback.size(),
+                    now
+                );
+                endpoint_trim_waiting_for_feedback_response_ = false;
+                endpoint_trim_response_start_joint_angles_.clear();
+                endpoint_trim_response_joint_mask_.clear();
+                endpoint_trim_response_wait_since_ = ros::Time(0);
+                endpoint_trim_stalled_retry_count_ = 0;
+                measured_hold_latched = true;
+            }
         }
     }
     response.success = true;
@@ -418,11 +509,9 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
         response.message = message.str();
         ROS_INFO("%s", response.message.c_str());
     } else {
-        // Keep the live-derived offset for the unchanged held target so the
-        // arm does not rebound as the lease is released. joint_command_callback
-        // clears it before the first different GUI/task target.
-        response.message =
-            "task endpoint precision lease released; held-target trim retained until target changes";
+        response.message = measured_hold_latched
+            ? "task endpoint precision lease released; fresh measured joint pose latched until target changes"
+            : "task endpoint precision lease released; no fresh measured latch available, existing held target retained until target changes";
         ROS_INFO("%s", response.message.c_str());
     }
     return true;
@@ -440,10 +529,11 @@ void AliciaDDriverNode::clear_retained_command_state()
         endpoint_feedback_trim_quiescent_ = false;
         endpoint_feedback_trim_offsets_.clear();
         endpoint_trim_feedback_anchor_joint_angles_.clear();
-        endpoint_trim_feedback_stable_since_ = ros::Time(0);
+        endpoint_trim_feedback_stable_since_.clear();
         endpoint_trim_last_feedback_sample_time_ = ros::Time(0);
         endpoint_trim_waiting_for_feedback_response_ = false;
         endpoint_trim_response_start_joint_angles_.clear();
+        endpoint_trim_response_joint_mask_.clear();
         endpoint_trim_response_wait_since_ = ros::Time(0);
         endpoint_trim_last_response_latency_sec_ = 0.0;
         endpoint_trim_stalled_retry_count_ = 0;
@@ -584,12 +674,23 @@ void AliciaDDriverNode::state_poll_timer_callback(const ros::TimerEvent& event)
     // once. Schedule every diagnostic query in a dedicated state-poll slot so
     // only one request is outstanding on the half-duplex transport.
     const ros::Time now = ros::Time::now();
-    const bool temperature_due = temperature_poll_rate_hz_ > 0.0 &&
+    const bool diagnostic_queries_suppressed =
+        diagnostic_query_suppressed_for_motion(now);
+    const bool temperature_due = !diagnostic_queries_suppressed &&
+        temperature_poll_rate_hz_ > 0.0 &&
         (last_temperature_query_time_.isZero() ||
          (now - last_temperature_query_time_).toSec() >= 1.0 / temperature_poll_rate_hz_);
-    const bool self_check_due = self_check_poll_rate_hz_ > 0.0 &&
+    const bool self_check_due = !diagnostic_queries_suppressed &&
+        self_check_poll_rate_hz_ > 0.0 &&
         (last_self_check_query_time_.isZero() ||
          (now - last_self_check_query_time_).toSec() >= 1.0 / self_check_poll_rate_hz_);
+
+    if (diagnostic_queries_suppressed) {
+        ROS_INFO_THROTTLE(
+            5.0,
+            "Deferring SDK temperature/self-check queries while the arm target is active; joint feedback polling remains enabled."
+        );
+    }
 
     if (self_check_due) {
         // Exact official SDK self-check query.
@@ -621,6 +722,77 @@ void AliciaDDriverNode::state_poll_timer_callback(const ros::TimerEvent& event)
         0x01, 0xFE, 0x9A, FRAME_END_BYTE
     };
     communicator_->write_raw_frame(joint_state_query_frame);
+}
+
+bool AliciaDDriverNode::diagnostic_query_suppressed_for_motion(
+    const ros::Time& now
+)
+{
+    if (!suppress_diagnostic_queries_while_motion_active_) return false;
+
+    bool has_command = false;
+    std::vector<double> target_joint_angles;
+    double target_gripper_rad = 0.0;
+    ros::Time last_reference_change;
+    {
+        std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
+        has_command = has_latest_command_;
+        target_joint_angles = latest_joint_angles_;
+        target_gripper_rad = latest_gripper_rad_;
+        last_reference_change = last_motion_reference_change_time_;
+    }
+    if (!has_command) return false;
+
+    if (
+        !last_reference_change.isZero() &&
+        std::max(0.0, (now - last_reference_change).toSec()) <
+            diagnostic_query_motion_quiet_sec_
+    ) {
+        return true;
+    }
+
+    bool feedback_is_fresh = false;
+    std::vector<double> feedback_joint_angles;
+    double feedback_gripper_rad = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        feedback_is_fresh =
+            has_real_feedback_ &&
+            !last_feedback_time_.isZero() &&
+            std::max(0.0, (now - last_feedback_time_).toSec()) <=
+                feedback_stale_timeout_sec_;
+        feedback_joint_angles = current_joint_positions_;
+        feedback_gripper_rad = current_gripper_position_;
+    }
+    if (
+        !feedback_is_fresh ||
+        target_joint_angles.size() != feedback_joint_angles.size() ||
+        target_joint_angles.empty()
+    ) {
+        return true;
+    }
+
+    for (size_t i = 0; i < target_joint_angles.size(); ++i) {
+        const double target = target_joint_angles[i];
+        const double feedback = feedback_joint_angles[i];
+        if (
+            !std::isfinite(target) ||
+            !std::isfinite(feedback) ||
+            std::abs(target - feedback) >
+                diagnostic_query_motion_error_rad_
+        ) {
+            return true;
+        }
+    }
+    if (
+        !std::isfinite(target_gripper_rad) ||
+        !std::isfinite(feedback_gripper_rad) ||
+        std::abs(target_gripper_rad - feedback_gripper_rad) >
+            diagnostic_query_motion_error_rad_
+    ) {
+        return true;
+    }
+    return false;
 }
 
 
@@ -746,6 +918,8 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
 
     {
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
+        const bool gripper_reference_changed =
+            std::abs(gripper_value - latest_gripper_rad_) > 1e-6;
         bool reference_changed =
             endpoint_trim_reference_joint_angles_.size() != joint_angles.size();
         if (!reference_changed) {
@@ -771,14 +945,21 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
             endpoint_feedback_trim_quiescent_ = false;
             endpoint_feedback_trim_offsets_.assign(joint_angles.size(), 0.0);
             endpoint_trim_feedback_anchor_joint_angles_.clear();
-            endpoint_trim_feedback_stable_since_ = ros::Time(0);
+            endpoint_trim_feedback_stable_since_.assign(
+                joint_angles.size(),
+                ros::Time(0)
+            );
             endpoint_trim_last_feedback_sample_time_ = ros::Time(0);
             endpoint_trim_waiting_for_feedback_response_ = false;
             endpoint_trim_response_start_joint_angles_.clear();
+            endpoint_trim_response_joint_mask_.clear();
             endpoint_trim_response_wait_since_ = ros::Time(0);
             endpoint_trim_last_response_latency_sec_ = 0.0;
             endpoint_trim_stalled_retry_count_ = 0;
             endpoint_feedback_trim_iteration_ = 0;
+        }
+        if (reference_changed || gripper_reference_changed) {
+            last_motion_reference_change_time_ = command_time;
         }
         latest_joint_angles_ = joint_angles;
         latest_gripper_rad_ = gripper_value;
@@ -809,10 +990,11 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     bool endpoint_feedback_trim_quiescent = false;
     std::vector<double> endpoint_feedback_trim_offsets;
     std::vector<double> endpoint_trim_feedback_anchor;
-    ros::Time endpoint_trim_feedback_stable_since;
+    std::vector<ros::Time> endpoint_trim_feedback_stable_since;
     ros::Time endpoint_trim_last_feedback_sample_time;
     bool endpoint_trim_waiting_for_feedback_response = false;
     std::vector<double> endpoint_trim_response_start;
+    std::vector<uint8_t> endpoint_trim_response_joint_mask;
     ros::Time endpoint_trim_response_wait_since;
     double endpoint_trim_last_response_latency_sec = 0.0;
     size_t endpoint_trim_stalled_retry_count = 0;
@@ -840,6 +1022,8 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
             endpoint_trim_waiting_for_feedback_response_;
         endpoint_trim_response_start =
             endpoint_trim_response_start_joint_angles_;
+        endpoint_trim_response_joint_mask =
+            endpoint_trim_response_joint_mask_;
         endpoint_trim_response_wait_since =
             endpoint_trim_response_wait_since_;
         endpoint_trim_last_response_latency_sec =
@@ -861,12 +1045,6 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         endpoint_feedback_trim_task_lease_active =
             endpoint_feedback_trim_task_lease_active_;
     }
-    if (endpoint_feedback_trim_task_lease_expired) {
-        ROS_WARN(
-            "Task endpoint precision lease expired; retained trim will only hold the unchanged target"
-        );
-    }
-
     bool feedback_ready = false;
     bool feedback_stale = true;
     bool protection_latched = false;
@@ -884,6 +1062,70 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         feedback_joint_angles = current_joint_positions_;
         feedback_gripper_rad = current_gripper_position_;
         feedback_sample_time = last_feedback_time_;
+    }
+
+    bool expired_lease_measured_hold_latched = false;
+    if (
+        endpoint_feedback_trim_task_lease_expired &&
+        feedback_ready &&
+        !feedback_stale &&
+        feedback_joint_angles.size() == endpoint_trim_reference.size()
+    ) {
+        std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
+        if (
+            endpoint_trim_reference_joint_angles_ ==
+                endpoint_trim_reference
+        ) {
+            endpoint_feedback_trim_offsets_.resize(
+                feedback_joint_angles.size()
+            );
+            for (size_t i = 0; i < feedback_joint_angles.size(); ++i) {
+                endpoint_feedback_trim_offsets_[i] = std::max(
+                    -endpoint_feedback_trim_max_rad_,
+                    std::min(
+                        endpoint_feedback_trim_max_rad_,
+                        feedback_joint_angles[i] -
+                            endpoint_trim_reference[i]
+                    )
+                );
+            }
+            endpoint_feedback_trim_active_ = true;
+            endpoint_feedback_trim_quiescent_ = true;
+            endpoint_trim_feedback_anchor_joint_angles_ =
+                feedback_joint_angles;
+            endpoint_trim_feedback_stable_since_.assign(
+                feedback_joint_angles.size(),
+                now
+            );
+            endpoint_trim_waiting_for_feedback_response_ = false;
+            endpoint_trim_response_start_joint_angles_.clear();
+            endpoint_trim_response_joint_mask_.clear();
+            endpoint_trim_response_wait_since_ = ros::Time(0);
+            endpoint_trim_stalled_retry_count_ = 0;
+
+            endpoint_feedback_trim_offsets =
+                endpoint_feedback_trim_offsets_;
+            endpoint_feedback_trim_active = true;
+            endpoint_feedback_trim_quiescent = true;
+            endpoint_trim_feedback_anchor = feedback_joint_angles;
+            endpoint_trim_feedback_stable_since.assign(
+                feedback_joint_angles.size(),
+                now
+            );
+            endpoint_trim_waiting_for_feedback_response = false;
+            endpoint_trim_response_start.clear();
+            endpoint_trim_response_joint_mask.clear();
+            endpoint_trim_response_wait_since = ros::Time(0);
+            endpoint_trim_stalled_retry_count = 0;
+            expired_lease_measured_hold_latched = true;
+        }
+    }
+    if (endpoint_feedback_trim_task_lease_expired) {
+        ROS_WARN(
+            expired_lease_measured_hold_latched
+                ? "Task endpoint precision lease expired; fresh measured joint pose latched until target changes"
+                : "Task endpoint precision lease expired without fresh measured feedback; existing held target retained until target changes"
+        );
     }
 
     if (!motion_enabled) {
@@ -1051,77 +1293,153 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         feedback_sample_time != endpoint_trim_last_feedback_sample_time;
     if (feedback_sample_is_new) {
         endpoint_trim_last_feedback_sample_time = feedback_sample_time;
-        if (endpoint_trim_waiting_for_feedback_response) {
-            double maximum_response_rad = 0.0;
-            if (
-                endpoint_trim_response_start.size() ==
-                    feedback_joint_angles.size()
-            ) {
-                for (size_t i = 0; i < feedback_joint_angles.size(); ++i) {
-                    maximum_response_rad = std::max(
-                        maximum_response_rad,
-                        std::abs(
-                            feedback_joint_angles[i] -
-                            endpoint_trim_response_start[i]
+        const size_t joint_count = feedback_joint_angles.size();
+        if (
+            endpoint_trim_feedback_anchor.size() != joint_count ||
+            endpoint_trim_feedback_stable_since.size() != joint_count
+        ) {
+            endpoint_trim_feedback_anchor = feedback_joint_angles;
+            endpoint_trim_feedback_stable_since.assign(
+                joint_count,
+                feedback_sample_time
+            );
+        }
+        if (
+            endpoint_trim_response_joint_mask.size() != joint_count
+        ) {
+            endpoint_trim_response_joint_mask.assign(joint_count, 0);
+            endpoint_trim_waiting_for_feedback_response = false;
+        }
+        const bool response_metadata_valid =
+            endpoint_trim_response_start.size() == joint_count;
+        if (
+            endpoint_trim_waiting_for_feedback_response &&
+            !response_metadata_valid
+        ) {
+            endpoint_trim_waiting_for_feedback_response = false;
+            endpoint_trim_response_joint_mask.assign(joint_count, 0);
+        }
+
+        bool response_joint_still_waiting = false;
+        for (size_t i = 0; i < joint_count; ++i) {
+            const bool response_expected =
+                endpoint_trim_waiting_for_feedback_response &&
+                endpoint_trim_response_joint_mask[i] != 0;
+            const double anchor_displacement_rad = std::abs(
+                feedback_joint_angles[i] -
+                endpoint_trim_feedback_anchor[i]
+            );
+            if (response_expected) {
+                const double response_rad = std::abs(
+                    feedback_joint_angles[i] -
+                    endpoint_trim_response_start[i]
+                );
+                const double feedback_error_rad =
+                    i < joint_angles.size()
+                        ? std::abs(
+                            joint_angles[i] - feedback_joint_angles[i]
                         )
-                    );
+                        : std::numeric_limits<double>::infinity();
+                if (
+                    response_rad + 1e-12 >=
+                        SDK_JOINT_QUANTIZATION_RAD ||
+                    feedback_error_rad <=
+                        ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD
+                ) {
+                    endpoint_trim_response_joint_mask[i] = 0;
+                    endpoint_trim_feedback_anchor[i] =
+                        feedback_joint_angles[i];
+                    endpoint_trim_feedback_stable_since[i] =
+                        feedback_sample_time;
+                } else {
+                    response_joint_still_waiting = true;
                 }
-            }
-            if (
-                endpoint_trim_response_start.size() ==
-                    feedback_joint_angles.size() &&
-                maximum_response_rad + 1e-12 >=
-                    SDK_JOINT_QUANTIZATION_RAD
-            ) {
-                if (!endpoint_trim_response_wait_since.isZero()) {
-                    const double observed_latency_sec =
-                        (
-                            feedback_sample_time -
-                            endpoint_trim_response_wait_since
-                        ).toSec();
-                    if (std::isfinite(observed_latency_sec) &&
-                        observed_latency_sec > 0.0) {
-                        endpoint_trim_last_response_latency_sec =
-                            observed_latency_sec;
-                    }
-                }
-                endpoint_trim_waiting_for_feedback_response = false;
-                endpoint_trim_feedback_anchor = feedback_joint_angles;
-                endpoint_trim_feedback_stable_since = feedback_sample_time;
-                endpoint_trim_response_wait_since = ros::Time(0);
-                endpoint_trim_stalled_retry_count = 0;
-            }
-        } else {
-            double maximum_anchor_displacement_rad = 0.0;
-            if (
-                endpoint_trim_feedback_anchor.size() ==
-                    feedback_joint_angles.size()
-            ) {
-                for (size_t i = 0; i < feedback_joint_angles.size(); ++i) {
-                    maximum_anchor_displacement_rad = std::max(
-                        maximum_anchor_displacement_rad,
-                        std::abs(
-                            feedback_joint_angles[i] -
-                            endpoint_trim_feedback_anchor[i]
-                        )
-                    );
-                }
-            }
-            if (
-                endpoint_trim_feedback_anchor.size() !=
-                    feedback_joint_angles.size() ||
-                maximum_anchor_displacement_rad >
+            } else if (
+                anchor_displacement_rad >
                     SDK_JOINT_QUANTIZATION_RAD + 1e-12
             ) {
-                endpoint_trim_feedback_anchor = feedback_joint_angles;
-                endpoint_trim_feedback_stable_since = feedback_sample_time;
+                // Stability is joint-local.  Encoder/servo movement on one
+                // joint must not reset another settled joint's eligibility.
+                endpoint_trim_feedback_anchor[i] =
+                    feedback_joint_angles[i];
+                endpoint_trim_feedback_stable_since[i] =
+                    feedback_sample_time;
             }
         }
+        if (
+            endpoint_trim_waiting_for_feedback_response &&
+            !response_joint_still_waiting
+        ) {
+            if (!endpoint_trim_response_wait_since.isZero()) {
+                const double observed_latency_sec =
+                    (
+                        feedback_sample_time -
+                        endpoint_trim_response_wait_since
+                    ).toSec();
+                if (std::isfinite(observed_latency_sec) &&
+                    observed_latency_sec > 0.0) {
+                    endpoint_trim_last_response_latency_sec =
+                        observed_latency_sec;
+                }
+            }
+            endpoint_trim_waiting_for_feedback_response = false;
+            endpoint_trim_response_wait_since = ros::Time(0);
+            endpoint_trim_stalled_retry_count = 0;
+        }
     }
-    const double feedback_stable_age_sec =
-        endpoint_trim_feedback_stable_since.isZero()
-            ? 0.0
-            : (now - endpoint_trim_feedback_stable_since).toSec();
+    std::vector<uint8_t> endpoint_feedback_stable_by_joint(
+        joint_angles.size(),
+        0
+    );
+    double feedback_stable_age_sec = 0.0;
+    bool has_stable_joint_above_round_trip_floor = false;
+    bool has_stable_joint_above_activation = false;
+    if (
+        endpoint_trim_feedback_stable_since.size() ==
+            joint_angles.size() &&
+        feedback_joint_angles.size() == joint_angles.size()
+    ) {
+        for (size_t i = 0; i < joint_angles.size(); ++i) {
+            const double joint_stable_age_sec =
+                endpoint_trim_feedback_stable_since[i].isZero()
+                    ? 0.0
+                    : (
+                        now - endpoint_trim_feedback_stable_since[i]
+                    ).toSec();
+            feedback_stable_age_sec = std::max(
+                feedback_stable_age_sec,
+                joint_stable_age_sec
+            );
+            const bool joint_is_waiting =
+                endpoint_trim_waiting_for_feedback_response &&
+                endpoint_trim_response_joint_mask.size() ==
+                    joint_angles.size() &&
+                endpoint_trim_response_joint_mask[i] != 0;
+            const bool joint_is_stable =
+                !joint_is_waiting &&
+                joint_stable_age_sec >=
+                    endpoint_feedback_trim_stable_sec_;
+            endpoint_feedback_stable_by_joint[i] =
+                joint_is_stable ? 1 : 0;
+            const double joint_error_rad = std::abs(
+                joint_angles[i] - feedback_joint_angles[i]
+            );
+            has_stable_joint_above_round_trip_floor =
+                has_stable_joint_above_round_trip_floor ||
+                (
+                    joint_is_stable &&
+                    joint_error_rad >
+                        ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD
+                );
+            has_stable_joint_above_activation =
+                has_stable_joint_above_activation ||
+                (
+                    joint_is_stable &&
+                    joint_error_rad >
+                        endpoint_feedback_trim_activation_error_rad_
+                );
+        }
+    }
     const bool endpoint_reference_stable =
         endpoint_trim_reference.size() == joint_angles.size() &&
         feedback_joint_angles.size() == joint_angles.size() &&
@@ -1131,7 +1449,11 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         !endpoint_trim_waiting_for_feedback_response &&
         endpoint_trim_feedback_anchor.size() ==
             feedback_joint_angles.size() &&
-        feedback_stable_age_sec >= endpoint_feedback_trim_stable_sec_;
+        std::find(
+            endpoint_feedback_stable_by_joint.begin(),
+            endpoint_feedback_stable_by_joint.end(),
+            static_cast<uint8_t>(1)
+        ) != endpoint_feedback_stable_by_joint.end();
     const bool endpoint_error_inside_trim_window =
         maximum_feedback_error_rad <= endpoint_feedback_trim_max_rad_;
     const bool endpoint_error_exceeds_activation =
@@ -1159,7 +1481,8 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         feedback_sample_is_new &&
         endpoint_feedback_trim_active &&
         endpoint_feedback_trim_quiescent &&
-        endpoint_error_exceeds_activation;
+        endpoint_error_exceeds_activation &&
+        has_stable_joint_above_activation;
     const bool endpoint_trim_quiescent_for_decision =
         (
             endpoint_feedback_trim_quiescent ||
@@ -1173,7 +1496,8 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         feedback_sample_is_new &&
         endpoint_error_inside_trim_window &&
         !endpoint_feedback_trim_active &&
-        endpoint_error_above_round_trip_floor;
+        endpoint_error_above_round_trip_floor &&
+        has_stable_joint_above_round_trip_floor;
     const bool continue_endpoint_feedback_trim =
         endpoint_feedback_trim_update_allowed &&
         endpoint_reference_stable &&
@@ -1182,7 +1506,8 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         endpoint_error_inside_trim_window &&
         endpoint_feedback_trim_active &&
         !endpoint_trim_quiescent_for_decision &&
-        endpoint_error_above_round_trip_floor;
+        endpoint_error_above_round_trip_floor &&
+        has_stable_joint_above_round_trip_floor;
     const double endpoint_trim_response_timeout_sec = std::max(
         endpoint_feedback_trim_stable_sec_,
         endpoint_trim_last_response_latency_sec > 0.0
@@ -1231,6 +1556,8 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
                 endpoint_trim_waiting_for_feedback_response;
             endpoint_trim_response_start_joint_angles_ =
                 endpoint_trim_response_start;
+            endpoint_trim_response_joint_mask_ =
+                endpoint_trim_response_joint_mask;
             endpoint_trim_response_wait_since_ =
                 endpoint_trim_response_wait_since;
             endpoint_trim_last_response_latency_sec_ =
@@ -1251,9 +1578,36 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
                         0.0
                     );
                 }
+                if (!retry_stalled_endpoint_feedback_trim) {
+                    endpoint_trim_response_joint_mask_.assign(
+                        joint_angles.size(),
+                        0
+                    );
+                    endpoint_trim_response_start_joint_angles_ =
+                        feedback_joint_angles;
+                    endpoint_trim_stalled_retry_count_ = 0;
+                }
                 for (size_t i = 0; i < joint_angles.size(); ++i) {
                     const double feedback_error =
                         joint_angles[i] - feedback_joint_angles[i];
+                    const bool joint_retry_is_due =
+                        retry_stalled_endpoint_feedback_trim &&
+                        endpoint_trim_response_joint_mask_.size() ==
+                            joint_angles.size() &&
+                        endpoint_trim_response_joint_mask_[i] != 0;
+                    const bool joint_stable_for_update =
+                        !retry_stalled_endpoint_feedback_trim &&
+                        endpoint_feedback_stable_by_joint.size() ==
+                            joint_angles.size() &&
+                        endpoint_feedback_stable_by_joint[i] != 0;
+                    if (
+                        (!joint_retry_is_due &&
+                         !joint_stable_for_update) ||
+                        std::abs(feedback_error) <=
+                            ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD
+                    ) {
+                        continue;
+                    }
                     const double previous_trim =
                         endpoint_feedback_trim_offsets_[i];
                     endpoint_feedback_trim_offsets_[i] = std::max(
@@ -1271,23 +1625,28 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
                             endpoint_feedback_trim_offsets_[i] -
                             previous_trim
                         ) > 1e-12;
+                    if (
+                        std::abs(
+                            endpoint_feedback_trim_offsets_[i] -
+                            previous_trim
+                        ) > 1e-12
+                    ) {
+                        endpoint_trim_response_joint_mask_[i] = 1;
+                        endpoint_trim_feedback_anchor_joint_angles_[i] =
+                            feedback_joint_angles[i];
+                        endpoint_trim_feedback_stable_since_[i] =
+                            ros::Time(0);
+                    }
                 }
                 endpoint_feedback_trim_active_ = true;
                 endpoint_feedback_trim_quiescent_ = false;
                 if (endpoint_trim_changed) {
                     ++endpoint_feedback_trim_iteration_;
                     endpoint_trim_waiting_for_feedback_response_ = true;
-                    if (!retry_stalled_endpoint_feedback_trim) {
-                        endpoint_trim_response_start_joint_angles_ =
-                            feedback_joint_angles;
-                        endpoint_trim_stalled_retry_count_ = 0;
-                    } else {
+                    if (retry_stalled_endpoint_feedback_trim) {
                         ++endpoint_trim_stalled_retry_count_;
                     }
                     endpoint_trim_response_wait_since_ = now;
-                    endpoint_trim_feedback_anchor_joint_angles_ =
-                        feedback_joint_angles;
-                    endpoint_trim_feedback_stable_since_ = ros::Time(0);
                 }
             }
             endpoint_trim_entered_quiescence =
@@ -1304,6 +1663,8 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
                 endpoint_feedback_trim_offsets_;
             endpoint_trim_waiting_for_feedback_response =
                 endpoint_trim_waiting_for_feedback_response_;
+            endpoint_trim_response_joint_mask =
+                endpoint_trim_response_joint_mask_;
             endpoint_trim_response_wait_since =
                 endpoint_trim_response_wait_since_;
             endpoint_trim_last_response_latency_sec =
@@ -1581,6 +1942,23 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
         all_full_scale = all_full_scale && raw_joints[i] >= 4095;
     }
     if (all_zero || all_full_scale) {
+        // A powered-down or booting controller can first emit an invalid
+        // encoder sentinel and then a syntactically valid but transient
+        // position. Do not retain the pre-power-cycle feedback baseline or a
+        // command target across that boundary: either can make the first
+        // stable encoder sample look like an impossible jump and leave the
+        // GUI latched to stale joints. This only clears software bootstrap
+        // state; it does not change motion_commands_enabled_ or transmit a
+        // stop, disable, or torque command.
+        clear_retained_command_state();
+        {
+            std::lock_guard<std::mutex> lock(actuation_mutex_);
+            actuation_confirmation_.mark_unconfirmed(
+                "ENCODER_FEEDBACK_NOT_READY",
+                ros::Time::now().toSec()
+            );
+        }
+        publish_actuation_status();
         ROS_WARN_THROTTLE(
             1.0,
             "Rejected invalid SDK joint feedback: all six encoders are %s; waiting for controller power/encoder readiness.",
@@ -1596,10 +1974,9 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
     {
     std::lock_guard<std::mutex> lock(data_mutex_);
     const ros::Time feedback_time = ros::Time::now();
-    last_feedback_time_ = feedback_time;
-    has_real_feedback_ = true;
 
     bool accept_joint_positions = true;
+    bool accepted_joint_feedback_discontinuity = false;
     double maximum_joint_delta_rad = 0.0;
     size_t maximum_joint_delta_index = 0;
     double allowed_joint_delta_rad = 0.0;
@@ -1613,9 +1990,20 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
             0.0,
             (feedback_time - last_joint_feedback_frame_time_).toSec()
         );
+        // A missing response must not make the next jump arbitrarily large.
+        // Use at most two nominal poll periods for direct physical
+        // plausibility. A larger recovery still has the separate repeated,
+        // command-consistent path below; without a streamed command it stays
+        // rejected instead of becoming valid merely because telemetry paused.
+        const double maximum_jump_interval_sec =
+            2.0 / std::max(1.0, state_poll_rate_hz_);
+        const double bounded_frame_interval_sec = std::min(
+            frame_interval_sec,
+            maximum_jump_interval_sec
+        );
         allowed_joint_delta_rad =
             feedback_jump_base_tolerance_rad_ +
-            feedback_max_velocity_rad_s_ * frame_interval_sec;
+            feedback_max_velocity_rad_s_ * bounded_frame_interval_sec;
         for (size_t i = 0; i < candidate_joint_positions.size(); ++i) {
             const double delta = std::abs(
                 candidate_joint_positions[i] - current_joint_positions_[i]
@@ -1626,7 +2014,9 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
             }
         }
         if (maximum_joint_delta_rad > allowed_joint_delta_rad) {
+            bool has_streamed_command_reference = false;
             bool command_inconsistent_jump = false;
+            bool command_consistent_recovery = false;
             double previous_command_error_rad = 0.0;
             double candidate_command_error_rad = 0.0;
             double command_consistency_margin_rad = 0.0;
@@ -1640,10 +2030,16 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
                 streamed_command_age_sec = (
                     feedback_time - last_streamed_joint_positions_time_
                 ).toSec();
-                if (
-                    streamed_command_age_sec >= 0.0 &&
-                    streamed_command_age_sec <= feedback_stale_timeout_sec_
-                ) {
+                if (streamed_command_age_sec >= 0.0) {
+                    has_streamed_command_reference = true;
+                    // A successfully streamed position remains the physical
+                    // hold reference after command streaming pauses.  Do not
+                    // let two repeated, multi-radian corrupt frames become
+                    // acceptable merely because the retained command is more
+                    // than one feedback timeout old.  Genuine manual or
+                    // unpowered motion still arrives as physically bounded
+                    // incremental feedback; reconnect clears this retained
+                    // reference before accepting a new powered state.
                     previous_command_error_rad = std::abs(
                         current_joint_positions_[maximum_joint_delta_index] -
                         last_streamed_joint_positions_[
@@ -1666,6 +2062,10 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
                         candidate_command_error_rad >
                         previous_command_error_rad +
                             command_consistency_margin_rad;
+                    command_consistent_recovery =
+                        candidate_command_error_rad +
+                            command_consistency_margin_rad <
+                        previous_command_error_rad;
                 }
             }
             bool matches_pending =
@@ -1692,7 +2092,8 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
             }
             accept_joint_positions =
                 pending_joint_feedback_count_ >=
-                feedback_jump_confirm_samples_;
+                    feedback_jump_confirm_samples_ &&
+                command_consistent_recovery;
             if (command_inconsistent_jump) {
                 accept_joint_positions = false;
                 ROS_WARN(
@@ -1713,6 +2114,27 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
                     ).c_str(),
                     format_bytes_as_hex(data_payload).c_str()
                 );
+            } else if (
+                pending_joint_feedback_count_ >=
+                    feedback_jump_confirm_samples_ &&
+                !command_consistent_recovery
+            ) {
+                ROS_WARN(
+                    "Rejected repeated SDK joint feedback discontinuity without command-consistent recovery: joint=%zu delta=%.6frad allowed=%.6frad command_reference=%s previous_command_error=%.6frad candidate_command_error=%.6frad margin=%.6frad command_age=%.3fs confirmation=%d/%d previous_deg=%s candidate_deg=%s payload=[%s]",
+                    maximum_joint_delta_index + 1,
+                    maximum_joint_delta_rad,
+                    allowed_joint_delta_rad,
+                    has_streamed_command_reference ? "available" : "unavailable",
+                    previous_command_error_rad,
+                    candidate_command_error_rad,
+                    command_consistency_margin_rad,
+                    streamed_command_age_sec,
+                    pending_joint_feedback_count_,
+                    feedback_jump_confirm_samples_,
+                    format_radians_as_degrees(current_joint_positions_).c_str(),
+                    format_radians_as_degrees(candidate_joint_positions).c_str(),
+                    format_bytes_as_hex(data_payload).c_str()
+                );
             } else if (!accept_joint_positions) {
                 ROS_WARN(
                     "Rejected implausible one-frame SDK joint feedback: joint=%zu delta=%.6frad allowed=%.6frad frame_dt=%.3fs confirmation=%d/%d previous_deg=%s candidate_deg=%s payload=[%s]",
@@ -1727,8 +2149,9 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
                     format_bytes_as_hex(data_payload).c_str()
                 );
             } else {
+                accepted_joint_feedback_discontinuity = true;
                 ROS_WARN(
-                    "Accepted confirmed SDK joint feedback discontinuity after %d nearby frames: joint=%zu delta=%.6frad allowed=%.6frad previous_deg=%s confirmed_deg=%s",
+                    "Accepted command-consistent SDK joint feedback recovery after %d nearby frames: joint=%zu delta=%.6frad allowed=%.6frad previous_deg=%s confirmed_deg=%s",
                     pending_joint_feedback_count_,
                     maximum_joint_delta_index + 1,
                     maximum_joint_delta_rad,
@@ -1742,11 +2165,23 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
     last_joint_feedback_frame_time_ = feedback_time;
     if (accept_joint_positions) {
         current_joint_positions_ = candidate_joint_positions;
+        last_feedback_time_ = feedback_time;
+        has_real_feedback_ = true;
         last_accepted_joint_feedback_time_ = feedback_time;
         pending_joint_feedback_.clear();
         pending_joint_feedback_count_ = 0;
         {
             std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
+            if (accepted_joint_feedback_discontinuity) {
+                // A discontinuity can move toward a held target because bad
+                // telemetry recovered, not because a servo responded. Drop
+                // the active probe before recording the recovered sample so
+                // it cannot manufacture positive actuation confirmation.
+                actuation_confirmation_.mark_unconfirmed(
+                    "DISCONTINUOUS_FEEDBACK_RECOVERY",
+                    feedback_time.toSec()
+                );
+            }
             actuation_confirmation_.note_feedback(
                 candidate_joint_positions,
                 feedback_time.toSec()
@@ -1764,10 +2199,13 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
     run_status_pub_.publish(status_msg);
 
     const bool temperature_fresh = has_temperature_feedback_ &&
-        (last_feedback_time_ - last_temperature_time_).toSec() <= 3.0;
-    const float max_temperature = latest_temperatures_c_.empty()
-        ? 0.0f
-        : *std::max_element(latest_temperatures_c_.begin(), latest_temperatures_c_.end());
+        (feedback_time - last_temperature_time_).toSec() <= 3.0;
+    float max_temperature = 0.0f;
+    for (float value : latest_temperatures_c_) {
+        if (std::isfinite(value)) {
+            max_temperature = std::max(max_temperature, value);
+        }
+    }
     const bool sustained_high_temperature_telemetry = temperature_fresh &&
         consecutive_high_temperature_samples_ >= temperature_over_limit_confirm_samples_;
 
@@ -1826,7 +2264,8 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
     bool should_seed_command_state = false;
     {
         std::lock_guard<std::mutex> latest_lock(latest_cmd_mutex_);
-        should_seed_command_state = !has_latest_command_;
+        should_seed_command_state =
+            accept_joint_positions && !has_latest_command_;
         if (should_seed_command_state) {
             // A ros_control arm trajectory intentionally omits right_finger.
             // Seed the partial-command merge source from measured hardware so
@@ -1845,14 +2284,16 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
         cmd_gripper_vel_rad_s_ = 0.0;
     }
 
-    if (log_command_flow_) {
+    if (accept_joint_positions && log_command_flow_) {
         ROS_INFO_THROTTLE(1.0, "Real SDK feedback: joints_deg=%s gripper_raw=%u status=0x%02X",
                           format_radians_as_degrees(current_joint_positions_).c_str(),
                           static_cast<unsigned>(gripper_raw),
                           data_payload[14]);
     }
 
-    publish_joint_state();
+    if (accept_joint_positions) {
+        publish_joint_state();
+    }
     }
 }
 
@@ -1898,10 +2339,38 @@ void AliciaDDriverNode::parse_sdk_temperature_frame(const std::vector<uint8_t>& 
     std_msgs::Float32MultiArray msg;
     msg.data.reserve(data_payload.size());
     float max_temperature = 0.0f;
+    size_t invalid_temperature_channels = 0;
     for (uint8_t raw : data_payload) {
-        const float value = static_cast<float>(raw);
+        float value = static_cast<float>(raw);
+        if (
+            value >
+            static_cast<float>(max_plausible_temperature_c_)
+        ) {
+            value = std::numeric_limits<float>::quiet_NaN();
+            ++invalid_temperature_channels;
+        }
         msg.data.push_back(value);
-        max_temperature = std::max(max_temperature, value);
+        if (std::isfinite(value)) {
+            max_temperature = std::max(max_temperature, value);
+        }
+    }
+
+    if (invalid_temperature_channels > 0) {
+        // The retained real-arm failure contained CRC-valid response bursts
+        // that simultaneously produced impossible 164--250 C temperature
+        // bytes, changing self-check masks, and 130/180 degree encoder jumps.
+        // Exclude only those impossible channel values.  Other channels in
+        // the same response remain independent protection evidence: the
+        // recorded 60--61 C channel must still be able to accumulate the
+        // unchanged consecutive same-channel over-temperature block.
+        ROS_ERROR_THROTTLE(
+            1.0,
+            "Rejected %zu implausible SDK temperature channel(s) above telemetry plausibility ceiling %.1f C; raw=[%s] accepted_values_c=%s",
+            invalid_temperature_channels,
+            max_plausible_temperature_c_,
+            format_bytes_as_hex(data_payload).c_str(),
+            format_temperatures(msg.data).c_str()
+        );
     }
 
     int high_temperature_sample_count = 0;

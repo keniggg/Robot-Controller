@@ -83,6 +83,10 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
         ]
         self.assertLessEqual(float(joint_limits['Joint3']), 0.02)
         self.assertGreater(float(joint_limits['Joint3']), 0.0)
+        self.assertLessEqual(float(joint_limits['Joint4']), 0.02)
+        self.assertGreater(float(joint_limits['Joint4']), 0.0)
+        self.assertLessEqual(float(joint_limits['Joint6']), 0.02)
+        self.assertGreater(float(joint_limits['Joint6']), 0.0)
         self.assertGreaterEqual(
             float(robot_cfg['strict_execution_min_duration_sec']),
             3.0,
@@ -131,6 +135,59 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
                 self.assertGreater(keepalive_hz, 0.0)
                 self.assertGreaterEqual(keepalive_hz, feedback_hz)
                 self.assertLessEqual(keepalive_hz, command_hz)
+
+    def test_driver_defers_diagnostic_queries_until_motion_is_measured(self):
+        source = DRIVER_SOURCE.read_text()
+        header = DRIVER_HEADER.read_text()
+
+        self.assertIn(
+            'diagnostic_query_suppressed_for_motion(now)',
+            source,
+        )
+        self.assertIn(
+            'const bool temperature_due = !diagnostic_queries_suppressed',
+            source,
+        )
+        self.assertIn(
+            'const bool self_check_due = !diagnostic_queries_suppressed',
+            source,
+        )
+        self.assertIn(
+            'std::abs(target - feedback) >',
+            source,
+        )
+        self.assertIn(
+            'std::abs(target_gripper_rad - feedback_gripper_rad) >',
+            source,
+        )
+        self.assertIn(
+            'last_motion_reference_change_time_ = command_time;',
+            source,
+        )
+        self.assertIn(
+            'bool suppress_diagnostic_queries_while_motion_active_ = true;',
+            header,
+        )
+
+        for launch_path in DRIVER_LAUNCHES:
+            with self.subTest(launch_path=launch_path.name):
+                tree = ET.parse(str(launch_path))
+                params = {
+                    node.attrib.get('name'): node.attrib.get('value')
+                    for node in tree.findall('.//param')
+                }
+                self.assertEqual(
+                    params['suppress_diagnostic_queries_while_motion_active'],
+                    'true',
+                )
+                self.assertGreater(
+                    float(params['diagnostic_query_motion_quiet_sec']),
+                    0.0,
+                )
+                self.assertGreater(
+                    float(params['diagnostic_query_motion_error_rad']),
+                    0.0,
+                )
 
     def test_driver_direct_start_default_keeps_final_target_alive(self):
         source = DRIVER_SOURCE.read_text()
@@ -260,7 +317,20 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
             trim_block,
         )
         self.assertIn(
-            'feedback_stable_age_sec >= endpoint_feedback_trim_stable_sec_',
+            'joint_stable_age_sec >=\n'
+            '                    endpoint_feedback_trim_stable_sec_',
+            trim_block,
+        )
+        self.assertIn(
+            'std::vector<ros::Time> endpoint_trim_feedback_stable_since_',
+            header,
+        )
+        self.assertIn(
+            'endpoint_feedback_stable_by_joint[i]',
+            trim_block,
+        )
+        self.assertIn(
+            'endpoint_trim_response_joint_mask_[i]',
             trim_block,
         )
         self.assertIn(
@@ -285,8 +355,8 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
             3,
         )
         self.assertIn(
-            'maximum_response_rad + 1e-12 >=\n'
-            '                    SDK_JOINT_QUANTIZATION_RAD',
+            'response_rad + 1e-12 >=\n'
+            '                        SDK_JOINT_QUANTIZATION_RAD',
             trim_block,
         )
         self.assertIn(
@@ -398,6 +468,17 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
         self.assertNotIn('Joint2', trim_block)
         self.assertNotIn('joint_idx ==', trim_block)
 
+        update_loop = trim_block.split(
+            'for (size_t i = 0; i < joint_angles.size(); ++i) {',
+        )[-1]
+        self.assertIn('joint_stable_for_update', update_loop)
+        self.assertIn('joint_retry_is_due', update_loop)
+        self.assertIn(
+            'std::abs(feedback_error) <=\n'
+            '                            ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD',
+            update_loop,
+        )
+
     def test_driver_endpoint_trim_has_task_scoped_expiring_lease(self):
         source = DRIVER_SOURCE.read_text()
         header = DRIVER_HEADER.read_text()
@@ -442,6 +523,23 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
         self.assertIn(
             'endpoint_feedback_trim_task_lease_active_ = false;',
             source,
+        )
+        release_block = source.split(
+            'if (!request.data) {',
+            1,
+        )[1].split(
+            'void AliciaDDriverNode::clear_retained_command_state()',
+            1,
+        )[0]
+        self.assertIn('release_feedback_is_fresh', release_block)
+        self.assertIn(
+            'release_feedback[i] -\n'
+            '                                endpoint_trim_reference_joint_angles_[i]',
+            release_block,
+        )
+        self.assertIn(
+            'fresh measured joint pose latched until target changes',
+            release_block,
         )
         reference_change_block = source.split(
             'if (reference_changed) {',

@@ -1,10 +1,19 @@
 grasp:
   use_grasp6d_plan: true
-  # A real correction-pregrasp motion contacted the target on 2026-07-25.
-  # Keep joints enabled, but reject every new grasp start until the live
-  # eye-on-hand transform has passed a static-target invariance check.
+  # Real contact videos show a one-finger-first miss. The operator-authorized
+  # pruned-28 hand-eye result has 5.609 mm held-out maximum translation error.
+  # This is narrowly below the 5.7 mm one-sided margin of the observed 38.6 mm
+  # carton in a 50 mm opening, but it still fails the formal 5 mm translation
+  # maximum. Keep the persistent interlock active; any use is a runtime-only,
+  # explicitly authorized provisional override.
   calibration_interlock_active: true
-  calibration_interlock_reason: "HAND_EYE_UNVERIFIED_AFTER_CORRECTION_COLLISION"
+  calibration_interlock_reason: "HAND_EYE_TRANSLATION_CROSS_VALIDATION_FAILED"
+  calibration_centering_margin_gate_enabled: true
+  handeye_translation_max_error_m: 0.00560877893301
+  # This is separate from calibration_interlock_active so a generic temporary
+  # interlock release cannot silently erase the newly measured jaw-margin
+  # contradiction. It may only be changed by a new explicit risk decision.
+  calibration_centering_margin_override: false
   # Automatic grasp needs a live driver heartbeat whose state was established
   # by directionally consistent encoder response after the latest positive
   # enable/reconnect. Manual GUI synchronization and the small proof move remain
@@ -181,6 +190,11 @@ gripper:
   # 当前电子皮肤尚未标定：6D 抓取只使用夹爪位置闭合，不读取力反馈，
   # 不调用柔顺闭合服务，也不把触觉状态作为抓取成功条件。
   use_compliant_close: false
+  # 冻结 6D 计划已经携带候选所需的真实开口。闭合时从该开口减去
+  # 2 mm 形成位置预载，而不是继续顶到 0 mm 机械端；普通非 6D 命令仍使用
+  # simple_close_position_m。该边界避免物体已经夹住后持续最大误差堵转。
+  use_plan_bound_close_position: true
+  plan_bound_close_preload_m: 0.002
   simple_close_position_m: 0.0
   simple_close_wait_sec: 0.8
   open_wait_sec: 1.0
@@ -506,6 +520,26 @@ grasp_6d:
     # non-contact observation endpoint unless the fully open Link6/7/8 CAD
     # boxes clear both the live support plane and live target OBB.
     observation_envelope_gate_enabled: true
+    # Far-field observation is independent of object planar yaw. Keep the
+    # camera optical axis target-centred and try this bounded wrist-roll
+    # lattice; every surviving endpoint still requires the CAD envelope and
+    # exact strict MoveIt plan. Contact orientation is resolved separately in
+    # near field from the full arbitrary-yaw grasp candidate set.
+    observation_camera_roll_offsets_deg:
+      - 0.0
+      - 15.0
+      - -15.0
+      - 30.0
+      - -30.0
+      - 45.0
+      - -45.0
+      - 60.0
+      - -60.0
+      - 75.0
+      - -75.0
+      - 90.0
+      - -90.0
+      - 180.0
 robot:
   # Real Alicia-D serial feedback can settle about 0.026 rad from the endpoint
   # after large 6D pregrasp moves; observed controller quantization reached
@@ -529,6 +563,18 @@ robot:
   # This applies to every target and stage; it is not an object pose constant.
   strict_execution_joint_velocity_limits_rad_s:
     Joint3: 0.02
+    # Two independent far-field observation paths commanded Joint4 at
+    # 0.042--0.048 rad/s and reached the unchanged 0.120 rad controller path
+    # boundary after 2--3 s feedback plateaus. A successful observation path
+    # commanded and measured Joint4 at 0.021--0.023 rad/s. Keep the same
+    # evidence-backed 0.02 rad/s bound as Joint3; do not widen path tolerance.
+    Joint4: 0.02
+    # The latest far-field path commanded Joint6 near 0.039--0.044 rad/s;
+    # measured feedback then plateaued near 5.4 deg while the reference
+    # advanced to 12.3 deg, producing the controller's observed 0.120741 rad
+    # path-tolerance violation. Apply the same measured-following bound to
+    # every strict path instead of widening the unchanged path tolerance.
+    Joint6: 0.02
   # Historical real-arm strict paths of 2.777 s and longer completed, while
   # the 2026-07-26 same-pose endpoint correction retimed to 1.200 s and ended
   # with Joint2 error 0.053877 rad. Stretch only shorter trajectories to this

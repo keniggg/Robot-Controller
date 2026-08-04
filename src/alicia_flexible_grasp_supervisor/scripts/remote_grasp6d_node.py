@@ -183,6 +183,26 @@ STRICT_ORIENTATION_VARIANTS_RPY_DEG = (
     (0.0, 0.0, 0.0),
     (0.0, 0.0, 180.0),
 )
+# Observation is a camera-view problem, not a contact-yaw problem.  Sample a
+# bounded roll lattice about the camera optical axis so the open gripper can
+# clear the support plane without coupling far-field reachability to the
+# object's planar pose.  The order is the deterministic preference order.
+DEFAULT_OBSERVATION_CAMERA_ROLL_OFFSETS_DEG = (
+    0.0,
+    15.0,
+    -15.0,
+    30.0,
+    -30.0,
+    45.0,
+    -45.0,
+    60.0,
+    -60.0,
+    75.0,
+    -75.0,
+    90.0,
+    -90.0,
+    180.0,
+)
 PIPELINE_COUNTER_FIELDS = (
     'submitted',
     'started',
@@ -2390,7 +2410,7 @@ def project_base_target_at_tool_pose(tool_pose, target_base_xyz, tool_from_camer
 
 
 def centered_observation_pose_at_camera_distance(
-    grasp_pose,
+    reference_tool_pose,
     target_base_xyz,
     tool_from_camera,
     nominal_camera_target_distance_m,
@@ -2399,12 +2419,13 @@ def centered_observation_pose_at_camera_distance(
 ):
     """Solve a target-centred view at one camera-to-target distance.
 
-    Contact and observation are different planning phases.  Hold the live
-    candidate wrist orientation fixed, place the camera optical centre on the
-    optical-axis line through the live target, and use the configured nominal
-    camera working distance.  The resulting tool0 standoff from the contact
-    pose is deliberately derived rather than constrained: an eye-in-hand
-    camera working distance must not be confused with a TCP-to-TCP offset.
+    Contact and observation are different planning phases.  Hold the supplied
+    observation-reference wrist orientation fixed, place the camera optical
+    centre on the optical-axis line through the live target, and use the
+    configured nominal camera working distance.  The resulting tool0 move
+    from the reference pose is deliberately derived rather than constrained:
+    an eye-in-hand camera working distance must not be confused with a
+    TCP-to-TCP offset.
     """
 
     try:
@@ -2437,10 +2458,13 @@ def centered_observation_pose_at_camera_distance(
             'OBSERVATION_VIEW_GEOMETRY_INVALID',
             'tool-to-camera transform is not finite',
         )
-    grasp_transform = pose_matrix(grasp_pose)
-    grasp_position = np.asarray(grasp_transform[:3, 3], dtype=float)
+    reference_transform = pose_matrix(reference_tool_pose)
+    reference_position = np.asarray(
+        reference_transform[:3, 3],
+        dtype=float,
+    )
     base_from_tool_rotation = np.asarray(
-        grasp_transform[:3, :3],
+        reference_transform[:3, :3],
         dtype=float,
     )
     base_from_camera_rotation = base_from_tool_rotation.dot(
@@ -2463,13 +2487,13 @@ def centered_observation_pose_at_camera_distance(
         target - optical_axis * nominal_distance
     )
     tool_position = camera_position - camera_offset_base
-    observation_pose = deepcopy(grasp_pose)
+    observation_pose = deepcopy(reference_tool_pose)
     observation_pose.pose.position.x = float(tool_position[0])
     observation_pose.pose.position.y = float(tool_position[1])
     observation_pose.pose.position.z = float(tool_position[2])
 
     derived_tool_standoff = float(
-        np.linalg.norm(tool_position - grasp_position)
+        np.linalg.norm(tool_position - reference_position)
     )
     target_camera = base_from_camera_rotation.T.dot(
         target - (tool_position + camera_offset_base)
@@ -3297,6 +3321,14 @@ class RemoteGrasp6DNode:
             remote_cfg.get(
                 'observation_envelope_gate_enabled',
                 True,
+            )
+        )
+        self.observation_camera_roll_offsets_deg = (
+            self._parse_observation_camera_roll_offsets_deg(
+                remote_cfg.get(
+                    'observation_camera_roll_offsets_deg',
+                    DEFAULT_OBSERVATION_CAMERA_ROLL_OFFSETS_DEG,
+                )
             )
         )
         self.gripper_tool_jaw_axis = str(
@@ -6046,12 +6078,100 @@ class RemoteGrasp6DNode:
             'lateral_sweep_reference': 'final_approach',
         }
 
+    @staticmethod
+    def _parse_observation_camera_roll_offsets_deg(value):
+        try:
+            raw = list(value)
+        except TypeError as exc:
+            raise CandidateContractError(
+                'OBSERVATION_VIEW_GEOMETRY_INVALID',
+                'observation camera roll offsets must be a finite list',
+            ) from exc
+        if not raw or len(raw) > 25:
+            raise CandidateContractError(
+                'OBSERVATION_VIEW_GEOMETRY_INVALID',
+                'observation camera roll lattice requires 1..25 offsets',
+            )
+        parsed = []
+        for item in raw:
+            if isinstance(item, (bool, np.bool_)):
+                raise CandidateContractError(
+                    'OBSERVATION_VIEW_GEOMETRY_INVALID',
+                    'observation camera roll offsets cannot be booleans',
+                )
+            try:
+                offset = float(item)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise CandidateContractError(
+                    'OBSERVATION_VIEW_GEOMETRY_INVALID',
+                    'observation camera roll offsets must be finite numbers',
+                ) from exc
+            if not math.isfinite(offset) or abs(offset) > 180.0:
+                raise CandidateContractError(
+                    'OBSERVATION_VIEW_GEOMETRY_INVALID',
+                    'observation camera roll offsets must be inside [-180, 180]',
+                )
+            if any(abs(offset - existing) <= 1e-9 for existing in parsed):
+                continue
+            parsed.append(offset)
+        if not parsed:
+            raise CandidateContractError(
+                'OBSERVATION_VIEW_GEOMETRY_INVALID',
+                'observation camera roll lattice has no unique offset',
+            )
+        return tuple(parsed)
+
+    def _observation_reference_roll_variants(self, reference_tool_pose):
+        """Roll the camera about its optical axis without using object yaw."""
+
+        reference = pose_matrix(reference_tool_pose)
+        tool_from_camera = _readonly_rigid_transform(
+            self._tool_from_camera_matrix(),
+            'runtime T_tool0_camera_link',
+        )
+        base_from_camera_rotation = reference[:3, :3].dot(
+            tool_from_camera[:3, :3]
+        )
+        offsets = self._parse_observation_camera_roll_offsets_deg(
+            getattr(
+                self,
+                'observation_camera_roll_offsets_deg',
+                DEFAULT_OBSERVATION_CAMERA_ROLL_OFFSETS_DEG,
+            )
+        )
+        variants = []
+        for preference_index, offset_deg in enumerate(offsets):
+            camera_roll = quaternion_matrix(
+                quaternion_from_euler(math.radians(offset_deg), 0.0, 0.0)
+            )[:3, :3]
+            rolled_camera_rotation = base_from_camera_rotation.dot(
+                camera_roll
+            )
+            rolled_tool_rotation = rolled_camera_rotation.dot(
+                tool_from_camera[:3, :3].T
+            )
+            rolled_transform = np.eye(4, dtype=float)
+            rolled_transform[:3, :3] = rolled_tool_rotation
+            rolled_reference = make_pose_stamped(
+                str(reference_tool_pose.header.frame_id or 'base_link'),
+                reference[:3, 3],
+                quaternion_from_matrix(rolled_transform),
+                stamp=reference_tool_pose.header.stamp,
+            )
+            variants.append({
+                'preference_index': int(preference_index),
+                'camera_roll_offset_deg': float(offset_deg),
+                'reference_pose': rolled_reference,
+            })
+        return tuple(variants)
+
     def _make_observation_sequence(
         self,
         grasp_pose,
         geometry,
         insertion_axis_base,
         snapshot=None,
+        observation_reference_pose=None,
     ):
         nominal_camera_distance = float(
             self.grasp_config.get(
@@ -6087,7 +6207,11 @@ class RemoteGrasp6DNode:
         )
         observation_pose, view_audit = (
             centered_observation_pose_at_camera_distance(
-                grasp_pose,
+                (
+                    grasp_pose
+                    if observation_reference_pose is None
+                    else observation_reference_pose
+                ),
                 geometry.center_base,
                 self._tool_from_camera_matrix(),
                 nominal_camera_distance,
@@ -6097,8 +6221,147 @@ class RemoteGrasp6DNode:
         )
         sequence.pregrasp = observation_pose
         setattr(sequence, 'adaptive_stage_profile', profile)
+        view_audit = dict(view_audit)
+        view_audit['orientation_source'] = (
+            'contact_candidate'
+            if observation_reference_pose is None
+            else 'frozen_snapshot_current_tool0'
+        )
         setattr(sequence, 'observation_view_audit', view_audit)
         return sequence
+
+    def _frozen_observation_reference_pose(self, prepared):
+        """Return the current tool pose from the request's frozen camera TF.
+
+        Far-field observation exists only to acquire a target-centred
+        close-range view.  It must not inherit a contact candidate's planar
+        yaw: doing so makes observation reachability depend on how the object
+        happens to be placed before the near-field contact plan even exists.
+        """
+
+        base_from_camera = _readonly_rigid_transform(
+            prepared.pose_estimator.T_base_camera_link,
+            'frozen T_base_camera_link',
+        )
+        tool_from_camera = _readonly_rigid_transform(
+            self._tool_from_camera_matrix(),
+            'runtime T_tool0_camera_link',
+        )
+        base_from_tool = _readonly_rigid_transform(
+            base_from_camera.dot(np.linalg.inv(tool_from_camera)),
+            'frozen current T_base_tool0',
+        )
+        return make_pose_stamped(
+            'base_link',
+            base_from_tool[:3, 3],
+            quaternion_from_matrix(base_from_tool),
+            stamp=prepared.stamp,
+        )
+
+    def _far_field_observation_variants(
+        self,
+        grasp_pose,
+        geometry,
+        insertion_axis_base,
+        snapshot,
+        observation_reference_pose,
+        prepared,
+    ):
+        """Return every object-yaw-independent, endpoint-safe camera view."""
+
+        passing = []
+        rejected = []
+        for reference_variant in self._observation_reference_roll_variants(
+            observation_reference_pose
+        ):
+            sequence = self._make_observation_sequence(
+                grasp_pose,
+                geometry,
+                insertion_axis_base,
+                snapshot=snapshot,
+                observation_reference_pose=(
+                    reference_variant['reference_pose']
+                ),
+            )
+            view_audit = dict(
+                getattr(sequence, 'observation_view_audit', {}) or {}
+            )
+            view_audit.update({
+                'orientation_source': (
+                    'frozen_snapshot_current_camera_roll_lattice'
+                ),
+                'camera_roll_offset_deg': float(
+                    reference_variant['camera_roll_offset_deg']
+                ),
+                'camera_roll_preference_index': int(
+                    reference_variant['preference_index']
+                ),
+                'object_yaw_used': False,
+            })
+            setattr(sequence, 'observation_view_audit', view_audit)
+            side_evidence = self._observation_side_evidence(
+                geometry,
+                sequence.pregrasp,
+                getattr(sequence, 'adaptive_stage_profile', None),
+            )
+            envelope = None
+            if bool(
+                getattr(self, 'observation_envelope_gate_enabled', False)
+            ):
+                envelope = self._observation_envelope_gate(
+                    geometry,
+                    sequence.pregrasp,
+                )
+                if (
+                    not isinstance(envelope, ObservationEnvelopeResult)
+                    or not envelope.ok
+                ):
+                    rejected.append({
+                        'camera_roll_offset_deg': float(
+                            reference_variant['camera_roll_offset_deg']
+                        ),
+                        'failure_code': str(
+                            getattr(
+                                envelope,
+                                'failure_code',
+                                'OBSERVATION_ENVELOPE_INVALID',
+                            )
+                        ),
+                        'failure_reason': str(
+                            getattr(
+                                envelope,
+                                'failure_reason',
+                                'invalid observation envelope',
+                            )
+                        ),
+                        'minimum_support_clearance_m': float(
+                            getattr(
+                                envelope,
+                                'minimum_support_clearance_m',
+                                -1.0e6,
+                            )
+                        ),
+                    })
+                    continue
+            passing.append({
+                'sequence': sequence,
+                'observation_envelope': envelope,
+                'observation_side_evidence': dict(side_evidence),
+                'observation_view': dict(view_audit),
+                'observation_translation_delta_m': (
+                    self._frozen_observation_translation_delta_m(
+                        prepared,
+                        sequence.pregrasp,
+                    )
+                ),
+                'camera_roll_offset_deg': float(
+                    reference_variant['camera_roll_offset_deg']
+                ),
+                'preference_index': int(
+                    reference_variant['preference_index']
+                ),
+            })
+        return tuple(passing), tuple(rejected)
 
     def _observation_side_evidence(
         self,
@@ -10116,6 +10379,14 @@ class RemoteGrasp6DNode:
         ).reshape(3)
         context_revision = str(prepared.pose_estimator.transform_sha256)
         weights = getattr(self, 'soft_score_weights', SoftScoreWeights())
+        near_field_planning = bool(
+            getattr(prepared, 'near_field', True)
+        )
+        observation_reference_pose = (
+            None
+            if near_field_planning
+            else self._frozen_observation_reference_pose(prepared)
+        )
         runtime = {}
         scored = []
         for stable in tuple(stable_candidates):
@@ -10373,84 +10644,89 @@ class RemoteGrasp6DNode:
                             ),
                         })
                     current_stable = replace(stable, **stable_updates)
-                    observation_sequence = self._make_observation_sequence(
-                        grasp_pose,
-                        prepared.geometry,
-                        current_stable.approach_base_xyz,
-                        snapshot=prepared.snapshot,
-                    )
-                    near_field = bool(
-                        getattr(prepared, 'near_field', True)
-                    )
+                    near_field = near_field_planning
                     observation_envelope = None
                     observation_side_evidence = {}
-                    if not near_field:
-                        observation_side_evidence = (
-                            self._observation_side_evidence(
+                    observation_variants = ()
+                    if near_field:
+                        observation_sequence = (
+                            self._make_observation_sequence(
+                                grasp_pose,
                                 prepared.geometry,
-                                observation_sequence.pregrasp,
-                                getattr(
-                                    observation_sequence,
-                                    'adaptive_stage_profile',
-                                    None,
-                                ),
+                                current_stable.approach_base_xyz,
+                                snapshot=prepared.snapshot,
+                                observation_reference_pose=None,
                             )
                         )
-                        if bool(
-                            getattr(
-                                self,
-                                'observation_envelope_gate_enabled',
-                                False,
+                    else:
+                        (
+                            observation_variants,
+                            rejected_observation_variants,
+                        ) = self._far_field_observation_variants(
+                            grasp_pose,
+                            prepared.geometry,
+                            current_stable.approach_base_xyz,
+                            prepared.snapshot,
+                            observation_reference_pose,
+                            prepared,
+                        )
+                        if not observation_variants:
+                            best_rejection = max(
+                                tuple(rejected_observation_variants or ()),
+                                key=lambda item: float(
+                                    item.get(
+                                        'minimum_support_clearance_m',
+                                        -1.0e6,
+                                    )
+                                ),
+                                default={},
                             )
-                        ):
-                            observation_envelope = (
-                                self._observation_envelope_gate(
-                                    prepared.geometry,
-                                    observation_sequence.pregrasp,
-                                )
+                            rospy.logwarn(
+                                (
+                                    'remote 6D observation roll lattice '
+                                    'rejected: track=%s variant=%d tested=%d '
+                                    'best_roll=%.1fdeg code=%s '
+                                    'clearance=%.3fmm reason=%s'
+                                ),
+                                getattr(stable, 'track_id', 'unknown'),
+                                int(variant_index),
+                                len(rejected_observation_variants),
+                                float(
+                                    best_rejection.get(
+                                        'camera_roll_offset_deg',
+                                        0.0,
+                                    )
+                                ),
+                                str(
+                                    best_rejection.get(
+                                        'failure_code',
+                                        'OBSERVATION_ENVELOPE_INVALID',
+                                    )
+                                ),
+                                1000.0 * float(
+                                    best_rejection.get(
+                                        'minimum_support_clearance_m',
+                                        -1.0e6,
+                                    )
+                                ),
+                                str(
+                                    best_rejection.get(
+                                        'failure_reason',
+                                        'no endpoint-safe observation roll',
+                                    )
+                                ),
                             )
-                            if (
-                                not isinstance(
-                                    observation_envelope,
-                                    ObservationEnvelopeResult,
-                                )
-                                or not observation_envelope.ok
-                            ):
-                                rospy.logwarn(
-                                    (
-                                        'remote 6D observation envelope '
-                                        'rejected: track=%s variant=%d '
-                                        'code=%s clearance=%.3fmm reason=%s'
-                                    ),
-                                    getattr(
-                                        stable,
-                                        'track_id',
-                                        'unknown',
-                                    ),
-                                    int(variant_index),
-                                    str(
-                                        getattr(
-                                            observation_envelope,
-                                            'failure_code',
-                                            'OBSERVATION_ENVELOPE_INVALID',
-                                        )
-                                    ),
-                                    1000.0 * float(
-                                        getattr(
-                                            observation_envelope,
-                                            'minimum_support_clearance_m',
-                                            -1.0e6,
-                                        )
-                                    ),
-                                    str(
-                                        getattr(
-                                            observation_envelope,
-                                            'failure_reason',
-                                            'invalid observation envelope',
-                                        )
-                                    ),
-                                )
-                                continue
+                            continue
+                        active_observation = observation_variants[0]
+                        observation_sequence = active_observation['sequence']
+                        observation_envelope = active_observation[
+                            'observation_envelope'
+                        ]
+                        observation_side_evidence = dict(
+                            active_observation[
+                                'observation_side_evidence'
+                            ]
+                        )
                     visibility_sequence = (
                         sequence if near_field else observation_sequence
                     )
@@ -10602,6 +10878,9 @@ class RemoteGrasp6DNode:
                         'grasp_pose': grasp_pose,
                         'sequence': sequence,
                         'observation_sequence': observation_sequence,
+                        'observation_variants': tuple(
+                            observation_variants
+                        ),
                         'adaptive_stage_profile': stage_profile,
                         'camera_candidate': camera_candidate,
                         'geometry_gate': gate,
@@ -11348,6 +11627,50 @@ class RemoteGrasp6DNode:
         )
         return outcome
 
+    @staticmethod
+    def _activate_far_field_observation_variant(
+        runtime,
+        variant,
+        attempted_count,
+    ):
+        """Bind the exact safe/reachable observation branch to authority."""
+
+        sequence = variant['sequence']
+        envelope = variant.get('observation_envelope')
+        runtime['observation_sequence'] = sequence
+        runtime['observation_envelope'] = (
+            {}
+            if envelope is None
+            else asdict(envelope)
+        )
+        runtime['observation_view'] = dict(
+            variant.get('observation_view', {}) or {}
+        )
+        evidence = runtime.setdefault('soft_evidence', {})
+        evidence.update(
+            dict(variant.get('observation_side_evidence', {}) or {})
+        )
+        evidence['observation_translation_delta_m'] = variant.get(
+            'observation_translation_delta_m'
+        )
+        runtime['observation_orientation_search'] = {
+            'available': True,
+            'policy': 'object_yaw_independent_camera_optical_axis_roll_lattice',
+            'object_yaw_used': False,
+            'configured_variant_count': len(
+                tuple(runtime.get('observation_variants', ()) or ())
+            ),
+            'attempted_variant_count': int(attempted_count),
+            'selected_preference_index': int(
+                variant.get('preference_index', 0)
+            ),
+            'selected_camera_roll_offset_deg': float(
+                variant.get('camera_roll_offset_deg', 0.0)
+            ),
+            'endpoint_envelope_rechecked': True,
+            'strict_moveit_rechecked': True,
+        }
+
     def _check_moveit_stable_candidate(self, candidate):
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
             (candidate.track_id, candidate.variant_index)
@@ -11408,14 +11731,113 @@ class RemoteGrasp6DNode:
             getattr(self, 'latest_joint_state', None)
         )
         if not near_field:
-            moveit_pose = stage_poses[0][1]
-            evaluation = self._strict_moveit_evaluation(moveit_pose)
-            with self._stream_condition:
-                self._require_stream_ticket_current_locked(prepared.ticket)
-                return self._commit_strict_moveit_evaluation(
-                    moveit_pose,
-                    evaluation,
+            observation_variants = tuple(
+                runtime.get('observation_variants', ()) or ()
+            )
+            if not observation_variants:
+                observation_variants = ({
+                    'sequence': observation_sequence,
+                    'observation_envelope': None,
+                    'observation_side_evidence': {},
+                    'observation_view': dict(
+                        getattr(
+                            observation_sequence,
+                            'observation_view_audit',
+                            {},
+                        )
+                        or {}
+                    ),
+                    'observation_translation_delta_m': runtime.get(
+                        'soft_evidence', {}
+                    ).get(
+                        'observation_translation_delta_m'
+                    ),
+                    'camera_roll_offset_deg': 0.0,
+                    'preference_index': 0,
+                },)
+            failures = []
+            for attempted_count, observation_variant in enumerate(
+                observation_variants,
+                start=1,
+            ):
+                moveit_pose = observation_variant['sequence'].pregrasp
+                evaluation = self._strict_moveit_evaluation(moveit_pose)
+                with self._stream_condition:
+                    self._require_stream_ticket_current_locked(
+                        prepared.ticket
+                    )
+                    result = self._commit_strict_moveit_evaluation(
+                        moveit_pose,
+                        evaluation,
+                    )
+                    if result.reachable:
+                        self._activate_far_field_observation_variant(
+                            runtime,
+                            observation_variant,
+                            attempted_count,
+                        )
+                        rospy.loginfo(
+                            (
+                                'remote 6D observation roll selected: '
+                                'roll=%.1fdeg attempt=%d/%d '
+                                'object_yaw_used=false'
+                            ),
+                            float(
+                                observation_variant.get(
+                                    'camera_roll_offset_deg',
+                                    0.0,
+                                )
+                            ),
+                            attempted_count,
+                            len(observation_variants),
+                        )
+                        return result
+                failures.append(result)
+                if str(result.failure_code or '') == 'MOVEIT_TIMEOUT':
+                    return result
+            runtime['observation_orientation_search'] = {
+                'available': False,
+                'policy': (
+                    'object_yaw_independent_camera_optical_axis_roll_lattice'
+                ),
+                'object_yaw_used': False,
+                'configured_variant_count': len(observation_variants),
+                'attempted_variant_count': len(failures),
+                'endpoint_envelope_rechecked': True,
+                'strict_moveit_rechecked': True,
+                'reason': 'no endpoint-safe roll branch passed strict MoveIt',
+            }
+            if not failures:
+                return MoveItResult(
+                    reachable=False,
+                    joint_path_cost=0.0,
+                    joint_max_delta_rad=0.0,
+                    reason='observation roll lattice has no MoveIt result',
+                    failure_code='MOVEIT_CHECK_ERROR',
                 )
+            failure = failures[-1]
+            if len(failures) == 1:
+                return failure
+            if all(
+                str(item.failure_code or '') == 'MOVEIT_UNREACHABLE'
+                for item in failures
+            ):
+                return MoveItResult(
+                    reachable=False,
+                    joint_path_cost=max(
+                        float(item.joint_path_cost) for item in failures
+                    ),
+                    joint_max_delta_rad=max(
+                        float(item.joint_max_delta_rad) for item in failures
+                    ),
+                    reason=(
+                        '%d endpoint-safe, object-yaw-independent '
+                        'observation rolls were strictly unreachable; %s'
+                    )
+                    % (len(failures), failure.reason),
+                    failure_code='MOVEIT_UNREACHABLE',
+                )
+            return failure
         deadline_sec = (
             self._direct_near_field_deadline_sec(prepared)
             if self._direct_near_field_active(prepared)
@@ -12345,6 +12767,15 @@ class RemoteGrasp6DNode:
                 ),
                 'observation_view': deepcopy(
                     candidate_runtime.get('observation_view', {})
+                ),
+                'observation_orientation_search': deepcopy(
+                    candidate_runtime.get(
+                        'observation_orientation_search',
+                        {
+                            'available': False,
+                            'reason': 'strict observation search not run',
+                        },
+                    )
                 ),
                 'observation_side_evidence': {
                     key: deepcopy(value)

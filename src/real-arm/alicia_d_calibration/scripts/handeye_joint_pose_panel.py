@@ -8,30 +8,58 @@ calibration poses.
 
 import json
 import math
-import sys
 import threading
 import time
 import tkinter as tk
 from tkinter import ttk
 
 from easy_handeye_msgs.srv import TakeSample
-import moveit_commander
 import rospy
+from sensor_msgs.msg import JointState
 from std_msgs.msg import String
+
+
+ARM_JOINT_NAMES = ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"]
+DEFAULT_JOINT_MIN_RAD = [-3.14, -2.5, -2.5, -3.14, -2.5, -3.14]
+DEFAULT_JOINT_MAX_RAD = [3.14, 2.5, 2.5, 3.14, 2.5, 3.14]
+
+
+def extract_joint_snapshot(names, positions):
+    """Return six arm joints and the optional gripper from a JointState."""
+    values = list(positions)
+    name_to_position = dict(zip(names, values))
+    arm = []
+    for index, name in enumerate(ARM_JOINT_NAMES):
+        if names:
+            value = name_to_position.get(name)
+        else:
+            value = values[index] if index < len(values) else None
+        if value is None or not math.isfinite(float(value)):
+            return None, None
+        arm.append(float(value))
+    gripper = name_to_position.get(
+        "right_finger", values[6] if len(values) > 6 else None
+    )
+    if gripper is not None:
+        gripper = float(gripper)
+        if not math.isfinite(gripper):
+            gripper = None
+    return arm, gripper
+
+
+def make_jog_target(current, joint_index, step_rad, lower, upper):
+    """Create one bounded single-joint target from measured feedback."""
+    if len(current) != 6 or not 0 <= joint_index < 6:
+        raise ValueError("six current arm joints and a valid joint index are required")
+    target = list(current)
+    requested = target[joint_index] + float(step_rad)
+    target[joint_index] = max(float(lower[joint_index]), min(float(upper[joint_index]), requested))
+    return target, target[joint_index] != requested
 
 
 class HandeyeJointPosePanel:
     def __init__(self):
-        moveit_commander.roscpp_initialize(sys.argv)
         rospy.init_node("handeye_joint_pose_panel", anonymous=True)
-
-        group_name = rospy.get_param("~group", "alicia")
-        self.group = moveit_commander.MoveGroupCommander(group_name)
-        self.group.set_max_velocity_scaling_factor(float(rospy.get_param("~velocity_scale", 0.08)))
-        self.group.set_max_acceleration_scaling_factor(float(rospy.get_param("~accel_scale", 0.06)))
-        self.group.set_planning_time(float(rospy.get_param("~planning_time", 3.0)))
-        self.group.set_num_planning_attempts(int(rospy.get_param("~planning_attempts", 3)))
-        self.group.allow_replanning(False)
 
         self.calibration_namespace = rospy.get_param(
             "~calibration_namespace",
@@ -44,6 +72,23 @@ class HandeyeJointPosePanel:
         self.max_reprojection_rms_px = float(rospy.get_param("~max_reprojection_rms_px", 1.5))
         self.stable_window_sec = float(rospy.get_param("~stable_window_sec", 2.0))
         self.stable_required_hits = int(rospy.get_param("~stable_required_hits", 4))
+        self.joint_state_topic = rospy.get_param("~joint_state_topic", "/joint_states")
+        self.joint_command_topic = rospy.get_param("~joint_command_topic", "/joint_commands")
+        self.feedback_max_age_sec = float(rospy.get_param("~feedback_max_age_sec", 0.5))
+        self.motion_response_timeout_sec = float(
+            rospy.get_param("~motion_response_timeout_sec", 2.0)
+        )
+        self.measured_response_min_delta_rad = float(
+            rospy.get_param("~measured_response_min_delta_rad", 0.003)
+        )
+        self.joint_min_rad = list(
+            rospy.get_param("/robot/joint_min_rad", DEFAULT_JOINT_MIN_RAD)
+        )
+        self.joint_max_rad = list(
+            rospy.get_param("/robot/joint_max_rad", DEFAULT_JOINT_MAX_RAD)
+        )
+        if len(self.joint_min_rad) != 6 or len(self.joint_max_rad) != 6:
+            raise ValueError("/robot joint limits must each contain six values")
 
         self.busy = False
         self.stability_busy = False
@@ -51,24 +96,43 @@ class HandeyeJointPosePanel:
         self.can_save = False
         self.latest_quality = None
         self.quality_lock = threading.Lock()
+        self.joint_lock = threading.Lock()
+        self.latest_arm_joints = None
+        self.latest_gripper = None
+        self.latest_joint_monotonic = 0.0
+        self.command_target = None
+        self.command_gripper = None
         self.take_sample_service = self.calibration_namespace + "/take_sample"
         self.get_sample_service = self.calibration_namespace + "/get_sample_list"
         self.root = tk.Tk()
         self.root.title("Hand-eye Pose Jog")
-        self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
 
-        self.step_deg = tk.DoubleVar(value=1.0)
-        self.status = tk.StringVar(value="Ready")
+        # 2 deg is above the driver's 0.02 rad post-enable response probe.
+        self.step_deg = tk.DoubleVar(value=2.0)
+        self.status = tk.StringVar(value="等待最新关节反馈")
+        self.actuation_status = tk.StringVar(value="使能确认: 等待状态")
         self.quality_status = tk.StringVar(value="Quality: waiting for ChArUco")
         self.save_status = tk.StringVar(value="Can save: no")
         self.sample_status = tk.StringVar(value="Samples: -")
         self.joint_values = [tk.StringVar(value="-") for _ in range(6)]
 
-        self.quality_sub = rospy.Subscriber(self.quality_topic, String, self._quality_cb, queue_size=1)
+        self.command_pub = rospy.Publisher(
+            self.joint_command_topic, JointState, queue_size=2
+        )
+        self.joint_sub = rospy.Subscriber(
+            self.joint_state_topic, JointState, self._joint_state_cb, queue_size=1
+        )
+        self.actuation_sub = rospy.Subscriber(
+            "/alicia_d/actuation_status", String, self._actuation_cb, queue_size=1
+        )
+        self.quality_sub = rospy.Subscriber(
+            self.quality_topic, String, self._quality_cb, queue_size=1
+        )
         self._build_ui()
-        self.refresh()
         self._refresh_sample_count_async()
         self._refresh_quality_display()
+        self._refresh_joint_display()
 
     def _build_ui(self):
         top = ttk.Frame(self.root, padding=8)
@@ -76,7 +140,9 @@ class HandeyeJointPosePanel:
 
         ttk.Label(top, text="Step deg").grid(row=0, column=0, sticky="w")
         ttk.Spinbox(top, from_=0.2, to=3.0, increment=0.2, textvariable=self.step_deg, width=6).grid(row=0, column=1)
-        ttk.Button(top, text="Refresh", command=self.refresh).grid(row=0, column=2, padx=4)
+        ttk.Button(top, text="刷新反馈", command=self.refresh).grid(row=0, column=2, padx=4)
+        self.sync_btn = ttk.Button(top, text="同步当前关节", command=self.sync_current_joints)
+        self.sync_btn.grid(row=0, column=3, padx=4)
 
         for index in range(6):
             row = index + 1
@@ -90,48 +156,177 @@ class HandeyeJointPosePanel:
             textvariable=self.status,
             width=42,
         ).grid(row=7, column=0, columnspan=4, pady=8, sticky="w")
+        ttk.Label(top, textvariable=self.actuation_status, width=58).grid(
+            row=8, column=0, columnspan=4, sticky="w"
+        )
 
-        ttk.Separator(top, orient="horizontal").grid(row=8, column=0, columnspan=4, sticky="ew", pady=4)
+        ttk.Separator(top, orient="horizontal").grid(row=9, column=0, columnspan=4, sticky="ew", pady=4)
         self.stable_btn = ttk.Button(top, text="已稳定", command=self.check_stable)
-        self.stable_btn.grid(row=9, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
+        self.stable_btn.grid(row=10, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
         self.save_btn = ttk.Button(top, text="保存", command=self.save_sample)
-        self.save_btn.grid(row=9, column=2, columnspan=2, sticky="ew", padx=2, pady=2)
+        self.save_btn.grid(row=10, column=2, columnspan=2, sticky="ew", padx=2, pady=2)
         self.save_btn.state(["disabled"])
-        ttk.Label(top, textvariable=self.save_status, width=42).grid(row=10, column=0, columnspan=4, sticky="w")
-        ttk.Label(top, textvariable=self.sample_status, width=42).grid(row=11, column=0, columnspan=4, sticky="w")
-        ttk.Label(top, textvariable=self.quality_status, width=58).grid(row=12, column=0, columnspan=4, sticky="w")
+        ttk.Label(top, textvariable=self.save_status, width=42).grid(row=11, column=0, columnspan=4, sticky="w")
+        ttk.Label(top, textvariable=self.sample_status, width=42).grid(row=12, column=0, columnspan=4, sticky="w")
+        ttk.Label(top, textvariable=self.quality_status, width=58).grid(row=13, column=0, columnspan=4, sticky="w")
 
     def refresh(self):
-        try:
-            values = self.group.get_current_joint_values()[:6]
-            for index, value in enumerate(values):
+        snapshot = self._fresh_joint_snapshot()
+        if snapshot is None:
+            self.status.set("刷新失败：没有新鲜的 /joint_states")
+            return
+        arm, _gripper = snapshot
+        for index, value in enumerate(arm):
+            self.joint_values[index].set("%.1f" % math.degrees(value))
+        self.status.set("反馈已刷新")
+
+    def _joint_state_cb(self, msg):
+        arm, gripper = extract_joint_snapshot(msg.name, msg.position)
+        if arm is None:
+            return
+        first_feedback = False
+        with self.joint_lock:
+            self.latest_arm_joints = arm
+            self.latest_gripper = gripper
+            self.latest_joint_monotonic = time.monotonic()
+            # First valid feedback is a non-commanding synchronization only.
+            if self.command_target is None:
+                self.command_target = list(arm)
+                self.command_gripper = gripper
+                first_feedback = True
+        if first_feedback:
+            self.root.after(
+                0,
+                lambda: self.status.set(
+                    "当前关节已自动同步；关节按钮使用 /joint_commands 直控"
+                ),
+            )
+
+    def _actuation_cb(self, msg):
+        value = str(msg.data)
+        self.root.after(0, lambda text=value: self.actuation_status.set("使能确认: " + text))
+
+    def _fresh_joint_snapshot(self):
+        with self.joint_lock:
+            if self.latest_arm_joints is None:
+                return None
+            if time.monotonic() - self.latest_joint_monotonic > self.feedback_max_age_sec:
+                return None
+            return list(self.latest_arm_joints), self.latest_gripper
+
+    def sync_current_joints(self):
+        snapshot = self._fresh_joint_snapshot()
+        if snapshot is None:
+            self.status.set("同步失败：没有新鲜的 /joint_states")
+            return
+        arm, gripper = snapshot
+        with self.joint_lock:
+            self.command_target = list(arm)
+            self.command_gripper = gripper
+        for index, value in enumerate(arm):
+            self.joint_values[index].set("%.1f" % math.degrees(value))
+        self.status.set("已同步当前关节；关节按钮使用 /joint_commands 直控")
+
+    def _refresh_joint_display(self):
+        snapshot = self._fresh_joint_snapshot()
+        if snapshot is not None:
+            arm, _gripper = snapshot
+            for index, value in enumerate(arm):
                 self.joint_values[index].set("%.1f" % math.degrees(value))
-            self.status.set("Ready")
-        except Exception as exc:
-            self.status.set("Refresh failed: %s" % exc)
+        if not rospy.is_shutdown():
+            self.root.after(250, self._refresh_joint_display)
 
     def jog(self, joint_index, direction):
         if self.busy:
-            self.status.set("Busy")
+            self.status.set("上一条关节直控命令仍在等待编码器响应")
             return
         self._set_can_save(False, "Can save: no, pose changed")
 
+        snapshot = self._fresh_joint_snapshot()
+        if snapshot is None:
+            self.status.set("未发送：没有新鲜的 /joint_states")
+            return
+        if self.command_pub.get_num_connections() < 1:
+            self.status.set("未发送：/joint_commands 当前没有驱动订阅连接")
+            return
+        try:
+            step = math.radians(float(self.step_deg.get())) * direction
+            baseline, gripper = snapshot
+            target, clamped = make_jog_target(
+                baseline,
+                joint_index,
+                step,
+                self.joint_min_rad,
+                self.joint_max_rad,
+            )
+        except Exception as exc:
+            self.status.set("未发送：%s" % exc)
+            return
+        actual_step = target[joint_index] - baseline[joint_index]
+        if abs(actual_step) < 1e-9:
+            self.status.set("未发送：J%d 已到关节限位" % (joint_index + 1))
+            return
+
         def worker():
-            self.busy = True
             try:
-                step = math.radians(float(self.step_deg.get())) * direction
-                target = self.group.get_current_joint_values()
-                target[joint_index] += step
-                self.status.set("Planning J%d %+.1f deg" % (joint_index + 1, math.degrees(step)))
-                self.group.set_joint_value_target(target)
-                ok = self.group.go(wait=True)
-                self.status.set("Move OK" if ok else "Move failed")
+                msg = JointState()
+                msg.header.stamp = rospy.Time.now()
+                msg.name = list(ARM_JOINT_NAMES)
+                msg.position = list(target)
+                if gripper is not None:
+                    msg.name.append("right_finger")
+                    msg.position.append(gripper)
+                self.command_pub.publish(msg)
+                with self.joint_lock:
+                    self.command_target = list(target)
+                    self.command_gripper = gripper
+                suffix = "（已限制到关节限位）" if clamped else ""
+                self.root.after(
+                    0,
+                    lambda: self.status.set(
+                        "已发送 J%d %+.1f° 到 /joint_commands%s；等待编码器响应"
+                        % (joint_index + 1, math.degrees(actual_step), suffix)
+                    ),
+                )
+                deadline = time.monotonic() + self.motion_response_timeout_sec
+                responded = False
+                measured_delta = 0.0
+                while time.monotonic() < deadline and not rospy.is_shutdown():
+                    current_snapshot = self._fresh_joint_snapshot()
+                    if current_snapshot is not None:
+                        current_arm, _ = current_snapshot
+                        measured_delta = current_arm[joint_index] - baseline[joint_index]
+                        if (
+                            abs(measured_delta) >= self.measured_response_min_delta_rad
+                            and measured_delta * actual_step > 0.0
+                        ):
+                            responded = True
+                            break
+                    time.sleep(0.05)
+                if responded:
+                    self.root.after(
+                        0,
+                        lambda: self.status.set(
+                            "J%d 编码器已按命令方向响应 %+.2f°"
+                            % (joint_index + 1, math.degrees(measured_delta))
+                        ),
+                    )
+                else:
+                    self.root.after(
+                        0,
+                        lambda: self.status.set(
+                            "J%d 命令已发送，但 %.1fs 内编码器无方向响应"
+                            % (joint_index + 1, self.motion_response_timeout_sec)
+                        ),
+                    )
             except Exception as exc:
-                self.status.set("Move failed: %s" % exc)
+                self.root.after(
+                    0, lambda error=exc: self.status.set("直控发送失败：%s" % error)
+                )
             finally:
                 self.busy = False
-                self.root.after(0, self.refresh)
 
+        self.busy = True
         threading.Thread(target=worker, daemon=True).start()
 
     def _quality_cb(self, msg):
@@ -284,6 +479,20 @@ class HandeyeJointPosePanel:
 
     def run(self):
         self.root.mainloop()
+
+    def close(self):
+        # Closing this helper unregisters ROS endpoints only. It deliberately
+        # publishes no stop, controller switch, torque-off, or disable command.
+        for subscriber in (self.joint_sub, self.actuation_sub, self.quality_sub):
+            try:
+                subscriber.unregister()
+            except Exception:
+                pass
+        try:
+            self.command_pub.unregister()
+        except Exception:
+            pass
+        self.root.destroy()
 
 
 if __name__ == "__main__":

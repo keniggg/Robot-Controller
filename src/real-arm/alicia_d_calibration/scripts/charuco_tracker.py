@@ -24,6 +24,55 @@ from cv_bridge import CvBridge, CvBridgeError
 import message_filters
 import yaml
 
+
+def prepare_detection_image(gray, scale):
+    """Upscale only the detector input; pose coordinates stay in source pixels."""
+    scale = float(scale)
+    if not np.isfinite(scale) or scale < 1.0 or scale > 4.0:
+        raise ValueError("detection_scale must be finite and in [1, 4]")
+    if abs(scale - 1.0) < 1e-9:
+        return gray, 1.0
+    return (
+        cv2.resize(
+            gray,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_CUBIC,
+        ),
+        scale,
+    )
+
+
+def rescale_corners_to_source(corners, scale, offset_xy=(0.0, 0.0)):
+    if corners is None:
+        return None
+    restored = np.asarray(corners, dtype=np.float32) / float(scale)
+    restored[..., 0] += float(offset_xy[0])
+    restored[..., 1] += float(offset_xy[1])
+    return restored
+
+
+def marker_roi(corners, image_shape, padding_px):
+    """Build a source-pixel ROI from detected marker corners."""
+    if not corners:
+        return None
+    height, width = image_shape[:2]
+    points = np.concatenate(
+        [np.asarray(item, dtype=float).reshape(-1, 2) for item in corners], axis=0
+    )
+    if points.size == 0 or not np.all(np.isfinite(points)):
+        return None
+    padding = max(0.0, float(padding_px))
+    x0 = max(0, int(np.floor(np.min(points[:, 0]) - padding)))
+    y0 = max(0, int(np.floor(np.min(points[:, 1]) - padding)))
+    x1 = min(width, int(np.ceil(np.max(points[:, 0]) + padding)) + 1)
+    y1 = min(height, int(np.ceil(np.max(points[:, 1]) + padding)) + 1)
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return None
+    return x0, y0, x1, y1
+
+
 class CharucoTracker:
     def __init__(self):
         rospy.init_node('charuco_tracker', anonymous=True)
@@ -59,11 +108,22 @@ class CharucoTracker:
         self.camera_info_yaml = rospy.get_param('~camera_info_yaml', '')
         self.quality_topic = rospy.get_param('~quality_topic', '/charuco/quality')
         self.max_input_age_sec = float(rospy.get_param('~max_input_age_sec', 0.35))
+        self.detection_scale = float(rospy.get_param('~detection_scale', 1.0))
+        if not np.isfinite(self.detection_scale) or not 1.0 <= self.detection_scale <= 4.0:
+            raise ValueError("~detection_scale must be finite and in [1, 4]")
+        self.detection_roi_padding_px = float(
+            rospy.get_param('~detection_roi_padding_px', 45.0)
+        )
+        if not np.isfinite(self.detection_roi_padding_px) or self.detection_roi_padding_px < 0.0:
+            raise ValueError("~detection_roi_padding_px must be finite and non-negative")
         
         # Camera calibration parameters (should be loaded from camera_info)
         self.camera_matrix = None
         self.dist_coeffs = None
         self.last_marker_count = 0
+        self.last_marker_corners = []
+        self.last_marker_ids = None
+        self.detection_roi = None
         self.last_charuco_count = 0
         self.last_edge_clearance_px = None
         self.last_reprojection_rms_px = None
@@ -126,6 +186,8 @@ class CharucoTracker:
         rospy.loginfo(f"Camera info topic: {self.camera_info_topic}")
         rospy.loginfo(f"Quality topic: {self.quality_topic}")
         rospy.loginfo(f"Max input age: {self.max_input_age_sec:.3f}s")
+        rospy.loginfo(f"Detection scale: {self.detection_scale:.2f}x")
+        rospy.loginfo(f"Detection ROI padding: {self.detection_roi_padding_px:.1f}px")
 
     def _load_camera_info_yaml(self, path):
         """Load a static CameraInfo YAML so this tracker can reuse an existing image stream."""
@@ -177,6 +239,13 @@ class CharucoTracker:
         self.last_reprojection_rms_px = None
         charuco_corners, charuco_ids = self.detect_charuco_board(cv_image)
         pose_ok = False
+
+        # Marker boxes and IDs remain useful even before four ChArUco corners
+        # are available for pose estimation.
+        if self.last_marker_corners and self.last_marker_ids is not None:
+            aruco.drawDetectedMarkers(
+                cv_image, self.last_marker_corners, self.last_marker_ids
+            )
         
         if charuco_corners is not None and charuco_ids is not None:
             # Always show detected ChArUco corners.  This keeps the debug image
@@ -287,29 +356,51 @@ class CharucoTracker:
                 detector_params = aruco.DetectorParameters_create()
             detector_params.cornerRefinementMethod = aruco.CORNER_REFINE_NONE  # Important for ChArUco
 
-            if hasattr(aruco, 'ArucoDetector'):
-                detector = aruco.ArucoDetector(self.dictionary, detector_params)
-                marker_corners, marker_ids, _ = detector.detectMarkers(gray)
-            else:
-                marker_corners, marker_ids, _ = aruco.detectMarkers(
-                    gray, self.dictionary, parameters=detector_params
+            marker_corners, marker_ids, detection_gray, detection_scale, offset = (
+                self._detect_markers_in_roi(gray, detector_params, self.detection_roi)
+            )
+            # A moving board can leave the cached ROI. Retry the complete
+            # source image immediately and rebuild the ROI from that evidence.
+            if (marker_ids is None or len(marker_ids) == 0) and self.detection_roi is not None:
+                marker_corners, marker_ids, detection_gray, detection_scale, offset = (
+                    self._detect_markers_in_roi(gray, detector_params, None)
                 )
             
             if marker_ids is None or len(marker_ids) == 0:
                 self.last_marker_count = 0
+                self.last_marker_corners = []
+                self.last_marker_ids = None
+                self.detection_roi = None
                 self.last_charuco_count = 0
                 self.last_edge_clearance_px = None
                 return None, None
             self.last_marker_count = len(marker_ids)
+            self.last_marker_corners = [
+                rescale_corners_to_source(corners, detection_scale, offset)
+                for corners in marker_corners
+            ]
+            self.last_marker_ids = np.asarray(marker_ids, dtype=np.int32)
+            self.detection_roi = marker_roi(
+                self.last_marker_corners,
+                gray.shape,
+                self.detection_roi_padding_px,
+            )
             
             # Detect ChArUco corners
             if hasattr(aruco, 'CharucoDetector'):
                 charuco_detector = cv2.aruco.CharucoDetector(self.board, detectorParams=detector_params)
-                charuco_corners, charuco_ids, _, _ = charuco_detector.detectBoard(gray)
+                # Reuse the exact marker result above. Calling detectBoard
+                # without these inputs repeats the most expensive search.
+                charuco_corners, charuco_ids, _, _ = charuco_detector.detectBoard(
+                    detection_gray, None, None, marker_corners, marker_ids
+                )
             else:
                 _, charuco_corners, charuco_ids = aruco.interpolateCornersCharuco(
-                    marker_corners, marker_ids, gray, self.board
+                    marker_corners, marker_ids, detection_gray, self.board
                 )
+            charuco_corners = rescale_corners_to_source(
+                charuco_corners, detection_scale, offset
+            )
             self.last_charuco_count = 0 if charuco_ids is None else len(charuco_ids)
             self.last_edge_clearance_px = self._edge_clearance_px(gray.shape, charuco_corners)
             
@@ -318,6 +409,30 @@ class CharucoTracker:
         except Exception as e:
             rospy.logwarn(f"ChArUco detection failed: {e}")
             return None, None
+
+    def _detect_markers_in_roi(self, gray, detector_params, roi):
+        if roi is None:
+            x0, y0, x1, y1 = 0, 0, gray.shape[1], gray.shape[0]
+        else:
+            x0, y0, x1, y1 = roi
+        source = gray[y0:y1, x0:x1]
+        detection_gray, detection_scale = prepare_detection_image(
+            source, self.detection_scale
+        )
+        if hasattr(aruco, 'ArucoDetector'):
+            detector = aruco.ArucoDetector(self.dictionary, detector_params)
+            marker_corners, marker_ids, _ = detector.detectMarkers(detection_gray)
+        else:
+            marker_corners, marker_ids, _ = aruco.detectMarkers(
+                detection_gray, self.dictionary, parameters=detector_params
+            )
+        return (
+            marker_corners,
+            marker_ids,
+            detection_gray,
+            detection_scale,
+            (float(x0), float(y0)),
+        )
     
     def estimate_pose(self, charuco_corners, charuco_ids):
         """Estimate pose of the ChArUco board."""
@@ -435,6 +550,10 @@ class CharucoTracker:
             'image_height': int(height) if height is not None else None,
             'camera_frame': self.camera_frame,
             'board_frame': self.board_frame,
+            'board_size': list(self.board_size),
+            'dictionary_id': self.dictionary_id,
+            'detection_scale': self.detection_scale,
+            'detection_roi': list(self.detection_roi) if self.detection_roi else None,
         }
         self.quality_pub.publish(String(data=json.dumps(payload, sort_keys=True)))
 

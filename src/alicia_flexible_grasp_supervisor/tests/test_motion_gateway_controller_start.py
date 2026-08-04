@@ -124,6 +124,12 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
         )
         gateway.failure_holds = 0
         gateway.failure_hold_start_positions = []
+        gateway.positive_enable_requests = []
+        gateway.demo_pub = types.SimpleNamespace(
+            publish=lambda msg: gateway.positive_enable_requests.append(
+                bool(msg.data)
+            )
+        )
         gateway._current_arm_positions_snapshot = (
             lambda: [0.1, -0.2]
         )
@@ -334,6 +340,8 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
             gateway.failure_hold_start_positions,
             [[0.1, -0.2]],
         )
+        self.assertEqual(gateway.positive_enable_requests, [False])
+        self.assertIn('positive joint enable re-requested', res.message)
 
     def test_failed_execution_hold_republishes_desired_not_feedback(self):
         gateway = MotionGateway.__new__(MotionGateway)

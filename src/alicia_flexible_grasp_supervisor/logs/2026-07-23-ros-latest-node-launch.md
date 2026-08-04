@@ -15312,3 +15312,1225 @@ Implemented and verified offline:
   gripper, torque, enable, stop, disable, controller or emergency command was
   accessed or issued. A later powered run is still required to validate the
   corrected transition from near-field pregrasp into approach.
+
+### 2026-08-01 - calibration minimal-movement panel used an inactive trajectory controller
+
+- During the new-board eye-on-hand calibration setup, clicking the six-joint
+  minimal movement panel produced no encoder change. The panel process logged
+  repeated `ABORTED: CONTROL_FAILED`. The matching MoveIt log proved that
+  planning completed, but `/alicia_controller/follow_joint_trajectory`
+  rejected every goal because `alicia_controller` was not running.
+- Source inspection identified the mismatch: `handeye_joint_pose_panel.py`
+  still used `MoveGroupCommander.go()`, while the project's established manual
+  control path publishes synchronized joint targets to `/joint_commands`.
+  Therefore the correct historical panel executable had been launched, but
+  its motion implementation was obsolete for the current direct-control
+  runtime.
+- Replaced only that panel's motion path with `/joint_states`-based joint
+  synchronization and `/joint_commands` direct publication. Each click now
+  constructs a bounded single-joint increment from fresh measured feedback,
+  preserves all other measured arm joints and the measured `right_finger`
+  value, enforces the configured six-joint limits, and reports measured
+  directional encoder response. Missing/stale/non-finite or incompletely
+  named feedback and a missing driver subscription fail without publishing.
+- The panel auto-synchronizes on its first complete feedback and also exposes
+  an explicit `同步当前关节` button. Its default first step is `2 deg`, above
+  the driver's source-defined `0.02 rad` post-enable response-probe threshold;
+  the operator can reduce the step after actuation is confirmed. The panel
+  does not call MoveIt, switch controllers, or publish stop, disable, torque,
+  gripper-action, or calibration-save commands during a jog.
+- Added focused helper tests for name-safe feedback extraction, rejection of a
+  missing named joint, single-joint target construction, and limit clamping.
+  All `8/8` calibration tests passed, both Python files compiled, the
+  `alicia_d_calibration` catkin build passed, and `git diff --check` passed.
+- Hot-restarted only the old minimal panel. The current panel node is
+  `/handeye_joint_pose_panel_9276_1785638083413`; the ChArUco RGB view, depth
+  view, tracker, and empty new easy_handeye backend stayed live. Read-only ROS
+  evidence shows the panel as a `/joint_commands` publisher, the real driver
+  as its subscriber, and complete current feedback near
+  `[-0.26,-0.53,-0.44,-0.18,-0.62,-0.18] deg` with the finger at `0.04975 m`.
+  Actuation remains `PENDING:POSITIVE_ENABLE_REQUESTED` until the operator's
+  one-click powered motion supplies independent directional encoder evidence;
+  no motion success is claimed before that test.
+
+### 2026-08-01 - new ChArUco board had been launched with the wrong dictionary and dimensions
+
+- The operator reported that the D405 color view clearly contained the new
+  board but `/charuco/result` showed no related annotations. Live quality was
+  `marker_count=0`, `charuco_count=0`, `pose_ok=false`; the tracker launched
+  earlier from the photo-based hypothesis used `11x8` and `DICT_4X4_100`.
+- Captured the current 640x480 D405 color frame passively. The board was fully
+  inside the image. An exhaustive OpenCV dictionary scan of that exact frame
+  detected no markers with `DICT_4X4_100`, while the `5x5` family detected six
+  markers at source resolution, 15 at `2x`, and 17 at `4x`; stable IDs included
+  `5` through `53`. The first 100 entries of the 5x5 dictionaries are shared,
+  so `DICT_5X5_100` is the minimal canonical family covering the observed
+  IDs; choosing 250 or 1000 would encode those same IDs identically.
+- Exhaustive ChArUco width/height matching reached detected corner ID `87`
+  only with width `12` and at least nine square rows. Combined with exactly
+  54 available checker marker cells and observed marker ID `53`, this proves
+  the printed grid is `12x9`, not `11x8`. This conclusion comes from decoded
+  live pixels and board geometry, not from an assumed outer-board dimension.
+- With `12x9`, square length `0.015 m`, marker length `0.01125 m`,
+  `DICT_5X5_100`, and `2x` detector input, the captured frame produced 15
+  markers, 11 ChArUco corners, a positive-depth pose near `0.497 m`, and
+  source-coordinate reprojection RMS `0.216 px`. The operator-reported
+  `3.2 mm` substrate thickness remains physical metadata and is not added to
+  the printed-plane square or marker geometry.
+- Added bounded `~detection_scale` support to `charuco_tracker.py`. Only the
+  grayscale detector input is enlarged; marker and ChArUco coordinates are
+  divided back to source pixels before edge checks, PnP, reprojection, TF, and
+  drawing. Marker boxes and IDs are now drawn even before enough ChArUco
+  corners exist for pose estimation. Quality output now identifies board
+  size, dictionary, and detection scale.
+- Four new helper regressions cover source-image preservation, identity scale,
+  corner-coordinate restoration, and rejection outside `[1,4]`. The complete
+  calibration suite passed `12/12`, Python compilation, the
+  `alicia_d_calibration` catkin build, and `git diff --check` passed.
+- Hot-restarted only the tracker with the proven parameters and retained the
+  same `charuco_board_cc200_20260801` frame. The unique live tracker then
+  reported `marker_count=10`, `charuco_count=8`, `pose_ok=true`, edge clearance
+  `184.6 px`, and reprojection RMS `0.0686 px`. The RGB/depth viewers, minimal
+  movement panel, empty easy_handeye backend, driver, and positive enable were
+  not restarted. No arm, gripper, stop, disable, controller, torque, sample
+  save, or calibration-interlock command was issued.
+
+### 2026-08-01 - ChArUco annotation latency reduced with marker reuse and adaptive ROI
+
+- After enabling source-correct `2x` detection, the operator reported that the
+  camera display looked very slow. Simultaneous read-only measurements proved
+  the D405 source was healthy at about `13.93 Hz` with `19 ms` mean timestamp
+  delay, while `/charuco/result` was only `2.63 Hz` with `443 ms` mean delay.
+  The bottleneck was therefore the annotation tracker, not camera capture.
+- Source inspection found two full 1280x960 marker searches per source frame:
+  `ArucoDetector.detectMarkers()` first established marker count, then
+  `CharucoDetector.detectBoard()` repeated detection because its optional
+  marker inputs were omitted. An offline same-frame benchmark measured about
+  `211 ms` for this duplicate path versus `92 ms` when reusing the marker
+  corners and IDs, with the same `15 markers / 11 ChArUco corners`.
+- The tracker now passes the first marker result into `detectBoard` and keeps a
+  source-pixel dynamic ROI around actual marker corners with `45 px` padding.
+  Only that ROI is enlarged for subsequent `2x` searches. Every marker and
+  ChArUco coordinate is mapped through both scale and ROI offset back to the
+  source image. If the board leaves the ROI or no marker is found, the same
+  callback immediately retries the complete image and rebuilds the ROI; no
+  stored pose or old corner set is published as current evidence.
+- Added regressions for cropped-coordinate restoration, ROI padding/clamping,
+  and missing/non-finite ROI evidence. The complete calibration suite passed
+  `15/15`, Python compilation, catkin build, and `git diff --check` passed.
+  Repeated offline calls held the same `12 markers / 9 corners`; the first
+  full-frame call took about `170 ms` and cached-ROI calls about `46--100 ms`.
+- Hot-restarted only the tracker. A matching 10-second live measurement showed
+  `/charuco/result` at `11.19 Hz` and `157 ms` mean delay: about `4.3x` the
+  previous frame rate and about `65%` lower delay. Concurrent quality remained
+  current and valid with ROI `[170,126,439,338]`, `19` markers, `22` ChArUco
+  corners, `pose_ok=true`, and reprojection RMS `0.199 px`.
+- The tracker, image views, calibration backend, movement panel, driver, and
+  positive enable remained online. No arm, gripper, sample-save, stop, disable,
+  controller, torque, interlock, or calibration-result command was issued.
+
+### 2026-08-01 - thirty-sample hand-eye solve was rejected by cross-validation
+
+- Read-only `get_sample_list` evidence from
+  `/d405_cc200_recalib_20260801_eye_on_hand` confirmed exactly `30` paired
+  `base_link -> tool0` and `camera_link -> charuco_board_cc200_20260801`
+  samples. The solve relation was audited as
+  `T_base_board = T_base_tool * T_tool_camera * T_camera_board`.
+- Added `handeye_sample_audit.py`. It computes all five OpenCV hand-eye methods
+  offline, reports full-set board invariance, runs five deterministic folds
+  with six held-out samples per fold, reports fold-to-fold candidate spread,
+  and ranks the worst samples. It only reads the sample-list service; it does
+  not select/save/publish a runtime TF, remove samples, clear the calibration
+  interlock, or command hardware.
+- With the unchanged `12x9`, `15 mm`, `11.25 mm`, `DICT_5X5_100` sample
+  geometry, the full-set `T_tool_camera` candidates were:
+  - Daniilidis: translation `[-0.085757512, 0.011321490, -0.124012290] m`,
+    quaternion xyzw
+    `[0.002919936, -0.718056729, 0.005060487, 0.695960056]`;
+  - Tsai-Lenz: translation `[-0.087349611, 0.011450484, -0.109826806] m`,
+    quaternion xyzw
+    `[0.003046999, -0.717840634, 0.005485782, 0.696179177]`;
+  - Park: translation `[-0.089311873, 0.007895990, -0.107501887] m`,
+    quaternion xyzw
+    `[0.019249385, -0.716970666, 0.028838149, 0.696240538]`;
+  - Horaud: translation `[-0.089312282, 0.007903552, -0.107489827] m`,
+    quaternion xyzw
+    `[0.019239772, -0.716941629, 0.028731005, 0.696275134]`;
+  - Andreff: translation `[-0.003710944, -0.007863123, -0.248723326] m`,
+    quaternion xyzw
+    `[0.010783580, -0.717673263, 0.017257606, 0.696082594]`.
+- Against the unchanged `3/5 mm` translation RMS/maximum and `1/2 deg`
+  orientation RMS/maximum contract, every five-fold result failed:
+  - Daniilidis: `7.202/11.423 mm`, `1.241/2.100 deg`;
+  - Tsai-Lenz: `8.356/13.733 mm`, `1.243/2.108 deg`;
+  - Park: `8.585/13.505 mm`, `1.216/1.987 deg`;
+  - Horaud: `8.582/13.515 mm`, `1.216/1.988 deg`;
+  - Andreff: `18.839/33.497 mm`, `1.220/2.024 deg`.
+- Daniilidis had the lowest translation error. Its five candidate folds were
+  relatively repeatable at `1.021/1.602 mm` translation and
+  `0.564/0.716 deg` orientation RMS/maximum spread, but its held-out board
+  invariance still exceeded both translation limits and both orientation
+  limits. Samples `16--20` repeatedly appeared among the largest residuals
+  for the non-Andreff methods, so the evidence is not an isolated single
+  sample that can be deleted without a new measured cause.
+- The operator's `150 x 112.5 mm` size description and the board label
+  `CC200-15-11.25` could refer to different physical features. A read-only
+  counterfactual scaled every stored camera-to-board translation by
+  `12.5/15` and recomputed all candidates without changing ROS data. It did
+  not restore validity: Daniilidis became `7.251/12.030 mm` and
+  `1.244/2.113 deg`; the other methods also remained outside the contract.
+  Therefore the failed solve is not attributed to that dimension ambiguity
+  without a direct ruler measurement of the printed-grid span.
+- The official easy_handeye backend was temporarily selected to Daniilidis
+  and `compute_calibration` returned exactly the offline translation and
+  quaternion above. The algorithm selection was then restored to Tsai-Lenz.
+  `save_calibration` was never called, no candidate was published as the
+  canonical TF, and the old calibration interlock remained active.
+- The audit and synthetic eye-on-hand convention regressions passed the full
+  calibration suite `18/18`; Python compilation, `catkin_make --pkg
+  alicia_d_calibration -j2`, and `git diff --check` passed. Because the
+  internal held-out gate failed, the separate six-new-pose final validation
+  was intentionally not started and no calibration success is claimed.
+
+### 2026-08-01 - measured board geometry and outlier-removal sensitivity
+
+- The operator measured the printed checker grid directly: every square is
+  `15 mm`, the complete 12-square horizontal span is `180 mm`, and the
+  complete nine-square vertical span is `135 mm`. This independently confirms
+  the live `square_length=0.015 m` geometry. The prior `12.5/15` scale test is
+  retained only as a rejected counterfactual; the 30-sample failure is not a
+  board-square scale error.
+- Under the lowest-error full-set Daniilidis solution, samples `16--20` formed
+  a coherent high-residual sequence. Their group mean was offset from the
+  30-sample board mean by `10.154 mm / 1.784 deg`; individually they measured
+  `10.078--10.923 mm / 1.669--2.013 deg`. Holding that complete sequence out
+  and fitting the other 25 made the held-out sequence worse at
+  `15.901/17.047 mm` and `2.556/2.767 deg` RMS/maximum.
+- At the operator's request, the five algorithms were recomputed on an
+  in-memory copy with samples `16--20` excluded. No easy_handeye sample was
+  deleted. Daniilidis remained numerically best, with candidate
+  `T_tool_camera` translation
+  `[-0.0850978548563, 0.0104476453965, -0.120819418450] m` and quaternion xyzw
+  `[-0.006847168182, -0.713292116351, -0.002495281568, 0.700828971011]`.
+  Its in-subset invariance was `5.831/9.052 mm` and `0.938/1.384 deg`; five-fold
+  held-out invariance was `6.136/9.786 mm` and `0.982/1.495 deg`. Rotation
+  passed, but both translation limits still failed. Tsai-Lenz, Park, Horaud,
+  and Andreff also failed the translation contract.
+- A second diagnostic greedily removed the largest value of
+  `max(translation/5 mm, orientation/2 deg)` and refit Daniilidis after every
+  removal. The removal order started
+  `[18,17,16,19,20,15,14,13,30,4]`. Even after removing ten samples and keeping
+  only 20, selection-biased five-fold translation error was still
+  `5.223/7.893 mm`, while the removed samples were inconsistent with the new
+  fit by `16.337/22.068 mm` and `2.417/3.318 deg`. Therefore the data do not
+  support a claim that deleting a few obvious outliers recovers a valid TF.
+- Candidate-independent pairwise rotation checks compared each robot relative
+  rotation angle with the matching camera relative rotation angle. Across
+  all 435 pairs the mismatch was `1.063 deg` RMS and `3.559 deg` maximum.
+  Adjacent captures were generally much closer (`0.00--0.52 deg`, with a few
+  near `1.0 deg`), while the largest mismatches linked early samples to
+  samples `19--20`. No two samples revisited the same robot pose closely
+  enough (`<=5 mm` and `<=2 deg`) to distinguish board motion, camera-mount
+  motion, or pose-dependent robot/FK error from the stored transforms alone.
+- All 30 saves followed the last logged `/joint_commands` target by
+  `3.943--14.229 s`, and the nearest periodic tracker messages showed at least
+  `35` ChArUco corners. This rules out an immediate post-command save and a
+  gross corner-count failure, but it does not prove encoder or board-pose
+  stillness: the current panel's stability check only repeats image-quality
+  thresholds and does not yet measure joint velocity or transform stability.
+- No stored sample, TF, calibration file, interlock, or hardware state was
+  changed during these sensitivity computations. The original 30 samples
+  remain intact and no candidate is authorized for runtime use.
+
+### 2026-08-01 - current temporary TF versus the pruned-25 candidate
+
+- The comparison used the transform actually present in the live TF tree, not
+  the unused fallback values visible under `/handeye`. The running
+  `/handeye_transform` node loaded the historical pruned-19 calibration file
+  and published `T_tool_camera` translation
+  `[-0.086612722279, -0.006340719797, -0.103412067492] m` and quaternion xyzw
+  `[0.022908132061, -0.678766859370, 0.027847019406, 0.733468003131]`.
+- On the same 25 retained samples, the current pruned-19 TF produced board
+  invariance `15.426/29.466 mm` and `1.961/3.754 deg` RMS/maximum. The new
+  exclude-16-through-20 Daniilidis candidate produced
+  `5.831/9.052 mm` and `0.938/1.384 deg`. Thus the new candidate is materially
+  better on the current measured data in every metric, although its
+  translation still fails the unchanged `3/5 mm` contract.
+- On all 30 current samples, the old/new comparison was respectively
+  `18.872/34.100 mm`, `2.347/4.162 deg` versus
+  `7.989/14.488 mm`, `1.285/2.359 deg`. Against the retained-25 board mean,
+  the excluded five samples measured `33.521/39.498 mm`, `4.039/4.801 deg`
+  under the old TF and `15.901/17.047 mm`, `2.556/2.767 deg` under the new
+  candidate.
+- The two tool-camera transforms differ by `24.231 mm / 7.306 deg`, so this is
+  not a rounding-level update. The historical pruned-19 TF had also already
+  failed its own six-pose independent verification at `3.94/6.67 mm` and
+  `1.07/1.67 deg`. The new candidate has better current-sample evidence, but
+  it has not passed either its held-out translation gate or a new independent
+  six-pose validation; it was therefore not written, published, or used to
+  change the calibration interlock.
+
+### 2026-08-01 - operator-authorized pruned-25 deployment and temporary interlock override
+
+- After reviewing the same-data comparison, the operator explicitly directed
+  the system to replace the historical pruned-19 runtime TF with the
+  exclude-16-through-20, 25-sample Daniilidis candidate, keep using it until a
+  newer calibration is deployed, and temporarily release the software
+  calibration interlock. This is an explicit operational override; it does
+  not relabel the failed translation cross-validation as a formal pass.
+- Before replacement, runtime interlock state was `true` with reason
+  `HAND_EYE_UNVERIFIED_AFTER_CORRECTION_COLLISION`. The actual live static TF
+  came from the pruned-19 easy_handeye file, not the stale fallback values in
+  `/handeye`.
+- Backed up the replaced pruned-19 file to
+  `/home/zhuyupei/.ros/easy_handeye/backups/d405_v4l2_charuco_handeyecalibration_eye_on_hand.pre_pruned25_20260801_203829.yaml`.
+  Its SHA-256 is
+  `3e4fdef3d5b66089e6c9a9c2219c012777af7f892955c3fa2cc181034b4cf107`.
+- Replaced the persistent runtime file
+  `/home/zhuyupei/.ros/easy_handeye/d405_v4l2_charuco_handeyecalibration_eye_on_hand.yaml`
+  with the 25-sample candidate. Its SHA-256 is
+  `30afaa1057d9f41d486657259ba630e65bfcf32b61e39ac6e8b5db894026e9ca`.
+  The file records the current CC200 namespace and board frame and the exact
+  `T_tool_camera`:
+  - translation `[-0.0850978548563, 0.0104476453965, -0.120819418450] m`;
+  - quaternion xyzw
+    `[-0.006847168182, -0.713292116351, -0.002495281568, 0.700828971011]`.
+  The quaternion norm was checked as `1.000000000000`.
+- Updated the checked-in `config/handeye.yaml` fallback to the same exact
+  values and annotated it as a 2026-08-01 operator-authorized temporary
+  pruned-25 deployment. The checked-in grasp interlock default remains `true`;
+  only the current runtime interlock was temporarily released. The persistent
+  calibration file and fallback ensure that future launches continue using
+  pruned-25 until a newer calibration replaces them.
+- Terminated only the old static `/handeye_transform` publisher and started a
+  canonical replacement from the current worktree. An initial noncanonical
+  process name was immediately corrected before releasing the interlock. The
+  unique live node is `/handeye_transform`, PID `17131`, supervised in terminal
+  session `19753`; it publishes only `/tf_static` and has no command
+  subscriptions. MoveIt, perception, the grasp task, remote 6D, and the current
+  easy_handeye backend are connected consumers.
+- Publisher output reported the exact 25-sample values and source file above;
+  independent `tf_echo tool0 camera_link` read back rounded values
+  `[-0.085, 0.010, -0.121]` and
+  `[-0.007, -0.713, -0.002, 0.701]`. Runtime
+  `/handeye/translation_xyz` and `/handeye/rotation_xyzw` were synchronized to
+  the same full-precision values to remove the previous introspection mismatch.
+- After TF and node verification, set runtime
+  `/grasp/calibration_interlock_active=false` and reason
+  `USER_OVERRIDE_PRUNED25_TF_TEMPORARY_PENDING_FORMAL_VALIDATION_20260801`.
+  Readback confirmed both values. The known evidence remains: retained-set
+  cross-validation translation `6.136/9.786 mm` fails the formal `3/5 mm`
+  gate, and no six-new-pose independent validation has passed.
+- YAML readback confirmed that the checked-in fallback and persistent runtime
+  file contain identical full-precision transforms. The focused static-TF
+  configuration regression passed `1/1`, and `git diff --check` passed; the
+  canonical publisher remained online throughout the final checks.
+- No arm, gripper, trajectory, positive/negative torque, controller stop,
+  disable, emergency, or sample-delete command was sent. The only live changes
+  were the static hand-eye publisher, matching introspection parameters, and
+  the explicitly authorized software calibration-interlock override.
+
+### 2026-08-01 - full contact run validated clipped-bbox authority and exposed gripper-load dropout
+
+- The operator explicitly authorized this run's temporary calibration-interlock
+  override and physical grasp. Runtime reason was
+  `USER_OVERRIDE_TEMPORARY_20260801_ALIGNED_AUTOMATIC_6D_STAGE2_FIX_VALIDATION_61D8B56`.
+  This did not claim that the pruned-25 calibration passed its formal held-out
+  translation contract. No TF/TCP, target center, `0.040 m` drift threshold,
+  or motion tolerance was changed.
+- Frozen far-field plan `5febca31740a92e4100a426a` moved to the observation
+  posture. Its single measured radial correction returned a controller goal
+  tolerance failure, but the unchanged live observation contract then measured
+  camera-to-target range `0.1871 m`, inside `[0.1800,0.2200] m`, and admitted
+  the near-field phase at ROS time `1785644924.685`.
+- The live learned audit contained only `source_index=0`, proving the configured
+  near-field learned-candidate cap of one was active. That learned candidate
+  was correctly rejected because its required `0.058355 m` opening exceeded
+  the physical `0.050000 m` inner gap. Request `88` then selected a strict
+  full-sequence-reachable `tabletop_geometry` candidate. Remote metrics report
+  `end_to_end_ms=19536.576`; the task rebound contact plan
+  `f97b0a80ab99e9656308e9f7` at `1785644945.957`, within the unchanged shared
+  `30.0 s` phase deadline.
+- The `40.318 s` near-field pregrasp trajectory completed and the task-scoped
+  endpoint lease proved `0.0015 m / 0.18 deg`. The live bbox had by then reached
+  the bottom image edge. At `1785644988.153`, the task logged exactly:
+  `Ignoring 0.041m live target-centre drift from a close-range bbox with 0px
+  edge clearance below 4px; preserving the frozen contact plan without
+  retargeting`. This is direct hardware evidence that an over-40-mm centroid
+  shift from a clipped bbox neither raised `TARGET_DRIFT` nor translated the
+  immutable grasp pose.
+- The frozen `0.033 m` Cartesian approach planned at fraction `1.000` and was
+  accepted only after measured FK reached `0.0035 m / 0.26 deg`. The frozen
+  `0.048 m` Cartesian grasp segment also planned at fraction `1.000`, completed,
+  and measured `0.0028 m / 0.32 deg`. Close-range target occlusion preserved the
+  same authority and ignored the expected `TARGET_LOST` tombstone.
+- At `1785645009.478`, the old no-tactile path issued a fixed `0.0 m` gripper
+  target. Video `/home/zhuyupei/Videos/25.mp4` and the operator both confirm the
+  carton was captured. The task then submitted the planned lift to tool0
+  `(-0.134,-0.488,0.149) m`; the operator confirms a physical lifting action,
+  although that action is outside the video's recorded interval.
+- During lift, valid joint feedback initially moved with the command. Official
+  self-check then fell from all ten bits `0x03FF` to `0x003F` and `0x0003`.
+  Starting at `1785645014.601`, repeated CRC-valid feedback payloads decoded to
+  impossible command-inconsistent Joint2/Joint3/Joint5 jumps, so the driver
+  rejected them rather than corrupting `/joint_states`. Feedback became stale,
+  command streaming paused, and the unchanged endpoint contract failed at
+  `0.0502 m / 5.76 deg`. The task result was
+  `MEASURED_ENDPOINT_POSITION_ERROR`, not `TARGET_DRIFT` or target loss.
+- No stop, disable, controller-stop, emergency, `/demonstration=true`, or
+  torque-off command was sent. One later `/demonstration=false` positive-enable
+  request was accepted by the driver but remained
+  `PENDING:POSITIVE_ENABLE_REQUESTED` because no valid encoder response returned.
+- `/home/zhuyupei/Videos/24.mp4` is HEVC `720x1280`, `50.133 s`, 1502 frames and
+  records the first-stage trajectory. `/home/zhuyupei/Videos/25.mp4` is HEVC
+  `720x1280`, `63.533 s`, 1904 frames and records second-stage near-field
+  pregrasp, approach, grasp, and capture only. Its visible non-monotonic height
+  during the first approximately `40.3 s` is the planned joint-space pregrasp;
+  the later downward motion is the planned Cartesian approach/grasp. It must not
+  be described as endpoint-error self-correction or as video evidence of lift.
+- The newly evidenced independent defect was the old full mechanical-limit
+  close: after object contact it retained a `0.0 m` target and therefore a large
+  sustained position error. The offline repair now derives frozen 6D close from
+  `required_open_width_m - 0.002 m`, clamps it to the unchanged `[0,0.05] m`
+  physical range, and leaves non-6D fixed-close behavior unchanged. Two focused
+  contracts pass. This new close target has not yet been validated on hardware.
+
+### 2026-08-01 - arbitrary planar carton orientation completed on hardware
+
+- The fixed-orientation behavior was traced to far-field observation inheriting
+  each contact candidate's wrist orientation before contact geometry was known.
+  Far-field observation is now generated from the frozen current camera optical
+  axis and a deterministic camera-axis roll lattice. Every roll keeps the target
+  centered at the unchanged `0.200 m` observation distance and must pass the
+  exact open-gripper CAD support/target envelope before strict MoveIt. Runtime
+  audit explicitly records `object_yaw_used=false`.
+- Contact orientation remains independent and retains the OBB-axis plus full
+  `0..180 deg` planar jaw-angle coverage. Gripper fit, table and target CAD
+  envelopes, collision, joint limits, rotation sweep, strict MoveIt, and full
+  path reachability remain hard constraints. No TF/TCP, target center,
+  `0.040 m` drift threshold, observation band, or endpoint tolerance changed.
+- A hot-loaded hardware cycle first proved a safe `-60 deg` observation branch
+  could reach `PREVIEW_READY`. The subsequently executed fresh plan
+  `6b83dc9346ab03a7cf166e19` selected the `-45 deg` branch with
+  `object_yaw_used=false`; its frozen source stamp was `1785648702809931278`.
+  The exact-plan runner measured preview age `9.644927 s`, committed the bound
+  audit in `continuous_execution` mode, stopped further candidate computation,
+  verified the same plan as `VALID`, and invoked `/grasp/start`.
+- Far observation used strict pose
+  `xyz=(-0.132,-0.325,0.100)`,
+  `q=(0.473,0.789,-0.380,0.097)`. Its retimed `52.772 s` trajectory completed
+  with measured endpoint error `0.0112 m / 1.82 deg`; the fresh camera range was
+  `0.1912 m`, inside the unchanged `[0.180,0.220] m` contract.
+- Near-field started at `1785648768.228` and rebound contact plan
+  `cd7732c54f84ef3d3f32e3f7` was available at `1785648781.533`, about `13.3 s`
+  later and inside the unchanged `30.0 s` phase deadline. The complete strict
+  sequence passed. Measured endpoints were `0.0027 m / 0.29 deg` for pregrasp,
+  `0.0046 m / 0.60 deg` for the fraction-`1.0` `0.023 m` approach, and
+  `0.0012 m / 0.15 deg` for the fraction-`1.0` `0.040 m` grasp. Close-range
+  clipping/occlusion preserved the immutable plan without centroid retargeting.
+- The new plan-bound close was exercised on hardware for the first time:
+  `required_open_width=0.0405 m`, preload `0.0020 m`, target `0.0385 m`.
+  The mechanical-limit `0.0000 m` target was explicitly not used. The gripper
+  held around raw command `769` and feedback `772`.
+- The planned fraction-`1.0` `0.057 m` lift reached its physical endpoint. The
+  controller reported `GOAL_TOLERANCE_VIOLATED` for Joint2, so the task applied
+  the unchanged measured-FK recovery contract instead of accepting controller
+  prose. Three measurements passed the original `0.006 m / 5 deg` limits; the
+  final endpoint was `0.0008 m / 0.24 deg`. The task reported
+  `SUCCESS 6D grasp done`, and the exact runner returned
+  `success=True, message=success`.
+- After success, joint feedback remained continuous, self-check returned to and
+  held `0x03FF`, commands continued, and the gripper retained the carton. A few
+  isolated corrupt temperature/feedback events were rejected and did not remove
+  torque. This run did not reproduce the previous post-capture torque loss; it
+  is one hardware proof, not a universal reliability claim.
+- No stop, disable, torque-off, controller-stop, emergency, or gripper-open
+  command was sent. The arm remains enabled and holding the lifted carton at the
+  end of this record.
+- Focused observation-reference, roll-lattice, envelope-ordering, strict-MoveIt,
+  and live-plan contract tests passed `6/6`; Python compilation and
+  `git diff --check` passed. A broad repository suite was intentionally not run
+  for this hardware continuation and is not claimed here.
+
+### 2026-08-02 - videos 26/27 and fresh full-system launch
+
+- Video `/home/zhuyupei/Videos/26.mp4` is HEVC `720x1280`, `50.866667 s`,
+  1524 frames and records the prior run's far-field phase. Video
+  `/home/zhuyupei/Videos/27.mp4` is HEVC `720x1280`, `89.166667 s`, 2672 frames
+  and records near-field pregrasp, Cartesian approach/grasp, and close. The
+  operator states that the successful lift followed but was not recorded.
+- Frame-by-frame inspection of video 27 shows that the carton is already closer
+  to one finger before close. The nearer finger contacts first and translates/
+  rotates the carton slightly before bilateral capture. This visible event is
+  not a late joint-error correction and does not originate during lift.
+- The executed contact tool0 pose was
+  `xyz=(-0.084,-0.437,0.075)`, `q=(0.150,0.975,-0.087,0.140)`. Applying the
+  checked-in Alicia 50 mm CAD finger-pair offset gives lateral finger center
+  approximately `(-0.0917,-0.4302) m`, while the frozen near-field perception
+  center was approximately `(-0.091,-0.429) m`. The `1--2 mm` lateral contract
+  difference and measured tool endpoint `0.0012 m / 0.15 deg` show that the
+  planner, Cartesian trajectory, and robot followed the perceived target.
+- The residual physical offset is therefore outside the path planner. The
+  deployed pruned-25 `T_tool_camera` is still temporary and has known five-fold
+  held-out translation `6.136/9.786 mm` RMS/maximum, consistent in magnitude
+  with the visible one-sided first contact. Mechanical jaw synchrony may add a
+  smaller component. No fixed base-frame or object-orientation compensation is
+  accepted because it would rotate incorrectly with the wrist and violate the
+  arbitrary-yaw objective.
+- A fresh full system was launched from the current worktree with the real arm,
+  D405, GUI, remote protocol-v3 GraspNet endpoint, and
+  `auto_torque_on_startup=true`. The positive enable was confirmed by measured
+  directional encoder response (`motion_enabled=true`); feedback remained
+  continuous, self-check held `0x03FF`, and measured temperature was about
+  `35 C`. The operator aligned the target to about image `(315,265)`, depth
+  `0.307 m`, confidence `0.899`.
+- The checked-in calibration interlock intentionally reset to `true` on the
+  fresh launch. No candidate was executed, and no stop, disable, torque-off,
+  controller-stop, or emergency command was sent in this phase.
+
+### 2026-08-02 - pre-contact feedback failure, driver repair, and powered restart
+
+- The operator authorized the temporary calibration-interlock override and a
+  physical grasp. An old preview first failed `PLAN_STALE` before motion. Fresh
+  far-field plan `3b3c317b365635101494af70` completed its observation move but
+  found no hard-safe near-field candidate. A fresh retry reused the reached
+  observation region and plan `5b36a8adc895b4792e9f9f7`; near-field request
+  generation `9` retained one learned candidate, ranked seven current results,
+  and rebound strict contact plan `89849acc7be4a693c206dbec` from a selected
+  `tabletop_geometry` candidate inside the unchanged phase deadline.
+- The `74.664 s` near-field pregrasp trajectory completed at the frozen target
+  `xyz=(-0.106,-0.435,0.109)`,
+  `q=(0.125,0.986,-0.087,0.071)`. Close-range clipping did not raise
+  `TARGET_DRIFT`, retarget translation, or revoke frozen-plan authority. The
+  task then entered its task-scoped endpoint feedback trim; it never submitted
+  the Cartesian approach, grasp, close, or lift.
+- During that trim, CRC-valid joint payloads alternated Joint4 among about
+  `-9.6`, `130`, and `179.9 deg`, sometimes changed other joints by nearly
+  `180 deg`, and reported changing `E1/E2` status. Temperature responses in the
+  same interval contained `164`, `239`, and `250 C`, while self-check masks
+  changed among values including `0x03FF`, `0x000F`, `0x0000`, and `0x000C`.
+  Camera-space target depth remained about `0.190--0.193 m`, while accepting a
+  false joint discontinuity produced large base-frame target jumps. These
+  correlated semantic contradictions do not identify an unverified transport,
+  firmware, sensor, wiring, thermal, or mechanical root cause.
+- The old joint parser refreshed `last_feedback_time_` even when it rejected a
+  candidate and continued publishing the previously accepted pose. It also
+  limited streamed-command consistency to one feedback timeout, so repeated
+  multi-radian candidates could later pass temporal confirmation after command
+  streaming was blocked. Endpoint trim therefore kept seeing an apparently
+  fresh held pose. A repeated implausible temperature channel then entered
+  `OVERHEAT_BLOCKED`; `/grasp/start` returned `failed`, stage `7`, with the
+  execution slot released. No object contact occurred.
+- No `/grasp/stop`, disable, emergency, explicit controller-stop, gripper-open,
+  or torque-off frame was sent. The driver repeatedly logged that E1/E2 and the
+  software command block left physical motion enable unchanged. The operator
+  later powered the arm off. Only after physical power removal, the old ROS
+  launch was exited so it could not reconnect on the obsolete binary; normal
+  process teardown unloaded its software controllers but sent no arm
+  torque-off or disable frame.
+- The repaired joint parser now updates `last_feedback_time_`, real-feedback
+  readiness, `/joint_states`, command seeding, and actuation confirmation only
+  for an accepted joint candidate. The last successfully streamed position
+  remains the discontinuity consistency reference after its ordinary freshness
+  interval, while physically bounded incremental feedback and reconnect
+  initialization remain available for genuine motion.
+- Temperature channels above the configurable semantic plausibility ceiling
+  (`125 C` by default) are published internally as invalid and cannot accumulate
+  a protection streak. Valid channels in the same response are not discarded:
+  they continue to enforce the unchanged `60 C`, three-consecutive-sample,
+  same-channel block with E1/E2. Thus one impossible `239 C` byte cannot cause
+  a false latch or hide a separate plausible `60--61 C` channel.
+- Focused serial-driver resilience tests passed `8/8`, `git diff --check`
+  passed for the affected files, and the Release `alicia_d_driver` catkin build
+  completed. No hardware command was issued by these offline steps.
+- After the operator reported power restored, a new full-system launch loaded
+  the rebuilt driver and requested only positive startup torque-on. Fresh
+  feedback began near the powered zero pose with `status=0x00`, temperatures
+  about `43 C`, and self-check `0x03FF`. A small controller target produced a
+  measured same-direction encoder response and established
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`. Subsequent GUI moves of Joint1,
+  Joint2, Joint3, and Joint5 were continuously followed to roughly
+  `[-103.4,16.7,-7.4,0.0,-7.6,0.4] deg`; temperature remained mostly
+  `43--44 C`, self-check remained `0x03FF`, and no multi-radian corrupt joint
+  candidate or above-ceiling temperature channel appeared in this initial
+  post-restart window.
+- Runtime calibration interlock was temporarily released for this authorized
+  run with reason
+  `USER_OVERRIDE_TEMPORARY_20260802_ALIGNED_AUTOMATIC_6D_SERIAL_FEEDBACK_FIX_VALIDATION`.
+  The checked-in default remains interlocked, and the temporary pruned-25 TF is
+  not relabeled as formally validated. No second 6D candidate or physical
+  contact had been started at the end of this entry.
+
+### 2026-08-02 - videos 28/29, physical miss, and lift-end oscillation evidence
+
+- Video `/home/zhuyupei/Videos/28.mp4` is H.264 `720x1280`, `30 fps`,
+  `66.038 s`, 1980 frames and records the second-stage trajectory. Video
+  `/home/zhuyupei/Videos/29.mp4` is H.264 `720x1280`, `30 fps`, `9.553 s`,
+  286 frames and records the final post-contact action. The external videos do
+  not carry a ROS clock, so their ordering is correlated with the task event
+  sequence rather than assigned invented absolute timestamps.
+- Frame inspection of video 28 shows that the carton is not centered between
+  the two physical fingers before closure. One finger contacts first and pushes/
+  rotates the carton upright; bilateral capture is never established. Video 29
+  then shows the carton remaining on the table while the empty gripper moves
+  back and forth near the lifted pose. The second motion is not a GraspNet
+  planned outbound/return segment.
+- The fresh far plan was `0d03b8525f51d417a4676a51`, frozen source stamp
+  `1785724329316317796`; near-field rebound contact plan was
+  `641db3f76ac5650bff55de2d`. Near-field planning finished in about `16.24 s`,
+  within the unchanged `30.0 s` phase deadline. The learned near-field limit
+  remained one candidate.
+- The executed plan commanded pregrasp tool0
+  `(-0.106,-0.431,0.130) m`, approach `(-0.117,-0.432,0.111) m`, grasp
+  `(-0.110,-0.439,0.075) m`, and lift `(-0.107,-0.432,0.120) m`.
+  Both Cartesian approach and grasp returned controller `SUCCEEDED`. The close
+  remained plan-bound: required width `38.6 mm`, preload `2.0 mm`, target
+  `36.6 mm`; the old mechanical-limit close was not used.
+- Applying the unchanged gripper CAD finger-pair offset to the frozen grasp pose
+  gives a planned finger-pair center near
+  `(-0.1165,-0.4330,0.1039) m`. The near-field visual target was stable around
+  `(-0.117,-0.431,0.084) m`, so the software mapping is centered in XY to about
+  `2 mm`. The video-visible physical miss therefore cannot be explained by
+  candidate target-center arithmetic or by the executed Cartesian path alone.
+- A separate active-URDF/STL audit transformed both `Link7/Link8` collision-mesh
+  AABBs into `tool0`. Their common center is approximately
+  `[0.0000,0.000302,-0.030000] m`; the analytical grasp contract uses
+  `[0.0004,0.0003,-0.0302] m`, a total difference of about `0.45 mm` and within
+  the existing `0.5 mm` CAD contract tolerance. The tool0-to-finger-center
+  geometry therefore cannot account for the multi-millimetre video miss.
+- The carton width was `38.6 mm` against the `50.0 mm` maximum opening, leaving
+  only about `5.7 mm` one-sided centering margin. The temporarily deployed
+  pruned-25 hand-eye transform has known held-out translation error
+  `6.136/9.786 mm` RMS/maximum and has never passed the formal `3/5 mm` gate.
+  That uncertainty is already larger than the available jaw margin and is
+  consistent with one-finger-first contact. This is evidence for a physical
+  camera-to-jaw calibration mismatch, not authorization to add a guessed
+  base-frame offset, change target center, or constrain the carton yaw.
+- The planned lift was submitted but the controller aborted with
+  `GOAL_TOLERANCE_VIOLATED: Joint2 goal error 0.065931 rad`. Task-scoped endpoint
+  correction reduced the error but the measured tool0 residual settled at
+  `8.4 mm / 1.54 deg`, outside the unchanged `6 mm / 5 deg` endpoint contract,
+  and the task correctly failed with `MEASURED_ENDPOINT_POSITION_ERROR`.
+- Driver evidence shows a global six-joint feedback-stability gate: roughly
+  one-degree Joint5 encoder/servo motion repeatedly reset the common stable
+  timestamp even while Joint2 still needed a small independent correction.
+  After the task lease was released, updates stopped but the accumulated
+  correction remained as a fixed held target to avoid rebound. The fixed target
+  and continuing servo response coincide with the empty-arm back-and-forth
+  visible in video 29; the log does not support calling it a planned trajectory.
+- The operator physically powered the arm off after the failure. Feedback then
+  became stale as expected from physical power removal. ROS was subsequently
+  exited with normal process teardown only; no `/grasp/stop`, disable,
+  torque-off, emergency, gripper-open, or controller-stop command was sent.
+- Repair direction is now recorded before implementation: replace the global
+  stability coupling with per-joint stability/update eligibility and prevent a
+  released failed task from retaining an over-corrected hunting target. Keep
+  TF/TCP definitions, visual target center, `40 mm` drift threshold, motion
+  tolerances, and arbitrary-yaw grasp coverage unchanged. The physical-centering
+  issue still requires a calibration result whose measured uncertainty fits the
+  available jaw margin; it must not be hidden by an empirical target shift.
+- The driver repair now gives every joint its own feedback anchor, stability
+  timestamp, response-expected mask, and update eligibility. A joint is updated
+  only when that joint is stable and its error exceeds the unchanged two-quantum
+  round-trip floor; movement on another joint no longer resets it. Stalled
+  retries are restricted to the joints that were actually corrected.
+- Normal lease release and the finite lease watchdog now replace the accumulated
+  outer-loop command with a fresh measured-joint hold latch when valid feedback
+  is available. Repeated controller messages for the unchanged reference retain
+  that physical pose; the first genuinely different GUI/task target clears it.
+  This is a position hold only and sends no stop, disable, torque-off, emergency,
+  or controller-stop command.
+- Contact execution now has an orientation-independent calibration-centering
+  margin gate. It compares `(physical_opening - required_open_width)/2` with the
+  configured measured hand-eye translation maximum. For this carton the values
+  are `5.7 mm` and `9.786 mm`, respectively, so contact is rejected with
+  `CALIBRATION_CENTERING_MARGIN`. The ordinary calibration interlock reason is
+  now `HAND_EYE_UNCERTAINTY_EXCEEDS_GRASP_CENTERING_MARGIN`; a separate explicit
+  centering-margin override defaults to `false`, so a generic temporary
+  interlock release cannot silently erase the newly observed contradiction.
+- A narrower object/candidate with enough physical margin passes independently
+  of planar yaw. The gate does not translate the target, alter candidate
+  orientation, change TF/TCP, or modify any motion/drift tolerance.
+- Affected offline validation passed: grasp-task sequence `152/152`, gripper CAD
+  geometry `100/100`, driver/MoveIt and default-configuration contracts `18/18`,
+  focused centering tests `2/2`, Python compilation, `git diff --check`, and the
+  Release `alicia_d_driver` catkin build. The arm remained physically powered
+  off throughout these edits and tests; no hardware command was issued.
+
+### 2026-08-02 - fresh minimal eye-on-hand recalibration stack started
+
+- At the operator's request, started the current worktree's minimal calibration
+  runtime rather than the grasp system: real Alicia bringup, robot-state TF,
+  D405 V4L2 color stream, ChArUco tracker, a new easy_handeye backend, the
+  direct-joint minimal pose/sample panel, and the annotated `/charuco/result`
+  image view. No grasp task, remote 6D planner, supervisor GUI, tactile node,
+  easy_handeye automatic-motion UI, rqt sampling UI, or RViz was started.
+- The driver opened `/dev/alicia_arm` at `1000000` baud and requested only
+  positive startup torque-on. Real feedback remained near
+  `[0.0,-0.5,-0.6,-0.2,-0.6,-0.2] deg`, official self-check repeatedly read
+  `0x03FF`, and ordinary temperatures were about `32--35 C`. Isolated E1 events
+  and one non-consecutive high channel did not meet the unchanged sustained
+  same-channel protection contract; no torque-off was sent. Actuation remains
+  `PENDING:POSITIVE_ENABLE_REQUESTED` until the first operator panel jog yields
+  measured directional response.
+- Created a fresh empty calibration authority at
+  `/d405_cc200_recalib_20260802_eye_on_hand`, with
+  `base_link -> tool0` and
+  `camera_link -> charuco_board_cc200_20260802` sample inputs. The backend uses
+  `eye_on_hand=true`, `freehand_robot_movement=true`, and
+  `publish_dummy=false`; it does not publish a competing tool-camera TF and has
+  not called `compute_calibration` or `save_calibration`.
+- The tracker uses the independently established board contract: `12x9`,
+  `15 mm` squares, `11.25 mm` markers, `DICT_5X5_100`, and `2x` detector input.
+  Its first current quality message reported the correct configuration but
+  `markers=0`, `corners=0`, `pose_ok=false`, so the board is not yet in view and
+  the panel cannot save a sample. The next operator action is to use the minimal
+  joint panel to bring the fixed board fully into the annotated image.
+- Online nodes and the new namespace's `take_sample`, `get_sample_list`,
+  `compute_calibration`, `set_algorithm`, and `save_calibration` services were
+  observed. No sample, calibration file, interlock, gripper, grasp, stop,
+  disable, torque-off, emergency, or controller-stop command was issued during
+  startup.
+- After the operator fixed the board, live quality passed before the first
+  sample (`40` ChArUco corners, `29` markers, `147.44 px` edge clearance,
+  `0.272 px` reprojection RMS, `pose_ok=true`) and driver actuation status was
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`.
+- The operator then saved sample 1 and the new backend returned exactly one
+  paired `base_link -> tool0` / `camera_link -> board` observation. Immediate
+  post-save quality remained valid (`47` corners, `33` markers, `147.61 px`
+  edge clearance, `0.360 px` reprojection RMS). The corresponding measured arm
+  joints were `[-1.842311, 0.309864, -0.118117, 0.010738, -0.098175,
+  0.001534] rad`. No calibration was computed or persisted at this one-sample
+  stage.
+
+### 2026-08-02 - fresh thirty-sample solve improved but failed formal validation
+
+- The operator collected `30` samples in the fresh
+  `/d405_cc200_recalib_20260802_eye_on_hand` session. A read-only run of
+  `handeye_sample_audit.py` confirmed 30 paired observations and wrote the full
+  five-algorithm report to `logs/2026-08-02-handeye-sample-audit.json`.
+- Against the unchanged `3/5 mm` translation RMS/maximum and `1/2 deg`
+  orientation RMS/maximum cross-validation gates, all five full-data methods
+  failed:
+  - Daniilidis: `3.642/7.585 mm`, `0.992/2.510 deg`;
+  - Horaud: `4.492/9.240 mm`, `0.985/2.509 deg`;
+  - Park: `4.492/9.247 mm`, `0.985/2.508 deg`;
+  - Tsai-Lenz: `4.533/9.219 mm`, `0.991/2.514 deg`;
+  - Andreff: `7.705/12.247 mm`, `0.985/2.509 deg`.
+- This fresh set is materially better than the rejected 2026-08-01 set, but it
+  is still not a valid precision calibration. Daniilidis was numerically best;
+  its five-fold candidate spread was `2.528/4.571 mm` and
+  `0.752/1.485 deg` RMS/maximum. Samples 1 and 30 appeared repeatedly among the
+  largest residuals.
+- In-memory Daniilidis sensitivity checks did not delete any backend sample.
+  Removing sample 1 or 30 alone still failed. Removing both left 28 samples at
+  `3.146/5.609 mm`, `0.823/1.663 deg`, still outside both translation limits;
+  the two excluded observations were inconsistent with that fit by
+  `7.222/7.481 mm`, `2.302/2.600 deg`. Even selection-biased removal of samples
+  `1,4,15,18,30` left the 25-sample maximum at `5.455 mm`, while the held-out
+  set remained inconsistent. The evidence therefore does not justify pruning
+  and accepting this session.
+- The official backend was temporarily set to `OpenCV/Daniilidis` and
+  `compute_calibration` exactly reproduced the offline candidate:
+  translation `[-0.0800578627415, 0.00616637262712,
+  -0.135600002281] m`, quaternion xyzw
+  `[0.0173235370483, -0.723920703270, 0.0238264294217,
+  0.689253952982]`. Its service-level `valid=true` means the numerical solve
+  exists; it does not supersede the failed measured-error gates.
+- The backend selection was restored to `OpenCV/Tsai-Lenz` and
+  `save_calibration` was not called. The existing persistent easy_handeye file
+  remained at SHA-256
+  `30afaa1057d9f41d486657259ba630e65bfcf32b61e39ac6e8b5db894026e9ca`;
+  no new namespace file exists. No TF was replaced or published, no interlock
+  was released, and no arm, gripper, stop, disable, torque-off, emergency, or
+  controller-stop command was sent during this computation and validation.
+
+### 2026-08-02 - operator-authorized pruned-28 persistence and runtime interlock release
+
+- After being shown that excluding samples 1 and 30 still leaves translation
+  cross-validation at `3.146/5.609 mm` against the unchanged `3/5 mm` limits,
+  the operator explicitly directed that this pruned result become the new
+  continuing TF and that the calibration interlock be released temporarily.
+  This authorization changes deployment, not the recorded validation verdict.
+- Removed zero-based sample 29 first and then zero-based sample 0 from the live
+  calibration backend, preserving the requested original-index meaning. The
+  backend then reported exactly `28` robot observations and `28` camera/board
+  observations. `OpenCV/Daniilidis` official recomputation returned
+  `valid=true` and exactly matched the offline candidate: translation
+  `[-0.07871787621671505, 0.005044897787180159,
+  -0.13783896256445793] m`, quaternion xyzw
+  `[0.020886305332462274, -0.7227629402161271,
+  0.02978465572232033, 0.6901379346066996]`.
+- Called `save_calibration` under that explicit authorization. The result was
+  written as a new file,
+  `~/.ros/easy_handeye/d405_cc200_recalib_20260802_eye_on_hand.yaml`, SHA-256
+  `5a1cc62e81f8b10ca5ee64a69bf5dbfc57fe2362c2f1ec20d3eed8861adf4b8b`.
+  The previous canonical pruned-25 file remains unchanged at SHA-256
+  `30afaa1057d9f41d486657259ba630e65bfcf32b61e39ac6e8b5db894026e9ca`.
+- Updated `config/handeye.yaml` so subsequent normal starts and the configured
+  fallback use the new file and exact same transform. Updated the measured
+  maximum translation error to `0.00560877893301 m`; the formal thresholds,
+  TF/TCP frame definitions, target center, 40 mm drift threshold, centering
+  gate, and motion tolerances were not changed. The persistent interlock
+  remains enabled with reason `HAND_EYE_TRANSLATION_CROSS_VALIDATION_FAILED`.
+- Reloaded the new hand-eye and grasp parameters into the current ROS Master,
+  then set only `/grasp/calibration_interlock_active=false` for this authorized
+  runtime. `/grasp/calibration_centering_margin_override` remains `false`.
+  A subsequent launch that reloads the checked-in defaults will restore the
+  persistent interlock and requires the same runtime authorization to release
+  it again.
+- Wrote the post-pruning five-algorithm audit to
+  `logs/2026-08-02-handeye-pruned28-audit.json`. No arm, gripper, grasp, stop,
+  disable, torque-off, emergency, or controller-stop command was sent during
+  pruning, computation, persistence, parameter reload, or documentation.
+
+### 2026-08-02 - current 6D attempts and permanent GUI direct-control recovery
+
+- Started the current worktree's complete ROS stack with the real arm, D405,
+  MoveIt, supervisor GUI and the authorized remote protocol-v3 endpoint at
+  `http://172.23.132.97:8000`. Startup requested positive torque-on and a small
+  Joint6 directional probe established
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`; the probe then returned to its
+  measured starting target. The operator authorized only the current runtime
+  `/grasp/calibration_interlock_active=false`; the independent
+  `/grasp/calibration_centering_margin_override` remained `false`.
+- Three executions made no object contact. Far plan
+  `cc3d1db2717f1eb941fea6d3` stopped at the unchanged `40 mm` drift contract
+  with measured `45 mm` target drift. Fresh plan
+  `5412b59c4b5a5120c5abda85` reached near-field planning, but all attempted
+  strict pregrasp/approach sequences were unreachable or below the unchanged
+  `0.98` Cartesian fraction and ended
+  `NEAR_FIELD_DIRECT_TIMEOUT`. Fresh promoted plan
+  `8bc551cadb0dc4d765fb51c4` was rejected before motion as
+  `ACTUATION_UNCONFIRMED:OVERHEAT_BLOCKED:SUSTAINED_SAME_CHANNEL_TEMPERATURE`.
+  The execution slot was released and none of these failures submitted close,
+  contact or lift.
+- After the final failure, the operator's GUI Joint2 target reached the real
+  driver but was logged as `Rejected /joint_commands target:
+  OVERHEAT_BLOCKED`. The GUI connection, driver and encoder stream were alive;
+  this was not a missing slider publisher. Current accepted temperatures were
+  generally `51--52 C` with same-channel over-limit streak `0/3`, while the
+  firmware run-status often remained `0xE1`. The earlier protection decision
+  intentionally stayed latched until a new explicit positive-enable request,
+  so the old GUI's target-only behavior could not recover it. This is the same
+  manual-terminal recovery gap recorded on 2026-08-01.
+- Added `DirectControlRecovery` to the joint-control GUI. An actual direct
+  slider target in `DISABLED`, `UNCONFIRMED` or `OVERHEAT_BLOCKED` sends exactly
+  one `/demonstration=false` positive-enable request, retains only that GUI
+  target for at most `2.0 s`, requires a `/joint_states` sample newer than the
+  request, and then publishes the target once. It does not publish while the
+  positive-enable reset has invalidated feedback. A rejected enable is not
+  retried by the background timer; another explicit slider action is required
+  after the `0.5 s` request throttle. Unknown startup status is also queued
+  rather than silently lost.
+- Static and state-machine regressions prove blocked-to-pending-to-fresh-
+  feedback replay, single publication, no background retry, timeout target
+  disposal, normal confirmed pass-through, startup status handoff, and the
+  absence of any `demonstration=true` value. Focused GUI tests passed `8/8`;
+  combined GUI/driver resilience tests passed `16/16`; complete supervisor
+  discovery passed `678/678`. Python compilation, `git diff --check`, and the
+  Release `alicia_flexible_grasp_supervisor` catkin build passed.
+- Only `/alicia_supervisor_gui` was replaced to load the Python repair. The old
+  Qt process did not exit after ROS unregistration, so it was terminated after
+  the new node registered; the real driver, hardware interface, MoveIt,
+  camera, perception, grasp and remote nodes were not restarted. This
+  deployment sent no joint, grasp, gripper, stop, disable, torque-off or
+  emergency command. Live proof still requires the operator to synchronize the
+  new GUI, enter direct mode and make one small slider change so the log can
+  show the new positive-enable/fresh-feedback/directional-response sequence.
+- The first live GUI recovery attempt then produced exactly one positive
+  request at ROS time `1785733646.743`: the driver changed from the retained
+  block to `PENDING:POSITIVE_ENABLE_REQUESTED` and wrote only its existing
+  torque-on frame. Fresh encoder feedback resumed, but the first replayed
+  Joint2 slider target was about `-20.5 deg` versus measured `-24.7 deg`, a
+  `4.2 deg` difference above the driver's unchanged `0.05 rad` (`2.86 deg`)
+  reconnect synchronization tolerance. It was correctly rejected as
+  `STALE_COMMAND_AFTER_RECONNECT`; later wider Joint2 slider targets were also
+  rejected. Joint2 feedback remained at about `-24.7 deg`, so this attempt did
+  not prove directional motion and did not move the arm through the rejected
+  targets.
+- That live result exposed a missing intermediate step rather than a reason to
+  widen the driver tolerance. Recovery now stores the newest full measured
+  GUI-order joint vector received after positive enable, publishes that exact
+  pose as a zero-motion synchronization target, waits for
+  `PENDING:COMMAND_SYNCHRONIZED` (or newer measured confirmation), and only
+  then publishes the user's retained slider target once. If positive enable
+  remains rejected, not even the zero-motion target is published. This keeps
+  stale task/controller targets outside synchronization while allowing the
+  user's first slider change to exceed `0.05 rad`.
+- The operator physically powered the arm off after this non-motion result.
+  Feedback then became stale as expected; no software stop, disable,
+  `/demonstration=true`, torque-off, emergency or grasp command was sent. The
+  second-stage GUI recovery passed focused tests `9/9`, combined GUI/driver
+  resilience tests `17/17`, full supervisor discovery `679/679`, Python
+  compilation and `git diff --check`.
+- The GUI was then restarted from current source in direct-control mode while
+  preserving the existing controller state. After the operator powered the arm
+  back on, feedback settled near
+  `[-0.4,-0.7,-0.7,-0.3,-0.6,-0.4] deg`. The next explicit Joint2 slider action
+  produced a zero-motion synchronization target at ROS time
+  `1785734300.970`, followed by
+  `PENDING:COMMAND_SYNCHRONIZED`,
+  `PENDING:AWAITING_ENCODER_RESPONSE`, and
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE` at `1785734301.274`. Measured
+  Joint2 changed from about `-0.7 deg` to `-3.4 deg` in the commanded direction
+  for a final GUI target near `-2.7 deg`. The operator subsequently used the
+  sliders to place the arm at the new observation pose near
+  `[-104.9,17.4,-6.3,-0.4,-11.2,-0.1] deg`, providing additional physical
+  proof that direct GUI control remained usable after the prior 6D failures.
+- The private hot-deployment override that starts this replacement GUI in
+  direct mode without changing controller state added one regression. Focused
+  GUI plus driver-resilience coverage passed `18/18`, and the correctly sourced
+  complete supervisor discovery passed `680/680`. An earlier unsourced discovery
+  attempt failed only because generated ROS message modules were absent from
+  `PYTHONPATH`; rerunning after `source devel/setup.bash` passed all tests.
+- With the target aligned, current-run parameters were set exactly as
+  authorized: `/grasp/calibration_interlock_active=false` and independent
+  `/grasp/calibration_centering_margin_override=false`. Continuous remote 6D
+  inference first promoted `ee3f12a77acb07ee939b3c44`; an execution request
+  for that ID was rejected without motion after it was superseded by
+  `3328003d617ee660b4f1279e`. Candidate refresh was then stopped (the arm and
+  joint enable were not stopped), and `/grasp/current_plan` returned frozen
+  plan `19853a5f8334fede6b7be0de` with `validation=VALID`.
+- Plan `19853a5f8334fede6b7be0de` executed its strict far-field observation
+  trajectory successfully. The fresh camera range was `0.1935 m`, inside the
+  unchanged `[0.1800,0.2200] m` contract, so the task entered near-field
+  planning. Request `319` produced `139` raw candidates, `21` after NMS, `8`
+  after remote collision filtering, and `1` returned candidate. Its learned
+  jaw geometry required `47.939698 deg` insertion tilt, above the live adaptive
+  hard bound `31.779377 deg`; its orientation variant also lacked a common
+  bilateral contact patch. The primary rejection was therefore
+  `GRASPNET_STAGE_PROFILE_UNAVAILABLE`, not a transport, target-loss, TF/TCP,
+  or MoveIt-execution failure. With no hard-safe local candidate, the task
+  ended at ROS time `1785734940.040` with
+  `NEAR_FIELD_NO_HARD_SAFE_CANDIDATE` and released its execution slot. No
+  contact, close, or lift command was submitted. No arm-stop, disable,
+  `/demonstration=true`, torque-off, emergency, controller-stop, or
+  `/grasp/stop` command was sent.
+
+### 2026-08-02 - far-field Joint4 tracking-bound diagnosis and offline repair
+
+- Frozen plan `0a38b2907abbc273f4ae3457` passed the strict MoveIt far-field
+  check and selected the endpoint-safe `-75 deg` camera-roll branch. Its exact
+  cached trajectory was retimed to `23.647 s`; the reference advanced Joint4
+  from about `1.6 deg` to `48.7 deg` at roughly `0.048 rad/s`. Measured Joint4
+  followed to about `42.1 deg`, then the controller returned
+  `PATH_TOLERANCE_VIOLATED: Joint4 path error 0.120766`. This exceeded the
+  unchanged `0.120000 rad` path tolerance by only `0.000766 rad`, or about
+  `0.044 deg`. The measured far-field endpoint residual was
+  `0.0490 m / 29.01 deg`, and the task correctly forbade a second physical
+  trajectory after controller failure. No contact, close or lift occurred.
+- The earlier successful plan `19853a5f8334fede6b7be0de` selected `-60 deg`
+  and completed a `43.022 s` far-field path. Its Joint4 reference and feedback
+  stayed near `0.021--0.023 rad/s`. A separate historical `-75 deg` path in
+  the same prior launch failed at Joint4 `0.120446 rad` while commanding about
+  `0.042 rad/s`, despite that launch having
+  `self_check_poll_rate_hz:=0.0`. Both failed traces contain `2--3 s` Joint4
+  feedback plateaus. The repeated result separates strict reachability from
+  real sustained tracking and does not justify changing controller tolerance.
+- Added an evidence-backed `Joint4: 0.02` entry beside the existing Joint3
+  per-joint strict-execution velocity bound. The retimer preserves the exact
+  MoveIt joint path and scales time, velocities and accelerations together;
+  the change is generic to Joint4 and does not select a fixed camera roll or
+  modify object pose, yaw, TF/TCP, candidate geometry, endpoint tolerance or
+  path tolerance.
+- The current launch omitted the prior explicit self-check override and used
+  the `0.5 Hz` default. During the failed trajectory the official mask fell
+  from `0x03FF` through `0x000F/0x000C/0x0003` to `0x0000`, with impossible
+  temperature bytes and rejected 180-degree joint frames. This is an
+  aggravating half-duplex transport condition, not the sole cause because the
+  old `-75 deg` failure occurred with self-check polling disabled.
+- The driver now defers temperature and official self-check queries while a
+  joint/gripper reference is changing, while the target differs from fresh
+  measured joints by more than `0.02 rad`, or while feedback is stale. Every
+  such poll slot remains a joint-state query. Diagnostic queries resume only
+  after at least `0.5 s` of unchanged reference and measured convergence; the
+  run-status byte in ordinary joint feedback remains available throughout.
+- The operator powered the arm off before this analysis. Only log reads,
+  source edits, unit tests and an offline Release driver build were performed.
+  No arm, gripper, grasp, stop, disable, `/demonstration=true`, torque-off,
+  emergency, controller-stop or `/grasp/stop` command was sent, and the running
+  ROS driver has not been hot-replaced. Focused MoveIt/configuration tests
+  passed `52/52`; complete supervisor discovery passed `681/681`. The two
+  localhost HTTP mock cases initially encountered the sandbox socket ban and
+  then passed with the identical module test outside that sandbox. Python
+  compilation, `alicia_d_driver` Release build and `git diff --check` passed.
+  Powered verification remains pending a deliberate ROS restart after the
+  operator reports power restored.
+
+### 2026-08-02 - powered feedback-discontinuity closure and unresolved servo enable
+
+- Restarted the complete current stack and loaded the new Joint4 `0.02 rad/s`
+  strict-execution bound plus motion-time diagnostic-query deferral. Startup
+  sent only the configured positive torque-on request. During teardown of the
+  previous full launch, controller spawner's standard shutdown path
+  automatically printed `Stopping all controllers...`; no explicit arm stop,
+  disable, torque-off, emergency, `/grasp/stop`, or controller-manager stop
+  request was issued by the operator workflow. After observing that implicit
+  software-controller cleanup, every subsequent deployment replaced only the
+  non-required driver node and left the full launch and controllers running.
+- Initial real feedback was
+  `[-108.5,26.5,-6.3,-6.2,-13.6,12.7] deg`. A CRC-valid payload then changed
+  Joint2 by exactly `+90 deg`; the old parser rejected the first copy but
+  accepted the identical second copy. The camera observation remained near
+  `uv=(311,284)`, depth `0.322 m`, while the base-frame target changed with the
+  false FK. This separated repeated transport corruption from physical arm
+  motion.
+- Added a RED regression and changed discontinuity confirmation so repetition
+  alone is insufficient. A jump now requires a retained successfully streamed
+  command and a material reduction of error toward that command. Without that
+  evidence, repeated candidates remain unpublished and cannot refresh driver
+  feedback or actuation state. The first focused RED test failed on the old
+  implementation and passed after the repair.
+- Hot-deployed the rebuilt driver. It produced stable real feedback, then
+  rejected a repeated Joint3 transition from `-6.3 deg` to `-26.6 deg` as
+  command-inconsistent for about 80 frames. A subsequent `0.624 s` response
+  gap nevertheless widened the old physical velocity allowance enough to
+  admit the `0.35435 rad` discontinuity. Its later return toward the retained
+  `-6.3 deg` command was accepted as command-consistent and incorrectly caused
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`.
+- Added a second RED regression. Direct jump plausibility now uses at most two
+  nominal state-poll periods; longer telemetry gaps cannot enlarge it. Any
+  accepted command-consistent discontinuity first marks actuation
+  `UNCONFIRMED:DISCONTINUOUS_FEEDBACK_RECOVERY` and clears the active probe
+  before recording the recovered sample, so transport recovery cannot prove
+  servo response.
+- The operator then moved the Joint6 GUI slider. Direct-control recovery
+  correctly delivered the current-pose synchronization target and the user
+  target to the driver; SDK command writes reported success. Measured Joint6
+  remained `12.7 deg` while targets progressed through `13.4`, `14.6`, `23.5`,
+  `47.3`, later `2.1`, and in the final bounded retry ultimately `-6.2 deg`.
+  The repaired driver consistently reported
+  `UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT`; it did not repeat the false positive.
+  The GUI publisher, sync handoff, serial connection and position-command write
+  path are therefore live, but positive torque-on has not produced physical
+  Joint6 actuation in this controller state.
+- Each retained non-moving target was removed by terminating only the driver
+  process. `AliciaDDriverNode::~AliciaDDriverNode()` only disconnects the serial
+  transport; it sends no stop, disable, torque-off or controller-stop frame.
+  A fresh driver reconnect used the unchanged private parameters, sent only
+  positive torque-on, and again showed `status=0x00`, self-check `0x03FF` and
+  temperatures `39--40 C`. One explicitly authorized
+  `/demonstration=false` request after stable feedback also failed to produce
+  Joint6 encoder motion. The driver is currently disconnected so no retained
+  joint target is streaming while the controller is power-cycled.
+- Runtime parameters were set exactly to the current authorization:
+  `/grasp/calibration_interlock_active=false` and
+  `/grasp/calibration_centering_margin_override=false`. No new remote request,
+  6D candidate, frozen plan, grasp start, contact, close, or lift was issued.
+- Current affected verification is serial-driver resilience `10/10`, C++
+  actuation confirmation `11/11`, Release `alicia_d_driver_node` build, and
+  affected-file `git diff --check`, all passing. Physical positive-enable
+  recovery remains pending an operator power cycle with the driver detached;
+  candidate generation remains forbidden until a target-joint encoder response
+  independently re-establishes confirmed actuation.
+
+### 2026-08-02 - powered GUI recovery and automatic bootstrap invalidation
+
+- After arm power returned, the controller emitted all-zero not-ready frames,
+  then a transient startup vector near
+  `[-0.4,97.5,-8.3,0.2,-19.4,0.0] deg`, and finally stable feedback near
+  `[-0.4,-0.6,-0.5,-0.2,-0.6,-0.3] deg`. The old all-zero rejection returned
+  without invalidating an already accepted startup baseline. It consequently
+  rejected the stable Joint2 value against `97.5 deg` as a repeated
+  `1.711923 rad` discontinuity, leaving `/joint_states` and GUI synchronization
+  stale.
+- One explicitly authorized `/demonstration=false` request cleared the retained
+  software bootstrap and sent only positive torque-on. The stable near-zero
+  encoder vector was accepted immediately. The GUI then synchronized its
+  complete target from measured joints, sent Joint6 targets through `2.1 deg`
+  to `5.0 deg`, and measured feedback reached `4.7 deg`. Actuation advanced
+  through `PENDING:COMMAND_SYNCHRONIZED` and
+  `PENDING:AWAITING_ENCODER_RESPONSE` to
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`; the operator independently
+  confirmed physical movement.
+- The permanent parser repair treats an all-zero or all-full-scale encoder
+  sentinel as a controller power/readiness boundary. Before returning, it now
+  calls `clear_retained_command_state()` and marks actuation
+  `UNCONFIRMED:ENCODER_FEEDBACK_NOT_READY`. This invalidates stale feedback,
+  command interpolation, and retained GUI/task targets without changing
+  `motion_commands_enabled_` and without constructing or transmitting any
+  stop, disable, torque-off, controller-stop, or grasp command.
+- The new regression failed against the former branch and passed after the
+  repair. Serial-driver resilience passed `11/11`, C++ actuation confirmation
+  passed `11/11`, the Release `alicia_d_driver_node` build completed, and the
+  affected diff check passed. Only `/alicia_d_driver_node` was hot-replaced;
+  the full launch, controllers, GUI, camera, perception, and task nodes stayed
+  online. The new node retained `auto_torque_on_startup=true`, requested only
+  positive torque-on, and then continuously reported stable feedback near
+  `[-0.4,-1.4,-1.1,-0.3,-0.9,4.7] deg`, self-check `0x03FF`, and ordinary
+  `38--39 C` temperatures. The GUI then synchronized again against this fresh
+  measured vector. Joint6 target changed from `5.0 deg` to `13.4 deg`, measured
+  Joint6 advanced from `4.7 deg` to `13.1 deg`, and the new process reported
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`; the operator confirmed physical
+  movement. No new remote 6D request, grasp, contact, close, or lift was issued.
+
+### 2026-08-03 - Joint6 strict limit and post-failure positive-enable recovery
+
+- Fresh plan `f0d1ee72714862849290f583` passed three-of-three stability,
+  `30/32` hard recheck and one-of-one strict MoveIt planning. Its far-field
+  path nevertheless aborted at `Joint6 path error 0.120741 rad`. The reference
+  ran near `0.039--0.044 rad/s`; measured Joint6 plateaued near `5.4 deg` while
+  the reference reached `12.3 deg`. No near-field, contact, close or lift stage
+  ran, and failed-execution correction remained forbidden.
+- Added `Joint6: 0.02` to the existing generic per-joint strict velocity map.
+  The RED configuration regression failed with missing `Joint6`, then passed;
+  the complete configuration file passed `13/13` and the MoveIt strict
+  execution suite passed `39/39`. No path point, target, yaw, TF/TCP,
+  `0.120 rad` path tolerance, endpoint tolerance, or calibration/centering
+  gate changed.
+- Respawned only `/motion_gateway` as PID `54644` under the still-running main
+  launch. The live map became `{Joint3: 0.02, Joint4: 0.02, Joint6: 0.02}`;
+  runtime calibration interlock and centering override remained `false/false`.
+  Fresh plan `6a8d4d671d72f56f8f8f4f73` then passed three-of-three stability,
+  `16/24` hard recheck and one-of-one strict MoveIt planning, with observation
+  roll `-60 deg` and `object_yaw_used=false`.
+- The new limit was active: the far-field trajectory retimed to `100.138 s`,
+  peak velocity `0.020 rad/s`, `limiting_joint=Joint6`. All six measured joints
+  then remained unchanged for about six seconds while controller and SDK
+  references advanced. The controller aborted at Joint6 `0.120397 rad`; the
+  failure hold measured `actual_delta=0.000000 rad`. This is a post-abort servo
+  execution latch, not another velocity, candidate, reachability or TF/TCP
+  contradiction. No contact stage ran.
+- Added a common strict-failure recovery contract. After installing the fresh
+  measured-position controller hold, `/motion_gateway` now publishes exactly
+  one `std_msgs/Bool(data=False)` on `/demonstration`. The driver therefore
+  clears the failed retained target and requests positive SDK torque-on. It
+  never publishes the `true` disable value, stop, torque-off, controller-stop,
+  emergency or `/grasp/stop`; planning failures and successful executions do
+  not enter this branch.
+- The focused behavior test failed on the previous implementation with no
+  positive-enable publication, then passed with the exact `[False]` request.
+  Motion gateway tests passed `28/28`; related MoveIt/configuration tests passed
+  `52/52`; Python compilation and `git diff --check` passed. Only
+  `/motion_gateway` was respawned again, as PID `55836`. One authorized
+  `/demonstration=false` request recovered the already-failed current run and
+  produced `PENDING:POSITIVE_ENABLE_REQUESTED`; no old motion target remains.
+  A small measured GUI Joint6 proof move is pending before any new remote plan.
+
+### 2026-08-03 - GUI bounded actuation proof and power-cycle requirement
+
+- The pending proof move failed physically. GUI Joint6 targets advanced from
+  about `12.8 deg` through `18.2 deg` to `25.9 deg`; every SDK command write
+  returned success, while measured Joint6 remained `12.0 deg`. Actuation
+  alternated between `PENDING:AWAITING_ENCODER_RESPONSE` and
+  `UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT`, never
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`. The operator action therefore
+  moved only the slider, not the arm.
+- A further authorized `/demonstration=false` cleared the retained `25.9 deg`
+  command. From `1785742512.634` onward the driver requested only positive
+  SDK torque-on and stopped streaming the old joint target; feedback remained
+  near `[-107.5,19.0,-8.9,-6.1,-9.8,12.0] deg`. No stop, disable, torque-off,
+  controller-stop, emergency, or `/grasp/stop` command was sent.
+- The controller intermittently reported run status `0xE1` and `0xE2` among
+  otherwise idle `0x00` frames, with no hardware `0xEE` error frame. The
+  current official Alicia-D protocol defines these values as overheat and
+  overheat protection. One-shot positive torque-on, driver reconnect, and
+  software restart have already failed to recover this state in retained real
+  runs, whereas physical power cycling previously restored actuation. Under
+  the explicit no-torque-off constraint, an operator power cycle is therefore
+  required before another measured proof.
+- Fixed the GUI recovery contract. `PENDING:COMMAND_SYNCHRONIZED` and
+  `PENDING:AWAITING_ENCODER_RESPONSE` no longer release a full slider target.
+  Recovery now requests positive enable, synchronizes to fresh measured pose,
+  emits at most one `0.025 rad` single-joint probe toward the explicit user
+  target, waits for `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`, and only then
+  publishes the full target. Encoder timeout drops the user target and sends
+  the same positive-enable request to clear the bounded probe.
+- The old implementation failed four new RED expectations by returning
+  `publish`/`timeout`; the repair passes all joint-control tests `12/12` and
+  Python compilation. Only the GUI was hot-replaced. The repaired anonymous
+  GUI node is `/alicia_supervisor_gui_57725_1785742854000`, launched with
+  `_preserve_controller_state_on_startup:=true` and
+  `_default_joint_direct_control:=true`. Both `alicia_controller` and
+  `hand_controller` remained `running`; no controller switch or stop occurred.
+  Candidate generation remains blocked until the post-power-cycle bounded
+  probe produces real encoder motion.
+- The operator power-cycled the physical arm for more than `60 s`. During the
+  off interval, `feedback_ready=false`, `motion_enabled=false`, and no retained
+  old target was streamed. Startup feedback then stabilized near zero, with
+  Joint6 about `-0.26 deg`. One authorized positive
+  `/demonstration=false` request reset software bootstrap state and requested
+  torque-on; it did not emit stop, disable, torque-off, controller-stop, or
+  `/grasp/stop`.
+- The repaired live GUI then completed its measured contract. After measured
+  slider synchronization, the operator requested about `+0.05 rad` on
+  Joint6. Driver state advanced through
+  `PENDING:COMMAND_SYNCHRONIZED`,
+  `PENDING:AWAITING_ENCODER_RESPONSE`, and at `1785743563.407` reached
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE` with `motion_enabled=true`.
+  Measured Joint6 moved from about `-0.26 deg` and settled near `+2.29 deg`.
+  This closes the original post-6D-failure GUI non-actuation symptom with real
+  encoder evidence. Any next grasp must still use a newly aligned observation
+  and a freshly generated plan; neither failed plan may be reused.
+
+### 2026-08-03 - fresh exact-plan execution stopped at calibration centering margin
+
+- After the operator reported the carton aligned, a fresh candidate window
+  reached `PREVIEW_READY`. The selected far-field result had three independent
+  stability hits, passed strict MoveIt `1/1`, and was atomically bound to plan
+  `d32e967a17b83c77b91420bc`. Candidate computation was frozen, and
+  `/grasp/current_plan` returned the identical ID with `validation=VALID`
+  immediately before the authorized real `/grasp/start` call.
+- The controller synchronization passed. `MOVE_PREGRASP` was conservatively
+  retimed to `143.976 s`, with Joint6 limiting velocity `0.020 rad/s` and the
+  unchanged `0.120 rad` path tolerance. Unlike the preceding post-abort latch,
+  all joints physically followed. Joint6 moved from about `2.6 deg` to
+  `167.3 deg` against a final `167.6 deg` command, and MoveIt reported
+  trajectory execution `SUCCEEDED`.
+- The measured endpoint settled in `0.90 s`; errors were `0.0136 m` and
+  `2.13 deg`. The live camera-to-target range was accepted at `0.1907 m`
+  inside `[0.18, 0.22] m`. A new near-field plan
+  `ce4179086da262f536e0eb9b` then passed the strict pregrasp/approach/grasp/lift
+  pose-sequence check and rebound to execution authority.
+- Contact remained fail-closed. The task rejected the near-field plan with
+  `CALIBRATION_CENTERING_MARGIN`: one-sided jaw margin `0.0042 m` was below
+  the measured hand-eye translation maximum `0.0056 m` (physical opening
+  `0.0500 m`, required opening `0.0416 m`). It did not enter contact, gripper
+  close, or lift. Runtime `calibration_interlock_active=false` remained the
+  one-run authorization, while `calibration_centering_margin_override=false`
+  remained unchanged.
+- `/grasp/start` returned `success=False`. Candidate inference was already
+  stopped afterward. No `/grasp/stop`, arm stop, disable,
+  `/demonstration=true`, torque-off, controller-stop, or emergency command was
+  sent; the enabled controller retained the measured pose. A new physical
+  grasp is not authorized by the current evidence until hand-eye calibration
+  satisfies the centering margin (target `<=3 mm`, hard limit `<=5 mm`) or the
+  operator explicitly changes the centering-margin policy.
+
+### 2026-08-03 - operator-authorized centering override completed real 6D grasp
+
+- The operator explicitly changed the current-run policy after the preceding
+  rejection. Runtime `/grasp/calibration_centering_margin_override` was set to
+  `true`; target centre, TF/TCP, target yaw, `40 mm` drift threshold, MoveIt
+  tolerances, endpoint contracts, and every remaining geometry/contact gate
+  were unchanged. No launch-file default was changed.
+- After a new manual alignment, the exact-plan runner opened a fresh timestamp
+  window and accepted far-field plan `b9e68a0e9d2d5deef6d9501c`. Its bound
+  audit committed in `continuous_execution` mode; inference was frozen and
+  `/grasp/current_plan` returned the same ID with `validation=VALID` before
+  `/grasp/start`.
+- Far-field `MOVE_PREGRASP` was retimed to `123.839 s` and completed
+  successfully with measured endpoint error `0.0149 m / 2.41 deg`. The fresh
+  camera-to-target range was `0.1936 m`, then `0.2026 m`, both inside the
+  required `[0.18, 0.22] m` observation band.
+- Near-field plan `42a584219c407751372124ec` passed the strict four-stage pose
+  sequence and rebound to execution authority. Its pregrasp trajectory was
+  retimed to `74.449 s` and completed successfully; measured endpoint error
+  was `0.0032 m / 0.76 deg`. Linear approach and grasp completed with the
+  grasp endpoint stable at `0.0052 m / 0.96 deg`, inside the unchanged
+  `0.0060 m / 5.00 deg` contact contract.
+- The gripper used the frozen plan width, not its mechanical limit: required
+  opening `0.0412 m`, preload `0.0020 m`, commanded close target `0.0392 m`.
+  The subsequent `0.060 m` Cartesian lift was planned at fraction `1.0`.
+- The lift action reported `GOAL_TOLERANCE_VIOLATED` on Joint2 at
+  `0.065433 rad`, but the task-scoped endpoint lease then measured the actual
+  lift endpoint stable at `0.0030 m / 0.39 deg` for three consecutive samples,
+  within the unchanged `0.0060 m / 5.00 deg` contract. The task therefore
+  recovered from the controller result using measured FK evidence, released
+  the precision lease with a fresh measured-pose latch, and reported
+  `SUCCESS 6D grasp done` followed by `execution slot released: success`.
+- The blocking `/grasp/start` returned `success=True`. Candidate inference was
+  already stopped afterward. The gripper was not opened, and no `/grasp/stop`,
+  arm stop, disable, `/demonstration=true`, torque-off, controller-stop, or
+  emergency command was sent.
