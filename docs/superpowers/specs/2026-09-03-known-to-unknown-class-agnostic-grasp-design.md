@@ -1,7 +1,7 @@
 # Known-Segmentation to Unknown-Object 6D Grasp Design
 
-Status: design approved in conversation on 2026-09-03; written specification
-awaiting operator review.
+Status: approved by the operator on 2026-09-03; ready for implementation
+planning and test-driven execution.
 
 ## Problem statement
 
