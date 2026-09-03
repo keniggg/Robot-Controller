@@ -70,6 +70,13 @@ public:
             !valid_joints(offsets)) {
             return violate();
         }
+        if (state_.phase == EndpointTrimPhase::FAULT) {
+            return state_;
+        }
+        if (state_.phase == EndpointTrimPhase::WAITING_RESPONSE ||
+            state_.phase == EndpointTrimPhase::PENDING_RELEASE) {
+            return unchanged("ENDPOINT_TRIM_RESPONSE_OUTSTANDING");
+        }
 
         clear_response();
         clear_release();
@@ -178,6 +185,9 @@ public:
             last_feedback_stamp_sec_ = feedback_stamp_sec;
             return unchanged();
         }
+        if (response_deadline_reached(feedback_stamp_sec, now_sec)) {
+            return timeout_response();
+        }
         if (response_baseline_.size() != config_.joint_count ||
             response_goal_.size() != config_.joint_count ||
             response_direction_.size() != config_.joint_count ||
@@ -220,6 +230,7 @@ public:
         if (release_requested_) {
             return complete_release(false);
         }
+        clear_release();
         state_.phase = EndpointTrimPhase::ACTIVE_READY;
         state_.command_changed = false;
         state_.release_completed = false;
@@ -276,14 +287,7 @@ public:
         if ((state_.phase == EndpointTrimPhase::WAITING_RESPONSE ||
              state_.phase == EndpointTrimPhase::PENDING_RELEASE) &&
             now_sec - response_start_sec_ >= config_.response_deadline_sec) {
-            clear_response();
-            if (release_requested_) {
-                return complete_release(true);
-            }
-            state_.phase = EndpointTrimPhase::ACTIVE_READY;
-            state_.command_changed = false;
-            state_.release_completed = false;
-            state_.code = "ENDPOINT_TRIM_RESPONSE_TIMEOUT";
+            return timeout_response();
         }
         return state_;
     }
@@ -410,6 +414,31 @@ private:
                 config_.sdk_quantum_rad,
             M_PI
         );
+    }
+
+    bool response_deadline_reached(
+        double feedback_stamp_sec,
+        double now_sec
+    ) const
+    {
+        return feedback_stamp_sec - response_start_sec_ >=
+                config_.response_deadline_sec ||
+            now_sec - response_start_sec_ >= config_.response_deadline_sec;
+    }
+
+    EndpointTrimDecision timeout_response()
+    {
+        clear_response();
+        if (release_requested_) {
+            return complete_release(true);
+        }
+        clear_release();
+        state_.phase = EndpointTrimPhase::FAULT;
+        state_.applied_step.assign(config_.joint_count, 0.0);
+        state_.command_changed = false;
+        state_.release_completed = false;
+        state_.code = "ENDPOINT_TRIM_RESPONSE_TIMEOUT";
+        return state_;
     }
 
     EndpointTrimDecision complete_release(bool timed_out)

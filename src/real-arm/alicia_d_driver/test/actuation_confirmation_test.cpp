@@ -39,6 +39,17 @@ double degrees(double value)
     return value * M_PI / 180.0;
 }
 
+double driver_sdk_quantize(double radians)
+{
+    const double angle_deg = radians * 180.0 / M_PI;
+    const int hardware_value = static_cast<int>(
+        (angle_deg + 180.0) / 360.0 * 4096.0
+    );
+    const double decoded_deg = -180.0 +
+        (static_cast<double>(hardware_value) / 4096.0) * 360.0;
+    return decoded_deg * M_PI / 180.0;
+}
+
 EndpointTrimConfig endpoint_trim_config()
 {
     return EndpointTrimConfig();
@@ -489,6 +500,168 @@ TEST(EndpointTrimContinuityTest, TimeoutIgnoresFreshReleaseFeedback)
     EXPECT_EQ(timed_out.reference, preserved);
     EXPECT_EQ(timed_out.offsets, joints());
     EXPECT_EQ(timed_out.composed_target, preserved);
+}
+
+TEST(EndpointTrimContinuityTest, TimeoutWithoutReleasePermanentlyBlocksCorrection)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+
+    trim.activate(joints(), joints(), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        joints(-config.max_step_rad), all_stable_joints(), 1.0, 0.1
+    );
+    const std::vector<double> preserved = correction.composed_target;
+    const EndpointTrimDecision timed_out = trim.update(
+        0.1 + config.response_deadline_sec
+    );
+    const EndpointTrimDecision retry = trim.request_correction(
+        joints(-2.0 * config.max_step_rad),
+        all_stable_joints(),
+        1.0,
+        0.2 + config.response_deadline_sec
+    );
+    const EndpointTrimDecision reactivated = trim.activate(
+        joints(0.5), joints(), 0.3 + config.response_deadline_sec
+    );
+
+    EXPECT_EQ(timed_out.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(timed_out.code, "ENDPOINT_TRIM_RESPONSE_TIMEOUT");
+    EXPECT_EQ(timed_out.composed_target, preserved);
+    EXPECT_EQ(retry.phase, EndpointTrimPhase::FAULT);
+    EXPECT_FALSE(retry.command_changed);
+    EXPECT_EQ(retry.composed_target, preserved);
+    EXPECT_EQ(reactivated.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(reactivated.code, "ENDPOINT_TRIM_RESPONSE_TIMEOUT");
+    EXPECT_FALSE(reactivated.command_changed);
+    EXPECT_EQ(reactivated.composed_target, preserved);
+}
+
+TEST(EndpointTrimContinuityTest, ActivateCannotBypassOutstandingResponseOrRelease)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+
+    trim.activate(joints(), joints(), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        joints(-config.max_step_rad), all_stable_joints(), 1.0, 0.1
+    );
+    const std::vector<double> preserved = correction.composed_target;
+    const EndpointTrimDecision waiting_activate = trim.activate(
+        joints(0.5), joints(), 0.2
+    );
+
+    EXPECT_EQ(waiting_activate.phase, EndpointTrimPhase::WAITING_RESPONSE);
+    EXPECT_FALSE(waiting_activate.command_changed);
+    EXPECT_EQ(
+        waiting_activate.code,
+        "ENDPOINT_TRIM_RESPONSE_OUTSTANDING"
+    );
+    EXPECT_EQ(waiting_activate.composed_target, preserved);
+
+    ASSERT_EQ(
+        trim.request_release(joints(), false, 0.3).phase,
+        EndpointTrimPhase::PENDING_RELEASE
+    );
+    const EndpointTrimDecision pending_activate = trim.activate(
+        joints(-0.5), joints(), 0.4
+    );
+    EXPECT_EQ(pending_activate.phase, EndpointTrimPhase::PENDING_RELEASE);
+    EXPECT_FALSE(pending_activate.command_changed);
+    EXPECT_EQ(pending_activate.composed_target, preserved);
+
+    const EndpointTrimDecision timed_out = trim.update(
+        0.1 + config.response_deadline_sec
+    );
+    EXPECT_EQ(timed_out.phase, EndpointTrimPhase::QUIESCENT);
+    EXPECT_TRUE(timed_out.release_completed);
+    EXPECT_EQ(timed_out.code, "ENDPOINT_TRIM_RESPONSE_TIMEOUT");
+    EXPECT_EQ(timed_out.composed_target, preserved);
+}
+
+TEST(EndpointTrimContinuityTest, FeedbackProcessedAfterDeadlineCannotSettle)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+
+    trim.activate(joints(), joints(), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        joints(-config.max_step_rad), all_stable_joints(), 1.0, 0.1
+    );
+    const std::vector<double> preserved = correction.composed_target;
+    trim.request_release(joints(), false, 0.15);
+    trim.note_feedback(correction.composed_target, 0.2, 0.2);
+    const EndpointTrimDecision late = trim.note_feedback(
+        correction.composed_target,
+        0.2 + config.stable_sec,
+        0.2 + config.response_deadline_sec
+    );
+
+    EXPECT_EQ(late.phase, EndpointTrimPhase::QUIESCENT);
+    EXPECT_TRUE(late.release_completed);
+    EXPECT_EQ(late.code, "ENDPOINT_TRIM_RESPONSE_TIMEOUT");
+    EXPECT_EQ(late.reference, preserved);
+    EXPECT_EQ(late.offsets, joints());
+    EXPECT_EQ(late.composed_target, preserved);
+}
+
+TEST(EndpointTrimContinuityTest, SettledFeedbackIsNotFreshForLaterRelease)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+    const std::vector<double> baseline = joints(-config.max_step_rad);
+
+    trim.activate(joints(), joints(), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        baseline, all_stable_joints(), 1.0, 0.1
+    );
+    const std::vector<double> settled = joints(
+        config.max_step_rad - 0.5 * config.settle_error_rad
+    );
+    trim.note_feedback(settled, 0.2, 0.2);
+    ASSERT_EQ(
+        trim.note_feedback(
+            settled,
+            0.2 + config.stable_sec,
+            0.2 + config.stable_sec
+        ).phase,
+        EndpointTrimPhase::ACTIVE_READY
+    );
+
+    const EndpointTrimDecision released = trim.request_release(
+        joints(-0.05), false, 0.6
+    );
+
+    EXPECT_EQ(released.phase, EndpointTrimPhase::QUIESCENT);
+    EXPECT_TRUE(released.release_completed);
+    EXPECT_EQ(released.reference, correction.composed_target);
+    EXPECT_EQ(released.offsets, joints());
+    EXPECT_EQ(released.composed_target, correction.composed_target);
+}
+
+TEST(EndpointTrimContinuityTest, SdkQuantizationMatchesDriverFormula)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+
+    for (int milliradians = -120; milliradians <= 120; ++milliradians) {
+        SCOPED_TRACE(milliradians);
+        const double offset = static_cast<double>(milliradians) / 1000.0;
+        EndpointTrimContinuity trim(config);
+        trim.activate(
+            std::vector<double>(config.joint_count, offset),
+            joints(),
+            0.0
+        );
+        const EndpointTrimDecision released = trim.request_release(
+            joints(), true, 0.1
+        );
+
+        ASSERT_EQ(released.phase, EndpointTrimPhase::QUIESCENT);
+        ASSERT_EQ(released.offsets.size(), config.joint_count);
+        for (const double actual : released.offsets) {
+            EXPECT_NEAR(actual, driver_sdk_quantize(offset), 1e-12);
+        }
+    }
 }
 
 TEST(EndpointTrimContinuityTest, RejectsMalformedOrNonfiniteInput)
