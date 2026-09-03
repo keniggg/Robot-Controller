@@ -165,6 +165,139 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertIn('motion_commands_enabled_ = false', demo_body)
         self.assertIn('torque_off_frame', demo_body)
 
+    def test_endpoint_trim_admission_is_owned_by_one_serialized_coordinator(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        header = DRIVER_HEADER.read_text()
+        timer = _function_body(
+            source,
+            'void AliciaDDriverNode::send_command_timer_callback',
+        )
+        joint_command = _function_body(
+            source,
+            'void AliciaDDriverNode::joint_command_callback',
+        )
+        self.assertIn(
+            '#include "alicia_d_driver/endpoint_trim_continuity.hpp"',
+            header,
+        )
+        self.assertEqual(
+            header.count('EndpointTrimContinuity endpoint_trim_continuity_;'),
+            1,
+        )
+        self.assertEqual(
+            source.count('endpoint_trim_continuity_.note_feedback('),
+            1,
+        )
+        self.assertIn(
+            'feedback_sample_time = last_accepted_joint_feedback_time_;',
+            timer,
+        )
+        self.assertNotIn(
+            'feedback_sample_time = last_feedback_time_;',
+            timer,
+        )
+        self.assertIn('accepted_feedback_sample_is_new', timer)
+        self.assertNotIn(
+            'endpoint_trim_last_feedback_sample_time_ = ros::Time(0);',
+            joint_command,
+        )
+        self.assertIn(
+            'endpoint_trim_decision.phase == EndpointTrimPhase::ACTIVE_READY',
+            timer,
+        )
+        self.assertIn(
+            'endpoint_trim_continuity_.request_correction(',
+            timer,
+        )
+        self.assertNotIn('retry_stalled_endpoint_feedback_trim', timer)
+        self.assertIn(
+            'sdk_joint_angles = endpoint_trim_decision.composed_target;',
+            timer,
+        )
+
+    def test_endpoint_trim_release_paths_do_not_mutate_offsets_directly(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        timer = _function_body(
+            source,
+            'void AliciaDDriverNode::send_command_timer_callback',
+        )
+        service = _function_body(
+            source,
+            'bool AliciaDDriverNode::set_task_endpoint_precision_callback',
+        )
+
+        self.assertNotIn('endpoint_feedback_trim_offsets_', service)
+        self.assertNotIn('expired_lease_measured_hold_latched', timer)
+        self.assertIn('endpoint_trim_continuity_.request_release(', service)
+        expiry_start = timer.index(
+            'endpoint_feedback_trim_task_lease_expired = true;'
+        )
+        expiry_end = timer.index(
+            '// Lease-expiry release request end',
+            expiry_start,
+        )
+        expiry_path = timer[expiry_start:expiry_end]
+        self.assertIn('endpoint_trim_continuity_.request_release(', expiry_path)
+        self.assertNotIn('endpoint_feedback_trim_offsets_', expiry_path)
+
+        trim_start = timer.index('// Endpoint trim continuity begin')
+        trim_end = timer.index('// Endpoint trim continuity end', trim_start)
+        endpoint_trim_path = service + timer[trim_start:trim_end]
+        for forbidden in (
+            'torque_off_frame',
+            'CMD_DEMO_CONTROL',
+            'motion_commands_enabled_ = false',
+            'generate_simple_frame(',
+            'ros::ServiceClient',
+        ):
+            self.assertNotIn(forbidden, endpoint_trim_path)
+
+    def test_endpoint_trim_continuity_parameters_are_bounded_and_forwarded(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        header = DRIVER_HEADER.read_text()
+        driver_launch = (
+            DRIVER_SRC.parent / 'launch' / 'alicia_d_driver.launch'
+        ).read_text()
+        bringup_launch = (
+            DRIVER_SRC.parent / 'launch' / 'alicia_d_bringup.launch'
+        ).read_text()
+
+        for member in (
+            'endpoint_feedback_trim_max_step_quantums_',
+            'endpoint_feedback_trim_response_min_quantums_',
+            'endpoint_feedback_trim_response_deadline_sec_',
+        ):
+            self.assertIn(member, header)
+            self.assertIn(member, source)
+
+        self.assertIn('endpoint_trim_parameters_valid', source)
+        self.assertIn('endpoint_feedback_trim_max_step_quantums_ >= 1', source)
+        self.assertIn('endpoint_feedback_trim_max_step_quantums_ <= 16', source)
+        self.assertIn('endpoint_feedback_trim_response_min_quantums_ >= 1', source)
+        self.assertIn(
+            'endpoint_feedback_trim_response_min_quantums_ <=\n'
+            '            endpoint_feedback_trim_max_step_quantums_',
+            source,
+        )
+        self.assertIn('endpoint_feedback_trim_response_deadline_sec_ >= 0.30', source)
+        self.assertIn('endpoint_feedback_trim_response_deadline_sec_ <= 3.0', source)
+
+        launch_defaults = {
+            'endpoint_feedback_trim_max_step_quantums': '4',
+            'endpoint_feedback_trim_response_min_quantums': '2',
+            'endpoint_feedback_trim_response_deadline_sec': '1.0',
+        }
+        for launch in (driver_launch, bringup_launch):
+            for name, default in launch_defaults.items():
+                self.assertIn(
+                    f'<arg name="{name}" default="{default}"/>',
+                    launch,
+                )
+                self.assertIn(
+                    f'<param name="{name}" value="$(arg {name})"/>',
+                    launch,
+                )
+
     def test_single_implausible_joint_feedback_frame_requires_confirmation(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         header = DRIVER_HEADER.read_text()

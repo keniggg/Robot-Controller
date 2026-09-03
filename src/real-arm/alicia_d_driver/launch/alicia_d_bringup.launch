@@ -12,6 +12,9 @@
   <arg name="ros_control_publish_gripper_command" default="false" />
   <arg name="auto_torque_on_startup" default="false" />
   <arg name="self_check_poll_rate_hz" default="0.5" />
+  <arg name="endpoint_feedback_trim_max_step_quantums" default="4"/>
+  <arg name="endpoint_feedback_trim_response_min_quantums" default="2"/>
+  <arg name="endpoint_feedback_trim_response_deadline_sec" default="1.0"/>
   <!-- Load the URDF, SRDF and other .yaml configuration files on the param server -->
   <include file="$(find alicia_d_moveit)/launch/planning_context.launch">
     <arg name="load_robot_description" value="true"/>
@@ -92,6 +95,9 @@
         <param name="endpoint_feedback_trim_activation_error_rad" type="double" value="0.035"/>
         <param name="endpoint_feedback_trim_max_rad" type="double" value="0.12"/>
         <param name="endpoint_feedback_trim_gain" type="double" value="1.0"/>
+        <param name="endpoint_feedback_trim_max_step_quantums" value="$(arg endpoint_feedback_trim_max_step_quantums)"/>
+        <param name="endpoint_feedback_trim_response_min_quantums" value="$(arg endpoint_feedback_trim_response_min_quantums)"/>
+        <param name="endpoint_feedback_trim_response_deadline_sec" value="$(arg endpoint_feedback_trim_response_deadline_sec)"/>
         <!-- joint_trajectory_controller already interpolates MoveIt paths. A
              second driver-side profile makes hardware lag behind action success. -->
         <param name="use_trajectory_smoothing"  type="bool"   value="false"/>

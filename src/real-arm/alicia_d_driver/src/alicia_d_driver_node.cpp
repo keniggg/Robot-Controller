@@ -100,6 +100,19 @@ static std::string format_temperatures(const std::vector<float>& values)
     ss << "]";
     return ss.str();
 }
+
+static const char* endpoint_trim_phase_name(EndpointTrimPhase phase)
+{
+    switch (phase) {
+        case EndpointTrimPhase::IDLE: return "IDLE";
+        case EndpointTrimPhase::ACTIVE_READY: return "ACTIVE_READY";
+        case EndpointTrimPhase::WAITING_RESPONSE: return "WAITING_RESPONSE";
+        case EndpointTrimPhase::PENDING_RELEASE: return "PENDING_RELEASE";
+        case EndpointTrimPhase::QUIESCENT: return "QUIESCENT";
+        case EndpointTrimPhase::FAULT: return "FAULT";
+    }
+    return "UNKNOWN";
+}
 // Protocol Constants for feedback frames
 constexpr uint8_t FEEDBACK_GRIPPER_STATE = 0x02;
 constexpr uint8_t FEEDBACK_SERVO_STATE = 0x04;
@@ -113,9 +126,27 @@ constexpr double GRIPPER_DEG_MAX = 100.0;      // Logical gripper range in degre
 constexpr double GRIPPER_HW_PER_DEG = (GRIPPER_HW_MAX - GRIPPER_HW_MIN) / GRIPPER_DEG_MAX; // ~15.42 counts/deg
 
 
-AliciaDDriverNode::AliciaDDriverNode() : pnh_("~"), last_process_time_(0.0)
+AliciaDDriverNode::AliciaDDriverNode()
+    : pnh_("~"),
+      endpoint_trim_continuity_(EndpointTrimConfig()),
+      last_process_time_(0.0)
 {
     load_parameters();
+    endpoint_trim_config_.joint_count = 6;
+    endpoint_trim_config_.sdk_quantum_rad = SDK_JOINT_QUANTIZATION_RAD;
+    endpoint_trim_config_.max_step_rad =
+        endpoint_feedback_trim_max_step_quantums_ *
+        SDK_JOINT_QUANTIZATION_RAD;
+    endpoint_trim_config_.response_min_rad =
+        endpoint_feedback_trim_response_min_quantums_ *
+        SDK_JOINT_QUANTIZATION_RAD;
+    endpoint_trim_config_.settle_error_rad =
+        ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD;
+    endpoint_trim_config_.stable_sec = endpoint_feedback_trim_stable_sec_;
+    endpoint_trim_config_.response_deadline_sec =
+        endpoint_feedback_trim_response_deadline_sec_;
+    endpoint_trim_config_.max_total_trim_rad = endpoint_feedback_trim_max_rad_;
+    endpoint_trim_continuity_ = EndpointTrimContinuity(endpoint_trim_config_);
     ActuationConfirmationConfig actuation_config;
     actuation_config.sync_tolerance_rad = reconnect_sync_tolerance_rad_;
     actuation_config.command_probe_min_delta_rad =
@@ -216,20 +247,10 @@ void AliciaDDriverNode::load_parameters()
         0.0,
         std::min(command_keepalive_rate_hz_, command_rate_hz_));
     // The SDK position loop can hold a repeatable measured offset from a
-    // stable ROS endpoint. Apply a bounded, accumulated live-feedback outer
-    // correction only after the reference and each affected joint's measured
-    // feedback settle. A moving joint cannot reset another joint's stability
-    // clock. Normally every corrected joint must produce an observed encoder
-    // response before another iteration. Start and continue only above the
-    // command/feedback round-trip quantization floor, then latch and hold the
-    // last live-derived trim. Re-enter the latched loop only if error leaves
-    // the broader controller goal band. Lease release latches the fresh
-    // measured joint pose rather than retaining an over-corrected target. If
-    // fresh feedback proves a
-    // still-active stall, retry only after an adaptive dwell derived from
-    // measured response latency, still under the same per-joint anti-windup
-    // bound. Never bake in a joint-specific angle or integrate while the
-    // trajectory is changing.
+    // stable ROS endpoint. The continuity coordinator admits one bounded
+    // correction, waits for a fresh directional encoder response to settle,
+    // and preserves that composed target through release or timeout. Never
+    // bake in a joint-specific angle or integrate while the trajectory moves.
     pnh_.param<bool>("endpoint_feedback_trim_enabled", endpoint_feedback_trim_enabled_, false);
     pnh_.param<double>(
         "endpoint_feedback_trim_task_lease_timeout_sec",
@@ -241,6 +262,51 @@ void AliciaDDriverNode::load_parameters()
                        endpoint_feedback_trim_activation_error_rad_, 0.035);
     pnh_.param<double>("endpoint_feedback_trim_max_rad", endpoint_feedback_trim_max_rad_, 0.12);
     pnh_.param<double>("endpoint_feedback_trim_gain", endpoint_feedback_trim_gain_, 1.0);
+    pnh_.param<int>(
+        "endpoint_feedback_trim_max_step_quantums",
+        endpoint_feedback_trim_max_step_quantums_,
+        4
+    );
+    pnh_.param<int>(
+        "endpoint_feedback_trim_response_min_quantums",
+        endpoint_feedback_trim_response_min_quantums_,
+        2
+    );
+    pnh_.param<double>(
+        "endpoint_feedback_trim_response_deadline_sec",
+        endpoint_feedback_trim_response_deadline_sec_,
+        1.0
+    );
+    const bool endpoint_trim_parameters_valid =
+        endpoint_feedback_trim_max_step_quantums_ >= 1 &&
+        endpoint_feedback_trim_max_step_quantums_ <= 16 &&
+        endpoint_feedback_trim_response_min_quantums_ >= 1 &&
+        endpoint_feedback_trim_response_min_quantums_ <=
+            endpoint_feedback_trim_max_step_quantums_ &&
+        std::isfinite(endpoint_feedback_trim_response_deadline_sec_) &&
+        endpoint_feedback_trim_response_deadline_sec_ >= 0.30 &&
+        endpoint_feedback_trim_response_deadline_sec_ <= 3.0;
+    if (!endpoint_trim_parameters_valid) {
+        ROS_WARN(
+            "Rejected endpoint trim continuity parameters "
+            "(max_step_quantums=%d response_min_quantums=%d "
+            "response_deadline_sec=%.3f); retaining safe defaults",
+            endpoint_feedback_trim_max_step_quantums_,
+            endpoint_feedback_trim_response_min_quantums_,
+            endpoint_feedback_trim_response_deadline_sec_
+        );
+        endpoint_feedback_trim_max_step_quantums_ = 4;
+        endpoint_feedback_trim_response_min_quantums_ = 2;
+        endpoint_feedback_trim_response_deadline_sec_ = 1.0;
+    }
+    ROS_INFO(
+        "Endpoint trim continuity effective values: "
+        "max_step_quantums=%d response_min_quantums=%d "
+        "response_deadline_sec=%.3f",
+        endpoint_feedback_trim_max_step_quantums_,
+        endpoint_feedback_trim_response_min_quantums_,
+        endpoint_feedback_trim_response_deadline_sec_
+    );
     endpoint_feedback_trim_stable_sec_ =
         std::max(0.0, endpoint_feedback_trim_stable_sec_);
     endpoint_feedback_trim_activation_error_rad_ =
@@ -427,18 +493,19 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
     bool release_feedback_is_fresh = false;
     if (!request.data) {
         std::lock_guard<std::mutex> data_lock(data_mutex_);
-        release_feedback_is_fresh =
-            has_real_feedback_ &&
-            current_joint_positions_.size() == 6 &&
-            !last_feedback_time_.isZero() &&
-            (now - last_feedback_time_).toSec() >= 0.0 &&
-            (now - last_feedback_time_).toSec() <=
-                feedback_stale_timeout_sec_;
-        if (release_feedback_is_fresh) {
+        if (current_joint_positions_.size() == 6) {
             release_feedback = current_joint_positions_;
         }
+        release_feedback_is_fresh =
+            has_real_feedback_ &&
+            release_feedback.size() == 6 &&
+            !last_accepted_joint_feedback_time_.isZero() &&
+            (now - last_accepted_joint_feedback_time_).toSec() >= 0.0 &&
+            (now - last_accepted_joint_feedback_time_).toSec() <=
+                feedback_stale_timeout_sec_;
     }
-    bool measured_hold_latched = false;
+    bool release_requested = false;
+    bool release_pending = false;
     {
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
         if (request.data) {
@@ -458,45 +525,26 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
             endpoint_feedback_trim_task_lease_active_ = false;
             endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
             endpoint_feedback_trim_task_lease_reference_.clear();
+            const EndpointTrimDecision& current =
+                endpoint_trim_continuity_.state();
+            std::vector<double> release_measurement = release_feedback;
+            if (release_measurement.size() != 6) {
+                release_measurement = current.composed_target;
+            }
             if (
-                release_feedback_is_fresh &&
-                release_feedback.size() ==
-                    endpoint_trim_reference_joint_angles_.size()
+                current.phase != EndpointTrimPhase::IDLE &&
+                release_measurement.size() == 6
             ) {
-                // The correction target is only an outer-loop means to reach
-                // the requested endpoint.  Once the task releases its lease,
-                // hold the measured joint pose that actually exists instead
-                // of retaining a possibly over-corrected command.  Repeated
-                // controller messages for the unchanged reference keep this
-                // latch; the first genuinely different task/GUI target clears
-                // it in joint_command_callback.
-                endpoint_feedback_trim_offsets_.resize(
-                    release_feedback.size()
-                );
-                for (size_t i = 0; i < release_feedback.size(); ++i) {
-                    endpoint_feedback_trim_offsets_[i] = std::max(
-                        -endpoint_feedback_trim_max_rad_,
-                        std::min(
-                            endpoint_feedback_trim_max_rad_,
-                            release_feedback[i] -
-                                endpoint_trim_reference_joint_angles_[i]
-                        )
+                const EndpointTrimDecision decision =
+                    endpoint_trim_continuity_.request_release(
+                        release_measurement,
+                        release_feedback_is_fresh,
+                        now.toSec()
                     );
-                }
-                endpoint_feedback_trim_active_ = true;
-                endpoint_feedback_trim_quiescent_ = true;
-                endpoint_trim_feedback_anchor_joint_angles_ =
-                    release_feedback;
-                endpoint_trim_feedback_stable_since_.assign(
-                    release_feedback.size(),
-                    now
-                );
-                endpoint_trim_waiting_for_feedback_response_ = false;
-                endpoint_trim_response_start_joint_angles_.clear();
-                endpoint_trim_response_joint_mask_.clear();
-                endpoint_trim_response_wait_since_ = ros::Time(0);
-                endpoint_trim_stalled_retry_count_ = 0;
-                measured_hold_latched = true;
+                release_requested = true;
+                release_pending =
+                    decision.phase == EndpointTrimPhase::PENDING_RELEASE;
+                endpoint_trim_release_requires_timer_install_ = true;
             }
         }
     }
@@ -509,9 +557,11 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
         response.message = message.str();
         ROS_INFO("%s", response.message.c_str());
     } else {
-        response.message = measured_hold_latched
-            ? "task endpoint precision lease released; fresh measured joint pose latched until target changes"
-            : "task endpoint precision lease released; no fresh measured latch available, existing held target retained until target changes";
+        response.message = release_pending
+            ? "task endpoint precision lease release pending serialized encoder response"
+            : (release_requested
+                ? "task endpoint precision lease release queued for serialized timer handoff"
+                : "task endpoint precision lease inactive; existing held target retained");
         ROS_INFO("%s", response.message.c_str());
     }
     return true;
@@ -541,6 +591,7 @@ void AliciaDDriverNode::clear_retained_command_state()
         endpoint_feedback_trim_task_lease_active_ = false;
         endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
         endpoint_feedback_trim_task_lease_reference_.clear();
+        endpoint_trim_release_requires_timer_install_ = false;
     }
     {
         std::lock_guard<std::mutex> lock(send_mutex_);
@@ -949,7 +1000,6 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
                 joint_angles.size(),
                 ros::Time(0)
             );
-            endpoint_trim_last_feedback_sample_time_ = ros::Time(0);
             endpoint_trim_waiting_for_feedback_response_ = false;
             endpoint_trim_response_start_joint_angles_.clear();
             endpoint_trim_response_joint_mask_.clear();
@@ -975,76 +1025,12 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
 void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event)
 {
     if (!communicator_ || !communicator_->is_connected()) return;
-    if (!has_latest_command_) return;
 
     std::unique_lock<std::mutex> send_lock(send_mutex_, std::try_to_lock);
     if (!send_lock.owns_lock()) return;
 
     const ros::Time now = ros::Time::now();
 
-    std::vector<double> joint_angles;
-    double gripper_value = 0.0; // radians for gripper once normalized
-    std::vector<double> endpoint_trim_reference;
-    ros::Time endpoint_trim_reference_since;
-    bool endpoint_feedback_trim_active = false;
-    bool endpoint_feedback_trim_quiescent = false;
-    std::vector<double> endpoint_feedback_trim_offsets;
-    std::vector<double> endpoint_trim_feedback_anchor;
-    std::vector<ros::Time> endpoint_trim_feedback_stable_since;
-    ros::Time endpoint_trim_last_feedback_sample_time;
-    bool endpoint_trim_waiting_for_feedback_response = false;
-    std::vector<double> endpoint_trim_response_start;
-    std::vector<uint8_t> endpoint_trim_response_joint_mask;
-    ros::Time endpoint_trim_response_wait_since;
-    double endpoint_trim_last_response_latency_sec = 0.0;
-    size_t endpoint_trim_stalled_retry_count = 0;
-    size_t endpoint_feedback_trim_iteration = 0;
-    bool endpoint_feedback_trim_task_lease_active = false;
-    bool endpoint_feedback_trim_task_lease_expired = false;
-    {
-        std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
-        if (!has_latest_command_) return;
-        joint_angles = latest_joint_angles_;
-        gripper_value = latest_gripper_rad_;
-        endpoint_trim_reference = endpoint_trim_reference_joint_angles_;
-        endpoint_trim_reference_since = endpoint_trim_reference_since_;
-        endpoint_feedback_trim_active = endpoint_feedback_trim_active_;
-        endpoint_feedback_trim_quiescent =
-            endpoint_feedback_trim_quiescent_;
-        endpoint_feedback_trim_offsets = endpoint_feedback_trim_offsets_;
-        endpoint_trim_feedback_anchor =
-            endpoint_trim_feedback_anchor_joint_angles_;
-        endpoint_trim_feedback_stable_since =
-            endpoint_trim_feedback_stable_since_;
-        endpoint_trim_last_feedback_sample_time =
-            endpoint_trim_last_feedback_sample_time_;
-        endpoint_trim_waiting_for_feedback_response =
-            endpoint_trim_waiting_for_feedback_response_;
-        endpoint_trim_response_start =
-            endpoint_trim_response_start_joint_angles_;
-        endpoint_trim_response_joint_mask =
-            endpoint_trim_response_joint_mask_;
-        endpoint_trim_response_wait_since =
-            endpoint_trim_response_wait_since_;
-        endpoint_trim_last_response_latency_sec =
-            endpoint_trim_last_response_latency_sec_;
-        endpoint_trim_stalled_retry_count =
-            endpoint_trim_stalled_retry_count_;
-        endpoint_feedback_trim_iteration =
-            endpoint_feedback_trim_iteration_;
-        if (
-            endpoint_feedback_trim_task_lease_active_ &&
-            !endpoint_feedback_trim_task_lease_expires_at_.isZero() &&
-            now >= endpoint_feedback_trim_task_lease_expires_at_
-        ) {
-            endpoint_feedback_trim_task_lease_active_ = false;
-            endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
-            endpoint_feedback_trim_task_lease_reference_.clear();
-            endpoint_feedback_trim_task_lease_expired = true;
-        }
-        endpoint_feedback_trim_task_lease_active =
-            endpoint_feedback_trim_task_lease_active_;
-    }
     bool feedback_ready = false;
     bool feedback_stale = true;
     bool protection_latched = false;
@@ -1055,76 +1041,325 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
         feedback_ready = has_real_feedback_;
-        feedback_stale = !has_real_feedback_ ||
-                         (now - last_feedback_time_).toSec() > feedback_stale_timeout_sec_;
+        feedback_sample_time = last_accepted_joint_feedback_time_;
+        feedback_stale =
+            !has_real_feedback_ ||
+            feedback_sample_time.isZero() ||
+            (now - feedback_sample_time).toSec() < 0.0 ||
+            (now - feedback_sample_time).toSec() >
+                feedback_stale_timeout_sec_;
         protection_latched = protection_fault_latched_;
         motion_enabled = motion_commands_enabled_;
         feedback_joint_angles = current_joint_positions_;
         feedback_gripper_rad = current_gripper_position_;
-        feedback_sample_time = last_feedback_time_;
     }
 
-    bool expired_lease_measured_hold_latched = false;
-    if (
-        endpoint_feedback_trim_task_lease_expired &&
-        feedback_ready &&
-        !feedback_stale &&
-        feedback_joint_angles.size() == endpoint_trim_reference.size()
-    ) {
+    std::vector<double> joint_angles;
+    double gripper_value = 0.0;
+    EndpointTrimDecision endpoint_trim_decision{};
+    EndpointTrimPhase endpoint_trim_phase_before = EndpointTrimPhase::IDLE;
+    std::string endpoint_trim_code_before;
+    std::vector<double> endpoint_trim_target_before;
+    double endpoint_trim_response_age_sec = 0.0;
+    bool endpoint_feedback_trim_task_lease_expired = false;
+    bool accepted_feedback_sample_is_new = false;
+    bool endpoint_trim_target_changed = false;
+
+    // Endpoint trim continuity begin
+    {
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
+        if (!has_latest_command_) return;
+
+        joint_angles = latest_joint_angles_;
+        gripper_value = latest_gripper_rad_;
+        const EndpointTrimDecision& initial_state =
+            endpoint_trim_continuity_.state();
+        endpoint_trim_phase_before = initial_state.phase;
+        endpoint_trim_code_before = initial_state.code;
+        endpoint_trim_target_before = initial_state.composed_target;
+
         if (
-            endpoint_trim_reference_joint_angles_ ==
-                endpoint_trim_reference
+            endpoint_trim_reference_joint_angles_.size() == 6 &&
+            !endpoint_trim_release_requires_timer_install_ &&
+            initial_state.reference != endpoint_trim_reference_joint_angles_
         ) {
-            endpoint_feedback_trim_offsets_.resize(
-                feedback_joint_angles.size()
+            endpoint_trim_decision =
+                endpoint_trim_continuity_.explicit_gui_handoff(
+                    endpoint_trim_reference_joint_angles_,
+                    now.toSec()
+                );
+        } else {
+            endpoint_trim_decision = initial_state;
+        }
+
+        const bool accepted_feedback_is_fresh =
+            feedback_ready &&
+            !feedback_stale &&
+            feedback_joint_angles.size() == 6 &&
+            !feedback_sample_time.isZero();
+        accepted_feedback_sample_is_new =
+            accepted_feedback_is_fresh &&
+            (
+                endpoint_trim_last_feedback_sample_time_.isZero() ||
+                feedback_sample_time >
+                    endpoint_trim_last_feedback_sample_time_
             );
-            for (size_t i = 0; i < feedback_joint_angles.size(); ++i) {
-                endpoint_feedback_trim_offsets_[i] = std::max(
-                    -endpoint_feedback_trim_max_rad_,
-                    std::min(
-                        endpoint_feedback_trim_max_rad_,
-                        feedback_joint_angles[i] -
-                            endpoint_trim_reference[i]
+        if (
+            endpoint_feedback_trim_task_lease_active_ &&
+            !endpoint_feedback_trim_task_lease_expires_at_.isZero() &&
+            now >= endpoint_feedback_trim_task_lease_expires_at_
+        ) {
+            endpoint_feedback_trim_task_lease_active_ = false;
+            endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
+            endpoint_feedback_trim_task_lease_reference_.clear();
+            endpoint_feedback_trim_task_lease_expired = true;
+
+            std::vector<double> release_measurement =
+                feedback_joint_angles;
+            if (release_measurement.size() != 6) {
+                release_measurement =
+                    endpoint_trim_decision.composed_target;
+            }
+            if (
+                endpoint_trim_decision.phase != EndpointTrimPhase::IDLE &&
+                release_measurement.size() == 6
+            ) {
+                endpoint_trim_decision =
+                    endpoint_trim_continuity_.request_release(
+                        release_measurement,
+                        accepted_feedback_is_fresh,
+                        now.toSec()
+                );
+            }
+        }
+        // Lease-expiry release request end
+
+        if (accepted_feedback_sample_is_new) {
+            endpoint_trim_decision =
+                endpoint_trim_continuity_.note_feedback(
+                    feedback_joint_angles,
+                    feedback_sample_time.toSec(),
+                    now.toSec()
+                );
+            endpoint_trim_last_feedback_sample_time_ =
+                feedback_sample_time;
+
+            if (
+                endpoint_trim_feedback_anchor_joint_angles_.size() != 6 ||
+                endpoint_trim_feedback_stable_since_.size() != 6
+            ) {
+                endpoint_trim_feedback_anchor_joint_angles_ =
+                    feedback_joint_angles;
+                endpoint_trim_feedback_stable_since_.assign(
+                    6,
+                    feedback_sample_time
+                );
+            } else {
+                for (size_t i = 0; i < 6; ++i) {
+                    if (
+                        std::abs(
+                            feedback_joint_angles[i] -
+                            endpoint_trim_feedback_anchor_joint_angles_[i]
+                        ) >
+                            SDK_JOINT_QUANTIZATION_RAD + 1e-12
+                    ) {
+                        endpoint_trim_feedback_anchor_joint_angles_[i] =
+                            feedback_joint_angles[i];
+                        endpoint_trim_feedback_stable_since_[i] =
+                            feedback_sample_time;
+                    }
+                }
+            }
+        }
+
+
+        endpoint_trim_decision =
+            endpoint_trim_continuity_.update(now.toSec());
+
+        std::vector<uint8_t> endpoint_feedback_stable_by_joint(6, 0);
+        double maximum_feedback_error_rad = 0.0;
+        bool has_stable_joint_above_round_trip_floor = false;
+        const bool feedback_shape_valid =
+            feedback_joint_angles.size() == 6 &&
+            endpoint_trim_reference_joint_angles_.size() == 6 &&
+            endpoint_trim_feedback_stable_since_.size() == 6;
+        if (feedback_shape_valid) {
+            for (size_t i = 0; i < 6; ++i) {
+                maximum_feedback_error_rad = std::max(
+                    maximum_feedback_error_rad,
+                    std::abs(
+                        endpoint_trim_reference_joint_angles_[i] -
+                        feedback_joint_angles[i]
+                    )
+                );
+                const double joint_stable_age_sec =
+                    endpoint_trim_feedback_stable_since_[i].isZero()
+                        ? 0.0
+                        : (
+                            now -
+                            endpoint_trim_feedback_stable_since_[i]
+                        ).toSec();
+                const bool stable_above_floor =
+                    joint_stable_age_sec >=
+                        endpoint_feedback_trim_stable_sec_ &&
+                    std::abs(
+                        endpoint_trim_reference_joint_angles_[i] -
+                        feedback_joint_angles[i]
+                    ) >
+                        ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD;
+                endpoint_feedback_stable_by_joint[i] =
+                    stable_above_floor ? 1 : 0;
+                has_stable_joint_above_round_trip_floor =
+                    has_stable_joint_above_round_trip_floor ||
+                    stable_above_floor;
+            }
+        }
+
+        double maximum_reference_delta_rad = 0.0;
+        if (
+            endpoint_trim_reference_joint_angles_.size() ==
+                joint_angles.size()
+        ) {
+            for (size_t i = 0; i < joint_angles.size(); ++i) {
+                maximum_reference_delta_rad = std::max(
+                    maximum_reference_delta_rad,
+                    std::abs(
+                        joint_angles[i] -
+                        endpoint_trim_reference_joint_angles_[i]
                     )
                 );
             }
-            endpoint_feedback_trim_active_ = true;
-            endpoint_feedback_trim_quiescent_ = true;
-            endpoint_trim_feedback_anchor_joint_angles_ =
-                feedback_joint_angles;
-            endpoint_trim_feedback_stable_since_.assign(
-                feedback_joint_angles.size(),
-                now
-            );
-            endpoint_trim_waiting_for_feedback_response_ = false;
-            endpoint_trim_response_start_joint_angles_.clear();
-            endpoint_trim_response_joint_mask_.clear();
-            endpoint_trim_response_wait_since_ = ros::Time(0);
-            endpoint_trim_stalled_retry_count_ = 0;
-
-            endpoint_feedback_trim_offsets =
-                endpoint_feedback_trim_offsets_;
-            endpoint_feedback_trim_active = true;
-            endpoint_feedback_trim_quiescent = true;
-            endpoint_trim_feedback_anchor = feedback_joint_angles;
-            endpoint_trim_feedback_stable_since.assign(
-                feedback_joint_angles.size(),
-                now
-            );
-            endpoint_trim_waiting_for_feedback_response = false;
-            endpoint_trim_response_start.clear();
-            endpoint_trim_response_joint_mask.clear();
-            endpoint_trim_response_wait_since = ros::Time(0);
-            endpoint_trim_stalled_retry_count = 0;
-            expired_lease_measured_hold_latched = true;
         }
+        const double endpoint_reference_stable_age_sec =
+            endpoint_trim_reference_since_.isZero()
+                ? 0.0
+                : (now - endpoint_trim_reference_since_).toSec();
+        const bool endpoint_reference_stable =
+            feedback_shape_valid &&
+            endpoint_reference_stable_age_sec >=
+                endpoint_feedback_trim_stable_sec_ &&
+            maximum_reference_delta_rad <=
+                SDK_JOINT_QUANTIZATION_RAD;
+        const bool endpoint_error_inside_trim_window =
+            maximum_feedback_error_rad <=
+                endpoint_feedback_trim_max_rad_;
+        const bool endpoint_feedback_trim_update_allowed =
+            endpoint_feedback_trim_enabled_ ||
+            endpoint_feedback_trim_task_lease_active_;
+
+        if (
+            endpoint_feedback_trim_update_allowed &&
+            accepted_feedback_sample_is_new &&
+            endpoint_reference_stable &&
+            endpoint_error_inside_trim_window &&
+            has_stable_joint_above_round_trip_floor &&
+            (
+                endpoint_trim_decision.phase == EndpointTrimPhase::IDLE ||
+                endpoint_trim_decision.phase ==
+                    EndpointTrimPhase::QUIESCENT
+            )
+        ) {
+            std::vector<double> activation_offsets =
+                endpoint_feedback_trim_offsets_;
+            if (activation_offsets.size() != 6) {
+                activation_offsets.assign(6, 0.0);
+            }
+            endpoint_trim_decision =
+                endpoint_trim_continuity_.activate(
+                    endpoint_trim_reference_joint_angles_,
+                    activation_offsets,
+                    now.toSec()
+                );
+        }
+
+        if (
+            endpoint_trim_decision.phase == EndpointTrimPhase::ACTIVE_READY &&
+            endpoint_feedback_trim_update_allowed &&
+            accepted_feedback_sample_is_new &&
+            endpoint_reference_stable &&
+            endpoint_error_inside_trim_window &&
+            has_stable_joint_above_round_trip_floor
+        ) {
+            endpoint_trim_decision =
+                endpoint_trim_continuity_.request_correction(
+                    feedback_joint_angles,
+                    endpoint_feedback_stable_by_joint,
+                    endpoint_feedback_trim_gain_,
+                    now.toSec()
+                );
+        }
+
+        // Install the coordinator-owned pair atomically. The serialized target
+        // below is always taken from the same immutable decision.
+        endpoint_trim_reference_joint_angles_ =
+            endpoint_trim_decision.reference;
+        endpoint_feedback_trim_offsets_ =
+            endpoint_trim_decision.offsets;
+        endpoint_trim_release_requires_timer_install_ = false;
+        endpoint_feedback_trim_active_ =
+            endpoint_trim_decision.phase != EndpointTrimPhase::IDLE;
+        endpoint_feedback_trim_quiescent_ =
+            endpoint_trim_decision.phase == EndpointTrimPhase::QUIESCENT;
+        endpoint_trim_waiting_for_feedback_response_ =
+            endpoint_trim_decision.phase ==
+                EndpointTrimPhase::WAITING_RESPONSE ||
+            endpoint_trim_decision.phase ==
+                EndpointTrimPhase::PENDING_RELEASE;
+
+        if (
+            endpoint_trim_waiting_for_feedback_response_ &&
+            endpoint_trim_response_wait_since_.isZero()
+        ) {
+            endpoint_trim_response_wait_since_ = now;
+        }
+        if (!endpoint_trim_response_wait_since_.isZero()) {
+            endpoint_trim_response_age_sec =
+                (now - endpoint_trim_response_wait_since_).toSec();
+        }
+        if (!endpoint_trim_waiting_for_feedback_response_) {
+            endpoint_trim_response_wait_since_ = ros::Time(0);
+        }
+        endpoint_trim_target_changed =
+            endpoint_trim_target_before !=
+                endpoint_trim_decision.composed_target;
+        if (endpoint_trim_target_changed) {
+            ++endpoint_feedback_trim_iteration_;
+        }
+    }
+    // Endpoint trim continuity end
+
+    if (
+        endpoint_trim_phase_before != endpoint_trim_decision.phase ||
+        endpoint_trim_target_changed ||
+        endpoint_feedback_trim_task_lease_expired ||
+        endpoint_trim_code_before != endpoint_trim_decision.code
+    ) {
+        const char* code = endpoint_trim_decision.code.empty()
+            ? "ENDPOINT_TRIM_STATE_TRANSITION"
+            : endpoint_trim_decision.code.c_str();
+        ROS_INFO(
+            "Endpoint trim transition code=%s phase=%s->%s "
+            "response_age=%.3fs applied_step_deg=%s "
+            "target_before_deg=%s target_after_deg=%s",
+            code,
+            endpoint_trim_phase_name(endpoint_trim_phase_before),
+            endpoint_trim_phase_name(endpoint_trim_decision.phase),
+            endpoint_trim_response_age_sec,
+            format_radians_as_degrees(
+                endpoint_trim_decision.applied_step
+            ).c_str(),
+            format_radians_as_degrees(
+                endpoint_trim_target_before
+            ).c_str(),
+            format_radians_as_degrees(
+                endpoint_trim_decision.composed_target
+            ).c_str()
+        );
     }
     if (endpoint_feedback_trim_task_lease_expired) {
         ROS_WARN(
-            expired_lease_measured_hold_latched
-                ? "Task endpoint precision lease expired; fresh measured joint pose latched until target changes"
-                : "Task endpoint precision lease expired without fresh measured feedback; existing held target retained until target changes"
+            "Task endpoint precision lease expired; serialized release "
+            "preserved the coordinator target"
         );
     }
 
@@ -1260,496 +1495,31 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     }
 
     std::vector<double> sdk_joint_angles = cmd_joint_angles_;
-    std::vector<double> feedback_trim(
-        sdk_joint_angles.size(),
-        0.0
-    );
-    double maximum_feedback_error_rad = 0.0;
-    double maximum_reference_delta_rad = 0.0;
     if (
-        endpoint_trim_reference.size() == joint_angles.size() &&
-        feedback_joint_angles.size() == joint_angles.size()
+        endpoint_trim_decision.phase != EndpointTrimPhase::IDLE &&
+        endpoint_trim_decision.composed_target.size() ==
+            sdk_joint_angles.size()
     ) {
-        for (size_t i = 0; i < joint_angles.size(); ++i) {
-            maximum_reference_delta_rad = std::max(
-                maximum_reference_delta_rad,
-                std::abs(
-                    joint_angles[i] - endpoint_trim_reference[i]
-                )
-            );
-            maximum_feedback_error_rad = std::max(
-                maximum_feedback_error_rad,
-                std::abs(
-                    joint_angles[i] - feedback_joint_angles[i]
-                )
-            );
-        }
+        sdk_joint_angles = endpoint_trim_decision.composed_target;
     }
-    const double stable_age_sec = endpoint_trim_reference_since.isZero()
-        ? 0.0
-        : (now - endpoint_trim_reference_since).toSec();
-    const bool feedback_sample_is_new =
-        !feedback_sample_time.isZero() &&
-        feedback_sample_time != endpoint_trim_last_feedback_sample_time;
-    if (feedback_sample_is_new) {
-        endpoint_trim_last_feedback_sample_time = feedback_sample_time;
-        const size_t joint_count = feedback_joint_angles.size();
-        if (
-            endpoint_trim_feedback_anchor.size() != joint_count ||
-            endpoint_trim_feedback_stable_since.size() != joint_count
-        ) {
-            endpoint_trim_feedback_anchor = feedback_joint_angles;
-            endpoint_trim_feedback_stable_since.assign(
-                joint_count,
-                feedback_sample_time
-            );
-        }
-        if (
-            endpoint_trim_response_joint_mask.size() != joint_count
-        ) {
-            endpoint_trim_response_joint_mask.assign(joint_count, 0);
-            endpoint_trim_waiting_for_feedback_response = false;
-        }
-        const bool response_metadata_valid =
-            endpoint_trim_response_start.size() == joint_count;
-        if (
-            endpoint_trim_waiting_for_feedback_response &&
-            !response_metadata_valid
-        ) {
-            endpoint_trim_waiting_for_feedback_response = false;
-            endpoint_trim_response_joint_mask.assign(joint_count, 0);
-        }
 
-        bool response_joint_still_waiting = false;
-        for (size_t i = 0; i < joint_count; ++i) {
-            const bool response_expected =
-                endpoint_trim_waiting_for_feedback_response &&
-                endpoint_trim_response_joint_mask[i] != 0;
-            const double anchor_displacement_rad = std::abs(
-                feedback_joint_angles[i] -
-                endpoint_trim_feedback_anchor[i]
-            );
-            if (response_expected) {
-                const double response_rad = std::abs(
-                    feedback_joint_angles[i] -
-                    endpoint_trim_response_start[i]
-                );
-                const double feedback_error_rad =
-                    i < joint_angles.size()
-                        ? std::abs(
-                            joint_angles[i] - feedback_joint_angles[i]
-                        )
-                        : std::numeric_limits<double>::infinity();
-                if (
-                    response_rad + 1e-12 >=
-                        SDK_JOINT_QUANTIZATION_RAD ||
-                    feedback_error_rad <=
-                        ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD
-                ) {
-                    endpoint_trim_response_joint_mask[i] = 0;
-                    endpoint_trim_feedback_anchor[i] =
-                        feedback_joint_angles[i];
-                    endpoint_trim_feedback_stable_since[i] =
-                        feedback_sample_time;
-                } else {
-                    response_joint_still_waiting = true;
-                }
-            } else if (
-                anchor_displacement_rad >
-                    SDK_JOINT_QUANTIZATION_RAD + 1e-12
-            ) {
-                // Stability is joint-local.  Encoder/servo movement on one
-                // joint must not reset another settled joint's eligibility.
-                endpoint_trim_feedback_anchor[i] =
-                    feedback_joint_angles[i];
-                endpoint_trim_feedback_stable_since[i] =
-                    feedback_sample_time;
-            }
-        }
-        if (
-            endpoint_trim_waiting_for_feedback_response &&
-            !response_joint_still_waiting
-        ) {
-            if (!endpoint_trim_response_wait_since.isZero()) {
-                const double observed_latency_sec =
-                    (
-                        feedback_sample_time -
-                        endpoint_trim_response_wait_since
-                    ).toSec();
-                if (std::isfinite(observed_latency_sec) &&
-                    observed_latency_sec > 0.0) {
-                    endpoint_trim_last_response_latency_sec =
-                        observed_latency_sec;
-                }
-            }
-            endpoint_trim_waiting_for_feedback_response = false;
-            endpoint_trim_response_wait_since = ros::Time(0);
-            endpoint_trim_stalled_retry_count = 0;
-        }
-    }
-    std::vector<uint8_t> endpoint_feedback_stable_by_joint(
-        joint_angles.size(),
-        0
+    ROS_DEBUG_THROTTLE(
+        1.0,
+        "Endpoint trim hold phase=%s code=%s response_age=%.3fs "
+        "applied_step_deg=%s target_before_deg=%s target_after_deg=%s",
+        endpoint_trim_phase_name(endpoint_trim_decision.phase),
+        endpoint_trim_decision.code.empty()
+            ? "NONE"
+            : endpoint_trim_decision.code.c_str(),
+        endpoint_trim_response_age_sec,
+        format_radians_as_degrees(
+            endpoint_trim_decision.applied_step
+        ).c_str(),
+        format_radians_as_degrees(endpoint_trim_target_before).c_str(),
+        format_radians_as_degrees(
+            endpoint_trim_decision.composed_target
+        ).c_str()
     );
-    double feedback_stable_age_sec = 0.0;
-    bool has_stable_joint_above_round_trip_floor = false;
-    bool has_stable_joint_above_activation = false;
-    if (
-        endpoint_trim_feedback_stable_since.size() ==
-            joint_angles.size() &&
-        feedback_joint_angles.size() == joint_angles.size()
-    ) {
-        for (size_t i = 0; i < joint_angles.size(); ++i) {
-            const double joint_stable_age_sec =
-                endpoint_trim_feedback_stable_since[i].isZero()
-                    ? 0.0
-                    : (
-                        now - endpoint_trim_feedback_stable_since[i]
-                    ).toSec();
-            feedback_stable_age_sec = std::max(
-                feedback_stable_age_sec,
-                joint_stable_age_sec
-            );
-            const bool joint_is_waiting =
-                endpoint_trim_waiting_for_feedback_response &&
-                endpoint_trim_response_joint_mask.size() ==
-                    joint_angles.size() &&
-                endpoint_trim_response_joint_mask[i] != 0;
-            const bool joint_is_stable =
-                !joint_is_waiting &&
-                joint_stable_age_sec >=
-                    endpoint_feedback_trim_stable_sec_;
-            endpoint_feedback_stable_by_joint[i] =
-                joint_is_stable ? 1 : 0;
-            const double joint_error_rad = std::abs(
-                joint_angles[i] - feedback_joint_angles[i]
-            );
-            has_stable_joint_above_round_trip_floor =
-                has_stable_joint_above_round_trip_floor ||
-                (
-                    joint_is_stable &&
-                    joint_error_rad >
-                        ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD
-                );
-            has_stable_joint_above_activation =
-                has_stable_joint_above_activation ||
-                (
-                    joint_is_stable &&
-                    joint_error_rad >
-                        endpoint_feedback_trim_activation_error_rad_
-                );
-        }
-    }
-    const bool endpoint_reference_stable =
-        endpoint_trim_reference.size() == joint_angles.size() &&
-        feedback_joint_angles.size() == joint_angles.size() &&
-        stable_age_sec >= endpoint_feedback_trim_stable_sec_ &&
-        maximum_reference_delta_rad <= SDK_JOINT_QUANTIZATION_RAD;
-    const bool endpoint_feedback_stable =
-        !endpoint_trim_waiting_for_feedback_response &&
-        endpoint_trim_feedback_anchor.size() ==
-            feedback_joint_angles.size() &&
-        std::find(
-            endpoint_feedback_stable_by_joint.begin(),
-            endpoint_feedback_stable_by_joint.end(),
-            static_cast<uint8_t>(1)
-        ) != endpoint_feedback_stable_by_joint.end();
-    const bool endpoint_error_inside_trim_window =
-        maximum_feedback_error_rad <= endpoint_feedback_trim_max_rad_;
-    const bool endpoint_error_exceeds_activation =
-        maximum_feedback_error_rad >
-            endpoint_feedback_trim_activation_error_rad_;
-    const bool endpoint_error_above_round_trip_floor =
-        maximum_feedback_error_rad >
-            ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD;
-    const bool endpoint_feedback_trim_update_allowed =
-        endpoint_feedback_trim_enabled_ ||
-        endpoint_feedback_trim_task_lease_active;
-    const bool endpoint_trim_enter_quiescence =
-        endpoint_feedback_trim_update_allowed &&
-        endpoint_reference_stable &&
-        endpoint_feedback_stable &&
-        feedback_sample_is_new &&
-        endpoint_error_inside_trim_window &&
-        endpoint_feedback_trim_active &&
-        !endpoint_feedback_trim_quiescent &&
-        !endpoint_error_above_round_trip_floor;
-    const bool endpoint_trim_leave_quiescence =
-        endpoint_feedback_trim_update_allowed &&
-        endpoint_reference_stable &&
-        endpoint_feedback_stable &&
-        feedback_sample_is_new &&
-        endpoint_feedback_trim_active &&
-        endpoint_feedback_trim_quiescent &&
-        endpoint_error_exceeds_activation &&
-        has_stable_joint_above_activation;
-    const bool endpoint_trim_quiescent_for_decision =
-        (
-            endpoint_feedback_trim_quiescent ||
-            endpoint_trim_enter_quiescence
-        ) &&
-        !endpoint_trim_leave_quiescence;
-    const bool start_endpoint_feedback_trim =
-        endpoint_feedback_trim_update_allowed &&
-        endpoint_reference_stable &&
-        endpoint_feedback_stable &&
-        feedback_sample_is_new &&
-        endpoint_error_inside_trim_window &&
-        !endpoint_feedback_trim_active &&
-        endpoint_error_above_round_trip_floor &&
-        has_stable_joint_above_round_trip_floor;
-    const bool continue_endpoint_feedback_trim =
-        endpoint_feedback_trim_update_allowed &&
-        endpoint_reference_stable &&
-        endpoint_feedback_stable &&
-        feedback_sample_is_new &&
-        endpoint_error_inside_trim_window &&
-        endpoint_feedback_trim_active &&
-        !endpoint_trim_quiescent_for_decision &&
-        endpoint_error_above_round_trip_floor &&
-        has_stable_joint_above_round_trip_floor;
-    const double endpoint_trim_response_timeout_sec = std::max(
-        endpoint_feedback_trim_stable_sec_,
-        endpoint_trim_last_response_latency_sec > 0.0
-            ? 2.0 * endpoint_trim_last_response_latency_sec
-            : feedback_stale_timeout_sec_
-    );
-    const double endpoint_trim_response_wait_age_sec =
-        endpoint_trim_response_wait_since.isZero()
-            ? 0.0
-            : (now - endpoint_trim_response_wait_since).toSec();
-    const bool retry_stalled_endpoint_feedback_trim =
-        endpoint_feedback_trim_update_allowed &&
-        endpoint_reference_stable &&
-        feedback_sample_is_new &&
-        endpoint_error_inside_trim_window &&
-        endpoint_feedback_trim_active &&
-        endpoint_trim_waiting_for_feedback_response &&
-        endpoint_trim_response_start.size() ==
-            feedback_joint_angles.size() &&
-        !endpoint_trim_quiescent_for_decision &&
-        endpoint_error_above_round_trip_floor &&
-        endpoint_trim_response_wait_age_sec >=
-            endpoint_trim_response_timeout_sec;
-    const bool update_endpoint_feedback_trim =
-        start_endpoint_feedback_trim ||
-        continue_endpoint_feedback_trim ||
-        retry_stalled_endpoint_feedback_trim;
-    bool endpoint_trim_changed = false;
-    bool endpoint_trim_entered_quiescence = false;
-    bool endpoint_trim_left_quiescence = false;
-    if (endpoint_feedback_trim_update_allowed) {
-        std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
-        if (
-            endpoint_trim_reference_since_ ==
-                endpoint_trim_reference_since &&
-            endpoint_trim_reference_joint_angles_ ==
-                endpoint_trim_reference
-        ) {
-            endpoint_trim_feedback_anchor_joint_angles_ =
-                endpoint_trim_feedback_anchor;
-            endpoint_trim_feedback_stable_since_ =
-                endpoint_trim_feedback_stable_since;
-            endpoint_trim_last_feedback_sample_time_ =
-                endpoint_trim_last_feedback_sample_time;
-            endpoint_trim_waiting_for_feedback_response_ =
-                endpoint_trim_waiting_for_feedback_response;
-            endpoint_trim_response_start_joint_angles_ =
-                endpoint_trim_response_start;
-            endpoint_trim_response_joint_mask_ =
-                endpoint_trim_response_joint_mask;
-            endpoint_trim_response_wait_since_ =
-                endpoint_trim_response_wait_since;
-            endpoint_trim_last_response_latency_sec_ =
-                endpoint_trim_last_response_latency_sec;
-            endpoint_trim_stalled_retry_count_ =
-                endpoint_trim_stalled_retry_count;
-            const bool endpoint_trim_was_quiescent =
-                endpoint_feedback_trim_quiescent_;
-            endpoint_feedback_trim_quiescent_ =
-                endpoint_trim_quiescent_for_decision;
-            if (update_endpoint_feedback_trim) {
-                if (
-                    endpoint_feedback_trim_offsets_.size() !=
-                        joint_angles.size()
-                ) {
-                    endpoint_feedback_trim_offsets_.assign(
-                        joint_angles.size(),
-                        0.0
-                    );
-                }
-                if (!retry_stalled_endpoint_feedback_trim) {
-                    endpoint_trim_response_joint_mask_.assign(
-                        joint_angles.size(),
-                        0
-                    );
-                    endpoint_trim_response_start_joint_angles_ =
-                        feedback_joint_angles;
-                    endpoint_trim_stalled_retry_count_ = 0;
-                }
-                for (size_t i = 0; i < joint_angles.size(); ++i) {
-                    const double feedback_error =
-                        joint_angles[i] - feedback_joint_angles[i];
-                    const bool joint_retry_is_due =
-                        retry_stalled_endpoint_feedback_trim &&
-                        endpoint_trim_response_joint_mask_.size() ==
-                            joint_angles.size() &&
-                        endpoint_trim_response_joint_mask_[i] != 0;
-                    const bool joint_stable_for_update =
-                        !retry_stalled_endpoint_feedback_trim &&
-                        endpoint_feedback_stable_by_joint.size() ==
-                            joint_angles.size() &&
-                        endpoint_feedback_stable_by_joint[i] != 0;
-                    if (
-                        (!joint_retry_is_due &&
-                         !joint_stable_for_update) ||
-                        std::abs(feedback_error) <=
-                            ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD
-                    ) {
-                        continue;
-                    }
-                    const double previous_trim =
-                        endpoint_feedback_trim_offsets_[i];
-                    endpoint_feedback_trim_offsets_[i] = std::max(
-                        -endpoint_feedback_trim_max_rad_,
-                        std::min(
-                            endpoint_feedback_trim_max_rad_,
-                            previous_trim +
-                                endpoint_feedback_trim_gain_ *
-                                feedback_error
-                        )
-                    );
-                    endpoint_trim_changed =
-                        endpoint_trim_changed ||
-                        std::abs(
-                            endpoint_feedback_trim_offsets_[i] -
-                            previous_trim
-                        ) > 1e-12;
-                    if (
-                        std::abs(
-                            endpoint_feedback_trim_offsets_[i] -
-                            previous_trim
-                        ) > 1e-12
-                    ) {
-                        endpoint_trim_response_joint_mask_[i] = 1;
-                        endpoint_trim_feedback_anchor_joint_angles_[i] =
-                            feedback_joint_angles[i];
-                        endpoint_trim_feedback_stable_since_[i] =
-                            ros::Time(0);
-                    }
-                }
-                endpoint_feedback_trim_active_ = true;
-                endpoint_feedback_trim_quiescent_ = false;
-                if (endpoint_trim_changed) {
-                    ++endpoint_feedback_trim_iteration_;
-                    endpoint_trim_waiting_for_feedback_response_ = true;
-                    if (retry_stalled_endpoint_feedback_trim) {
-                        ++endpoint_trim_stalled_retry_count_;
-                    }
-                    endpoint_trim_response_wait_since_ = now;
-                }
-            }
-            endpoint_trim_entered_quiescence =
-                !endpoint_trim_was_quiescent &&
-                endpoint_feedback_trim_quiescent_;
-            endpoint_trim_left_quiescence =
-                endpoint_trim_was_quiescent &&
-                !endpoint_feedback_trim_quiescent_;
-            endpoint_feedback_trim_active =
-                endpoint_feedback_trim_active_;
-            endpoint_feedback_trim_quiescent =
-                endpoint_feedback_trim_quiescent_;
-            endpoint_feedback_trim_offsets =
-                endpoint_feedback_trim_offsets_;
-            endpoint_trim_waiting_for_feedback_response =
-                endpoint_trim_waiting_for_feedback_response_;
-            endpoint_trim_response_joint_mask =
-                endpoint_trim_response_joint_mask_;
-            endpoint_trim_response_wait_since =
-                endpoint_trim_response_wait_since_;
-            endpoint_trim_last_response_latency_sec =
-                endpoint_trim_last_response_latency_sec_;
-            endpoint_trim_stalled_retry_count =
-                endpoint_trim_stalled_retry_count_;
-            endpoint_feedback_trim_iteration =
-                endpoint_feedback_trim_iteration_;
-        }
-    }
-    if (
-        endpoint_feedback_trim_active &&
-        endpoint_feedback_trim_offsets.size() == sdk_joint_angles.size()
-    ) {
-        for (size_t i = 0; i < sdk_joint_angles.size(); ++i) {
-            feedback_trim[i] = endpoint_feedback_trim_offsets[i];
-            sdk_joint_angles[i] += feedback_trim[i];
-        }
-        if (log_command_flow_) {
-            if (endpoint_trim_entered_quiescence) {
-                ROS_INFO(
-                    "Endpoint feedback trim entered quantization-floor quiescence: max_error=%.6frad round_trip_floor=%.6frad iteration=%zu accumulated_trim_deg=%s",
-                    maximum_feedback_error_rad,
-                    ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD,
-                    endpoint_feedback_trim_iteration,
-                    format_radians_as_degrees(feedback_trim).c_str()
-                );
-            } else if (endpoint_trim_left_quiescence) {
-                ROS_WARN(
-                    "Endpoint feedback trim left quiescence: max_error=%.6frad activation_error=%.6frad iteration=%zu",
-                    maximum_feedback_error_rad,
-                    endpoint_feedback_trim_activation_error_rad_,
-                    endpoint_feedback_trim_iteration
-                );
-            }
-            if (endpoint_trim_changed) {
-                if (retry_stalled_endpoint_feedback_trim) {
-                    ROS_WARN(
-                        "Endpoint feedback trim stalled-response retry %zu (iteration %zu): response_wait=%.3fs adaptive_timeout=%.3fs last_response_latency=%.3fs max_error=%.6frad base_deg=%s measured_deg=%s accumulated_trim_deg=%s",
-                        endpoint_trim_stalled_retry_count,
-                        endpoint_feedback_trim_iteration,
-                        endpoint_trim_response_wait_age_sec,
-                        endpoint_trim_response_timeout_sec,
-                        endpoint_trim_last_response_latency_sec,
-                        maximum_feedback_error_rad,
-                        format_radians_as_degrees(joint_angles).c_str(),
-                        format_radians_as_degrees(feedback_joint_angles).c_str(),
-                        format_radians_as_degrees(feedback_trim).c_str()
-                    );
-                } else {
-                    ROS_INFO(
-                        "Endpoint feedback trim iteration %zu: reference_stable=%.3fs feedback_stable=%.3fs max_error=%.6frad base_deg=%s measured_deg=%s accumulated_trim_deg=%s",
-                        endpoint_feedback_trim_iteration,
-                        stable_age_sec,
-                        feedback_stable_age_sec,
-                        maximum_feedback_error_rad,
-                        format_radians_as_degrees(joint_angles).c_str(),
-                        format_radians_as_degrees(feedback_joint_angles).c_str(),
-                        format_radians_as_degrees(feedback_trim).c_str()
-                    );
-                }
-            } else {
-                ROS_INFO_THROTTLE(
-                    1.0,
-                    "Endpoint feedback trim holding: iteration=%zu quiescent=%s waiting_for_encoder_response=%s response_wait=%.3fs adaptive_timeout=%.3fs max_error=%.6frad round_trip_floor=%.6frad base_deg=%s measured_deg=%s accumulated_trim_deg=%s",
-                    endpoint_feedback_trim_iteration,
-                    endpoint_feedback_trim_quiescent
-                        ? "true"
-                        : "false",
-                    endpoint_trim_waiting_for_feedback_response
-                        ? "true"
-                        : "false",
-                    endpoint_trim_response_wait_since.isZero()
-                        ? 0.0
-                        : (now - endpoint_trim_response_wait_since).toSec(),
-                    endpoint_trim_response_timeout_sec,
-                    maximum_feedback_error_rad,
-                    ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD,
-                    format_radians_as_degrees(joint_angles).c_str(),
-                    format_radians_as_degrees(feedback_joint_angles).c_str(),
-                    format_radians_as_degrees(feedback_trim).c_str()
-                );
-            }
-        }
-    }
 
     // Build and send SDK-style joint + gripper frame:
     // [AA] [06] [03] [1C] [J1 pos lo hi speed lo hi] ... [J6] [gripper pos lo hi speed lo hi] [CRC] [FF]

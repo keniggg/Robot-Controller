@@ -5,6 +5,9 @@
    <arg name="debug_mode" default="false" />
    <arg name="auto_torque_on_startup" default="false" />
    <arg name="self_check_poll_rate_hz" default="0.5" />
+   <arg name="endpoint_feedback_trim_max_step_quantums" default="4"/>
+   <arg name="endpoint_feedback_trim_response_min_quantums" default="2"/>
+   <arg name="endpoint_feedback_trim_response_deadline_sec" default="1.0"/>
    <node name="alicia_d_driver_node" pkg="alicia_d_driver" type="alicia_d_driver_node" output="screen">
    
      <!-- Serial Port Configuration -->
@@ -51,6 +54,9 @@
       <param name="endpoint_feedback_trim_activation_error_rad" type="double" value="0.035"/>
       <param name="endpoint_feedback_trim_max_rad" type="double" value="0.12"/>
       <param name="endpoint_feedback_trim_gain" type="double" value="1.0"/>
+      <param name="endpoint_feedback_trim_max_step_quantums" value="$(arg endpoint_feedback_trim_max_step_quantums)"/>
+      <param name="endpoint_feedback_trim_response_min_quantums" value="$(arg endpoint_feedback_trim_response_min_quantums)"/>
+      <param name="endpoint_feedback_trim_response_deadline_sec" value="$(arg endpoint_feedback_trim_response_deadline_sec)"/>
       <param name="use_trajectory_smoothing"  type="bool"   value="false"/>
       <param name="max_joint_velocity_rad_s"  type="double" value="0.30"/>
       <param name="max_joint_accel_rad_s2"    type="double" value="1.0"/>

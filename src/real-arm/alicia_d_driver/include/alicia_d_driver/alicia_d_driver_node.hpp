@@ -3,6 +3,7 @@
 
 #include "ros/ros.h"
 #include "alicia_d_driver/actuation_confirmation.hpp"
+#include "alicia_d_driver/endpoint_trim_continuity.hpp"
 #include "serial_communicator.hpp" // Assuming this is a non-ROS helper class
 #include "std_msgs/Bool.h"
 #include "std_msgs/Float32MultiArray.h"
@@ -126,10 +127,16 @@ private:
 	   double endpoint_feedback_trim_task_lease_timeout_sec_ = 120.0;
 	   ros::Time endpoint_feedback_trim_task_lease_expires_at_;
 	   std::vector<double> endpoint_feedback_trim_task_lease_reference_;
+	   bool endpoint_trim_release_requires_timer_install_ = false;
 	   double endpoint_feedback_trim_stable_sec_ = 0.30;
 	   double endpoint_feedback_trim_activation_error_rad_ = 0.035;
 	   double endpoint_feedback_trim_max_rad_ = 0.12;
 	   double endpoint_feedback_trim_gain_ = 1.0;
+	   int endpoint_feedback_trim_max_step_quantums_ = 4;
+	   int endpoint_feedback_trim_response_min_quantums_ = 2;
+	   double endpoint_feedback_trim_response_deadline_sec_ = 1.0;
+	   EndpointTrimConfig endpoint_trim_config_;
+	   EndpointTrimContinuity endpoint_trim_continuity_;
 		   double protection_clear_stable_sec_ = 30.0;
 	   double max_enable_temperature_c_ = 60.0;
 	   double max_plausible_temperature_c_ = 125.0;
