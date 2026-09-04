@@ -430,90 +430,81 @@ TEST(EndpointTrimContinuityTest, DeployedResponseMinimumRejectsOneQuantumUntilTw
 }
 
 TEST(EndpointTrimContinuityTest,
-     SettlesAtReferenceWithoutReversingAccumulatedCorrection)
+     DeployedIncrementResponseConvergesFixedBiasWithoutReversal)
 {
     EndpointTrimConfig config = endpoint_trim_config();
+    config.sdk_quantum_rad = 2.0 * M_PI / 4096.0;
+    config.max_step_rad = 4.0 * config.sdk_quantum_rad;
+    config.response_min_rad = 2.0 * config.sdk_quantum_rad;
+    config.settle_error_rad = 2.0 * config.sdk_quantum_rad;
+    config.stable_sec = 0.30;
+    config.response_deadline_sec = 1.0;
     EndpointTrimContinuity trim(config);
     const double quantum = config.sdk_quantum_rad;
     const std::vector<double> reference = joints();
-    const std::vector<double> baseline = joints(-4.0 * quantum);
+    const double fixed_bias = degrees(1.3);
+    std::vector<double> measured = joints(-fixed_bias);
+    double previous_residual = fixed_bias;
 
     trim.activate(reference, joints(), 0.0);
-    const EndpointTrimDecision correction = trim.request_correction(
-        baseline, all_stable_joints(), 1.0, 0.1
-    );
-    ASSERT_EQ(correction.phase, EndpointTrimPhase::WAITING_RESPONSE);
-    ASSERT_NEAR(correction.applied_step[0], 4.0 * quantum, 1e-12);
-    const std::vector<double> preserved = correction.composed_target;
+    std::vector<double> final_target;
+    for (size_t iteration = 0; iteration < 4; ++iteration) {
+        const double request_time = 1.0 + 0.6 * iteration;
+        const EndpointTrimDecision correction = trim.request_correction(
+            measured, all_stable_joints(), 1.0, request_time
+        );
+        ASSERT_EQ(correction.phase, EndpointTrimPhase::WAITING_RESPONSE);
+        ASSERT_TRUE(correction.command_changed);
+        EXPECT_GT(correction.applied_step[0], 0.0);
+        EXPECT_LE(correction.applied_step[0], 4.0 * quantum + 1e-12);
+        if (iteration < 3) {
+            EXPECT_NEAR(correction.applied_step[0], 4.0 * quantum, 1e-12);
+        } else {
+            EXPECT_NEAR(
+                correction.applied_step[0], fixed_bias - 12.0 * quantum, 1e-12
+            );
+        }
+        for (size_t joint = 1; joint < correction.applied_step.size(); ++joint) {
+            EXPECT_EQ(correction.applied_step[joint], 0.0);
+        }
 
-    EXPECT_EQ(
-        trim.note_feedback(reference, 0.2, 0.2).phase,
-        EndpointTrimPhase::WAITING_RESPONSE
-    );
-    EXPECT_EQ(
-        trim.note_feedback(
-            reference,
-            0.2 + config.stable_sec,
-            0.2 + config.stable_sec
-        ).phase,
-        EndpointTrimPhase::ACTIVE_READY
-    );
+        measured = joints(correction.composed_target[0] - fixed_bias);
+        const double residual = std::abs(reference[0] - measured[0]);
+        EXPECT_LT(residual, previous_residual);
+        previous_residual = residual;
+        final_target = correction.composed_target;
 
+        const double settle_start = request_time + 0.05;
+        EXPECT_EQ(
+            trim.note_feedback(measured, settle_start, settle_start).phase,
+            EndpointTrimPhase::WAITING_RESPONSE
+        );
+        EXPECT_EQ(
+            trim.note_feedback(
+                measured,
+                settle_start + config.stable_sec - 0.01,
+                settle_start + config.stable_sec - 0.01
+            ).phase,
+            EndpointTrimPhase::WAITING_RESPONSE
+        );
+        EXPECT_EQ(
+            trim.note_feedback(
+                measured,
+                settle_start + config.stable_sec + 0.01,
+                settle_start + config.stable_sec + 0.01
+            ).phase,
+            EndpointTrimPhase::ACTIVE_READY
+        );
+    }
+
+    EXPECT_LE(std::abs(measured[0] - reference[0]), 1e-12);
     const EndpointTrimDecision next = trim.request_correction(
-        reference,
-        all_stable_joints(),
-        1.0,
-        0.3 + config.stable_sec
+        measured, all_stable_joints(), 1.0, 3.5
     );
     EXPECT_EQ(next.phase, EndpointTrimPhase::ACTIVE_READY);
     EXPECT_FALSE(next.command_changed);
     EXPECT_EQ(next.applied_step, joints());
-    EXPECT_EQ(next.composed_target, preserved);
-}
-
-TEST(EndpointTrimContinuityTest,
-     DirectionalStaticBiasTimesOutWithoutReverseOrAdditionalIncrement)
-{
-    EndpointTrimConfig config = endpoint_trim_config();
-    EndpointTrimContinuity trim(config);
-    const double quantum = config.sdk_quantum_rad;
-    const std::vector<double> baseline = joints(-4.0 * quantum);
-
-    trim.activate(joints(), joints(), 0.0);
-    const EndpointTrimDecision correction = trim.request_correction(
-        baseline, all_stable_joints(), 1.0, 0.1
-    );
-    ASSERT_EQ(correction.phase, EndpointTrimPhase::WAITING_RESPONSE);
-    const std::vector<double> preserved = correction.composed_target;
-
-    const std::vector<double> biased = joints(-3.0 * quantum);
-    const EndpointTrimDecision moving = trim.note_feedback(
-        biased, 0.2, 0.2
-    );
-    EXPECT_EQ(moving.phase, EndpointTrimPhase::WAITING_RESPONSE);
-    EXPECT_EQ(moving.applied_step, joints());
-    EXPECT_EQ(moving.composed_target, preserved);
-
-    const EndpointTrimDecision waiting = trim.update(0.25);
-    EXPECT_EQ(waiting.phase, EndpointTrimPhase::WAITING_RESPONSE);
-    EXPECT_EQ(waiting.applied_step, joints());
-    EXPECT_EQ(waiting.composed_target, preserved);
-
-    const EndpointTrimDecision blocked = trim.request_correction(
-        biased, all_stable_joints(), 1.0, 0.3
-    );
-    EXPECT_EQ(blocked.phase, EndpointTrimPhase::WAITING_RESPONSE);
-    EXPECT_FALSE(blocked.command_changed);
-    EXPECT_EQ(blocked.applied_step, joints());
-    EXPECT_EQ(blocked.composed_target, preserved);
-
-    const EndpointTrimDecision timed_out = trim.update(
-        0.1 + config.response_deadline_sec
-    );
-    EXPECT_EQ(timed_out.phase, EndpointTrimPhase::FAULT);
-    EXPECT_EQ(timed_out.code, "ENDPOINT_TRIM_RESPONSE_TIMEOUT");
-    EXPECT_EQ(timed_out.applied_step, joints());
-    EXPECT_EQ(timed_out.composed_target, preserved);
+    EXPECT_EQ(next.composed_target, final_target);
 }
 
 TEST(EndpointTrimContinuityTest, PendingReleaseCompletesAfterStableResponse)

@@ -154,12 +154,18 @@ public:
         }
 
         response_baseline_ = measured;
-        // The composed target is the over-command sent to the actuator.  The
-        // response is complete only when feedback reaches the upstream
-        // reference that the trim is intended to recover.  Settling against
-        // the over-command would make the next reference-measured correction
-        // reverse the accumulated offset.
-        response_goal_ = state_.reference;
+        // Verify the response to this increment, independently of any fixed
+        // command-to-feedback bias.  The composed target remains the SDK
+        // over-command, while the immutable response goal is exactly the
+        // measured baseline plus the increment that was actually admitted.
+        // This admits another same-direction increment only after the prior
+        // one has demonstrably moved and settled.
+        response_goal_ = response_baseline_;
+        for (size_t i = 0; i < config_.joint_count; ++i) {
+            response_goal_[i] = saturating_add(
+                response_baseline_[i], applied[i]
+            );
+        }
         response_direction_ = response_direction;
         response_start_sec_ = now_sec;
         response_settle_since_sec_ = std::numeric_limits<double>::quiet_NaN();
