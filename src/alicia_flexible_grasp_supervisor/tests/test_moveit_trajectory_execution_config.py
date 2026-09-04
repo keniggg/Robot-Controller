@@ -354,6 +354,10 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
             self.assertIn(member, header)
         self.assertIn('endpoint_trim_continuity_.request_release(', service)
         self.assertIn('endpoint_trim_command_order_.record_release(', service)
+        self.assertLess(
+            service.index('endpoint_trim_continuity_.request_release('),
+            service.index('endpoint_trim_command_order_.record_release('),
+        )
         self.assertIn('EndpointTrimReleaseStatus::PENDING', service)
         self.assertIn('EndpointTrimReleaseStatus::COMPLETED', service)
         self.assertNotIn('endpoint_feedback_trim_offsets_', service)
@@ -365,6 +369,10 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
         expiry = timer[expiry_start:expiry_end]
         self.assertIn('endpoint_trim_continuity_.request_release(', expiry)
         self.assertIn('endpoint_trim_command_order_.record_release(', expiry)
+        self.assertLess(
+            expiry.index('endpoint_trim_continuity_.request_release('),
+            expiry.index('endpoint_trim_command_order_.record_release('),
+        )
         self.assertNotIn('endpoint_feedback_trim_offsets_', expiry)
 
     def test_gui_direct_command_is_single_joint_and_clears_task_trim(self):

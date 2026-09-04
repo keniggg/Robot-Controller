@@ -95,11 +95,15 @@ header default `response_min_rad` is `q`. The node's deployed parameter wiring
 instead uses `2q`. The direct behavioral gtest now instantiates the deployed
 values: `max_step_rad = 8*pi/4096` (`4q`), `response_min_rad = 4*pi/4096`
 (`2q`), `response_deadline_sec = 1.0`, `stable_sec = 0.30`, and
-`settle_error_rad = 4*pi/4096` (`2q`). It proves that a directional `1q` feedback
-change stays `WAITING_RESPONSE`; a `2q` directional feedback change also
-remains waiting until a further stable interval has elapsed, then reaches
-`ACTIVE_READY`. This is a coordinator-only unit test; it does not dispatch a
-driver command or contact hardware.
+`settle_error_rad = 4*pi/4096` (`2q`). The fixture starts from an existing
+`-1q` trim, so after the new correction the `1q` directional feedback sample
+is already exactly at the `2q` settle-error boundary. Repeating that `1q`
+sample after `0.31 s` still leaves the coordinator in `WAITING_RESPONSE`;
+therefore the response-minimum gate, rather than the settle-error gate, is
+what rejects it. A `2q` response then begins settling, stays waiting at
+`0.29 s`, and reaches `ACTIVE_READY` only after `0.31 s`. This is a
+coordinator-only unit test; it does not dispatch a driver command or contact
+hardware.
 
 The outdated source-contract tests were reproduced before repair with exit
 `1`: `14` ran, with `2` failures and `1` `IndexError`. They expected the
@@ -120,3 +124,20 @@ The full suite is therefore not claimed green. The two remaining errors are
 environmental sandbox restrictions, not endpoint-commit failures. This
 corrective evidence remains offline-only and does not alter the powered
 deployment gate above.
+
+## Corrective verification — unconfounded threshold and release ordering
+
+The deployed-threshold fixture now makes the `1q` sample satisfy the
+`settle_error_rad = 2q` condition before testing the independent
+`response_min_rad = 2q` condition. Both task-release paths also assert that
+`EndpointTrimContinuity::request_release` appears before
+`EndpointTrimCommandOrder::record_release`, so the order object records the
+decision that was just produced rather than stale state.
+
+| Command | Exit | Result |
+| --- | ---: | --- |
+| `source /opt/ros/noetic/setup.bash && catkin_make run_tests_alicia_d_driver_gtest_actuation_confirmation_test` | 0 | Integrated dirty-tree run passed `47/47`, including the unconfounded deployed-threshold case. |
+| staged test source compiled directly with `g++`, then `/tmp/endpoint_task4_round2_staged_test` | 0 | Isolated staged snapshot passed `45/45`; unrelated GUI-hold hunks remained unstaged. |
+| `source devel/setup.bash && python3 -m unittest src.alicia_flexible_grasp_supervisor.tests.test_moveit_trajectory_execution_config -q` | 0 | `14/14` passed, including both release-order assertions. |
+| `source devel/setup.bash && python3 -m unittest src.alicia_flexible_grasp_supervisor.tests.test_serial_driver_resilience -q` | 0 | `27/27` passed. |
+| `git diff --check` | 0 | No whitespace errors. |

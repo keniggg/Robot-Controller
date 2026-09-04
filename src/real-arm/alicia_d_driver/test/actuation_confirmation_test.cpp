@@ -393,12 +393,17 @@ TEST(EndpointTrimContinuityTest, DeployedResponseMinimumRejectsOneQuantumUntilTw
         joints(-config.response_min_rad + one_quantum);
     const std::vector<double> two_quantum_response = joints();
 
-    trim.activate(joints(), joints(), 0.0);
+    trim.activate(joints(), joints(-one_quantum), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        baseline, all_stable_joints(), 1.0, 1.0
+    );
     ASSERT_EQ(
-        trim.request_correction(
-            baseline, all_stable_joints(), 1.0, 1.0
-        ).phase,
+        correction.phase,
         EndpointTrimPhase::WAITING_RESPONSE
+    );
+    ASSERT_LE(
+        std::abs(one_quantum_response[0] - correction.composed_target[0]),
+        config.settle_error_rad
     );
 
     EXPECT_EQ(
@@ -406,15 +411,19 @@ TEST(EndpointTrimContinuityTest, DeployedResponseMinimumRejectsOneQuantumUntilTw
         EndpointTrimPhase::WAITING_RESPONSE
     );
     EXPECT_EQ(
-        trim.note_feedback(two_quantum_response, 1.2, 1.2).phase,
+        trim.note_feedback(one_quantum_response, 1.41, 1.41).phase,
         EndpointTrimPhase::WAITING_RESPONSE
     );
     EXPECT_EQ(
-        trim.note_feedback(two_quantum_response, 1.49, 1.49).phase,
+        trim.note_feedback(two_quantum_response, 1.5, 1.5).phase,
         EndpointTrimPhase::WAITING_RESPONSE
     );
     EXPECT_EQ(
-        trim.note_feedback(two_quantum_response, 1.51, 1.51).phase,
+        trim.note_feedback(two_quantum_response, 1.79, 1.79).phase,
+        EndpointTrimPhase::WAITING_RESPONSE
+    );
+    EXPECT_EQ(
+        trim.note_feedback(two_quantum_response, 1.81, 1.81).phase,
         EndpointTrimPhase::ACTIVE_READY
     );
 }
