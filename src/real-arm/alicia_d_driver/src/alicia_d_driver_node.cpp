@@ -147,6 +147,10 @@ AliciaDDriverNode::AliciaDDriverNode()
         endpoint_feedback_trim_response_deadline_sec_;
     endpoint_trim_config_.max_total_trim_rad = endpoint_feedback_trim_max_rad_;
     endpoint_trim_continuity_ = EndpointTrimContinuity(endpoint_trim_config_);
+    endpoint_trim_command_order_ = EndpointTrimCommandOrder(
+        endpoint_trim_config_.joint_count,
+        endpoint_trim_config_.sdk_quantum_rad
+    );
     ActuationConfirmationConfig actuation_config;
     actuation_config.sync_tolerance_rad = reconnect_sync_tolerance_rad_;
     actuation_config.command_probe_min_delta_rad =
@@ -508,8 +512,20 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
     bool release_pending = false;
     {
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
+        if (
+            endpoint_trim_command_order_.has_unapplied_command() &&
+            endpoint_trim_command_order_.upstream_target().size() == 6
+        ) {
+            endpoint_trim_continuity_.explicit_gui_handoff(
+                endpoint_trim_command_order_.upstream_target(),
+                now.toSec()
+            );
+            endpoint_trim_command_order_.mark_command_applied();
+        }
         if (request.data) {
-            if (endpoint_trim_reference_joint_angles_.size() != 6) {
+            const EndpointTrimDecision& current =
+                endpoint_trim_continuity_.state();
+            if (current.reference.size() != 6) {
                 response.success = false;
                 response.message =
                     "task endpoint precision lease rejected: no held six-joint target";
@@ -520,7 +536,7 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
                 now + ros::Duration(
                     endpoint_feedback_trim_task_lease_timeout_sec_);
             endpoint_feedback_trim_task_lease_reference_ =
-                endpoint_trim_reference_joint_angles_;
+                current.reference;
         } else {
             endpoint_feedback_trim_task_lease_active_ = false;
             endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
@@ -544,8 +560,8 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
                 release_requested = true;
                 release_pending =
                     decision.phase == EndpointTrimPhase::PENDING_RELEASE;
-                endpoint_trim_release_requires_timer_install_ = true;
             }
+            endpoint_trim_command_order_.note_release();
         }
     }
     response.success = true;
@@ -573,8 +589,11 @@ void AliciaDDriverNode::clear_retained_command_state()
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
         has_latest_command_ = false;
         latest_joint_angles_.clear();
+        endpoint_trim_continuity_ =
+            EndpointTrimContinuity(endpoint_trim_config_);
+        endpoint_trim_command_order_.reset();
         endpoint_trim_reference_joint_angles_.clear();
-        endpoint_trim_reference_since_ = ros::Time(0);
+        endpoint_trim_upstream_reference_since_ = ros::Time(0);
         endpoint_feedback_trim_active_ = false;
         endpoint_feedback_trim_quiescent_ = false;
         endpoint_feedback_trim_offsets_.clear();
@@ -591,7 +610,6 @@ void AliciaDDriverNode::clear_retained_command_state()
         endpoint_feedback_trim_task_lease_active_ = false;
         endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
         endpoint_feedback_trim_task_lease_reference_.clear();
-        endpoint_trim_release_requires_timer_install_ = false;
     }
     {
         std::lock_guard<std::mutex> lock(send_mutex_);
@@ -880,6 +898,9 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
 {
     if (!communicator_->is_connected()) return;
     const ros::Time command_time = ros::Time::now();
+    const bool endpoint_trim_explicit_gui_command =
+        msg->header.frame_id == "gui_direct" ||
+        msg->header.frame_id == "gui_direct_sync";
 
     // Measure incoming /joint_commands rate (logs once per second)
     // {
@@ -971,42 +992,23 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
         const bool gripper_reference_changed =
             std::abs(gripper_value - latest_gripper_rad_) > 1e-6;
-        bool reference_changed =
-            endpoint_trim_reference_joint_angles_.size() != joint_angles.size();
-        if (!reference_changed) {
-            for (size_t i = 0; i < joint_angles.size(); ++i) {
-                if (std::abs(
-                        joint_angles[i] -
-                        endpoint_trim_reference_joint_angles_[i]
-                    ) > SDK_JOINT_QUANTIZATION_RAD) {
-                    reference_changed = true;
-                    break;
-                }
-            }
-        }
+        const bool reference_changed =
+            endpoint_trim_command_order_.observe_upstream_command(
+                joint_angles,
+                endpoint_trim_explicit_gui_command
+            );
         if (reference_changed) {
             if (endpoint_feedback_trim_task_lease_active_) {
                 endpoint_feedback_trim_task_lease_active_ = false;
                 endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
                 endpoint_feedback_trim_task_lease_reference_.clear();
             }
-            endpoint_trim_reference_joint_angles_ = joint_angles;
-            endpoint_trim_reference_since_ = command_time;
-            endpoint_feedback_trim_active_ = false;
-            endpoint_feedback_trim_quiescent_ = false;
-            endpoint_feedback_trim_offsets_.assign(joint_angles.size(), 0.0);
+            endpoint_trim_upstream_reference_since_ = command_time;
             endpoint_trim_feedback_anchor_joint_angles_.clear();
             endpoint_trim_feedback_stable_since_.assign(
                 joint_angles.size(),
                 ros::Time(0)
             );
-            endpoint_trim_waiting_for_feedback_response_ = false;
-            endpoint_trim_response_start_joint_angles_.clear();
-            endpoint_trim_response_joint_mask_.clear();
-            endpoint_trim_response_wait_since_ = ros::Time(0);
-            endpoint_trim_last_response_latency_sec_ = 0.0;
-            endpoint_trim_stalled_retry_count_ = 0;
-            endpoint_feedback_trim_iteration_ = 0;
         }
         if (reference_changed || gripper_reference_changed) {
             last_motion_reference_change_time_ = command_time;
@@ -1035,6 +1037,7 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     bool feedback_stale = true;
     bool protection_latched = false;
     bool motion_enabled = false;
+    bool actuation_overheat_blocked = false;
     std::vector<double> feedback_joint_angles;
     double feedback_gripper_rad = 0.0;
     ros::Time feedback_sample_time;
@@ -1053,6 +1056,20 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         feedback_joint_angles = current_joint_positions_;
         feedback_gripper_rad = current_gripper_position_;
     }
+    {
+        std::lock_guard<std::mutex> lock(actuation_mutex_);
+        actuation_overheat_blocked =
+            actuation_confirmation_.state() ==
+                ActuationState::OVERHEAT_BLOCKED;
+    }
+    const EndpointTrimTransmissionGate endpoint_trim_gate{
+        motion_enabled,
+        actuation_overheat_blocked,
+        protection_latched,
+        pause_commands_when_feedback_stale_,
+        feedback_ready,
+        feedback_stale,
+    };
 
     std::vector<double> joint_angles;
     double gripper_value = 0.0;
@@ -1079,15 +1096,15 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         endpoint_trim_target_before = initial_state.composed_target;
 
         if (
-            endpoint_trim_reference_joint_angles_.size() == 6 &&
-            !endpoint_trim_release_requires_timer_install_ &&
-            initial_state.reference != endpoint_trim_reference_joint_angles_
+            endpoint_trim_command_order_.newer_command_requires_handoff() &&
+            endpoint_trim_command_order_.upstream_target().size() == 6
         ) {
             endpoint_trim_decision =
                 endpoint_trim_continuity_.explicit_gui_handoff(
-                    endpoint_trim_reference_joint_angles_,
+                    endpoint_trim_command_order_.upstream_target(),
                     now.toSec()
                 );
+            endpoint_trim_command_order_.mark_command_applied();
         } else {
             endpoint_trim_decision = initial_state;
         }
@@ -1131,6 +1148,7 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
                         now.toSec()
                 );
             }
+            endpoint_trim_command_order_.note_release();
         }
         // Lease-expiry release request end
 
@@ -1181,14 +1199,14 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         bool has_stable_joint_above_round_trip_floor = false;
         const bool feedback_shape_valid =
             feedback_joint_angles.size() == 6 &&
-            endpoint_trim_reference_joint_angles_.size() == 6 &&
+            endpoint_trim_decision.reference.size() == 6 &&
             endpoint_trim_feedback_stable_since_.size() == 6;
         if (feedback_shape_valid) {
             for (size_t i = 0; i < 6; ++i) {
                 maximum_feedback_error_rad = std::max(
                     maximum_feedback_error_rad,
                     std::abs(
-                        endpoint_trim_reference_joint_angles_[i] -
+                        endpoint_trim_decision.reference[i] -
                         feedback_joint_angles[i]
                     )
                 );
@@ -1203,7 +1221,7 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
                     joint_stable_age_sec >=
                         endpoint_feedback_trim_stable_sec_ &&
                     std::abs(
-                        endpoint_trim_reference_joint_angles_[i] -
+                        endpoint_trim_decision.reference[i] -
                         feedback_joint_angles[i]
                     ) >
                         ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD;
@@ -1217,7 +1235,7 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
 
         double maximum_reference_delta_rad = 0.0;
         if (
-            endpoint_trim_reference_joint_angles_.size() ==
+            endpoint_trim_decision.reference.size() ==
                 joint_angles.size()
         ) {
             for (size_t i = 0; i < joint_angles.size(); ++i) {
@@ -1225,15 +1243,15 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
                     maximum_reference_delta_rad,
                     std::abs(
                         joint_angles[i] -
-                        endpoint_trim_reference_joint_angles_[i]
+                        endpoint_trim_decision.reference[i]
                     )
                 );
             }
         }
         const double endpoint_reference_stable_age_sec =
-            endpoint_trim_reference_since_.isZero()
+            endpoint_trim_upstream_reference_since_.isZero()
                 ? 0.0
-                : (now - endpoint_trim_reference_since_).toSec();
+                : (now - endpoint_trim_upstream_reference_since_).toSec();
         const bool endpoint_reference_stable =
             feedback_shape_valid &&
             endpoint_reference_stable_age_sec >=
@@ -1248,6 +1266,7 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
             endpoint_feedback_trim_task_lease_active_;
 
         if (
+            endpoint_trim_gate.allows_correction() &&
             endpoint_feedback_trim_update_allowed &&
             accepted_feedback_sample_is_new &&
             endpoint_reference_stable &&
@@ -1260,19 +1279,20 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
             )
         ) {
             std::vector<double> activation_offsets =
-                endpoint_feedback_trim_offsets_;
+                endpoint_trim_decision.offsets;
             if (activation_offsets.size() != 6) {
                 activation_offsets.assign(6, 0.0);
             }
             endpoint_trim_decision =
                 endpoint_trim_continuity_.activate(
-                    endpoint_trim_reference_joint_angles_,
+                    endpoint_trim_decision.reference,
                     activation_offsets,
                     now.toSec()
                 );
         }
 
         if (
+            endpoint_trim_gate.allows_correction() &&
             endpoint_trim_decision.phase == EndpointTrimPhase::ACTIVE_READY &&
             endpoint_feedback_trim_update_allowed &&
             accepted_feedback_sample_is_new &&
@@ -1295,7 +1315,6 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
             endpoint_trim_decision.reference;
         endpoint_feedback_trim_offsets_ =
             endpoint_trim_decision.offsets;
-        endpoint_trim_release_requires_timer_install_ = false;
         endpoint_feedback_trim_active_ =
             endpoint_trim_decision.phase != EndpointTrimPhase::IDLE;
         endpoint_feedback_trim_quiescent_ =
@@ -1368,18 +1387,12 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(actuation_mutex_);
-        if (
-            actuation_confirmation_.state() ==
-            ActuationState::OVERHEAT_BLOCKED
-        ) {
-            ROS_ERROR_THROTTLE(
-                1.0,
-                "Blocking SDK command stream: measured actuation state is OVERHEAT_BLOCKED; no torque_off frame was sent."
-            );
-            return;
-        }
+    if (actuation_overheat_blocked) {
+        ROS_ERROR_THROTTLE(
+            1.0,
+            "Blocking SDK command stream: measured actuation state is OVERHEAT_BLOCKED; no torque_off frame was sent."
+        );
+        return;
     }
 
     if (protection_latched) {
@@ -1494,14 +1507,10 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         cmd_gripper_vel_rad_s_ = 0.0;
     }
 
-    std::vector<double> sdk_joint_angles = cmd_joint_angles_;
-    if (
-        endpoint_trim_decision.phase != EndpointTrimPhase::IDLE &&
-        endpoint_trim_decision.composed_target.size() ==
-            sdk_joint_angles.size()
-    ) {
-        sdk_joint_angles = endpoint_trim_decision.composed_target;
-    }
+    const std::vector<double> sdk_joint_angles = endpoint_trim_stream_target(
+        cmd_joint_angles_,
+        endpoint_trim_decision
+    );
 
     ROS_DEBUG_THROTTLE(
         1.0,

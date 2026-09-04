@@ -211,7 +211,8 @@ class SerialDriverResilienceTest(unittest.TestCase):
         )
         self.assertNotIn('retry_stalled_endpoint_feedback_trim', timer)
         self.assertIn(
-            'sdk_joint_angles = endpoint_trim_decision.composed_target;',
+            'const std::vector<double> sdk_joint_angles = '
+            'endpoint_trim_stream_target(',
             timer,
         )
 
@@ -251,6 +252,94 @@ class SerialDriverResilienceTest(unittest.TestCase):
             'ros::ServiceClient',
         ):
             self.assertNotIn(forbidden, endpoint_trim_path)
+
+    def test_endpoint_trim_orders_upstream_commands_and_release_by_generation(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        header = DRIVER_HEADER.read_text()
+        callback = _function_body(
+            source,
+            'void AliciaDDriverNode::joint_command_callback',
+        )
+        timer = _function_body(
+            source,
+            'void AliciaDDriverNode::send_command_timer_callback',
+        )
+        service = _function_body(
+            source,
+            'bool AliciaDDriverNode::set_task_endpoint_precision_callback',
+        )
+        admission = (
+            DRIVER_SRC.parent / 'include' / 'alicia_d_driver'
+            / 'endpoint_trim_driver_admission.hpp'
+        ).read_text()
+
+        self.assertIn(
+            '#include "alicia_d_driver/endpoint_trim_driver_admission.hpp"',
+            header,
+        )
+        self.assertIn('EndpointTrimCommandOrder endpoint_trim_command_order_;', header)
+        self.assertNotIn('endpoint_trim_release_requires_timer_install_', header)
+        self.assertNotIn('endpoint_trim_release_requires_timer_install_', source)
+        self.assertIn('endpoint_trim_command_order_.observe_upstream_command(', callback)
+        self.assertIn('endpoint_trim_command_order_.note_release();', service)
+        self.assertIn('endpoint_trim_command_order_.note_release();', timer)
+        self.assertIn('endpoint_trim_command_order_.newer_command_requires_handoff()', timer)
+        self.assertIn('endpoint_trim_command_order_.mark_command_applied();', timer)
+        self.assertIn('upstream_target_', admission)
+        self.assertIn('command_generation_', admission)
+        self.assertIn('release_generation_', admission)
+        self.assertNotIn(
+            'endpoint_trim_reference_joint_angles_.size() != joint_angles.size()',
+            callback,
+        )
+        self.assertNotIn('endpoint_trim_reference_joint_angles_ = joint_angles;', callback)
+        self.assertNotIn('endpoint_feedback_trim_offsets_.assign(', callback)
+
+    def test_retained_command_clear_resets_coordinator_at_every_call_site(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        clear = _function_body(
+            source,
+            'void AliciaDDriverNode::clear_retained_command_state',
+        )
+        self.assertIn(
+            'endpoint_trim_continuity_ =\n'
+            '            EndpointTrimContinuity(endpoint_trim_config_);',
+            clear,
+        )
+        self.assertIn('endpoint_trim_command_order_.reset();', clear)
+
+        callers = (
+            'bool AliciaDDriverNode::request_positive_enable',
+            'void AliciaDDriverNode::reconnect_callback',
+            'void AliciaDDriverNode::parse_sdk_joint_state_frame',
+            'void AliciaDDriverNode::demonstration_mode_callback',
+        )
+        for caller in callers:
+            with self.subTest(caller=caller):
+                self.assertIn(
+                    'clear_retained_command_state();',
+                    _function_body(source, caller),
+                )
+
+    def test_endpoint_trim_correction_is_after_every_transmission_gate(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        timer = _function_body(
+            source,
+            'void AliciaDDriverNode::send_command_timer_callback',
+        )
+        correction = timer.index('endpoint_trim_continuity_.request_correction(')
+
+        self.assertIn('EndpointTrimTransmissionGate endpoint_trim_gate', timer)
+        self.assertIn('endpoint_trim_gate.allows_correction()', timer)
+        self.assertLess(timer.index('motion_enabled = motion_commands_enabled_;'), correction)
+        self.assertLess(timer.index('ActuationState::OVERHEAT_BLOCKED'), correction)
+        self.assertLess(timer.index('protection_latched = protection_fault_latched_;'), correction)
+        self.assertLess(timer.index('feedback_stale ='), correction)
+        self.assertIn(
+            'endpoint_trim_gate.allows_correction() &&\n'
+            '            endpoint_trim_decision.phase == EndpointTrimPhase::ACTIVE_READY',
+            timer,
+        )
 
     def test_endpoint_trim_continuity_parameters_are_bounded_and_forwarded(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()

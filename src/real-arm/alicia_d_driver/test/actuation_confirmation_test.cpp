@@ -2,6 +2,7 @@
 
 #include "alicia_d_driver/actuation_confirmation.hpp"
 #include "alicia_d_driver/endpoint_trim_continuity.hpp"
+#include "alicia_d_driver/endpoint_trim_driver_admission.hpp"
 
 #include <cmath>
 #include <limits>
@@ -734,6 +735,158 @@ TEST(EndpointTrimContinuityTest, ExplicitGuiHandoffClearsTaskTrimAndPreservesTar
     EXPECT_EQ(handoff.offsets, joints());
     EXPECT_EQ(handoff.composed_target, gui_target);
     EXPECT_TRUE(handoff.command_changed);
+}
+
+TEST(EndpointTrimDriverAdmissionTest,
+     RepeatedControllerCommandAfterReleasePreservesComposedTarget)
+{
+    const EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+    EndpointTrimCommandOrder order(config.joint_count, config.sdk_quantum_rad);
+    const std::vector<double> upstream =
+        joints(0.10, 0.20, 0.30, 0.40, 0.50, 0.60);
+
+    ASSERT_TRUE(order.observe_upstream_command(upstream, false));
+    trim.explicit_gui_handoff(order.upstream_target(), 0.0);
+    order.mark_command_applied();
+    const EndpointTrimDecision active = trim.activate(
+        upstream,
+        joints(0.02, -0.02, 0.02, -0.02, 0.02, -0.02),
+        0.1
+    );
+    const std::vector<double> preserved = active.composed_target;
+    const std::vector<double> release_feedback =
+        joints(0.09, 0.19, 0.29, 0.39, 0.49, 0.59);
+    const EndpointTrimDecision released = trim.request_release(
+        release_feedback, true, 0.2
+    );
+    order.note_release();
+
+    ASSERT_EQ(released.phase, EndpointTrimPhase::QUIESCENT);
+    EXPECT_EQ(released.reference, release_feedback);
+    expect_vectors_near(
+        released.composed_target,
+        preserved,
+        config.sdk_quantum_rad
+    );
+    const std::vector<double> rebased_target = released.composed_target;
+    EXPECT_FALSE(order.observe_upstream_command(upstream, false));
+    EXPECT_FALSE(order.newer_command_requires_handoff());
+    EXPECT_EQ(trim.state().composed_target, rebased_target);
+}
+
+TEST(EndpointTrimDriverAdmissionTest,
+     NewGuiCommandAfterServiceReleaseIsAuthoritative)
+{
+    const EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+    EndpointTrimCommandOrder order(config.joint_count, config.sdk_quantum_rad);
+    const std::vector<double> task_target = joints(0.1);
+    const std::vector<double> gui_target =
+        joints(-0.4, 0.3, -0.2, 0.1, -0.05, 0.04);
+
+    order.observe_upstream_command(task_target, false);
+    trim.explicit_gui_handoff(order.upstream_target(), 0.0);
+    order.mark_command_applied();
+    trim.activate(task_target, joints(0.01), 0.1);
+    trim.request_release(joints(0.1), true, 0.2);
+    order.note_release();
+    const uint64_t release_generation = order.release_generation();
+
+    ASSERT_TRUE(order.observe_upstream_command(gui_target, true));
+    EXPECT_GT(order.command_generation(), release_generation);
+    ASSERT_TRUE(order.newer_command_requires_handoff());
+    const EndpointTrimDecision handoff = trim.explicit_gui_handoff(
+        order.upstream_target(),
+        0.3
+    );
+    order.mark_command_applied();
+
+    EXPECT_EQ(handoff.phase, EndpointTrimPhase::IDLE);
+    EXPECT_EQ(handoff.composed_target, gui_target);
+    EXPECT_FALSE(order.newer_command_requires_handoff());
+}
+
+TEST(EndpointTrimDriverAdmissionTest,
+     RetainedStateResetCannotSelectPriorTrimTarget)
+{
+    const EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+    EndpointTrimCommandOrder order(config.joint_count, config.sdk_quantum_rad);
+    const std::vector<double> upstream = joints(0.1);
+    const std::vector<double> safe_fallback = joints(-0.2);
+
+    order.observe_upstream_command(upstream, false);
+    trim.activate(upstream, joints(), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        joints(0.08), all_stable_joints(), 1.0, 0.1
+    );
+    ASSERT_EQ(correction.phase, EndpointTrimPhase::WAITING_RESPONSE);
+    ASSERT_NE(correction.composed_target, safe_fallback);
+
+    trim = EndpointTrimContinuity(config);
+    order.reset();
+
+    EXPECT_EQ(trim.state().phase, EndpointTrimPhase::IDLE);
+    EXPECT_TRUE(trim.state().composed_target.empty());
+    EXPECT_EQ(
+        endpoint_trim_stream_target(safe_fallback, trim.state()),
+        safe_fallback
+    );
+    EXPECT_FALSE(order.has_unapplied_command());
+}
+
+TEST(EndpointTrimDriverAdmissionTest,
+     BlockedTransmissionCannotAdmitCorrectionOrMutateTarget)
+{
+    const EndpointTrimConfig config = endpoint_trim_config();
+    const std::vector<EndpointTrimTransmissionGate> blocked = {
+        {false, false, false, true, true, false},
+        {true, true, false, true, true, false},
+        {true, false, true, true, true, false},
+        {true, false, false, true, false, true},
+        {true, false, false, true, true, true},
+    };
+
+    for (const EndpointTrimTransmissionGate& gate : blocked) {
+        EndpointTrimContinuity trim(config);
+        const EndpointTrimDecision active =
+            trim.activate(joints(0.1), joints(), 0.0);
+        const std::vector<double> before = active.composed_target;
+        if (gate.allows_correction()) {
+            trim.request_correction(
+                joints(0.08), all_stable_joints(), 1.0, 0.1
+            );
+        }
+        EXPECT_EQ(trim.state().phase, EndpointTrimPhase::ACTIVE_READY);
+        EXPECT_EQ(trim.state().composed_target, before);
+    }
+}
+
+TEST(EndpointTrimDriverAdmissionTest,
+     FailedWriteAfterAdmissionFailsClosedWithoutTargetReversal)
+{
+    const EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+    trim.activate(joints(0.1), joints(), 0.0);
+    const EndpointTrimDecision admitted = trim.request_correction(
+        joints(0.08), all_stable_joints(), 1.0, 0.1
+    );
+    const std::vector<double> preserved = admitted.composed_target;
+
+    // Model write_raw_frame() == false: no feedback acknowledgement arrives.
+    const EndpointTrimDecision timed_out =
+        trim.update(0.1 + config.response_deadline_sec);
+    const EndpointTrimDecision retry = trim.request_correction(
+        joints(0.06), all_stable_joints(), 1.0,
+        0.2 + config.response_deadline_sec
+    );
+
+    EXPECT_EQ(timed_out.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(timed_out.composed_target, preserved);
+    EXPECT_EQ(retry.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(retry.composed_target, preserved);
+    EXPECT_FALSE(retry.command_changed);
 }
 
 int main(int argc, char** argv)
