@@ -746,8 +746,11 @@ TEST(EndpointTrimDriverAdmissionTest,
     const std::vector<double> upstream =
         joints(0.10, 0.20, 0.30, 0.40, 0.50, 0.60);
 
-    ASSERT_TRUE(order.observe_upstream_command(upstream, false));
-    trim.explicit_gui_handoff(order.upstream_target(), 0.0);
+    ASSERT_TRUE(order.observe_upstream_command(
+        upstream,
+        EndpointTrimCommandSource::TASK_CONTROLLER
+    ));
+    trim.task_controller_handoff(order.upstream_target(), 0.0);
     order.mark_command_applied();
     const EndpointTrimDecision active = trim.activate(
         upstream,
@@ -770,8 +773,11 @@ TEST(EndpointTrimDriverAdmissionTest,
         config.sdk_quantum_rad
     );
     const std::vector<double> rebased_target = released.composed_target;
-    EXPECT_FALSE(order.observe_upstream_command(upstream, false));
-    EXPECT_FALSE(order.newer_command_requires_handoff());
+    EXPECT_FALSE(order.observe_upstream_command(
+        upstream,
+        EndpointTrimCommandSource::TASK_CONTROLLER
+    ));
+    EXPECT_FALSE(order.newer_task_command_requires_handoff());
     EXPECT_EQ(trim.state().composed_target, rebased_target);
 }
 
@@ -785,17 +791,23 @@ TEST(EndpointTrimDriverAdmissionTest,
     const std::vector<double> gui_target =
         joints(-0.4, 0.3, -0.2, 0.1, -0.05, 0.04);
 
-    order.observe_upstream_command(task_target, false);
-    trim.explicit_gui_handoff(order.upstream_target(), 0.0);
+    order.observe_upstream_command(
+        task_target,
+        EndpointTrimCommandSource::TASK_CONTROLLER
+    );
+    trim.task_controller_handoff(order.upstream_target(), 0.0);
     order.mark_command_applied();
     trim.activate(task_target, joints(0.01), 0.1);
     trim.request_release(joints(0.1), true, 0.2);
     order.note_release();
     const uint64_t release_generation = order.release_generation();
 
-    ASSERT_TRUE(order.observe_upstream_command(gui_target, true));
+    ASSERT_TRUE(order.observe_upstream_command(
+        gui_target,
+        EndpointTrimCommandSource::EXPLICIT_GUI
+    ));
     EXPECT_GT(order.command_generation(), release_generation);
-    ASSERT_TRUE(order.newer_command_requires_handoff());
+    ASSERT_TRUE(order.newer_explicit_gui_command_requires_handoff());
     const EndpointTrimDecision handoff = trim.explicit_gui_handoff(
         order.upstream_target(),
         0.3
@@ -804,7 +816,7 @@ TEST(EndpointTrimDriverAdmissionTest,
 
     EXPECT_EQ(handoff.phase, EndpointTrimPhase::IDLE);
     EXPECT_EQ(handoff.composed_target, gui_target);
-    EXPECT_FALSE(order.newer_command_requires_handoff());
+    EXPECT_FALSE(order.newer_explicit_gui_command_requires_handoff());
 }
 
 TEST(EndpointTrimDriverAdmissionTest,
@@ -816,7 +828,10 @@ TEST(EndpointTrimDriverAdmissionTest,
     const std::vector<double> upstream = joints(0.1);
     const std::vector<double> safe_fallback = joints(-0.2);
 
-    order.observe_upstream_command(upstream, false);
+    order.observe_upstream_command(
+        upstream,
+        EndpointTrimCommandSource::TASK_CONTROLLER
+    );
     trim.activate(upstream, joints(), 0.0);
     const EndpointTrimDecision correction = trim.request_correction(
         joints(0.08), all_stable_joints(), 1.0, 0.1
@@ -1028,6 +1043,223 @@ TEST(EndpointTrimOwnershipTransitionTest,
     EXPECT_EQ(handoff.composed_target, gui_target);
     EXPECT_FALSE(handoff.release_completed);
     EXPECT_TRUE(handoff.code.empty());
+}
+
+TEST(EndpointTrimDriverOrchestrationTest,
+     ExplicitGuiAuthorityRejectsAStaleTaskCommand)
+{
+    EndpointTrimCommandOrder order(
+        endpoint_trim_config().joint_count,
+        endpoint_trim_config().sdk_quantum_rad
+    );
+    const std::vector<double> gui_target = joints(0.4);
+    const std::vector<double> stale_task_target = joints(-0.3);
+
+    ASSERT_TRUE(order.observe_upstream_command(
+        gui_target,
+        EndpointTrimCommandSource::EXPLICIT_GUI
+    ));
+    ASSERT_TRUE(order.last_observation_accepted());
+    order.mark_command_applied();
+
+    EXPECT_FALSE(order.observe_upstream_command(
+        stale_task_target,
+        EndpointTrimCommandSource::TASK_CONTROLLER
+    ));
+    EXPECT_FALSE(order.last_observation_accepted());
+    EXPECT_EQ(order.upstream_target(), gui_target);
+    EXPECT_EQ(
+        order.authoritative_source(),
+        EndpointTrimCommandSource::EXPLICIT_GUI
+    );
+    EXPECT_FALSE(order.newer_task_command_requires_handoff());
+}
+
+TEST(EndpointTrimDriverOrchestrationTest,
+     TaskControllerResumesOnlyAfterGuiGestureHandoffIsPermitted)
+{
+    EndpointTrimCommandOrder order(
+        endpoint_trim_config().joint_count,
+        endpoint_trim_config().sdk_quantum_rad
+    );
+    const std::vector<double> gui_target = joints(0.4);
+    const std::vector<double> task_target = joints(-0.3);
+
+    ASSERT_TRUE(order.observe_upstream_command(
+        gui_target,
+        EndpointTrimCommandSource::EXPLICIT_GUI
+    ));
+    order.mark_command_applied();
+
+    // A repeat during the direct-GUI gesture cannot overwrite the GUI target.
+    EXPECT_FALSE(order.observe_upstream_command(
+        task_target,
+        EndpointTrimCommandSource::TASK_CONTROLLER,
+        false
+    ));
+    EXPECT_EQ(order.upstream_target(), gui_target);
+
+    // Once the node's GUI gesture timeout/sync boundary has passed, a new
+    // task-controller target is a normal task handoff, never a GUI handoff.
+    EXPECT_TRUE(order.observe_upstream_command(
+        task_target,
+        EndpointTrimCommandSource::TASK_CONTROLLER,
+        true
+    ));
+    EXPECT_TRUE(order.last_observation_accepted());
+    EXPECT_EQ(order.upstream_target(), task_target);
+    EXPECT_EQ(
+        order.authoritative_source(),
+        EndpointTrimCommandSource::TASK_CONTROLLER
+    );
+    EXPECT_TRUE(order.newer_task_command_requires_handoff());
+    EXPECT_FALSE(order.newer_explicit_gui_command_requires_handoff());
+}
+
+TEST(EndpointTrimDriverOrchestrationTest,
+     ReleaseDoesNotPromoteAnUnappliedTaskCommandToGui)
+{
+    EndpointTrimCommandOrder order(
+        endpoint_trim_config().joint_count,
+        endpoint_trim_config().sdk_quantum_rad
+    );
+    ASSERT_TRUE(order.observe_upstream_command(
+        joints(0.2),
+        EndpointTrimCommandSource::TASK_CONTROLLER
+    ));
+    ASSERT_TRUE(order.has_unapplied_command());
+
+    order.note_release();
+
+    EXPECT_FALSE(order.newer_explicit_gui_command_requires_handoff());
+    EXPECT_FALSE(order.newer_task_command_requires_handoff());
+    EXPECT_EQ(
+        order.authoritative_source(),
+        EndpointTrimCommandSource::TASK_CONTROLLER
+    );
+}
+
+TEST(EndpointTrimDriverOrchestrationTest,
+     ImmediateReleaseEventSurvivesSameTickNoopFeedbackAndConsumesOnce)
+{
+    EndpointTrimContinuity trim(endpoint_trim_config());
+    EndpointTrimCommandOrder order;
+    const EndpointTrimDecision active =
+        trim.activate(joints(0.1), joints(0.01), 0.0);
+    const EndpointTrimDecision released =
+        trim.request_release(joints(0.095), true, 0.1);
+    ASSERT_TRUE(released.release_completed);
+
+    EXPECT_EQ(
+        order.record_release(active.phase, released, true),
+        EndpointTrimReleaseStatus::COMPLETED
+    );
+    const EndpointTrimDecision after_feedback =
+        trim.note_feedback(joints(0.095), 0.11, 0.11);
+    EXPECT_FALSE(after_feedback.release_completed);
+    ASSERT_TRUE(order.has_terminal_release_event());
+    EXPECT_EQ(
+        order.consume_terminal_release_code(),
+        "ENDPOINT_TRIM_RELEASE_SETTLED"
+    );
+    EXPECT_FALSE(order.has_terminal_release_event());
+    EXPECT_TRUE(order.consume_terminal_release_code().empty());
+    order.capture_terminal_release(released);
+    EXPECT_FALSE(order.has_terminal_release_event());
+}
+
+TEST(EndpointTrimDriverOrchestrationTest,
+     ReleaseStatusDistinguishesPendingCompletedNoopAndRejected)
+{
+    EndpointTrimCommandOrder pending_order;
+    EndpointTrimContinuity pending_trim(endpoint_trim_config());
+    pending_trim.activate(joints(), joints(), 0.0);
+    pending_trim.request_correction(
+        joints(-0.02), all_stable_joints(), 1.0, 0.1
+    );
+    const EndpointTrimPhase waiting_phase = pending_trim.state().phase;
+    const EndpointTrimDecision pending =
+        pending_trim.request_release(joints(-0.02), true, 0.2);
+    EXPECT_EQ(
+        pending_order.record_release(waiting_phase, pending, true),
+        EndpointTrimReleaseStatus::PENDING
+    );
+    EXPECT_FALSE(pending_order.has_terminal_release_event());
+
+    EndpointTrimCommandOrder completed_order;
+    EndpointTrimContinuity completed_trim(endpoint_trim_config());
+    const EndpointTrimDecision active =
+        completed_trim.activate(joints(0.1), joints(), 0.0);
+    const EndpointTrimDecision completed =
+        completed_trim.request_release(joints(0.1), true, 0.1);
+    EXPECT_EQ(
+        completed_order.record_release(active.phase, completed, true),
+        EndpointTrimReleaseStatus::COMPLETED
+    );
+
+    EndpointTrimCommandOrder noop_order;
+    EndpointTrimContinuity noop_trim(endpoint_trim_config());
+    EXPECT_EQ(
+        noop_order.record_release(
+            EndpointTrimPhase::IDLE,
+            noop_trim.state(),
+            false
+        ),
+        EndpointTrimReleaseStatus::NOOP
+    );
+    const EndpointTrimDecision quiescent =
+        completed_trim.request_release(joints(0.1), true, 0.2);
+    EXPECT_EQ(
+        noop_order.record_release(
+            EndpointTrimPhase::QUIESCENT,
+            quiescent,
+            true
+        ),
+        EndpointTrimReleaseStatus::NOOP
+    );
+
+    EndpointTrimCommandOrder rejected_order;
+    EndpointTrimContinuity faulted(endpoint_trim_config());
+    const EndpointTrimDecision fault = faulted.activate(
+        std::vector<double>{0.1}, joints(), 0.0
+    );
+    ASSERT_EQ(fault.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(
+        rejected_order.record_release(fault.phase, fault, true),
+        EndpointTrimReleaseStatus::REJECTED
+    );
+}
+
+TEST(EndpointTrimDriverOrchestrationTest,
+     ReleaseRoutingEligibilityCannotFaultAnInactiveCoordinator)
+{
+    EXPECT_FALSE(endpoint_trim_release_request_allowed(
+        EndpointTrimPhase::IDLE
+    ));
+    EXPECT_FALSE(endpoint_trim_release_request_allowed(
+        EndpointTrimPhase::QUIESCENT
+    ));
+    EXPECT_FALSE(endpoint_trim_release_request_allowed(
+        EndpointTrimPhase::FAULT
+    ));
+    EXPECT_TRUE(endpoint_trim_release_request_allowed(
+        EndpointTrimPhase::ACTIVE_READY
+    ));
+    EXPECT_TRUE(endpoint_trim_release_request_allowed(
+        EndpointTrimPhase::WAITING_RESPONSE
+    ));
+    EXPECT_TRUE(endpoint_trim_release_request_allowed(
+        EndpointTrimPhase::PENDING_RELEASE
+    ));
+
+    EndpointTrimContinuity idle(endpoint_trim_config());
+    idle.explicit_gui_handoff(joints(0.2), 0.0);
+    ASSERT_EQ(idle.state().phase, EndpointTrimPhase::IDLE);
+    if (endpoint_trim_release_request_allowed(idle.state().phase)) {
+        idle.request_release(joints(0.2), true, 0.1);
+    }
+    EXPECT_EQ(idle.state().phase, EndpointTrimPhase::IDLE);
+    EXPECT_EQ(idle.state().composed_target, joints(0.2));
 }
 
 int main(int argc, char** argv)

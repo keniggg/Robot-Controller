@@ -296,20 +296,14 @@ public:
         const std::vector<double>& gui_target,
         double now_sec)
     {
-        if (!valid_time(now_sec) || !valid_joints(gui_target)) {
-            return violate();
-        }
-        clear_response();
-        clear_release();
-        state_.phase = EndpointTrimPhase::IDLE;
-        state_.reference = gui_target;
-        state_.offsets.assign(config_.joint_count, 0.0);
-        state_.composed_target = gui_target;
-        state_.applied_step.assign(config_.joint_count, 0.0);
-        state_.command_changed = true;
-        state_.release_completed = false;
-        state_.code.clear();
-        return state_;
+        return handoff_idle_target(gui_target, now_sec);
+    }
+
+    EndpointTrimDecision task_controller_handoff(
+        const std::vector<double>& task_target,
+        double now_sec)
+    {
+        return handoff_idle_target(task_target, now_sec);
     }
 
     const EndpointTrimDecision& state() const
@@ -318,6 +312,26 @@ public:
     }
 
 private:
+    EndpointTrimDecision handoff_idle_target(
+        const std::vector<double>& target,
+        double now_sec)
+    {
+        if (!valid_time(now_sec) || !valid_joints(target)) {
+            return violate();
+        }
+        clear_response();
+        clear_release();
+        state_.phase = EndpointTrimPhase::IDLE;
+        state_.reference = target;
+        state_.offsets.assign(config_.joint_count, 0.0);
+        state_.composed_target = target;
+        state_.applied_step.assign(config_.joint_count, 0.0);
+        state_.command_changed = true;
+        state_.release_completed = false;
+        state_.code.clear();
+        return state_;
+    }
+
     static bool finite_nonnegative(double value)
     {
         return std::isfinite(value) && value >= 0.0;

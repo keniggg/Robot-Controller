@@ -281,9 +281,10 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertNotIn('endpoint_trim_release_requires_timer_install_', header)
         self.assertNotIn('endpoint_trim_release_requires_timer_install_', source)
         self.assertIn('endpoint_trim_command_order_.observe_upstream_command(', callback)
-        self.assertIn('endpoint_trim_command_order_.note_release();', service)
-        self.assertIn('endpoint_trim_command_order_.note_release();', timer)
-        self.assertIn('endpoint_trim_command_order_.newer_command_requires_handoff()', timer)
+        self.assertIn('endpoint_trim_command_order_.record_release(', service)
+        self.assertIn('endpoint_trim_command_order_.record_release(', timer)
+        self.assertIn('newer_task_command_requires_handoff()', timer)
+        self.assertNotIn('explicit_gui_handoff(', timer)
         self.assertIn('endpoint_trim_command_order_.mark_command_applied();', timer)
         self.assertIn('upstream_target_', admission)
         self.assertIn('command_generation_', admission)
@@ -316,10 +317,8 @@ class SerialDriverResilienceTest(unittest.TestCase):
         )
         expiry = timer[expiry_start:expiry_end]
         self.assertIn('endpoint_trim_continuity_.request_release(', expiry)
-        self.assertIn(
-            'task endpoint precision lease release pending serialized handoff',
-            service,
-        )
+        self.assertIn('EndpointTrimReleaseStatus::PENDING', service)
+        self.assertIn('EndpointTrimReleaseStatus::COMPLETED', service)
         self.assertNotIn('release queued', service)
         for path in (service, expiry):
             self.assertNotIn('endpoint_feedback_trim_offsets_', path)
@@ -364,12 +363,93 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertIn('"ENDPOINT_TRIM_RELEASE_SETTLED"', timer)
         self.assertIn('"ENDPOINT_TRIM_RESPONSE_TIMEOUT"', timer)
         self.assertIn('"ENDPOINT_TRIM_CONTINUITY_VIOLATION"', timer)
-        self.assertIn('endpoint_trim_decision.release_completed', timer)
-        self.assertIn('endpoint_trim_release_install_pending', timer)
+        self.assertIn('endpoint_trim_terminal_release_code', timer)
         self.assertIn('endpoint_trim_response_generation_started', timer)
         generation = timer.index('endpoint_trim_response_generation_started')
         age = timer.index('endpoint_trim_response_age_sec =', generation)
         self.assertLess(generation, age)
+
+    def test_endpoint_trim_command_order_tracks_source_authority(self):
+        admission = (
+            DRIVER_SRC.parent / 'include' / 'alicia_d_driver'
+            / 'endpoint_trim_driver_admission.hpp'
+        ).read_text()
+
+        self.assertIn('enum class EndpointTrimCommandSource', admission)
+        self.assertIn('TASK_CONTROLLER', admission)
+        self.assertIn('EXPLICIT_GUI', admission)
+        self.assertIn('authoritative_source_', admission)
+        self.assertIn('last_observation_accepted_', admission)
+        self.assertIn(
+            'newer_explicit_gui_command_requires_handoff',
+            admission,
+        )
+        self.assertIn('newer_task_command_requires_handoff', admission)
+        self.assertIn('task_controller_handoff_permitted', admission)
+        self.assertIn(
+            '!task_controller_handoff_permitted',
+            admission,
+        )
+
+    def test_task_authority_resumes_at_the_existing_gui_gesture_boundary(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        callback = _function_body(
+            source,
+            'void AliciaDDriverNode::joint_command_callback',
+        )
+
+        # The pre-existing direct-GUI gesture owns the short timeout window.
+        # Once that guard has allowed an untagged command through, it is
+        # admitted as a TASK_CONTROLLER handoff rather than a GUI handoff.
+        self.assertIn('gui_direct_gesture_timeout_sec_', callback)
+        self.assertIn(
+            'Ignored %s /joint_commands source during active gui_direct gesture',
+            callback,
+        )
+        observe = callback.index(
+            'endpoint_trim_command_order_.observe_upstream_command('
+        )
+        handoff = callback.index(
+            'endpoint_trim_continuity_.explicit_gui_handoff('
+        )
+        self.assertLess(observe, handoff)
+        self.assertIn(
+            '!endpoint_trim_explicit_gui_command',
+            callback[observe:handoff],
+        )
+
+    def test_release_service_is_release_only_and_reports_actual_outcome(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        service = _function_body(
+            source,
+            'bool AliciaDDriverNode::set_task_endpoint_precision_callback',
+        )
+
+        self.assertNotIn('explicit_gui_handoff(', service)
+        self.assertNotIn('task_controller_handoff(', service)
+        self.assertIn('EndpointTrimReleaseStatus::PENDING', service)
+        self.assertIn('EndpointTrimReleaseStatus::COMPLETED', service)
+        self.assertIn('EndpointTrimReleaseStatus::REJECTED', service)
+        self.assertIn('release pending serialized encoder response', service)
+        self.assertIn('release completed; serialized target install pending', service)
+        self.assertIn('release rejected:', service)
+        self.assertIn('no release handoff required', service)
+
+    def test_terminal_release_event_is_latched_before_same_tick_feedback(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        timer = _function_body(
+            source,
+            'void AliciaDDriverNode::send_command_timer_callback',
+        )
+
+        record = timer.index('endpoint_trim_command_order_.record_release(')
+        feedback = timer.index('endpoint_trim_continuity_.note_feedback(')
+        consume = timer.index(
+            'endpoint_trim_command_order_.consume_terminal_release_code()'
+        )
+        self.assertLess(record, feedback)
+        self.assertLess(feedback, consume)
+        self.assertIn('endpoint_trim_terminal_release_code', timer)
 
     def test_retained_command_clear_resets_coordinator_at_every_call_site(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()

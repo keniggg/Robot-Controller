@@ -7,7 +7,27 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <vector>
+
+enum class EndpointTrimCommandSource {
+    TASK_CONTROLLER,
+    EXPLICIT_GUI,
+};
+
+enum class EndpointTrimReleaseStatus {
+    PENDING,
+    COMPLETED,
+    NOOP,
+    REJECTED,
+};
+
+inline bool endpoint_trim_release_request_allowed(EndpointTrimPhase phase)
+{
+    return phase == EndpointTrimPhase::ACTIVE_READY ||
+        phase == EndpointTrimPhase::WAITING_RESPONSE ||
+        phase == EndpointTrimPhase::PENDING_RELEASE;
+}
 
 // Orders accepted upstream targets and release requests without sharing the
 // coordinator's rebased reference as upstream-command identity.
@@ -23,8 +43,10 @@ public:
 
     bool observe_upstream_command(
         const std::vector<double>& target,
-        bool force_handoff)
+        EndpointTrimCommandSource source,
+        bool task_controller_handoff_permitted = false)
     {
+        last_observation_accepted_ = false;
         if (target.size() != joint_count_) {
             return false;
         }
@@ -33,7 +55,19 @@ public:
                 return false;
             }
         }
-        bool changed = force_handoff ||
+        if (
+            source == EndpointTrimCommandSource::TASK_CONTROLLER &&
+            has_authoritative_source_ &&
+            authoritative_source_ == EndpointTrimCommandSource::EXPLICIT_GUI &&
+            !task_controller_handoff_permitted
+        ) {
+            return false;
+        }
+        last_observation_accepted_ = true;
+        bool changed =
+            source == EndpointTrimCommandSource::EXPLICIT_GUI ||
+            !has_authoritative_source_ ||
+            source != authoritative_source_ ||
             upstream_target_.size() != target.size();
         if (!changed) {
             for (size_t i = 0; i < target.size(); ++i) {
@@ -46,6 +80,8 @@ public:
         }
         if (changed) {
             upstream_target_ = target;
+            authoritative_source_ = source;
+            has_authoritative_source_ = true;
             command_generation_ = next_generation();
         }
         return changed;
@@ -61,15 +97,86 @@ public:
         release_generation_ = next_generation();
     }
 
+    EndpointTrimReleaseStatus record_release(
+        EndpointTrimPhase phase_before,
+        const EndpointTrimDecision& decision,
+        bool request_routed)
+    {
+        note_release();
+        if (phase_before == EndpointTrimPhase::FAULT) {
+            last_release_status_ = EndpointTrimReleaseStatus::REJECTED;
+        } else if (
+            phase_before == EndpointTrimPhase::IDLE ||
+            phase_before == EndpointTrimPhase::QUIESCENT
+        ) {
+            last_release_status_ = EndpointTrimReleaseStatus::NOOP;
+        } else if (!request_routed) {
+            last_release_status_ = EndpointTrimReleaseStatus::REJECTED;
+        } else if (decision.phase == EndpointTrimPhase::PENDING_RELEASE) {
+            last_release_status_ = EndpointTrimReleaseStatus::PENDING;
+        } else if (decision.release_completed) {
+            last_release_status_ = EndpointTrimReleaseStatus::COMPLETED;
+            capture_terminal_release(decision);
+        } else {
+            last_release_status_ = EndpointTrimReleaseStatus::REJECTED;
+        }
+        return last_release_status_;
+    }
+
+    void capture_terminal_release(const EndpointTrimDecision& decision)
+    {
+        if (
+            !decision.release_completed ||
+            !terminal_release_code_.empty() ||
+            terminal_release_captured_generation_ == release_generation_
+        ) {
+            return;
+        }
+        if (decision.code.empty()) {
+            terminal_release_code_ = "ENDPOINT_TRIM_RELEASE_SETTLED";
+        } else if (decision.code == "ENDPOINT_TRIM_RESPONSE_TIMEOUT") {
+            terminal_release_code_ = "ENDPOINT_TRIM_RESPONSE_TIMEOUT";
+        } else {
+            terminal_release_code_ = "ENDPOINT_TRIM_CONTINUITY_VIOLATION";
+        }
+        terminal_release_captured_generation_ = release_generation_;
+    }
+
+    EndpointTrimReleaseStatus release_status() const
+    {
+        return last_release_status_;
+    }
+
+    bool has_terminal_release_event() const
+    {
+        return !terminal_release_code_.empty();
+    }
+
+    std::string consume_terminal_release_code()
+    {
+        const std::string code = terminal_release_code_;
+        terminal_release_code_.clear();
+        return code;
+    }
+
     bool has_unapplied_command() const
     {
         return command_generation_ != applied_command_generation_;
     }
 
-    bool newer_command_requires_handoff() const
+    bool newer_explicit_gui_command_requires_handoff() const
     {
         return has_unapplied_command() &&
-            command_generation_ > release_generation_;
+            command_generation_ > release_generation_ &&
+            authoritative_source_ == EndpointTrimCommandSource::EXPLICIT_GUI;
+    }
+
+    bool newer_task_command_requires_handoff() const
+    {
+        return has_unapplied_command() &&
+            command_generation_ > release_generation_ &&
+            authoritative_source_ ==
+                EndpointTrimCommandSource::TASK_CONTROLLER;
     }
 
     const std::vector<double>& upstream_target() const
@@ -87,6 +194,16 @@ public:
         return release_generation_;
     }
 
+    bool last_observation_accepted() const
+    {
+        return last_observation_accepted_;
+    }
+
+    EndpointTrimCommandSource authoritative_source() const
+    {
+        return authoritative_source_;
+    }
+
     void reset()
     {
         sequence_ = 0;
@@ -94,6 +211,12 @@ public:
         applied_command_generation_ = 0;
         release_generation_ = 0;
         upstream_target_.clear();
+        has_authoritative_source_ = false;
+        authoritative_source_ = EndpointTrimCommandSource::TASK_CONTROLLER;
+        last_observation_accepted_ = false;
+        last_release_status_ = EndpointTrimReleaseStatus::NOOP;
+        terminal_release_code_.clear();
+        terminal_release_captured_generation_ = 0;
     }
 
 private:
@@ -114,6 +237,14 @@ private:
     uint64_t applied_command_generation_ = 0;
     uint64_t release_generation_ = 0;
     std::vector<double> upstream_target_;
+    bool has_authoritative_source_ = false;
+    EndpointTrimCommandSource authoritative_source_ =
+        EndpointTrimCommandSource::TASK_CONTROLLER;
+    bool last_observation_accepted_ = false;
+    EndpointTrimReleaseStatus last_release_status_ =
+        EndpointTrimReleaseStatus::NOOP;
+    std::string terminal_release_code_;
+    uint64_t terminal_release_captured_generation_ = 0;
 };
 
 struct EndpointTrimTransmissionGate {
