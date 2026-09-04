@@ -914,9 +914,17 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
 {
     if (!communicator_->is_connected()) return;
     const ros::Time command_time = ros::Time::now();
+    const EndpointTrimCommandSource endpoint_trim_command_source =
+        msg->header.frame_id == "gui_direct"
+            ? EndpointTrimCommandSource::GUI_DIRECT_EDIT
+            : (
+                msg->header.frame_id == "gui_direct_sync"
+                    ? EndpointTrimCommandSource::GUI_DIRECT_SYNC
+                    : EndpointTrimCommandSource::TASK_CONTROLLER
+            );
     const bool endpoint_trim_explicit_gui_command =
-        msg->header.frame_id == "gui_direct" ||
-        msg->header.frame_id == "gui_direct_sync";
+        endpoint_trim_command_source !=
+            EndpointTrimCommandSource::TASK_CONTROLLER;
 
     // Measure incoming /joint_commands rate (logs once per second)
     // {
@@ -1011,14 +1019,8 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         const bool reference_changed =
             endpoint_trim_command_order_.observe_upstream_command(
                 joint_angles,
-                endpoint_trim_explicit_gui_command
-                    ? EndpointTrimCommandSource::EXPLICIT_GUI
-                    : EndpointTrimCommandSource::TASK_CONTROLLER,
-                // An untagged task command reaches this point only after the
-                // active gui_direct gesture has timed out. gui_direct_sync is
-                // tagged GUI authority itself, so it cannot authorize a task
-                // handoff by accident.
-                !endpoint_trim_explicit_gui_command
+                endpoint_trim_command_source,
+                command_time.toSec()
             );
         if (!endpoint_trim_command_order_.last_observation_accepted()) {
             ROS_WARN_THROTTLE(

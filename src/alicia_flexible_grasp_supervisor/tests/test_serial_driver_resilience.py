@@ -348,10 +348,8 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertIn('endpoint_trim_command_order_.mark_command_applied();', callback)
         self.assertIn('endpoint_feedback_trim_task_lease_active_ = false;', callback)
         self.assertIn('endpoint_trim_response_wait_since_ = ros::Time(0);', callback)
-        self.assertIn(
-            'msg->header.frame_id == "gui_direct" ||',
-            callback,
-        )
+        self.assertIn('EndpointTrimCommandSource::GUI_DIRECT_EDIT', callback)
+        self.assertIn('EndpointTrimCommandSource::GUI_DIRECT_SYNC', callback)
 
     def test_endpoint_trim_release_logs_exact_terminal_codes_and_fresh_age(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
@@ -377,7 +375,8 @@ class SerialDriverResilienceTest(unittest.TestCase):
 
         self.assertIn('enum class EndpointTrimCommandSource', admission)
         self.assertIn('TASK_CONTROLLER', admission)
-        self.assertIn('EXPLICIT_GUI', admission)
+        self.assertIn('GUI_DIRECT_EDIT', admission)
+        self.assertIn('GUI_DIRECT_SYNC', admission)
         self.assertIn('authoritative_source_', admission)
         self.assertIn('last_observation_accepted_', admission)
         self.assertIn(
@@ -385,27 +384,24 @@ class SerialDriverResilienceTest(unittest.TestCase):
             admission,
         )
         self.assertIn('newer_task_command_requires_handoff', admission)
-        self.assertIn('task_controller_handoff_permitted', admission)
-        self.assertIn(
-            '!task_controller_handoff_permitted',
-            admission,
-        )
+        self.assertIn('gui_task_holdoff_sec_', admission)
+        self.assertIn('gui_task_holdoff_until_sec_', admission)
+        self.assertIn('now_sec <= gui_task_holdoff_until_sec_', admission)
 
-    def test_task_authority_resumes_at_the_existing_gui_gesture_boundary(self):
+    def test_task_authority_is_classified_and_timed_in_committed_source(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         callback = _function_body(
             source,
             'void AliciaDDriverNode::joint_command_callback',
         )
 
-        # The pre-existing direct-GUI gesture owns the short timeout window.
-        # Once that guard has allowed an untagged command through, it is
-        # admitted as a TASK_CONTROLLER handoff rather than a GUI handoff.
-        self.assertIn('gui_direct_gesture_timeout_sec_', callback)
         self.assertIn(
-            'Ignored %s /joint_commands source during active gui_direct gesture',
+            'EndpointTrimCommandSource endpoint_trim_command_source',
             callback,
         )
+        self.assertIn('EndpointTrimCommandSource::GUI_DIRECT_EDIT', callback)
+        self.assertIn('EndpointTrimCommandSource::GUI_DIRECT_SYNC', callback)
+        self.assertIn('EndpointTrimCommandSource::TASK_CONTROLLER', callback)
         observe = callback.index(
             'endpoint_trim_command_order_.observe_upstream_command('
         )
@@ -414,8 +410,37 @@ class SerialDriverResilienceTest(unittest.TestCase):
         )
         self.assertLess(observe, handoff)
         self.assertIn(
-            '!endpoint_trim_explicit_gui_command',
+            'endpoint_trim_command_source',
             callback[observe:handoff],
+        )
+        self.assertIn('command_time.toSec()', callback[observe:handoff])
+        self.assertNotIn('task_controller_handoff_permitted', callback)
+
+    def test_optional_gui_direct_guard_uses_the_same_default_boundary(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        callback = _function_body(
+            source,
+            'void AliciaDDriverNode::joint_command_callback',
+        )
+        admission = (
+            DRIVER_SRC.parent / 'include' / 'alicia_d_driver'
+            / 'endpoint_trim_driver_admission.hpp'
+        ).read_text()
+
+        # The committed arbiter remains self-contained. If the separate
+        # operator GUI-hold implementation is present, its default inclusive
+        # 0.25 s boundary must agree instead of creating a wider second gate.
+        self.assertIn('double gui_task_holdoff_sec = 0.25', admission)
+        self.assertIn('now_sec <= gui_task_holdoff_until_sec_', admission)
+        if 'gui_direct_gesture_timeout_sec_' not in callback:
+            return
+        self.assertIn(
+            'direct_age_sec <= gui_direct_gesture_timeout_sec_',
+            callback,
+        )
+        self.assertIn(
+            'gui_direct_gesture_timeout_sec_,\n        0.25',
+            source,
         )
 
     def test_release_service_is_release_only_and_reports_actual_outcome(self):

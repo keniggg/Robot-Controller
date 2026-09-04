@@ -12,7 +12,8 @@
 
 enum class EndpointTrimCommandSource {
     TASK_CONTROLLER,
-    EXPLICIT_GUI,
+    GUI_DIRECT_EDIT,
+    GUI_DIRECT_SYNC,
 };
 
 enum class EndpointTrimReleaseStatus {
@@ -35,19 +36,36 @@ class EndpointTrimCommandOrder {
 public:
     EndpointTrimCommandOrder(
         size_t joint_count = 6,
-        double change_tolerance_rad = 2.0 * M_PI / 4096.0)
+        double change_tolerance_rad = 2.0 * M_PI / 4096.0,
+        double gui_task_holdoff_sec = 0.25)
         : joint_count_(joint_count),
-          change_tolerance_rad_(change_tolerance_rad)
+          change_tolerance_rad_(change_tolerance_rad),
+          gui_task_holdoff_sec_(
+              std::isfinite(gui_task_holdoff_sec) &&
+                  gui_task_holdoff_sec >= 0.0
+                  ? gui_task_holdoff_sec
+                  : 0.25)
     {
     }
 
     bool observe_upstream_command(
         const std::vector<double>& target,
+        EndpointTrimCommandSource source)
+    {
+        return observe_upstream_command(target, source, 0.0);
+    }
+
+    bool observe_upstream_command(
+        const std::vector<double>& target,
         EndpointTrimCommandSource source,
-        bool task_controller_handoff_permitted = false)
+        double now_sec)
     {
         last_observation_accepted_ = false;
-        if (target.size() != joint_count_) {
+        if (
+            target.size() != joint_count_ ||
+            !std::isfinite(now_sec) ||
+            now_sec < 0.0
+        ) {
             return false;
         }
         for (const double value : target) {
@@ -55,17 +73,32 @@ public:
                 return false;
             }
         }
-        if (
-            source == EndpointTrimCommandSource::TASK_CONTROLLER &&
-            has_authoritative_source_ &&
-            authoritative_source_ == EndpointTrimCommandSource::EXPLICIT_GUI &&
-            !task_controller_handoff_permitted
-        ) {
-            return false;
+        if (source == EndpointTrimCommandSource::TASK_CONTROLLER) {
+            if (
+                gui_task_holdoff_active_ &&
+                now_sec <= gui_task_holdoff_until_sec_
+            ) {
+                return false;
+            }
+            gui_task_holdoff_active_ = false;
+        } else if (source == EndpointTrimCommandSource::GUI_DIRECT_SYNC) {
+            // A tagged synchronization explicitly ends the edit holdoff.
+            gui_task_holdoff_active_ = false;
+        } else if (source == EndpointTrimCommandSource::GUI_DIRECT_EDIT) {
+            if (
+                now_sec > std::numeric_limits<double>::max() -
+                    gui_task_holdoff_sec_
+            ) {
+                return false;
+            }
+            gui_task_holdoff_active_ = true;
+            gui_task_holdoff_until_sec_ =
+                now_sec + gui_task_holdoff_sec_;
         }
         last_observation_accepted_ = true;
         bool changed =
-            source == EndpointTrimCommandSource::EXPLICIT_GUI ||
+            source == EndpointTrimCommandSource::GUI_DIRECT_EDIT ||
+            source == EndpointTrimCommandSource::GUI_DIRECT_SYNC ||
             !has_authoritative_source_ ||
             source != authoritative_source_ ||
             upstream_target_.size() != target.size();
@@ -102,7 +135,6 @@ public:
         const EndpointTrimDecision& decision,
         bool request_routed)
     {
-        note_release();
         if (phase_before == EndpointTrimPhase::FAULT) {
             last_release_status_ = EndpointTrimReleaseStatus::REJECTED;
         } else if (
@@ -116,9 +148,20 @@ public:
             last_release_status_ = EndpointTrimReleaseStatus::PENDING;
         } else if (decision.release_completed) {
             last_release_status_ = EndpointTrimReleaseStatus::COMPLETED;
-            capture_terminal_release(decision);
         } else {
             last_release_status_ = EndpointTrimReleaseStatus::REJECTED;
+        }
+        if (
+            last_release_status_ == EndpointTrimReleaseStatus::PENDING ||
+            last_release_status_ == EndpointTrimReleaseStatus::COMPLETED
+        ) {
+            // Only an active coordinator release can start a terminal-event
+            // generation. No-op and rejected calls must not re-arm an older
+            // completed state after its event has been consumed.
+            note_release();
+            if (last_release_status_ == EndpointTrimReleaseStatus::COMPLETED) {
+                capture_terminal_release(decision);
+            }
         }
         return last_release_status_;
     }
@@ -168,7 +211,10 @@ public:
     {
         return has_unapplied_command() &&
             command_generation_ > release_generation_ &&
-            authoritative_source_ == EndpointTrimCommandSource::EXPLICIT_GUI;
+            (authoritative_source_ ==
+                EndpointTrimCommandSource::GUI_DIRECT_EDIT ||
+             authoritative_source_ ==
+                EndpointTrimCommandSource::GUI_DIRECT_SYNC);
     }
 
     bool newer_task_command_requires_handoff() const
@@ -217,6 +263,8 @@ public:
         last_release_status_ = EndpointTrimReleaseStatus::NOOP;
         terminal_release_code_.clear();
         terminal_release_captured_generation_ = 0;
+        gui_task_holdoff_active_ = false;
+        gui_task_holdoff_until_sec_ = 0.0;
     }
 
 private:
@@ -232,6 +280,7 @@ private:
 
     size_t joint_count_;
     double change_tolerance_rad_;
+    double gui_task_holdoff_sec_;
     uint64_t sequence_ = 0;
     uint64_t command_generation_ = 0;
     uint64_t applied_command_generation_ = 0;
@@ -245,6 +294,8 @@ private:
         EndpointTrimReleaseStatus::NOOP;
     std::string terminal_release_code_;
     uint64_t terminal_release_captured_generation_ = 0;
+    bool gui_task_holdoff_active_ = false;
+    double gui_task_holdoff_until_sec_ = 0.0;
 };
 
 struct EndpointTrimTransmissionGate {

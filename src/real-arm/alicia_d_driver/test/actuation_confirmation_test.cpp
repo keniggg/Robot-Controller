@@ -804,7 +804,8 @@ TEST(EndpointTrimDriverAdmissionTest,
 
     ASSERT_TRUE(order.observe_upstream_command(
         gui_target,
-        EndpointTrimCommandSource::EXPLICIT_GUI
+        EndpointTrimCommandSource::GUI_DIRECT_EDIT,
+        0.3
     ));
     EXPECT_GT(order.command_generation(), release_generation);
     ASSERT_TRUE(order.newer_explicit_gui_command_requires_handoff());
@@ -1057,26 +1058,28 @@ TEST(EndpointTrimDriverOrchestrationTest,
 
     ASSERT_TRUE(order.observe_upstream_command(
         gui_target,
-        EndpointTrimCommandSource::EXPLICIT_GUI
+        EndpointTrimCommandSource::GUI_DIRECT_EDIT,
+        10.0
     ));
     ASSERT_TRUE(order.last_observation_accepted());
     order.mark_command_applied();
 
     EXPECT_FALSE(order.observe_upstream_command(
         stale_task_target,
-        EndpointTrimCommandSource::TASK_CONTROLLER
+        EndpointTrimCommandSource::TASK_CONTROLLER,
+        10.10
     ));
     EXPECT_FALSE(order.last_observation_accepted());
     EXPECT_EQ(order.upstream_target(), gui_target);
     EXPECT_EQ(
         order.authoritative_source(),
-        EndpointTrimCommandSource::EXPLICIT_GUI
+        EndpointTrimCommandSource::GUI_DIRECT_EDIT
     );
     EXPECT_FALSE(order.newer_task_command_requires_handoff());
 }
 
 TEST(EndpointTrimDriverOrchestrationTest,
-     TaskControllerResumesOnlyAfterGuiGestureHandoffIsPermitted)
+     TaskControllerResumesOnlyAfterCommittedGuiHoldoffExpires)
 {
     EndpointTrimCommandOrder order(
         endpoint_trim_config().joint_count,
@@ -1087,24 +1090,28 @@ TEST(EndpointTrimDriverOrchestrationTest,
 
     ASSERT_TRUE(order.observe_upstream_command(
         gui_target,
-        EndpointTrimCommandSource::EXPLICIT_GUI
+        EndpointTrimCommandSource::GUI_DIRECT_EDIT,
+        20.0
     ));
     order.mark_command_applied();
 
-    // A repeat during the direct-GUI gesture cannot overwrite the GUI target.
+    // Match the existing gui_direct guard: the 0.25 s boundary itself is
+    // still held, and the first time after it restores task authority.
     EXPECT_FALSE(order.observe_upstream_command(
         task_target,
         EndpointTrimCommandSource::TASK_CONTROLLER,
-        false
+        20.249
     ));
     EXPECT_EQ(order.upstream_target(), gui_target);
-
-    // Once the node's GUI gesture timeout/sync boundary has passed, a new
-    // task-controller target is a normal task handoff, never a GUI handoff.
+    EXPECT_FALSE(order.observe_upstream_command(
+        task_target,
+        EndpointTrimCommandSource::TASK_CONTROLLER,
+        20.250
+    ));
     EXPECT_TRUE(order.observe_upstream_command(
         task_target,
         EndpointTrimCommandSource::TASK_CONTROLLER,
-        true
+        20.251
     ));
     EXPECT_TRUE(order.last_observation_accepted());
     EXPECT_EQ(order.upstream_target(), task_target);
@@ -1114,6 +1121,42 @@ TEST(EndpointTrimDriverOrchestrationTest,
     );
     EXPECT_TRUE(order.newer_task_command_requires_handoff());
     EXPECT_FALSE(order.newer_explicit_gui_command_requires_handoff());
+}
+
+TEST(EndpointTrimDriverOrchestrationTest,
+     GuiDirectSyncClosesTheCommittedTaskHoldoff)
+{
+    EndpointTrimCommandOrder order(
+        endpoint_trim_config().joint_count,
+        endpoint_trim_config().sdk_quantum_rad
+    );
+    const std::vector<double> gui_target = joints(0.4);
+    const std::vector<double> sync_target = joints(0.41);
+    const std::vector<double> task_target = joints(-0.3);
+
+    ASSERT_TRUE(order.observe_upstream_command(
+        gui_target,
+        EndpointTrimCommandSource::GUI_DIRECT_EDIT,
+        30.0
+    ));
+    order.mark_command_applied();
+    ASSERT_TRUE(order.observe_upstream_command(
+        sync_target,
+        EndpointTrimCommandSource::GUI_DIRECT_SYNC,
+        30.01
+    ));
+    order.mark_command_applied();
+
+    EXPECT_TRUE(order.observe_upstream_command(
+        task_target,
+        EndpointTrimCommandSource::TASK_CONTROLLER,
+        30.01
+    ));
+    EXPECT_EQ(
+        order.authoritative_source(),
+        EndpointTrimCommandSource::TASK_CONTROLLER
+    );
+    EXPECT_TRUE(order.newer_task_command_requires_handoff());
 }
 
 TEST(EndpointTrimDriverOrchestrationTest,
@@ -1164,6 +1207,30 @@ TEST(EndpointTrimDriverOrchestrationTest,
     );
     EXPECT_FALSE(order.has_terminal_release_event());
     EXPECT_TRUE(order.consume_terminal_release_code().empty());
+
+    const uint64_t completed_generation = order.release_generation();
+    EXPECT_EQ(
+        order.record_release(
+            EndpointTrimPhase::QUIESCENT,
+            released,
+            true
+        ),
+        EndpointTrimReleaseStatus::NOOP
+    );
+    EXPECT_EQ(order.release_generation(), completed_generation);
+    order.capture_terminal_release(released);
+    EXPECT_FALSE(order.has_terminal_release_event());
+
+    EndpointTrimContinuity faulted(endpoint_trim_config());
+    const EndpointTrimDecision fault = faulted.activate(
+        std::vector<double>{0.1}, joints(), 0.0
+    );
+    ASSERT_EQ(fault.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(
+        order.record_release(fault.phase, fault, true),
+        EndpointTrimReleaseStatus::REJECTED
+    );
+    EXPECT_EQ(order.release_generation(), completed_generation);
     order.capture_terminal_release(released);
     EXPECT_FALSE(order.has_terminal_release_event());
 }
