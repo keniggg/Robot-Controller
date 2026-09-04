@@ -295,6 +295,82 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertNotIn('endpoint_trim_reference_joint_angles_ = joint_angles;', callback)
         self.assertNotIn('endpoint_feedback_trim_offsets_.assign(', callback)
 
+    def test_endpoint_trim_release_and_expiry_share_pending_handoff_contract(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        service = _function_body(
+            source,
+            'bool AliciaDDriverNode::set_task_endpoint_precision_callback',
+        )
+        timer = _function_body(
+            source,
+            'void AliciaDDriverNode::send_command_timer_callback',
+        )
+
+        self.assertIn('endpoint_trim_continuity_.request_release(', service)
+        expiry_start = timer.index(
+            'endpoint_feedback_trim_task_lease_expired = true;'
+        )
+        expiry_end = timer.index(
+            '// Lease-expiry release request end',
+            expiry_start,
+        )
+        expiry = timer[expiry_start:expiry_end]
+        self.assertIn('endpoint_trim_continuity_.request_release(', expiry)
+        self.assertIn(
+            'task endpoint precision lease release pending serialized handoff',
+            service,
+        )
+        self.assertNotIn('release queued', service)
+        for path in (service, expiry):
+            self.assertNotIn('endpoint_feedback_trim_offsets_', path)
+            self.assertNotIn('endpoint_trim_response_wait_since_', path)
+            self.assertNotIn('endpoint_trim_feedback_anchor_joint_angles_', path)
+
+    def test_explicit_gui_handoff_is_installed_at_the_accepted_boundary(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        callback = _function_body(
+            source,
+            'void AliciaDDriverNode::joint_command_callback',
+        )
+
+        admission = callback.index('actuation_confirmation_.admit_command(')
+        handoff = callback.index('endpoint_trim_continuity_.explicit_gui_handoff(')
+        self.assertGreater(handoff, admission)
+        self.assertIn('if (endpoint_trim_explicit_gui_command)', callback)
+        self.assertIn(
+            'endpoint_trim_reference_joint_angles_ =\n'
+            '                gui_handoff.reference;',
+            callback,
+        )
+        self.assertIn(
+            'endpoint_feedback_trim_offsets_ = gui_handoff.offsets;',
+            callback,
+        )
+        self.assertIn('endpoint_trim_command_order_.mark_command_applied();', callback)
+        self.assertIn('endpoint_feedback_trim_task_lease_active_ = false;', callback)
+        self.assertIn('endpoint_trim_response_wait_since_ = ros::Time(0);', callback)
+        self.assertIn(
+            'msg->header.frame_id == "gui_direct" ||',
+            callback,
+        )
+
+    def test_endpoint_trim_release_logs_exact_terminal_codes_and_fresh_age(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        timer = _function_body(
+            source,
+            'void AliciaDDriverNode::send_command_timer_callback',
+        )
+
+        self.assertIn('"ENDPOINT_TRIM_RELEASE_SETTLED"', timer)
+        self.assertIn('"ENDPOINT_TRIM_RESPONSE_TIMEOUT"', timer)
+        self.assertIn('"ENDPOINT_TRIM_CONTINUITY_VIOLATION"', timer)
+        self.assertIn('endpoint_trim_decision.release_completed', timer)
+        self.assertIn('endpoint_trim_release_install_pending', timer)
+        self.assertIn('endpoint_trim_response_generation_started', timer)
+        generation = timer.index('endpoint_trim_response_generation_started')
+        age = timer.index('endpoint_trim_response_age_sec =', generation)
+        self.assertLess(generation, age)
+
     def test_retained_command_clear_resets_coordinator_at_every_call_site(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         clear = _function_body(

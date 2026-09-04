@@ -889,6 +889,147 @@ TEST(EndpointTrimDriverAdmissionTest,
     EXPECT_FALSE(retry.command_changed);
 }
 
+TEST(EndpointTrimOwnershipTransitionTest,
+     ServiceReleaseDuringWaitingResponseStaysPendingUntilSettled)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+    const std::vector<double> baseline = joints(-config.max_step_rad);
+
+    trim.activate(joints(), joints(), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        baseline, all_stable_joints(), 1.0, 0.1
+    );
+    ASSERT_EQ(correction.phase, EndpointTrimPhase::WAITING_RESPONSE);
+    const std::vector<double> preserved = correction.composed_target;
+
+    const EndpointTrimDecision pending = trim.request_release(
+        baseline, true, 0.15
+    );
+    EXPECT_EQ(pending.phase, EndpointTrimPhase::PENDING_RELEASE);
+    EXPECT_FALSE(pending.release_completed);
+    EXPECT_EQ(pending.composed_target, preserved);
+
+    trim.note_feedback(correction.composed_target, 0.2, 0.2);
+    const EndpointTrimDecision settled = trim.note_feedback(
+        correction.composed_target,
+        0.2 + config.stable_sec,
+        0.2 + config.stable_sec
+    );
+    EXPECT_EQ(settled.phase, EndpointTrimPhase::QUIESCENT);
+    EXPECT_TRUE(settled.release_completed);
+    EXPECT_TRUE(settled.code.empty());
+    expect_vectors_near(
+        settled.composed_target,
+        preserved,
+        config.sdk_quantum_rad
+    );
+}
+
+TEST(EndpointTrimOwnershipTransitionTest,
+     LeaseExpiryDuringWaitingResponseUsesPendingReleasePath)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+
+    trim.activate(joints(0.1), joints(), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        joints(0.1 - config.max_step_rad),
+        all_stable_joints(),
+        1.0,
+        0.1
+    );
+    ASSERT_EQ(correction.phase, EndpointTrimPhase::WAITING_RESPONSE);
+
+    // Lease expiry is deliberately the same coordinator request as service
+    // release; the node source contract verifies that shared routing.
+    const EndpointTrimDecision pending = trim.request_release(
+        joints(), false, 0.2
+    );
+    EXPECT_EQ(pending.phase, EndpointTrimPhase::PENDING_RELEASE);
+    EXPECT_FALSE(pending.release_completed);
+    EXPECT_EQ(pending.composed_target, correction.composed_target);
+
+    const EndpointTrimDecision timed_out = trim.update(
+        0.1 + config.response_deadline_sec
+    );
+    EXPECT_EQ(timed_out.phase, EndpointTrimPhase::QUIESCENT);
+    EXPECT_TRUE(timed_out.release_completed);
+    EXPECT_EQ(timed_out.code, "ENDPOINT_TRIM_RESPONSE_TIMEOUT");
+    EXPECT_EQ(timed_out.composed_target, correction.composed_target);
+}
+
+TEST(EndpointTrimOwnershipTransitionTest,
+     StaleReleaseFeedbackPreservesTheComposedTarget)
+{
+    EndpointTrimContinuity trim(endpoint_trim_config());
+    const EndpointTrimDecision active = trim.activate(
+        joints(0.1), joints(0.01), 0.0
+    );
+
+    const EndpointTrimDecision released = trim.request_release(
+        joints(-0.4), false, 0.1
+    );
+
+    EXPECT_EQ(released.phase, EndpointTrimPhase::QUIESCENT);
+    EXPECT_TRUE(released.release_completed);
+    EXPECT_EQ(released.reference, active.composed_target);
+    EXPECT_EQ(released.offsets, joints());
+    EXPECT_EQ(released.composed_target, active.composed_target);
+}
+
+TEST(EndpointTrimOwnershipTransitionTest,
+     FreshReleaseFeedbackRebasesWithoutACommandJump)
+{
+    const EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+    const EndpointTrimDecision active = trim.activate(
+        joints(0.1), joints(0.01), 0.0
+    );
+    const std::vector<double> measured = joints(0.095);
+
+    const EndpointTrimDecision released = trim.request_release(
+        measured, true, 0.1
+    );
+
+    EXPECT_EQ(released.phase, EndpointTrimPhase::QUIESCENT);
+    EXPECT_TRUE(released.release_completed);
+    EXPECT_TRUE(released.code.empty());
+    EXPECT_EQ(released.reference, measured);
+    expect_vectors_near(
+        released.composed_target,
+        active.composed_target,
+        config.sdk_quantum_rad
+    );
+}
+
+TEST(EndpointTrimOwnershipTransitionTest,
+     ExplicitGuiCommandDuringPendingReleaseIsImmediatelyAuthoritative)
+{
+    EndpointTrimContinuity trim(endpoint_trim_config());
+    trim.activate(joints(0.1), joints(), 0.0);
+    trim.request_correction(
+        joints(0.08), all_stable_joints(), 1.0, 0.1
+    );
+    ASSERT_EQ(
+        trim.request_release(joints(0.08), true, 0.15).phase,
+        EndpointTrimPhase::PENDING_RELEASE
+    );
+    const std::vector<double> gui_target =
+        joints(-0.4, 0.3, -0.2, 0.1, -0.05, 0.04);
+
+    const EndpointTrimDecision handoff =
+        trim.explicit_gui_handoff(gui_target, 0.2);
+
+    EXPECT_EQ(handoff.phase, EndpointTrimPhase::IDLE);
+    EXPECT_TRUE(handoff.command_changed);
+    EXPECT_EQ(handoff.reference, gui_target);
+    EXPECT_EQ(handoff.offsets, joints());
+    EXPECT_EQ(handoff.composed_target, gui_target);
+    EXPECT_FALSE(handoff.release_completed);
+    EXPECT_TRUE(handoff.code.empty());
+}
+
 int main(int argc, char** argv)
 {
     testing::InitGoogleTest(&argc, argv);

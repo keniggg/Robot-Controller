@@ -509,7 +509,6 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
                 feedback_stale_timeout_sec_;
     }
     bool release_requested = false;
-    bool release_pending = false;
     {
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
         if (
@@ -551,15 +550,12 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
                 current.phase != EndpointTrimPhase::IDLE &&
                 release_measurement.size() == 6
             ) {
-                const EndpointTrimDecision decision =
-                    endpoint_trim_continuity_.request_release(
-                        release_measurement,
-                        release_feedback_is_fresh,
-                        now.toSec()
-                    );
+                endpoint_trim_continuity_.request_release(
+                    release_measurement,
+                    release_feedback_is_fresh,
+                    now.toSec()
+                );
                 release_requested = true;
-                release_pending =
-                    decision.phase == EndpointTrimPhase::PENDING_RELEASE;
             }
             endpoint_trim_command_order_.note_release();
         }
@@ -573,11 +569,9 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
         response.message = message.str();
         ROS_INFO("%s", response.message.c_str());
     } else {
-        response.message = release_pending
-            ? "task endpoint precision lease release pending serialized encoder response"
-            : (release_requested
-                ? "task endpoint precision lease release queued for serialized timer handoff"
-                : "task endpoint precision lease inactive; existing held target retained");
+        response.message = release_requested
+            ? "task endpoint precision lease release pending serialized handoff"
+            : "task endpoint precision lease inactive; existing held target retained";
         ROS_INFO("%s", response.message.c_str());
     }
     return true;
@@ -997,6 +991,29 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
                 joint_angles,
                 endpoint_trim_explicit_gui_command
             );
+        if (endpoint_trim_explicit_gui_command) {
+            const EndpointTrimDecision gui_handoff =
+                endpoint_trim_continuity_.explicit_gui_handoff(
+                    joint_angles,
+                    command_time.toSec()
+                );
+            endpoint_trim_command_order_.mark_command_applied();
+            endpoint_trim_reference_joint_angles_ =
+                gui_handoff.reference;
+            endpoint_feedback_trim_offsets_ = gui_handoff.offsets;
+            endpoint_feedback_trim_active_ = false;
+            endpoint_feedback_trim_quiescent_ = false;
+            endpoint_trim_waiting_for_feedback_response_ = false;
+            endpoint_trim_response_start_joint_angles_.clear();
+            endpoint_trim_response_joint_mask_.clear();
+            endpoint_trim_response_wait_since_ = ros::Time(0);
+            endpoint_trim_last_response_latency_sec_ = 0.0;
+            endpoint_trim_stalled_retry_count_ = 0;
+            endpoint_feedback_trim_iteration_ = 0;
+            endpoint_feedback_trim_task_lease_active_ = false;
+            endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
+            endpoint_feedback_trim_task_lease_reference_.clear();
+        }
         if (reference_changed) {
             if (endpoint_feedback_trim_task_lease_active_) {
                 endpoint_feedback_trim_task_lease_active_ = false;
@@ -1081,6 +1098,7 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     bool endpoint_feedback_trim_task_lease_expired = false;
     bool accepted_feedback_sample_is_new = false;
     bool endpoint_trim_target_changed = false;
+    bool endpoint_trim_release_install_pending = false;
 
     // Endpoint trim continuity begin
     {
@@ -1094,6 +1112,9 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         endpoint_trim_phase_before = initial_state.phase;
         endpoint_trim_code_before = initial_state.code;
         endpoint_trim_target_before = initial_state.composed_target;
+        endpoint_trim_release_install_pending =
+            initial_state.release_completed &&
+            !endpoint_feedback_trim_quiescent_;
 
         if (
             endpoint_trim_command_order_.newer_command_requires_handoff() &&
@@ -1325,9 +1346,18 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
             endpoint_trim_decision.phase ==
                 EndpointTrimPhase::PENDING_RELEASE;
 
+        endpoint_trim_target_changed =
+            endpoint_trim_target_before !=
+                endpoint_trim_decision.composed_target;
+        const bool endpoint_trim_response_generation_started =
+            endpoint_trim_waiting_for_feedback_response_ &&
+            endpoint_trim_target_changed;
         if (
             endpoint_trim_waiting_for_feedback_response_ &&
-            endpoint_trim_response_wait_since_.isZero()
+            (
+                endpoint_trim_response_generation_started ||
+                endpoint_trim_response_wait_since_.isZero()
+            )
         ) {
             endpoint_trim_response_wait_since_ = now;
         }
@@ -1338,9 +1368,6 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         if (!endpoint_trim_waiting_for_feedback_response_) {
             endpoint_trim_response_wait_since_ = ros::Time(0);
         }
-        endpoint_trim_target_changed =
-            endpoint_trim_target_before !=
-                endpoint_trim_decision.composed_target;
         if (endpoint_trim_target_changed) {
             ++endpoint_feedback_trim_iteration_;
         }
@@ -1351,11 +1378,26 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         endpoint_trim_phase_before != endpoint_trim_decision.phase ||
         endpoint_trim_target_changed ||
         endpoint_feedback_trim_task_lease_expired ||
+        endpoint_trim_release_install_pending ||
         endpoint_trim_code_before != endpoint_trim_decision.code
     ) {
-        const char* code = endpoint_trim_decision.code.empty()
-            ? "ENDPOINT_TRIM_STATE_TRANSITION"
-            : endpoint_trim_decision.code.c_str();
+        const char* code = nullptr;
+        if (endpoint_trim_decision.release_completed) {
+            if (endpoint_trim_decision.code.empty()) {
+                code = "ENDPOINT_TRIM_RELEASE_SETTLED";
+            } else if (
+                endpoint_trim_decision.code ==
+                    "ENDPOINT_TRIM_RESPONSE_TIMEOUT"
+            ) {
+                code = "ENDPOINT_TRIM_RESPONSE_TIMEOUT";
+            } else {
+                code = "ENDPOINT_TRIM_CONTINUITY_VIOLATION";
+            }
+        } else {
+            code = endpoint_trim_decision.code.empty()
+                ? "ENDPOINT_TRIM_STATE_TRANSITION"
+                : endpoint_trim_decision.code.c_str();
+        }
         ROS_INFO(
             "Endpoint trim transition code=%s phase=%s->%s "
             "response_age=%.3fs applied_step_deg=%s "
