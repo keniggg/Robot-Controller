@@ -296,266 +296,100 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
     def test_driver_endpoint_feedback_trim_is_live_and_joint_agnostic(self):
         source = DRIVER_SOURCE.read_text()
         header = DRIVER_HEADER.read_text()
-        trim_block = source.split(
-            'std::vector<double> sdk_joint_angles = cmd_joint_angles_;',
-            1,
-        )[1].split('// Build and send SDK-style joint + gripper frame:', 1)[0]
+        timer = source.split(
+            'void AliciaDDriverNode::send_command_timer_callback', 1
+        )[1].split('void AliciaDDriverNode::process_serial_data_callback', 1)[0]
 
-        self.assertIn('joint_angles[i] - feedback_joint_angles[i]', trim_block)
         self.assertIn(
-            'previous_trim +\n'
-            '                                endpoint_feedback_trim_gain_ *\n'
-            '                                feedback_error',
-            trim_block,
-        )
-        self.assertIn(
-            'endpoint_feedback_trim_offsets_[i]',
-            trim_block,
-        )
-        self.assertIn(
-            'endpoint_trim_waiting_for_feedback_response',
-            trim_block,
-        )
-        self.assertIn(
-            'joint_stable_age_sec >=\n'
-            '                    endpoint_feedback_trim_stable_sec_',
-            trim_block,
-        )
-        self.assertIn(
-            'std::vector<ros::Time> endpoint_trim_feedback_stable_since_',
+            '#include "alicia_d_driver/endpoint_trim_continuity.hpp"',
             header,
         )
         self.assertIn(
-            'endpoint_feedback_stable_by_joint[i]',
-            trim_block,
+            '#include "alicia_d_driver/endpoint_trim_driver_admission.hpp"',
+            header,
         )
+        self.assertIn('EndpointTrimContinuity endpoint_trim_continuity_;', header)
+        self.assertIn('EndpointTrimCommandOrder endpoint_trim_command_order_;', header)
         self.assertIn(
-            'endpoint_trim_response_joint_mask_[i]',
-            trim_block,
-        )
-        self.assertIn(
-            'ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD =\n'
-            '    2.0 * SDK_JOINT_QUANTIZATION_RAD',
+            'endpoint_trim_config_.response_min_rad =',
             source,
         )
         self.assertIn(
-            'const bool endpoint_error_exceeds_activation =',
-            trim_block,
+            'endpoint_feedback_trim_response_min_quantums_ *',
+            source,
         )
-        self.assertIn(
-            'const bool endpoint_error_above_round_trip_floor =',
-            trim_block,
+        self.assertIn('endpoint_trim_continuity_.note_feedback(', timer)
+        self.assertIn('endpoint_trim_continuity_.update(now.toSec())', timer)
+        self.assertIn('endpoint_trim_continuity_.request_correction(', timer)
+        self.assertIn('endpoint_trim_stream_target(', timer)
+        self.assertLess(
+            timer.index('endpoint_trim_continuity_.note_feedback('),
+            timer.index('endpoint_trim_continuity_.request_correction('),
         )
-        self.assertIn(
-            'bool endpoint_feedback_trim_quiescent_ = false;',
-            header,
+        self.assertLess(
+            timer.index('endpoint_trim_continuity_.request_correction('),
+            timer.index('endpoint_trim_stream_target('),
         )
-        self.assertGreaterEqual(
-            source.count('endpoint_feedback_trim_quiescent_ = false;'),
-            3,
-        )
-        self.assertIn(
-            'response_rad + 1e-12 >=\n'
-            '                        SDK_JOINT_QUANTIZATION_RAD',
-            trim_block,
-        )
-        self.assertIn(
-            '2.0 * endpoint_trim_last_response_latency_sec',
-            trim_block,
-        )
-        self.assertIn(
-            ': feedback_stale_timeout_sec_',
-            trim_block,
-        )
-        self.assertIn(
-            'retry_stalled_endpoint_feedback_trim',
-            trim_block,
-        )
-        stalled_retry_block = trim_block.split(
-            'const bool retry_stalled_endpoint_feedback_trim =',
-            1,
-        )[1].split(
-            'const bool update_endpoint_feedback_trim =',
-            1,
-        )[0]
-        self.assertIn('endpoint_reference_stable', stalled_retry_block)
-        self.assertIn('feedback_sample_is_new', stalled_retry_block)
-        self.assertIn(
-            'endpoint_error_inside_trim_window',
-            stalled_retry_block,
-        )
-        self.assertIn(
-            'endpoint_trim_waiting_for_feedback_response',
-            stalled_retry_block,
-        )
-        self.assertIn(
-            '!endpoint_trim_quiescent_for_decision',
-            stalled_retry_block,
-        )
-        self.assertIn(
-            'endpoint_error_above_round_trip_floor',
-            stalled_retry_block,
-        )
-        continue_block = trim_block.split(
-            'const bool continue_endpoint_feedback_trim =',
-            1,
-        )[1].split(
-            'const double endpoint_trim_response_timeout_sec =',
-            1,
-        )[0]
-        self.assertIn(
-            '!endpoint_trim_quiescent_for_decision',
-            continue_block,
-        )
-        self.assertIn(
-            'endpoint_error_above_round_trip_floor',
-            continue_block,
-        )
-        start_block = trim_block.split(
-            'const bool start_endpoint_feedback_trim =',
-            1,
-        )[1].split(
-            'const bool continue_endpoint_feedback_trim =',
-            1,
-        )[0]
-        self.assertIn('endpoint_error_above_round_trip_floor', start_block)
-        self.assertNotIn('endpoint_error_exceeds_activation', start_block)
-        enter_quiescence_block = trim_block.split(
-            'const bool endpoint_trim_enter_quiescence =',
-            1,
-        )[1].split(
-            'const bool endpoint_trim_leave_quiescence =',
-            1,
-        )[0]
-        self.assertIn('endpoint_feedback_stable', enter_quiescence_block)
-        self.assertIn('feedback_sample_is_new', enter_quiescence_block)
-        self.assertIn(
-            '!endpoint_error_above_round_trip_floor',
-            enter_quiescence_block,
-        )
-        leave_quiescence_block = trim_block.split(
-            'const bool endpoint_trim_leave_quiescence =',
-            1,
-        )[1].split(
-            'const bool endpoint_trim_quiescent_for_decision =',
-            1,
-        )[0]
-        self.assertIn(
-            'endpoint_feedback_trim_quiescent',
-            leave_quiescence_block,
-        )
-        self.assertIn(
-            'endpoint_error_exceeds_activation',
-            leave_quiescence_block,
-        )
-        self.assertIn(
-            'endpoint_feedback_trim_quiescent_ =\n'
-            '                endpoint_trim_quiescent_for_decision;',
-            trim_block,
-        )
-        self.assertIn(
-            'endpoint_trim_response_wait_age_sec >=\n'
-            '            endpoint_trim_response_timeout_sec',
-            trim_block,
-        )
-        self.assertNotIn(
-            'endpoint_feedback_trim_gain_ * feedback_error\n'
-            '                )',
-            trim_block,
-        )
-        self.assertIn('endpoint_feedback_trim_max_rad_', trim_block)
-        self.assertIn('endpoint_feedback_trim_active_', trim_block)
-        self.assertNotIn('Joint2', trim_block)
-        self.assertNotIn('joint_idx ==', trim_block)
-
-        update_loop = trim_block.split(
-            'for (size_t i = 0; i < joint_angles.size(); ++i) {',
-        )[-1]
-        self.assertIn('joint_stable_for_update', update_loop)
-        self.assertIn('joint_retry_is_due', update_loop)
-        self.assertIn(
-            'std::abs(feedback_error) <=\n'
-            '                            ENDPOINT_FEEDBACK_TRIM_ROUND_TRIP_FLOOR_RAD',
-            update_loop,
-        )
+        self.assertNotIn('retry_stalled_endpoint_feedback_trim', timer)
 
     def test_driver_endpoint_trim_has_task_scoped_expiring_lease(self):
         source = DRIVER_SOURCE.read_text()
         header = DRIVER_HEADER.read_text()
+        service = source.split(
+            'bool AliciaDDriverNode::set_task_endpoint_precision_callback', 1
+        )[1].split('void AliciaDDriverNode::clear_retained_command_state', 1)[0]
+        timer = source.split(
+            'void AliciaDDriverNode::send_command_timer_callback', 1
+        )[1].split('void AliciaDDriverNode::process_serial_data_callback', 1)[0]
 
         self.assertIn('#include "std_srvs/SetBool.h"', header)
-        self.assertIn(
-            'set_task_endpoint_precision_callback',
-            header,
-        )
-        self.assertIn(
-            'task_endpoint_precision_service_ = pnh_.advertiseService(',
-            source,
-        )
+        self.assertIn('set_task_endpoint_precision_callback', header)
+        self.assertIn('task_endpoint_precision_service_ = pnh_.advertiseService(', source)
         self.assertIn('"set_task_endpoint_precision",', source)
-        self.assertIn(
+        for member in (
             'endpoint_feedback_trim_task_lease_active_',
-            header,
-        )
-        self.assertIn(
             'endpoint_feedback_trim_task_lease_timeout_sec_',
-            header,
-        )
-        self.assertIn(
             'endpoint_feedback_trim_task_lease_reference_',
-            header,
+        ):
+            self.assertIn(member, header)
+        self.assertIn('endpoint_trim_continuity_.request_release(', service)
+        self.assertIn('endpoint_trim_command_order_.record_release(', service)
+        self.assertIn('EndpointTrimReleaseStatus::PENDING', service)
+        self.assertIn('EndpointTrimReleaseStatus::COMPLETED', service)
+        self.assertNotIn('endpoint_feedback_trim_offsets_', service)
+
+        expiry_start = timer.index(
+            'endpoint_feedback_trim_task_lease_expired = true;'
         )
-        self.assertIn(
-            'const bool endpoint_feedback_trim_update_allowed =',
-            source,
+        expiry_end = timer.index('// Lease-expiry release request end', expiry_start)
+        expiry = timer[expiry_start:expiry_end]
+        self.assertIn('endpoint_trim_continuity_.request_release(', expiry)
+        self.assertIn('endpoint_trim_command_order_.record_release(', expiry)
+        self.assertNotIn('endpoint_feedback_trim_offsets_', expiry)
+
+    def test_gui_direct_command_is_single_joint_and_clears_task_trim(self):
+        source = DRIVER_SOURCE.read_text()
+        header = DRIVER_HEADER.read_text()
+        callback = source.split(
+            'void AliciaDDriverNode::joint_command_callback', 1
+        )[1].split('void AliciaDDriverNode::send_command_timer_callback', 1)[0]
+
+        self.assertIn('msg->header.frame_id == "gui_direct"', callback)
+        self.assertIn('msg->effort.size() != msg->name.size()', callback)
+        self.assertIn('marked_count != 1', callback)
+        self.assertIn('gui_direct_gesture_timeout_sec_', header)
+        self.assertIn('gui_direct_edited_index_', header)
+        self.assertIn('EndpointTrimCommandSource::GUI_DIRECT_EDIT', callback)
+        self.assertIn('EndpointTrimCommandSource::GUI_DIRECT_SYNC', callback)
+        self.assertIn('EndpointTrimCommandSource::TASK_CONTROLLER', callback)
+        observe = callback.index(
+            'endpoint_trim_command_order_.observe_upstream_command('
         )
-        self.assertIn(
-            'endpoint_feedback_trim_enabled_ ||\n'
-            '        endpoint_feedback_trim_task_lease_active',
-            source,
-        )
-        self.assertIn(
-            'endpoint_feedback_trim_active &&\n'
-            '        endpoint_feedback_trim_offsets.size() == '
-            'sdk_joint_angles.size()',
-            source,
-        )
-        self.assertIn(
-            'endpoint_feedback_trim_task_lease_active_ = false;',
-            source,
-        )
-        release_block = source.split(
-            'if (!request.data) {',
-            1,
-        )[1].split(
-            'void AliciaDDriverNode::clear_retained_command_state()',
-            1,
-        )[0]
-        self.assertIn('release_feedback_is_fresh', release_block)
-        self.assertIn(
-            'release_feedback[i] -\n'
-            '                                endpoint_trim_reference_joint_angles_[i]',
-            release_block,
-        )
-        self.assertIn(
-            'fresh measured joint pose latched until target changes',
-            release_block,
-        )
-        reference_change_block = source.split(
-            'if (reference_changed) {',
-            1,
-        )[1].split(
-            'latest_joint_angles_ = joint_angles;',
-            1,
-        )[0]
-        self.assertIn(
-            'endpoint_feedback_trim_task_lease_active_ = false;',
-            reference_change_block,
-        )
-        self.assertIn(
-            'endpoint_feedback_trim_task_lease_reference_.clear();',
-            reference_change_block,
-        )
+        handoff = callback.index('endpoint_trim_continuity_.explicit_gui_handoff(')
+        applied = callback.index('endpoint_trim_command_order_.mark_command_applied();')
+        self.assertLess(observe, handoff)
+        self.assertLess(handoff, applied)
+        self.assertIn('endpoint_feedback_trim_task_lease_active_ = false;', callback)
 
 
 if __name__ == '__main__':
