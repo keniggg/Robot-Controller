@@ -154,7 +154,12 @@ public:
         }
 
         response_baseline_ = measured;
-        response_goal_ = state_.composed_target;
+        // The composed target is the over-command sent to the actuator.  The
+        // response is complete only when feedback reaches the upstream
+        // reference that the trim is intended to recover.  Settling against
+        // the over-command would make the next reference-measured correction
+        // reverse the accumulated offset.
+        response_goal_ = state_.reference;
         response_direction_ = response_direction;
         response_start_sec_ = now_sec;
         response_settle_since_sec_ = std::numeric_limits<double>::quiet_NaN();
@@ -232,6 +237,7 @@ public:
         }
         clear_release();
         state_.phase = EndpointTrimPhase::ACTIVE_READY;
+        state_.applied_step.assign(config_.joint_count, 0.0);
         state_.command_changed = false;
         state_.release_completed = false;
         state_.code.clear();
@@ -247,13 +253,13 @@ public:
             return violate();
         }
         if (state_.phase == EndpointTrimPhase::FAULT) {
-            return state_;
+            return unchanged(state_.code);
         }
         if (state_.phase == EndpointTrimPhase::PENDING_RELEASE) {
             return unchanged();
         }
         if (state_.phase == EndpointTrimPhase::QUIESCENT) {
-            return state_;
+            return unchanged();
         }
         if (state_.phase == EndpointTrimPhase::IDLE) {
             return violate();
@@ -268,6 +274,7 @@ public:
         }
         state_.command_changed = false;
         state_.release_completed = false;
+        state_.applied_step.assign(config_.joint_count, 0.0);
         state_.code.clear();
         if (state_.phase == EndpointTrimPhase::WAITING_RESPONSE) {
             state_.phase = EndpointTrimPhase::PENDING_RELEASE;
@@ -282,14 +289,14 @@ public:
             return violate();
         }
         if (state_.phase == EndpointTrimPhase::FAULT) {
-            return state_;
+            return unchanged(state_.code);
         }
         if ((state_.phase == EndpointTrimPhase::WAITING_RESPONSE ||
              state_.phase == EndpointTrimPhase::PENDING_RELEASE) &&
             now_sec - response_start_sec_ >= config_.response_deadline_sec) {
             return timeout_response();
         }
-        return state_;
+        return unchanged();
     }
 
     EndpointTrimDecision explicit_gui_handoff(
@@ -303,6 +310,12 @@ public:
         const std::vector<double>& task_target,
         double now_sec)
     {
+        if (!valid_time(now_sec) || !valid_joints(task_target)) {
+            return violate();
+        }
+        if (state_.phase == EndpointTrimPhase::FAULT) {
+            return unchanged(state_.code);
+        }
         return handoff_idle_target(task_target, now_sec);
     }
 
@@ -497,6 +510,7 @@ private:
 
     EndpointTrimDecision unchanged(const std::string& code = std::string())
     {
+        state_.applied_step.assign(config_.joint_count, 0.0);
         state_.command_changed = false;
         state_.release_completed = false;
         state_.code = code;

@@ -321,6 +321,7 @@ TEST(EndpointTrimContinuityTest, SerializesLiveCorrectionAndDelaysLeaseRelease)
     );
     EXPECT_EQ(release.phase, EndpointTrimPhase::PENDING_RELEASE);
     EXPECT_FALSE(release.release_completed);
+    EXPECT_EQ(release.applied_step, joints());
     expect_vectors_near(release.composed_target, first.composed_target, 1e-12);
 }
 
@@ -428,30 +429,91 @@ TEST(EndpointTrimContinuityTest, DeployedResponseMinimumRejectsOneQuantumUntilTw
     );
 }
 
-TEST(EndpointTrimContinuityTest, SettlesAgainstTheComposedCommandTarget)
+TEST(EndpointTrimContinuityTest,
+     SettlesAtReferenceWithoutReversingAccumulatedCorrection)
 {
     EndpointTrimConfig config = endpoint_trim_config();
     EndpointTrimContinuity trim(config);
-    const std::vector<double> baseline = joints(-config.max_step_rad);
+    const double quantum = config.sdk_quantum_rad;
+    const std::vector<double> reference = joints();
+    const std::vector<double> baseline = joints(-4.0 * quantum);
+
+    trim.activate(reference, joints(), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        baseline, all_stable_joints(), 1.0, 0.1
+    );
+    ASSERT_EQ(correction.phase, EndpointTrimPhase::WAITING_RESPONSE);
+    ASSERT_NEAR(correction.applied_step[0], 4.0 * quantum, 1e-12);
+    const std::vector<double> preserved = correction.composed_target;
+
+    EXPECT_EQ(
+        trim.note_feedback(reference, 0.2, 0.2).phase,
+        EndpointTrimPhase::WAITING_RESPONSE
+    );
+    EXPECT_EQ(
+        trim.note_feedback(
+            reference,
+            0.2 + config.stable_sec,
+            0.2 + config.stable_sec
+        ).phase,
+        EndpointTrimPhase::ACTIVE_READY
+    );
+
+    const EndpointTrimDecision next = trim.request_correction(
+        reference,
+        all_stable_joints(),
+        1.0,
+        0.3 + config.stable_sec
+    );
+    EXPECT_EQ(next.phase, EndpointTrimPhase::ACTIVE_READY);
+    EXPECT_FALSE(next.command_changed);
+    EXPECT_EQ(next.applied_step, joints());
+    EXPECT_EQ(next.composed_target, preserved);
+}
+
+TEST(EndpointTrimContinuityTest,
+     DirectionalStaticBiasTimesOutWithoutReverseOrAdditionalIncrement)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+    const double quantum = config.sdk_quantum_rad;
+    const std::vector<double> baseline = joints(-4.0 * quantum);
 
     trim.activate(joints(), joints(), 0.0);
     const EndpointTrimDecision correction = trim.request_correction(
         baseline, all_stable_joints(), 1.0, 0.1
     );
     ASSERT_EQ(correction.phase, EndpointTrimPhase::WAITING_RESPONSE);
+    const std::vector<double> preserved = correction.composed_target;
 
-    EXPECT_EQ(
-        trim.note_feedback(correction.composed_target, 0.2, 0.2).phase,
-        EndpointTrimPhase::WAITING_RESPONSE
+    const std::vector<double> biased = joints(-3.0 * quantum);
+    const EndpointTrimDecision moving = trim.note_feedback(
+        biased, 0.2, 0.2
     );
-    EXPECT_EQ(
-        trim.note_feedback(
-            correction.composed_target,
-            0.2 + config.stable_sec,
-            0.2 + config.stable_sec
-        ).phase,
-        EndpointTrimPhase::ACTIVE_READY
+    EXPECT_EQ(moving.phase, EndpointTrimPhase::WAITING_RESPONSE);
+    EXPECT_EQ(moving.applied_step, joints());
+    EXPECT_EQ(moving.composed_target, preserved);
+
+    const EndpointTrimDecision waiting = trim.update(0.25);
+    EXPECT_EQ(waiting.phase, EndpointTrimPhase::WAITING_RESPONSE);
+    EXPECT_EQ(waiting.applied_step, joints());
+    EXPECT_EQ(waiting.composed_target, preserved);
+
+    const EndpointTrimDecision blocked = trim.request_correction(
+        biased, all_stable_joints(), 1.0, 0.3
     );
+    EXPECT_EQ(blocked.phase, EndpointTrimPhase::WAITING_RESPONSE);
+    EXPECT_FALSE(blocked.command_changed);
+    EXPECT_EQ(blocked.applied_step, joints());
+    EXPECT_EQ(blocked.composed_target, preserved);
+
+    const EndpointTrimDecision timed_out = trim.update(
+        0.1 + config.response_deadline_sec
+    );
+    EXPECT_EQ(timed_out.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(timed_out.code, "ENDPOINT_TRIM_RESPONSE_TIMEOUT");
+    EXPECT_EQ(timed_out.applied_step, joints());
+    EXPECT_EQ(timed_out.composed_target, preserved);
 }
 
 TEST(EndpointTrimContinuityTest, PendingReleaseCompletesAfterStableResponse)
@@ -504,6 +566,7 @@ TEST(EndpointTrimContinuityTest, RepeatedReleaseRequestRemainsPending)
     ASSERT_EQ(first.phase, EndpointTrimPhase::PENDING_RELEASE);
     EXPECT_EQ(repeated.phase, EndpointTrimPhase::PENDING_RELEASE);
     EXPECT_FALSE(repeated.release_completed);
+    EXPECT_EQ(repeated.applied_step, joints());
     EXPECT_EQ(repeated.composed_target, first.composed_target);
 }
 
@@ -590,6 +653,57 @@ TEST(EndpointTrimContinuityTest, TimeoutWithoutReleasePermanentlyBlocksCorrectio
     EXPECT_EQ(reactivated.composed_target, preserved);
 }
 
+TEST(EndpointTrimContinuityTest,
+     TaskHandoffCannotClearStickyFaultButExplicitGuiHandoffCan)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    EndpointTrimContinuity trim(config);
+
+    trim.activate(joints(), joints(), 0.0);
+    const EndpointTrimDecision correction = trim.request_correction(
+        joints(-config.max_step_rad), all_stable_joints(), 1.0, 0.1
+    );
+    const std::vector<double> preserved = correction.composed_target;
+    const EndpointTrimDecision timed_out = trim.update(
+        0.1 + config.response_deadline_sec
+    );
+    ASSERT_EQ(timed_out.phase, EndpointTrimPhase::FAULT);
+
+    const EndpointTrimDecision task_handoff = trim.task_controller_handoff(
+        joints(0.5), 0.2 + config.response_deadline_sec
+    );
+    EXPECT_EQ(task_handoff.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(task_handoff.code, "ENDPOINT_TRIM_RESPONSE_TIMEOUT");
+    EXPECT_FALSE(task_handoff.command_changed);
+    EXPECT_EQ(task_handoff.applied_step, joints());
+    EXPECT_EQ(task_handoff.composed_target, preserved);
+
+    const std::vector<double> gui_target =
+        joints(0.1, 0.2, 0.3, 0.4, 0.5, 0.6);
+    const EndpointTrimDecision gui_handoff = trim.explicit_gui_handoff(
+        gui_target, 0.3 + config.response_deadline_sec
+    );
+    EXPECT_EQ(gui_handoff.phase, EndpointTrimPhase::IDLE);
+    EXPECT_TRUE(gui_handoff.command_changed);
+    EXPECT_TRUE(gui_handoff.code.empty());
+    EXPECT_EQ(gui_handoff.reference, gui_target);
+    EXPECT_EQ(gui_handoff.offsets, joints());
+    EXPECT_EQ(gui_handoff.composed_target, gui_target);
+}
+
+TEST(EndpointTrimContinuityTest, MalformedTaskHandoffFailsClosed)
+{
+    EndpointTrimContinuity trim(endpoint_trim_config());
+    trim.explicit_gui_handoff(joints(0.2), 0.0);
+    const EndpointTrimDecision malformed = trim.task_controller_handoff(
+        std::vector<double>{0.1}, 0.1
+    );
+
+    EXPECT_EQ(malformed.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(malformed.code, "ENDPOINT_TRIM_CONTINUITY_VIOLATION");
+    EXPECT_FALSE(malformed.command_changed);
+}
+
 TEST(EndpointTrimContinuityTest, ActivateCannotBypassOutstandingResponseOrRelease)
 {
     EndpointTrimConfig config = endpoint_trim_config();
@@ -668,9 +782,7 @@ TEST(EndpointTrimContinuityTest, SettledFeedbackIsNotFreshForLaterRelease)
     const EndpointTrimDecision correction = trim.request_correction(
         baseline, all_stable_joints(), 1.0, 0.1
     );
-    const std::vector<double> settled = joints(
-        config.max_step_rad - 0.5 * config.settle_error_rad
-    );
+    const std::vector<double> settled = joints();
     trim.note_feedback(settled, 0.2, 0.2);
     ASSERT_EQ(
         trim.note_feedback(
@@ -978,9 +1090,9 @@ TEST(EndpointTrimOwnershipTransitionTest,
     EXPECT_FALSE(pending.release_completed);
     EXPECT_EQ(pending.composed_target, preserved);
 
-    trim.note_feedback(correction.composed_target, 0.2, 0.2);
+    trim.note_feedback(joints(), 0.2, 0.2);
     const EndpointTrimDecision settled = trim.note_feedback(
-        correction.composed_target,
+        joints(),
         0.2 + config.stable_sec,
         0.2 + config.stable_sec
     );

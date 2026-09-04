@@ -21,6 +21,10 @@ DRIVER_HEADER = (
     ROOT / 'real-arm' / 'alicia_d_driver' / 'include'
     / 'alicia_d_driver' / 'alicia_d_driver_node.hpp'
 )
+ENDPOINT_TRIM_ADMISSION = (
+    ROOT / 'real-arm' / 'alicia_d_driver' / 'include'
+    / 'alicia_d_driver' / 'endpoint_trim_driver_admission.hpp'
+)
 
 
 class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
@@ -375,29 +379,47 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
         )
         self.assertNotIn('endpoint_feedback_trim_offsets_', expiry)
 
-    def test_gui_direct_command_is_single_joint_and_clears_task_trim(self):
+    def test_committed_gui_sources_handoff_and_holdoff_are_self_contained(self):
         source = DRIVER_SOURCE.read_text()
-        header = DRIVER_HEADER.read_text()
+        admission = ENDPOINT_TRIM_ADMISSION.read_text()
         callback = source.split(
             'void AliciaDDriverNode::joint_command_callback', 1
         )[1].split('void AliciaDDriverNode::send_command_timer_callback', 1)[0]
 
         self.assertIn('msg->header.frame_id == "gui_direct"', callback)
-        self.assertIn('msg->effort.size() != msg->name.size()', callback)
-        self.assertIn('marked_count != 1', callback)
-        self.assertIn('gui_direct_gesture_timeout_sec_', header)
-        self.assertIn('gui_direct_edited_index_', header)
+        self.assertIn('msg->header.frame_id == "gui_direct_sync"', callback)
         self.assertIn('EndpointTrimCommandSource::GUI_DIRECT_EDIT', callback)
         self.assertIn('EndpointTrimCommandSource::GUI_DIRECT_SYNC', callback)
         self.assertIn('EndpointTrimCommandSource::TASK_CONTROLLER', callback)
+        self.assertIn(
+            'endpoint_trim_command_source !=\n'
+            '            EndpointTrimCommandSource::TASK_CONTROLLER',
+            callback,
+        )
         observe = callback.index(
             'endpoint_trim_command_order_.observe_upstream_command('
         )
+        gui_branch = callback.index('if (endpoint_trim_explicit_gui_command)')
         handoff = callback.index('endpoint_trim_continuity_.explicit_gui_handoff(')
         applied = callback.index('endpoint_trim_command_order_.mark_command_applied();')
         self.assertLess(observe, handoff)
+        self.assertLess(gui_branch, handoff)
         self.assertLess(handoff, applied)
         self.assertIn('endpoint_feedback_trim_task_lease_active_ = false;', callback)
+
+        self.assertIn('double gui_task_holdoff_sec = 0.25', admission)
+        self.assertIn('now_sec <= gui_task_holdoff_until_sec_', admission)
+        sync_branch = admission.index(
+            'source == EndpointTrimCommandSource::GUI_DIRECT_SYNC'
+        )
+        edit_branch = admission.index(
+            'source == EndpointTrimCommandSource::GUI_DIRECT_EDIT',
+            sync_branch,
+        )
+        self.assertIn(
+            'gui_task_holdoff_active_ = false;',
+            admission[sync_branch:edit_branch],
+        )
 
 
 if __name__ == '__main__':

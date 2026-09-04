@@ -141,3 +141,44 @@ decision that was just produced rather than stale state.
 | `source devel/setup.bash && python3 -m unittest src.alicia_flexible_grasp_supervisor.tests.test_moveit_trajectory_execution_config -q` | 0 | `14/14` passed, including both release-order assertions. |
 | `source devel/setup.bash && python3 -m unittest src.alicia_flexible_grasp_supervisor.tests.test_serial_driver_resilience -q` | 0 | `27/27` passed. |
 | `git diff --check` | 0 | No whitespace errors. |
+
+## Final-review corrective verification — reference settle and sticky fault
+
+The response settle goal is now the immutable upstream/reference target, not
+the over-commanded `reference + offsets` SDK target. The controller continues
+to compute `error = reference - measured` and preserves the composed target
+across response and release transitions. A regression starts at `-4q`, admits
+one `+4q` correction, observes fresh directional feedback at the zero
+reference for the stable interval, and proves the next correction is a zero
+step with no target reversal. A static-bias regression observes directional
+movement that stays outside the reference settle band and proves it reaches a
+bounded timeout `FAULT` without a reverse or additional increment.
+
+Timeout `FAULT` is sticky across task-controller handoff. A valid task target
+cannot change the preserved target or phase; malformed task input still fails
+closed. Only an explicit GUI handoff clears trim fault/history and installs its
+exact target in `IDLE`. Every unchanged decision now reports a zero
+`applied_step`, while the release-generation tests continue to prove terminal
+release delivery is exact-once.
+
+The committed MoveIt source contract no longer depends on the operator-owned,
+unstaged GUI gesture/one-hot fields. It checks only committed GUI source
+classification, accepted-boundary explicit handoff ordering, task-lease
+clearance, and the arbiter's inclusive `0.25 s` edit holdoff plus explicit sync
+release.
+
+| Environment and command | Exit | Result |
+| --- | ---: | --- |
+| current integrated worktree: `catkin_make -DCATKIN_ENABLE_TESTING=ON -j2` | 0 | Configure/build succeeded without starting a ROS node or hardware process. |
+| current integrated worktree: focused driver gtest | 0 | `50/50` passed: `11` actuation, `2` operator-owned GUI hold, `20` endpoint continuity, `5` admission, `5` ownership transition, `7` orchestration. |
+| clean `git archive` snapshot of `c546417`: focused driver gtest | 0 | `48/48` passed; the two unrelated unstaged GUI-hold tests are absent. |
+| clean snapshot: MoveIt source contracts | 0 | `14/14` passed. |
+| clean snapshot: serial contracts | 0 | `25/25` passed. |
+| current integrated worktree: serial contracts | 0 | `27/27` passed, including two operator-owned unstaged cases. |
+| clean snapshot: full supervisor discovery | 1 | `701` ran in `2.099 s`; the only two errors are sandbox-denied `127.0.0.1` mock-server binds. |
+| current integrated worktree: full supervisor discovery | 1 | `725` ran in `2.265 s`; again only the same two sandbox bind errors remain. |
+| `git diff --check` | 0 | No whitespace errors. |
+
+Neither full discovery is claimed green: both remaining errors are separated
+environmental sandbox restrictions. All corrective work and verification was
+offline-only. The powered deployment gate in this document is unchanged.
