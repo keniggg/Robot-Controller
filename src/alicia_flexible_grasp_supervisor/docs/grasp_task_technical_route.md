@@ -922,3 +922,39 @@ GUI/手动命令的全局端点微调始终关闭，租约另有 `120 s` 自动�
   真实移动并稳定在约 `+2.29 deg`，而不是只有 GUI 目标变化。至此“6D 抓取失败后
   GUI 滑条看似发送但实体不动”的软件侧永久门控和恢复流程已取得实机证据；后续
   可继续用 GUI 对准目标，但仍需重新生成新鲜 6D 候选，不能复用失败前计划。
+
+### 2026-09-03（端点微调连续性：仅离线证据和上电门禁）
+
+- 本次只完成离线编译与回归；WSL、ROS master/节点、串口、相机、控制器和机械臂
+  均保持关闭。没有启动、重启或热加载驱动，也没有发布或调用任何 ROS
+  topic/service，更没有执行抓取。
+- 驱动的有效端点微调量子为 `q = 2*pi/4096 rad`（约 `0.001533981 rad`）；默认
+  单次上限为 `4q`（约 `0.006135923 rad`），方向响应至少 `2q`（约
+  `0.003067962 rad`），响应截止为 `1.0 s`。干净已提交的端点仲裁器还拥有
+  GUI 编辑到任务控制器的 `0.25 s` holdoff/sync 边界；更广范围的集成 GUI guard
+  可以更严格，但绝不能绕过这个边界。
+- 连续性状态机为：
+
+  ```text
+  IDLE --activate--> ACTIVE_READY --bounded correction--> WAITING_RESPONSE
+    ^                    ^              | settled + stable     | release
+    | GUI handoff        |              +----------------------+--> PENDING_RELEASE
+    +--------------------+                         | settled / deadline
+                                             QUIESCENT <----------+
+  WAITING_RESPONSE --deadline without release--> FAULT
+  ```
+
+  `ACTIVE_READY` 的 release 可直接完成到 `QUIESCENT`；显式 GUI handoff 在任一
+  任务状态原子安装 GUI target 并回到 `IDLE`。release 终态审计码只能是
+  `ENDPOINT_TRIM_RELEASE_SETTLED`、`ENDPOINT_TRIM_RESPONSE_TIMEOUT` 或
+  `ENDPOINT_TRIM_CONTINUITY_VIOLATION`，因此不会把 pending、旧反馈或超时误记为
+  已重新绑定。
+- 历史回归输入保留为六关节参考上的 Joint2 首次 `+1.3 deg` 修正、尚在等待响应时
+  会达到 `+2.3 deg` 的第二次请求，以及 `0.37 s` 后的 lease release；第二次请求
+  必须被串行化，release 必须为 pending，composed target 不得跳变或反向。现场旧日志
+  中还有 `0.015748 -> 0.009476 rad` 的连续微调以及 `0.46 s` ROS 时间倒跳/陈旧反馈
+  事实；它们是回归输入，不是新的上电结论。
+- 上电验收仍被明确阻断：不得在 motion command 活跃时 restart/hot-load 实机驱动，
+  不得仅凭此计划启动新的真实抓取。只有 class-agnostic precontact-geometry 计划
+  也离线通过（green），并且操作者随后重新对准目标后，才可讨论一次全新的受控上电
+  验收。

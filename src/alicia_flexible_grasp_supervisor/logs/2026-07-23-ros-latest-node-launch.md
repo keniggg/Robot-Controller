@@ -16534,3 +16534,53 @@ Implemented and verified offline:
   already stopped afterward. The gripper was not opened, and no `/grasp/stop`,
   arm stop, disable, `/demonstration=true`, torque-off, controller-stop, or
   emergency command was sent.
+
+### 2026-09-03 - endpoint-trim continuity evidence; powered deployment remains gated
+
+- This entry is offline-only. WSL and every hardware interface were shut down;
+  no ROS master/node, real driver, serial port, camera, controller, or robot
+  process was started. No topic/service was published/called and no powered
+  deployment, driver restart/hot-load, or grasp occurred.
+- The independent endpoint arbiter's effective contract is one SDK quantum
+  `q=2*pi/4096 rad` (`~0.001533981 rad`), default maximum correction step
+  `4q` (`~0.006135923 rad`), directional response minimum `2q`
+  (`~0.003067962 rad`), and response deadline `1.0 s`. Its committed
+  GUI-edit/task-controller arbitration boundary is a `0.25 s` holdoff; an
+  integrated broader GUI guard may be stricter but must never bypass that
+  arbiter holdoff/sync boundary.
+- The audited transition diagram is:
+
+  ```text
+  IDLE --activate--> ACTIVE_READY --correction--> WAITING_RESPONSE
+    ^                    ^              | settled + stable       | release
+    | GUI handoff        +--------------+                         v
+    +------------------------------------------------------ PENDING_RELEASE
+  ACTIVE_READY --release--> QUIESCENT; PENDING_RELEASE --settle/deadline--> QUIESCENT
+  WAITING_RESPONSE --deadline without release--> FAULT
+  ```
+
+  GUI handoff atomically installs the GUI target and returns to `IDLE`.
+  Terminal release reporting is limited to
+  `ENDPOINT_TRIM_RELEASE_SETTLED`, `ENDPOINT_TRIM_RESPONSE_TIMEOUT`, and
+  `ENDPOINT_TRIM_CONTINUITY_VIOLATION`.
+- The log-derived regression uses a six-joint reference, a Joint2 `+1.3 deg`
+  first correction, a blocked second request that would reach `+2.3 deg`, and
+  a lease release `0.37 s` later. It asserts serialized response ownership,
+  pending release, and no composed-target reversal. Historical observations
+  of `0.015748 -> 0.009476 rad` correction and a `0.46 s` ROS-time jump remain
+  diagnostic inputs only; they do not authorize powered operation.
+- Offline evidence: `catkin_make -DCATKIN_ENABLE_TESTING=ON -j2` succeeded;
+  the actuation-confirmation target passed `46/46` (including all 16 endpoint
+  continuity, 5 admission, 5 ownership-transition, and 7 orchestration
+  tests); and serial-driver resilience passed `27/27`. Complete supervisor
+  discovery is not green in this dirty worktree: `725` tests ran with
+  `2` failures and `3` errors. Two errors are sandbox-denied localhost mock
+  server binds; the remaining failures/error are legacy source-text checks in
+  `test_moveit_trajectory_execution_config` that predate the coordinator
+  refactor. They do not invalidate the focused endpoint result, but no full
+  suite-green claim is made.
+- Deployment gate: do not restart or hot-load a real driver while a motion
+  command is active, and do not start a real grasp from endpoint continuity
+  evidence alone. A new powered acceptance may be considered only after the
+  class-agnostic precontact-geometry plan is green and the operator later
+  realigns the target; it must then use a fresh plan.
