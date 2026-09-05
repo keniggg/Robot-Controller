@@ -1,5 +1,48 @@
 # Endpoint trim continuity verification — 2026-09-03
 
+## Current accepted result — 2026-09-04
+
+Behavior commit: `349255c1c41fd779cf39a4727ef0862c7019cfd0`.
+Final independent review found no remaining Critical/Important issue in the
+endpoint scope. The definitive response goal is the immutable
+`measured_baseline + actual_applied_step`, using saturating arithmetic.
+The applied step includes both the per-step and accumulated-offset limits.
+The SDK target remains `reference + offsets`; the next increment is admitted
+only after fresh directional feedback has settled around the incremental goal.
+
+The deployed-parameter regression uses `4q` maximum step, `2q` response minimum,
+`2q` settle band, `0.30 s` stability, and `1.0 s` response deadline. A synthetic
+fixed `1.3 deg` command-to-feedback bias converges in four positive increments:
+`0.3515625`, `0.3515625`, `0.3515625`, and `0.2453125 deg`.
+Each step waits through the stability interval; at convergence the next step
+is zero and the SDK target is preserved. This is an ideal fixed-bias unit-test
+model, not a measurement of hardware dynamics, speed, or grasp success.
+
+Exact commit `349255c` was extracted with `git archive` into
+`/tmp/endpoint-349255c-26oNVG`. The archive's C++ source was compiled against its
+own headers with C++14 and the installed GoogleTest sources. Python ran from
+the archive with ROS Noetic and the workspace's generated message environment.
+
+| Verification | Result |
+| --- | --- |
+| Clean behavior-commit C++ tests | `47/47`, exit `0` |
+| Clean MoveIt/source and serial contracts | `14 + 25 = 39/39`, exit `0` |
+| Clean full Python discovery | `701/701`, exit `0` (`2.165 s`) |
+| Integrated build and C++ tests | build exit `0`; `49/49`, exit `0` |
+| Integrated full Python discovery | `725/725`, exit `0` (`2.198 s`) |
+
+The first sandboxed clean discovery had exactly two socket-permission errors.
+It was then rerun with approved localhost socket access: both mock HTTP tests
+and the complete discovery passed. The integrated discovery also used that
+approval. Only local test servers were started; ROS and hardware interfaces
+were not started or called. Test log messages about motion/enable paths are
+outputs of mocked cases, not actions on the robot.
+
+Earlier sections below retain the investigation history and historical counts.
+They are superseded by this result where they describe response-goal behavior
+or incomplete full-suite verification. In particular, the intermediate sibling
+`c546417` is not the evidence identifier for the accepted behavior.
+
 ## Scope and safety status
 
 This is offline-only evidence. WSL and all hardware interfaces were shut down.
@@ -88,7 +131,7 @@ deployment. Keep all hardware interfaces down until the class-agnostic
 precontact-geometry plan is green and the operator has subsequently realigned
 the target; then require a fresh plan and a separately authorized acceptance.
 
-## Corrective verification — deployed response threshold
+## Historical corrective verification — deployed response threshold
 
 The original continuity test constructed a bare `EndpointTrimConfig`, whose
 header default `response_min_rad` is `q`. The node's deployed parameter wiring
@@ -142,17 +185,15 @@ decision that was just produced rather than stale state.
 | `source devel/setup.bash && python3 -m unittest src.alicia_flexible_grasp_supervisor.tests.test_serial_driver_resilience -q` | 0 | `27/27` passed. |
 | `git diff --check` | 0 | No whitespace errors. |
 
-## Final-review corrective verification — reference settle and sticky fault
+## Historical final-review attempt — reference settle and sticky fault
 
-The response settle goal is now the immutable upstream/reference target, not
-the over-commanded `reference + offsets` SDK target. The controller continues
-to compute `error = reference - measured` and preserves the composed target
-across response and release transitions. A regression starts at `-4q`, admits
-one `+4q` correction, observes fresh directional feedback at the zero
-reference for the stable interval, and proves the next correction is a zero
-step with no target reversal. A static-bias regression observes directional
-movement that stays outside the reference settle band and proves it reaches a
-bounded timeout `FAULT` without a reverse or additional increment.
+The intermediate `7d43529` attempt used the full upstream reference as the
+response goal. Review rejected that goal because a correct first `4q` response
+cannot reach the reference when the initial error is `1.3 deg`. Its two
+single-response tests were replaced by the deployed multi-increment regression
+in `349255c`; the accepted goal is `measured_baseline + actual_applied_step`.
+The following counts are historical and do not establish acceptance of that
+intermediate control law.
 
 Timeout `FAULT` is sticky across task-controller handoff. A valid task target
 cannot change the preserved target or phase; malformed task input still fails

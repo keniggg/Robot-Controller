@@ -16584,3 +16584,20 @@ Implemented and verified offline:
   evidence alone. A new powered acceptance may be considered only after the
   class-agnostic precontact-geometry plan is green and the operator later
   realigns the target; it must then use a fresh plan.
+
+## 2026-09-04 endpoint offline final verification
+
+- Accepted behavior commit: `349255c1c41fd779cf39a4727ef0862c7019cfd0`.
+  Independent review clean. Each response goal is the measured baseline plus
+  the actual bounded increment. The deployed 1.3-degree fixed-bias fixture
+  converges through four positive increments and then emits a zero next step.
+- Exact clean archive: C++ `47/47`, source contracts `39/39`, full Python
+  `701/701`. Integrated worktree: build passed, C++ `49/49`, Python `725/725`.
+  The two historical localhost socket errors passed after approved local mock
+  server access; no test expectation was relaxed to hide them.
+- All work remained offline. No WSL, ROS node, hardware interface, or real
+  motion/enable/disable command was invoked. Simulated fixed-bias convergence
+  is not evidence of real-arm speed, shake elimination, or a completed grasp.
+- Continuing the approved class-agnostic precontact plan, starting with opaque
+  target identity and plan-integrity fields. Known carton segmentation remains
+  a mask source only; downstream execution must remain class independent.
