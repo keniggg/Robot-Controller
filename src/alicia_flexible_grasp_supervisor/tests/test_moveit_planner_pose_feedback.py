@@ -43,6 +43,7 @@ class FakeManipulator:
         current_pose=None,
         execute_result=True,
         cartesian_result=None,
+        current_joint_values=None,
     ):
         self.go_results = list(go_result) if isinstance(go_result, (list, tuple)) else [go_result]
         if isinstance(plan_result, (list, tuple)):
@@ -52,6 +53,7 @@ class FakeManipulator:
         self.current_pose = current_pose
         self.execute_result = execute_result
         self.cartesian_result = cartesian_result
+        self.current_joint_values = current_joint_values
         self.target = None
         self.pose_targets = []
         self.position_targets = []
@@ -102,6 +104,11 @@ class FakeManipulator:
     def get_current_pose(self):
         return self.current_pose
 
+    def get_current_joint_values(self):
+        if self.current_joint_values is None:
+            raise RuntimeError('joint feedback unavailable')
+        return list(self.current_joint_values)
+
     def get_planning_time(self):
         return self.planning_time
 
@@ -135,6 +142,7 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         planner.strict_pose_planning_time = 0.25
         planner.cached_plan_position_tolerance_m = 0.002
         planner.cached_plan_orientation_tolerance_rad = 0.02
+        planner.execution_goal_tolerance_rad = 0.03
         planner.cartesian_eef_step_m = 0.003
         planner.cartesian_jump_threshold = 0.0
         planner.cartesian_min_fraction = 0.98
@@ -201,6 +209,52 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertEqual(manipulator.executed_plans, [planned])
         self.assertEqual(manipulator.plan_calls, 1)
         self.assertEqual(manipulator.go_calls, 0)
+        self.assertIsNone(planner._last_pose_plan)
+
+    def test_failed_cached_execute_succeeds_when_joint_feedback_reached_hardware_tolerance(self):
+        planned = JointPlan([[0.0, 0.0], [0.10, 0.20]])
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=False,
+            current_joint_values=[0.099, 0.226],
+        )
+        planner = self.make_planner(manipulator)
+        target = make_pose(q=(0.0, 0.7071, 0.0, 0.7071))
+
+        plan_ok, plan_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(target)
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertTrue(execute_ok, execute_message)
+        self.assertIn('within hardware goal tolerance', execute_message)
+        self.assertEqual(manipulator.executed_plans, [planned])
+        self.assertIsNone(planner._last_pose_plan)
+
+    def test_failed_cached_execute_stays_failed_when_joint_feedback_misses_hardware_tolerance(self):
+        planned = JointPlan([[0.0, 0.0], [0.10, 0.20]])
+        manipulator = FakeManipulator(
+            plan_result=planned,
+            execute_result=False,
+            current_joint_values=[0.099, 0.231],
+        )
+        planner = self.make_planner(manipulator)
+        target = make_pose(q=(0.0, 0.7071, 0.0, 0.7071))
+
+        plan_ok, plan_message = planner.move_to_pose(
+            target,
+            execute=False,
+            allow_fallbacks=False,
+        )
+        execute_ok, execute_message = planner.execute_cached_strict_pose(target)
+
+        self.assertTrue(plan_ok, plan_message)
+        self.assertFalse(execute_ok)
+        self.assertIn('execute failed from cached plan', execute_message)
+        self.assertEqual(manipulator.executed_plans, [planned])
         self.assertIsNone(planner._last_pose_plan)
 
     def test_cached_only_strict_execute_reports_missing_cache_without_planning(self):

@@ -34,6 +34,11 @@ class MoveItPlanner:
             '/robot/cached_plan_orientation_tolerance_rad',
             0.02,
         )
+        self.execution_goal_tolerance_rad = self._float_param(
+            '~execution_goal_tolerance_rad',
+            '/robot/execution_goal_tolerance_rad',
+            0.03,
+        )
         self.cartesian_eef_step_m = self._float_param(
             '~cartesian_eef_step_m', '/robot/cartesian_eef_step_m', 0.003
         )
@@ -388,6 +393,14 @@ class MoveItPlanner:
             self.manipulator.stop()
             if ok:
                 return True, 'executed cached plan (%s): %s' % (cached.get('kind', 'target'), target_text)
+            settled, settled_message = self._cached_plan_goal_reached_with_hardware_tolerance(
+                cached['plan']
+            )
+            if settled:
+                return True, (
+                    'executed cached plan (%s): %s; controller reported failure but %s'
+                    % (cached.get('kind', 'target'), target_text, settled_message)
+                )
             return False, (
                 'execute failed from cached plan (%s): %s; check trajectory controllers, hardware state, and heat protection'
             ) % (cached.get('kind', 'target'), target_text)
@@ -524,6 +537,47 @@ class MoveItPlanner:
         size = min(len(positions[0]), len(positions[-1]))
         max_delta = max(abs(float(positions[-1][i]) - float(positions[0][i])) for i in range(size))
         return {'path_cost': float(path_cost), 'max_delta': float(max_delta)}
+
+    def _cached_plan_goal_reached_with_hardware_tolerance(self, plan):
+        tolerance = max(
+            0.0,
+            float(getattr(self, 'execution_goal_tolerance_rad', 0.03)),
+        )
+        if tolerance <= 0.0:
+            return False, ''
+        trajectory = getattr(plan, 'joint_trajectory', None)
+        points = list(getattr(trajectory, 'points', []) or [])
+        if not points:
+            return False, ''
+        goal_positions = list(getattr(points[-1], 'positions', []) or [])
+        if not goal_positions:
+            return False, ''
+        if not hasattr(self.manipulator, 'get_current_joint_values'):
+            return False, ''
+        try:
+            current_positions = list(self.manipulator.get_current_joint_values() or [])
+        except Exception:
+            return False, ''
+        size = min(len(goal_positions), len(current_positions))
+        if size <= 0:
+            return False, ''
+        errors = [
+            abs(float(current_positions[index]) - float(goal_positions[index]))
+            for index in range(size)
+        ]
+        if not all(math.isfinite(value) for value in errors):
+            return False, ''
+        max_error = max(errors)
+        if max_error <= tolerance:
+            return True, (
+                'joint feedback is within hardware goal tolerance '
+                'max_error=%.6frad <= %.6frad'
+                % (max_error, tolerance)
+            )
+        return False, (
+            'joint feedback max_error=%.6frad > %.6frad'
+            % (max_error, tolerance)
+        )
 
     @staticmethod
     def _pose_position_distance(first, second):
