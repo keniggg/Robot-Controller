@@ -143,6 +143,7 @@ class SafetyGateInput:
     request_id: object = None
     snapshot_stamp_sec: object = None
     target_epoch: object = None
+    target_track_id: object = None
     target_label: object = None
     model_choice: object = None
     track_id: object = None
@@ -237,10 +238,9 @@ def mandatory_safety_gate(gate):
         )
     if (
         not _valid_integer(gate.target_epoch)
-        or not isinstance(gate.target_label, str)
-        or not gate.target_label
-        or not isinstance(gate.model_choice, str)
-        or not gate.model_choice
+        or not isinstance(gate.target_track_id, str)
+        or not gate.target_track_id
+        or gate.target_track_id != gate.target_track_id.strip()
         or not _valid_integer(gate.track_id)
         or not _valid_integer(gate.variant_index)
     ):
@@ -856,8 +856,7 @@ def _safety_binding_gate(candidate):
     evidence_width = _finite_float(safety.required_open_width_m)
     identity_matches = (
         safety.target_epoch == stable.target_epoch
-        and safety.target_label == stable.target_label
-        and safety.model_choice == stable.model_choice
+        and safety.target_track_id == stable.target_track_id
         and safety.track_id == stable.track_id
         and safety.variant_index == candidate.variant_index
     )

@@ -8,12 +8,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # --- Find Dependencies ---
 # Find all required ROS packages.
 find_package(catkin REQUIRED COMPONENTS
+  rospy
   roscpp
   std_msgs
   std_srvs
   sensor_msgs
   hardware_interface
   controller_manager
+  controller_manager_msgs
   serial  # <-- ADD THIS to find the ros-serial package
 )
 
@@ -28,7 +30,7 @@ catkin_package(
   INCLUDE_DIRS include
 #   LIBRARIES bessica_d_hw_interface # Export the library for other packages to use
   # DEPENDS is no longer needed here as catkin handles dependencies from find_package
-  CATKIN_DEPENDS roscpp std_msgs std_srvs sensor_msgs hardware_interface controller_manager serial
+  CATKIN_DEPENDS rospy roscpp std_msgs std_srvs sensor_msgs hardware_interface controller_manager controller_manager_msgs serial
 )
 
 # --- Include Directories ---
@@ -80,6 +82,11 @@ endif()
 
 # --- Installation Rules ---
 # This section remains correct.
+catkin_install_python(PROGRAMS
+  scripts/controller_loader_once.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 install(TARGETS
   alicia_d_driver_node
   alicia_d_hw_interface_node

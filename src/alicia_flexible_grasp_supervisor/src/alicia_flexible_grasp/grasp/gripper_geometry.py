@@ -1,8 +1,11 @@
 from dataclasses import dataclass, replace
 import math
+from numbers import Integral
 
 import numpy as np
 from tf.transformations import quaternion_from_matrix, quaternion_matrix
+
+from alicia_flexible_grasp.vision.multiview_surface import FusedTargetSurface
 
 
 ANALYTICAL_GRIPPER_MODEL_NAME = 'Alicia_D_v5_6_gripper_50mm'
@@ -95,6 +98,7 @@ _CONSERVATIVE_ENVELOPE_FLOAT_EPSILON_M = 1.0e-9
 _CENTER_TOLERANCE_M = 0.003
 _GATE_COUNT = 6
 _INTERPOLATION_SAMPLES = 11
+_MEASURED_SURFACE_TRIM_FRACTION = 0.05
 
 
 class AnalyticalGripperContractError(ValueError):
@@ -156,6 +160,280 @@ class GripperGeometry:
         object.__setattr__(self, 'support_clearance_m', support_clearance)
         object.__setattr__(self, 'finger_size_xyz_m', finger)
         object.__setattr__(self, 'palm_size_xyz_m', palm)
+
+
+@dataclass(frozen=True)
+class BilateralSurfaceEvidence:
+    ok: bool
+    code: str
+    negative_jaw_points: int
+    positive_jaw_points: int
+    negative_view_count: int
+    positive_view_count: int
+    measured_width_m: float
+    contact_height_m: float
+
+
+def _linear_quantiles(values, fractions):
+    """Linear order statistics using operations available in NumPy 1.17.
+
+    Weighted endpoints avoid overflowing the difference of finite extremes.
+    No version-specific quantile keyword or warning suppression is needed.
+    """
+
+    ordered = np.sort(np.asarray(values, dtype=float).reshape(-1))
+    ranks = np.asarray(fractions, dtype=float) * (len(ordered) - 1)
+    lower = np.floor(ranks).astype(np.int64)
+    upper = np.ceil(ranks).astype(np.int64)
+    weight = ranks - lower
+    return (1.0 - weight) * ordered[lower] + weight * ordered[upper]
+
+
+def _bilateral_surface_measurement(
+    fused_surface,
+    contact_center_base,
+    jaw_axis_base,
+    insertion_axis_base,
+    finger_geometry,
+    minimum_points_per_side,
+    support_normal_base=None,
+):
+    if not isinstance(fused_surface, FusedTargetSurface):
+        raise ValueError('fused_surface must be a FusedTargetSurface')
+    center = _readonly_vector(contact_center_base, 'contact_center_base')
+    jaw = _readonly_vector(jaw_axis_base, 'jaw_axis_base')
+    insertion = _readonly_vector(
+        insertion_axis_base, 'insertion_axis_base'
+    )
+    if not math.isclose(
+        float(np.linalg.norm(jaw)), 1.0, rel_tol=0.0, abs_tol=1e-6
+    ):
+        raise ValueError('jaw_axis_base must be a unit vector')
+    if not math.isclose(
+        float(np.linalg.norm(insertion)), 1.0, rel_tol=0.0, abs_tol=1e-6
+    ):
+        raise ValueError('insertion_axis_base must be a unit vector')
+    if abs(float(np.dot(jaw, insertion))) > 1e-6:
+        raise ValueError('jaw and insertion axes must be orthogonal')
+    if not isinstance(finger_geometry, GripperGeometry):
+        raise ValueError('finger_geometry must be a GripperGeometry')
+    if (
+        isinstance(minimum_points_per_side, (bool, np.bool_))
+        or not isinstance(minimum_points_per_side, Integral)
+        or int(minimum_points_per_side) <= 0
+    ):
+        raise ValueError('minimum_points_per_side must be a positive integer')
+    minimum = int(minimum_points_per_side)
+    # Samples/provenance alone cannot determine the measured support plane.
+    # A top face has apparent insertion-height extent when the tool is tilted.
+    try:
+        normal = _readonly_vector(support_normal_base, 'support_normal_base')
+        if not math.isclose(float(np.linalg.norm(normal)), 1.0,
+                            rel_tol=0.0, abs_tol=1e-6):
+            raise ValueError('support normal must be unit length')
+    except (TypeError, ValueError):
+        return None, None, None, None
+
+    # The fixed Alicia semantic mapping is tool Y = jaw, tool Z = insertion,
+    # and cross(Y, Z) = tool X.  The configured finger X/Z box dimensions are
+    # therefore the conservative physical contact footprint available through
+    # this interface; the exact mesh polygon additionally needs tool0 offset,
+    # which this measured-surface contract intentionally does not accept.
+    cross_axis = np.cross(jaw, insertion)
+    cross_axis /= float(np.linalg.norm(cross_axis))
+    delta = np.asarray(fused_surface.points_base, dtype=float) - center
+    jaw_projection = delta.dot(jaw)
+    insertion_projection = delta.dot(insertion)
+    cross_projection = delta.dot(cross_axis)
+    support_projection = delta.dot(normal)
+    half_cross = 0.5 * float(finger_geometry.finger_size_xyz_m[0])
+    half_insertion = 0.5 * float(finger_geometry.finger_size_xyz_m[2])
+    # Keep the measured jaw bands inside the actual opening travel.  Without
+    # this bound, a sufficiently dense cluster of arbitrary far-field points
+    # could move the robust quantile extremes outward and be misclassified as
+    # near-side support.  The contact center is the physical jaw midpoint.
+    physical_gap = min(
+        float(finger_geometry.max_inner_gap_m),
+        ANALYTICAL_MAX_INNER_GAP_M,
+    )
+    half_physical_gap = 0.5 * physical_gap
+    footprint = (
+        (np.abs(cross_projection) <= half_cross)
+        & (np.abs(insertion_projection) <= half_insertion)
+        & (np.abs(jaw_projection) <= half_physical_gap + 1.0e-9)
+    )
+    footprint_indices = np.flatnonzero(footprint)
+    if len(footprint_indices) < 2:
+        return None, None, None, footprint
+
+    footprint_jaw = jaw_projection[footprint]
+    lower, upper = _linear_quantiles(
+        footprint_jaw,
+        (_MEASURED_SURFACE_TRIM_FRACTION,
+         1.0 - _MEASURED_SURFACE_TRIM_FRACTION),
+    )
+    lower = float(lower)
+    upper = float(upper)
+    width = upper - lower
+    if not math.isfinite(width) or width <= 1e-9:
+        return None, None, None, footprint
+
+    # A measured point can support one side only when it lies within the
+    # existing fixed jaw-clearance contract of that robust measured extreme.
+    # This threshold is hardware-derived and does not depend on target class.
+    side_depth = float(finger_geometry.jaw_clearance_each_side_m)
+    midpoint = 0.5 * lower + 0.5 * upper
+    negative_mask = (
+        footprint & (np.abs(jaw_projection - lower) <= side_depth)
+        & (jaw_projection < midpoint)
+    )
+    positive_mask = (
+        footprint & (np.abs(jaw_projection - upper) <= side_depth)
+        & (jaw_projection > midpoint)
+    )
+    negative_count = int(np.count_nonzero(negative_mask))
+    positive_count = int(np.count_nonzero(positive_mask))
+    negative_views = int(np.unique(
+        fused_surface.view_indices[negative_mask]
+    ).size)
+    positive_views = int(np.unique(
+        fused_surface.view_indices[positive_mask]
+    ).size)
+    counts = (
+        negative_count,
+        positive_count,
+        negative_views,
+        positive_views,
+        width,
+    )
+    if negative_count < minimum or positive_count < minimum:
+        return counts, None, None, (negative_mask, positive_mask)
+
+    # Require actual common support-normal extent before using insertion
+    # coordinates for physical CAD overlap. Top-plane samples cannot acquire
+    # a contact height simply by rotating the tool frame.
+    quantiles = (_MEASURED_SURFACE_TRIM_FRACTION,
+                 1.0 - _MEASURED_SURFACE_TRIM_FRACTION)
+    negative_support = _linear_quantiles(support_projection[negative_mask], quantiles)
+    positive_support = _linear_quantiles(support_projection[positive_mask], quantiles)
+    support_lower = max(float(negative_support[0]), float(positive_support[0]))
+    support_upper = min(float(negative_support[1]), float(positive_support[1]))
+    if support_upper - support_lower <= 1e-9:
+        return counts, None, None, (negative_mask, positive_mask)
+    common_support = ((support_projection >= support_lower)
+                      & (support_projection <= support_upper))
+    negative_mask &= common_support
+    positive_mask &= common_support
+    counts = (
+        int(np.count_nonzero(negative_mask)),
+        int(np.count_nonzero(positive_mask)),
+        int(np.unique(fused_surface.view_indices[negative_mask]).size),
+        int(np.unique(fused_surface.view_indices[positive_mask]).size),
+        width,
+    )
+    if counts[0] < minimum or counts[1] < minimum:
+        return counts, None, None, (negative_mask, positive_mask)
+
+    negative_heights = insertion_projection[negative_mask]
+    positive_heights = insertion_projection[positive_mask]
+    negative_bounds = _linear_quantiles(
+        negative_heights,
+        (_MEASURED_SURFACE_TRIM_FRACTION,
+         1.0 - _MEASURED_SURFACE_TRIM_FRACTION),
+    )
+    positive_bounds = _linear_quantiles(
+        positive_heights,
+        (_MEASURED_SURFACE_TRIM_FRACTION,
+         1.0 - _MEASURED_SURFACE_TRIM_FRACTION),
+    )
+    common_lower = max(float(negative_bounds[0]), float(positive_bounds[0]))
+    common_upper = min(float(negative_bounds[1]), float(positive_bounds[1]))
+    if (
+        not math.isfinite(common_lower)
+        or not math.isfinite(common_upper)
+        or common_upper <= common_lower
+    ):
+        return counts, None, None, (negative_mask, positive_mask)
+    return (
+        counts,
+        common_lower,
+        common_upper,
+        (negative_mask, positive_mask),
+    )
+
+
+def evaluate_bilateral_surface_evidence(
+    fused_surface,
+    contact_center_base,
+    jaw_axis_base,
+    insertion_axis_base,
+    finger_geometry,
+    minimum_points_per_side=12,
+    *,
+    support_normal_base=None,
+):
+    """Measure jaw bands; a bound unit support normal is required to pass.
+
+    Contact height is relative to the contact center along insertion, matching
+    the tool-Z CAD overlap contract. Support-normal extent is independently
+    required and filters which measured points may contribute to that height.
+    """
+    measurement = _bilateral_surface_measurement(
+        fused_surface,
+        contact_center_base,
+        jaw_axis_base,
+        insertion_axis_base,
+        finger_geometry,
+        minimum_points_per_side,
+        support_normal_base,
+    )
+    counts, lower, upper, _masks = measurement
+    if counts is None:
+        counts = (0, 0, 0, 0, 0.0)
+    negative, positive, negative_views, positive_views, width = counts
+    ok = lower is not None and upper is not None
+    return BilateralSurfaceEvidence(
+        ok=bool(ok),
+        code=(
+            'BILATERAL_SURFACE_EVIDENCE_OK'
+            if ok
+            else 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+        ),
+        negative_jaw_points=int(negative),
+        positive_jaw_points=int(positive),
+        negative_view_count=int(negative_views),
+        positive_view_count=int(positive_views),
+        measured_width_m=float(width),
+        contact_height_m=(
+            0.5 * (float(lower) + float(upper)) if ok else 0.0
+        ),
+    )
+
+
+def bilateral_surface_contact_bounds_m(
+    fused_surface,
+    contact_center_base,
+    jaw_axis_base,
+    insertion_axis_base,
+    finger_geometry,
+    minimum_points_per_side=12,
+    *,
+    support_normal_base=None,
+):
+    """Return the measured tool-Z interval, or None without support evidence."""
+
+    _counts, lower, upper, _masks = _bilateral_surface_measurement(
+        fused_surface,
+        contact_center_base,
+        jaw_axis_base,
+        insertion_axis_base,
+        finger_geometry,
+        minimum_points_per_side,
+        support_normal_base,
+    )
+    if lower is None or upper is None:
+        return None
+    return float(lower), float(upper)
 
 
 @dataclass(frozen=True)
@@ -343,7 +621,12 @@ def _opening_fit_clearance_each_side_m(value, gripper):
     return clearance
 
 
-def projected_cloud_width_m(points, jaw_axis, clearance_each_side_m):
+def projected_cloud_width_m(
+    points,
+    jaw_axis,
+    clearance_each_side_m,
+    trim_fraction=0.0,
+):
     """Return target-cloud span along a unit jaw axis plus jaw clearances."""
     cloud = np.asarray(points, dtype=float)
     if cloud.ndim != 2 or cloud.shape[1:] != (3,) or cloud.shape[0] == 0:
@@ -359,9 +642,16 @@ def projected_cloud_width_m(points, jaw_axis, clearance_each_side_m):
     )
     if clearance < 0.0:
         raise ValueError('clearance_each_side_m must be non-negative')
+    trim = _finite_number(trim_fraction, 'trim_fraction')
+    if not 0.0 <= trim <= 0.05:
+        raise ValueError('trim_fraction must be in [0, 0.05]')
     projection = cloud @ axis
+    if trim > 0.0:
+        lower, upper = np.quantile(projection, (trim, 1.0 - trim))
+    else:
+        lower, upper = np.min(projection), np.max(projection)
     return _finite_number(
-        float(np.max(projection) - np.min(projection)) + 2.0 * clearance,
+        float(upper - lower) + 2.0 * clearance,
         'projected cloud width',
     )
 
@@ -1117,6 +1407,7 @@ def _evaluate_physical_candidate(
     motion_cost=0.0,
     opening_fit_clearance_each_side_m=None,
     contact_height_bounds_m=None,
+    contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Run source-independent physical gates for an explicit tool0 pose."""
@@ -1168,10 +1459,26 @@ def _evaluate_physical_candidate(
             raise ValueError(
                 'minimum_contact_patch_overlap_m must be non-negative'
             )
-        contact_height_axis = contact_height_axis_base(
-            tool_rotation @ parse_tool_axis(tool_jaw_axis)[0],
-            support_normal,
-        )
+        jaw_for_height = tool_rotation @ parse_tool_axis(tool_jaw_axis)[0]
+        if contact_height_axis_base_override is None:
+            contact_height_axis = contact_height_axis_base(
+                jaw_for_height,
+                support_normal,
+            )
+        else:
+            contact_height_axis = _readonly_vector(
+                contact_height_axis_base_override,
+                'contact_height_axis_base_override',
+            )
+            if not math.isclose(
+                float(np.linalg.norm(contact_height_axis)),
+                1.0,
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            ) or abs(float(np.dot(contact_height_axis, jaw_for_height))) > 1e-6:
+                raise ValueError(
+                    'contact height axis must be unit and orthogonal to jaw'
+                )
         obb_height_center = float(
             np.dot(obb_center - center, contact_height_axis)
         )
@@ -1536,6 +1843,9 @@ def _evaluate_candidate_impl(
     opening_fit_clearance_each_side_m=None,
     target_points_base=None,
     contact_band_fraction=0.12,
+    bilateral_surface_evidence=None,
+    contact_height_bounds_m=None,
+    contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Validate the strict GraspNet source contract, then run physical gates."""
@@ -1594,13 +1904,35 @@ def _evaluate_candidate_impl(
         _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
         if jaw_index == finger_index:
             raise ValueError('jaw and finger length axes must be different')
-        required_width = required_open_width_m(
-            obb_size,
-            obb_rotation,
-            tool_rotation @ jaw_local,
-            fit_clearance,
-        )
-        if target_points_base is not None:
+        if bilateral_surface_evidence is not None:
+            if (
+                not isinstance(
+                    bilateral_surface_evidence, BilateralSurfaceEvidence
+                )
+                or not bilateral_surface_evidence.ok
+            ):
+                raise ValueError(
+                    'bilateral_surface_evidence must be successful measured evidence'
+                )
+            required_width = (
+                float(bilateral_surface_evidence.measured_width_m)
+                + 2.0 * fit_clearance
+            )
+            if contact_height_bounds_m is None:
+                raise ValueError(
+                    'measured bilateral evidence requires contact height bounds'
+                )
+            contact_height_bounds = tuple(
+                float(value) for value in contact_height_bounds_m
+            )
+        else:
+            required_width = required_open_width_m(
+                obb_size,
+                obb_rotation,
+                tool_rotation @ jaw_local,
+                fit_clearance,
+            )
+        if target_points_base is not None and bilateral_surface_evidence is None:
             contact_height_bounds = bilateral_contact_height_bounds_m(
                 target_points_base,
                 center,
@@ -1659,6 +1991,7 @@ def _evaluate_candidate_impl(
         motion_cost=motion_cost,
         opening_fit_clearance_each_side_m=fit_clearance,
         contact_height_bounds_m=contact_height_bounds,
+        contact_height_axis_base_override=contact_height_axis_base_override,
         minimum_contact_patch_overlap_m=minimum_contact_patch_overlap_m,
     )
 
@@ -1684,7 +2017,11 @@ def _evaluate_explicit_candidate_impl(
     tool_finger_length_axis='z',
     motion_cost=0.0,
     opening_fit_clearance_each_side_m=None,
+    width_projection_trim_fraction=0.0,
     contact_band_fraction=0.12,
+    contact_height_bounds_m=None,
+    bilateral_surface_evidence=None,
+    contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Validate an explicit target-cloud width, then run physical gates."""
@@ -1701,30 +2038,109 @@ def _evaluate_explicit_candidate_impl(
         _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
         if jaw_index == finger_index:
             raise ValueError('jaw and finger length axes must be different')
-        recomputed = projected_cloud_width_m(
-            target_points_base,
-            rotation @ jaw_local,
-            fit_clearance,
-        )
-        contact_height_bounds = bilateral_contact_height_bounds_m(
-            target_points_base,
-            candidate_center_base,
-            rotation @ jaw_local,
-            support_normal_base,
-            contact_band_fraction,
-        )
-        if contact_height_bounds is None:
-            return _failed_result(
-                'finger_reach',
-                'GRIPPER_CONTACT_PATCH_MISS',
-                'target cloud has no common bilateral contact height',
-                3,
-                recomputed,
-                0.0,
-                -1.0e6,
-                0.0,
-                motion_cost,
-                0.0,
+        if bilateral_surface_evidence is not None:
+            if (
+                not isinstance(
+                    bilateral_surface_evidence, BilateralSurfaceEvidence
+                )
+                or not bilateral_surface_evidence.ok
+            ):
+                raise ValueError(
+                    'bilateral_surface_evidence must be successful measured evidence'
+                )
+            recomputed = (
+                float(bilateral_surface_evidence.measured_width_m)
+                + 2.0 * fit_clearance
+            )
+            measured_contact_height_bounds = contact_height_bounds_m
+            if measured_contact_height_bounds is None:
+                raise ValueError(
+                    'measured bilateral evidence requires contact height bounds'
+                )
+            contact_height_bounds = tuple(
+                float(value) for value in measured_contact_height_bounds
+            )
+        else:
+            recomputed = projected_cloud_width_m(
+                target_points_base,
+                rotation @ jaw_local,
+                fit_clearance,
+                trim_fraction=width_projection_trim_fraction,
+            )
+            measured_contact_height_bounds = bilateral_contact_height_bounds_m(
+                target_points_base,
+                candidate_center_base,
+                rotation @ jaw_local,
+                support_normal_base,
+                contact_band_fraction,
+            )
+            if measured_contact_height_bounds is None:
+                return _failed_result(
+                    'finger_reach',
+                    'GRIPPER_CONTACT_PATCH_MISS',
+                    'target cloud has no common bilateral contact height',
+                    3,
+                    recomputed,
+                    0.0,
+                    -1.0e6,
+                    0.0,
+                    motion_cost,
+                    0.0,
+                )
+            contact_height_bounds = measured_contact_height_bounds
+        if (
+            contact_height_bounds_m is not None
+            and bilateral_surface_evidence is None
+        ):
+            supplied_bounds = np.asarray(
+                contact_height_bounds_m,
+                dtype=float,
+            ).reshape(-1)
+            if (
+                supplied_bounds.shape != (2,)
+                or not np.all(np.isfinite(supplied_bounds))
+                or supplied_bounds[1] < supplied_bounds[0]
+            ):
+                raise ValueError(
+                    'contact_height_bounds_m must be two ordered finite values'
+                )
+            height_axis = contact_height_axis_base(
+                rotation @ jaw_local,
+                support_normal_base,
+            )
+            obb_interval = _obb_line_interval(
+                np.asarray(candidate_center_base, dtype=float),
+                height_axis,
+                np.asarray(obb_center_base, dtype=float),
+                np.asarray(R_base_obb, dtype=float),
+                np.asarray(obb_size_xyz_m, dtype=float),
+            )
+            if obb_interval is None:
+                raise ValueError(
+                    'contact height override has no target OBB intersection'
+                )
+            tolerance = GRIPPER_CONTRACT_TOLERANCE_M
+            if (
+                float(supplied_bounds[0]) < float(obb_interval[0]) - tolerance
+                or float(supplied_bounds[1]) > float(obb_interval[1]) + tolerance
+            ):
+                raise ValueError(
+                    'contact height override exceeds the target OBB interval'
+                )
+            measured_overlap = min(
+                float(supplied_bounds[1]),
+                float(measured_contact_height_bounds[1]),
+            ) - max(
+                float(supplied_bounds[0]),
+                float(measured_contact_height_bounds[0]),
+            )
+            if measured_overlap < -1e-9:
+                raise ValueError(
+                    'contact height override is disjoint from measured bilateral support'
+                )
+            contact_height_bounds = (
+                float(supplied_bounds[0]),
+                float(supplied_bounds[1]),
             )
         supplied_width = _finite_number(
             required_open_width_m,
@@ -1783,6 +2199,7 @@ def _evaluate_explicit_candidate_impl(
         motion_cost=motion_cost,
         opening_fit_clearance_each_side_m=fit_clearance,
         contact_height_bounds_m=contact_height_bounds,
+        contact_height_axis_base_override=contact_height_axis_base_override,
         minimum_contact_patch_overlap_m=minimum_contact_patch_overlap_m,
     )
 
@@ -1810,6 +2227,9 @@ def evaluate_candidate(
     opening_fit_clearance_each_side_m=None,
     target_points_base=None,
     contact_band_fraction=0.12,
+    bilateral_surface_evidence=None,
+    contact_height_bounds_m=None,
+    contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Evaluate one candidate and always fail closed on invalid derived state."""
@@ -1836,6 +2256,11 @@ def evaluate_candidate(
             opening_fit_clearance_each_side_m=opening_fit_clearance_each_side_m,
             target_points_base=target_points_base,
             contact_band_fraction=contact_band_fraction,
+            bilateral_surface_evidence=bilateral_surface_evidence,
+            contact_height_bounds_m=contact_height_bounds_m,
+            contact_height_axis_base_override=(
+                contact_height_axis_base_override
+            ),
             minimum_contact_patch_overlap_m=(
                 minimum_contact_patch_overlap_m
             ),
@@ -1880,7 +2305,11 @@ def evaluate_explicit_candidate(
     tool_finger_length_axis='z',
     motion_cost=0.0,
     opening_fit_clearance_each_side_m=None,
+    width_projection_trim_fraction=0.0,
     contact_band_fraction=0.12,
+    contact_height_bounds_m=None,
+    bilateral_surface_evidence=None,
+    contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
 ):
     """Evaluate an explicit tool0 candidate without a GraspNet depth field."""
@@ -1905,7 +2334,13 @@ def evaluate_explicit_candidate(
             tool_finger_length_axis=tool_finger_length_axis,
             motion_cost=motion_cost,
             opening_fit_clearance_each_side_m=opening_fit_clearance_each_side_m,
+            width_projection_trim_fraction=width_projection_trim_fraction,
             contact_band_fraction=contact_band_fraction,
+            contact_height_bounds_m=contact_height_bounds_m,
+            bilateral_surface_evidence=bilateral_surface_evidence,
+            contact_height_axis_base_override=(
+                contact_height_axis_base_override
+            ),
             minimum_contact_patch_overlap_m=(
                 minimum_contact_patch_overlap_m
             ),

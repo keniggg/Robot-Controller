@@ -14,6 +14,8 @@ import urllib.error
 
 import numpy as np
 from geometry_msgs.msg import PoseStamped
+from alicia_flexible_grasp.vision.target_observation import TargetTrackIdentity
+
 from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan
 
 
@@ -247,6 +249,10 @@ def make_snapshot(target_depth, source_mode='instance_mask', stamp_ns=10_000_000
         ),
         source_mode=source_mode,
         stamp_ns=int(stamp_ns),
+        target_epoch=0,
+        target_identity=TargetTrackIdentity.from_stream(0, 0),
+        sample_stamp_ns=(int(stamp_ns) - 200_000_000,
+                         int(stamp_ns) - 100_000_000, int(stamp_ns)),
     )
 
 
@@ -493,6 +499,57 @@ def make_processing_node(client=None):
         cy=1.0,
         depth_scale=0.0001,
     )
+    attach_synthetic_bilateral_measurement(node)
+    return node
+
+
+def attach_synthetic_bilateral_measurement(node, geometry=None, width_m=None):
+    """Let legacy gate tests focus on their non-surface contract.
+
+    Task-3 producer/evaluator tests use real registered surfaces elsewhere.
+    These older unit tests need an explicit measured-contact prerequisite so
+    they can continue exercising later candidate lineage, depth and planning
+    gates without restoring the removed OBB fallback.
+    """
+    def measurement(center, rotation):
+        current_geometry = geometry or getattr(
+            node,
+            '_latest_geometry_estimate',
+            None,
+        )
+        if current_geometry is None:
+            return None, None, None, None
+        points = np.asarray(current_geometry.object_points_base, dtype=float)
+        transform = np.asarray(rotation, dtype=float).reshape(3, 3)
+        jaw = transform[:, 1]
+        insertion = transform[:, 2]
+        measured_width = width_m
+        if measured_width is None:
+            axes = np.asarray(current_geometry.axes_base, dtype=float).reshape(3, 3)
+            size = np.asarray(current_geometry.size_xyz_m, dtype=float).reshape(3)
+            measured_width = float(
+                np.sum(np.abs(axes.T.dot(jaw)) * size)
+            )
+        relative = points - np.asarray(center, dtype=float).reshape(1, 3)
+        insertion_projection = relative.dot(insertion)
+        bounds = (
+            float(np.min(insertion_projection)),
+            float(np.max(insertion_projection)),
+        )
+        surface = types.SimpleNamespace(points_base=points)
+        evidence = remote_node.BilateralSurfaceEvidence(
+            True,
+            'BILATERAL_SURFACE_VALID',
+            24,
+            24,
+            2,
+            2,
+            float(measured_width),
+            0.5 * (bounds[0] + bounds[1]),
+        )
+        return surface, evidence, bounds, insertion
+
+    node._current_bilateral_surface_measurement = measurement
     return node
 
 
@@ -580,6 +637,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             request_id=3,
             snapshot_stamp_sec=10.0,
             target_epoch=7,
+            target_track_id=TargetTrackIdentity.from_stream(0, 7).track_id,
             target_label='carton',
             model_choice='carton_segmentation',
             center_base_xyz=center,
@@ -611,6 +669,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             request_id=3,
             snapshot_stamp_sec=10.0,
             target_epoch=7,
+            target_track_id=TargetTrackIdentity.from_stream(0, 7).track_id,
             target_label='carton',
             model_choice='carton_segmentation',
             track_id=track_id,
@@ -1037,6 +1096,100 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         )
         self.assertIsNone(node.latest_support_plane_camera_point)
         self.assertIsNone(node.latest_support_plane_camera_normal)
+
+    def test_prepare_treats_label_and_model_choice_as_diagnostics_only(self):
+        geometry = make_geometry_estimate()
+        candidate = RemoteGraspCandidate(
+            score=0.91,
+            translation_m=np.asarray([0.40, -0.10, 0.22]),
+            quaternion_xyzw=np.asarray([0.0, 0.0, 0.0, 1.0]),
+            width_m=0.039,
+            depth_m=0.030,
+        )
+        cases = (
+            ('carton', 'carton_segment'),
+            ('unseen_object', 'generic_segmenter'),
+            ('', ''),
+        )
+        input_config = frozen_input_config(make_processing_node())
+        prepared_results = []
+
+        for label, model_choice in cases:
+            snapshot = make_snapshot(
+                np.ones((3, 4), dtype=np.uint16) * 2200,
+            )
+            snapshot.object_msg.label = label
+            node = make_processing_node()
+            node._last_model_choice = model_choice
+            node._require_graspnet_input_prerequisites = lambda *_args: None
+            node._prepare_snapshot_geometry = lambda *_args: (
+                geometry,
+                snapshot.depth_raw,
+                np.eye(4),
+            )
+            node._generate_tabletop_candidates = (
+                lambda _geometry, **_kwargs: (
+                    (),
+                    {'candidate_basis': 'same_geometry'},
+                )
+            )
+            node._gripper_contract_mismatch_reason = lambda: ''
+            node._build_frozen_graspnet_input = lambda *_args, **_kwargs: (
+                types.SimpleNamespace(
+                    color_bgr=snapshot.color_bgr,
+                    depth_raw=snapshot.depth_raw,
+                ),
+                {'input_basis': 'same_snapshot'},
+            )
+            node._require_stream_ticket_current = lambda _ticket: None
+            node._predict_remote = lambda *_args, **_kwargs: (
+                (candidate,),
+                {'prediction_basis': 'same_input'},
+                {'server_ms': 4.0},
+                1.0,
+                2.0,
+                3.0,
+            )
+            ticket = types.SimpleNamespace(
+                request_id=11,
+                generation=1,
+                snapshot_stamp_sec=snapshot.stamp_sec,
+                target_epoch=1,
+                payload=(snapshot, input_config),
+            )
+
+            prepared_results.append(node._prepare_and_predict(ticket))
+
+        baseline = prepared_results[0]
+        for prepared, (expected_label, expected_model_choice) in zip(
+            prepared_results,
+            cases,
+        ):
+            self.assertEqual(prepared.snapshot.object_msg.label, expected_label)
+            self.assertEqual(prepared.model_choice, expected_model_choice)
+            self.assertIs(prepared.geometry, geometry)
+            self.assertIs(prepared.candidates[0], candidate)
+            self.assertEqual(prepared.candidates, baseline.candidates)
+            self.assertEqual(
+                dict(prepared.remote_diagnostics),
+                dict(baseline.remote_diagnostics),
+            )
+            self.assertEqual(
+                dict(prepared.remote_performance),
+                dict(baseline.remote_performance),
+            )
+            self.assertEqual(
+                dict(prepared.graspnet_input_audit),
+                dict(baseline.graspnet_input_audit),
+            )
+            self.assertIs(
+                prepared.graspnet_input_config,
+                baseline.graspnet_input_config,
+            )
+            np.testing.assert_array_equal(
+                prepared.graspnet_input.depth_raw,
+                baseline.graspnet_input.depth_raw,
+            )
 
     def test_prepare_propagates_remote_error_when_tabletop_has_no_candidate(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
@@ -1579,6 +1732,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 object_mask=mask.copy(),
                 bbox=(5, 4, 20, 12),
                 object_msg=types.SimpleNamespace(detected=True, snapshot_stamp=stamp),
+                target_identity=TargetTrackIdentity.from_stream(0, 0),
                 stamp_sec=float(stamp),
                 frame_id='camera_link',
                 joint_positions=np.asarray(joints, dtype=float),
@@ -1632,6 +1786,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         def rgbd(mask, stamp):
             return RgbdSample(
+                target_identity=TargetTrackIdentity.from_stream(0, 0),
                 color_bgr=np.zeros((20, 30, 3), dtype=np.uint8),
                 depth_raw=np.full((20, 30), 2200, dtype=np.uint16),
                 object_mask=mask,
@@ -1796,6 +1951,28 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             estimate.axes_base,
             atol=1e-7,
         )
+
+    def test_near_field_geometry_preserves_measured_center_and_points(self):
+        node = make_processing_node()
+        node.near_field_planning_active = True
+        near = make_geometry_estimate()
+        snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
+        node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+        registered = []
+        node._register_near_field_surface = registered.append
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: near
+        try:
+            measured, _depth, _transform = node._prepare_snapshot_geometry(
+                snapshot, remote_node.rospy.Time(*divmod(snapshot.stamp_ns, 1_000_000_000)))
+        finally:
+            remote_node.estimate_object_geometry = original_estimator
+
+        self.assertIs(measured, near)
+        self.assertEqual(len(registered), 1)
+        self.assertEqual(registered[0].stamp_ns, snapshot.stamp_ns)
+        self.assertEqual(registered[0].identity, snapshot.target_identity)
+        np.testing.assert_array_equal(registered[0].points_base, near.object_points_base)
 
     def test_snapshot_geometry_tf_uses_exact_stamp_and_optical_convention(self):
         class TfBuffer:
@@ -3334,7 +3511,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
 
-    def test_all_analytical_rejections_return_counts_and_invalidate_geometry(self):
+    def test_contact_without_bilateral_surface_returns_counts_and_invalidates_geometry(self):
         snapshot = make_snapshot(np.ones((3, 4), dtype=np.uint16) * 2200)
         client = RecordingClient(
             candidates=[
@@ -3351,6 +3528,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             ]
         )
         node = make_processing_node(client)
+        node._current_bilateral_surface_measurement = (
+            lambda *_args, **_kwargs: (None, None, None, None)
+        )
         node.pose_estimator = RecordingPoseEstimator()
         node._plan_reachable = lambda _pose: (_ for _ in ()).throw(
             AssertionError('IK must not run after analytical rejection')
@@ -3371,10 +3551,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(message.startswith('NO_GEOMETRIC_CANDIDATE: '))
         self.assertIn('raw=1', message)
-        self.assertIn('after_transform=1', message)
-        self.assertIn('after_center=1', message)
+        self.assertIn('after_transform=0', message)
+        self.assertIn('after_center=0', message)
         self.assertIn('after_jaw_width=0', message)
-        self.assertIn('GRIPPER_TOO_NARROW=1', message)
+        self.assertIn('BILATERAL_SURFACE_EVIDENCE_MISSING=1', message)
         self.assertFalse(node.geometry_pub.messages[-1].valid)
         self.assertEqual(node.geometry_pub.messages[-1].failure_reason, message)
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
@@ -3405,11 +3585,13 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         node = make_processing_node(client)
         node.pose_estimator = RecordingPoseEstimator()
         node._plan_reachable = lambda _pose: True
-        original_estimator = remote_node.estimate_object_geometry
-        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+        estimate = make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
             size_xyz_m=[0.04, 0.04, 0.02],
         )
+        attach_synthetic_bilateral_measurement(node, estimate, width_m=0.040)
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: estimate
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
         )
@@ -4207,28 +4389,81 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIsNone(node.previous_object_axes_base)
         self.assertEqual(node.plan_pub.messages[-1].poses, [])
 
-    def test_model_choice_change_invalidates_previous_geometry(self):
-        node = make_processing_node()
-        node._last_model_choice = 'original'
-        original_get_param = remote_node.rospy.get_param
-        remote_node.rospy.get_param = lambda name, default=None: {
-            '/perception': {
-                'detector': 'yolo',
-                'yolo_model_choice': 'carton_segment',
-                'yolo_target_class': 'carton',
-            },
-        }.get(name, default)
-        try:
-            requires_mask = node._active_profile_requires_mask()
-        finally:
-            remote_node.rospy.get_param = original_get_param
+    def test_model_choice_change_refreshes_profile_without_revoking_target_authority(self):
+        for detector_kind, expected_requires_mask in (
+            ('simple_hsv', False),
+            ('yolo', True),
+        ):
+            with self.subTest(detector=detector_kind):
+                node = make_processing_node()
+                node.enabled = True
+                node.pipeline_metrics_pub = RecordingPublisher()
+                node.preview_plan_pub = RecordingPublisher()
+                node.preview_rich_plan_pub = RecordingPublisher()
+                node.robot_execution_active = False
+                node.near_field_planning_active = False
+                node._initialize_streaming_state(
+                    source_clock=lambda: 10.0,
+                    start_worker=False,
+                )
+                self.assertTrue(node.start_streaming())
+                node._last_model_choice = 'original'
+                geometry = make_geometry_message()
+                estimate = make_geometry_estimate()
+                node.latest_object_geometry = geometry
+                node._latest_geometry_estimate = estimate
+                identity_before = node._current_stream_target_identity()
+                generation_before = node._stream_generation
+                tracker_before = node.tracker
+                node._stable_variant_runtime = {
+                    ('old-generation', 0): {'prepared': object()},
+                }
+                selected_profiles = []
+                original_get_param = remote_node.rospy.get_param
+                original_select_yolo_model = remote_node.select_yolo_model
+                remote_node.rospy.get_param = lambda name, default=None: {
+                    '/perception': {
+                        'detector': detector_kind,
+                        'yolo_model_choice': 'generic_segmenter',
+                        'yolo_target_class': 'diagnostic_only',
+                    },
+                }.get(name, default)
+                remote_node.select_yolo_model = (
+                    lambda _config, model_choice, _target: (
+                        selected_profiles.append(model_choice)
+                        or {'require_instance_mask': True}
+                    )
+                )
+                try:
+                    requires_mask = node._active_profile_requires_mask()
+                finally:
+                    remote_node.rospy.get_param = original_get_param
+                    remote_node.select_yolo_model = original_select_yolo_model
 
-        self.assertTrue(requires_mask)
-        self.assertFalse(node.geometry_pub.messages[-1].valid)
-        self.assertTrue(
-            node.geometry_pub.messages[-1].failure_reason.startswith('MODEL_RELOADED: ')
-        )
-        self.assertIsNone(node.previous_object_axes_base)
+                self.assertEqual(requires_mask, expected_requires_mask)
+                self.assertEqual(node._last_model_choice, 'generic_segmenter')
+                self.assertGreater(node._stream_generation, generation_before)
+                self.assertIsNot(node.tracker, tracker_before)
+                self.assertEqual(node._stable_variant_runtime, {})
+                self.assertEqual(node._last_target_epoch_reason, 'MODEL_RELOADED')
+                self.assertEqual(
+                    selected_profiles,
+                    ['generic_segmenter'] if detector_kind == 'yolo' else [],
+                )
+                self.assertEqual(
+                    node._current_stream_target_identity(),
+                    identity_before,
+                )
+                self.assertIs(node.latest_object_geometry, geometry)
+                self.assertIs(node._latest_geometry_estimate, estimate)
+                self.assertEqual(node.geometry_pub.messages, [])
+                self.assertEqual(node.rich_plan_pub.messages, [])
+                self.assertEqual(node.plan_pub.messages, [])
+                np.testing.assert_array_equal(
+                    node.previous_object_axes_base,
+                    np.eye(3),
+                )
+                node.shutdown_streaming_worker()
 
     def test_selects_first_reachable_candidate_after_camera_to_base_transform(self):
         candidates = [
@@ -5710,11 +5945,13 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             np.asarray([0.0, 0.0, 0.0, 1.0]),
             remote_node.quaternion_from_euler(0.0, 0.0, np.pi),
         ]
-        original_estimator = remote_node.estimate_object_geometry
-        remote_node.estimate_object_geometry = lambda **_kwargs: make_geometry_estimate(
+        estimate = make_geometry_estimate(
             center_base=[0.40, -0.10, 0.25],
             size_xyz_m=[0.04, 0.04, 0.02],
         )
+        attach_synthetic_bilateral_measurement(node, estimate, width_m=0.040)
+        original_estimator = remote_node.estimate_object_geometry
+        remote_node.estimate_object_geometry = lambda **_kwargs: estimate
         node._snapshot_base_optical_transform = (
             lambda *_args: identity_base_camera_snapshot_transform()
         )

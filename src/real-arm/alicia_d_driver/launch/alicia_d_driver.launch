@@ -36,6 +36,8 @@
       <param name="feedback_stale_timeout_sec" type="double" value="1.0"/>
       <param name="protection_clear_stable_sec" type="double" value="30.0"/>
       <param name="max_enable_temperature_c" type="double" value="60.0"/>
+      <param name="max_temperature_slew_c_per_sec" type="double" value="8.0"/>
+      <param name="temperature_slew_tolerance_c" type="double" value="5.0"/>
       <param name="e1_confirm_consecutive_frames" type="int" value="3"/>
       <param name="temperature_over_limit_confirm_samples" type="int" value="3"/>
       <param name="reconnect_sync_tolerance_rad" type="double" value="0.05"/>

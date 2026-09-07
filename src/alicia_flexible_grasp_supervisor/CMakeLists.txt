@@ -10,6 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
   trajectory_msgs
   control_msgs
   controller_manager_msgs
+  easy_handeye_msgs
   message_generation
   tf
   tf2_ros
@@ -63,6 +64,7 @@ catkin_package(
     trajectory_msgs
     control_msgs
     controller_manager_msgs
+    easy_handeye_msgs
     message_runtime
     tf
     tf2_ros

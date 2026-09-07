@@ -2,7 +2,9 @@
 import pathlib
 import struct
 import sys
+import warnings
 import xml.etree.ElementTree as ET
+from dataclasses import fields
 
 import numpy as np
 import pytest
@@ -19,14 +21,18 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
     ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M,
     ANALYTICAL_PALM_CENTER_TOOL_XYZ_M,
     ANALYTICAL_PALM_SIZE_XYZ_M,
+    BilateralSurfaceEvidence,
     CandidateGateResult,
     GRIPPER_CONTRACT_TOLERANCE_M,
     GripperGeometry,
     _carried_obb_pose,
+    _bilateral_surface_measurement,
+    _linear_quantiles,
     candidate_rank_key,
     bilateral_contact_height_bounds_m,
     contact_height_axis_base,
     evaluate_candidate,
+    evaluate_bilateral_surface_evidence,
     evaluate_explicit_candidate,
     evaluate_open_gripper_observation_envelope,
     finger_contact_patch_height_intervals_m,
@@ -37,6 +43,14 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
     projected_cloud_width_m,
     required_open_width_m,
 )
+from alicia_flexible_grasp.vision.multiview_surface import (  # noqa: E402
+    SurfaceView,
+    append_registered_view,
+    fused_surface_from_view,
+)
+from alicia_flexible_grasp.vision.target_observation import (  # noqa: E402
+    TargetTrackIdentity,
+)
 
 
 GRIPPER = GripperGeometry(
@@ -46,6 +60,314 @@ GRIPPER = GripperGeometry(
     palm_size_xyz_m=np.array([0.1175, 0.1550, 0.0774]),
     support_clearance_m=0.003,
 )
+
+
+@pytest.mark.parametrize('values,fractions,expected', [
+    ([7.0], [0.0, 0.05, 0.5, 0.95, 1.0], [7.0] * 5),
+    ([4.0, 0.0], [0.0, 0.25, 0.5, 0.75, 1.0], [0., 1., 2., 3., 4.]),
+    ([2.0, -2.0, 2.0, -2.0], [0.0, 0.5, 1.0], [-2., 0., 2.]),
+    ([-1e308, 1e308], [0.0, 0.25, 0.5, 0.75, 1.0],
+     [-1e308, -5e307, 0.0, 5e307, 1e308]),
+])
+def test_linear_quantiles_are_warning_free_finite_and_order_invariant(
+    values, fractions, expected,
+):
+    # Catches deprecated NumPy keywords and subtraction overflow in interpolation.
+    for ordered in (values, values[::-1]):
+        with warnings.catch_warnings(record=True) as emitted:
+            warnings.simplefilter('always')
+            actual = _linear_quantiles(ordered, fractions)
+        assert not emitted, [str(item.message) for item in emitted]
+        assert np.all(np.isfinite(actual))
+        np.testing.assert_allclose(actual, expected, rtol=1e-15, atol=0.0)
+
+
+def measured_surface_fixture(include_negative=True, include_positive=True,
+                             reverse_and_duplicate=False, outside_jaw_points=False,
+                             width_m=0.035, many_outside_jaw_points=False):
+    identity = TargetTrackIdentity.from_stream(7, 11)
+    xs = np.linspace(-0.020, 0.020, 17)
+    ys = np.linspace(-0.5 * width_m, 0.5 * width_m, 15)
+    zs = np.linspace(0.0, 0.021, 15)
+    top = np.asarray([(x, y, 0.021) for x in xs for y in ys])
+    negative = np.asarray(
+        [(x, -0.5 * width_m, z) for x in xs for z in zs[:-1]]
+    )
+    positive = np.asarray(
+        [(x, 0.5 * width_m, z) for x in xs for z in zs[:-1]]
+    )
+    reference_points = np.vstack(
+        (top, negative) if include_negative else (top,)
+    )
+    moving_points = np.vstack(
+        (top, positive) if include_positive else (top,)
+    )
+    if outside_jaw_points:
+        outliers = np.asarray([
+            (x, y, z) for x in (-0.020, 0.020)
+            for y in (-0.021, 0.021)
+            for z in (0.0075, 0.010, 0.0125)
+        ])
+        reference_points = np.vstack((reference_points, outliers))
+        moving_points = np.vstack((moving_points, outliers))
+    if many_outside_jaw_points:
+        # Deliberately overwhelm a trimmed statistic with samples that are
+        # physically outside the maximum jaw travel.  A robust extreme alone
+        # must not turn these points into near-side support.
+        outliers = np.asarray([
+            (x, y, z) for x in np.linspace(-0.020, 0.020, 17)
+            for y in (-0.100, 0.100)
+            for z in np.linspace(0.0, 0.021, 15)
+        ])
+        reference_points = np.vstack((reference_points, outliers))
+        moving_points = np.vstack((moving_points, outliers))
+    if reverse_and_duplicate:
+        reference_points = np.repeat(reference_points[::-1], 2, axis=0)
+        moving_points = np.repeat(moving_points[::-1], 2, axis=0)
+    reference = SurfaceView(
+        identity, 1_000_000_000, reference_points,
+        np.array([0.0, 0.0, 1.0]), 0.0, 12,
+    )
+    if not include_positive:
+        return fused_surface_from_view(reference), reference
+    moving = SurfaceView(
+        identity, 1_100_000_000, moving_points,
+        np.array([0.0, 0.0, 1.0]), 0.0, 12,
+    )
+    registration, fused = append_registered_view(
+        fused_surface_from_view(reference), reference, moving
+    )
+    assert registration.ok
+    return fused, reference
+
+
+def test_bilateral_surface_evidence_interface_is_frozen_and_exact():
+    fused, reference = measured_surface_fixture()
+
+    evidence = evaluate_bilateral_surface_evidence(
+        fused,
+        np.array([0.0, 0.0, 0.0105]),
+        np.array([0.0, 1.0, 0.0]),
+        np.array([0.0, 0.0, -1.0]),
+        GRIPPER,
+        support_normal_base=reference.support_normal_base,
+    )
+
+    assert isinstance(evidence, BilateralSurfaceEvidence)
+    assert evidence.__dataclass_params__.frozen is True
+    assert [item.name for item in fields(BilateralSurfaceEvidence)] == [
+        'ok',
+        'code',
+        'negative_jaw_points',
+        'positive_jaw_points',
+        'negative_view_count',
+        'positive_view_count',
+        'measured_width_m',
+        'contact_height_m',
+    ]
+    assert evidence.ok is True
+    assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_OK'
+    assert evidence.negative_jaw_points >= 12
+    assert evidence.positive_jaw_points >= 12
+    assert evidence.negative_view_count >= 1
+    assert evidence.positive_view_count >= 1
+    assert evidence.measured_width_m == pytest.approx(0.035, abs=0.0025)
+    assert abs(evidence.contact_height_m) < 0.003
+
+
+def test_bilateral_authorization_requires_support_normal():
+    # An insertion direction alone cannot distinguish a tilted top plane.
+    fused, _reference = measured_surface_fixture()
+    evidence = evaluate_bilateral_surface_evidence(
+        fused, [0.0, 0.0, 0.0105], [0.0, 1.0, 0.0],
+        [0.0, 0.0, -1.0], GRIPPER,
+    )
+    assert not evidence.ok
+    assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+def test_points_beyond_robust_jaw_band_cannot_count_as_contact_support():
+    records = []
+    for outliers in (False, True):
+        fused, reference = measured_surface_fixture(outside_jaw_points=outliers)
+        evidence = evaluate_bilateral_surface_evidence(
+            fused, [0., 0., 0.0105], [0., 1., 0.], [0., 0., -1.], GRIPPER,
+            support_normal_base=reference.support_normal_base,
+        )
+        assert evidence.ok
+        records.append(evidence)
+    # Added samples are 3.5 mm beyond the measured 35 mm jaw span, outside
+    # the fixed 2 mm contact band, and cannot inflate its supporting count.
+    assert records[1].measured_width_m == records[0].measured_width_m
+    assert records[1].negative_jaw_points == records[0].negative_jaw_points
+
+
+def test_arbitrarily_far_jaw_extremes_are_bounded_by_physical_gap():
+    baseline, reference = measured_surface_fixture()
+    polluted, polluted_reference = measured_surface_fixture(
+        many_outside_jaw_points=True,
+    )
+    kwargs = dict(
+        contact_center_base=[0., 0., 0.0105],
+        jaw_axis_base=[0., 1., 0.],
+        insertion_axis_base=[0., 0., -1.],
+        finger_geometry=GRIPPER,
+    )
+    clean = evaluate_bilateral_surface_evidence(
+        baseline, support_normal_base=reference.support_normal_base, **kwargs
+    )
+    far = evaluate_bilateral_surface_evidence(
+        polluted,
+        support_normal_base=polluted_reference.support_normal_base,
+        **kwargs
+    )
+    assert clean.ok and far.ok
+    assert far.measured_width_m == pytest.approx(clean.measured_width_m)
+    assert far.negative_jaw_points == clean.negative_jaw_points
+    assert far.positive_jaw_points == clean.positive_jaw_points
+
+
+def test_narrow_target_cannot_count_one_sample_for_both_jaws():
+    fused, reference = measured_surface_fixture(include_positive=False, width_m=0.0015)
+    counts, _, _, masks = _bilateral_surface_measurement(
+        fused, [0., 0., 0.0105], [0., 1., 0.], [0., 0., -1.], GRIPPER, 12,
+        support_normal_base=reference.support_normal_base,
+    )
+    assert counts is not None
+    negative, positive = masks
+    assert not np.any(negative & positive)
+
+
+def test_disjoint_jaw_support_heights_cannot_authorize_contact():
+    fused, reference = measured_surface_fixture()
+    points = np.array(fused.points_base, copy=True)
+    # Keep each jaw's measured surface substantial, but separate their
+    # support-normal spans so no common physical insertion interval exists.
+    negative = points[:, 1] < -0.010
+    positive = points[:, 1] > 0.010
+    points[negative, 2] = np.linspace(0.000, 0.006, negative.sum())
+    points[positive, 2] = np.linspace(0.015, 0.021, positive.sum())
+    disjoint = type(fused)(
+        fused.identity, points, fused.view_indices, fused.view_stamps_ns
+    )
+    evidence = evaluate_bilateral_surface_evidence(
+        disjoint, [0., 0., 0.0105], [0., 1., 0.], [0., 0., -1.], GRIPPER,
+        support_normal_base=reference.support_normal_base,
+    )
+    assert not evidence.ok
+    assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+@pytest.mark.parametrize('normal', [None, [0., 0., 0.], [0., 0., 2.],
+                                  [0., 0., float('nan')], [0., 1.]])
+def test_invalid_support_normal_cannot_authorize_bilateral_surface(normal):
+    fused, _ = measured_surface_fixture()
+    evidence = evaluate_bilateral_surface_evidence(
+        fused, [0., 0., 0.0105], [0., 1., 0.], [0., 0., -1.], GRIPPER,
+        support_normal_base=normal,
+    )
+    assert not evidence.ok
+
+
+@pytest.mark.parametrize('tilt_deg', [0., 35., -35.])
+@pytest.mark.parametrize('jaw_sign', [1., -1.])
+def test_measured_bilateral_surface_is_order_duplicate_and_axis_sign_invariant(
+    tilt_deg, jaw_sign,
+):
+    tilt = np.deg2rad(tilt_deg)
+    evidence_by_order = []
+    for duplicated in (False, True):
+        fused, reference = measured_surface_fixture(reverse_and_duplicate=duplicated)
+        evidence = evaluate_bilateral_surface_evidence(
+            fused, [0., 0., 0.0105], [0., jaw_sign, 0.],
+            [np.sin(tilt), 0., -np.cos(tilt)], GRIPPER,
+            support_normal_base=reference.support_normal_base,
+        )
+        assert evidence.ok
+        assert evidence.measured_width_m == pytest.approx(0.035, abs=0.0025)
+        assert evidence.negative_jaw_points >= 12
+        assert evidence.positive_jaw_points >= 12
+        evidence_by_order.append(evidence)
+    assert evidence_by_order[0] == evidence_by_order[1]
+
+
+@pytest.mark.parametrize(
+    'surface_factory',
+    [
+        lambda: measured_surface_fixture(False, False)[0],
+        lambda: measured_surface_fixture(True, False)[0],
+    ],
+)
+def test_top_only_and_one_sided_measured_surfaces_fail_closed(surface_factory):
+    evidence = evaluate_bilateral_surface_evidence(
+        surface_factory(),
+        np.array([0.0, 0.0, 0.0105]),
+        np.array([0.0, 1.0, 0.0]),
+        np.array([0.0, 0.0, -1.0]),
+        GRIPPER,
+        support_normal_base=[0.0, 0.0, 1.0],
+    )
+
+    assert evidence.ok is False
+    assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+def test_sparse_or_outside_physical_finger_footprint_does_not_count():
+    fused, _reference = measured_surface_fixture()
+    sparse = type(fused)(
+        fused.identity,
+        fused.points_base[::40],
+        fused.view_indices[::40],
+        fused.view_stamps_ns,
+    )
+    outside_points = np.array(fused.points_base, copy=True)
+    outside_points[:, 0] += 0.050
+    outside = type(fused)(
+        fused.identity,
+        outside_points,
+        fused.view_indices,
+        fused.view_stamps_ns,
+    )
+
+    for surface in (sparse, outside):
+        evidence = evaluate_bilateral_surface_evidence(
+            surface,
+            np.array([0.0, 0.0, 0.0105]),
+            np.array([0.0, 1.0, 0.0]),
+            np.array([0.0, 0.0, -1.0]),
+            GRIPPER,
+            support_normal_base=_reference.support_normal_base,
+        )
+        assert evidence.ok is False
+        assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+@pytest.mark.parametrize(
+    'override',
+    [
+        {'fused_surface': object()},
+        {'jaw_axis_base': [0.0, 2.0, 0.0]},
+        {'insertion_axis_base': [0.0, 1.0, 0.0]},
+        {'finger_geometry': object()},
+        {'minimum_points_per_side': True},
+        {'minimum_points_per_side': 0},
+    ],
+)
+def test_bilateral_surface_evidence_strictly_validates_contract(override):
+    fused, _reference = measured_surface_fixture()
+    values = {
+        'fused_surface': fused,
+        'contact_center_base': [0.0, 0.0, 0.0105],
+        'jaw_axis_base': [0.0, 1.0, 0.0],
+        'insertion_axis_base': [0.0, 0.0, -1.0],
+        'finger_geometry': GRIPPER,
+        'minimum_points_per_side': 12,
+        'support_normal_base': _reference.support_normal_base,
+    }
+    values.update(override)
+
+    with pytest.raises(ValueError):
+        evaluate_bilateral_surface_evidence(**values)
 
 
 CONSERVATIVE_CONTRACT_FIELDS = (
@@ -355,6 +677,52 @@ def test_projected_cloud_width_includes_both_clearances():
     )
 
     assert required == pytest.approx(0.039)
+
+
+def test_projected_cloud_width_can_trim_sparse_depth_outliers():
+    points = np.zeros((102, 3), dtype=float)
+    points[:100, 1] = np.linspace(-0.019, 0.019, 100)
+    points[100:, 1] = (-0.030, 0.030)
+
+    required = projected_cloud_width_m(
+        points,
+        jaw_axis=np.array([0.0, 1.0, 0.0]),
+        clearance_each_side_m=0.0005,
+        trim_fraction=0.01,
+    )
+
+    assert required < 0.041
+    assert required > 0.038
+
+
+def test_explicit_candidate_uses_same_trimmed_width_contract_as_proposal():
+    fixture = explicit_carton_fixture()
+    points = np.tile(
+        np.asarray(fixture['target_points_base'], dtype=float),
+        (100, 1),
+    )
+    points = np.concatenate(
+        (points, [[0.0, -0.030, 0.0055], [0.0, 0.030, 0.0055]]),
+        axis=0,
+    )
+    fixture['target_points_base'] = points
+    fixture['required_open_width_m'] = projected_cloud_width_m(
+        points,
+        jaw_axis=np.array([0.0, 1.0, 0.0]),
+        clearance_each_side_m=0.002,
+        trim_fraction=0.01,
+    )
+
+    result = evaluate_explicit_candidate(
+        **fixture,
+        width_projection_trim_fraction=0.01,
+    )
+
+    assert result.failure_code != 'GRIPPER_WIDTH_INVALID'
+    assert result.failed_gate != 'jaw_width'
+    assert result.required_open_width_m == pytest.approx(
+        fixture['required_open_width_m']
+    )
 
 
 def test_explicit_candidate_never_requires_or_fabricates_graspnet_depth():

@@ -7,9 +7,11 @@ import io
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 import time
+import numpy as np
 import rospy
 from geometry_msgs.msg import PoseArray, PoseStamped
 from sensor_msgs.msg import JointState
@@ -19,6 +21,7 @@ from alicia_flexible_grasp_supervisor.msg import (
     Grasp6DPlan,
     GraspState,
     NearFieldPlanningPhase,
+    ObjectGeometry,
     ObjectPose,
 )
 from alicia_flexible_grasp_supervisor.srv import (
@@ -34,8 +37,17 @@ from alicia_flexible_grasp_supervisor.srv import (
 )
 from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages, STATE_NAMES
 from alicia_flexible_grasp.grasp.grasp_pose_generator import make_pregrasp_pose, make_lift_pose
+from alicia_flexible_grasp.grasp.gripper_geometry import (
+    ANALYTICAL_FINGER_BOX_PADDING_XYZ_M,
+    ANALYTICAL_FINGER_SIZE_XYZ_M,
+    ANALYTICAL_MAX_INNER_GAP_M,
+    ANALYTICAL_PALM_SIZE_XYZ_M,
+    GripperGeometry,
+    gripper_box_centers,
+)
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     compute_plan_id,
+    float32_wire_value,
     plan_id_matches_content,
     required_open_width_is_valid,
     stamp_nanoseconds as _stamp_nanoseconds,
@@ -45,6 +57,8 @@ from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     validate_finite_pose,
     validate_plan_header_binding,
     validate_rich_geometry,
+    validate_refinement_evidence,
+    refinement_registration_policy,
 )
 from alicia_flexible_grasp.robot.planning_feedback import (
     is_orientation_fallback_message,
@@ -52,6 +66,7 @@ from alicia_flexible_grasp.robot.planning_feedback import (
     orientation_fallback_rejection_message,
     position_only_rejection_message,
 )
+from alicia_flexible_grasp.vision.target_observation import validate_track_id
 from alicia_flexible_grasp.vision.mujoco_digital_twin_client import (
     MujocoDigitalTwinClient,
     build_mujoco_payload,
@@ -71,6 +86,128 @@ class PlanValidationResult:
     age_sec: float = float('inf')
 
 
+# ``CheckPoseSequence`` predates the richer MoveIt metrics and only exposes a
+# failure code as a string.  Keep final-refinement diagnostics within the
+# task's public vocabulary; an arbitrary service string must never become a
+# safety/state-machine code.
+_FINAL_REFINE_MOVEIT_FAILURE_CODES = frozenset(
+    (
+        'MOVEIT_CHECK_ERROR',
+        'MOVEIT_TIMEOUT',
+        'MOVEIT_UNREACHABLE',
+    )
+)
+
+
+def _plan_target_track_id(plan):
+    """Read a non-semantic identity bound to both copies in the rich plan."""
+    track = validate_track_id(getattr(plan, 'target_track_id', None))
+    geometry_track = validate_track_id(
+        getattr(getattr(plan, 'object_geometry', None), 'target_track_id', None)
+    )
+    if track != geometry_track:
+        raise ValueError('plan and embedded geometry target tracks disagree')
+    return track
+
+
+def _final_refinement_registration_policy(gcfg):
+    """Read task refinement thresholds while forbidding safety-bound widening."""
+    config = gcfg if isinstance(gcfg, dict) else {}
+    nested = config.get('final_visual_refine_registration', {})
+    if nested is None:
+        raise ValueError('final_visual_refine_registration must be a mapping')
+    policy = dict(refinement_registration_policy(nested))
+    # These legacy scalar names remain accepted only as tightening aliases;
+    # they cannot widen the shared RegistrationConfig defaults.
+    aliases = {
+        'final_visual_refine_max_translation_m': 'maximum_translation_m',
+        'final_visual_refine_max_yaw_deg': 'maximum_yaw_deg',
+    }
+    legacy = {
+        aliases[name]: config[name]
+        for name in aliases
+        if name in config
+    }
+    if legacy:
+        policy = dict(refinement_registration_policy(dict(policy, **legacy)))
+    return policy
+
+
+def _support_plane_delta(first_plan, second_plan):
+    """Return support-normal angle and plane-offset residual for two plans."""
+    first_geometry = getattr(first_plan, 'object_geometry', None)
+    second_geometry = getattr(second_plan, 'object_geometry', None)
+    _first_pose, _first_size, first_support = validate_rich_geometry(first_geometry)
+    _second_pose, _second_size, second_support = validate_rich_geometry(second_geometry)
+    # ObjectGeometry declares a unit support normal.  Do not silently
+    # renormalize arbitrary vectors: that would let malformed geometry alter
+    # the support-plane authority while still passing continuity checks.
+    for normal, label in (
+        (first_support[:3], 'first support normal'),
+        (second_support[:3], 'second support normal'),
+    ):
+        norm = _vector3_norm(normal)
+        if not math.isfinite(norm) or abs(norm - 1.0) > 1e-5:
+            raise ValueError('%s must be a finite unit vector' % label)
+    first_normal = _normalize_vector3(first_support[:3], 'first support normal')
+    second_normal = _normalize_vector3(second_support[:3], 'second support normal')
+    dot = max(-1.0, min(1.0, _dot3(first_normal, second_normal)))
+    angle_deg = math.degrees(math.acos(dot))
+    offset_delta_m = abs(float(first_support[3]) - float(second_support[3]))
+    if not math.isfinite(angle_deg) or not math.isfinite(offset_delta_m):
+        raise ValueError('support plane residual is non-finite')
+    return angle_deg, offset_delta_m
+
+
+def validate_final_refinement_execution(bound_plan, preview_plan, gcfg=None):
+    """Validate plan-bound 3D evidence and support-plane continuity.
+
+    The return code deliberately has only one terminal invalid code for
+    malformed, stale/invalid, and track-mismatched final-refinement previews.
+    ``CLEAR_VIEW_REQUIRED`` is reserved for a clipped preview whose measured
+    registration evidence is merely insufficient.
+    """
+    try:
+        policy = _final_refinement_registration_policy(gcfg)
+        if _plan_target_track_id(bound_plan) != _plan_target_track_id(preview_plan):
+            raise ValueError('bound and preview target tracks disagree')
+        status, _counts, _metrics, _clipped = validate_refinement_evidence(
+            preview_plan, policy
+        )
+        if status == 'CLEAR_VIEW_REQUIRED':
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REQUIRED',
+                '3D registration needs an unclipped view',
+            )
+        if status != 'VALID_3D':
+            raise ValueError('preview lacks valid 3D registration evidence')
+        angle_deg, offset_delta_m = _support_plane_delta(bound_plan, preview_plan)
+        # ObjectGeometry carries float32 normals/offsets.  Compare against the
+        # same wire-quantized safety limits so an exact configured boundary is
+        # accepted after ROS serialization, while still rejecting any excess.
+        if angle_deg > float32_wire_value(
+            policy['maximum_support_normal_angle_deg']
+        ) + 1e-6:
+            raise ValueError(
+                'support normal changed %.4fdeg (limit %.4fdeg)'
+                % (angle_deg, policy['maximum_support_normal_angle_deg'])
+            )
+        # Compare quantized values, matching ROS float32 serialization.  This
+        # accepts an exact configured boundary after round-trip while still
+        # rejecting the next representable value above that boundary.
+        if float32_wire_value(offset_delta_m) > float32_wire_value(
+            policy['maximum_support_offset_delta_m']
+        ):
+            raise ValueError(
+                'support offset changed %.6fm (limit %.6fm)'
+                % (offset_delta_m, policy['maximum_support_offset_delta_m'])
+            )
+    except (TypeError, ValueError, AttributeError) as exc:
+        return PlanValidationResult(False, 'FINAL_REFINE_3D_INVALID', str(exc))
+    return PlanValidationResult(True, 'FINAL_REFINE_3D_VALID', '')
+
+
 _MUJOCO_AUDIT_SCHEMA_VERSION = 1
 _MUJOCO_AUDIT_DEFAULT_PATH = '~/.ros/grasp6d_mujoco_audit_latest.json'
 _FAR_FIELD_OBSERVATION_PLAN = 'FAR_FIELD_OBSERVATION_PLAN'
@@ -85,6 +222,22 @@ _DIRECT_NEAR_FIELD_TERMINAL_CODES = frozenset(
     )
 )
 _DIRECT_NEAR_FIELD_TERMINAL_SOURCE = 'near_field_terminal'
+_CLEAR_VIEW_WAITING_CODES = frozenset(
+    (
+        'NEAR_FIELD_PLAN_MISSING',
+        'NEAR_FIELD_PLAN_UNCHANGED',
+        'CLEAR_VIEW_OBSERVATION_WAITING',
+        'CLEAR_VIEW_PREVIEW_WAITING',
+    )
+)
+
+
+def normalize_final_refine_moveit_failure_code(code):
+    """Keep the final-refinement state machine on its bounded error contract."""
+    normalized = str(code or '').strip()
+    if normalized in _FINAL_REFINE_MOVEIT_FAILURE_CODES:
+        return normalized
+    return 'MOVEIT_UNREACHABLE'
 _MUJOCO_SAFETY_KEYS = (
     'simulation_ok',
     'ik_success',
@@ -192,6 +345,224 @@ def validate_calibration_centering_margin(plan, grasp_config, gripper_config):
             reason,
         )
     return PlanValidationResult(True, 'VALID', reason)
+
+
+def validate_near_field_planar_center_anchor(
+    far_field_plan,
+    near_field_plan,
+    grasp_config,
+    reference_center_base=None,
+):
+    """Require the close-view OBB to retain the far-view planar center."""
+
+    config = grasp_config if isinstance(grasp_config, dict) else {}
+    enabled = config.get(
+        'near_field_planar_center_anchor_validation_enabled',
+        False,
+    )
+    required = config.get(
+        'near_field_planar_center_anchor_validation_required',
+        True,
+    )
+    if type(enabled) is not bool or type(required) is not bool:
+        return PlanValidationResult(
+            False,
+            'NEAR_FIELD_CENTER_ANCHOR_CONFIG_INVALID',
+            'near-field center anchor validation flags must be booleans',
+        )
+    if not enabled:
+        return PlanValidationResult(True, 'NOT_APPLICABLE', '')
+    if far_field_plan is None or near_field_plan is None:
+        return PlanValidationResult(
+            not required,
+            'NEAR_FIELD_CENTER_ANCHOR_UNAVAILABLE',
+            'far-field and near-field rich plans are both required',
+        )
+    try:
+        far_geometry = far_field_plan.object_geometry
+        near_geometry = near_field_plan.object_geometry
+        if _plan_target_track_id(far_field_plan) != _plan_target_track_id(near_field_plan):
+            raise ValueError('far-field and near-field target tracks disagree')
+        if reference_center_base is None:
+            far_center = [
+                float(far_geometry.pose_base.position.x),
+                float(far_geometry.pose_base.position.y),
+                float(far_geometry.pose_base.position.z),
+            ]
+        else:
+            far_center = [
+                float(value) for value in reference_center_base
+            ]
+            if len(far_center) != 3:
+                raise ValueError('reached-view reference center is not xyz')
+        near_center = [
+            float(near_geometry.pose_base.position.x),
+            float(near_geometry.pose_base.position.y),
+            float(near_geometry.pose_base.position.z),
+        ]
+        normal = [
+            float(near_geometry.support_normal_base.x),
+            float(near_geometry.support_normal_base.y),
+            float(near_geometry.support_normal_base.z),
+        ]
+        if not all(
+            math.isfinite(value)
+            for value in far_center + near_center + normal
+        ):
+            raise ValueError('geometry center or support normal is non-finite')
+        normal_norm = math.sqrt(sum(value * value for value in normal))
+        if normal_norm <= 1e-12:
+            raise ValueError('near-field support normal is degenerate')
+        normal = [value / normal_norm for value in normal]
+        delta = [
+            far_center[index] - near_center[index]
+            for index in range(3)
+        ]
+        normal_delta = sum(
+            delta[index] * normal[index] for index in range(3)
+        )
+        planar_delta = [
+            delta[index] - normal_delta * normal[index]
+            for index in range(3)
+        ]
+        planar_residual = math.sqrt(
+            sum(value * value for value in planar_delta)
+        )
+        maximum = _strict_json_number(
+            config.get(
+                'near_field_planar_center_anchor_max_residual_m',
+                0.003,
+            )
+        )
+        if maximum is None or maximum < 0.0:
+            raise ValueError('maximum planar anchor residual is invalid')
+    except Exception as exc:
+        return PlanValidationResult(
+            False,
+            'NEAR_FIELD_CENTER_ANCHOR_INVALID',
+            str(exc),
+        )
+
+    reason = (
+        'far/near planar center residual %.4fm within %.4fm; '
+        'normal-only center delta %.4fm'
+        % (planar_residual, maximum, normal_delta)
+    )
+    if planar_residual > maximum + 1e-12:
+        return PlanValidationResult(
+            False,
+            'NEAR_FIELD_CENTER_ANCHOR_MISSING',
+            reason,
+        )
+    return PlanValidationResult(
+        True,
+        'NEAR_FIELD_CENTER_ANCHOR_OK',
+        reason,
+    )
+
+
+def evaluate_post_lift_tabletop_observation(
+    plan,
+    observed_center_base,
+    minimum_lift_fraction,
+    height_tolerance_m,
+    maximum_planar_drift_m,
+):
+    """Reject success when the target is still visibly on its support plane."""
+
+    try:
+        geometry = plan.object_geometry
+        normal = [
+            float(geometry.support_normal_base.x),
+            float(geometry.support_normal_base.y),
+            float(geometry.support_normal_base.z),
+        ]
+        normal_norm = math.sqrt(sum(value * value for value in normal))
+        if not math.isfinite(normal_norm) or normal_norm <= 1e-12:
+            raise ValueError('support normal is degenerate')
+        normal = [value / normal_norm for value in normal]
+        support_offset = float(geometry.support_offset_m)
+        geometry_center = [
+            float(geometry.pose_base.position.x),
+            float(geometry.pose_base.position.y),
+            float(geometry.pose_base.position.z),
+        ]
+        observed = [float(value) for value in observed_center_base]
+        if len(observed) != 3 or not all(
+            math.isfinite(value)
+            for value in normal + geometry_center + observed + [support_offset]
+        ):
+            raise ValueError('support geometry or observed center is invalid')
+        poses = list(getattr(plan, 'poses', ()) or ())
+        if len(poses) != 4:
+            raise ValueError('contact plan must contain four poses')
+        grasp_position = poses[2].position
+        lift_position = poses[3].position
+        lift_delta = [
+            float(getattr(lift_position, axis))
+            - float(getattr(grasp_position, axis))
+            for axis in ('x', 'y', 'z')
+        ]
+        normal_lift = sum(
+            lift_delta[index] * normal[index] for index in range(3)
+        )
+        fraction = float(minimum_lift_fraction)
+        tolerance = float(height_tolerance_m)
+        planar_limit = float(maximum_planar_drift_m)
+        if (
+            not math.isfinite(normal_lift)
+            or normal_lift <= 0.0
+            or not math.isfinite(fraction)
+            or fraction <= 0.0
+            or fraction > 1.0
+            or not math.isfinite(tolerance)
+            or tolerance < 0.0
+            or not math.isfinite(planar_limit)
+            or planar_limit < 0.0
+        ):
+            raise ValueError('post-lift visual verification config is invalid')
+    except Exception as exc:
+        return PlanValidationResult(
+            False,
+            'POST_LIFT_VISUAL_CONFIG_INVALID',
+            str(exc),
+        )
+
+    delta = [observed[index] - geometry_center[index] for index in range(3)]
+    normal_delta = sum(delta[index] * normal[index] for index in range(3))
+    planar_delta = [
+        delta[index] - normal_delta * normal[index]
+        for index in range(3)
+    ]
+    planar_drift = math.sqrt(sum(value * value for value in planar_delta))
+    planned_height = (
+        sum(geometry_center[index] * normal[index] for index in range(3))
+        + support_offset
+    )
+    observed_height = (
+        sum(observed[index] * normal[index] for index in range(3))
+        + support_offset
+    )
+    minimum_held_height = (
+        planned_height + fraction * normal_lift - tolerance
+    )
+    reason = (
+        'fresh target support height %.4fm, required held height %.4fm; '
+        'planar drift %.4fm (limit %.4fm), planned lift %.4fm'
+        % (
+            observed_height,
+            minimum_held_height,
+            planar_drift,
+            planar_limit,
+            normal_lift,
+        )
+    )
+    if (
+        planar_drift <= planar_limit + 1e-12
+        and observed_height + 1e-12 < minimum_held_height
+    ):
+        return PlanValidationResult(False, 'OBJECT_NOT_LIFTED', reason)
+    return PlanValidationResult(True, 'POST_LIFT_VISUAL_NO_CONTRADICTION', reason)
 
 
 def _wall_time_sec():
@@ -557,8 +928,10 @@ def validate_execution_plan(plan, now_sec, validity_sec, enforce_freshness=True)
     plan_id = str(getattr(plan, 'plan_id', '') or '').strip()
     if not plan_id:
         return PlanValidationResult(False, 'PLAN_ID_MISSING', 'plan_id is empty')
-    if not str(getattr(plan, 'model_choice', '') or '').strip():
-        return PlanValidationResult(False, 'MODEL_MISSING', 'model_choice is empty')
+    try:
+        _plan_target_track_id(plan)
+    except (TypeError, ValueError, AttributeError) as exc:
+        return PlanValidationResult(False, 'TARGET_GEOMETRY_TRACK_INVALID', str(exc))
     poses = list(getattr(plan, 'poses', ()) or ())
     if len(poses) != 4 or not all(_finite_pose(pose) for pose in poses):
         return PlanValidationResult(
@@ -663,6 +1036,23 @@ def _quaternion_multiply(first, second):
     )
 
 
+def _quaternion_inverse(quaternion):
+    values = tuple(float(value) for value in quaternion)
+    norm_squared = sum(value * value for value in values)
+    if (
+        len(values) != 4
+        or not all(math.isfinite(value) for value in values)
+        or norm_squared <= 1e-24
+    ):
+        raise ValueError('quaternion is not invertible')
+    return (
+        -values[0] / norm_squared,
+        -values[1] / norm_squared,
+        -values[2] / norm_squared,
+        values[3] / norm_squared,
+    )
+
+
 def _axis_angle_quaternion(axis, angle_rad):
     unit = _normalize_vector3(axis, 'rotation axis')
     half = 0.5 * float(angle_rad)
@@ -703,6 +1093,436 @@ def _project_unit_to_plane(vector, normal, label):
     return _normalize_vector3(projected, label)
 
 
+def _quaternion_from_basis(x_axis, y_axis, z_axis):
+    """Return an xyzw quaternion for a right-handed basis.
+
+    The clear-view pose generator uses this small local conversion instead of
+    depending on a TF/Eigen helper.  Keeping the conversion here also makes the
+    geometric contract testable when ROS is not running.
+    """
+    x_axis = _normalize_vector3(x_axis, 'basis x axis')
+    y_axis = _normalize_vector3(y_axis, 'basis y axis')
+    z_axis = _normalize_vector3(z_axis, 'basis z axis')
+    # The caller constructs an orthonormal basis, but reject a malformed one
+    # rather than silently manufacturing an orientation from skew axes.
+    for first, second, label in (
+        (x_axis, y_axis, 'basis x/y axes'),
+        (x_axis, z_axis, 'basis x/z axes'),
+        (y_axis, z_axis, 'basis y/z axes'),
+    ):
+        if abs(_dot3(first, second)) > 1e-5:
+            raise ValueError('%s are not orthogonal' % label)
+    m00, m01, m02 = x_axis[0], y_axis[0], z_axis[0]
+    m10, m11, m12 = x_axis[1], y_axis[1], z_axis[1]
+    m20, m21, m22 = x_axis[2], y_axis[2], z_axis[2]
+    trace = m00 + m11 + m22
+    if trace > 0.0:
+        scale = math.sqrt(max(1e-24, trace + 1.0)) * 2.0
+        quaternion = (
+            (m21 - m12) / scale,
+            (m02 - m20) / scale,
+            (m10 - m01) / scale,
+            0.25 * scale,
+        )
+    elif m00 > m11 and m00 > m22:
+        scale = math.sqrt(max(1e-24, 1.0 + m00 - m11 - m22)) * 2.0
+        quaternion = (
+            0.25 * scale,
+            (m01 + m10) / scale,
+            (m02 + m20) / scale,
+            (m21 - m12) / scale,
+        )
+    elif m11 > m22:
+        scale = math.sqrt(max(1e-24, 1.0 + m11 - m00 - m22)) * 2.0
+        quaternion = (
+            (m01 + m10) / scale,
+            0.25 * scale,
+            (m12 + m21) / scale,
+            (m02 - m20) / scale,
+        )
+    else:
+        scale = math.sqrt(max(1e-24, 1.0 + m22 - m00 - m11)) * 2.0
+        quaternion = (
+            (m02 + m20) / scale,
+            (m12 + m21) / scale,
+            0.25 * scale,
+            (m10 - m01) / scale,
+        )
+    norm = _vector3_norm(quaternion)
+    if not math.isfinite(norm) or norm <= 1e-12:
+        raise ValueError('basis quaternion is invalid')
+    return tuple(value / norm for value in quaternion)
+
+
+def make_clear_view_reacquisition_poses(
+    current_pose,
+    target_center_base,
+    support_normal_base,
+    lateral_offset_m=0.060,
+    radial_retreat_m=0.040,
+    minimum_contact_clearance_m=0.080,
+    current_camera_pose=None,
+    envelope_radius_m=0.025,
+    opening_width_m=None,
+    gripper_geometry=None,
+):
+    """Build two symmetric, no-contact observation poses.
+
+    ``current_pose`` is the measured base-to-tool pose.  When the measured
+    ``current_camera_pose`` is supplied, the current tool-to-camera transform
+    is preserved and the ROS ``camera_link`` +X optical axis is aimed at the
+    target.  The optional argument is omitted only by pure legacy tests where
+    tool and camera are collocated and tool +Z is the optical axis.  Runtime
+    reacquisition requires both measured poses.
+
+    The target centre is taken from the frozen rich plan, so detector
+    centroids and object labels cannot retarget this move.  Candidates are
+    returned in deterministic ``(-tangent, +tangent)`` order; callers may rank
+    them by strict MoveIt metrics before executing one.
+
+    The tool/camera segment is wrapped in a conservative, non-zero camera-body
+    sphere and the measured Alicia palm/finger CAD boxes are wrapped by their
+    half-diagonal spheres.  A centerline outside the contact radius is not
+    sufficient when any physical box envelope overlaps it.
+    """
+    tool_pose = getattr(current_pose, 'pose', current_pose)
+    if (
+        tool_pose is None
+        or not hasattr(tool_pose, 'position')
+        or not hasattr(tool_pose, 'orientation')
+    ):
+        raise ValueError('current tool pose is required')
+    camera_stamped = current_camera_pose
+    camera_pose = getattr(camera_stamped, 'pose', camera_stamped)
+    use_measured_camera = camera_pose is not None
+    if not use_measured_camera:
+        camera_pose = tool_pose
+    try:
+        current_tool_xyz = tuple(
+            float(getattr(tool_pose.position, axis))
+            for axis in ('x', 'y', 'z')
+        )
+        current_camera_xyz = tuple(
+            float(getattr(camera_pose.position, axis))
+            for axis in ('x', 'y', 'z')
+        )
+        target_xyz = tuple(float(value) for value in target_center_base)
+        if len(target_xyz) != 3:
+            raise ValueError('target centre must contain three values')
+        support = _normalize_vector3(
+            tuple(float(value) for value in support_normal_base),
+            'support normal',
+        )
+        lateral = float(lateral_offset_m)
+        radial_retreat = float(radial_retreat_m)
+        clearance = float(minimum_contact_clearance_m)
+        envelope_radius = float(envelope_radius_m)
+        if gripper_geometry is None:
+            gripper_geometry = GripperGeometry(
+                max_inner_gap_m=ANALYTICAL_MAX_INNER_GAP_M,
+                jaw_clearance_each_side_m=0.002,
+                finger_size_xyz_m=ANALYTICAL_FINGER_SIZE_XYZ_M,
+                palm_size_xyz_m=ANALYTICAL_PALM_SIZE_XYZ_M,
+                support_clearance_m=0.003,
+            )
+        if not isinstance(gripper_geometry, GripperGeometry):
+            raise ValueError('gripper_geometry must be a GripperGeometry')
+        opening = (
+            float(gripper_geometry.max_inner_gap_m)
+            if opening_width_m is None
+            else float(opening_width_m)
+        )
+        if (
+            not math.isfinite(opening)
+            or opening <= 0.0
+            or opening > float(gripper_geometry.max_inner_gap_m)
+        ):
+            raise ValueError('opening_width_m must be finite and in gripper range')
+        current_tool_q = _quaternion_xyzw(tool_pose)
+        current_camera_q = _quaternion_xyzw(camera_pose)
+    except (TypeError, ValueError, AttributeError, OverflowError) as exc:
+        raise ValueError('clear-view reacquisition geometry is invalid: %s' % exc)
+    if not all(
+        math.isfinite(value)
+        for value in current_tool_xyz + current_camera_xyz + target_xyz
+    ):
+        raise ValueError('clear-view positions must be finite')
+    if use_measured_camera:
+        tool_frame = str(
+            getattr(getattr(current_pose, 'header', None), 'frame_id', '') or ''
+        )
+        camera_frame = str(
+            getattr(getattr(current_camera_pose, 'header', None), 'frame_id', '')
+            or ''
+        )
+        if tool_frame and camera_frame and tool_frame != camera_frame:
+            raise ValueError('tool and camera poses use different base frames')
+    if (
+        not math.isfinite(lateral)
+        or lateral <= 0.0
+        or not math.isfinite(radial_retreat)
+        or radial_retreat < 0.0
+        or not math.isfinite(clearance)
+        or clearance <= 0.0
+        or not math.isfinite(envelope_radius)
+        or envelope_radius <= 0.0
+    ):
+        raise ValueError(
+            'clear-view offsets, clearance, and non-zero envelope are invalid'
+        )
+
+    effective_clearance = clearance + envelope_radius
+
+    target_to_current = tuple(
+        current_camera_xyz[index] - target_xyz[index] for index in range(3)
+    )
+    radial_norm = _vector3_norm(target_to_current)
+    if not math.isfinite(radial_norm):
+        raise ValueError('clear-view radial direction is non-finite')
+    if radial_norm < effective_clearance - 1e-12:
+        raise ValueError(
+            'current tool envelope is inside minimum contact clearance '
+            '(%.6fm < %.6fm)' % (radial_norm, effective_clearance)
+        )
+    if radial_norm <= 1e-9:
+        # A degenerate measured position has no target-to-tool ray.  Infer a
+        # stable outward ray from the measured optical axis, then fall back to
+        # the support normal only if that axis is also degenerate.
+        optical_axis = _rotate_vector(
+            current_camera_q,
+            (1.0, 0.0, 0.0) if use_measured_camera else (0.0, 0.0, 1.0),
+        )
+        target_to_current = tuple(-float(value) for value in optical_axis)
+        radial_norm = _vector3_norm(target_to_current)
+        if radial_norm <= 1e-9:
+            target_to_current = support
+            radial_norm = 1.0
+    radial = tuple(value / radial_norm for value in target_to_current)
+
+    tangent_raw = _cross3(support, radial)
+    if _vector3_norm(tangent_raw) <= 1e-9:
+        # A top-down view can make the radial ray parallel to the support
+        # normal.  Preserve the measured roll when possible and project its
+        # local X axis into the support plane.
+        measured_x = _rotate_vector(
+            current_camera_q,
+            (0.0, 1.0, 0.0) if use_measured_camera else (1.0, 0.0, 0.0),
+        )
+        tangent_raw = tuple(
+            measured_x[index] - _dot3(measured_x, support) * support[index]
+            for index in range(3)
+        )
+    if _vector3_norm(tangent_raw) <= 1e-9:
+        fallback_axis = (1.0, 0.0, 0.0)
+        if abs(_dot3(fallback_axis, support)) > 0.9:
+            fallback_axis = (0.0, 1.0, 0.0)
+        tangent_raw = _cross3(support, fallback_axis)
+    tangent = _normalize_vector3(tangent_raw, 'support-plane tangent')
+
+    midpoint = tuple(
+        current_camera_xyz[index] + radial[index] * radial_retreat
+        for index in range(3)
+    )
+    if use_measured_camera:
+        tool_from_camera_q = _quaternion_multiply(
+            _quaternion_inverse(current_tool_q),
+            current_camera_q,
+        )
+        tool_from_camera_translation = _rotate_vector(
+            _quaternion_inverse(current_tool_q),
+            tuple(
+                current_camera_xyz[index] - current_tool_xyz[index]
+                for index in range(3)
+            ),
+        )
+    else:
+        tool_from_camera_q = (0.0, 0.0, 0.0, 1.0)
+        tool_from_camera_translation = (0.0, 0.0, 0.0)
+    candidates = []
+    rejected_for_clearance = 0
+    for side in (-1.0, 1.0):
+        candidate_xyz = tuple(
+            midpoint[index] + side * tangent[index] * lateral
+            for index in range(3)
+        )
+        target_to_candidate = tuple(
+            target_xyz[index] - candidate_xyz[index] for index in range(3)
+        )
+        candidate_distance = _vector3_norm(target_to_candidate)
+        if (
+            not math.isfinite(candidate_distance)
+            or candidate_distance < effective_clearance - 1e-12
+        ):
+            rejected_for_clearance += 1
+            continue
+        target_axis = tuple(
+            value / candidate_distance for value in target_to_candidate
+        )
+        if use_measured_camera:
+            measured_camera_y = _rotate_vector(
+                current_camera_q,
+                (0.0, 1.0, 0.0),
+            )
+            camera_y_raw = tuple(
+                measured_camera_y[index]
+                - _dot3(measured_camera_y, target_axis) * target_axis[index]
+                for index in range(3)
+            )
+            if _vector3_norm(camera_y_raw) <= 1e-9:
+                camera_y_raw = tangent
+            camera_y = _normalize_vector3(
+                camera_y_raw,
+                'clear-view camera y axis',
+            )
+            camera_z = _normalize_vector3(
+                _cross3(target_axis, camera_y),
+                'clear-view camera z axis',
+            )
+            camera_y = _normalize_vector3(
+                _cross3(camera_z, target_axis),
+                'clear-view camera y axis',
+            )
+            desired_camera_q = _quaternion_from_basis(
+                target_axis,
+                camera_y,
+                camera_z,
+            )
+            quaternion = _quaternion_multiply(
+                desired_camera_q,
+                _quaternion_inverse(tool_from_camera_q),
+            )
+            quaternion_norm = math.sqrt(
+                sum(value * value for value in quaternion)
+            )
+            quaternion = tuple(
+                value / quaternion_norm for value in quaternion
+            )
+            rotated_camera_offset = _rotate_vector(
+                quaternion,
+                tool_from_camera_translation,
+            )
+            candidate_tool_xyz = tuple(
+                candidate_xyz[index] - rotated_camera_offset[index]
+                for index in range(3)
+            )
+        else:
+            measured_x = _rotate_vector(current_tool_q, (1.0, 0.0, 0.0))
+            x_projected = tuple(
+                measured_x[index]
+                - _dot3(measured_x, target_axis) * target_axis[index]
+                for index in range(3)
+            )
+            if _vector3_norm(x_projected) <= 1e-9:
+                x_projected = tangent
+            optical_x = _normalize_vector3(
+                x_projected,
+                'clear-view optical x axis',
+            )
+            optical_y = _normalize_vector3(
+                _cross3(target_axis, optical_x),
+                'clear-view optical y axis',
+            )
+            quaternion = _quaternion_from_basis(
+                optical_x,
+                optical_y,
+                target_axis,
+            )
+            candidate_tool_xyz = candidate_xyz
+
+        segment = tuple(
+            candidate_xyz[index] - candidate_tool_xyz[index]
+            for index in range(3)
+        )
+        segment_norm_squared = _dot3(segment, segment)
+        relative_tool = tuple(
+            candidate_tool_xyz[index] - target_xyz[index]
+            for index in range(3)
+        )
+        if segment_norm_squared <= 1e-18:
+            envelope_distance = _vector3_norm(relative_tool)
+        else:
+            fraction = max(
+                0.0,
+                min(
+                    1.0,
+                    -_dot3(relative_tool, segment) / segment_norm_squared,
+                ),
+            )
+            envelope_distance = _vector3_norm(
+                tuple(
+                    relative_tool[index] + fraction * segment[index]
+                    for index in range(3)
+                )
+            )
+        if (
+            not math.isfinite(envelope_distance)
+            or envelope_distance < effective_clearance - 1e-12
+        ):
+            rejected_for_clearance += 1
+            continue
+        rotation = np.asarray(
+            [
+                _rotate_vector(quaternion, (1.0, 0.0, 0.0)),
+                _rotate_vector(quaternion, (0.0, 1.0, 0.0)),
+                _rotate_vector(quaternion, (0.0, 0.0, 1.0)),
+            ],
+            dtype=float,
+        ).T
+        centers = gripper_box_centers(
+            candidate_tool_xyz,
+            rotation,
+            opening,
+            gripper_geometry,
+            tool_jaw_axis='y',
+            tool_finger_length_axis='z',
+        )
+        cad_boxes = (
+            ('left_finger', centers['left_finger'],
+             gripper_geometry.finger_size_xyz_m
+             + ANALYTICAL_FINGER_BOX_PADDING_XYZ_M),
+            ('right_finger', centers['right_finger'],
+             gripper_geometry.finger_size_xyz_m
+             + ANALYTICAL_FINGER_BOX_PADDING_XYZ_M),
+            ('palm', centers['palm'], gripper_geometry.palm_size_xyz_m),
+        )
+        cad_intrusion = False
+        for name, center, size in cad_boxes:
+            del name
+            radius = 0.5 * _vector3_norm(size)
+            cad_distance = _vector3_norm(
+                tuple(float(center[index]) - target_xyz[index] for index in range(3))
+            ) - radius
+            if (
+                not math.isfinite(cad_distance)
+                or cad_distance < clearance - 1e-12
+            ):
+                cad_intrusion = True
+                break
+        if cad_intrusion:
+            rejected_for_clearance += 1
+            continue
+        candidate = deepcopy(current_pose)
+        candidate_pose = getattr(candidate, 'pose', candidate)
+        candidate_pose.position.x = candidate_tool_xyz[0]
+        candidate_pose.position.y = candidate_tool_xyz[1]
+        candidate_pose.position.z = candidate_tool_xyz[2]
+        candidate_pose.orientation.x = quaternion[0]
+        candidate_pose.orientation.y = quaternion[1]
+        candidate_pose.orientation.z = quaternion[2]
+        candidate_pose.orientation.w = quaternion[3]
+        candidates.append(candidate)
+    if not candidates:
+        raise ValueError(
+            'all clear-view candidates enter minimum contact clearance '
+            '(rejected=%d minimum %.6fm envelope=%.6fm)' % (
+                rejected_for_clearance,
+                clearance,
+                envelope_radius,
+            )
+        )
+    return tuple(candidates)
+
+
 def build_bounded_final_visual_refinement(
     current_plan,
     observed_plan,
@@ -720,11 +1540,6 @@ def build_bounded_final_visual_refinement(
             'FINAL_REFINE_PLAN_MISSING',
             'current and observed rich plans are required',
         )
-    if str(current_plan.model_choice) != str(observed_plan.model_choice):
-        return reject(
-            'FINAL_REFINE_CANDIDATE_SWITCH',
-            'model choice changed during final refinement',
-        )
     if str(current_plan.candidate_source) != str(
         observed_plan.candidate_source
     ) or tuple(current_plan.candidate_source_lineage) != tuple(
@@ -734,12 +1549,14 @@ def build_bounded_final_visual_refinement(
             'FINAL_REFINE_CANDIDATE_SWITCH',
             'candidate source lineage changed during final refinement',
         )
-    if str(current_plan.object_geometry.label) != str(
-        observed_plan.object_geometry.label
-    ):
+    try:
+        same_track = _plan_target_track_id(current_plan) == _plan_target_track_id(observed_plan)
+    except (TypeError, ValueError, AttributeError):
+        same_track = False
+    if not same_track:
         return reject(
             'FINAL_REFINE_TARGET_CHANGED',
-            'target label changed during final refinement',
+            'target track changed during final refinement',
         )
 
     current_poses = list(getattr(current_plan, 'poses', ()) or ())
@@ -879,6 +1696,25 @@ def build_bounded_final_visual_refinement(
         refined = deepcopy(current_plan)
         refined.header = deepcopy(observed_plan.header)
         refined.object_geometry = deepcopy(observed_plan.object_geometry)
+        # Carry the registration evidence that justified this correction into
+        # the new plan.  Leaving the old ``NOT_EVALUATED`` status here would
+        # make the post-move 3D confirmation reject an otherwise valid rebound.
+        for field in (
+            'candidate_source',
+            'candidate_source_lineage',
+            'has_candidate_model_width',
+            'target_track_id',
+            'refinement_status',
+            'refinement_inlier_count',
+            'refinement_overlap_fraction',
+            'refinement_rmse_m',
+            'refinement_translation_m',
+            'refinement_rotation_deg',
+            'refinement_source_clipped',
+            'fused_view_count',
+        ):
+            if hasattr(observed_plan, field):
+                setattr(refined, field, deepcopy(getattr(observed_plan, field)))
         refined.poses = corrected_poses
         refined.score = float(observed_plan.score)
         refined.required_open_width_m = max(
@@ -935,94 +1771,6 @@ def _plan_support_surface_xyz(plan):
         center_xyz[index] + support_normal[index] * 0.5 * height_m
         for index in range(3)
     )
-
-
-def build_bounded_final_center_refinement(
-    current_plan,
-    observed_surface_center_xyz,
-    observed_stamp,
-    max_translation_m,
-):
-    """Translate a frozen candidate from a stable observed surface center."""
-
-    def reject(code, reason):
-        return PlanValidationResult(False, code, reason), None, {}
-
-    if current_plan is None:
-        return reject(
-            'FINAL_REFINE_PLAN_MISSING',
-            'a current rich plan is required',
-        )
-    poses = list(getattr(current_plan, 'poses', ()) or ())
-    if len(poses) != 4:
-        return reject(
-            'FINAL_REFINE_PLAN_MALFORMED',
-            'the current rich plan must contain four poses',
-        )
-    if _stamp_nanoseconds(observed_stamp) <= 0:
-        return reject(
-            'FINAL_REFINE_CENTER_STAMP_INVALID',
-            'the observed surface center needs a positive source timestamp',
-        )
-    try:
-        for index, pose in enumerate(poses):
-            validate_finite_pose(pose, 'current pose %d' % index)
-        observed_surface = tuple(
-            float(value) for value in observed_surface_center_xyz
-        )
-        if len(observed_surface) != 3 or not all(
-            math.isfinite(value) for value in observed_surface
-        ):
-            raise ValueError('observed surface center must be finite xyz')
-        planned_surface = _plan_support_surface_xyz(current_plan)
-        translation = tuple(
-            observed_surface[index] - planned_surface[index]
-            for index in range(3)
-        )
-        translation_norm = _vector3_norm(translation)
-        translation_limit = max(0.0, float(max_translation_m))
-        if translation_norm > translation_limit + 1e-12:
-            return reject(
-                'FINAL_REFINE_TRANSLATION_LIMIT',
-                'surface-center correction %.4fm exceeds %.4fm'
-                % (translation_norm, translation_limit),
-            )
-
-        refined = deepcopy(current_plan)
-        refined.header.stamp = deepcopy(observed_stamp)
-        refined.object_geometry.header = deepcopy(refined.header)
-        refined.poses = []
-        for pose in poses:
-            corrected = deepcopy(pose)
-            corrected.position.x += translation[0]
-            corrected.position.y += translation[1]
-            corrected.position.z += translation[2]
-            refined.poses.append(corrected)
-        geometry_center = refined.object_geometry.pose_base.position
-        geometry_center.x += translation[0]
-        geometry_center.y += translation[1]
-        geometry_center.z += translation[2]
-        refined.diagnostic = (
-            'FINAL_CENTER_REFINE: translation=%.4fm '
-            'surface_center=1 orientation_frozen=1 width_frozen=1'
-            % translation_norm
-        )
-        refined.valid = True
-        refined.plan_id = compute_plan_id(refined)
-        if not plan_id_matches_content(refined):
-            return reject(
-                'FINAL_REFINE_PLAN_ID_FAILED',
-                'center-corrected rich plan failed canonical integrity',
-            )
-    except Exception as exc:
-        return reject('FINAL_REFINE_CENTER_INVALID', str(exc))
-
-    return PlanValidationResult(True), refined, {
-        'translation_m': translation_norm,
-        'translation_xyz': translation,
-        'planned_surface_xyz': planned_surface,
-        'observed_surface_xyz': observed_surface,
-    }
 
 
 def _poses_same_enough(first, second, position_tolerance_m=0.001, quaternion_tolerance=0.001):
@@ -1168,6 +1916,10 @@ class GraspTaskNode:
         self.latest_obj_time = None
         self.latest_visual_obj = None
         self.latest_visual_obj_time = None
+        self.latest_target_geometry = None
+        self.target_instance_association_threshold_m = rospy.get_param(
+            '/grasp_6d/remote/target_instance_association_threshold_m', 0.08
+        )
         self.latest_grasp6d_plan = None
         self.latest_grasp6d_preview_plan = None
         self.latest_grasp6d_legacy_plan = None
@@ -1196,6 +1948,15 @@ class GraspTaskNode:
         self._near_field_phase_id = 0
         self._near_field_phase_started_sec = 0.0
         self._near_field_phase_deadline_sec = 0.0
+        self._near_field_reference_center_base = None
+        # A clear-view move is a bounded observation aid, never a retry loop.
+        # The counter is reset at each new task start and consumed before the
+        # first candidate preflight so unreachable candidates cannot trigger a
+        # second physical observation move.
+        self._clear_view_reacquisition_attempts = 0
+        self._clear_view_reacquisition_minimum_stamp_ns = 0
+        self._final_refine_move_pose = None
+        self._final_refine_strict_execute_pose = None
         self.stage = GraspStages.IDLE
         self.tf_buffer = None
         self.tf_listener = None
@@ -1221,6 +1982,10 @@ class GraspTaskNode:
             latch=True,
         )
         rospy.Subscriber('/perception/object', ObjectPose, self.obj_cb, queue_size=1)
+        rospy.Subscriber(
+            '/grasp_6d/object_geometry', ObjectGeometry,
+            self.target_geometry_cb, queue_size=1,
+        )
         rospy.Subscriber(
             rospy.get_param(
                 '/grasp/grasp6d_enriched_plan_topic',
@@ -1437,6 +2202,74 @@ class GraspTaskNode:
         self.latest_raw_detection = bool(msg.data)
         self.latest_raw_detection_time = rospy.Time.now()
 
+    def target_geometry_cb(self, msg):
+        """Use the remote geometric track, never a detector class, for revocation."""
+        with self._grasp6d_plan_guard():
+            incoming_stamp = _stamp_nanoseconds(getattr(getattr(msg, 'header', None), 'stamp', None))
+            previous = getattr(self, 'latest_target_geometry', None)
+            previous_stamp = _stamp_nanoseconds(getattr(getattr(previous, 'header', None), 'stamp', None))
+            if incoming_stamp <= 0 or incoming_stamp < previous_stamp:
+                return
+            if (not bool(getattr(msg, 'valid', False))
+                    and str(getattr(msg, 'failure_reason', '')).partition(':')[0].strip() == 'TARGET_LOST'
+                    and self._target_occlusion_allowed_locked()):
+                # Retain the last measured geometry along with the frozen plan.
+                # This is the same narrow loss exception as the ObjectPose path.
+                return
+            self.latest_target_geometry = deepcopy(msg)
+            frozen = getattr(self, '_bound_execution_plan', None)
+            if frozen is None or incoming_stamp < _stamp_nanoseconds(frozen.header.stamp):
+                return
+            if not bool(getattr(msg, 'valid', False)):
+                self._execution_authority_revoked = True
+                self._last_execution_plan_event = 'TARGET_GEOMETRY_INVALID'
+                return
+            try:
+                incoming_track = validate_track_id(msg.target_track_id)
+                frozen_track = _plan_target_track_id(frozen)
+                incoming_point = msg.pose_base.position
+                incoming_center = (
+                    float(incoming_point.x),
+                    float(incoming_point.y),
+                    float(incoming_point.z),
+                )
+                frozen_center = self._plan_geometry_center_xyz(frozen)
+                threshold = self._target_association_threshold({})
+                try:
+                    now_ns = _stamp_nanoseconds(rospy.Time.now())
+                except Exception:
+                    # Unit-constructed nodes have no initialized ROS clock.
+                    now_ns = 0
+                future_tolerance_ns = int(round(
+                    self._configured_target_observation_validity({}) * 1e9
+                ))
+                associated = bool(
+                    incoming_track == frozen_track
+                    and _finite_geometry(msg)
+                    and msg.header.frame_id == frozen.header.frame_id
+                    and frozen_center is not None
+                    and threshold is not None
+                    and (
+                        now_ns <= 0
+                        or incoming_stamp - now_ns <= future_tolerance_ns
+                    )
+                    and math.sqrt(sum(
+                        (incoming_center[index] - frozen_center[index]) ** 2
+                        for index in range(3)
+                    )) <= threshold
+                )
+            except (
+                TypeError,
+                ValueError,
+                AttributeError,
+                IndexError,
+                OverflowError,
+            ):
+                associated = False
+            if not associated:
+                self._execution_authority_revoked = True
+                self._last_execution_plan_event = 'TARGET_GEOMETRY_TRACK_INVALID'
+
     def grasp6d_plan_cb(self, msg):
         result = validate_execution_plan(
             msg,
@@ -1455,6 +2288,11 @@ class GraspTaskNode:
                 and getattr(self, '_bound_execution_plan', None) is not None
             )
             if execution_frozen and bool(getattr(msg, 'valid', False)):
+                if result.ok and incoming_ns >= _stamp_nanoseconds(self._bound_execution_plan.header.stamp):
+                    if _plan_target_track_id(msg) != _plan_target_track_id(self._bound_execution_plan):
+                        self._execution_authority_revoked = True
+                        self._last_execution_plan_event = 'TARGET_GEOMETRY_TRACK_INVALID'
+                        return
                 self._last_execution_plan_event = 'EXECUTION_FROZEN'
                 rospy.logwarn(
                     'Ignored rich 6D plan %s: EXECUTION_FROZEN (%s)',
@@ -1634,6 +2472,7 @@ class GraspTaskNode:
         active,
         force=False,
         budget_sec=None,
+        reference_plan=None,
     ):
         """Publish the explicit near-field planning phase without moving hardware."""
 
@@ -1672,6 +2511,7 @@ class GraspTaskNode:
             deadline_sec = 0.0
             self._near_field_phase_started_sec = 0.0
             self._near_field_phase_deadline_sec = 0.0
+            self._near_field_reference_center_base = None
         self._near_field_phase_id = phase_id
         phase = NearFieldPlanningPhase()
         phase.header.stamp = now
@@ -1683,6 +2523,76 @@ class GraspTaskNode:
             if deadline_sec > 0.0
             else rospy.Time(0)
         )
+        phase.reference_center_valid = False
+        phase.reference_label = ''
+        phase.reference_target_track_id = ''
+        phase.reference_source_stamp = rospy.Time(0)
+        if active and reference_plan is not None:
+            with self._grasp6d_plan_guard():
+                reference_object = deepcopy(
+                    getattr(self, 'latest_obj', None)
+                )
+            reference_label = str(
+                getattr(reference_object, 'label', '') or ''
+            ).strip().lower()
+            reference_surface = self._object_xyz(reference_object)
+            reference_source_stamp = self._object_source_stamp(
+                reference_object
+            )
+            try:
+                planned_surface = _plan_support_surface_xyz(reference_plan)
+                planned_center = self._plan_geometry_center_xyz(
+                    reference_plan
+                )
+            except Exception:
+                planned_surface = None
+                planned_center = None
+            if (
+                reference_object is not None
+                and bool(getattr(reference_object, 'detected', False))
+                and self._observed_target_matches_plan(reference_plan, reference_object, {})
+                and reference_surface is not None
+                and planned_surface is not None
+                and planned_center is not None
+                and _stamp_nanoseconds(reference_source_stamp) > 0
+            ):
+                correction = tuple(
+                    float(reference_surface[index])
+                    - float(planned_surface[index])
+                    for index in range(3)
+                )
+                reference_center = tuple(
+                    float(planned_center[index]) + correction[index]
+                    for index in range(3)
+                )
+                if all(
+                    math.isfinite(value)
+                    for value in correction + reference_center
+                ):
+                    phase.reference_center_valid = True
+                    phase.reference_label = reference_label
+                    phase.reference_target_track_id = _plan_target_track_id(reference_plan)
+                    phase.reference_center_base.x = reference_center[0]
+                    phase.reference_center_base.y = reference_center[1]
+                    phase.reference_center_base.z = reference_center[2]
+                    phase.reference_source_stamp = reference_source_stamp
+                    self._near_field_reference_center_base = (
+                        reference_center
+                    )
+                    rospy.loginfo(
+                        (
+                            'Near-field phase %d carries reached-view center '
+                            'reference xyz=(%.4f, %.4f, %.4f), correction='
+                            '(%.1f, %.1f, %.1f)mm'
+                        ),
+                        phase_id,
+                        reference_center[0],
+                        reference_center[1],
+                        reference_center[2],
+                        correction[0] * 1000.0,
+                        correction[1] * 1000.0,
+                        correction[2] * 1000.0,
+                    )
         phase_publisher = getattr(self, 'near_field_phase_pub', None)
         if phase_publisher is not None and callable(
             getattr(phase_publisher, 'publish', None)
@@ -1786,6 +2696,8 @@ class GraspTaskNode:
                             '%s: %s' % (validation.code, validation.reason),
                         )
                     bound_plan = self._freeze_execution_plan(bound_plan)
+                self._clear_view_reacquisition_attempts = 0
+                self._clear_view_reacquisition_minimum_stamp_ns = 0
                 self._start_inflight = True
                 self.active = True
         self._set_near_field_active(False)
@@ -2047,6 +2959,7 @@ class GraspTaskNode:
         defer_contact_gate = (
             plan_phase == _FAR_FIELD_OBSERVATION_PLAN
         )
+        far_field_reference_plan = plan if defer_contact_gate else None
         reused_observation_pose = None
         if defer_contact_gate:
             self.set_state(
@@ -2221,7 +3134,7 @@ class GraspTaskNode:
             phase_budget_sec = self._cfg_float(
                 gcfg,
                 'near_field_replan_timeout_sec',
-                30.0,
+                60.0,
             )
             if (
                 not math.isfinite(phase_budget_sec)
@@ -2236,6 +3149,7 @@ class GraspTaskNode:
             self._set_near_field_active(
                 True,
                 budget_sec=phase_budget_sec,
+                reference_plan=far_field_reference_plan,
             )
 
         rebound = self._maybe_rebind_near_field_grasp6d_plan(
@@ -2255,6 +3169,32 @@ class GraspTaskNode:
                 'continue without a strictly checked contact execution plan',
             )
             return False
+        if defer_contact_gate:
+            anchor_validation = validate_near_field_planar_center_anchor(
+                far_field_reference_plan,
+                rebound,
+                gcfg,
+                reference_center_base=getattr(
+                    self,
+                    '_near_field_reference_center_base',
+                    None,
+                ),
+            )
+            if not anchor_validation.ok:
+                self.set_state(
+                    GraspStages.FAILED,
+                    '%s: %s'
+                    % (
+                        anchor_validation.code,
+                        anchor_validation.reason,
+                    ),
+                )
+                return False
+            if anchor_validation.code == 'NEAR_FIELD_CENTER_ANCHOR_OK':
+                rospy.loginfo(
+                    'Near-field planar center anchor verified: %s',
+                    anchor_validation.reason,
+                )
         centering_validation = validate_calibration_centering_margin(
             rebound,
             gcfg,
@@ -2309,14 +3249,15 @@ class GraspTaskNode:
                 ):
                     return False
 
-        refined = (
-            plan
-            if direct_near_field
-            else self._maybe_final_refine_grasp6d_plan(
-                gcfg,
-                gripper_cfg,
-                plan,
-            )
+        # Keep the historical three-argument refinement call compatible with
+        # existing integrations while making the strict services available to
+        # the optional clear-view detour.
+        self._final_refine_move_pose = move_pose
+        self._final_refine_strict_execute_pose = strict_execute_pose
+        refined = self._maybe_final_refine_grasp6d_plan(
+            gcfg,
+            gripper_cfg,
+            plan,
         )
         if refined is None:
             return False
@@ -2352,11 +3293,13 @@ class GraspTaskNode:
             ):
                 return False
 
-        if (
-            final_refinement_applied
-            and not self._confirm_final_center_alignment(plan, gcfg)
-        ):
-            return False
+        if final_refinement_applied:
+            post_move_confirmation = self._post_move_confirmation_or_fail(
+                plan,
+                gcfg,
+            )
+            if not post_move_confirmation.ok:
+                return False
 
         if not self._execution_checkpoint(plan, gcfg, 'approach'):
             return False
@@ -2419,6 +3362,27 @@ class GraspTaskNode:
             execute_pose=move_pose_linear,
         ):
             return False
+        post_lift_minimum_stamp_ns = _stamp_nanoseconds(rospy.Time.now())
+        post_lift_visual = self._post_lift_visual_verification_result(
+            plan,
+            gcfg,
+            post_lift_minimum_stamp_ns,
+        )
+        if not post_lift_visual.ok:
+            self._clear_grasp6d_authority(
+                expected_plan_id=str(getattr(plan, 'plan_id', '') or '')
+            )
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: %s'
+                % (post_lift_visual.code, post_lift_visual.reason),
+            )
+            return False
+        if post_lift_visual.code == 'POST_LIFT_VISUAL_UNAVAILABLE':
+            rospy.logwarn(
+                'Post-lift visual verification unavailable: %s',
+                post_lift_visual.reason,
+            )
         if not self._execution_checkpoint(plan, gcfg, 'success acknowledgement'):
             return False
         self.set_state(GraspStages.SUCCESS, '6D grasp done', True)
@@ -2450,7 +3414,7 @@ class GraspTaskNode:
         required = self._cfg_bool(gcfg, 'near_field_replan_required', True)
         timeout = max(
             0.0,
-            self._cfg_float(gcfg, 'near_field_replan_timeout_sec', 30.0),
+            self._cfg_float(gcfg, 'near_field_replan_timeout_sec', 60.0),
         )
         poll_sec = max(
             0.02,
@@ -2551,16 +3515,8 @@ class GraspTaskNode:
                         == _CONTACT_EXECUTION_PLAN
                     ),
                 )
-                if direct_near_field:
-                    if not self._set_near_field_preview_stream(
-                        gcfg,
-                        False,
-                    ):
-                        rospy.logwarn(
-                            'Direct near-field plan %s is frozen but the '
-                            'preview stream disable request failed',
-                            str(getattr(frozen, 'plan_id', '') or ''),
-                        )
+                # The remote single-snapshot gate holds this phase after success.
+                # Keep the stream identity for the later final-refinement phase.
                 rospy.loginfo(
                     'Rebound 6D execution authority to near-field plan %s '
                     'from Preview stamp age %.3fs',
@@ -2665,6 +3621,439 @@ class GraspTaskNode:
     def _request_near_field_preview_stream(self, gcfg):
         return self._set_near_field_preview_stream(gcfg, True)
 
+    @staticmethod
+    def _clear_view_preflight_metrics(response):
+        """Extract the strict planner's duration/path metrics from a reply.
+
+        ``SetTargetPose`` predates the duration field and therefore carries the
+        metrics in its bounded status string.  Test doubles and future service
+        versions may expose structured attributes; both forms are accepted,
+        while malformed values are rejected so ranking never uses invented
+        numbers.
+        """
+        message = str(getattr(response, 'message', '') or '')
+        nested = getattr(response, 'metrics', None)
+        if not isinstance(nested, dict):
+            nested = {}
+
+        def read(names):
+            for name in names:
+                if name in nested:
+                    value = nested.get(name)
+                else:
+                    value = getattr(response, name, None)
+                if value is not None:
+                    try:
+                        number = float(value)
+                    except (TypeError, ValueError, OverflowError):
+                        return None
+                    if not math.isfinite(number) or number < 0.0:
+                        return None
+                    return number
+            for name in names:
+                match = re.search(
+                    r'(?:^|\s|;)%s=([-+0-9.eE]+)' % re.escape(name),
+                    message,
+                )
+                if match:
+                    try:
+                        number = float(match.group(1))
+                    except (TypeError, ValueError, OverflowError):
+                        return None
+                    if not math.isfinite(number) or number < 0.0:
+                        return None
+                    return number
+            return None
+
+        duration = read(
+            (
+                'joint_duration_lower_bound_sec',
+                'execution_duration_lower_bound_sec',
+                'duration_lower_bound_sec',
+            )
+        )
+        path_cost = read(('joint_path_cost', 'path_cost'))
+        max_delta = read(('joint_max_delta', 'max_delta'))
+        if duration is None or path_cost is None or max_delta is None:
+            return None
+        limiting_joint = str(
+            nested.get('hardware_limiting_joint', '')
+            if 'hardware_limiting_joint' in nested
+            else getattr(response, 'hardware_limiting_joint', '') or ''
+        )
+        if not limiting_joint:
+            match = re.search(
+                r'(?:^|\s|;)hardware_limiting_joint=([^\s;]+)',
+                message,
+            )
+            if match:
+                limiting_joint = match.group(1)
+        return {
+            'joint_duration_lower_bound_sec': float(duration),
+            'execution_duration_lower_bound_sec': float(duration),
+            'joint_path_cost': float(path_cost),
+            'joint_max_delta': float(max_delta),
+            'hardware_limiting_joint': limiting_joint,
+        }
+
+    @staticmethod
+    def _clear_view_response_success(response):
+        if isinstance(response, tuple) and response:
+            return bool(response[0])
+        return bool(getattr(response, 'success', False))
+
+    @staticmethod
+    def _clear_view_response_message(response):
+        if isinstance(response, tuple):
+            return str(response[1] if len(response) > 1 else '')
+        return str(getattr(response, 'message', '') or '')
+
+    def _clear_view_observation_ready(
+        self,
+        plan,
+        minimum_stamp_ns,
+        gcfg,
+    ):
+        """Require a post-move target observation before accepting a Preview."""
+        latest = getattr(self, 'latest_obj', None)
+        if latest is None or not bool(getattr(latest, 'detected', False)):
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_OBSERVATION_WAITING',
+                'waiting for a detected target after clear-view motion',
+            )
+        source_stamp = self._object_source_stamp(latest)
+        source_ns = _stamp_nanoseconds(source_stamp)
+        if source_ns <= 0 or source_ns < int(minimum_stamp_ns):
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_OBSERVATION_WAITING',
+                'target observation is older than the clear-view move',
+            )
+        try:
+            if not self._observed_target_matches_plan(plan, latest, gcfg):
+                return PlanValidationResult(
+                    False,
+                    'FINAL_REFINE_3D_INVALID',
+                    'post-clear-view target track no longer matches the bound plan',
+                )
+        except Exception as exc:
+            return PlanValidationResult(
+                False,
+                'FINAL_REFINE_3D_INVALID',
+                'post-clear-view target association failed: %s' % exc,
+            )
+        return PlanValidationResult(True, 'CLEAR_VIEW_OBSERVATION_READY', '')
+
+    def _execute_clear_view_reacquisition(
+        self,
+        current_plan,
+        gcfg,
+        move_pose,
+        strict_execute_pose,
+        gripper_cfg=None,
+    ):
+        """Strictly plan and execute at most one no-contact observation move."""
+        config = gcfg if isinstance(gcfg, dict) else {}
+        if not self._cfg_bool(
+            config,
+            'clear_view_reacquisition_enabled',
+            True,
+        ):
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'clear-view reacquisition is disabled',
+            )
+        try:
+            maximum_attempts = int(
+                config.get('clear_view_reacquisition_max_attempts', 1)
+            )
+        except (TypeError, ValueError, OverflowError):
+            maximum_attempts = 0
+        attempts = int(
+            getattr(self, '_clear_view_reacquisition_attempts', 0) or 0
+        )
+        if maximum_attempts != 1 or attempts >= maximum_attempts:
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'the single clear-view reacquisition attempt is already consumed',
+            )
+        if not callable(move_pose) or not callable(strict_execute_pose):
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'strict MoveIt planning and execution services are required',
+            )
+        if 'clear_view_reacquisition_camera_body_radius_m' not in config:
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'clear-view camera body radius configuration is required',
+            )
+        envelope_radius = self._cfg_float(
+            config,
+            'clear_view_reacquisition_camera_body_radius_m',
+            float('nan'),
+        )
+        if not math.isfinite(envelope_radius) or envelope_radius <= 0.0:
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'clear-view camera body radius must be finite and positive',
+            )
+        opening = None
+        runtime_gripper = None
+        if gripper_cfg is not None:
+            physical_opening = self._cfg_float(
+                gripper_cfg,
+                'open_position_m',
+                float('nan'),
+            )
+            required_opening = _strict_json_number(
+                getattr(current_plan, 'required_open_width_m', float('nan'))
+            )
+            if (
+                not math.isfinite(physical_opening)
+                or physical_opening <= 0.0
+                or required_opening is None
+                or required_opening <= 0.0
+            ):
+                return PlanValidationResult(
+                    False,
+                    'CLEAR_VIEW_REACQUISITION_FAILED',
+                    'physical and plan-required gripper openings are required',
+                )
+            opening = max(physical_opening, required_opening)
+            runtime_gripper = GripperGeometry(
+                max_inner_gap_m=ANALYTICAL_MAX_INNER_GAP_M,
+                jaw_clearance_each_side_m=0.002,
+                finger_size_xyz_m=ANALYTICAL_FINGER_SIZE_XYZ_M,
+                palm_size_xyz_m=ANALYTICAL_PALM_SIZE_XYZ_M,
+                support_clearance_m=0.003,
+            )
+
+        current_pose = self._current_tool_pose_base()
+        current_camera_pose = self._current_camera_pose_base()
+        target_center = self._plan_geometry_center_xyz(current_plan)
+        geometry = getattr(current_plan, 'object_geometry', None)
+        normal_msg = getattr(geometry, 'support_normal_base', None)
+        if (
+            current_pose is None
+            or current_camera_pose is None
+            or target_center is None
+            or normal_msg is None
+        ):
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'measured tool/camera poses and frozen support geometry are required',
+            )
+        try:
+            candidates = make_clear_view_reacquisition_poses(
+                current_pose,
+                target_center,
+                (
+                    normal_msg.x,
+                    normal_msg.y,
+                    normal_msg.z,
+                ),
+                lateral_offset_m=self._cfg_float(
+                    config,
+                    'clear_view_reacquisition_lateral_offset_m',
+                    0.060,
+                ),
+                radial_retreat_m=self._cfg_float(
+                    config,
+                    'clear_view_reacquisition_radial_retreat_m',
+                    0.040,
+                ),
+                minimum_contact_clearance_m=self._cfg_float(
+                    config,
+                    'clear_view_reacquisition_minimum_contact_clearance_m',
+                    0.080,
+                ),
+                current_camera_pose=current_camera_pose,
+                envelope_radius_m=envelope_radius,
+                opening_width_m=opening,
+                gripper_geometry=runtime_gripper,
+            )
+        except Exception as exc:
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'cannot construct clear-view candidates: %s' % exc,
+            )
+
+        # Consume the budget before any preflight.  Two failed preflights are
+        # still one attempted observation and may not unlock another move.
+        self._clear_view_reacquisition_attempts = attempts + 1
+        self.set_state(
+            GraspStages.PLAN_PREGRASP,
+            'strictly preflighting clear-view reacquisition candidates',
+        )
+        reachable = []
+        failures = []
+        for index, candidate in enumerate(candidates):
+            try:
+                response = move_pose(candidate, False)
+            except Exception as exc:
+                failures.append('candidate_%d exception: %s' % (index, exc))
+                continue
+            response_message = self._clear_view_response_message(response)
+            if not self._clear_view_response_success(response):
+                failures.append(
+                    'candidate_%d unreachable: %s'
+                    % (index, response_message)
+                )
+                continue
+            if (
+                is_position_only_fallback_message(response_message)
+                or is_orientation_fallback_message(response_message)
+            ):
+                failures.append(
+                    'candidate_%d used a forbidden MoveIt fallback' % index
+                )
+                continue
+            metrics = self._clear_view_preflight_metrics(response)
+            if metrics is None:
+                failures.append(
+                    'candidate_%d returned malformed strict metrics' % index
+                )
+                continue
+            reachable.append((metrics, index, candidate))
+        if not reachable:
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'no reachable clear-view candidate: %s'
+                % ('; '.join(failures) or 'strict preflight rejected both candidates'),
+            )
+
+        preferred = str(
+            config.get('clear_view_reacquisition_preferred_side', 'negative')
+            or 'negative'
+        ).strip().lower()
+        preferred_index = 0 if preferred in ('negative', 'minus', '-1', 'left') else 1
+        selected_metrics, selected_index, selected_pose = min(
+            reachable,
+            key=lambda item: (
+                float(item[0]['joint_duration_lower_bound_sec']),
+                float(item[0]['joint_path_cost']),
+                0 if item[1] == preferred_index else 1,
+                item[1],
+            ),
+        )
+        # The strict MoveIt endpoint intentionally retains only its most
+        # recently planned trajectory.  Planning a later candidate therefore
+        # invalidates the cache for an earlier winner, even when that later
+        # candidate is unreachable.  Re-plan an earlier winner immediately
+        # before the atomic execute boundary; a last-candidate winner already
+        # owns the current cache and needs no duplicate planning request.
+        if selected_index != len(candidates) - 1:
+            try:
+                selected_response = move_pose(selected_pose, False)
+            except Exception as exc:
+                return PlanValidationResult(
+                    False,
+                    'CLEAR_VIEW_REACQUISITION_FAILED',
+                    'selected clear-view candidate replan raised: %s' % exc,
+                )
+            selected_message = self._clear_view_response_message(
+                selected_response
+            )
+            if (
+                not self._clear_view_response_success(selected_response)
+                or is_position_only_fallback_message(selected_message)
+                or is_orientation_fallback_message(selected_message)
+                or self._clear_view_preflight_metrics(selected_response) is None
+            ):
+                return PlanValidationResult(
+                    False,
+                    'CLEAR_VIEW_REACQUISITION_FAILED',
+                    'selected clear-view candidate could not be strictly replanned',
+                )
+        checkpoint = getattr(self, '_execution_checkpoint', None)
+        if callable(checkpoint) and not checkpoint(
+            current_plan,
+            config,
+            'clear-view reacquisition execution',
+        ):
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'bound plan changed before clear-view execution',
+            )
+        try:
+            action = lambda: strict_execute_pose(selected_pose, True)
+            invoke = getattr(self, '_invoke_plan_bound_action', None)
+            if callable(invoke):
+                action_validation, response = invoke(
+                    current_plan,
+                    config,
+                    'clear-view reacquisition',
+                    action,
+                )
+                if not action_validation.ok:
+                    return PlanValidationResult(
+                        False,
+                        'CLEAR_VIEW_REACQUISITION_FAILED',
+                        'bound plan invalid before clear-view execution: %s: %s'
+                        % (
+                            action_validation.code,
+                            action_validation.reason,
+                        ),
+                    )
+            else:
+                response = action()
+        except Exception as exc:
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'clear-view execution raised: %s' % exc,
+            )
+        if not self._clear_view_response_success(response):
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'selected clear-view candidate failed: %s'
+                % self._clear_view_response_message(response),
+            )
+        settle = getattr(self, '_wait_for_motion_settle', None)
+        if callable(settle):
+            settle('clear-view reacquisition')
+        try:
+            minimum_stamp_ns = _stamp_nanoseconds(rospy.Time.now()) + 1
+        except Exception:
+            minimum_stamp_ns = 1
+        self._clear_view_reacquisition_minimum_stamp_ns = int(
+            max(1, minimum_stamp_ns)
+        )
+        if not self._request_near_field_preview_stream(config):
+            return PlanValidationResult(
+                False,
+                'CLEAR_VIEW_REACQUISITION_FAILED',
+                'fresh near-field preview request failed after clear-view motion',
+            )
+        self.set_state(
+            GraspStages.PLAN_PREGRASP,
+            (
+                'clear-view candidate %d executed; awaiting fresh registered '
+                'observation (duration_lb=%.3fs path_cost=%.3f)'
+            )
+            % (
+                selected_index,
+                float(selected_metrics['joint_duration_lower_bound_sec']),
+                float(selected_metrics['joint_path_cost']),
+            ),
+        )
+        return PlanValidationResult(
+            True,
+            'CLEAR_VIEW_REACQUIRED',
+            'one strict clear-view observation move completed',
+        )
+
     def _check_final_refine_sequence(self, plan, gcfg):
         timeout = max(
             0.0,
@@ -2689,7 +4078,7 @@ class GraspTaskNode:
         except Exception as exc:
             return PlanValidationResult(
                 False,
-                'FINAL_REFINE_MOVEIT_ERROR',
+                'MOVEIT_CHECK_ERROR',
                 str(exc),
             )
         if not bool(getattr(response, 'success', False)):
@@ -2697,12 +4086,12 @@ class GraspTaskNode:
                 getattr(response, 'failed_stage', '') or ''
             )
             message = str(getattr(response, 'message', '') or '')
+            failure_code = normalize_final_refine_moveit_failure_code(
+                getattr(response, 'failure_code', '')
+            )
             return PlanValidationResult(
                 False,
-                str(
-                    getattr(response, 'failure_code', '')
-                    or 'FINAL_REFINE_MOVEIT_UNREACHABLE'
-                ),
+                failure_code,
                 (
                     'final refinement %s failed: %s'
                     % (failed_stage or 'sequence', message)
@@ -2718,7 +4107,19 @@ class GraspTaskNode:
         gcfg,
         gripper_cfg,
         current_plan,
+        move_pose=None,
+        strict_execute_pose=None,
     ):
+        move_pose = move_pose or getattr(
+            self,
+            '_final_refine_move_pose',
+            None,
+        )
+        strict_execute_pose = strict_execute_pose or getattr(
+            self,
+            '_final_refine_strict_execute_pose',
+            None,
+        )
         if not self._cfg_bool(
             gcfg,
             'final_visual_refine_enabled',
@@ -2765,6 +4166,19 @@ class GraspTaskNode:
             GraspStages.PLAN_PREGRASP,
             'waiting for bounded final visual refinement',
         )
+        if self._direct_near_field_enabled(gcfg) and timeout > 0.0:
+            self._set_near_field_active(
+                True,
+                force=True,
+                budget_sec=timeout,
+                reference_plan=current_plan,
+            )
+            minimum_stamp_ns = max(
+                minimum_stamp_ns,
+                _stamp_nanoseconds(
+                    rospy.Time.from_sec(self._near_field_phase_started_sec)
+                ),
+            )
         if not self._request_near_field_preview_stream(gcfg):
             if required:
                 self.set_state(
@@ -2777,24 +4191,16 @@ class GraspTaskNode:
             )
             return current_plan
 
-        translation_limit = max(
-            0.0,
-            self._cfg_float(
-                gcfg,
-                'final_visual_refine_max_translation_m',
-                0.025,
-            ),
-        )
-        yaw_limit = math.radians(
-            max(
-                0.0,
-                self._cfg_float(
-                    gcfg,
-                    'final_visual_refine_max_yaw_deg',
-                    10.0,
-                ),
+        try:
+            refinement_policy = _final_refinement_registration_policy(gcfg)
+        except (TypeError, ValueError, AttributeError) as exc:
+            self.set_state(
+                GraspStages.FAILED,
+                'FINAL_REFINE_3D_INVALID: %s' % str(exc),
             )
-        )
+            return None
+        translation_limit = refinement_policy['maximum_translation_m']
+        yaw_limit = math.radians(refinement_policy['maximum_yaw_deg'])
         roll_pitch_limit = math.radians(
             max(
                 0.0,
@@ -2805,58 +4211,83 @@ class GraspTaskNode:
                 ),
             )
         )
-        center_fallback_enabled = self._cfg_bool(
-            gcfg,
-            'final_visual_refine_center_fallback_enabled',
-            True,
-        )
-        center_fallback_delay = max(
-            0.0,
-            self._cfg_float(
-                gcfg,
-                'final_visual_refine_center_fallback_delay_sec',
-                3.0,
-            ),
-        )
-        center_required_samples = max(
-            1,
-            int(
-                gcfg.get(
-                    'final_visual_refine_center_fallback_required_samples',
-                    5,
-                )
-            ),
-        )
-        center_max_jitter = max(
-            0.0,
-            self._cfg_float(
-                gcfg,
-                'final_visual_refine_center_fallback_max_jitter_m',
-                0.006,
-            ),
-        )
         start = time.monotonic()
-        center_samples = []
-        last_center_token = None
-        last_center_attempt_token = None
         last_result = PlanValidationResult(
             False,
             'FINAL_REFINE_WAITING',
             'waiting for a same-candidate close-range Preview plan',
         )
+        clear_view_pending = False
+        clear_view_observation_stamp_ns = 0
         while (
             self.active
             and not rospy.is_shutdown()
             and time.monotonic() - start <= timeout
         ):
+            if clear_view_pending:
+                observation_ready = self._clear_view_observation_ready(
+                    current_plan,
+                    clear_view_observation_stamp_ns,
+                    gcfg,
+                )
+                if not observation_ready.ok:
+                    last_result = observation_ready
+                    if observation_ready.code != 'CLEAR_VIEW_OBSERVATION_WAITING':
+                        break
+                    rospy.sleep(poll_sec)
+                    continue
             preview_result, observed = (
                 self._copy_near_field_preview_candidate(
                     current_plan,
                     minimum_stamp_ns,
                     gcfg,
+                    minimum_observation_stamp_ns=(
+                        clear_view_observation_stamp_ns
+                        if clear_view_pending
+                        else 0
+                    ),
                 )
             )
-            if preview_result.ok:
+            if preview_result.code == 'CLEAR_VIEW_REQUIRED':
+                if clear_view_pending:
+                    last_result = PlanValidationResult(
+                        False,
+                        'CLEAR_VIEW_REACQUISITION_FAILED',
+                        'fresh clear-view Preview still lacks sufficient 3D evidence',
+                    )
+                    break
+                reacquisition = self._execute_clear_view_reacquisition(
+                    current_plan,
+                    gcfg,
+                    move_pose,
+                    strict_execute_pose,
+                    gripper_cfg,
+                )
+                last_result = reacquisition
+                if reacquisition.ok:
+                    clear_view_pending = True
+                    clear_view_observation_stamp_ns = int(
+                        getattr(
+                            self,
+                            '_clear_view_reacquisition_minimum_stamp_ns',
+                            0,
+                        )
+                        or 0
+                    )
+                    if clear_view_observation_stamp_ns <= 0:
+                        clear_view_observation_stamp_ns = (
+                            _stamp_nanoseconds(rospy.Time.now()) + 1
+                        )
+                    # Do not let the old Preview be mistaken for the fresh
+                    # post-move registration while the stream catches up.
+                    minimum_stamp_ns = max(
+                        minimum_stamp_ns,
+                        clear_view_observation_stamp_ns,
+                    )
+                    rospy.sleep(poll_sec)
+                    continue
+                break
+            elif preview_result.ok:
                 refinement, candidate, metrics = (
                     build_bounded_final_visual_refinement(
                         current_plan,
@@ -2866,15 +4297,75 @@ class GraspTaskNode:
                         roll_pitch_limit,
                     )
                 )
+                if (
+                    not refinement.ok
+                    and clear_view_pending
+                    and refinement.code == 'FINAL_REFINE_CANDIDATE_SWITCH'
+                ):
+                    # A new clear view may expose a different hard-safe
+                    # candidate family.  Treat it as a complete rebind, then
+                    # retain the same evidence/track/support gates below.
+                    candidate = deepcopy(observed)
+                    refinement = PlanValidationResult(
+                        True,
+                        'CLEAR_VIEW_PLAN_REBOUND',
+                        'fresh clear-view plan accepted as a complete rebind',
+                    )
+                    metrics = {
+                        'translation_m': 0.0,
+                        'yaw_rad': 0.0,
+                        'observed_roll_pitch_change_rad': 0.0,
+                    }
                 last_result = refinement
                 if refinement.ok:
+                    centering = validate_calibration_centering_margin(
+                        candidate,
+                        gcfg,
+                        gripper_cfg,
+                    )
+                    if not centering.ok:
+                        last_result = centering
+                        break
+                    if centering.code == 'CALIBRATION_CENTERING_MARGIN_OVERRIDE':
+                        rospy.logwarn(
+                            'Refined plan contact centering margin explicitly '
+                            'overridden: %s',
+                            centering.reason,
+                        )
+                    if not self._execution_checkpoint(
+                        current_plan,
+                        gcfg,
+                        'final visual refinement sequence',
+                    ):
+                        last_result = PlanValidationResult(
+                            False,
+                            'FINAL_REFINE_3D_INVALID',
+                            'bound plan changed before final refinement sequence',
+                        )
+                        break
                     sequence_result = self._check_final_refine_sequence(
                         candidate,
                         gcfg,
                     )
                     last_result = sequence_result
                     if sequence_result.ok:
-                        frozen = self._freeze_execution_plan(candidate)
+                        rebind_validation, frozen = self._invoke_plan_bound_action(
+                            current_plan,
+                            gcfg,
+                            'final visual refinement rebind',
+                            lambda: self._freeze_execution_plan(candidate),
+                        )
+                        if not rebind_validation.ok or frozen is None:
+                            last_result = PlanValidationResult(
+                                False,
+                                'FINAL_REFINE_3D_INVALID',
+                                'bound plan changed before refinement rebind: %s: %s'
+                                % (
+                                    rebind_validation.code,
+                                    rebind_validation.reason,
+                                ),
+                            )
+                            break
                         rospy.loginfo(
                             (
                                 'Bound final visual refinement plan %s: '
@@ -2907,152 +4398,28 @@ class GraspTaskNode:
                         return frozen
             else:
                 last_result = preview_result
-                if (
-                    preview_result.code == 'NEAR_FIELD_PLAN_UNCHANGED'
-                    and self._cfg_bool(
-                        gcfg,
-                        (
-                            'final_visual_refine_accept_unchanged_after_'
-                            'post_move_confirm'
-                        ),
-                        False,
-                    )
-                ):
-                    rospy.loginfo(
-                        (
-                            'Final refinement candidate is unchanged; '
-                            'requiring fresh post-move center evidence '
-                            'before preserving plan %s'
-                        ),
-                        str(getattr(current_plan, 'plan_id', '') or ''),
-                    )
-                    if self._confirm_final_center_alignment(
-                        current_plan,
-                        gcfg,
-                    ):
-                        return current_plan
-                    return None
+                if clear_view_pending and preview_result.code not in _CLEAR_VIEW_WAITING_CODES:
+                    break
 
             elapsed = time.monotonic() - start
-            if center_fallback_enabled and elapsed >= center_fallback_delay:
-                center_result, token, xyz, stamp = (
-                    self._copy_final_center_sample(
-                        current_plan,
-                        minimum_stamp_ns,
-                        gcfg,
-                    )
-                )
-                if center_result.ok and token != last_center_token:
-                    last_center_token = token
-                    center_samples.append((xyz, stamp, token))
-                    center_samples = center_samples[-center_required_samples:]
-                elif not center_result.ok:
-                    last_result = center_result
-
-                if len(center_samples) >= center_required_samples:
-                    median_xyz = tuple(
-                        sorted(
-                            float(item[0][axis])
-                            for item in center_samples
-                        )[len(center_samples) // 2]
-                        for axis in range(3)
-                    )
-                    spread = max(
-                        _vector3_norm(
-                            tuple(
-                                float(item[0][axis]) - median_xyz[axis]
-                                for axis in range(3)
-                            )
-                        )
-                        for item in center_samples
-                    )
-                    representative_stamp = center_samples[
-                        len(center_samples) // 2
-                    ][1]
-                    newest_token = center_samples[-1][2]
-                    if spread > center_max_jitter:
-                        last_result = PlanValidationResult(
-                            False,
-                            'FINAL_REFINE_CENTER_UNSTABLE',
-                            'surface-center spread %.4fm exceeds %.4fm'
-                            % (spread, center_max_jitter),
-                        )
-                        center_samples = center_samples[
-                            -max(1, center_required_samples - 1):
-                        ]
-                    elif newest_token != last_center_attempt_token:
-                        last_center_attempt_token = newest_token
-                        refinement, candidate, metrics = (
-                            build_bounded_final_center_refinement(
-                                current_plan,
-                                median_xyz,
-                                representative_stamp,
-                                translation_limit,
-                            )
-                        )
-                        last_result = refinement
-                        if refinement.ok:
-                            sequence_result = (
-                                self._check_final_refine_sequence(
-                                    candidate,
-                                    gcfg,
-                                )
-                            )
-                            last_result = sequence_result
-                            if sequence_result.ok:
-                                frozen = self._freeze_execution_plan(
-                                    candidate
-                                )
-                                delta = metrics['translation_xyz']
-                                rospy.loginfo(
-                                    (
-                                        'Bound final center-only refinement '
-                                        'plan %s: translation=(%.1f, %.1f, '
-                                        '%.1f)mm norm=%.1fmm samples=%d '
-                                        'spread=%.1fmm orientation/width '
-                                        'frozen; %s'
-                                    ),
-                                    str(
-                                        getattr(frozen, 'plan_id', '') or ''
-                                    ),
-                                    float(delta[0]) * 1000.0,
-                                    float(delta[1]) * 1000.0,
-                                    float(delta[2]) * 1000.0,
-                                    float(metrics['translation_m']) * 1000.0,
-                                    len(center_samples),
-                                    spread * 1000.0,
-                                    sequence_result.reason,
-                                )
-                                self.set_state(
-                                    GraspStages.PLAN_PREGRASP,
-                                    (
-                                        'bounded center-only final '
-                                        'refinement rebound: %s'
-                                    )
-                                    % str(
-                                        getattr(frozen, 'plan_id', '') or ''
-                                    ),
-                                )
-                                if not (
-                                    self._simulate_grasp6d_plan_if_required(
-                                        gcfg,
-                                        gripper_cfg,
-                                        frozen,
-                                    )
-                                ):
-                                    return None
-                                return frozen
             rospy.sleep(poll_sec)
 
-        message = (
-            'FINAL_REFINE_TIMEOUT: no bounded same-candidate refinement after '
-            '%.1fs; last=%s: %s'
-        ) % (
-            timeout,
-            last_result.code,
-            last_result.reason,
+        clear_view_failed = (
+            clear_view_pending
+            or last_result.code == 'CLEAR_VIEW_REACQUISITION_FAILED'
         )
-        if required:
+        if clear_view_failed:
+            message = (
+                'CLEAR_VIEW_REACQUISITION_FAILED: no valid post-move '
+                'registration after the single clear-view attempt in %.1fs; '
+                'last=%s: %s'
+            ) % (timeout, last_result.code, last_result.reason)
+        else:
+            message = (
+                'FINAL_REFINE_TIMEOUT: no bounded same-candidate refinement after '
+                '%.1fs; last=%s: %s'
+            ) % (timeout, last_result.code, last_result.reason)
+        if required or clear_view_failed:
             self.set_state(GraspStages.FAILED, message)
             return None
         rospy.logwarn('%s; keeping existing bound plan', message)
@@ -3063,6 +4430,7 @@ class GraspTaskNode:
         current_plan,
         minimum_stamp_ns,
         gcfg,
+        minimum_observation_stamp_ns=0,
     ):
         with self._grasp6d_plan_guard():
             preview = deepcopy(
@@ -3082,6 +4450,27 @@ class GraspTaskNode:
         stamp_ns = _stamp_nanoseconds(
             getattr(getattr(preview, 'header', None), 'stamp', None)
         )
+        # Freshness is a hard admission prerequisite.  In particular, a
+        # stale cached Preview with the same plan_id must not be reported as a
+        # harmless unchanged plan.
+        if stamp_ns <= 0 or stamp_ns < int(minimum_stamp_ns):
+            return (
+                PlanValidationResult(
+                    False,
+                    (
+                        'CLEAR_VIEW_PREVIEW_WAITING'
+                        if int(minimum_observation_stamp_ns or 0) > 0
+                        else 'FINAL_REFINE_3D_INVALID'
+                    ),
+                    (
+                        'waiting for a Preview newer than the clear-view '
+                        'move'
+                        if int(minimum_observation_stamp_ns or 0) > 0
+                        else 'Preview source timestamp is older than the near-field request window'
+                    ),
+                ),
+                None,
+            )
         diagnostic = str(getattr(preview, 'diagnostic', '') or '')
         terminal_code, separator, terminal_reason = diagnostic.partition(':')
         terminal_code = terminal_code.strip()
@@ -3118,21 +4507,23 @@ class GraspTaskNode:
                 ),
                 None,
             )
+        if int(minimum_observation_stamp_ns or 0) > 0:
+            observation_ready = self._clear_view_observation_ready(
+                current_plan,
+                int(minimum_observation_stamp_ns),
+                gcfg,
+            )
+            if not observation_ready.ok:
+                return observation_ready, None
+        # A genuinely fresh same-ID preview remains a harmless no-op.  The
+        # freshness gate above must run first so stale cached plans cannot
+        # leak NEAR_FIELD_PLAN_UNCHANGED and bypass final-refinement checks.
         if strict_plan_id_equal(preview_id, current_id):
             return (
                 PlanValidationResult(
                     False,
                     'NEAR_FIELD_PLAN_UNCHANGED',
                     'Preview still matches the current execution plan',
-                ),
-                None,
-            )
-        if stamp_ns <= 0 or stamp_ns < int(minimum_stamp_ns):
-            return (
-                PlanValidationResult(
-                    False,
-                    'NEAR_FIELD_PLAN_OLD',
-                    'Preview source timestamp is older than the near-field request window',
                 ),
                 None,
             )
@@ -3143,7 +4534,23 @@ class GraspTaskNode:
             self._configured_plan_validity(gcfg),
         )
         if not validation.ok:
-            return validation, None
+            # A final-refinement Preview has no authority to expose generic
+            # plan/stamp/geometry diagnostics to the execution state machine.
+            return PlanValidationResult(
+                False,
+                'FINAL_REFINE_3D_INVALID',
+                '%s: %s' % (validation.code, validation.reason),
+            ), None
+        try:
+            refinement_validation = validate_final_refinement_execution(
+                current_plan,
+                preview,
+                gcfg,
+            )
+        except (TypeError, ValueError, AttributeError) as exc:
+            return PlanValidationResult(False, 'FINAL_REFINE_3D_INVALID', str(exc)), None
+        if not refinement_validation.ok:
+            return refinement_validation, None
         drift = self._target_drift_result(
             preview,
             gcfg,
@@ -3159,304 +4566,278 @@ class GraspTaskNode:
             return observation_range, None
         return validation, preview
 
-    def _copy_final_center_sample(
-        self,
-        current_plan,
-        minimum_stamp_ns,
-        gcfg,
-    ):
-        with self._grasp6d_plan_guard():
-            obj = deepcopy(getattr(self, 'latest_obj', None))
-            stamp = deepcopy(getattr(self, 'latest_obj_time', None))
-        if obj is None or not bool(getattr(obj, 'detected', False)):
-            return (
-                PlanValidationResult(
-                    False,
-                    'FINAL_REFINE_CENTER_MISSING',
-                    'no detected live target is available',
-                ),
-                None,
-                None,
-                None,
-            )
-        stamp_ns = _stamp_nanoseconds(stamp)
-        if stamp_ns <= 0 or stamp_ns < int(minimum_stamp_ns):
-            return (
-                PlanValidationResult(
-                    False,
-                    'FINAL_REFINE_CENTER_OLD',
-                    'live target is older than the final-refinement window',
-                ),
-                None,
-                None,
-                None,
-            )
-        age = _stamp_seconds(rospy.Time.now()) - _stamp_seconds(stamp)
-        validity = self._configured_target_observation_validity(gcfg)
-        if (
-            not math.isfinite(age)
-            or age < 0.0
-            or age > validity
-        ):
-            return (
-                PlanValidationResult(
-                    False,
-                    'FINAL_REFINE_CENTER_STALE',
-                    'live target age %.3fs is outside [0, %.3f]s'
-                    % (age, validity),
-                ),
-                None,
-                None,
-                None,
-            )
-        plan_label = str(
-            getattr(
-                getattr(current_plan, 'object_geometry', None),
-                'label',
-                '',
-            )
-            or ''
-        ).strip().lower()
-        live_label = str(getattr(obj, 'label', '') or '').strip().lower()
-        if not plan_label or live_label != plan_label:
-            return (
-                PlanValidationResult(
-                    False,
-                    'FINAL_REFINE_TARGET_CHANGED',
-                    'live target label does not match the frozen plan',
-                ),
-                None,
-                None,
-                None,
-            )
-        camera_cfg = rospy.get_param('/camera', {})
-        edge_margin_px = max(
-            0,
-            int(
-                gcfg.get(
-                    'final_visual_refine_center_fallback_edge_margin_px',
-                    4,
-                )
-            ),
-        )
-        try:
-            edge_clearance_px = self._object_bbox_edge_clearance_px(
-                obj,
-                camera_cfg.get('width', 640),
-                camera_cfg.get('height', 480),
-            )
-        except Exception as exc:
-            return (
-                PlanValidationResult(
-                    False,
-                    'FINAL_REFINE_CENTER_BBOX_INVALID',
-                    str(exc),
-                ),
-                None,
-                None,
-                None,
-            )
-        if edge_clearance_px < edge_margin_px:
-            return (
-                PlanValidationResult(
-                    False,
-                    'FINAL_REFINE_CENTER_CLIPPED',
-                    (
-                        'target bbox edge clearance %dpx is below %dpx; '
-                        'a clipped mask centroid cannot drive motion'
-                    )
-                    % (edge_clearance_px, edge_margin_px),
-                ),
-                None,
-                None,
-                None,
-            )
-        xyz = self._object_xyz(obj)
-        if xyz is None or not all(math.isfinite(value) for value in xyz):
-            return (
-                PlanValidationResult(
-                    False,
-                    'FINAL_REFINE_CENTER_INVALID',
-                    'live target surface center is unavailable',
-                ),
-                None,
-                None,
-                None,
-            )
-        return PlanValidationResult(True), stamp_ns, xyz, stamp
-
     def _confirm_final_center_alignment(self, plan, gcfg):
+        """Require fresh, same-track 3D registration evidence after motion.
+
+        This is deliberately independent of image centroids.  Each accepted
+        Preview must be newer than the corrected plan and the preceding
+        Preview, must retain the plan lineage/support binding, and must report
+        a bounded registration translation residual.  Only the observation
+        stream is read; this method never commands another motion.
+        """
+        config = gcfg if isinstance(gcfg, dict) else {}
         if not self._cfg_bool(
-            gcfg,
+            config,
             'final_visual_refine_post_move_confirm_enabled',
             True,
         ):
-            return True
-        timeout = max(
-            0.0,
-            self._cfg_float(
-                gcfg,
-                'final_visual_refine_post_move_confirm_timeout_sec',
-                12.0,
-            ),
+            return PlanValidationResult(True, 'NOT_APPLICABLE', '')
+        timeout = self._cfg_float(
+            config,
+            'final_visual_refine_post_move_confirm_timeout_sec',
+            float('nan'),
         )
-        poll_sec = max(
-            0.02,
-            self._cfg_float(
-                gcfg,
-                'final_visual_refine_poll_sec',
-                0.05,
-            ),
+        required_raw = config.get(
+            'final_visual_refine_post_move_confirm_required_samples',
+            None,
         )
-        required_samples = max(
-            1,
-            int(
-                gcfg.get(
-                    'final_visual_refine_post_move_confirm_required_samples',
-                    5,
-                )
-            ),
+        max_jitter = self._cfg_float(
+            config,
+            'final_visual_refine_post_move_confirm_max_jitter_m',
+            float('nan'),
         )
-        max_jitter = max(
-            0.0,
-            self._cfg_float(
-                gcfg,
-                'final_visual_refine_post_move_confirm_max_jitter_m',
-                0.006,
-            ),
+        max_residual = self._cfg_float(
+            config,
+            'final_visual_refine_post_move_confirm_max_residual_m',
+            float('nan'),
         )
-        max_residual = max(
-            0.0,
-            self._cfg_float(
-                gcfg,
-                'final_visual_refine_post_move_confirm_max_residual_m',
-                0.006,
-            ),
-        )
-        with self._grasp6d_plan_guard():
-            initial_stamp = deepcopy(
-                getattr(self, 'latest_obj_time', None)
+        try:
+            required = int(required_raw)
+            required_is_integral = (
+                not isinstance(required_raw, bool)
+                and float(required_raw) == float(required)
+            )
+        except (TypeError, ValueError, OverflowError):
+            required = 0
+            required_is_integral = False
+        if (
+            not math.isfinite(timeout)
+            or timeout <= 0.0
+            or required <= 0
+            or not required_is_integral
+            or not math.isfinite(max_jitter)
+            or max_jitter < 0.0
+            or not math.isfinite(max_residual)
+            or max_residual < 0.0
+        ):
+            return PlanValidationResult(
+                False,
+                'FINAL_REFINE_POST_MOVE_CONFIRM_CONFIG_INVALID',
+                'post-move confirmation thresholds must be finite and positive',
+            )
+        try:
+            confirmation_start_ns = _stamp_nanoseconds(rospy.Time.now())
+            minimum_stamp_ns = (
+                _stamp_nanoseconds(getattr(getattr(plan, 'header', None), 'stamp', None))
+            )
+            plan_id = str(getattr(plan, 'plan_id', '') or '')
+        except Exception as exc:
+            return PlanValidationResult(
+                False,
+                'FINAL_REFINE_POST_MOVE_CONFIRM_INVALID',
+                'corrected plan timestamp is invalid: %s' % exc,
             )
         minimum_stamp_ns = max(
-            _stamp_nanoseconds(
-                getattr(getattr(plan, 'header', None), 'stamp', None)
-            ) + 1,
-            _stamp_nanoseconds(initial_stamp) + 1,
-        )
-        self.set_state(
-            GraspStages.PLAN_PREGRASP,
-            'confirming post-move pregrasp center alignment',
-        )
+            minimum_stamp_ns,
+            int(confirmation_start_ns),
+        ) + 1
+
+        def start_confirmation_phase():
+            try:
+                phase_ok = self._set_near_field_active(
+                    True,
+                    force=True,
+                    budget_sec=timeout,
+                    reference_plan=plan,
+                )
+            except Exception as exc:
+                return PlanValidationResult(
+                    False,
+                    'FINAL_REFINE_POST_MOVE_CONFIRM_PHASE_FAILED',
+                    'cannot start fresh near-field phase: %s' % exc,
+                )
+            if phase_ok is False:
+                return PlanValidationResult(
+                    False,
+                    'FINAL_REFINE_POST_MOVE_CONFIRM_PHASE_FAILED',
+                    'fresh near-field phase was rejected',
+                )
+            try:
+                requested = self._request_near_field_preview_stream(config)
+            except Exception as exc:
+                return PlanValidationResult(
+                    False,
+                    'FINAL_REFINE_POST_MOVE_CONFIRM_STREAM_FAILED',
+                    'cannot request fresh Preview stream: %s' % exc,
+                )
+            if not requested:
+                return PlanValidationResult(
+                    False,
+                    'FINAL_REFINE_POST_MOVE_CONFIRM_STREAM_FAILED',
+                    'fresh Preview stream request was rejected',
+                )
+            return PlanValidationResult(True)
+
+        phase_result = start_confirmation_phase()
+        if not phase_result.ok:
+            return phase_result
         samples = []
-        last_token = None
-        last_result = PlanValidationResult(
-            False,
-            'FINAL_REFINE_CONFIRM_WAITING',
-            'waiting for post-correction target observations',
-        )
-        start = time.monotonic()
+        last_stamp_ns = minimum_stamp_ns - 1
+        last_invalid_reason = 'no fresh Preview registration evidence'
+        started = time.monotonic()
         while (
-            self.active
+            getattr(self, 'active', True)
             and not rospy.is_shutdown()
-            and time.monotonic() - start <= timeout
+            and time.monotonic() - started <= timeout
         ):
-            result, token, xyz, _stamp = self._copy_final_center_sample(
-                plan,
-                minimum_stamp_ns,
-                gcfg,
-            )
-            last_result = result
-            if result.ok and token != last_token:
-                last_token = token
-                samples.append(xyz)
-                samples = samples[-required_samples:]
-            if len(samples) >= required_samples:
-                median_xyz = tuple(
-                    sorted(float(item[axis]) for item in samples)[
-                        len(samples) // 2
-                    ]
-                    for axis in range(3)
+            with self._grasp6d_plan_guard():
+                preview = deepcopy(
+                    getattr(self, 'latest_grasp6d_preview_plan', None)
                 )
-                spread = max(
-                    _vector3_norm(
-                        tuple(
-                            float(item[axis]) - median_xyz[axis]
-                            for axis in range(3)
+            if preview is not None:
+                stamp_ns = _stamp_nanoseconds(
+                    getattr(getattr(preview, 'header', None), 'stamp', None)
+                )
+                preview_id = str(getattr(preview, 'plan_id', '') or '')
+                if stamp_ns <= last_stamp_ns or stamp_ns < minimum_stamp_ns:
+                    if not samples:
+                        last_invalid_reason = (
+                            'Preview registration evidence is stale or non-monotonic'
                         )
+                elif preview_id == plan_id:
+                    last_invalid_reason = (
+                        'post-move Preview must be a fresh plan-bound registration'
                     )
-                    for item in samples
-                )
-                if spread > max_jitter:
-                    last_result = PlanValidationResult(
-                        False,
-                        'FINAL_REFINE_CONFIRM_UNSTABLE',
-                        'post-correction spread %.4fm exceeds %.4fm'
-                        % (spread, max_jitter),
-                    )
-                    samples = samples[
-                        -max(1, required_samples - 1):
-                    ]
                 else:
                     try:
-                        planned_surface = _plan_support_surface_xyz(plan)
-                    except Exception as exc:
-                        self.set_state(
-                            GraspStages.FAILED,
-                            'FINAL_REFINE_CONFIRM_INVALID: %s' % exc,
-                        )
-                        return False
-                    residual = tuple(
-                        median_xyz[index] - planned_surface[index]
-                        for index in range(3)
-                    )
-                    residual_norm = _vector3_norm(residual)
-                    rospy.loginfo(
-                        (
-                            'Post-correction center confirmation: '
-                            'residual=(%.1f, %.1f, %.1f)mm norm=%.1fmm '
-                            'samples=%d spread=%.1fmm limit=%.1fmm'
-                        ),
-                        residual[0] * 1000.0,
-                        residual[1] * 1000.0,
-                        residual[2] * 1000.0,
-                        residual_norm * 1000.0,
-                        len(samples),
-                        spread * 1000.0,
-                        max_residual * 1000.0,
-                    )
-                    if residual_norm <= max_residual + 1e-12:
-                        self.set_state(
-                            GraspStages.PLAN_PREGRASP,
-                            (
-                                'post-move pregrasp center confirmed: '
-                                'residual %.1f mm'
+                        if (
+                            str(getattr(preview, 'candidate_source', '') or '')
+                            != str(getattr(plan, 'candidate_source', '') or '')
+                            or tuple(getattr(preview, 'candidate_source_lineage', ()) or ())
+                            != tuple(getattr(plan, 'candidate_source_lineage', ()) or ())
+                        ):
+                            return PlanValidationResult(
+                                False,
+                                'FINAL_REFINE_POST_MOVE_CONFIRM_INVALID',
+                                'candidate source lineage changed after corrected pregrasp',
                             )
-                            % (residual_norm * 1000.0),
+                        validation = validate_execution_plan(
+                            preview,
+                            _stamp_seconds(rospy.Time.now()),
+                            self._configured_plan_validity(config),
+                            enforce_freshness=False,
                         )
-                        return True
-                    self.set_state(
-                        GraspStages.FAILED,
-                        (
-                            'FINAL_REFINE_RESIDUAL: post-move pregrasp '
-                            'center residual %.1fmm exceeds %.1fmm; '
-                            'refusing contact'
+                        if not validation.ok:
+                            raise ValueError(
+                                '%s: %s' % (validation.code, validation.reason)
+                            )
+                        refinement = validate_final_refinement_execution(
+                            plan,
+                            preview,
+                            config,
                         )
-                        % (
-                            residual_norm * 1000.0,
-                            max_residual * 1000.0,
-                        ),
-                    )
-                    return False
-            rospy.sleep(poll_sec)
-        self.set_state(
-            GraspStages.FAILED,
-            (
-                'FINAL_REFINE_CONFIRM_TIMEOUT: no stable post-correction '
-                'center after %.1fs; last=%s: %s'
+                        if not refinement.ok:
+                            raise ValueError(
+                                '%s: %s' % (
+                                    refinement.code,
+                                    refinement.reason,
+                                )
+                            )
+                        residual = float(
+                            getattr(preview, 'refinement_translation_m')
+                        )
+                        if (
+                            not math.isfinite(residual)
+                            or residual < 0.0
+                            or residual > max_residual + 1e-12
+                        ):
+                            raise ValueError(
+                                'registration residual %.6fm exceeds %.6fm'
+                                % (residual, max_residual)
+                            )
+                        try:
+                            point = preview.object_geometry.pose_base.position
+                            center_xyz = tuple(
+                                float(getattr(point, axis))
+                                for axis in ('x', 'y', 'z')
+                            )
+                        except (AttributeError, TypeError, ValueError):
+                            raise ValueError(
+                                'Preview registration center is unavailable'
+                            )
+                        if not all(math.isfinite(value) for value in center_xyz):
+                            raise ValueError(
+                                'Preview registration center is non-finite'
+                            )
+                        samples.append((stamp_ns, residual, center_xyz))
+                        last_stamp_ns = stamp_ns
+                        if len(samples) >= required:
+                            window = samples[-required:]
+                            values = [item[1] for item in window]
+                            jitter = max(values) - min(values)
+                            centers = [item[2] for item in window]
+                            center_jitter = max(
+                                math.sqrt(
+                                    sum(
+                                        (centers[first][axis] - centers[second][axis])
+                                        ** 2
+                                        for axis in range(3)
+                                    )
+                                )
+                                for first in range(len(centers))
+                                for second in range(first + 1, len(centers))
+                            ) if len(centers) > 1 else 0.0
+                            if (
+                                jitter <= max_jitter + 1e-12
+                                and center_jitter <= max_jitter + 1e-12
+                            ):
+                                return PlanValidationResult(
+                                    True,
+                                    'FINAL_REFINE_POST_MOVE_CONFIRM_OK',
+                                    'accepted %d fresh 3D registration frames; '
+                                    'residual jitter %.6fm center jitter %.6fm'
+                                    % (required, jitter, center_jitter),
+                                )
+                            last_invalid_reason = (
+                                'registration jitter residual=%.6fm center=%.6fm '
+                                'exceeds %.6fm'
+                                % (jitter, center_jitter, max_jitter)
+                            )
+                        # ``single_snapshot_direct`` permits only one remote
+                        # submission per near-field phase.  Every accepted
+                        # sample which does not complete a stable window must
+                        # therefore request another phase, including when an
+                        # unstable window needs a replacement frame.
+                        next_phase = start_confirmation_phase()
+                        if not next_phase.ok:
+                            return next_phase
+                    except (TypeError, ValueError, AttributeError, IndexError) as exc:
+                        last_invalid_reason = str(exc)
+            rospy.sleep(
+                max(
+                    0.02,
+                    self._cfg_float(
+                        config,
+                        'final_visual_refine_poll_sec',
+                        0.05,
+                    ),
+                )
             )
-            % (timeout, last_result.code, last_result.reason),
+        return PlanValidationResult(
+            False,
+            'FINAL_REFINE_POST_MOVE_CONFIRM_TIMEOUT',
+            'accepted %d/%d fresh 3D registration frames: %s'
+            % (len(samples), required, last_invalid_reason),
         )
-        return False
+
+    def _post_move_confirmation_or_fail(self, plan, gcfg):
+        result = self._confirm_final_center_alignment(plan, gcfg)
+        if not result.ok:
+            self.set_state(
+                GraspStages.FAILED,
+                '%s: %s' % (result.code, result.reason),
+            )
+        return result
 
     def _set_contact_endpoint_precision(self, enabled, gcfg):
         config = gcfg if isinstance(gcfg, dict) else {}
@@ -3903,7 +5284,7 @@ class GraspTaskNode:
                 and token is not None
                 and token != last_token
                 and self._raw_detection_is_fresh(raw_max_age)
-                and self._same_target_label(reference_obj, obj)
+                and self._same_target_geometry(reference_obj, obj, gcfg)
             ):
                 last_token = token
                 xyz = self._object_xyz(obj)
@@ -3963,11 +5344,94 @@ class GraspTaskNode:
         except Exception:
             return id(stamp)
 
-    @staticmethod
-    def _same_target_label(first, second):
-        first_label = str(getattr(first, 'label', '') or '').strip().lower()
-        second_label = str(getattr(second, 'label', '') or '').strip().lower()
-        return bool(first_label and second_label and first_label == second_label)
+    def _same_target_geometry(self, first, second, gcfg):
+        bound = getattr(self, '_bound_execution_plan', None)
+        if bound is not None:
+            return self._observed_target_matches_plan(bound, second, gcfg)
+        first_xyz, second_xyz = self._object_xyz(first), self._object_xyz(second)
+        if first_xyz is None or second_xyz is None:
+            return False
+        try:
+            if (not first.detected or not second.detected
+                    or not first.pose_base.header.frame_id
+                    or first.pose_base.header.frame_id != second.pose_base.header.frame_id
+                    or _stamp_nanoseconds(self._object_source_stamp(first)) <= 0
+                    or _stamp_nanoseconds(self._object_source_stamp(second)) <= 0):
+                return False
+        except AttributeError:
+            return False
+        threshold = self._target_association_threshold(gcfg)
+        return (threshold is not None
+                and all(math.isfinite(v) for v in first_xyz + second_xyz)
+                and self._object_distance(first, second) <= threshold)
+
+    def _target_association_threshold(self, gcfg):
+        value = (gcfg or {}).get(
+            'target_instance_association_threshold_m',
+            getattr(self, 'target_instance_association_threshold_m', 0.08),
+        )
+        if isinstance(value, bool):
+            return None
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return value if math.isfinite(value) and value > 0.0 else None
+
+    def _observed_target_matches_plan(self, plan, observed, gcfg, after_lift=False):
+        """Associate raw RGB-D observations with a bound opaque geometric track.
+
+        ObjectPose has no identity field. Its timestamp, base-frame position,
+        and bounded distance provide association; remote ObjectGeometry can
+        explicitly invalidate the track even when two components are nearby.
+        Labels and preview plans supply no association authority.
+        """
+        try:
+            track = _plan_target_track_id(plan)
+            if not bool(getattr(observed, 'detected', False)):
+                return False
+            source_ns = _stamp_nanoseconds(self._object_source_stamp(observed))
+            pose_ns = _stamp_nanoseconds(observed.pose_base.header.stamp)
+            if (source_ns <= 0 or pose_ns != source_ns
+                    or observed.pose_base.header.frame_id != plan.header.frame_id):
+                return False
+            center = self._plan_geometry_center_xyz(plan)
+            xyz = self._object_xyz(observed)
+            threshold = self._target_association_threshold(gcfg)
+            if center is None or xyz is None or threshold is None:
+                return False
+            if not all(math.isfinite(v) for v in xyz):
+                return False
+            geometry = getattr(self, 'latest_target_geometry', None)
+            geometry_ns = _stamp_nanoseconds(getattr(getattr(geometry, 'header', None), 'stamp', None))
+            if geometry is not None:
+                validity = self._configured_target_observation_validity(gcfg)
+                # Single-snapshot phases cache measured geometry through motion.
+                # Its source must cover this plan; live ObjectPose freshness is
+                # checked by the caller independently of the cached measurement.
+                if (not bool(getattr(geometry, 'valid', False))
+                        or geometry.header.frame_id != plan.header.frame_id
+                        or geometry_ns <= 0
+                        or geometry_ns < _stamp_nanoseconds(plan.header.stamp)
+                        or (geometry_ns - source_ns) * 1e-9 > validity
+                        or validate_track_id(getattr(geometry, 'target_track_id', None)) != track):
+                    return False
+                gp = geometry.pose_base.position
+                geometry_xyz = (float(gp.x), float(gp.y), float(gp.z))
+                if (not all(math.isfinite(value) for value in geometry_xyz)
+                        or math.sqrt(sum((xyz[i] - geometry_xyz[i]) ** 2 for i in range(3))) > threshold):
+                    return False
+            distance = math.sqrt(sum((xyz[i] - center[i]) ** 2 for i in range(3)))
+            if after_lift:
+                # Both a still-on-table contradiction and expected lifted
+                # geometry must be observable without assigning a new label.
+                grasp, lift = plan.poses[2].position, plan.poses[3].position
+                lifted_center = tuple(center[i] + getattr(lift, axis) - getattr(grasp, axis)
+                                      for i, axis in enumerate(('x', 'y', 'z')))
+                distance = min(distance, math.sqrt(sum((xyz[i] - lifted_center[i]) ** 2 for i in range(3))))
+            return distance <= threshold
+        except (TypeError, ValueError, AttributeError, IndexError, OverflowError):
+            return False
 
     @staticmethod
     def _object_xyz(obj):
@@ -4382,20 +5846,10 @@ class GraspTaskNode:
                 'live target observation age %.3fs is outside [0, %.3f]s'
                 % (observation_age, observation_validity),
             )
-        plan_label = str(
-            getattr(getattr(plan, 'object_geometry', None), 'label', '') or ''
-        ).strip().lower()
-        live_label = str(getattr(latest_obj, 'label', '') or '').strip().lower()
-        if not plan_label or not live_label:
+        if not self._observed_target_matches_plan(plan, latest_obj, gcfg):
             return fail(
-                'TARGET_LABEL_MISSING',
-                'plan and live target labels must both be non-empty',
-            )
-        if plan_label != live_label:
-            return fail(
-                'TARGET_LABEL_MISMATCH',
-                'live target label %s does not match plan geometry label %s'
-                % (live_label, plan_label),
+                'TARGET_GEOMETRY_TRACK_INVALID',
+                'live target is not associated with the bound geometric track',
             )
         plan_center = self._plan_geometry_center_xyz(plan)
         live_center = self._object_xyz(latest_obj)
@@ -4444,6 +5898,94 @@ class GraspTaskNode:
             plan,
             gcfg,
             clear_authority_on_fail=True,
+        )
+
+    def _post_lift_visual_verification_result(
+        self,
+        plan,
+        gcfg,
+        minimum_source_stamp_ns,
+    ):
+        enabled = gcfg.get('post_lift_visual_verification_enabled', False)
+        if type(enabled) is not bool:
+            return PlanValidationResult(
+                False,
+                'POST_LIFT_VISUAL_CONFIG_INVALID',
+                'post-lift visual verification flag must be boolean',
+            )
+        if not enabled:
+            return PlanValidationResult(True, 'NOT_APPLICABLE', '')
+        timeout = max(
+            0.0,
+            self._cfg_float(
+                gcfg,
+                'post_lift_visual_verification_timeout_sec',
+                3.0,
+            ),
+        )
+        poll_sec = max(
+            0.02,
+            self._cfg_float(
+                gcfg,
+                'post_lift_visual_verification_poll_sec',
+                0.05,
+            ),
+        )
+        minimum_fraction = self._cfg_float(
+            gcfg,
+            'post_lift_visual_minimum_lift_fraction',
+            0.5,
+        )
+        height_tolerance = self._cfg_float(
+            gcfg,
+            'post_lift_visual_height_tolerance_m',
+            0.005,
+        )
+        maximum_planar_drift = self._cfg_float(
+            gcfg,
+            'post_lift_visual_max_planar_drift_m',
+            0.040,
+        )
+        started = time.monotonic()
+        while (
+            self.active
+            and not rospy.is_shutdown()
+            and time.monotonic() - started <= timeout
+        ):
+            with self._grasp6d_plan_guard():
+                observed = deepcopy(
+                    getattr(self, 'latest_visual_obj', None)
+                )
+            source_stamp = self._object_source_stamp(observed)
+            source_stamp_ns = _stamp_nanoseconds(source_stamp)
+            if (
+                observed is not None
+                and bool(getattr(observed, 'detected', False))
+                and source_stamp_ns > int(minimum_source_stamp_ns)
+                and self._observed_target_matches_plan(plan, observed, gcfg, after_lift=True)
+            ):
+                center = self._object_xyz(observed)
+                if center is not None:
+                    result = evaluate_post_lift_tabletop_observation(
+                        plan,
+                        center,
+                        minimum_fraction,
+                        height_tolerance,
+                        maximum_planar_drift,
+                    )
+                    if not result.ok:
+                        return result
+                    rospy.loginfo(
+                        'Post-lift visual observation has no stationary-table '
+                        'contradiction: %s',
+                        result.reason,
+                    )
+                    return result
+            rospy.sleep(poll_sec)
+        return PlanValidationResult(
+            True,
+            'POST_LIFT_VISUAL_UNAVAILABLE',
+            'no fresh observation associated with the bound geometric track was visible after lift',
         )
 
     def _target_occlusion_allowed_locked(self):
@@ -4924,14 +6466,6 @@ class GraspTaskNode:
             0.02,
             self._cfg_float(gcfg, 'near_field_replan_poll_sec', 0.05),
         )
-        plan_label = str(
-            getattr(
-                getattr(plan, 'object_geometry', None),
-                'label',
-                '',
-            )
-            or ''
-        ).strip().lower()
         last_result = PlanValidationResult(
             False,
             'OBSERVATION_CAMERA_RANGE_UNAVAILABLE',
@@ -4963,7 +6497,20 @@ class GraspTaskNode:
                 )
                 rospy.sleep(poll_sec)
                 continue
-            age = _stamp_seconds(rospy.Time.now()) - _stamp_seconds(stamp)
+            source_stamp = self._object_source_stamp(obj)
+            source_stamp_ns = _stamp_nanoseconds(source_stamp)
+            if source_stamp_ns < int(minimum_stamp_ns):
+                last_result = PlanValidationResult(
+                    False,
+                    'OBSERVATION_CAMERA_SOURCE_OLD',
+                    'target image timestamp predates the reached camera view',
+                )
+                rospy.sleep(poll_sec)
+                continue
+            age = (
+                _stamp_seconds(rospy.Time.now())
+                - _stamp_seconds(source_stamp)
+            )
             if (
                 not math.isfinite(age)
                 or age < 0.0
@@ -4977,12 +6524,11 @@ class GraspTaskNode:
                 )
                 rospy.sleep(poll_sec)
                 continue
-            live_label = str(getattr(obj, 'label', '') or '').strip().lower()
-            if not plan_label or live_label != plan_label:
+            if not self._observed_target_matches_plan(plan, obj, gcfg):
                 return PlanValidationResult(
                     False,
                     'OBSERVATION_CAMERA_TARGET_CHANGED',
-                    'fresh target label does not match the frozen observation plan',
+                    'fresh target is not associated with the frozen observation track',
                 )
             target = self._object_xyz(obj)
             if target is None or not all(
@@ -5740,6 +7286,19 @@ class GraspTaskNode:
                     0.002,
                 ),
             )
+            opening_clearance_each_side_m = self._cfg_float(
+                gripper_cfg,
+                'plan_bound_opening_clearance_each_side_m',
+                0.002,
+            )
+            if (
+                not math.isfinite(opening_clearance_each_side_m)
+                or opening_clearance_each_side_m < 0.0
+            ):
+                return False, (
+                    'PLAN_GRIPPER_CLEARANCE_INVALID: plan-bound opening '
+                    'clearance per side must be finite and non-negative'
+                )
             lower = min(close_limit_m, open_position_m)
             upper = max(close_limit_m, open_position_m)
             if (
@@ -5754,13 +7313,20 @@ class GraspTaskNode:
                 )
             close_position = max(
                 lower,
-                min(upper, required_open_width_m - preload_m),
+                min(
+                    upper,
+                    required_open_width_m
+                    - 2.0 * opening_clearance_each_side_m
+                    - preload_m,
+                ),
             )
             rospy.loginfo(
                 'Plan-bound fixed gripper close: required_open_width=%.4fm '
-                'preload=%.4fm target=%.4fm; configured mechanical-limit '
-                'target %.4fm is not used for this frozen 6D plan',
+                'opening_clearance_each_side=%.4fm preload=%.4fm '
+                'target=%.4fm; configured mechanical-limit target %.4fm is '
+                'not used for this frozen 6D plan',
                 required_open_width_m,
+                opening_clearance_each_side_m,
                 preload_m,
                 close_position,
                 configured_close_position,

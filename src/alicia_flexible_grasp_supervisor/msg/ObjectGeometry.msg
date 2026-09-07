@@ -1,6 +1,7 @@
 std_msgs/Header header
 bool valid
 string label
+string target_track_id
 string source_mode
 geometry_msgs/Pose pose_base
 geometry_msgs/Vector3 size_xyz_m

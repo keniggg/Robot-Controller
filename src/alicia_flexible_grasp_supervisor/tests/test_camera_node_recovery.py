@@ -322,6 +322,32 @@ class CameraNodeRecoveryTest(unittest.TestCase):
         self.assertEqual(node.pub_depth.messages[-1].header.stamp, 'pair-stamp')
         self.assertEqual(fake_rospy.time_calls, 1)
 
+    def test_depth_preview_is_downsampled_without_changing_full_depth(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({
+            'fallback_to_simulation': False,
+            'depth_preview_topic': '/depth/preview',
+            'depth_preview_width': 2,
+            'depth_preview_height': 2,
+        })
+        fake_rospy.shutdown_after_stamp = True
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        node.spin()
+
+        full_depth = node.pub_depth.messages[-1]
+        preview = node.pub_depth_preview.messages[-1]
+        self.assertEqual(full_depth.image.shape, (3, 4))
+        self.assertEqual(preview.image.shape, (2, 2))
+        self.assertEqual(full_depth.image.dtype, np.uint16)
+        self.assertEqual(preview.image.dtype, np.uint16)
+        self.assertEqual(preview.header.stamp, full_depth.header.stamp)
+
     def test_real_camera_does_not_sleep_after_blocking_frame_acquisition(self):
         module = load_camera_node()
         fake_rospy = FakeRospy({'fallback_to_simulation': False})
@@ -375,6 +401,19 @@ class CameraNodeRecoveryTest(unittest.TestCase):
         self.assertEqual(len(node.pub_color.messages), 2)
         self.assertEqual(len(node.pub_depth.messages), 2)
         self.assertEqual(fake_rospy.sleep_count, 0)
+
+    def test_30_fps_input_schedules_20_fps_without_quantizing_to_15(self):
+        module = load_camera_node()
+        node = module.CameraNode.__new__(module.CameraNode)
+        node.publish_fps = 20.0
+        node._publish_period_sec = 1.0 / node.publish_fps
+        node._last_publish_monotonic = None
+        hardware_frame_times = iter(index / 30.0 for index in range(30))
+        node._monotonic = lambda: next(hardware_frame_times)
+
+        decisions = [node._publication_is_due() for _ in range(30)]
+
+        self.assertEqual(sum(decisions), 20)
 
     def test_simulated_camera_keeps_rate_sleep(self):
         module = load_camera_node()

@@ -38,6 +38,7 @@ class JointCommander:
         positions = list(positions[:len(self.joint_names)])
         msg = JointState()
         msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = 'motion_gateway'
         msg.name = self.joint_names
         msg.position = positions
         self.last_positions = positions

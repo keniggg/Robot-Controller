@@ -22,6 +22,29 @@ from std_msgs.msg import String
 ARM_JOINT_NAMES = ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"]
 DEFAULT_JOINT_MIN_RAD = [-3.14, -2.5, -2.5, -3.14, -2.5, -3.14]
 DEFAULT_JOINT_MAX_RAD = [3.14, 2.5, 2.5, 3.14, 2.5, 3.14]
+DEFAULT_STEP_DEG = 2.0
+DEFAULT_MIN_STEP_DEG = 0.1
+DEFAULT_MAX_STEP_DEG = 10.0
+DEFAULT_DRIVER_SYNC_SETTLE_SEC = 0.15
+FULLWIDTH_DIGIT_TRANSLATION = str.maketrans(
+    {
+        "０": "0",
+        "１": "1",
+        "２": "2",
+        "３": "3",
+        "４": "4",
+        "５": "5",
+        "６": "6",
+        "７": "7",
+        "８": "8",
+        "９": "9",
+        "．": ".",
+        "。": ".",
+        "，": ",",
+        "＋": "+",
+        "－": "-",
+    }
+)
 
 
 def extract_joint_snapshot(names, positions):
@@ -57,6 +80,46 @@ def make_jog_target(current, joint_index, step_rad, lower, upper):
     return target, target[joint_index] != requested
 
 
+def parse_step_degrees(value, lower=DEFAULT_MIN_STEP_DEG, upper=DEFAULT_MAX_STEP_DEG):
+    """Parse the operator-entered step size and clamp it to panel limits."""
+    text = str(value).strip().translate(FULLWIDTH_DIGIT_TRANSLATION)
+    text = text.replace("°", "").replace("度", "")
+    text = text.replace("deg", "").replace("DEG", "")
+    text = text.replace(" ", "").replace("\t", "")
+    if "," in text and "." not in text:
+        text = text.replace(",", ".")
+    if not text:
+        raise ValueError("Step deg is empty")
+    step = float(text)
+    if not math.isfinite(step) or step <= 0.0:
+        raise ValueError("Step deg must be a positive number")
+    lower = float(lower)
+    upper = float(upper)
+    if not math.isfinite(lower) or not math.isfinite(upper) or lower <= 0.0 or upper < lower:
+        raise ValueError("invalid step limits")
+    clamped = False
+    if step < lower:
+        step = lower
+        clamped = True
+    elif step > upper:
+        step = upper
+        clamped = True
+    return step, clamped
+
+
+def format_step_degrees(value):
+    return ("%.3f" % float(value)).rstrip("0").rstrip(".")
+
+
+def actuation_status_needs_driver_sync(value):
+    text = str(value)
+    return not (
+        text.startswith("CONFIRMED:")
+        or "COMMAND_SYNCHRONIZED" in text
+        or "MEASURED_DIRECTIONAL_RESPONSE" in text
+    )
+
+
 class HandeyeJointPosePanel:
     def __init__(self):
         rospy.init_node("handeye_joint_pose_panel", anonymous=True)
@@ -74,12 +137,26 @@ class HandeyeJointPosePanel:
         self.stable_required_hits = int(rospy.get_param("~stable_required_hits", 4))
         self.joint_state_topic = rospy.get_param("~joint_state_topic", "/joint_states")
         self.joint_command_topic = rospy.get_param("~joint_command_topic", "/joint_commands")
-        self.feedback_max_age_sec = float(rospy.get_param("~feedback_max_age_sec", 0.5))
+        self.feedback_max_age_sec = float(rospy.get_param("~feedback_max_age_sec", 2.0))
         self.motion_response_timeout_sec = float(
             rospy.get_param("~motion_response_timeout_sec", 2.0)
         )
         self.measured_response_min_delta_rad = float(
             rospy.get_param("~measured_response_min_delta_rad", 0.003)
+        )
+        self.driver_sync_settle_sec = max(
+            0.0,
+            float(
+                rospy.get_param(
+                    "~driver_sync_settle_sec", DEFAULT_DRIVER_SYNC_SETTLE_SEC
+                )
+            ),
+        )
+        self.min_step_deg = float(rospy.get_param("~min_step_deg", DEFAULT_MIN_STEP_DEG))
+        self.max_step_deg = float(rospy.get_param("~max_step_deg", DEFAULT_MAX_STEP_DEG))
+        default_step_deg = float(rospy.get_param("~default_step_deg", DEFAULT_STEP_DEG))
+        default_step_deg, _ = parse_step_degrees(
+            default_step_deg, self.min_step_deg, self.max_step_deg
         )
         self.joint_min_rad = list(
             rospy.get_param("/robot/joint_min_rad", DEFAULT_JOINT_MIN_RAD)
@@ -102,6 +179,8 @@ class HandeyeJointPosePanel:
         self.latest_joint_monotonic = 0.0
         self.command_target = None
         self.command_gripper = None
+        self.driver_sync_needed = True
+        self.last_driver_sync_monotonic = 0.0
         self.take_sample_service = self.calibration_namespace + "/take_sample"
         self.get_sample_service = self.calibration_namespace + "/get_sample_list"
         self.root = tk.Tk()
@@ -109,7 +188,7 @@ class HandeyeJointPosePanel:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         # 2 deg is above the driver's 0.02 rad post-enable response probe.
-        self.step_deg = tk.DoubleVar(value=2.0)
+        self.step_deg_text = tk.StringVar(value=format_step_degrees(default_step_deg))
         self.status = tk.StringVar(value="等待最新关节反馈")
         self.actuation_status = tk.StringVar(value="使能确认: 等待状态")
         self.quality_status = tk.StringVar(value="Quality: waiting for ChArUco")
@@ -139,7 +218,14 @@ class HandeyeJointPosePanel:
         top.grid(row=0, column=0, sticky="nsew")
 
         ttk.Label(top, text="Step deg").grid(row=0, column=0, sticky="w")
-        ttk.Spinbox(top, from_=0.2, to=3.0, increment=0.2, textvariable=self.step_deg, width=6).grid(row=0, column=1)
+        ttk.Spinbox(
+            top,
+            from_=self.min_step_deg,
+            to=self.max_step_deg,
+            increment=0.2,
+            textvariable=self.step_deg_text,
+            width=8,
+        ).grid(row=0, column=1)
         ttk.Button(top, text="刷新反馈", command=self.refresh).grid(row=0, column=2, padx=4)
         self.sync_btn = ttk.Button(top, text="同步当前关节", command=self.sync_current_joints)
         self.sync_btn.grid(row=0, column=3, padx=4)
@@ -204,6 +290,8 @@ class HandeyeJointPosePanel:
 
     def _actuation_cb(self, msg):
         value = str(msg.data)
+        with self.joint_lock:
+            self.driver_sync_needed = actuation_status_needs_driver_sync(value)
         self.root.after(0, lambda text=value: self.actuation_status.set("使能确认: " + text))
 
     def _fresh_joint_snapshot(self):
@@ -225,7 +313,37 @@ class HandeyeJointPosePanel:
             self.command_gripper = gripper
         for index, value in enumerate(arm):
             self.joint_values[index].set("%.1f" % math.degrees(value))
-        self.status.set("已同步当前关节；关节按钮使用 /joint_commands 直控")
+        if self._publish_driver_sync_baseline(arm, gripper, "operator_sync"):
+            self.status.set("已同步当前关节，并发送当前位置基线到驱动")
+        else:
+            self.status.set("已同步当前关节；/joint_commands 暂无驱动连接")
+
+    def _make_joint_command(self, arm, gripper):
+        msg = JointState()
+        msg.header.stamp = rospy.Time.now()
+        msg.name = list(ARM_JOINT_NAMES)
+        msg.position = list(arm)
+        if gripper is not None:
+            msg.name.append("right_finger")
+            msg.position.append(gripper)
+        return msg
+
+    def _publish_driver_sync_baseline(self, arm, gripper, reason):
+        if self.command_pub.get_num_connections() < 1:
+            return False
+        msg = self._make_joint_command(arm, gripper)
+        rospy.loginfo(
+            "Panel publishing no-motion driver sync baseline: reason=%s target_deg=%s",
+            reason,
+            ["%.2f" % math.degrees(value) for value in arm],
+        )
+        self.command_pub.publish(msg)
+        with self.joint_lock:
+            self.command_target = list(arm)
+            self.command_gripper = gripper
+            self.driver_sync_needed = False
+            self.last_driver_sync_monotonic = time.monotonic()
+        return True
 
     def _refresh_joint_display(self):
         snapshot = self._fresh_joint_snapshot()
@@ -250,7 +368,12 @@ class HandeyeJointPosePanel:
             self.status.set("未发送：/joint_commands 当前没有驱动订阅连接")
             return
         try:
-            step = math.radians(float(self.step_deg.get())) * direction
+            step_deg, step_clamped = parse_step_degrees(
+                self.step_deg_text.get(), self.min_step_deg, self.max_step_deg
+            )
+            if step_clamped:
+                self.step_deg_text.set(format_step_degrees(step_deg))
+            step = math.radians(step_deg) * direction
             baseline, gripper = snapshot
             target, clamped = make_jog_target(
                 baseline,
@@ -266,21 +389,36 @@ class HandeyeJointPosePanel:
         if abs(actual_step) < 1e-9:
             self.status.set("未发送：J%d 已到关节限位" % (joint_index + 1))
             return
+        with self.joint_lock:
+            driver_sync_needed = self.driver_sync_needed
 
         def worker():
             try:
-                msg = JointState()
-                msg.header.stamp = rospy.Time.now()
-                msg.name = list(ARM_JOINT_NAMES)
-                msg.position = list(target)
-                if gripper is not None:
-                    msg.name.append("right_finger")
-                    msg.position.append(gripper)
+                if driver_sync_needed:
+                    self._publish_driver_sync_baseline(
+                        baseline, gripper, "pre_jog_reconnect_sync"
+                    )
+                    if self.driver_sync_settle_sec > 0.0:
+                        time.sleep(self.driver_sync_settle_sec)
+                msg = self._make_joint_command(target, gripper)
+                rospy.loginfo(
+                    "Panel publishing joint jog: joint=J%d requested_step_deg=%.3f "
+                    "actual_step_deg=%.3f target_deg=%s",
+                    joint_index + 1,
+                    step_deg * direction,
+                    math.degrees(actual_step),
+                    ["%.2f" % math.degrees(value) for value in target],
+                )
                 self.command_pub.publish(msg)
                 with self.joint_lock:
                     self.command_target = list(target)
                     self.command_gripper = gripper
-                suffix = "（已限制到关节限位）" if clamped else ""
+                suffixes = []
+                if step_clamped:
+                    suffixes.append("步长已限制到 %.1f°" % step_deg)
+                if clamped:
+                    suffixes.append("已限制到关节限位")
+                suffix = "（%s）" % "，".join(suffixes) if suffixes else ""
                 self.root.after(
                     0,
                     lambda: self.status.set(

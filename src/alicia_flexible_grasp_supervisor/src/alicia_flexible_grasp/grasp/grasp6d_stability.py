@@ -6,6 +6,9 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 
 from .hybrid_grasp_candidates import VALID_CANDIDATE_SOURCES
+from alicia_flexible_grasp.vision.target_observation import (
+    TargetTrackIdentity, validate_target_identity, validate_track_id,
+)
 
 
 _NORM_EPSILON = 1e-12
@@ -59,22 +62,7 @@ def _validated_candidate_provenance(candidate_source, source_lineage):
 
 
 def _validated_target_identity(value):
-    if not isinstance(value, tuple) or len(value) != 3:
-        raise ValueError(
-            'target_identity must be an (epoch, label, model_choice) tuple'
-        )
-    epoch, label, model_choice = value
-    try:
-        epoch = _validated_integer(epoch, 'target_identity epoch', 0)
-    except ValueError:
-        raise ValueError('target_identity epoch must be a non-negative integer')
-    if not isinstance(label, str) or not label:
-        raise ValueError('target_identity label must be a non-empty string')
-    if not isinstance(model_choice, str) or not model_choice:
-        raise ValueError(
-            'target_identity model_choice must be a non-empty string'
-        )
-    return (epoch, label, model_choice)
+    return validate_target_identity(value)
 
 
 def _frozen_vector(value, size, name, normalize=False):
@@ -220,6 +208,7 @@ class CandidateObservation:
     request_id: int
     snapshot_stamp_sec: float
     target_epoch: int
+    target_track_id: str
     target_label: str
     model_choice: str
     center_base_xyz: np.ndarray
@@ -251,10 +240,11 @@ class CandidateObservation:
             'target_epoch',
             _validated_integer(self.target_epoch, 'target_epoch', 0),
         )
+        validate_track_id(self.target_track_id)
         for name in ('target_label', 'model_choice'):
             value = getattr(self, name)
-            if not isinstance(value, str) or not value:
-                raise ValueError('{} must be a non-empty string'.format(name))
+            if not isinstance(value, str):
+                raise ValueError('{} must be a diagnostic string'.format(name))
         object.__setattr__(
             self,
             'center_base_xyz',
@@ -312,6 +302,7 @@ class StableCandidate:
     request_id: int
     snapshot_stamp_sec: float
     target_epoch: int
+    target_track_id: str
     target_label: str
     model_choice: str
     center_base_xyz: np.ndarray
@@ -394,7 +385,7 @@ class CandidateTracker:
                 raise ValueError('observation request_id must match update request_id')
         if batch:
             identities = {
-                (item.target_epoch, item.target_label, item.model_choice)
+                TargetTrackIdentity(item.target_epoch, item.target_track_id)
                 for item in batch
             }
             if len(identities) != 1:
@@ -556,8 +547,7 @@ class CandidateTracker:
     def _pair_cost(self, first, second):
         if (
             first.target_epoch != second.target_epoch
-            or first.target_label != second.target_label
-            or first.model_choice != second.model_choice
+            or first.target_track_id != second.target_track_id
         ):
             return None
 
@@ -798,6 +788,7 @@ class CandidateTracker:
             request_id=newest.request_id,
             snapshot_stamp_sec=newest.snapshot_stamp_sec,
             target_epoch=newest.target_epoch,
+            target_track_id=newest.target_track_id,
             target_label=newest.target_label,
             model_choice=newest.model_choice,
             center_base_xyz=center_base_xyz,

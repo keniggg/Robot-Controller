@@ -16535,6 +16535,744 @@ Implemented and verified offline:
   arm stop, disable, `/demonstration=true`, torque-off, controller-stop, or
   emergency command was sent.
 
+### 2026-08-08 - hand-eye minimal jog panel reconnect-sync fix
+
+- During CC200 hand-eye recalibration bringup, the minimal jog panel initially
+  showed live D405 RGB/`/charuco/result` and fresh `/joint_states`, but a first
+  `Step deg=5.0` jog after driver restart failed with the panel-side message
+  `J1 command sent, but no encoder directional response within 2.0s`. Driver
+  logs showed the corresponding target was rejected as
+  `STALE_COMMAND_AFTER_RECONNECT` while actuation status remained
+  `PENDING:POSITIVE_ENABLE_REQUESTED`.
+- Root cause: the driver intentionally requires the first post-reconnect
+  `/joint_commands` target to be close to measured feedback
+  (`reconnect_sync_tolerance_rad=0.05`, about `2.86 deg`) before treating the
+  command stream as synchronized. A 5 deg first jog exceeded that guard. The
+  earlier 2 deg step worked because it was below the same guard.
+- Fixed the panel rather than weakening the driver guard. The panel now sends
+  a no-motion measured-joint baseline to `/joint_commands` when the operator
+  clicks `同步当前关节`, and also automatically sends that baseline before the
+  first jog whenever the actuation status indicates reconnect/confirmation
+  synchronization is still needed. After a short settle delay, the real jog is
+  published. This preserves the existing driver stale-command protection while
+  making larger operator step sizes usable immediately after reconnect.
+- Offline validation passed:
+  `python3 -m unittest src/real-arm/alicia_d_calibration/tests/test_handeye_joint_pose_panel.py -q`
+  ran `6` tests successfully, and
+  `python3 -m py_compile src/real-arm/alicia_d_calibration/scripts/handeye_joint_pose_panel.py`
+  completed without errors.
+- The operator powered the arm off while the software fix was being completed.
+  No arm stop, disable, torque-off, emergency, or new motion command was sent
+  by the assistant during the powered-off interval.
+
+### 2026-08-08 - integrated hand-eye calibration page implemented in main GUI
+
+- 按操作员要求把最小手眼控制面板合并进主 PyQt GUI，新增独立“手眼标定”页。
+  页面复用原 `JointControlWidget`/`DirectControlRecovery` 关节命令链，只显示
+  Joint1--Joint6；每行保留原滑条目标，同时新增 `/joint_states` 编码器实时角度
+  （deg）。标定页构造时使用 `preserve_controller_state_on_startup=true` 语义，
+  页面创建本身不切换控制器、不请求使能，也不发布任何关节目标。
+- 新增 `OnDemandRgbView`。页面初始没有 ROS 图像 subscriber；点击“开启图像”后
+  才订阅 `/charuco/result`，点击“关闭图像”立即注销、清空并隐藏。该页面没有
+  depth subscriber，也不启动或停止相机/ChArUco 节点。
+- 页面集成 CC200 `12 x 9 + DICT_5X5_100 + 11.25 mm marker` 质量状态、稳定
+  确认、样本采集/刷新/删除、算法刷新/切换、计算和经二次确认后的保存。
+  默认门限保持 age `<=500 ms`、corners `>=35`、edge `>=12 px`、
+  RMS `<=1.5 px`、`2.0 s` 窗口内连续 `4` 次合格。滑条改变、质量失效或成功
+  采样都会撤销本次采样许可。
+- 本次 GUI 会话新采集的样本会同时显示六关节实测角度，便于逐姿态记录；
+  easy_handeye 服务中已有样本因消息不含关节角字段而明确显示 `--`，没有生成
+  推测值。easy_handeye namespace、图像 topic、质量 topic 和门限已集中加入
+  `config/gui_config.yaml`。
+- 文档按用途拆分并同步：页面合同/操作/参数写入
+  `docs/handeye_calibration_gui.md`，与完整抓取路线的关系写入
+  `docs/grasp_task_technical_route.md`，本节只记录实现和验证证据；README 增加入口。
+- 离线验证：聚焦 GUI、生命周期、关节恢复和旧最小面板回归 `31/31`；完整
+  supervisor 回归在沙箱内 `687/689`，仅两个本机监听 socket 用例受权限限制，
+  随后在允许 loopback 的同一模块补跑 `15/15`，因此完整用例实际通过
+  `689/689`。Python 编译、`git diff --check` 和
+  `catkin_make --pkg alicia_flexible_grasp_supervisor` 均通过。
+- 本次只完成代码、文档和离线测试，没有重启主 GUI、相机、tracker、驱动或
+  机械臂节点；没有发布运动、停止、失能、torque-off、controller-stop、采样、
+  计算或保存标定命令。
+
+### 2026-08-08 - integrated CC200 hand-eye sampling runtime started
+
+- 按操作员要求启动最新集成手眼标定。复用仍在运行的 `roscore`、D405 V4L2
+  RGB、`charuco_tracker`、Alicia-D 驱动、MoveGroup 和 robot-state publisher，
+  没有重复占用 `/dev/video4` 或 `/dev/alicia_arm`，也没有重启驱动/控制器。
+- 复用 tracker 的实参已确认是 CC200 合同：`board_size=[12,9]`、
+  `DICT_5X5_100`、`square_length=0.015 m`、`marker_length=0.01125 m`、
+  `camera_link -> charuco_board_cc200_20260809`，输入为
+  `/camera/color/image_raw`。
+- 新启动 easy_handeye server：
+  `/d405_cc200_recalib_20260809_eye_on_hand/easy_handeye_calibration_server`。
+  `take_sample`、`get_sample_list`、`remove_sample`、`list/set_algorithm`、
+  `compute_calibration` 和 `save_calibration` 服务均已注册；只读
+  `get_sample_list` 返回两组空数组，因此本次从 `0` 个样本重新开始。
+- 新启动主 GUI `/alicia_supervisor_gui`（PID `21401`），加载新增“手眼标定”页
+  和 `/gui/handeye/*` 参数。节点信息确认 GUI 当前订阅低带宽
+  `/charuco/quality`，没有订阅 `/charuco/result`，符合图像默认关闭合同；操作员
+  点击“开启图像”后才会建立该订阅。
+- 旧 `/image_view` 和 `/charuco_image_view` 已收到关闭请求；它们的 XMLRPC 端点
+  已不可达，ROS master 暂时仍保留陈旧注册，不代表仍有实体图像订阅或窗口进程。
+- 启动后的首帧质量为 `charuco_count=0`、`marker_count=0`、`pose_ok=false`，
+  图像尺寸 `640 x 480`，字典和板尺寸仍正确。这表示 CC200 当前不在相机可识别
+  画面内；在画面合格并通过 GUI 稳定确认前不采样。
+- 本次启动和只读确认没有发布关节运动、停止、失能、torque-off、
+  controller-stop、采样、计算或保存标定命令。
+
+### 2026-08-09 - hand-eye page single-screen layout correction
+
+- 操作员截图证明初版水平 `QSplitter` 的左侧关节控件占用了几乎全部宽度，右侧
+  RGB/采样区只剩窄栏。该问题是 Qt size hint/最小宽度竞争，不是 RGB、质量 topic
+  或 easy_handeye 服务缺失。
+- 按操作员最终要求，取消了中间方案中的功能区切换和所有手眼页内部滚动窗口。
+  最终布局固定为同一页面：左上为六关节滑条/目标/实时角度，右上为 RGB，底部为
+  CC200 质量、算法、采样表和计算。移动滑条时图像不被切换或隐藏。
+- 两个图像按钮合并为“图像输出”下拉框，选项为“关闭图像”和“开启图像”。
+  默认仍为关闭且没有 `/charuco/result` subscriber；开启/关闭继续精确创建/注销
+  单个 RGB subscriber，不涉及深度图或相机/tracker 生命周期。
+- 标定模式下压缩了关节面板边距、行间距和数值栏最小宽度；采样面板改为摘要行
+  加“操作控制/样本结果”并排布局。新增最小窗口契约验证：开启 RGB 后关节面板、
+  图像面板、采样面板、稳定/采样按钮、样本表和计算结果区都位于手眼页可见矩形
+  内，且手眼页没有 `QScrollArea`。
+- 聚焦 GUI/生命周期/关节恢复/旧最小面板回归通过 `31/31`。完整 supervisor
+  回归在受限沙箱内为 `687/689`，仅两个本机监听 socket 用例因权限失败；相同
+  HTTP 模块在允许 loopback 的环境补跑 `15/15`，因此完整用例实际通过
+  `689/689`。Python 编译、`git diff --check` 和
+  `catkin_make --pkg alicia_flexible_grasp_supervisor` 均通过。
+- 操作员已关闭各硬件串口和机械臂电源。本阶段只修改代码、测试与文档，未热重启
+  GUI/驱动/相机/tracker/easy_handeye，未发布运动、使能、停止、失能、
+  torque-off、controller-stop、采样、计算或保存标定命令。
+
+### 2026-08-10 - latest integrated CC200 hand-eye runtime restarted
+
+- 操作员要求启动最新手眼标定系统并重新标定。由于普通沙箱视图看不到真实
+  `/dev` 设备，先在外部 WSL 环境只读确认 `/dev/alicia_arm -> ttyACM1`、
+  `/dev/video4` 以及相关 `/dev/ttyACM*`、`/dev/video*` 已出现。
+- 启动的是 `codex/protocol-v3-upgrade` worktree 的最新集成标定链路，而不是
+  老 `d405_v4l2_charuco_eyeonhand.launch` 默认配置。老 launch 文件仍默认
+  `11x8 + DICT_4X4_100`，因此本次拆分启动并显式固定 CC200 合同：
+  `board_size=[12,9]`、`DICT_5X5_100`、`square_length=0.015 m`、
+  `marker_length=0.01125 m`、`detection_scale=2.0`、
+  `camera_link -> charuco_board_cc200_20260809`。
+- 运行终端会话：bringup `88428`，D405 V4L2 RGB `9189`，CC200 tracker
+  `33286`，easy_handeye backend `52854`，新版主 GUI `92756`。bringup 已打开
+  `/dev/alicia_arm`，MoveGroup 就绪，`alicia_controller` 和 `hand_controller`
+  已启动；驱动执行的是启动正向 torque-on 请求，未发送 stop、disable、
+  torque-off、controller-stop 或 emergency 命令。
+- D405 V4L2 RGB 节点发布 `/camera/color/image_raw`；CC200 tracker 发布
+  `/charuco/result` 和 `/charuco/quality`。实测频率约为 RGB `29.6 Hz`、
+  `/charuco/quality` `13--16 Hz`、`/joint_states` `59 Hz`。
+- easy_handeye 服务命名空间为
+  `/d405_cc200_recalib_20260809_eye_on_hand`，`take_sample`、`get_sample_list`、
+  `remove_sample`、`list/set_algorithm`、`compute_calibration` 和
+  `save_calibration` 均已注册。只读 `get_sample_list` 返回空样本表，因此本次
+  重新标定从 `0` 个样本开始。
+- 新版主 GUI `/alicia_supervisor_gui` 已启动并加载 `/gui/handeye/*` 参数。
+  操作员打开图像后，`/charuco/result` 由 GUI 订阅；若下拉框选择“关闭图像”，
+  手眼页会注销该订阅。首页保留原有 `/supervisor/camera/*` 空 topic 订阅，
+  但本次标定最小链路不启动 supervisor depth/RGB 节点。
+- 当前 CC200 质量读数有效：`charuco_count=47`、`marker_count=36`、
+  `edge_clearance_px=124.4`、`reprojection_rms_px=0.460`、
+  `pose_ok=true`。当前驱动状态为
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`。
+- 本次启动和确认没有发布关节运动、grasp、采样、删除样本、计算、保存标定、
+  stop、disable、torque-off、controller-stop 或 emergency 命令。
+
+### 2026-08-10 - operator started integrated hand-eye sampling
+
+- 启动后操作员在主 GUI 手眼标定页移动关节并采样。驱动日志显示由 GUI/控制器
+  发布的 `/joint_commands` 目标流，实测反馈跟随；这些是操作员在 GUI 上的关节
+  调整，不是自动 easy_handeye 运动节点。
+- easy_handeye backend 记录 `Taking a sample... Got a sample`。随后只读
+  `get_sample_list` 显示当前已有 `2` 组 paired
+  `base_link -> tool0` / `camera_link -> charuco_board_cc200_20260809` 样本。
+- 同时刻只读 `/charuco/quality` 仍满足采样门控：
+  `charuco_count=77`、`marker_count=50`、`edge_clearance_px=127.5`、
+  `reprojection_rms_px=0.567`、`pose_ok=true`。
+- 本记录没有调用 `take_sample`、`remove_sample`、`compute_calibration`、
+  `save_calibration`，也没有发送 stop、disable、torque-off、controller-stop 或
+  emergency 命令；采样动作来自操作员在 GUI 中的显式操作。
+
+### 2026-08-10 - completed 30-sample audit; minimal prune candidate found
+
+- 操作员报告采样完成后，只读 `get_sample_list` 确认
+  `/d405_cc200_recalib_20260809_eye_on_hand` 当前有 `30` 组 paired
+  `base_link -> tool0` / `camera_link -> charuco_board_cc200_20260809` 样本。
+  当前 `/charuco/quality` 仍有效：`charuco_count=60`、`marker_count=41`、
+  `edge_clearance_px=26.7`、`reprojection_rms_px=0.738`、`pose_ok=true`。
+- 运行只读审计脚本并写入
+  `logs/2026-08-10-handeye-sample-audit.json`。原始 30 样本未通过正式
+  `3/5 mm、1/2 deg` 五折门限：
+  - Park `3.217/6.013 mm`、`0.931/1.414 deg`;
+  - Horaud `3.218/6.017 mm`、`0.931/1.413 deg`;
+  - Tsai-Lenz `3.218/6.120 mm`、`0.934/1.441 deg`;
+  - Daniilidis `3.259/6.155 mm`、`0.937/1.500 deg`;
+  - Andreff translation error was much larger and was rejected as unsuitable.
+- 备份完整原始样本到
+  `logs/2026-08-10-handeye-raw-samples-before-prune.json`，随后只做内存剪枝
+  敏感性分析，没有删除 easy_handeye 后端样本。快速全样本组合搜索被中止，
+  改为基于 full-audit worst samples 的目标搜索，并写入
+  `logs/2026-08-10-handeye-specific-prune.json`。
+- 最小通过剪枝为排除样本 `8、26、27`，保留 `27` 组；四个主算法均通过：
+  Park `2.812/4.606 mm`、`0.863/1.351 deg`，Horaud
+  `2.813/4.611 mm`、`0.863/1.350 deg`，Tsai-Lenz
+  `2.802/4.696 mm`、`0.864/1.349 deg`，Daniilidis
+  `2.832/4.702 mm`、`0.867/1.340 deg`。按最大平移误差优先，Park 是当前
+  最稳的最小删除候选，其 `T_tool_camera` 平移为
+  `[-0.083276711, 0.004843742, -0.129075604] m`，四元数 xyzw 为
+  `[0.005929097, -0.716758124, 0.018061735, 0.697062702]`。
+- 截至本记录，未调用 `remove_sample`、`set_algorithm`、`compute_calibration` 或
+  `save_calibration`，也未发布 stop、disable、torque-off、controller-stop、
+  emergency 或任何自动运动命令。删除样本 `8、26、27` 并保存 Park 标定需要
+  操作员明确确认后再执行。
+
+### 2026-08-10 - pruned-27 Park calibration saved and deployed to config
+
+- 操作员确认只排除样本 `8、26、27`，保留 `27` 组。easy_handeye 使用
+  zero-based removal index，因此按降序调用 `remove_sample`：先删原样本 `27`
+  的 index `26`，再删原样本 `26` 的 index `25`，最后删原样本 `8` 的 index
+  `7`。后端样本数从 `30 -> 29 -> 28 -> 27`。
+- 删除后重新运行正式审计并写入
+  `logs/2026-08-10-handeye-pruned27-audit.json`。真实后端 27 样本通过正式
+  `3/5 mm、1/2 deg` 五折门限；Park 结果为
+  `2.812/4.606 mm`、`0.863/1.351 deg`，Daniilidis/Horaud/Tsai-Lenz 也均通过。
+  Andreff 仍因平移误差明显偏大而不作为候选。
+- easy_handeye 官方后端切换到 `OpenCV/Park`，`compute_calibration` 返回
+  `valid=true`。保存的新 `T_tool0_camera_link` 为平移
+  `[-0.08327671107922277, 0.004843742371779117, -0.12907560357461276] m`，
+  四元数 xyzw 为
+  `[0.005929097277682129, -0.7167581240677906, 0.018061735450252286,
+  0.6970627024169479]`。
+- 新标定保存到
+  `/home/zhuyupei/.ros/easy_handeye/d405_cc200_recalib_20260809_eye_on_hand.yaml`。
+  保存前该文件不存在，因此没有覆盖旧 20260809 YAML；旧 20260802 和历史
+  `d405_v4l2_charuco_handeyecalibration` 文件未修改。
+- 同步运行配置：`config/handeye.yaml` 指向新的 20260809 YAML，并更新静态 fallback
+  xyz/q；`config/grasp_params.yaml` 将
+  `calibration_interlock_active=false`、reason
+  `HAND_EYE_CROSS_VALIDATION_PASSED`，并把
+  `handeye_translation_max_error_m` 改为 `0.00460616416406`。独立
+  `calibration_centering_margin_override` 仍为 `false`，centering-margin gate
+  仍开启。
+- 本阶段没有发布机械臂自动运动、grasp、stop、disable、torque-off、
+  controller-stop 或 emergency 命令。样本删除、算法切换、计算和保存均只作用于
+  easy_handeye 标定后端和配置文件。
+- 验证结果：`handeye.yaml` 和 `grasp_params.yaml` 均可解析；
+  `handeye_transform_node.resolve_transform_config()` 从新 YAML 解析得到
+  `tool0 -> camera_link` 及上述 Park xyz/q；聚焦回归
+  `test_handeye_transform_node.py` + `test_grasp_task_sequence.py` 通过
+  `153/153`；`git diff --check` 通过。
+- 当前 ROS 参数服务器已加载新配置：`/handeye/calibration_file` 为
+  `~/.ros/easy_handeye/d405_cc200_recalib_20260809_eye_on_hand.yaml`，
+  `/grasp/handeye_translation_max_error_m=0.00460616416406`，
+  `/grasp/calibration_interlock_active=false`。
+
+### 2026-08-11 - second contact miss traced to close-view OBB center bias
+
+- 本次运行的 `/handeye_transform` 明确加载
+  `~/.ros/easy_handeye/d405_cc200_recalib_20260809_eye_on_hand.yaml`，发布的
+  `T_tool0_camera_link` 与 2026-08-10 pruned-27 Park 审计完全一致：平移
+  `[-0.0832767111, 0.0048437424, -0.1290756036] m`，四元数 xyzw
+  `[0.0059290973, -0.7167581241, 0.0180617355, 0.6970627024]`。文件名中的
+  `20260809` 是标定会话名称；27 组样本实际在 8 月 10 日采集、计算并保存，
+  因而本次不是复用了旧 TF。
+- 第二段视频和冻结计划 `89bb927754dd9bc63e255303` 共同证明夹爪从纸盒一侧
+  擦过，纸盒未随抬升离开桌面。夹爪闭合命令/反馈为 `691/693`，等效目标开口
+  约 `34.6 mm`，所以不是夹爪没有闭合，也不是 `48.5 mm` 宽度估计继续生效。
+- 对同一静止纸盒的远、近快照回放显示：每个静止视角内部中心跨度只有
+  `1--3 mm`，但远场 OBB 中心
+  `[-0.093689,-0.454089,0.096674] m` 与近场原始中心
+  `[-0.106583,-0.447476,0.084773] m` 相差 `18.8 mm`；投影到近场支撑面后仍为
+  `15.1 mm`，在最终夹爪 jaw 轴上约 `7.1 mm`。该值略大于失败计划的单侧
+  `6.7 mm` 余量，定量解释了单指擦碰。把 TF 替换成 8 月 2 日或更早结果不会
+  消除该跨视角漂移，根因是斜向近视角只看到相机朝向表面，最小面积矩形把可见
+  点云中心误当成实体盒中心。
+- 近场规划现在在进入近场边界时冻结同一任务的远场无遮挡 OBB 中心。当前近场
+  快照仍提供尺寸、yaw、支撑面、高度和原始点云，只把中心在当前支撑面内投影回
+  远场中心；最大允许修正 `25 mm`，远近支撑法向差最多 `12 deg`，缺少同目标
+  锚点、超界或法向不一致均失效关闭。任务节点另以 `3 mm` 平面残差独立复核，
+  未真正应用锚定的计划不能进入接触。
+- 抬升后增加单向视觉反证：若新的同标签观测仍位于原支撑面附近且未达到计划
+  抬升量的 `50%`，任务以 `OBJECT_NOT_LIFTED` 失败，不再把仅到达机械臂抬升
+  终点误报为抓取成功；目标被夹爪遮挡时保持“不确定”，不会触发 stop、disable
+  或 torque-off。
+- 失败数据回放、远场锚点捕获、只改平面中心、超界拒绝、任务边界复核和抬升后
+  反证测试均通过。完整 supervisor unittest `694/694`、streaming pytest
+  `232/232`、Python 编译和 `git diff --check` 通过。分析、修改和测试期间没有
+  发布机械臂运动、抓取、停止、失能、torque-off 或 controller-stop 命令。
+- 确认旧任务状态为 `active=false` 后，向当前 ROS 参数服务器加载新版
+  `grasp_params.yaml`，只热替换 `/remote_grasp6d_node` 和
+  `/grasp_task_node`。新规划节点 PID `63634`、监督终端 `89664`，新任务节点
+  PID `63737`、监督终端 `81658`；任务状态为 `IDLE/ready`。三个新开关
+  `near_field_center_anchor_enabled`、任务边界 anchor validation 和
+  `post_lift_visual_verification_enabled` 均为 `true`。驱动 PID `38520` 在热替换
+  前后未变化，控制器、GUI 和关节使能未重启；没有调用 `/grasp/start`，因此没有
+  产生物理运动。
+
+### 2026-08-11 - anchored real replay exposed an empty-close contract error
+
+- 机械臂物理重启后只发送一次正向 `/demonstration=false` 使能请求，并在把保留
+  控制目标同步到新鲜实测关节后，以 Joint6 `+0.025 rad` 小步响应确认
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`。没有发送 stop、disable、
+  torque-off、controller-stop 或 `/grasp/stop`。
+- 操作员重新对准纸盒后，冻结远场计划
+  `a24e7fe90ce43e41b39c5d5d`（source stamp
+  `1786439499709223747`）。到达观察位姿后捕获远场中心
+  `(-0.1185,-0.4520,0.0932) m`；近场原始中心平面漂移 `14.3 mm`、法向差
+  `3.07 deg`，锚定修正 `(11.5,-8.5,0.9) mm`。任务节点对重绑定计划
+  `9013c45f108ab81d537411ef` 独立复核得到远/近平面残差 `0.6 mm <= 3 mm`，
+  因此先前约 15 mm 的斜视中心偏移已经被本次通用锚定消除。
+- 近场预抓取、直线接近、抓取位姿和抬升的实测 FK 终点误差分别为
+  `3.6 mm / 0.27 deg`、`5.2 mm / 0.85 deg`、`1.1 mm / 0.23 deg`、
+  `1.1 mm / 0.21 deg`。接近和抬升的控制器结果虽为失败，任务只在同一冻结
+  计划的任务级 endpoint precision lease 连续满足原 `6 mm / 5 deg` 实测合同
+  后恢复；没有放宽位姿门限或替换目标。
+- 任务随后把计划 `required_open_width=43.6 mm` 仅减去 `2.0 mm` 预载，向
+  真机下发约 `41.6 mm`，驱动反馈 raw `834`，等效约 `41.7 mm`。离线检查确认
+  `required_open_width` 本来就包含两侧各 `2 mm` 的规划进场余量；旧闭合公式
+  没有先扣掉这 `4 mm`，所以对实体窄边不足 `40 mm` 的纸盒没有形成夹持。
+- 抬升后第一帧新鲜同标签观测为
+  `base=(-0.108,-0.441,0.083) m`。它距远场中心的平面漂移约 `15 mm < 40 mm`，
+  且高度没有随计划的 `33 mm` 抬升上升，按已有判据应为
+  `OBJECT_NOT_LIFTED`。任务却发布 `SUCCESS`；根因是视觉核验参数误放在
+  `/grasp_6d`，而 `grasp_task_node` 从 `/grasp` 读取执行配置，导致该核验在
+  真机路径中实际处于关闭状态。此次 `SUCCESS` 因而撤回为一次空抓证据，不能
+  作为物体已抬起的结论。
+- 已把所有 `post_lift_visual_*` 参数移到 `/grasp`，并增加配置结构回归以防再次
+  放错命名空间。计划绑定闭合改为
+  `required_open_width - 2 * opening_clearance_each_side - preload`；默认两侧
+  进场余量各 `2 mm`、预载 `2 mm`。对本次同样的 `43.6 mm` 计划，新目标将为
+  `37.6 mm`，仍由 `[0,50] mm` 物理范围夹紧且不使用机械零位。
+- 完整 supervisor unittest `695/695` 与 `git diff --check` 通过。确认旧任务
+  `active=false` 后加载新参数，只热重启任务节点；当前 PID `78284`、监督终端
+  `38347`、状态 `IDLE/ready`，运行参数
+  `/grasp/post_lift_visual_verification_enabled=true`、
+  `/gripper/plan_bound_opening_clearance_each_side_m=0.002`、
+  `/gripper/plan_bound_close_preload_m=0.002`。真实驱动、控制器、当前关节使能和
+  夹爪保持均未重启或改变；因当前视觉为 `TARGET_LOST`，没有发起第二次盲抓。
+
+### 2026-08-23 - protocol-v3 full launch, RGB-D latency fix, and bounded real grasp replay
+
+- 从本 worktree 的 `devel/setup.bash` 启动完整真机系统：
+  `full_system.launch start_real_arm:=true driver_port:=/dev/alicia_arm
+  driver_baudrate:=1000000 auto_torque_on_startup:=true
+  self_check_poll_rate_hz:=0.0 start_camera:=true start_tactile:=false
+  start_gui:=true use_remote_grasp6d:=true
+  remote_grasp6d_url:=http://172.23.132.97:8000`。ROS run id 为
+  `5a7a5a66-9f64-11f1-b06d-7350277327af`；真机串口、RealSense、MoveIt、
+  GUI、感知、remote protocol-v3 和任务节点保持在线。正向自动使能经编码器
+  方向响应确认；全程未发布 stop、disable、torque-off、controller-stop 或
+  `/grasp/stop`。
+- 修复相机 30 FPS 输入按 20 FPS 发布时被量化成约 15 FPS 的调度问题：发布
+  时钟按理想周期推进，不再每帧重置基准。RealSense `uint16` 深度裁剪改为原始
+  单位比较，避免每帧整图 `float64` 临时分配；隐藏的 GUI 相机页会退订图像，
+  显示时恢复订阅。
+- 新增 `/supervisor/camera/depth/preview` 320x240 `16UC1` 预览，仅在有订阅者
+  时从完整深度降采样；GUI 使用该预览，完整 640x480 深度仍发布给感知和 6D
+  规划。在线 8 秒观测得到 RGB `19.85 Hz`、完整深度 `19.83 Hz`、深度预览
+  `19.81 Hz`；31 个相机调度、深度尺度和 GUI overlay 聚焦测试通过，
+  `git diff --check` 通过。
+- 对纸盒的第一份冻结执行计划实际进入 `MOVE_PREGRASP`；远场终点实测误差
+  `9.9 mm / 9.44 deg`，新鲜相机观测距离 `0.1976 m`。近场融合快照没有
+  hard-safe candidate，任务以
+  `NEAR_FIELD_NO_HARD_SAFE_CANDIDATE` 失效关闭；没有执行接近、闭合或抬升。
+- 第二份稳定并通过 MoveIt 严格规划的计划提升后，最终执行 id 为
+  `28b5a37cd594c9e7d5186226`。两次提交均在任何运动前由驱动温控门即时拒绝：
+  `ACTUATION_UNCONFIRMED:OVERHEAT_BLOCKED:SUSTAINED_SAME_CHANNEL_TEMPERATURE`。
+  同期十路温度可回落到 `[37,37,44,35,36,36,37,43,37,41] C`，但实时流中
+  同一异常保护证据重复出现，因此没有修改阈值、清锁或绕过保护，也不再重复
+  提交；ROS 全节点保持在线且现有使能状态不变。
+
+### 2026-08-23 - permanent post-failure direct-control recovery and near-field candidate fix
+
+- 抓取失败后上位机直控滑条不能恢复并非控制器被停止。运行日志显示 GUI 已先后
+  请求正向使能、同步当前关节并发送有界验证步，但验证步错误地选中了 Joint4；
+  原因是自动任务移动机械臂后，七个滑条仍保留任务前目标，恢复器把整组过期目标
+  当作一次新命令，并按最大差值选择探测关节。验证超时清除目标后，旧 GUI 又立刻
+  重发一次正向使能，却没有对应的同步/探测，最终把状态遗留为
+  `PENDING:POSITIVE_ENABLE_REQUESTED`，后续滑条因此持续等待。
+- 直控恢复现在显式绑定用户正在编辑的滑条。每次新鲜 `/joint_states` 到达时，
+  未编辑的六个通道持续回基到实测反馈，只保留当前滑条目标；同步、1.5 deg 有界
+  探测和最终命令均只改变该关节。失败或超时会丢弃目标并回到可重试状态，不再
+  自动重发一个没有后续探测的使能请求，也不要求断电重启。新增回归覆盖“自动任务
+  已移动所有关节、用户只拖动一个滑条”的完整恢复序列。
+- 两次执行前的 `OVERHEAT_BLOCKED:SUSTAINED_SAME_CHANNEL_TEMPERATURE` 来自
+  CRC-valid 串口异常帧：正常 30--40 C 通道会在约一秒内跳到 98/100 C，并与
+  179.9 deg/E1/E2 编码器毛刺同窗出现。驱动保留原 125 C 绝对上限和 60 C、
+  同通道连续三次保护合同，同时增加逐通道温升速率可信度过滤：默认允许
+  `5 C + 8 C/s * elapsed`；瞬时跳变不进入保护连续计数，基线不被污染。允许量
+  随时间增长，因此真实、可持续的升温最终仍会被接纳并触发原保护，不会绕过
+  真实过热。
+- 本次 `NEAR_FIELD_NO_HARD_SAFE_CANDIDATE` 的审计显示 24 个近场 proposal
+  全部只评估了 45 deg 倾斜候选，其 palm 进入支撑面；支持面法向候选没有进入
+  hard gate。排序键原来把竖直和倾斜候选放在同一层，并以 `-tilt` 让 45 deg
+  永远优先；恰好 `24 proposals == max_candidates 24`，于是每个方向的竖直候选
+  全部被批次上限饿死。现在每个 live jaw direction 先保留一个 support-normal
+  候选，倾斜变体只占第二层；生产批次上限在内部既有硬上限内由 24 调到 32，
+  为八个倾斜备选留出空间。几何、桌面碰撞、可见性、MoveIt 和中心误差门限均
+  未放宽。
+- 离线验证：完整 supervisor unittest `701/701`、remote streaming pytest
+  `232/232`、驱动 actuation-confirmation gtest `11/11`；Release 构建、Python
+  编译和 `git diff --check` 均通过。分析、修改、构建和测试期间没有发布机械臂
+  运动、抓取、stop、disable、torque-off、controller-stop 或 `/grasp/stop`
+  命令。
+- 加载修复时，完整 launch 的 stock `controller_manager/spawner` 退出钩子自动
+  调用了 controller stop/unload。驱动析构没有发送 torque-off，串口控制板的
+  正向扭矩状态未被显式关闭，但该 controller-stop 与操作约束不符。随后以完全
+  相同参数恢复完整 launch；新 run id
+  `3d2663ba-9f69-11f1-b06d-7350277327af`，驱动、控制器、GUI、RGB-D、感知、
+  MoveIt、任务节点和 protocol-v3 远端均恢复在线，启动只请求正向 torque-on。
+  为防以后再次发生，真机 bringup 已用 `controller_loader_once.py` 替换常驻
+  stock spawner：它只 load/start 控制器后正常退出，不安装 shutdown stop/unload
+  hook。源码结构回归、Python 编译和 driver Release 构建通过；当前在线控制器
+  未因这项后续文件修改重启。
+- 新温度过滤已在在线串口流中实际命中：通道 3 的 `46 -> 108 C`、`46 -> 79 C`
+  跳变和其他超上限字节分别以 `slew_invalid=1` 或 `above_ceiling=1` 拒绝；下一帧
+  46--47 C 正常遥测继续进入原保护链，没有再形成虚假的同通道三连高温锁。
+- 第一次 GUI 同步后又暴露一个现场边界：如果第一次滑条变化不足 0.02 rad 或
+  只编辑夹爪，目标被丢弃后驱动会合法保留
+  `PENDING:COMMAND_SYNCHRONIZED`；旧恢复器把该状态当作永久等待。现在新的明确
+  Joint1--Joint6 滑条动作可复用既有零运动同步，等待一帧更新反馈后直接进入该
+  关节的有界探测，不重发使能。该分支聚焦测试 `15/15`，更新后的完整 supervisor
+  unittest `703/703`；仅热替换 GUI，驱动、控制器、相机和抓取节点未重启。
+
+### 2026-09-02 - corrected root-overlay launch to protocol-v3 carton runtime
+
+- 本次最初错误 source 了仓库根目录的 `devel/setup.bash`，导致 GUI/感知加载
+  `original` / `mouse` 默认配置。发现后先从本 worktree 加载
+  `config/camera_params.yaml` 并递增 `/perception/yolo_reload_generation`，在线
+  感知随即切换为 `carton_segment` / `carton`；之后完成无重叠的完整环境切换。
+- 为避免旧 stock controller spawner 在退出时安装并调用 stop/unload hook，先只
+  结束旧 spawner，再退出旧 root-overlay launch；驱动析构仅断开串口。全过程
+  没有发送 stop、disable、torque-off、controller-stop、`/demonstration=true`
+  或 `/grasp/stop` 命令。
+- 从 `/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/devel/setup.bash`
+  启动日志规定的完整真机命令：
+  `roslaunch alicia_flexible_grasp_supervisor full_system.launch
+  start_real_arm:=true driver_port:=/dev/alicia_arm driver_baudrate:=1000000
+  auto_torque_on_startup:=true self_check_poll_rate_hz:=0.0 start_camera:=true
+  start_tactile:=false start_gui:=true use_remote_grasp6d:=true
+  remote_grasp6d_url:=http://172.23.132.97:8000`。新 ROS run id 为
+  `84f37aa4-a750-11f1-b25b-0b3c1d16c776`；`controller_loader_once.py` 成功
+  load/start 控制器后正常退出，驱动、MoveIt、MotionGateway、RealSense、GUI、
+  perception、grasp task 与 remote protocol-v3 节点均由该 worktree 在线运行。
+- `auto_torque_on_startup` 发出正向 torque-on 请求后，驱动处于
+  `PENDING:POSITIVE_ENABLE_REQUESTED`。按既有现场合同，先向 `/joint_commands`
+  发布一次等于新鲜编码器反馈的零运动同步，再只向 Joint6 正方向发布一次
+  `+0.025 rad` 有界验证目标；状态依次进入
+  `PENDING:COMMAND_SYNCHRONIZED`、`PENDING:AWAITING_ENCODER_RESPONSE`，最终为
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`，`/alicia_d/motion_enabled=True`。
+  Joint6 实测约从 `-0.0015 rad` 到 `+0.0184 rad`，夹爪命令保持不变。
+- 使能后串口反馈 `status=0x00`，十路最高温度约 `35 C`。`carton` 实例分割稳定，
+  置信度约 `0.90`，有效 mask 约 `4.8k` 像素，目标基座坐标约
+  `(-0.107, -0.437, 0.098) m`。截至本记录只完成环境纠正和正向使能，尚未调用
+  `/grasp_6d/request_plan`、`/grasp_6d/replan_execution` 或 `/grasp/start`；等待
+  操作员重新对准纸盒后生成全新的计划。
+
+### 2026-09-02 - aligned carton 6D execution ended OBJECT_NOT_LIFTED
+
+- 操作员明确报告“已对准”后，调用 `/grasp_6d/request_plan trigger:true` 开启一份
+  全新候选窗口。远场结果达到三次独立稳定命中，严格 MoveIt `1/1` 通过；预览
+  `c514e65a74eded126d0b6c1c` 经 `/grasp_6d/replan_execution trigger:true`
+  原子升格。随后用 `/grasp_6d/request_plan trigger:false` 只冻结候选计算；这不是
+  机械臂停止命令。任务节点确认最终执行计划
+  `dd926d5e592ea144b6ebf08c`、`validation=VALID`，并以同一 plan id 调用
+  `/grasp/start execute:true`。
+- 远场观测轨迹时长 `95.921 s`，成功完成；实测终点误差
+  `0.0130 m / 2.21 deg`，新鲜相机距离 `0.1905 m` 位于要求的
+  `[0.1800, 0.2200] m` 内。近场严格四阶段序列通过，执行权限重新绑定到计划
+  `4d6578b37b7accc00c44b274`；远/近场平面中心残差 `0.0003 m`。
+- 近场预抓取轨迹时长 `67.009 s` 并成功完成；端点闭环修正后实测残差
+  `0.0020 m / 0.36 deg`。27 mm 直线 approach 的控制器先报告 Joint2
+  `GOAL_TOLERANCE_VIOLATED`，但任务只在独立实测 FK 合同通过
+  `0.0019 m / 0.55 deg` 后继续。最终 37 mm 直线抓取位姿成功完成，实测残差
+  `0.0055 m / 0.65 deg`。
+- 计划绑定闭合使用 `required_open_width=0.0438 m`、两侧进场余量各
+  `0.0020 m` 和 preload `0.0020 m`，闭合目标为 `0.0378 m`；实测
+  `gripper_raw` 约 `758`，没有使用机械零位。59 mm 抬升规划 fraction `1.000`；
+  控制器也曾报告 Joint2 容差超限，但独立实测抬升端点合同通过
+  `0.0052 m / 0.62 deg`。
+- 抬升后的新鲜视觉验证判定目标未被提起：
+  `OBJECT_NOT_LIFTED: fresh target support height 0.0088m, required held height
+  0.0285m; planar drift 0.0090m (limit 0.0400m), planned lift 0.0460m`。
+  `/grasp/start` 最终返回 `success=False, message=failed`，执行槽已释放。没有盲目
+  重试；夹爪保留计划闭合状态。全程未由操作侧发送 `/grasp/stop`、arm stop、
+  disable、`/demonstration=true`、torque-off、controller-stop、emergency 或
+  gripper-open 命令；完整 ROS launch 继续在线。
+
+### 2026-09-02 - reached-view grasp correction, J2/J3/J5 direct isolation, and GUI restart
+
+- 操作者提供的两段轨迹视频文件没有出现在本工作树或可读临时目录，因此没有把
+  未读取的视频画面冒充量化证据；本节使用操作者对“第一阶段/第二阶段均明显偏离”
+  的现场报告、同次 ROS run 的原始时间线和失败后的直控复现描述共同定位问题。
+- 失败 run `84f37aa4-a750-11f1-b25b-0b3c1d16c776` 到达远场观察位后，连续纸盒
+  观测约为 `base=(-0.115,-0.431,0.091) m`，bbox 约
+  `(285,189,137,138)`，相机距离 `0.1905 m`。但进入近场时远端仍冻结规划前
+  几何中心 `(-0.1074,-0.4418,0.0919) m`；二者平面差约 `13.2 mm`。随后记录的
+  `far/near residual=0.3 mm` 只证明近场计划跟随了这个旧锚点，不能证明它跟随
+  到达观察位后的真实目标。生产配置又关闭了 final visual refine，所以错误中心
+  贯穿近场预抓取、接近、闭合和抬升，最终由
+  `OBJECT_NOT_LIFTED` 正确反证为空抓。
+- 抓取中心修复把“到达观察位后的实体中心”提升为任务侧权威。任务在接受新鲜
+  观察距离后校验目标原始图像时间，使用当前视觉表面点相对远场计划支撑面中心的
+  修正得到实体中心，并随 `NearFieldPlanningPhase` 发布有效位、标签、base-frame
+  中心和源时间。远端只有在结构化合同、当前几何和标签均有效时才保留当前尺寸、
+  朝向、支撑面、法向和点云并替换中心；缺失参考 fail closed。任务自己的
+  `<=3 mm` 平面锚点复核也改为对这个 reached-view reference，而不再对旧计划中心。
+- 候选预抓取后恢复必需的 final visual refine，超时 `20 s`。若远端仍返回同一
+  候选，任务不再立即接受“unchanged”，而是收集五个互异、同标签、边界完整的
+  实时中心样本；最大抖动 `6 mm`、边界余量 `4 px`、修正上限 `25 mm`。只修正
+  平移，冻结姿态、开口宽度和候选身份，并对更新后的四阶段接触序列重新执行严格
+  MoveIt；修正后还需五帧中心残差确认。配置已加载为
+  `final_visual_refine_enabled=true`、`required=true`、center fallback 开启且延时
+  `0 s`。
+- J2/J3/J5 联动的命令路径有两个可叠加缺口：GUI 的 `JointState` 原来总是携带
+  七个滑条值，驱动不知道操作者实际编辑了哪一轴；任务专属 endpoint feedback
+  trim/lease 结束后，历史多关节偏移也可能继续叠加到普通命令。三个
+  `/joint_commands` publisher 虽保持注册，但空闲窗口没有观测到持续互相抢写，
+  因此没有把故障归因成未经证明的空闲 publisher 竞争。
+- GUI 现在把零运动同步标记为 `gui_direct_sync`；普通直控标记为 `gui_direct`，并在
+  `effort` 携带恰好一个 one-hot 编辑通道。驱动要求元数据和被编辑值有限且完整；
+  每段新手势从新鲜编码器反馈锁存六关节和夹爪，只替换被标记轴，同一编辑轴在
+  `0.25 s` 内复用锁存基线并暂时拒绝其他命令源。每条 GUI 直控/同步命令都撤销
+  endpoint lease、清零历史 trim offsets。ros_control 和 motion gateway 也分别
+  标记 `ros_control`、`motion_gateway`，便于以后直接从驱动日志追踪来源。
+- 离线阶段完成 Release `catkin_make`；近场重锚、final refine、GUI 恢复状态机、
+  one-hot 协议和驱动源合同的聚焦回归为 `198/198`，`git diff --check` 通过。
+  此时没有向机械臂发布运动或抓取命令。
+- 操作者随后误关了上位机。只读现场检查表明旧 ROS master、驱动、相机、MoveIt、
+  感知、任务和远端节点仍在线，只有 `/alicia_supervisor_gui` 缺失。由于本次同时
+  修改了 ROS 消息和驱动/GUI 协议，没有把新 GUI 与旧内存节点混装；旧完整 launch
+  退出后，从本 worktree 使用日志规定的完整参数启动一致的新版本。第一次沙箱内
+  启动在枚举网络接口时以 `PermissionError` 退出，尚未建立节点或发送硬件命令；
+  随后在本机 ROS/串口环境成功启动新 run
+  `610e477a-a757-11f1-b25b-0b3c1d16c776`，日志写入工作区 `.ros_log`。
+- 新 run 中 `/alicia_supervisor_gui` PID `41790`，驱动 PID `41741`，remote
+  protocol-v3 PID `41772`，任务 PID `41784`。一次性 controller loader 只执行
+  load/start 后退出，未安装 shutdown stop/unload hook。完整节点注册，远端报告
+  `backend=graspnet_baseline loaded=true protocol=3`；`carton` 分割持续约
+  `0.895--0.917` 置信度，任务保持 `IDLE/ready`。
+- `auto_torque_on_startup` 只请求正向 torque-on。随后发布一次等于新鲜编码器的
+  `gui_direct_sync` 零运动基线，以及一次只标记 Joint6 的 `+0.025 rad` 有界目标。
+  驱动明确记录 `source=gui_direct edited_index=5`，目标从
+  `[-101.9,32.1,-14.5,-4.1,-18.4,1.4] deg` 变为
+  `[-101.9,32.1,-14.5,-4.1,-18.4,2.8] deg`：Joint2/3/5 的命令值没有随 Joint6
+  改变。状态依次为 `COMMAND_SYNCHRONIZED -> AWAITING_ENCODER_RESPONSE ->
+  CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`，`motion_enabled=true`。实测反馈中
+  未编辑轴仍有约 `0.1--0.5 deg` 的保持/量化 settling。随后对 J2、J3、J5 的
+  小步复测证明，虽然驱动日志中的目标已单轴隔离，每次切换编辑轴时其他编码器仍
+  会跟随改变；因此没有在这里把故障误记为已经闭合，而是继续定位第二层原因。
+- 本次版本切换、正向使能和验证步没有发布 `/grasp/stop`、arm stop、controller
+  stop、disable、torque-off、`/demonstration=true`、emergency 或 gripper-open
+  命令；最新完整 ROS 与上位机保持在线，尚未启动新的 6D 抓取。
+- 最终离线验证均在同一 worktree 完成：Release `catkin_make` 退出码为 0；完整
+  supervisor unittest 最新复跑为 `710/710`（`8.832 s`）；第二层保持修复前 driver gtest
+  目标为 `11/11`，修复后更新为 `13/13`；当前
+  `catkin_test_results build/test_results/alicia_d_driver` 汇总 `26 tests, 0 errors,
+  0 failures, 0 skipped`；四个改动 Python 入口通过 `py_compile`，四份 YAML 和
+  两份 package manifest/两份 launch XML 均可解析。unittest 输出包含为故障分支
+  主动构造的错误日志，以及既有 GUI 无 ROS master 场景的 `ROSInitException`/资源
+  回收警告，但进程退出码和断言结果均为通过。
+- 在线终端复核仍持续收到真实编码器、温度和纸盒识别流：驱动命令保持为单一
+  Joint6 目标，反馈稳定约
+  `[-101.9,31.8,-15.0,-4.1,-18.5,2.6] deg`、最高温度约 `38 C`；纸盒中心约
+  `(-0.104,-0.430,0.095) m`、置信度约 `0.90`。启动早期出现一次孤立的硬件
+  `0xE1` 状态事件，当时新鲜实测最高温度仅 `38 C`；现有过滤按合同将其记录为
+  `1/3` 而未触发失能，此后正常 `0x00` 遥测继续。重复时间戳 TF 警告仍可见，
+  不影响上述编码器、目标识别或节点存活，但保留为下一轮运行日志项。
+- 第二层根因是“编码器反馈不等于当前 SDK 保持设定值”。首轮 J2/J3/J5 实测前，
+  最近 SDK 目标约为 `[32.1,-14.5,-18.4] deg`，稳定反馈约为
+  `[31.8,-15.0,-18.5] deg`。旧的新手势逻辑把未编辑轴的反馈重新写成 SDK 目标，
+  因而在清零 trim 后仍主动改变了其余轴设定值；首轮 J2 命令虽只编辑 J2，J3/J5
+  反馈分别又移动约 `-0.5/-0.2 deg`。这不是 one-hot 解析失败，而是保持基线选错。
+- 新增 `select_gui_direct_hold_reference()`：新手势和已有命令流上的
+  `gui_direct_sync` 优先继承最近一次成功写入硬件且仍新鲜的六轴 SDK 设定值；只有
+  驱动尚无可用下发记录时才回退真实反馈。这样既不接受 GUI 的陈旧全量滑条值，
+  也不把稳定的命令—反馈偏差制造成未编辑轴的新目标。新增两个纯 C++ 回归分别
+  覆盖最近 SDK 设定值保持和无效/过期记录的反馈回退，driver gtest 更新为
+  `13/13`。
+- Release 重建后再次切换完整环境，新 run id 为
+  `5a2ed3bc-a75b-11f1-b25b-0b3c1d16c776`；驱动 PID `56619`、GUI PID `56682`、
+  remote PID `56666`、任务 PID `56675`。启动参数仍为本节上方记录的完整真机、
+  相机、GUI 和 remote protocol-v3 组合；正向 torque-on 后执行一次零运动同步，
+  未发送任何停止或失能命令。
+- 新二进制的 J2/J3/J5 真机复测全部通过。同步后基线为
+  `[-1.7778837332, 0.5568350260, -0.2807184842, -0.0720970970,
+  -0.3267379078, 0.0460194236] rad`：
+  J2 `+0.025 rad` 后 J2 到 `0.5767767762`，J3/J5 原始编码器值分别保持
+  `-0.2807184842/-0.3267379078`；J3 `+0.025 rad` 后 J3 到
+  `-0.2699806187`，J2/J5 仍逐位不变；J5 `+0.025 rad` 后 J5 到
+  `-0.3144660615`，J2/J3 仍逐位不变。三次驱动目标依次只改变 J2、J3、J5，
+  最终执行状态为 `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`。
+- 复测后的持续监视中，`carton` 仍稳定检出（一次只读快照
+  `confidence=0.8974`、`base=(-0.1227,-0.4343,0.0949) m`），任务保持
+  `IDLE/ready`、远端保持 manual-trigger 等待。串口间歇报告互不连续的 `E1/E2`
+  状态事件，但每次之间均恢复 `0x00`，实测十路温度为
+  `[35,36,32,31,37,41,36,37,36,36] C`；
+  `/alicia_d/protection_latched=False`、`motion_enabled=True`。按现有合同只记录该
+  遥测，没有发送停止、失能或 torque-off 命令。
+
+### 2026-09-03 - GUI-only recovery before the next aligned carton run
+
+- 操作者再次误关上位机。现有 ROS master 下驱动、ros_control、MoveIt、相机、
+  `carton` 感知、任务节点和 remote protocol-v3 节点均仍在线，只有
+  `/alicia_supervisor_gui` 缺失；因此没有重启完整真机系统，也没有触碰既有
+  控制器和机械臂使能。
+- 从 protocol-v3 worktree 的 `devel/setup.bash` 启动
+  `roslaunch alicia_flexible_grasp_supervisor gui.launch`。恢复后的
+  `/alicia_supervisor_gui` PID 为 `147953`，已连接关节反馈、相机/深度、
+  `carton` 感知、6D Preview/Execution、抓取状态和正向直控话题。
+- 上一轮未运动的执行尝试补充了两个操作合同：`StartGrasp` 请求必须显式携带
+  `plan_id`；提交边界必须使用任务节点 `/grasp/current_plan` 返回的同一
+  `plan_id` 和 `validation=VALID`，不能仅凭旁路 `/grasp_6d/plan_enriched`
+  判断任务回调已接收。后续流程将在持续推理中取得该任务侧权威 plan id，立即
+  调用 `/grasp/start`；任务进入 active、冻结不可变执行计划后，再暂停候选推理。
+- 为避免操作员重新对准期间生成旧候选，调用
+  `/grasp_6d/request_plan trigger:false` 仅暂停远端候选计算。这不是机械臂停止
+  命令；本次恢复过程未发布 `/grasp/stop`、arm/controller stop、disable、
+  torque-off、emergency、`/demonstration=true` 或 gripper-open 命令。等待操作员
+  完成对准并报告“已对准”后，生成全新 carton 6D 计划并继续实机验收。
+
+### 2026-09-03 - aligned run evidence, first-stage path fix, and full recovery
+
+- 操作者报告“已对准”后开启新的远场窗口。generation `7` 达到稳定 `3/3`、
+  严格 MoveIt `1/1`，任务侧 `/grasp/current_plan` 返回并绑定
+  `plan_id=e68ff4db1f8c50bae3a14999`、`validation=VALID`。任务进入
+  `MOVE_PREGRASP` 后才暂停后台候选生成；没有发布机械臂停止命令。
+- 远场观察运动实际完成。重定时日志为 `duration=86.735 s`、
+  `max_delta=1.735 rad`、最终 `peak_velocity=0.020 rad/s`，限制关节为 Joint6；
+  实测端点误差 `7.9 mm / 1.35 deg`，到纸盒距离 `0.1934 m`，位于要求的
+  `[0.180,0.220] m`。上传视频
+  `/home/zhuyupei/Videos/764a25caa99acc18c09b5d1ebdd3c80d.mp4` 为
+  `720x1280` HEVC、时长 `89.667 s`，与这段轨迹时长相符。视频所示慢速属实，
+  但 ROS 证据表明第一阶段已成功到达；失败发生在随后的近场规划。
+- 到达视角参考中心为 `(-0.1248,-0.3861,0.0729) m`。近场使用三帧、跨度
+  `1203.95 ms` 的当前 RGB-D，mask IoU `0.9585`、目标点 `8079`、支撑点
+  `18243`；中心锚定平移仅 `4.7 mm`、法向差 `0.83 deg`。远端 `391` 个原始候选
+  经 NMS/碰撞后为 `40/22`，但旧的一项 learned 上限只返回 source index `0`；
+  该候选要求 `80.8557 deg` 插入倾角，高于当帧 `38.3996 deg` 硬上限，按
+  `GRASPNET_STAGE_PROFILE_UNAVAILABLE` 拒绝。tabletop 分支六个方案最大接触片
+  重叠仅 `1.409 mm`，低于原 `2.0 mm` 硬下限。因此任务以
+  `NEAR_FIELD_NO_HARD_SAFE_CANDIDATE` 失败并释放执行槽，没有接近、闭合或抬升。
+- 修复没有放宽 Joint3/4/6 的 `0.02 rad/s` 真机跟随上界。远场滚转搜索改为比较
+  所有端点安全且严格可达分支，按 `joint_max_delta_rad`、`joint_path_cost`、
+  确定性偏好顺序选最短关节运动，避免“第一个可达”造成不必要的 Joint6 大绕行。
+  同时将 `near_field_max_candidates` 从 `1` 调为 `12`，让当前帧严格几何检查覆盖
+  多个 learned 模式；`30 s` 截止时间、tabletop 分支、倾角、碰撞、接触、关节、
+  MoveIt、plan-id 和执行授权门均未改变。新增最短分支回归和默认配置断言；定向
+  回归 `4 passed`，remote/config 完整相关回归 `397 passed`。
+- 操作者随后误关上位机和全部节点。第一次恢复 run
+  `fed7b552-a781-11f1-b25b-0b3c1d16c776` 已拉起 GUI、驱动、MoveIt、相机、
+  carton 感知和 remote protocol 3，并以零运动同步加 Joint6 `+0.025 rad` 正向
+  小步取得 `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`。复核文档后发现该 run 使用
+  默认 `self_check_poll_rate_hz=0.5`，与最新现场命令不一致且期间出现孤立 E1/E2
+  状态帧；因此只通过进程退出断开串口，驱动析构没有 torque-off 写帧。
+- 最终按文档从 protocol-v3 worktree 启动 run
+  `2afeb9c2-a783-11f1-b25b-0b3c1d16c776`：完整参数含
+  `auto_torque_on_startup=true`、`self_check_poll_rate_hz=0.0`、真实相机、
+  `start_tactile=false`、GUI、remote URL `http://172.23.132.97:8000`。
+  `near_field_max_candidates=12` 已由启动配置载入。再次使用新鲜编码器进行零运动
+  同步并只让 Joint6 正向 `+0.025 rad`，最终
+  `/alicia_d/actuation_status=CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`、
+  `/alicia_d/motion_enabled=True`。carton 稳定识别、任务 `IDLE/ready`，等待操作者
+  在最终运行环境中重新对准后启动新鲜 6D 抓取。
+- 本节所有恢复和修复过程均未发布 `/grasp/stop`、arm/controller stop、disable、
+  torque-off、emergency、`/demonstration=true` 或 gripper-open 命令。
+
+### 2026-09-03 - 141 s observation video, near-field failure, and offline repair
+
+- The operator aligned the carton and authorized the fresh run. Far-field plan
+  `bb2c864826b16c4250008219` was task-side `VALID`. The observation search
+  checked all five endpoint-safe roll branches; two were strictly reachable
+  and the then-current minimum-joint-delta policy selected camera roll
+  `+90 deg`, `joint_path_cost=3.079`, `joint_max_delta=2.822 rad`.
+- The exact cached trajectory completed with `SUCCEEDED`. Strict retiming was
+  `141.082 s`; Joint6 was the limiting joint at the unchanged measured
+  `0.020 rad/s` rate and moved approximately `+9.1 deg -> -152.6 deg`.
+  Measured endpoint residual was `10.4 mm / 1.81 deg`; the fresh
+  camera-to-target distance was `0.1927 m`, inside `[0.180,0.220] m`.
+  `/home/zhuyupei/Videos/6a184088ecb03f8ca902121b496342b4.mp4`
+  is H.264 `544x960`, `137.463 s`, 4127 frames. Its sampled frames show the
+  same large arm elevation/wrist reorientation while the carton remains
+  stationary, so the reported slow motion is consistent with ROS timing and
+  is not a playback artefact.
+- Near field retained the same `carton` target (`confidence` about `0.915`,
+  range about `0.192 m`) and estimated a
+  `50.22 x 35.05 x 21.24 mm` support-anchored OBB. Same-pixel depth
+  repeatability was `0.148 mm` and spatial MAD was `3.2 mm`. Of 44 GraspNet
+  candidates, NMS/remote collision left `10/3`; two required minimum insertion
+  tilts `59.70/66.68 deg`, above the live hard `35.23 deg` profile, while the
+  remaining candidate put its centre `1.91 mm` below the support plane.
+- The independent tabletop branch evaluated nine real jaw directions and 162
+  materialized wrist/tilt variants. All failed
+  `GRIPPER_CONTACT_PATCH_MISS`; the best continuous measured bilateral
+  cloud/CAD overlap was `1.515 mm`, below the unchanged `2.000 mm` requirement.
+  The task therefore returned `NEAR_FIELD_NO_HARD_SAFE_CANDIDATE`; it did not
+  enter approach, close, or lift. The driver remained
+  `CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE`, `motion_enabled=True`.
+- Historical comparison explains both regressions. Earlier observation paths
+  were commonly about `15--37 s`, before repeated real executions proved
+  Joint3/4/6 could reach the unchanged `0.120 rad` path-error boundary. Their
+  current `0.020 rad/s` per-joint limits prevent those failures but turn a large
+  wrist route into `100--144 s`. Earlier contact planning also accepted sparse
+  visible-surface evidence; it reached close/lift but visibly contacted one
+  finger first and displaced the carton. The current CAD overlap gate correctly
+  blocks that old off-centre behaviour rather than reproducing it.
+- Offline speed repair adds a hardware-limited duration lower bound to every
+  strict pose plan: per-joint absolute path travel is divided by that joint's
+  deployed velocity limit, and the maximum ratio and limiting joint are
+  exported in the existing planning message. Equivalent safe/reachable
+  observation rolls now rank first by that lower bound, then by maximum joint
+  delta, path cost, and deterministic preference. No velocity limit, path
+  tolerance, endpoint, camera-distance, envelope, or collision gate changed.
+- Offline contact repair is deliberately restricted to the detected `carton`
+  class. When close-view bilateral edge points collapse to a top-surface band
+  shorter than the live overlap requirement, the planner may use the same
+  support-anchored solid OBB's vertical interval. The inferred interval starts
+  above the unchanged `3 mm` support clearance, stays inside the OBB, and must
+  intersect the measured bilateral band; all subsequent exact CAD endpoint,
+  swept collision, contact, strict MoveIt, and execution gates remain in force.
+  Unknown/non-carton classes retain the original measured-cloud-only rule.
+- Replaying the exact failed audit's 376 points and frozen geometry gives zero
+  candidates and the original 162 contact misses for an unsupported label. For
+  `carton`, it produces the configured 32-candidate bound with continuous CAD
+  overlaps `3.787--17.140 mm`; minimum open-finger support clearance remains
+  `3.000 mm`, and all `32/32` pass the full analytical endpoint/sweep gate.
+  This is offline geometry evidence only; MoveIt reachability and hardware
+  execution remain unclaimed until the operator finishes repositioning.
+- Regression results: remote streaming/planning `236 passed`, gripper and
+  tabletop geometry `127 passed`, MoveIt pose-feedback `40/40`; the complete
+  supervisor discovery suite passed `711/711`, Python compile passed, and
+  `git diff --check` reported no whitespace errors. During video analysis and
+  repair the operator was manually moving the
+  arm, so no motion, retry, stop, disable, torque-off, emergency,
+  `/demonstration=true`, `/grasp/stop`, or gripper command was sent.
+
+### 2026-09-03 - operator-mandated class-agnostic target contract
+
+- The operator established a non-negotiable final architecture requirement:
+  every fix and optimization must generalize to an object whose semantic class
+  is unknown. No per-class training, pre-authored per-object segmentation, or
+  label-specific execution-authority branch is permitted in the final route.
+- The current `carton`-only solid-OBB recovery is therefore retained only as
+  diagnostic evidence that incomplete close-view surfaces caused the contact
+  miss. It is not an acceptable final implementation and must be replaced by a
+  class-independent geometric evidence contract before final acceptance.
+- The operator approved a staged boundary. The current phase keeps the
+  operator-trained `carton` segmentation only as the target-mask adapter. All
+  downstream geometry, candidate generation, collision/contact checks,
+  MoveIt, final refinement, endpoint control, and result verification must be
+  class-agnostic. After the known carton completes the full task, only that
+  adapter is replaced by online unknown-object RGB-D extraction or generic
+  segmentation; the generic pretrained GraspNet backend may remain.
+- The approved design is recorded in
+  `docs/superpowers/specs/2026-09-03-known-to-unknown-class-agnostic-grasp-design.md`.
+  No physical retry was started while the operator manually repositioned the
+  arm.
+
 ### 2026-09-03 - endpoint-trim continuity evidence; powered deployment remains gated
 
 - This entry is offline-only. WSL and every hardware interface were shut down;
@@ -16601,3 +17339,88 @@ Implemented and verified offline:
 - Continuing the approved class-agnostic precontact plan, starting with opaque
   target identity and plan-integrity fields. Known carton segmentation remains
   a mask source only; downstream execution must remain class independent.
+
+## 2026-09-04 precontact identity integration — partial, offline only
+
+- Task node integrated tests: `164/164` passed. Remote-node tests: `156/157`,
+  one open reached-view anchor fixture missing the explicit reference track.
+- Opaque geometric identity replaces diagnostic label/model equality. Phase
+  cancellation and target identity lifetime are being separated; independent
+  review and combined-suite evidence remain pending.
+- No powered outcome is claimed. No WSL, ROS runtime node, hardware interface,
+  or real motion/enable/disable command was invoked.
+- Live verification record:
+  `docs/superpowers/verification/2026-09-03-known-mask-class-agnostic-precontact.md`.
+  Multiview measured support, 3D refinement and bounded reacquisition remain
+  unfinished; identity propagation alone does not solve full grasp acceptance.
+
+## 2026-09-05 precontact identity lifecycle — offline verification only
+
+- No ROS master/node, WSL service, camera, serial device, controller, arm,
+  enable/disable, stop, torque-off, gripper, or motion command was used.
+- Direct-near success retains stream/track; final refinement opens a new
+  planning phase, preserving target identity while invalidating old inference
+  generation and excluding prior samples/previews. Actual stop/start remains a
+  new-target boundary.
+- Same-track hard-invalid geometry revokes immediately except for explicit
+  TARGET_LOST expected occlusion. Cached geometry may span motion time only
+  when it covers the frozen plan and passes track/frame/finite/position gates;
+  live ObjectPose freshness is still required.
+- Lifecycle RED/GREEN: 4 failures then 4 passes; task/remote tests 408 passed;
+  independent lifecycle re-review Spec/Quality PASS; Task 1 plus GUI 948
+  passed; complete supervisor pytest \`1829 passed, 3 skipped, 7 warnings\`.
+- Task 1 still awaits full-scope review. Tasks 2–5 and powered grasp remain
+  open; this is not evidence of real-arm speed or complete-grasp success.
+
+## 2026-09-05 precontact Task 1 final offline acceptance
+
+- Full review findings are closed: same-track structural contradictions now
+  revoke through expected occlusion; empty/changed diagnostic model names no
+  longer reject evidence or publish hard-invalid geometry. The actual detector
+  profile and input/readiness gates remain active.
+- Generated-message tests persist plan-ID binding for target track plus every
+  refinement field, reject invalid states, and verify ROS float32 wire
+  round-trip consistency. Independent scoped verdict: PASS.
+- Fresh final evidence: Task 1 integration 977 passed; `catkin_make -j2`
+  exited 0; complete supervisor pytest 1866 passed, 3 skipped, 7 existing
+  warnings; `git diff --check` exited 0.
+- No ROS master/node, WSL, camera, serial device, controller, arm, gripper,
+  enable/disable, stop, torque or motion command was used. Task 2 measured
+  multi-view fusion starts next; real-arm speed, shake and full grasp remain
+  unverified.
+
+## 2026-09-06 class-agnostic precontact offline completion; no node launch
+
+- 本节没有启动或检查 ROS master/node、WSL、相机、串口、controller、机械臂或
+  夹爪，也没有发布 enable、disable、stop、torque 或 motion 命令。日志标题虽为
+  node launch，本节仅记录后续启动所依赖的软件离线状态，不能当作运行态证据。
+- Task 2–5 已完成并经独立复核：多视角融合只保留真实测量点及 provenance；
+  接触必须有双侧实测表面；`carton` solid-OBB 补面分支已删除；最终修正只用
+  同 track/source/lineage/support 绑定的 `VALID_3D` evidence；clear-view 最多
+  一次并检查 camera/tool capsule 与 Alicia palm/双指 CAD 包络。
+- corrected-pregrasp 后必须由新的 near-field phases 取得五帧 3D evidence；
+  residual 和完整三维中心 jitter 均受 6 mm 门约束。失败以精确 code 在 approach/
+  contact 前返回，不通过标签或 2D centroid 绕过。
+- 最新离线结果：Task 4/5 四文件 573 passed；完整 supervisor pytest
+  `2042 passed, 3 skipped, 8 warnings`；catkin build exit 0（8 messages、
+  11 services）；unittest `769 tests OK`；driver gtest `49/49`；
+  `git diff --check` 通过且 index 为空。协议测试只绑定本机 127.0.0.1 mock HTTP。
+- 后续不能复用历史“已对准”。只有操作者恢复 WSL/硬件接口、重新对准并明确授权
+  一次新尝试后，才能从本日志此前已验证的完整启动参数恢复系统。真机必须重新
+  验证观察轨迹时长、第二阶段完整性、夹爪抖动、encoder/endpoint trim、四阶段
+  strict MoveIt、gripper feedback 和 lift 结果；当前均保持未验证。
+
+## 2026-09-06 final offline review closure; still no node launch
+
+- 最终审查发现并关闭一个 Important：接受非零 3D 配准后，必须针对修正后的
+  精确四姿态而非修正前 sequence 重做完整 strict MoveIt 检查。当前顺序为先应用
+  registration、固定 diagnostic/最终 `plan_id`，再检查最终 rich plan 四姿态；
+  成功前不生成可发布 bundle/audit，失败清除陈旧 final 成功证据。
+- 非零真实配准回归先 RED 后 GREEN；四文件 574 passed。独立复审确认
+  ADDRESSED、无新 Critical/Important，Spec PASS / Quality PASS。
+- 最终离线证据：完整 supervisor `2043 passed, 3 skipped, 8 warnings`；catkin
+  8 messages / 11 services；unittest 769/769；driver gtest 49/49；静态门、
+  `git diff --check` 与空 index 均通过。
+- 本节仍没有启动或检查 ROS graph、WSL、相机、串口、controller、机械臂或夹爪，
+  也没有发布 enable、disable、stop、torque 或 motion 命令。离线 Tasks 1–6 已
+  关闭；真机速度、第二阶段、夹爪抖动及 lift 仍等待新的现场恢复、对准和授权。

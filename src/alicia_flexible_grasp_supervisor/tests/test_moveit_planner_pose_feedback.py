@@ -188,6 +188,96 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
             )
         )
 
+    def test_plan_metrics_expose_per_joint_hardware_duration_lower_bound(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.strict_execution_max_joint_velocity_rad_s = 0.08
+        planner.strict_execution_joint_velocity_limits_rad_s = {
+            'Joint3': 0.02,
+            'Joint4': 0.02,
+            'Joint6': 0.02,
+        }
+        plan = JointPlan(
+            [
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                [0.8, 0.0, 0.3, 0.0, 0.0, 0.5],
+            ]
+        )
+
+        metrics = planner._plan_joint_path_metrics(plan)
+
+        self.assertAlmostEqual(
+            metrics['execution_duration_lower_bound_sec'],
+            25.0,
+        )
+        self.assertEqual(metrics['hardware_limiting_joint'], 'Joint6')
+        self.assertAlmostEqual(metrics['joint_duration_lower_bound_sec'], 25.0)
+
+    def test_strict_sequence_sums_stage_duration_lower_bounds(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.strict_execution_max_joint_velocity_rad_s = 0.1
+        planner.strict_execution_joint_velocity_limits_rad_s = {}
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+        plans = iter([
+            JointPlan([[0.0, 0.0], [0.2, 0.0]]),
+            JointPlan([[0.2, 0.0], [0.2, 0.3]]),
+        ])
+        planner._plan_pose_from_start_state = (
+            lambda _state, _target, **_kwargs: (next(plans), 'planned')
+        )
+
+        ok, code, failed_stage, metrics, message = planner.check_pose_sequence(
+            [make_pose(x=0.1), make_pose(x=0.2)],
+            ['pregrasp', 'lift'],
+            [False, False],
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(code, '')
+        self.assertEqual(failed_stage, '')
+        # 0.2 / 0.1 + 0.3 / 0.1, summed because stages execute serially.
+        self.assertAlmostEqual(metrics['joint_duration_lower_bound_sec'], 5.0)
+        self.assertAlmostEqual(metrics['execution_duration_lower_bound_sec'], 5.0)
+        self.assertEqual(metrics['hardware_limiting_joint'], 'Joint2')
+        self.assertIn('joint_duration_lower_bound_sec=5.000', message)
+
+    def test_strict_sequence_rejects_nonfinite_trajectory_fail_closed(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+        bad_plan = JointPlan([[0.0, 0.0], [float('nan'), 0.1]])
+        planner._plan_pose_from_start_state = (
+            lambda _state, _target, **_kwargs: (bad_plan, 'planned')
+        )
+
+        ok, code, failed_stage, metrics, _message = planner.check_pose_sequence(
+            [make_pose()], ['pregrasp'], [False]
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(code, 'MOVEIT_CHECK_ERROR')
+        self.assertEqual(failed_stage, '')
+        self.assertEqual(metrics['joint_duration_lower_bound_sec'], 0.0)
+
+    def test_strict_sequence_rejects_empty_trajectory_fail_closed(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.robot = types.SimpleNamespace(
+            get_current_state=lambda: self.robot_state(0.0, 0.0)
+        )
+        planner._plan_pose_from_start_state = (
+            lambda _state, _target, **_kwargs: (EmptyPlan(), 'empty')
+        )
+
+        ok, code, failed_stage, _metrics, _message = planner.check_pose_sequence(
+            [make_pose()], ['pregrasp'], [False]
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(code, 'MOVEIT_UNREACHABLE')
+        self.assertEqual(failed_stage, 'pregrasp')
+
     def test_strict_sequence_uses_each_planned_terminal_state(self):
         pregrasp_plan = JointPlan([[0.0, 0.0], [0.2, 0.3]])
         approach_plan = JointPlan([[0.2, 0.3], [0.25, 0.35]])

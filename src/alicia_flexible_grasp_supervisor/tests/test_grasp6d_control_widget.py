@@ -35,6 +35,8 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         plan.header.frame_id = 'base_link'
         plan.header.stamp = rospy.Time.from_sec(canonical_stamp_sec)
         plan.valid = True
+        plan.target_track_id = 'g0-t1'
+        plan.refinement_status = 'NOT_EVALUATED'
         plan.model_choice = 'carton_segment:' + str(plan_id)
         plan.score = 0.9
         if hasattr(plan, 'candidate_source'):
@@ -56,6 +58,7 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
         geometry.header.frame_id = plan.header.frame_id
         geometry.header.stamp = plan.header.stamp
         geometry.valid = True
+        geometry.target_track_id = plan.target_track_id
         geometry.label = 'carton'
         geometry.source_mode = 'instance_mask'
         geometry.pose_base.position.x = 0.4
@@ -141,8 +144,16 @@ class Grasp6DControlWidgetTest(unittest.TestCase):
                 self.assertFalse(state.fresh)
 
     def test_gui_geometry_semantics_bbox_mode_and_digest_tampering(self):
+        plan = self._rich_plan(stamp_sec=9.0)
+        tracker = control_widget.Grasp6DReadinessTracker(validity_sec=2.0)
+        for label in ('carton', 'bottle', ''):
+            plan.object_geometry.label = label
+            with self.subTest(label=label):
+                tracker.update_enriched(plan, now_sec=10.0)
+                self.assertTrue(tracker.state(now_sec=10.0).fresh)
+                self.assertEqual(tracker.plan_id, plan.plan_id)
+
         for field, value in (
-            ('label', ''),
             ('source_mode', ''),
             ('source_mode', 'unknown'),
         ):

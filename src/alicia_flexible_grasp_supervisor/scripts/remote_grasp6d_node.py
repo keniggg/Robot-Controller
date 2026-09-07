@@ -38,21 +38,26 @@ from alicia_flexible_grasp.grasp.adaptive_stage_profiles import (
 )
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     compute_plan_id,
+    float32_wire_value,
     required_open_width_is_valid,
+    refinement_registration_policy,
     validate_candidate_model_width,
     validate_candidate_source,
     validate_plan_header_binding,
     validate_rich_geometry,
 )
 from alicia_flexible_grasp.grasp.gripper_geometry import (
+    BilateralSurfaceEvidence,
     CandidateGateResult,
     GripperGeometry,
     ObservationEnvelopeResult,
     bilateral_contact_height_bounds_m,
+    bilateral_surface_contact_bounds_m,
     candidate_rank_key,
     candidate_with_motion_cost,
     contact_height_axis_base,
     evaluate_candidate,
+    evaluate_bilateral_surface_evidence,
     evaluate_explicit_candidate,
     evaluate_open_gripper_observation_envelope,
     finger_contact_patch_overlap_m,
@@ -125,6 +130,15 @@ from alicia_flexible_grasp.vision.model_selection import select_yolo_model
 from alicia_flexible_grasp.vision.latest_only_inference import (
     LatestOnlyInferenceCoordinator,
 )
+from alicia_flexible_grasp.vision.multiview_surface import (
+    FusedTargetSurface,
+    RegistrationConfig,
+    RegistrationResult,
+    SurfaceView,
+    append_registered_view,
+    fused_surface_from_view,
+    surface_view_from_observation,
+)
 from alicia_flexible_grasp.vision.object_geometry import (
     GeometryEstimate,
     estimate_object_geometry,
@@ -140,6 +154,10 @@ from alicia_flexible_grasp.vision.rgbd_snapshot import (
     SnapshotResult,
     SynchronizedRgbdBuffer,
     fuse_stable_samples,
+)
+from alicia_flexible_grasp.vision.target_observation import (
+    TargetObservation, TargetTrackIdentity, validate_target_identity,
+    observation_from_snapshot,
 )
 from alicia_flexible_grasp_supervisor.msg import (
     Grasp6DPlan,
@@ -538,6 +556,7 @@ class PreparedPrediction:
     near_field: bool = False
     near_field_phase_id: int = 0
     near_field_phase_deadline_sec: float = 0.0
+    target_observation: object = None
 
     def __post_init__(self):
         for name in (
@@ -603,6 +622,7 @@ CONTINUOUS_RUNTIME_DEFAULTS = {
     'performance_window_size': 100,
 }
 MOVEIT_TOP_N_MAX = 24
+MULTIVIEW_CONFIG_INVALID = 'MULTIVIEW_CONFIG_INVALID'
 
 
 @dataclass(frozen=True)
@@ -622,8 +642,67 @@ class ContinuousRuntimeConfig:
     performance_window_size: int
 
 
+@dataclass(frozen=True)
+class RegistrationEvidence:
+    identity: TargetTrackIdentity
+    stamp_ns: int
+    result: RegistrationResult
+    source_clipped: bool
+
+
 def _continuous_config_error(message):
     raise CandidateContractError(CONTINUOUS_CONFIG_INVALID, message)
+
+
+def _multiview_config_error(message):
+    raise CandidateContractError(MULTIVIEW_CONFIG_INVALID, message)
+
+
+def load_multiview_registration_config(remote_cfg):
+    """Load a complete registration policy without widening safe defaults."""
+
+    if not isinstance(remote_cfg, dict):
+        _multiview_config_error('/grasp_6d/remote must be a mapping')
+    defaults = RegistrationConfig()
+    if 'multiview' not in remote_cfg:
+        return defaults
+    raw = remote_cfg['multiview']
+    if not isinstance(raw, dict):
+        _multiview_config_error('multiview must be a mapping')
+    names = tuple(defaults.__dataclass_fields__)
+    if set(raw) != set(names):
+        _multiview_config_error(
+            'multiview must contain exactly: %s' % ', '.join(names)
+        )
+    try:
+        configured = RegistrationConfig(
+            **{name: raw[name] for name in names}
+        )
+    except (TypeError, ValueError) as exc:
+        _multiview_config_error('invalid multiview value: %s' % exc)
+    maximum_fields = (
+        'correspondence_max_m',
+        'maximum_rmse_m',
+        'maximum_translation_m',
+        'maximum_yaw_deg',
+        'maximum_support_normal_angle_deg',
+        'maximum_support_offset_delta_m',
+        'maximum_iterations',
+    )
+    minimum_fields = ('minimum_inliers', 'minimum_overlap_fraction')
+    widened = [
+        name for name in maximum_fields
+        if getattr(configured, name) > getattr(defaults, name)
+    ] + [
+        name for name in minimum_fields
+        if getattr(configured, name) < getattr(defaults, name)
+    ]
+    if widened:
+        _multiview_config_error(
+            'multiview bounds may only be tightened: %s'
+            % ', '.join(sorted(widened))
+        )
+    return configured
 
 
 def _strict_config_number(
@@ -835,6 +914,7 @@ TABLETOP_GEOMETRY_DEFAULTS = {
     'angle_step_deg': 15.0,
     'angle_dedup_deg': 2.0,
     'jaw_clearance_each_side_m': 0.002,
+    'width_projection_trim_fraction': 0.0,
     'min_contact_band_points': 6,
     'contact_band_fraction': 0.12,
     'min_finger_support_clearance_m': 0.003,
@@ -1049,6 +1129,12 @@ def load_tabletop_geometry_config(
         maximum=0.5 - 1e-12,
         minimum_inclusive=False,
     )
+    width_projection_trim_fraction = _strict_config_number(
+        values,
+        'width_projection_trim_fraction',
+        minimum=0.0,
+        maximum=0.05,
+    )
     support_clearance = _strict_config_number(
         values,
         'min_finger_support_clearance_m',
@@ -1111,6 +1197,7 @@ def load_tabletop_geometry_config(
             angle_dedup_deg=angle_dedup,
             jaw_clearance_each_side_m=jaw_clearance,
             opening_fit_clearance_each_side_m=opening_fit_clearance,
+            width_projection_trim_fraction=width_projection_trim_fraction,
             min_contact_band_points=min_contact_points,
             contact_band_fraction=contact_fraction,
             max_candidates=max_candidates,
@@ -3020,9 +3107,7 @@ def build_rich_plan(
             raise ValueError('selected candidate model width is invalid')
     if not required_open_width_is_valid(required_width):
         raise ValueError('required open width must be in (0, 0.050] m')
-    model = str(model_choice or '').strip()
-    if not model:
-        raise ValueError('model choice must be non-empty')
+    model = str(model_choice or '')
 
     message = Grasp6DPlan()
     message.header = deepcopy(snapshot_header)
@@ -3039,6 +3124,8 @@ def build_rich_plan(
     )
     message.required_open_width_m = required_width
     message.object_geometry = deepcopy(geometry_msg)
+    message.target_track_id = geometry_msg.target_track_id
+    message.refinement_status = 'NOT_EVALUATED'
     message.model_choice = model
     message.diagnostic = ''
     validate_rich_geometry(message.object_geometry)
@@ -3055,13 +3142,15 @@ def rich_plan_to_legacy(plan):
     return legacy
 
 
-def geometry_estimate_to_message(estimate, snapshot=None, stamp=None, label=''):
+def geometry_estimate_to_message(estimate, snapshot=None, stamp=None, label='', target_identity=None):
     """Map one immutable geometry estimate into the base-frame ROS contract."""
     message = ObjectGeometry()
     message.header.frame_id = 'base_link'
     message.header.stamp = stamp if stamp is not None else rospy.Time(0)
     message.valid = bool(getattr(estimate, 'ok', False))
     message.label = str(label or '')
+    identity = target_identity or getattr(snapshot, 'target_identity', None)
+    message.target_track_id = validate_target_identity(identity).track_id
     message.source_mode = str(
         getattr(estimate, 'source_mode', '')
         or getattr(snapshot, 'source_mode', '')
@@ -3135,19 +3224,22 @@ class RemoteGrasp6DNode:
         ).strip().lower()
         try:
             near_field_direct_timeout_sec = float(
-                grasp_cfg.get('near_field_replan_timeout_sec', 30.0)
+                grasp_cfg.get('near_field_replan_timeout_sec', 60.0)
             )
         except (TypeError, ValueError, OverflowError):
-            near_field_direct_timeout_sec = 30.0
+            near_field_direct_timeout_sec = 60.0
         if (
             not math.isfinite(near_field_direct_timeout_sec)
             or near_field_direct_timeout_sec <= 0.0
         ):
-            near_field_direct_timeout_sec = 30.0
+            near_field_direct_timeout_sec = 60.0
         self.near_field_direct_timeout_sec = near_field_direct_timeout_sec
         startup_continuous_config = load_continuous_runtime_config(
             remote_cfg,
             get_param=rospy.get_param,
+        )
+        self.multiview_registration_config = (
+            load_multiview_registration_config(remote_cfg)
         )
         startup_gate_audit_enabled = remote_cfg.get(
             'gate_audit_enabled',
@@ -3570,6 +3662,12 @@ class RemoteGrasp6DNode:
             self.geometry_min_size_m,
             float(remote_cfg.get('geometry_max_height_m', 0.500)),
         )
+        self._near_field_reference_view = None
+        self._near_field_fused_surface = None
+        self._near_field_surface_phase_id = 0
+        self._near_field_surface_generation = -1
+        self._near_field_reference_center_base = None
+        self._latest_registration_evidence = None
         self.gate_audit_enabled = startup_gate_audit_enabled
         self.gate_audit_output_path = startup_gate_audit_path
         self.mujoco_audit_output_path = startup_mujoco_audit_path
@@ -4277,6 +4375,14 @@ class RemoteGrasp6DNode:
         with self._geometry_state_guard():
             self.robot_execution_active = active
 
+    def _reset_multiview_surface(self):
+        self._near_field_reference_view = None
+        self._near_field_fused_surface = None
+        self._near_field_surface_phase_id = 0
+        self._near_field_surface_generation = -1
+        self._near_field_reference_center_base = None
+        self._latest_registration_evidence = None
+
     def near_field_state_cb(self, msg):
         """Reset candidate evidence only at the explicit near-field boundary."""
 
@@ -4298,7 +4404,7 @@ class RemoteGrasp6DNode:
         )
         try:
             maximum_budget_sec = float(
-                getattr(self, 'near_field_direct_timeout_sec', 30.0)
+                getattr(self, 'near_field_direct_timeout_sec', 60.0)
             )
         except (TypeError, ValueError, OverflowError):
             maximum_budget_sec = float('nan')
@@ -4315,6 +4421,8 @@ class RemoteGrasp6DNode:
             and phase_budget_sec <= maximum_budget_sec + 1e-6
         )
         active = bool(requested_active and valid_active_contract)
+        captured_reference_view = None
+        captured_reference_center = None
         with self._geometry_state_guard():
             previous = bool(
                 getattr(self, 'near_field_planning_active', False)
@@ -4330,6 +4438,61 @@ class RemoteGrasp6DNode:
             self._near_field_phase_deadline_sec = (
                 deadline_sec if active else 0.0
             )
+            if active and (not previous or phase_id != previous_phase_id):
+                observation = getattr(
+                    self, '_latest_target_observation', None
+                )
+                reference_valid = bool(
+                    getattr(msg, 'reference_center_valid', False)
+                )
+                reference_track = str(
+                    getattr(msg, 'reference_target_track_id', '') or ''
+                )
+                reference_point = getattr(
+                    msg,
+                    'reference_center_base',
+                    None,
+                )
+                reference_center = np.asarray(
+                    [
+                        getattr(reference_point, 'x', float('nan')),
+                        getattr(reference_point, 'y', float('nan')),
+                        getattr(reference_point, 'z', float('nan')),
+                    ],
+                    dtype=float,
+                )
+                reference_source_sec = self._stamp_to_sec(
+                    getattr(msg, 'reference_source_stamp', None)
+                )
+                # Keep the source's integer ROS nanoseconds: a float-seconds
+                # round trip loses precision at real acquisition timestamps.
+                reference_stamp_ns = _stamp_to_nsec(
+                    getattr(msg, 'reference_source_stamp', None)
+                )
+                reference_contract_valid = bool(
+                    reference_valid
+                    and reference_track
+                    and reference_center.shape == (3,)
+                    and np.all(np.isfinite(reference_center))
+                    and reference_source_sec is not None
+                    and math.isfinite(float(reference_source_sec))
+                    and float(reference_source_sec) > 0.0
+                    and float(reference_source_sec) <= started_sec + 1e-6
+                    and isinstance(observation, TargetObservation)
+                    and observation.identity
+                    == self._current_stream_target_identity()
+                    and observation.stamp_ns == reference_stamp_ns
+                    and reference_track == observation.identity.track_id
+                    and reference_track == self._current_stream_target_identity().track_id
+                )
+                if reference_contract_valid:
+                    captured_reference_view = surface_view_from_observation(
+                        observation
+                    )
+                    captured_reference_center = reference_center.copy()
+                self._reset_multiview_surface()
+            elif not active:
+                self._reset_multiview_surface()
         if requested_active and not valid_active_contract:
             rospy.logwarn(
                 'Rejected invalid near-field phase contract '
@@ -4343,15 +4506,43 @@ class RemoteGrasp6DNode:
         with self._stream_condition:
             self._direct_near_field_submission_generation = None
         phase = 'near_field' if active else 'far_field'
+        if active and captured_reference_view is None:
+            rospy.logwarn(
+                'Near-field phase has no exact reached-view measured surface'
+            )
         if self._advance_target_instance_epoch(
-            'PLANNING_PHASE_%s' % phase.upper()
+            'PLANNING_PHASE_%s' % ('NEAR_FIELD' if active else 'FAR_FIELD'),
+            preserve_identity=True,
         ):
+            if active and captured_reference_view is not None:
+                with self._geometry_state_guard():
+                    self._near_field_reference_view = captured_reference_view
+                    self._near_field_fused_surface = fused_surface_from_view(
+                        captured_reference_view,
+                        voxel_size_m=float(
+                            getattr(self, 'geometry_voxel_size_m', 0.0025)
+                        ),
+                    )
+                    self._near_field_surface_phase_id = phase_id
+                    self._near_field_surface_generation = int(
+                        self._stream_generation
+                    )
+                    self._near_field_reference_center_base = (
+                        captured_reference_center
+                    )
+                rospy.loginfo(
+                    'Captured reached-view measured surface for near-field '
+                    'phase %d: stamp_ns=%d points=%d',
+                    phase_id,
+                    captured_reference_view.stamp_ns,
+                    len(captured_reference_view.points_base),
+                )
             rospy.loginfo(
                 (
                     'remote 6D planning phase changed to %s; '
                     'cancelled prior-phase requests and reset stability window'
                 ),
-                phase,
+                'near_field' if active else 'far_field',
             )
 
     @staticmethod
@@ -4827,6 +5018,7 @@ class RemoteGrasp6DNode:
                 snapshot=snapshot,
                 stamp=self._safe_time(stamp),
                 label=label,
+                target_identity=self._current_stream_target_identity(),
             )
         self._publish_invalid_plan_pair(
             failure_code,
@@ -4904,6 +5096,9 @@ class RemoteGrasp6DNode:
         return base_from_source.dot(source_from_optical)
 
     def _prepare_snapshot_geometry(self, snapshot, stamp):
+        stream_guard = getattr(self, '_stream_condition', self._geometry_state_guard())
+        with stream_guard, self._geometry_state_guard():
+            lifecycle = self._multiview_lifecycle_token()
         try:
             target_depth, object_mask = self._snapshot_geometry_inputs(snapshot)
         except Exception as exc:
@@ -4971,7 +5166,257 @@ class RemoteGrasp6DNode:
                 getattr(self, 'geometry_outlier_std_ratio', 2.0)
             ),
         )
+        if bool(getattr(estimate, 'ok', False)):
+            try:
+                observation = observation_from_snapshot(
+                    snapshot, estimate, transform, 'base_link')
+            except ValueError as exc:
+                return (self._invalid_geometry_estimate(
+                    'TARGET_GEOMETRY_TRACK_INVALID', str(exc), snapshot.source_mode),
+                    target_depth, transform)
+            with stream_guard, self._geometry_state_guard():
+                if lifecycle != self._multiview_lifecycle_token():
+                    return (self._invalid_geometry_estimate(
+                        'TARGET_GEOMETRY_GENERATION_STALE',
+                        'planning phase, generation or target changed during geometry preparation',
+                        snapshot.source_mode), target_depth, transform)
+                self._latest_target_observation = observation
+                if bool(getattr(self, 'near_field_planning_active', False)):
+                    self._register_near_field_surface(observation)
         return estimate, target_depth, transform
+
+    def _multiview_lifecycle_token(self):
+        return (
+            int(getattr(self, '_stream_generation', 0)),
+            int(getattr(self, '_near_field_phase_id', 0)),
+            bool(getattr(self, 'near_field_planning_active', False)),
+            self._current_stream_target_identity(),
+        )
+
+    def _active_multiview_surface(self):
+        surface = getattr(self, '_near_field_fused_surface', None)
+        reference = getattr(self, '_near_field_reference_view', None)
+        if (
+            not bool(getattr(self, 'near_field_planning_active', False))
+            or not isinstance(surface, FusedTargetSurface)
+            or not isinstance(reference, SurfaceView)
+            or int(getattr(self, '_near_field_surface_phase_id', 0))
+            != int(getattr(self, '_near_field_phase_id', 0))
+            or int(getattr(self, '_near_field_surface_generation', -1))
+            != int(getattr(self, '_stream_generation', 0))
+            or surface.identity != reference.identity
+            or surface.identity != self._current_stream_target_identity()
+        ):
+            return None, None
+        return surface, reference
+
+    def _register_near_field_surface(self, observation):
+        """Register one exact measured near view into the current phase."""
+
+        if not isinstance(observation, TargetObservation):
+            raise ValueError('observation must be a TargetObservation')
+        with self._geometry_state_guard():
+            surface, reference = self._active_multiview_surface()
+            if surface is None:
+                self._latest_registration_evidence = None
+                return None
+            moving = surface_view_from_observation(observation)
+            result, fused = append_registered_view(
+                surface,
+                reference,
+                moving,
+                config=getattr(
+                    self, 'multiview_registration_config', RegistrationConfig()
+                ),
+                voxel_size_m=float(
+                    getattr(self, 'geometry_voxel_size_m', 0.0025)
+                ),
+            )
+            if result.ok:
+                self._near_field_fused_surface = fused
+            self._latest_registration_evidence = RegistrationEvidence(
+                identity=observation.identity,
+                stamp_ns=observation.stamp_ns,
+                result=result,
+                source_clipped=bool(moving.is_clipped),
+            )
+            return result
+
+    @staticmethod
+    def _registration_rotation_deg(transform):
+        rotation = np.asarray(transform, dtype=float)[:3, :3]
+        cosine = np.clip((np.trace(rotation) - 1.0) * 0.5, -1.0, 1.0)
+        return float(np.degrees(np.arccos(cosine)))
+
+    def _apply_registration_evidence_to_plan(self, plan, observation):
+        """Bind only the current exact view's registration to a rich plan."""
+
+        plan.refinement_status = 'NOT_EVALUATED'
+        plan.refinement_inlier_count = 0
+        plan.refinement_overlap_fraction = 0.0
+        plan.refinement_rmse_m = 0.0
+        plan.refinement_translation_m = 0.0
+        plan.refinement_rotation_deg = 0.0
+        plan.refinement_source_clipped = False
+        plan.fused_view_count = 0
+        if not isinstance(observation, TargetObservation):
+            return False
+        with self._geometry_state_guard():
+            surface, _reference = self._active_multiview_surface()
+            evidence = getattr(self, '_latest_registration_evidence', None)
+            geometry = getattr(plan, 'object_geometry', None)
+            if (
+                surface is None
+                or not isinstance(evidence, RegistrationEvidence)
+                or evidence.identity != observation.identity
+                or evidence.stamp_ns != observation.stamp_ns
+                or surface.identity != observation.identity
+                or str(getattr(plan, 'target_track_id', '') or '')
+                != observation.identity.track_id
+                or str(getattr(geometry, 'target_track_id', '') or '')
+                != observation.identity.track_id
+                or _stamp_to_nsec(getattr(getattr(plan, 'header', None), 'stamp', None))
+                != observation.stamp_ns
+                or _stamp_to_nsec(getattr(getattr(geometry, 'header', None), 'stamp', None))
+                != observation.stamp_ns
+            ):
+                return False
+            result = evidence.result
+            registration_config = getattr(
+                self, 'multiview_registration_config', RegistrationConfig()
+            )
+            try:
+                # Parse through the shared acceptance policy so a malformed
+                # active configuration fails closed and every evidence field
+                # uses the same float32-wire thresholds as task execution.
+                policy = refinement_registration_policy(registration_config)
+            except (TypeError, ValueError, AttributeError):
+                return False
+            if type(getattr(result, 'ok', None)) is not bool:
+                return False
+            # Apply the accepted bounded rigid correction to every pose in the
+            # selected family before the plan is serialized.  Invalid or
+            # unbounded evidence leaves the candidate untouched and is
+            # rejected below.
+            correction = np.asarray(result.transform_base, dtype=float)
+            if result.ok:
+                if correction.shape != (4, 4) or not np.all(np.isfinite(correction)):
+                    return False
+                if float32_wire_value(float(np.linalg.norm(correction[:3, 3]))) > float32_wire_value(
+                    policy['maximum_translation_m']
+                ):
+                    return False
+                if float32_wire_value(self._registration_rotation_deg(correction)) > float32_wire_value(
+                    policy['maximum_yaw_deg']
+                ):
+                    return False
+                if int(result.inlier_count) < int(policy['minimum_inliers']):
+                    return False
+                if int(len(surface.view_stamps_ns)) < int(policy['minimum_fused_view_count']):
+                    return False
+                if float32_wire_value(float(result.overlap_fraction)) < float32_wire_value(
+                    policy['minimum_overlap_fraction']
+                ):
+                    return False
+                if float32_wire_value(float(result.rmse_m)) > float32_wire_value(
+                    policy['maximum_rmse_m']
+                ):
+                    return False
+                if float32_wire_value(float(result.support_normal_angle_deg)) > float32_wire_value(
+                    policy['maximum_support_normal_angle_deg']
+                ):
+                    return False
+                support_offset_delta = abs(float(_reference.support_offset_m) - float(
+                    observation.support_offset_m
+                ))
+                if float32_wire_value(support_offset_delta) > float32_wire_value(
+                    policy['maximum_support_offset_delta_m']
+                ):
+                    return False
+                for pose in getattr(plan, 'poses', ()):
+                    current = transform_matrix(
+                        [pose.position.x, pose.position.y, pose.position.z],
+                        [pose.orientation.x, pose.orientation.y,
+                         pose.orientation.z, pose.orientation.w],
+                    )
+                    updated = correction.dot(current)
+                    quat = _normalize_quaternion(quaternion_from_matrix(updated))
+                    pose.position.x, pose.position.y, pose.position.z = [float(v) for v in updated[:3, 3]]
+                    pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = [float(v) for v in quat]
+            # A clipped source with insufficient registration evidence asks
+            # for a clear view; all other registration failures are terminal.
+            if result.ok:
+                plan.refinement_status = 'VALID_3D'
+            elif evidence.source_clipped and result.code in (
+                'INLIERS_INSUFFICIENT',
+                'OVERLAP_INSUFFICIENT',
+            ):
+                plan.refinement_status = 'CLEAR_VIEW_REQUIRED'
+            else:
+                plan.refinement_status = 'INVALID_3D'
+            plan.refinement_inlier_count = int(result.inlier_count)
+            plan.refinement_overlap_fraction = float(
+                result.overlap_fraction
+            )
+            plan.refinement_rmse_m = float(result.rmse_m)
+            plan.refinement_translation_m = float(
+                np.linalg.norm(result.transform_base[:3, 3])
+            )
+            plan.refinement_rotation_deg = self._registration_rotation_deg(
+                result.transform_base
+            )
+            plan.refinement_source_clipped = bool(
+                evidence.source_clipped
+            )
+            plan.fused_view_count = len(surface.view_stamps_ns)
+            return True
+
+    def _multiview_surface_audit(self):
+        with self._geometry_state_guard():
+            surface, _reference = self._active_multiview_surface()
+            evidence = getattr(self, '_latest_registration_evidence', None)
+            if surface is None:
+                return {
+                    'active': False,
+                    'source_stamps_ns': [],
+                    'view_indices': [],
+                }
+            unique, counts = np.unique(
+                surface.view_indices, return_counts=True
+            )
+            audit = {
+                'active': True,
+                'phase_id': int(self._near_field_surface_phase_id),
+                'generation': int(self._near_field_surface_generation),
+                'target_track_id': surface.identity.track_id,
+                'target_epoch': int(surface.identity.epoch),
+                'source_stamps_ns': list(surface.view_stamps_ns),
+                'view_indices': [int(value) for value in unique],
+                'view_point_counts': {
+                    str(int(index)): int(count)
+                    for index, count in zip(unique, counts)
+                },
+                'point_count': len(surface.points_base),
+            }
+            if isinstance(evidence, RegistrationEvidence):
+                audit['latest_registration'] = {
+                    'source_stamp_ns': int(evidence.stamp_ns),
+                    'code': evidence.result.code,
+                    'ok': bool(evidence.result.ok),
+                    'inlier_count': int(evidence.result.inlier_count),
+                    'overlap_fraction': float(
+                        evidence.result.overlap_fraction
+                    ),
+                    'rmse_m': float(evidence.result.rmse_m),
+                    'translation_m': float(np.linalg.norm(
+                        evidence.result.transform_base[:3, 3]
+                    )),
+                    'rotation_deg': self._registration_rotation_deg(
+                        evidence.result.transform_base
+                    ),
+                    'source_clipped': bool(evidence.source_clipped),
+                }
+            return audit
 
     def _support_plane_camera_from_geometry(self, estimate, transform):
         """Return this geometry estimate's support plane in camera_link."""
@@ -5186,9 +5631,7 @@ class RemoteGrasp6DNode:
             previous is not None
             and bool(getattr(previous, 'detected', False))
             and (
-                str(getattr(previous, 'label', '') or '')
-                != str(getattr(msg, 'label', '') or '')
-                or self._object_pose_distance(previous, msg)
+                self._object_pose_distance(previous, msg)
                 > float(
                     getattr(
                         self,
@@ -5212,11 +5655,9 @@ class RemoteGrasp6DNode:
             )
 
     def _current_stream_target_identity(self):
-        target = getattr(self, 'latest_object', None)
-        return (
+        return TargetTrackIdentity.from_stream(
+            int(getattr(self, '_target_identity_generation', getattr(self, '_stream_generation', 0))),
             int(getattr(self, 'target_instance_epoch', 0)),
-            str(getattr(target, 'label', '') or ''),
-            str(getattr(self, '_last_model_choice', '') or ''),
         )
 
     def _stream_ticket_cancellation_code_locked(self, ticket):
@@ -5239,7 +5680,7 @@ class RemoteGrasp6DNode:
         with self._stream_condition:
             self._require_stream_ticket_current_locked(ticket)
 
-    def _advance_target_instance_epoch(self, reason):
+    def _advance_target_instance_epoch(self, reason, preserve_identity=False):
         """Invalidate pending tracking when the observed target identity changes."""
 
         condition = getattr(self, '_stream_condition', None)
@@ -5255,9 +5696,16 @@ class RemoteGrasp6DNode:
                     'TARGET_EPOCH_STALE',
                 )
                 self._pending_request_id = None
-            self.target_instance_epoch += 1
+            if preserve_identity:
+                self._target_identity_generation = getattr(
+                    self, '_target_identity_generation', self._stream_generation)
+                self.inference_coordinator.stop()
+                self._stream_generation = self.inference_coordinator.start()
+            else:
+                self.target_instance_epoch += 1
             self.tracker = CandidateTracker(self._tracking_config)
             self._stable_variant_runtime = {}
+            self._reset_multiview_surface()
             self.inference_coordinator.reset_target_epoch(
                 self.target_instance_epoch
             )
@@ -5309,6 +5757,15 @@ class RemoteGrasp6DNode:
         self._near_field_phase_deadline_sec = float(
             getattr(self, '_near_field_phase_deadline_sec', 0.0) or 0.0
         )
+        self.multiview_registration_config = getattr(
+            self, 'multiview_registration_config', RegistrationConfig()
+        )
+        self._near_field_reference_view = None
+        self._near_field_fused_surface = None
+        self._near_field_surface_phase_id = 0
+        self._near_field_surface_generation = -1
+        self._near_field_reference_center_base = None
+        self._latest_registration_evidence = None
         self._stream_condition = threading.Condition(threading.RLock())
         # A cached-Preview replan runs in a ROS service thread while the
         # latest-only worker may already be finalizing another promotion.
@@ -5502,6 +5959,7 @@ class RemoteGrasp6DNode:
             self.tracker = CandidateTracker(self._tracking_config)
             self._stable_variant_runtime = {}
             self._stream_generation = self.inference_coordinator.start()
+            self._target_identity_generation = self._stream_generation
             self._direct_near_field_submission_generation = None
             self.streaming_enabled = True
             self._stream_condition.notify_all()
@@ -5547,9 +6005,7 @@ class RemoteGrasp6DNode:
         with self._stream_condition:
             if not self.streaming_enabled:
                 return False
-            snapshot_identity = tuple(
-                getattr(snapshot, 'target_identity', ()) or ()
-            )
+            snapshot_identity = getattr(snapshot, 'target_identity', None)
             snapshot_epoch = getattr(snapshot, 'target_epoch', None)
             current_identity = self._current_stream_target_identity()
             if (
@@ -6494,6 +6950,123 @@ class RemoteGrasp6DNode:
             )
         return fraction
 
+    def _current_bilateral_surface_measurement(
+        self,
+        contact_center_base,
+        R_base_tool,
+    ):
+        """Measure the current phase-bound surface in fixed Alicia tool axes."""
+
+        surface, reference = self._active_multiview_surface()
+        if not isinstance(surface, FusedTargetSurface) or not isinstance(reference, SurfaceView):
+            return None, None, None, None
+        rotation = np.asarray(R_base_tool, dtype=float)
+        if (
+            rotation.shape != (3, 3)
+            or not np.all(np.isfinite(rotation))
+        ):
+            return surface, None, None, None
+        jaw_local, jaw_index = parse_tool_axis(
+            self.gripper_tool_jaw_axis
+        )
+        insertion_local, insertion_index = parse_tool_axis(
+            self.gripper_tool_finger_length_axis
+        )
+        if (
+            jaw_index != 1
+            or jaw_local[1] <= 0.0
+            or insertion_index != 2
+            or insertion_local[2] <= 0.0
+        ):
+            raise CandidateContractError(
+                'GRIPPER_MODEL_MISMATCH',
+                'measured contact requires fixed +Y jaw and +Z insertion axes',
+            )
+        jaw_axis = rotation.dot(jaw_local)
+        insertion_axis = rotation.dot(insertion_local)
+        evidence = evaluate_bilateral_surface_evidence(
+            surface,
+            contact_center_base,
+            jaw_axis,
+            insertion_axis,
+            self.gripper_geometry,
+            minimum_points_per_side=12,
+            support_normal_base=reference.support_normal_base,
+        )
+        bounds = bilateral_surface_contact_bounds_m(
+            surface,
+            contact_center_base,
+            jaw_axis,
+            insertion_axis,
+            self.gripper_geometry,
+            minimum_points_per_side=12,
+            support_normal_base=reference.support_normal_base,
+        )
+        return surface, evidence, bounds, insertion_axis
+
+    @staticmethod
+    def _bilateral_surface_gate_failure(evidence=None):
+        negative = int(
+            getattr(evidence, 'negative_jaw_points', 0) or 0
+        )
+        positive = int(
+            getattr(evidence, 'positive_jaw_points', 0) or 0
+        )
+        return CandidateGateResult(
+            ok=False,
+            failure_code='BILATERAL_SURFACE_EVIDENCE_MISSING',
+            failure_reason=(
+                'current fused surface lacks measured bilateral support '
+                '(negative=%d positive=%d)' % (negative, positive)
+            ),
+            required_open_width_m=max(
+                0.0,
+                float(getattr(evidence, 'measured_width_m', 0.0) or 0.0),
+            ),
+            center_distance_m=0.0,
+            support_clearance_m=-1.0e6,
+            jaw_alignment=0.0,
+            motion_cost=0.0,
+            geometry_cost=0.0,
+            failed_gate='bilateral_surface_evidence',
+            passed_gate_count=0,
+        )
+
+    @staticmethod
+    def _bilateral_surface_audit(evidence, bounds, axis):
+        if (
+            not isinstance(evidence, BilateralSurfaceEvidence)
+            or not evidence.ok
+            or bounds is None
+        ):
+            return {
+                'bilateral_surface_evidence_code': (
+                    'BILATERAL_SURFACE_EVIDENCE_MISSING'
+                ),
+            }
+        return {
+            'bilateral_surface_evidence_code': evidence.code,
+            'negative_contact_count': int(evidence.negative_jaw_points),
+            'positive_contact_count': int(evidence.positive_jaw_points),
+            'negative_jaw_unique_view_count': int(
+                evidence.negative_view_count
+            ),
+            'positive_jaw_unique_view_count': int(
+                evidence.positive_view_count
+            ),
+            'measured_width_m': float(evidence.measured_width_m),
+            'measured_contact_height_m': float(evidence.contact_height_m),
+            'contact_height_bounds_m': tuple(
+                float(value) for value in bounds
+            ),
+            'contact_height_axis_base': tuple(
+                float(value) for value in axis
+            ),
+            'contact_height_bounds_source': (
+                'fused_measured_bilateral_surface'
+            ),
+        }
+
     @staticmethod
     def _phase_contact_overlap_requirement_m(
         contact_execution_phase,
@@ -6551,6 +7124,10 @@ class RemoteGrasp6DNode:
         T_base_tool0,
         stage_profile,
         contact_execution_phase,
+        contact_height_bounds_m=None,
+        contact_height_bounds_source='measured_bilateral_cloud',
+        bilateral_surface_evidence=None,
+        contact_height_axis_base_override=None,
     ):
         """Audit the same live overlap/uncertainty evidence used by the gate."""
 
@@ -6561,13 +7138,37 @@ class RemoteGrasp6DNode:
             jaw_axis,
             geometry.support_normal_base,
         )
-        bounds = bilateral_contact_height_bounds_m(
-            geometry.object_points_base,
-            candidate_center_base,
-            jaw_axis,
-            geometry.support_normal_base,
-            self._contact_band_fraction(),
-        )
+        bounds = contact_height_bounds_m
+        evidence = bilateral_surface_evidence
+        if bool(contact_execution_phase):
+            _surface, evidence, bounds, measured_axis = (
+                self._current_bilateral_surface_measurement(
+                    candidate_center_base,
+                    transform[:3, :3],
+                )
+            )
+            contact_height_axis_base_override = measured_axis
+            if (
+                not isinstance(evidence, BilateralSurfaceEvidence)
+                or not evidence.ok
+                or bounds is None
+            ):
+                raise CandidateContractError(
+                    'BILATERAL_SURFACE_EVIDENCE_MISSING',
+                    'contact audit requires the current bound fused surface',
+                )
+        if contact_height_axis_base_override is not None:
+            height_axis = np.asarray(
+                contact_height_axis_base_override, dtype=float
+            ).reshape(3)
+        if bounds is None:
+            bounds = bilateral_contact_height_bounds_m(
+                geometry.object_points_base,
+                candidate_center_base,
+                jaw_axis,
+                geometry.support_normal_base,
+                self._contact_band_fraction(),
+            )
         if bounds is None:
             raise CandidateContractError(
                 'GRIPPER_CONTACT_PATCH_MISS',
@@ -6598,6 +7199,13 @@ class RemoteGrasp6DNode:
                 else float(overlap / uncertainty)
             ),
             'bilateral_contact_height_span_m': bilateral_span,
+            'contact_height_bounds_m': (
+                float(bounds[0]),
+                float(bounds[1]),
+            ),
+            'contact_height_bounds_source': str(
+                contact_height_bounds_source
+            ),
             'contact_patch_coverage_fraction': (
                 None
                 if bilateral_span <= 0.0
@@ -6608,6 +7216,15 @@ class RemoteGrasp6DNode:
                 if bool(contact_execution_phase)
                 else 'deferred_to_near_field_contact_plan'
             ),
+            **(
+                self._bilateral_surface_audit(
+                    evidence,
+                    bounds,
+                    height_axis,
+                )
+                if bool(contact_execution_phase)
+                else {}
+            ),
         }
 
     def _tabletop_candidate_contact_overlap_m(
@@ -6615,15 +7232,26 @@ class RemoteGrasp6DNode:
         proposal,
         candidate,
         support_normal,
+        contact_height_bounds_m=None,
+        contact_height_axis_base_override=None,
     ):
-        lower, upper = self._proposal_contact_height_bounds(proposal)
-        transform = np.asarray(candidate.T_base_tool0, dtype=float)
-        height_axis = contact_height_axis_base(
-            transform[:3, :3].dot(
-                parse_tool_axis(self.gripper_tool_jaw_axis)[0]
-            ),
-            support_normal,
+        lower, upper = (
+            self._proposal_contact_height_bounds(proposal)
+            if contact_height_bounds_m is None
+            else tuple(float(value) for value in contact_height_bounds_m)
         )
+        transform = np.asarray(candidate.T_base_tool0, dtype=float)
+        if contact_height_axis_base_override is None:
+            height_axis = contact_height_axis_base(
+                transform[:3, :3].dot(
+                    parse_tool_axis(self.gripper_tool_jaw_axis)[0]
+                ),
+                support_normal,
+            )
+        else:
+            height_axis = np.asarray(
+                contact_height_axis_base_override, dtype=float
+            ).reshape(3)
         return finger_contact_patch_overlap_m(
             candidate.contact_center_base,
             transform[:3, 3],
@@ -6641,6 +7269,7 @@ class RemoteGrasp6DNode:
         probe_variants,
         maximum_tilt_deg,
         required_overlap_m,
+        contact_height_bounds_m=None,
     ):
         """Derive the largest CAD/contact-safe tilt for each wrist branch."""
 
@@ -6664,6 +7293,7 @@ class RemoteGrasp6DNode:
                 proposal,
                 candidate,
                 support_normal,
+                contact_height_bounds_m=contact_height_bounds_m,
             )
             branch_samples.setdefault(key, []).append(
                 (tilt, overlap)
@@ -6716,6 +7346,7 @@ class RemoteGrasp6DNode:
                         proposal,
                         item,
                         support_normal,
+                        contact_height_bounds_m=contact_height_bounds_m,
                     )
             return -float('inf')
 
@@ -6811,32 +7442,36 @@ class RemoteGrasp6DNode:
             candidate.audit.get('approach_tilt_polarity', 0.0)
         )
         if tilt <= 1e-9:
-            # Keep one vertical wrist branch in the same leading stratum as
-            # the live tilt samples.  With a bounded batch this preserves the
-            # support-normal endpoint without crowding out the intermediate
-            # geometry-derived tilts that can form the visibility/IK
-            # intersection.
+            # Every live jaw direction must first expose one support-normal
+            # endpoint to the hard gates.  The previous key placed a 45-degree
+            # item ahead of this vertical item in the same branch.  With 24
+            # proposals and a 24-item batch, all slots were therefore consumed
+            # by tilted poses whose palms entered the table, and the vertical
+            # candidates were never evaluated.
             primary_variant = int(proposal_index) % 2
-            rotated_branch = (
-                0
-                if int(candidate.variant_index) == primary_variant
-                else 4
-            )
-            return (0, rotated_branch, 0.0)
+            if int(candidate.variant_index) == primary_variant:
+                return (0, 0, 0.0)
+            return (2, 0, 0.0)
         polarity_index = 0 if polarity < 0.0 else 1
         branch_index = 2 * polarity_index + int(candidate.variant_index)
         rotated_branch = (
             branch_index - (int(proposal_index) % 4)
         ) % 4
-        return (0, rotated_branch, -tilt)
+        # Tilted visibility/IK alternatives follow the per-proposal vertical
+        # endpoint.  Larger safe tilts still rank first within this second
+        # stratum.
+        return (1, rotated_branch, -tilt)
 
     def _generate_tabletop_candidates(
         self,
         geometry,
         snapshot=None,
         contact_execution_phase=True,
+        target_label='',
     ):
         """Materialize a bounded geometry batch from one frozen estimate."""
+
+        del target_label
 
         if not bool(getattr(self, 'tabletop_geometry_enabled', True)):
             return (), {
@@ -6852,6 +7487,26 @@ class RemoteGrasp6DNode:
             dtype=float,
         )
         support_point = -float(geometry.support_offset_m) * support_normal
+        fused_surface = None
+        if bool(contact_execution_phase):
+            fused_surface, reference = self._active_multiview_surface()
+            if not isinstance(fused_surface, FusedTargetSurface) or not isinstance(reference, SurfaceView):
+                return (), {
+                    'enabled': True,
+                    'proposal_count': 0,
+                    'materialized_count': 0,
+                    'failure_code': 'BILATERAL_SURFACE_EVIDENCE_MISSING',
+                    'failure_reason': (
+                        'contact execution requires the current bound fused surface'
+                    ),
+                    'sampled_angles_deg': (),
+                    'adaptive_stage_profiles': (),
+                    'rejection_counts': {},
+                    'plan_phase': CONTACT_EXECUTION_PLAN,
+                    'contact_execution_gate_deferred': False,
+                }
+            support_normal = reference.support_normal_base
+            support_point = -float(reference.support_offset_m) * support_normal
         generation = generate_tabletop_proposals(
             object_points_base=geometry.object_points_base,
             obb_center_base=geometry.center_base,
@@ -6860,6 +7515,10 @@ class RemoteGrasp6DNode:
             support_point_base=support_point,
             support_normal_base=support_normal,
             config=self.tabletop_geometry_config,
+            fused_surface=fused_surface,
+            finger_geometry=(
+                self.gripper_geometry if fused_surface is not None else None
+            ),
         )
         diagnostics = {
             'enabled': True,
@@ -6931,8 +7590,23 @@ class RemoteGrasp6DNode:
             if bool(contact_execution_phase)
             else 'deferred_to_near_field_contact_plan'
         )
+        contact_height_sources = Counter()
         for proposal in generation.proposals:
             try:
+                contact_height_bounds = self._proposal_contact_height_bounds(
+                    proposal
+                )
+                contact_height_source = str(
+                    dict(getattr(proposal, 'audit', {}) or {}).get(
+                        'contact_height_bounds_source',
+                        (
+                            'fused_measured_bilateral_surface'
+                            if bool(contact_execution_phase)
+                            else 'contact_gate_deferred'
+                        ),
+                    )
+                )
+                contact_height_sources[contact_height_source] += 1
                 probe_variants = materialize_tabletop_candidates(
                         proposal=proposal,
                         support_point_base=support_point,
@@ -6956,10 +7630,15 @@ class RemoteGrasp6DNode:
                         probe_variants,
                         maximum_tilt,
                         required_overlap_m=required_overlap,
+                        contact_height_bounds_m=contact_height_bounds,
                     )
                 )
                 contact_boundary_profiles.append({
                     'proposal_source_index': int(proposal.source_index),
+                    'contact_height_bounds_m': tuple(
+                        float(value) for value in contact_height_bounds
+                    ),
+                    'contact_height_bounds_source': contact_height_source,
                     'boundary_tilts_deg': tuple(boundary_tilts),
                     'branches': tuple(boundary_audit),
                 })
@@ -7019,20 +7698,51 @@ class RemoteGrasp6DNode:
                 }
                 safe_variants = []
                 for item in variants:
+                    item_bounds = contact_height_bounds
+                    item_axis = None
+                    item_evidence = None
+                    if bool(contact_execution_phase):
+                        (
+                            _surface,
+                            item_evidence,
+                            item_bounds,
+                            item_axis,
+                        ) = self._current_bilateral_surface_measurement(
+                            item.contact_center_base,
+                            np.asarray(item.T_base_tool0, dtype=float)[:3, :3],
+                        )
+                        if (
+                            not isinstance(
+                                item_evidence, BilateralSurfaceEvidence
+                            )
+                            or not item_evidence.ok
+                            or item_bounds is None
+                        ):
+                            rejections[
+                                'BILATERAL_SURFACE_EVIDENCE_MISSING'
+                            ] += 1
+                            continue
                     overlap = self._tabletop_candidate_contact_overlap_m(
                         proposal,
                         item,
                         support_normal,
+                        contact_height_bounds_m=item_bounds,
+                        contact_height_axis_base_override=item_axis,
                     )
                     if overlap + 1e-9 < required_overlap:
                         rejections['GRIPPER_CONTACT_PATCH_MISS'] += 1
                         continue
-                    lower, upper = self._proposal_contact_height_bounds(
-                        proposal
-                    )
+                    lower, upper = item_bounds
                     bilateral_span = float(upper - lower)
                     safe_variants.append(
-                        (item, overlap, bilateral_span)
+                        (
+                            item,
+                            overlap,
+                            bilateral_span,
+                            item_evidence,
+                            item_bounds,
+                            item_axis,
+                        )
                     )
                 materialized.extend(
                     replace(
@@ -7083,6 +7793,13 @@ class RemoteGrasp6DNode:
                                 proposal.positive_contact_count
                             ),
                             'contact_patch_overlap_m': float(overlap),
+                            'contact_height_bounds_m': tuple(
+                                float(value)
+                                for value in item_bounds
+                            ),
+                            'contact_height_bounds_source': str(
+                                contact_height_source
+                            ),
                             'contact_patch_required_overlap_m': float(
                                 required_overlap
                             ),
@@ -7121,14 +7838,33 @@ class RemoteGrasp6DNode:
                                 )
                                 > 1e-9
                             ),
+                            **(
+                                self._bilateral_surface_audit(
+                                    item_evidence,
+                                    item_bounds,
+                                    item_axis,
+                                )
+                                if bool(contact_execution_phase)
+                                else {}
+                            ),
                         }),
                     )
-                    for item, overlap, bilateral_span in safe_variants
+                    for (
+                        item,
+                        overlap,
+                        bilateral_span,
+                        item_evidence,
+                        item_bounds,
+                        item_axis,
+                    ) in safe_variants
                 )
             except TabletopCandidateContractError as exc:
                 rejections[str(exc.code)] += 1
         diagnostics['contact_boundary_profiles'] = tuple(
             contact_boundary_profiles
+        )
+        diagnostics['contact_height_bounds_sources'] = dict(
+            sorted(contact_height_sources.items())
         )
         materialized.sort(
             key=lambda item: (
@@ -7250,6 +7986,9 @@ class RemoteGrasp6DNode:
                 estimate,
                 snapshot=snapshot,
                 contact_execution_phase=near_field,
+                target_label=str(
+                    getattr(snapshot.object_msg, 'label', '') or ''
+                ),
             )
         )
         pose_estimator = FrozenSnapshotCandidatePoseEstimator(
@@ -7281,10 +8020,6 @@ class RemoteGrasp6DNode:
             **support_plane_kwargs,
         )
         model_choice = str(getattr(self, '_last_model_choice', '') or '')
-        if not model_choice:
-            raise CandidateContractError(
-                'MODEL_TASK_MISMATCH', 'model choice is empty'
-            )
         ros_prepare_ms = max(
             0.0,
             (time.perf_counter() - prepare_started) * 1000.0,
@@ -7348,6 +8083,9 @@ class RemoteGrasp6DNode:
             near_field_phase_deadline_sec=(
                 near_field_phase_deadline_sec
             ),
+            target_observation=getattr(
+                self, '_latest_target_observation', None
+            ),
         )
 
     def _update_candidate_tracker(
@@ -7361,14 +8099,14 @@ class RemoteGrasp6DNode:
             return self.tracker.update(
                 int(request_id),
                 tuple(observations),
-                target_identity=tuple(target_identity),
+                target_identity=target_identity,
             )
         with self._stream_condition:
             self._require_stream_ticket_current_locked(ticket)
             return self.tracker.update(
                 int(request_id),
                 tuple(observations),
-                target_identity=tuple(target_identity),
+                target_identity=target_identity,
             )
 
     @staticmethod
@@ -7398,7 +8136,7 @@ class RemoteGrasp6DNode:
         visibility_required=False,
         visibility_valid=None,
     ):
-        target_epoch, target_label, model_choice = tuple(target_identity)
+        target_identity = validate_target_identity(target_identity)
         return SafetyGateInput(
             depth_valid=depth_valid,
             depth_required=depth_required,
@@ -7415,9 +8153,8 @@ class RemoteGrasp6DNode:
             collision_free=collision_free,
             request_id=int(request_id),
             snapshot_stamp_sec=float(snapshot_stamp_sec),
-            target_epoch=int(target_epoch),
-            target_label=str(target_label),
-            model_choice=str(model_choice),
+            target_epoch=target_identity.epoch,
+            target_track_id=target_identity.track_id,
             track_id=int(track_id),
             variant_index=int(variant_index),
             center_base_xyz=center_base_xyz,
@@ -8064,6 +8801,24 @@ class RemoteGrasp6DNode:
             contact_execution_phase=bool(
                 getattr(prepared, 'near_field', True)
             ),
+            contact_height_bounds_m=getattr(
+                camera_candidate,
+                '_bilateral_contact_height_bounds_m',
+                None,
+            ),
+            contact_height_bounds_source=(
+                'fused_measured_bilateral_surface'
+            ),
+            bilateral_surface_evidence=getattr(
+                camera_candidate,
+                '_bilateral_surface_evidence',
+                None,
+            ),
+            contact_height_axis_base_override=getattr(
+                camera_candidate,
+                '_bilateral_contact_height_axis_base',
+                None,
+            ),
         )
         payload = LocalCandidatePayload(
             raw_candidate_index=int(source_index),
@@ -8113,6 +8868,43 @@ class RemoteGrasp6DNode:
 
     def _normalize_tabletop_candidate(self, prepared, tabletop_candidate):
         transform = np.asarray(tabletop_candidate.T_base_tool0, dtype=float)
+        tabletop_audit = dict(tabletop_candidate.audit)
+        contact_height_bounds = tabletop_audit.get(
+            'contact_height_bounds_m'
+        )
+        contact_height_source = str(
+            tabletop_audit.get(
+                'contact_height_bounds_source',
+                'measured_bilateral_cloud',
+            )
+        )
+        bilateral_evidence = None
+        contact_height_axis = None
+        target_points_base = prepared.geometry.object_points_base
+        if bool(getattr(prepared, 'near_field', True)):
+            (
+                surface,
+                bilateral_evidence,
+                contact_height_bounds,
+                contact_height_axis,
+            ) = self._current_bilateral_surface_measurement(
+                tabletop_candidate.contact_center_base,
+                transform[:3, :3],
+            )
+            if (
+                surface is None
+                or not isinstance(
+                    bilateral_evidence, BilateralSurfaceEvidence
+                )
+                or not bilateral_evidence.ok
+                or contact_height_bounds is None
+            ):
+                raise CandidateContractError(
+                    'BILATERAL_SURFACE_EVIDENCE_MISSING',
+                    'current fused surface lacks measured bilateral support',
+                )
+            target_points_base = surface.points_base
+            contact_height_source = 'fused_measured_bilateral_surface'
         quaternion = quaternion_from_matrix(transform)
         grasp_pose = make_pose_stamped(
             'base_link',
@@ -8133,7 +8925,7 @@ class RemoteGrasp6DNode:
             candidate_tool0_base=transform[:3, 3],
             R_base_tool=transform[:3, :3],
             required_open_width_m=tabletop_candidate.required_open_width_m,
-            target_points_base=geometry.object_points_base,
+            target_points_base=target_points_base,
             obb_center_base=geometry.center_base,
             R_base_obb=geometry.axes_base,
             obb_size_xyz_m=geometry.size_xyz_m,
@@ -8151,7 +8943,17 @@ class RemoteGrasp6DNode:
                 'opening_fit_clearance_each_side_m',
                 None,
             ),
+            width_projection_trim_fraction=float(
+                getattr(
+                    getattr(self, 'tabletop_geometry_config', None),
+                    'width_projection_trim_fraction',
+                    0.0,
+                )
+            ),
             contact_band_fraction=self._contact_band_fraction(),
+            contact_height_bounds_m=contact_height_bounds,
+            bilateral_surface_evidence=bilateral_evidence,
+            contact_height_axis_base_override=contact_height_axis,
             minimum_contact_patch_overlap_m=(
                 self._phase_contact_overlap_requirement_m(
                     getattr(prepared, 'near_field', True),
@@ -8195,7 +8997,7 @@ class RemoteGrasp6DNode:
             sequence,
             support,
         )
-        audit = dict(tabletop_candidate.audit)
+        audit = dict(tabletop_audit)
         audit.update({
             'adaptive_stage_profile': self._stage_profile_audit(
                 stage_profile
@@ -8210,6 +9012,10 @@ class RemoteGrasp6DNode:
                 contact_execution_phase=bool(
                     getattr(prepared, 'near_field', True)
                 ),
+                contact_height_bounds_m=contact_height_bounds,
+                contact_height_bounds_source=contact_height_source,
+                bilateral_surface_evidence=bilateral_evidence,
+                contact_height_axis_base_override=contact_height_axis,
             ),
             'downward_approach_cos': float(
                 np.dot(tabletop_candidate.insertion_axis_base, -support)
@@ -8246,11 +9052,7 @@ class RemoteGrasp6DNode:
         target_label = str(
             getattr(prepared.snapshot.object_msg, 'label', '') or ''
         )
-        target_identity = (
-            int(prepared.ticket.target_epoch),
-            target_label,
-            str(prepared.model_choice),
-        )
+        target_identity = validate_target_identity(prepared.snapshot.target_identity)
         quaternion = quaternion_from_matrix(candidate.T_base_tool0)
         depth_required = candidate.candidate_source == 'graspnet'
         depth_valid = None
@@ -8443,6 +9245,7 @@ class RemoteGrasp6DNode:
                     request_id=prepared.ticket.request_id,
                     snapshot_stamp_sec=prepared.ticket.snapshot_stamp_sec,
                     target_epoch=prepared.ticket.target_epoch,
+                    target_track_id=validate_target_identity(prepared.snapshot.target_identity).track_id,
                     target_label=target_label,
                     model_choice=prepared.model_choice,
                     center_base_xyz=normalized.contact_center_base,
@@ -8575,6 +9378,11 @@ class RemoteGrasp6DNode:
                 return False
             target_identity = self._current_stream_target_identity()
             newest_after_ns = self.last_submitted_stamp_ns
+            if direct_single_snapshot:
+                newest_after_ns = max(
+                    newest_after_ns,
+                    int(round(self._near_field_phase_started_sec * 1e9)),
+                )
             snapshot_frame_count = (
                 max(
                     1,
@@ -8867,6 +9675,7 @@ class RemoteGrasp6DNode:
                         observation.snapshot_stamp_sec
                     ),
                     target_epoch=int(observation.target_epoch),
+                    target_track_id=observation.target_track_id,
                     target_label=str(observation.target_label),
                     model_choice=str(observation.model_choice),
                     center_base_xyz=observation.center_base_xyz,
@@ -8894,12 +9703,12 @@ class RemoteGrasp6DNode:
         return tuple(stable)
 
     def _direct_near_field_moveit_rank_key(self, candidate):
-        """Try the smallest frozen-pose correction before strict MoveIt.
+        """Prefer the narrowest hard-safe grasp, then the smallest correction.
 
         This is only an ordering policy for candidates that already passed
-        every hard geometry and collision gate.  A large wrist rotation stays
-        in the bounded set and can still become execution authority when the
-        shorter candidates fail strict MoveIt.
+        every hard geometry and collision gate. Aperture margin is physical
+        room for centering error, so it takes precedence over avoiding a wrist
+        rotation. Equal-width candidates still minimize frozen-pose change.
         """
 
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
@@ -8923,7 +9732,18 @@ class RemoteGrasp6DNode:
                 else float('inf')
             )
 
+        stable = getattr(candidate, 'stable_candidate', candidate)
+        try:
+            required_width = float(
+                getattr(stable, 'required_open_width_m', float('inf'))
+            )
+        except (TypeError, ValueError, OverflowError):
+            required_width = float('inf')
+        if not math.isfinite(required_width) or required_width <= 0.0:
+            required_width = float('inf')
+
         return (
+            required_width,
             nonnegative_finite('contact_start_orientation_delta_rad'),
             nonnegative_finite('contact_start_translation_delta_m'),
             candidate.pre_moveit_score,
@@ -10368,11 +11188,7 @@ class RemoteGrasp6DNode:
     def _recheck_and_score_stable(self, prepared, stable_candidates):
         """Re-evaluate stable fused poses against the latest accepted facts."""
 
-        current_identity = (
-            int(prepared.ticket.target_epoch),
-            str(getattr(prepared.snapshot.object_msg, 'label', '') or ''),
-            str(prepared.model_choice or ''),
-        )
+        current_identity = validate_target_identity(prepared.snapshot.target_identity)
         target_xyz = np.asarray(
             prepared.geometry.center_base,
             dtype=float,
@@ -10462,12 +11278,43 @@ class RemoteGrasp6DNode:
                             snapshot=prepared.snapshot,
                         )
                         transform = pose_matrix(grasp_pose)
+                        target_points_base = geometry.object_points_base
+                        bilateral_evidence = None
+                        measured_bounds = dict(
+                            getattr(normalized, 'audit', {}) or {}
+                        ).get('contact_height_bounds_m')
+                        measured_axis = None
+                        gate = None
+                        if near_field_planning:
+                            (
+                                surface,
+                                bilateral_evidence,
+                                measured_bounds,
+                                measured_axis,
+                            ) = self._current_bilateral_surface_measurement(
+                                stable.center_base_xyz,
+                                transform[:3, :3],
+                            )
+                            if (
+                                surface is None
+                                or not isinstance(
+                                    bilateral_evidence,
+                                    BilateralSurfaceEvidence,
+                                )
+                                or not bilateral_evidence.ok
+                                or measured_bounds is None
+                            ):
+                                gate = self._bilateral_surface_gate_failure(
+                                    bilateral_evidence
+                                )
+                            else:
+                                target_points_base = surface.points_base
                         explicit_gate_kwargs = {
                             'gripper': self.gripper_geometry,
                             'candidate_center_base': stable.center_base_xyz,
                             'candidate_tool0_base': transform[:3, 3],
                             'R_base_tool': transform[:3, :3],
-                            'target_points_base': geometry.object_points_base,
+                            'target_points_base': target_points_base,
                             'obb_center_base': geometry.center_base,
                             'R_base_obb': geometry.axes_base,
                             'obb_size_xyz_m': geometry.size_xyz_m,
@@ -10493,9 +11340,23 @@ class RemoteGrasp6DNode:
                                 'opening_fit_clearance_each_side_m',
                                 None,
                             ),
+                            'width_projection_trim_fraction': float(
+                                getattr(
+                                    getattr(
+                                        self,
+                                        'tabletop_geometry_config',
+                                        None,
+                                    ),
+                                    'width_projection_trim_fraction',
+                                    0.0,
+                                )
+                            ),
                             'contact_band_fraction': (
                                 self._contact_band_fraction()
                             ),
+                            'contact_height_bounds_m': measured_bounds,
+                            'bilateral_surface_evidence': bilateral_evidence,
+                            'contact_height_axis_base_override': measured_axis,
                             'minimum_contact_patch_overlap_m': (
                                 self._phase_contact_overlap_requirement_m(
                                     getattr(prepared, 'near_field', True),
@@ -10503,12 +11364,13 @@ class RemoteGrasp6DNode:
                                 )
                             ),
                         }
-                        gate = evaluate_explicit_candidate(
-                            **explicit_gate_kwargs,
-                            required_open_width_m=(
-                                stable.required_open_width_m
-                            ),
-                        )
+                        if gate is None:
+                            gate = evaluate_explicit_candidate(
+                                **explicit_gate_kwargs,
+                                required_open_width_m=(
+                                    stable.required_open_width_m
+                                ),
+                            )
                         if (
                             isinstance(gate, CandidateGateResult)
                             and not gate.ok
@@ -10532,15 +11394,7 @@ class RemoteGrasp6DNode:
                                     )
                                     and refreshed_gate.ok
                                 ):
-                                    gate = replace(
-                                        refreshed_gate,
-                                        required_open_width_m=max(
-                                            float(
-                                                stable.required_open_width_m
-                                            ),
-                                            current_width,
-                                        ),
-                                    )
+                                    gate = refreshed_gate
                         gate = self._apply_final_approach_lateral_gate(
                             gate,
                             sequence,
@@ -10601,9 +11455,13 @@ class RemoteGrasp6DNode:
                     latest_required_width = _finite_pipeline_number(
                         getattr(gate, 'required_open_width_m', 0.0)
                     )
-                    conservative_required_width = max(
-                        float(stable.required_open_width_m),
-                        latest_required_width,
+                    conservative_required_width = (
+                        latest_required_width
+                        if near_field_planning
+                        else max(
+                            float(stable.required_open_width_m),
+                            latest_required_width,
+                        )
                     )
                     stable_updates = {
                         'required_open_width_m': conservative_required_width,
@@ -10783,10 +11641,9 @@ class RemoteGrasp6DNode:
                         ),
                         same_target_instance=(
                             current_identity
-                            == (
+                            == TargetTrackIdentity(
                                 current_stable.target_epoch,
-                                current_stable.target_label,
-                                current_stable.model_choice,
+                                current_stable.target_track_id,
                             )
                             and prepared.ticket.target_epoch
                             == self.target_instance_epoch
@@ -11756,6 +12613,8 @@ class RemoteGrasp6DNode:
                     'preference_index': 0,
                 },)
             failures = []
+            reachable_variants = []
+            attempted_count = 0
             for attempted_count, observation_variant in enumerate(
                 observation_variants,
                 start=1,
@@ -11771,30 +12630,99 @@ class RemoteGrasp6DNode:
                         evaluation,
                     )
                     if result.reachable:
-                        self._activate_far_field_observation_variant(
-                            runtime,
+                        reachable_variants.append((
+                            result,
                             observation_variant,
-                            attempted_count,
-                        )
-                        rospy.loginfo(
-                            (
-                                'remote 6D observation roll selected: '
-                                'roll=%.1fdeg attempt=%d/%d '
-                                'object_yaw_used=false'
-                            ),
-                            float(
-                                observation_variant.get(
-                                    'camera_roll_offset_deg',
-                                    0.0,
-                                )
-                            ),
-                            attempted_count,
-                            len(observation_variants),
-                        )
-                        return result
+                        ))
+                        continue
                 failures.append(result)
                 if str(result.failure_code or '') == 'MOVEIT_TIMEOUT':
+                    if reachable_variants:
+                        break
                     return result
+            if reachable_variants:
+                result, observation_variant = min(
+                    reachable_variants,
+                    key=lambda item: (
+                        float(
+                            self._parse_plan_metrics(
+                                item[0].reason
+                            ).get(
+                                'execution_duration_lower_bound_sec',
+                                float('inf'),
+                            )
+                        ),
+                        float(item[0].joint_max_delta_rad),
+                        float(item[0].joint_path_cost),
+                        int(item[1].get('preference_index', 0)),
+                    ),
+                )
+                selected_plan_metrics = self._parse_plan_metrics(
+                    result.reason
+                )
+                self._activate_far_field_observation_variant(
+                    runtime,
+                    observation_variant,
+                    attempted_count,
+                )
+                runtime['observation_orientation_search'].update({
+                    'reachable_variant_count': len(reachable_variants),
+                    'selected_joint_path_cost': float(
+                        result.joint_path_cost
+                    ),
+                    'selected_joint_max_delta_rad': float(
+                        result.joint_max_delta_rad
+                    ),
+                    'selected_execution_duration_lower_bound_sec': (
+                        selected_plan_metrics.get(
+                            'execution_duration_lower_bound_sec'
+                        )
+                    ),
+                    'selected_hardware_limiting_joint': str(
+                        selected_plan_metrics.get(
+                            'hardware_limiting_joint',
+                            '',
+                        )
+                    ),
+                })
+                rospy.loginfo(
+                    (
+                        'remote 6D observation roll selected by minimum '
+                        'hardware-limited duration: roll=%.1fdeg checked=%d/%d '
+                        'reachable=%d joint_path_cost=%.3f '
+                        'joint_max_delta=%.3frad duration_lb=%s '
+                        'limiting_joint=%s object_yaw_used=false'
+                    ),
+                    float(
+                        observation_variant.get(
+                            'camera_roll_offset_deg',
+                            0.0,
+                        )
+                    ),
+                    attempted_count,
+                    len(observation_variants),
+                    len(reachable_variants),
+                    float(result.joint_path_cost),
+                    float(result.joint_max_delta_rad),
+                    (
+                        'unavailable'
+                        if selected_plan_metrics.get(
+                            'execution_duration_lower_bound_sec'
+                        ) is None
+                        else '%.3fs' % float(
+                            selected_plan_metrics[
+                                'execution_duration_lower_bound_sec'
+                            ]
+                        )
+                    ),
+                    str(
+                        selected_plan_metrics.get(
+                            'hardware_limiting_joint',
+                            'unavailable',
+                        )
+                    ),
+                )
+                return result
             runtime['observation_orientation_search'] = {
                 'available': False,
                 'policy': (
@@ -11955,8 +12883,8 @@ class RemoteGrasp6DNode:
 
         payload = {
             'target_epoch': int(stable.target_epoch),
-            'target_label': str(stable.target_label),
-            'model_choice': str(stable.model_choice),
+            'target_track_id': TargetTrackIdentity(
+                stable.target_epoch, stable.target_track_id).track_id,
         }
         return hashlib.sha256(
             json.dumps(
@@ -11966,6 +12894,94 @@ class RemoteGrasp6DNode:
                 allow_nan=False,
             ).encode('utf-8')
         ).hexdigest()
+
+    @staticmethod
+    def _rich_plan_execution_sequence(plan):
+        """Adapt the exact four hashed rich-plan poses to strict MoveIt."""
+
+        poses = tuple(getattr(plan, 'poses', ()) or ())
+        if len(poses) != 4:
+            raise CandidateContractError(
+                'MOVEIT_CHECK_ERROR',
+                'final rich plan must contain exactly four execution poses',
+            )
+        stamped = []
+        for pose in poses:
+            target = PoseStamped()
+            target.header = deepcopy(getattr(plan, 'header', None))
+            target.pose = deepcopy(pose)
+            stamped.append(target)
+        return Grasp6DSequence(
+            pregrasp=stamped[0],
+            approach=stamped[1],
+            grasp=stamped[2],
+            lift=stamped[3],
+        )
+
+    def _strict_check_final_near_field_plan(
+        self,
+        plan,
+        prepared,
+        runtime,
+    ):
+        """Fail closed unless the exact post-registration plan is reachable."""
+
+        for name in (
+            'final_execution_sequence',
+            'final_strict_moveit_result',
+            'final_strict_moveit_metrics',
+            'final_strict_plan_id',
+        ):
+            runtime.pop(name, None)
+        sequence = self._rich_plan_execution_sequence(plan)
+        stage_poses = (
+            ('pregrasp', sequence.pregrasp),
+            ('approach', sequence.approach),
+            ('grasp', sequence.grasp),
+            ('lift', sequence.lift),
+        )
+        runtime['moveit_input_joint_state'] = self._joint_state_audit(
+            deepcopy(getattr(self, 'latest_joint_state', None))
+        )
+        deadline_sec = (
+            self._direct_near_field_deadline_sec(prepared)
+            if self._direct_near_field_active(prepared)
+            else 0.0
+        )
+        result, metrics = self._cached_strict_moveit_sequence_evaluation(
+            stage_poses,
+            prepared,
+            runtime,
+            'final_registered_strict_sequence',
+            deadline_sec=deadline_sec,
+        )
+        hard_evidence = bool(
+            isinstance(result, MoveItResult)
+            and result.reachable is True
+            and result.collision_free is True
+            and result.within_joint_limits is True
+            and result.ik_valid is True
+            and result.planning_success is True
+        )
+        if not hard_evidence:
+            failure_code = str(
+                getattr(result, 'failure_code', '')
+                or 'MOVEIT_CHECK_ERROR'
+            )
+            reason = str(
+                getattr(result, 'reason', '')
+                or 'strict MoveIt did not return complete success evidence'
+            )
+            raise CandidateContractError(
+                failure_code,
+                'final registration-bound four-stage sequence failed strict '
+                'MoveIt: %s' % reason,
+            )
+        runtime['final_execution_sequence'] = sequence
+        runtime['final_strict_moveit_result'] = asdict(result)
+        runtime['final_strict_moveit_metrics'] = dict(metrics or {})
+        runtime['final_strict_plan_id'] = str(plan.plan_id)
+        return sequence, result, dict(metrics or {})
 
     def _build_selected_preview_bundle(self, selected):
         """Build one immutable candidate-bound preview without publishing it."""
@@ -12040,11 +13056,27 @@ class RemoteGrasp6DNode:
             geometry_message.header,
             stable.model_choice,
         )
+        registration_bound = self._apply_registration_evidence_to_plan(
+            rich_plan, getattr(prepared, 'target_observation', None)
+        )
         rich_plan.diagnostic = (
             CONTACT_EXECUTION_PLAN
             if near_field
             else FAR_FIELD_OBSERVATION_PLAN
         )
+        rich_plan.plan_id = compute_plan_id(rich_plan)
+        final_strict_result = None
+        final_strict_metrics = {}
+        if near_field:
+            (
+                _final_execution_sequence,
+                final_strict_result,
+                final_strict_metrics,
+            ) = self._strict_check_final_near_field_plan(
+                rich_plan,
+                prepared,
+                runtime,
+            )
         legacy_plan = rich_plan_to_legacy(rich_plan)
         stage_profile = runtime.get('adaptive_stage_profile')
         stage_profile_audit = (
@@ -12071,6 +13103,22 @@ class RemoteGrasp6DNode:
             'near_field_sequence_checked': near_field,
             'observation_stage_checked': not near_field,
             'full_execution_sequence_checked': near_field,
+            'final_registered_sequence_checked': bool(
+                near_field
+                and registration_bound
+                and rich_plan.refinement_status == 'VALID_3D'
+                and isinstance(final_strict_result, MoveItResult)
+                and final_strict_result.reachable is True
+            ),
+            'final_registered_sequence_plan_id': (
+                str(rich_plan.plan_id) if near_field else ''
+            ),
+            'final_strict_moveit_result': (
+                asdict(final_strict_result)
+                if isinstance(final_strict_result, MoveItResult)
+                else None
+            ),
+            'final_strict_moveit_metrics': dict(final_strict_metrics),
             'strict_sequence_stages': (
                 ['pregrasp', 'approach', 'grasp', 'lift']
                 if near_field
@@ -12173,6 +13221,7 @@ class RemoteGrasp6DNode:
                 ),
                 'evaluation_variant_index': int(selected.variant_index),
             },
+            'multiview_surface': self._multiview_surface_audit(),
         }
 
         signature = self._preview_target_signature(stable)
@@ -12697,6 +13746,26 @@ class RemoteGrasp6DNode:
                 and selected.track_id == track_id
                 and selected.variant_index == variant_index
             )
+            near_field = bool(getattr(prepared, 'near_field', False))
+            audited_sequence = (
+                candidate_runtime.get(
+                    'final_execution_sequence',
+                    candidate_runtime.get('sequence'),
+                )
+                if is_selected and near_field
+                else (
+                    candidate_runtime.get('sequence')
+                    if near_field
+                    else candidate_runtime.get('observation_sequence')
+                )
+            )
+            final_strict_result = candidate_runtime.get(
+                'final_strict_moveit_result'
+            )
+            if is_selected and near_field and isinstance(
+                final_strict_result, dict
+            ):
+                moveit = deepcopy(final_strict_result)
             evaluation_record = {
                 'candidate_source': candidate_source,
                 'source_index': int(candidate_source_index),
@@ -12710,12 +13779,34 @@ class RemoteGrasp6DNode:
                 'final_score': final_score,
                 'moveit': moveit,
                 'execution_sequence': self._execution_sequence_audit(
-                    (
-                        candidate_runtime.get('sequence')
-                        if bool(getattr(prepared, 'near_field', False))
-                        else candidate_runtime.get('observation_sequence')
-                    ),
-                    bool(getattr(prepared, 'near_field', False)),
+                    audited_sequence,
+                    near_field,
+                ),
+                'final_execution_sequence_checked': bool(
+                    is_selected
+                    and near_field
+                    and isinstance(final_strict_result, dict)
+                    and final_strict_result.get('reachable') is True
+                    and bool(
+                        candidate_runtime.get('final_strict_plan_id')
+                    )
+                ),
+                'final_strict_plan_id': (
+                    str(
+                        candidate_runtime.get('final_strict_plan_id', '')
+                        or ''
+                    )
+                    if is_selected and near_field
+                    else ''
+                ),
+                'final_strict_moveit_metrics': (
+                    deepcopy(
+                        candidate_runtime.get(
+                            'final_strict_moveit_metrics', {}
+                        )
+                    )
+                    if is_selected and near_field
+                    else {}
                 ),
                 'adaptive_stage_profile': (
                     self._stage_profile_audit(
@@ -13199,18 +14290,7 @@ class RemoteGrasp6DNode:
         target_label = str(
             getattr(prepared.snapshot.object_msg, 'label', '') or ''
         )
-        target_identity = (
-            int(ticket.target_epoch),
-            target_label,
-            str(
-                getattr(
-                    prepared,
-                    'model_choice',
-                    getattr(self, '_last_model_choice', ''),
-                )
-                or ''
-            ),
-        )
+        target_identity = validate_target_identity(prepared.snapshot.target_identity)
         observations, local_funnel = self._evaluate_local_candidates(prepared)
         near_field = bool(getattr(prepared, 'near_field', False))
         direct_near_field = self._direct_near_field_active(prepared)
@@ -14005,12 +15085,10 @@ class RemoteGrasp6DNode:
         previous_choice = getattr(self, '_last_model_choice', None)
         if previous_choice is not None and model_choice != previous_choice:
             self._last_model_choice = model_choice
-            self._invalidate_geometry(
+            self._advance_target_instance_epoch(
                 'MODEL_RELOADED',
-                'model choice changed from %s to %s'
-                % (previous_choice, model_choice),
+                preserve_identity=True,
             )
-            self._advance_target_instance_epoch('MODEL_RELOADED')
         else:
             self._last_model_choice = model_choice
         detector_kind = str(pcfg.get('detector', 'simple_hsv')).strip().lower()
@@ -14922,6 +16000,11 @@ class RemoteGrasp6DNode:
                 deepcopy(self.latest_object_geometry.header),
                 str(getattr(self, '_last_model_choice', '') or ''),
             )
+            self._apply_registration_evidence_to_plan(
+                rich_plan,
+                getattr(self, '_latest_target_observation', None),
+            )
+            rich_plan.plan_id = compute_plan_id(rich_plan)
             # The final atomic report is a publication prerequisite.  It
             # binds every evaluated lineage row and the selected row to the
             # immutable rich-plan ID before either executable topic is sent.
@@ -15096,6 +16179,9 @@ class RemoteGrasp6DNode:
             remote_cfg,
             defaults=self._continuous_runtime_defaults(),
             get_param=rospy.get_param,
+        )
+        multiview_registration_config = (
+            load_multiview_registration_config(remote_cfg)
         )
         gate_audit_enabled = rospy.get_param(
             '/grasp_6d/remote/gate_audit_enabled',
@@ -15314,6 +16400,7 @@ class RemoteGrasp6DNode:
         self.tabletop_geometry_config = tabletop_geometry_config
         self.hybrid_merge_config = hybrid_merge_config
         self.adaptive_stage_limits = adaptive_stage_limits
+        self.multiview_registration_config = multiview_registration_config
         self.gate_audit_enabled = gate_audit_enabled
         self.gate_audit_output_path = gate_audit_output_path
         self.mujoco_audit_output_path = mujoco_audit_output_path
@@ -16253,6 +17340,41 @@ class RemoteGrasp6DNode:
             camera_candidate,
             grasp_pose,
         )
+        target_points_base = estimate.object_points_base
+        evidence = None
+        contact_height_bounds = None
+        contact_height_axis = None
+        if bool(contact_execution_phase):
+            (
+                surface,
+                evidence,
+                contact_height_bounds,
+                contact_height_axis,
+            ) = self._current_bilateral_surface_measurement(
+                candidate_center_base,
+                grasp_transform[:3, :3],
+            )
+            if (
+                surface is None
+                or not isinstance(evidence, BilateralSurfaceEvidence)
+                or not evidence.ok
+                or contact_height_bounds is None
+            ):
+                result = self._bilateral_surface_gate_failure(evidence)
+                self._record_geometry_gate_result(result)
+                return result
+            target_points_base = surface.points_base
+            setattr(camera_candidate, '_bilateral_surface_evidence', evidence)
+            setattr(
+                camera_candidate,
+                '_bilateral_contact_height_bounds_m',
+                contact_height_bounds,
+            )
+            setattr(
+                camera_candidate,
+                '_bilateral_contact_height_axis_base',
+                contact_height_axis,
+            )
         result = evaluate_candidate(
             gripper=self.gripper_geometry,
             # Grasp center drives OBB/jaw-line gates; the four transforms are
@@ -16288,8 +17410,11 @@ class RemoteGrasp6DNode:
                 'opening_fit_clearance_each_side_m',
                 None,
             ),
-            target_points_base=estimate.object_points_base,
+            target_points_base=target_points_base,
             contact_band_fraction=self._contact_band_fraction(),
+            bilateral_surface_evidence=evidence,
+            contact_height_bounds_m=contact_height_bounds,
+            contact_height_axis_base_override=contact_height_axis,
             minimum_contact_patch_overlap_m=(
                 self._phase_contact_overlap_requirement_m(
                     contact_execution_phase,
@@ -16478,6 +17603,8 @@ class RemoteGrasp6DNode:
             else graspnet_input_audit
         )
         summary['graspnet_input'] = input_audit
+        multiview_surface_audit = self._multiview_surface_audit()
+        summary['multiview_surface'] = multiview_surface_audit
         audit_metadata_fn = getattr(pose_estimator, 'audit_metadata', None)
         if callable(audit_metadata_fn):
             snapshot_transform_summary = dict(
@@ -16518,6 +17645,7 @@ class RemoteGrasp6DNode:
             'target_cloud_center_base': self._json_vector(
                 getattr(self, 'latest_target_cloud_base_xyz', None)
             ),
+            'multiview_surface': multiview_surface_audit,
             'remote_diagnostics': _thaw_request_evidence(
                 remote_diagnostics or {}
             ),
@@ -18058,13 +19186,23 @@ class RemoteGrasp6DNode:
     def _parse_plan_metrics(message):
         text = str(message or '')
         metrics = {}
-        for key in ('joint_path_cost', 'joint_max_delta'):
+        for key in (
+            'joint_path_cost',
+            'joint_max_delta',
+            'execution_duration_lower_bound_sec',
+        ):
             match = re.search(r'%s=([-+0-9.eE]+)' % key, text)
             if match:
                 try:
                     metrics[key] = float(match.group(1))
                 except Exception:
                     pass
+        limiting_joint = re.search(
+            r'hardware_limiting_joint=([^\s;]+)',
+            text,
+        )
+        if limiting_joint:
+            metrics['hardware_limiting_joint'] = limiting_joint.group(1)
         return metrics
 
     def _candidate_visibility_metrics(
@@ -18819,13 +19957,33 @@ class RemoteGrasp6DNode:
             )
         transform = pose_matrix(grasp_pose)
         profile = runtime.get('adaptive_stage_profile')
+        (
+            surface,
+            bilateral_evidence,
+            measured_bounds,
+            measured_axis,
+        ) = self._current_bilateral_surface_measurement(
+            stable.center_base_xyz,
+            transform[:3, :3],
+        )
+        if (
+            surface is None
+            or not isinstance(
+                bilateral_evidence, BilateralSurfaceEvidence
+            )
+            or not bilateral_evidence.ok
+            or measured_bounds is None
+        ):
+            return self._bilateral_surface_gate_failure(
+                bilateral_evidence
+            )
         return evaluate_explicit_candidate(
             gripper=self.gripper_geometry,
             candidate_center_base=stable.center_base_xyz,
             candidate_tool0_base=transform[:3, 3],
             R_base_tool=transform[:3, :3],
             required_open_width_m=stable.required_open_width_m,
-            target_points_base=geometry.object_points_base,
+            target_points_base=surface.points_base,
             obb_center_base=geometry.center_base,
             R_base_obb=geometry.axes_base,
             obb_size_xyz_m=geometry.size_xyz_m,
@@ -18843,7 +20001,17 @@ class RemoteGrasp6DNode:
                 'opening_fit_clearance_each_side_m',
                 None,
             ),
+            width_projection_trim_fraction=float(
+                getattr(
+                    getattr(self, 'tabletop_geometry_config', None),
+                    'width_projection_trim_fraction',
+                    0.0,
+                )
+            ),
             contact_band_fraction=self._contact_band_fraction(),
+            contact_height_bounds_m=measured_bounds,
+            bilateral_surface_evidence=bilateral_evidence,
+            contact_height_axis_base_override=measured_axis,
             minimum_contact_patch_overlap_m=(
                 self._phase_contact_overlap_requirement_m(
                     True,

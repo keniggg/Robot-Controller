@@ -25,6 +25,7 @@ class CameraWidget(QtWidgets.QWidget):
         self.bridge = CvBridge() if CvBridge else None
         self._alive = True
         self._subscribers = []
+        self._subscription_active = False
         self._last_color_rgb = None
         self._last_color_pixmap = None
         self._last_depth_pixmap = None
@@ -83,10 +84,9 @@ class CameraWidget(QtWidgets.QWidget):
 
         self.color_signal.connect(self.update_color_image)
         self.depth_signal.connect(self.update_depth_image)
-        self._subscribers.append(rospy.Subscriber(topic, Image, self.color_cb, queue_size=1, buff_size=2**24, tcp_nodelay=True))
-        self._subscribers.append(rospy.Subscriber(depth_topic, Image, self.depth_cb, queue_size=1, buff_size=2**24, tcp_nodelay=True))
         self.destroyed.connect(lambda *_: self._shutdown_ros())
         self._update_mode()
+        QtCore.QTimer.singleShot(0, self._sync_subscription_visibility)
 
     def _make_view_label(self, text):
         label = QtWidgets.QLabel(text)
@@ -205,6 +205,67 @@ class CameraWidget(QtWidgets.QWidget):
         except Exception:
             return True
 
+    def _subscribe_ros(self):
+        if not self.__dict__.get('_alive', False):
+            return
+        if self.__dict__.get('_subscription_active', False):
+            return
+        subscribers = []
+        try:
+            subscribers.append(rospy.Subscriber(
+                self.topic,
+                Image,
+                self.color_cb,
+                queue_size=1,
+                buff_size=2**24,
+                tcp_nodelay=True,
+            ))
+            subscribers.append(rospy.Subscriber(
+                self.depth_topic,
+                Image,
+                self.depth_cb,
+                queue_size=1,
+                buff_size=2**24,
+                tcp_nodelay=True,
+            ))
+        except Exception:
+            for subscriber in subscribers:
+                try:
+                    subscriber.unregister()
+                except Exception:
+                    pass
+            raise
+        self._subscribers = subscribers
+        self._subscription_active = True
+
+    def _unsubscribe_ros(self):
+        subscribers = list(self.__dict__.get('_subscribers', []))
+        self._subscribers = []
+        self._subscription_active = False
+        self._color_pending = False
+        self._depth_pending = False
+        for subscriber in subscribers:
+            try:
+                subscriber.unregister()
+            except Exception:
+                pass
+
+    def _sync_subscription_visibility(self):
+        if not self.__dict__.get('_alive', False):
+            return
+        if self._stream_visible():
+            self._subscribe_ros()
+        else:
+            self._unsubscribe_ros()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._subscribe_ros()
+
+    def hideEvent(self, event):
+        self._unsubscribe_ros()
+        super().hideEvent(event)
+
     def set_detection_overlay(self, bbox=None, label='', color=(80, 255, 120), contour_xy=None):
         try:
             if bbox is None:
@@ -267,13 +328,7 @@ class CameraWidget(QtWidgets.QWidget):
 
     def _shutdown_ros(self):
         self._alive = False
-        self._color_pending = False
-        self._depth_pending = False
-        for subscriber in list(self.__dict__.get('_subscribers', []) ):
-            try:
-                subscriber.unregister()
-            except Exception:
-                pass
+        self._unsubscribe_ros()
 
     def closeEvent(self, event):
         self._shutdown_ros()

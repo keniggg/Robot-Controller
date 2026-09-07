@@ -17,6 +17,7 @@
   <depend>trajectory_msgs</depend>
   <depend>control_msgs</depend>
   <depend>controller_manager_msgs</depend>
+  <depend>easy_handeye_msgs</depend>
   <depend>message_runtime</depend>
   <depend>tf</depend>
   <depend>tf2_ros</depend>

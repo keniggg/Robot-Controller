@@ -11,6 +11,10 @@ camera:
   read_failure_limit: 3
   color_topic: "/supervisor/camera/color/image_raw"
   depth_topic: "/supervisor/camera/depth/image_raw"
+  # GUI 使用较小的深度预览，完整 640x480 深度仍供感知与 6D 规划使用。
+  depth_preview_topic: "/supervisor/camera/depth/preview"
+  depth_preview_width: 320
+  depth_preview_height: 240
   camera_info_topic: "/supervisor/camera/color/camera_info"
   align_depth_to_color: true
   depth_filter:

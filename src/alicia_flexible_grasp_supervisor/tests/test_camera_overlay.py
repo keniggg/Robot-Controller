@@ -2,6 +2,7 @@
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 from PyQt5 import QtCore
@@ -188,6 +189,45 @@ class CameraOverlayTest(unittest.TestCase):
         self.assertFalse(widget._alive)
         self.assertTrue(first.unregistered)
         self.assertTrue(second.unregistered)
+
+    def test_visible_camera_subscribes_once_and_hidden_camera_unsubscribes(self):
+        class FakeSubscriber:
+            def __init__(self):
+                self.unregistered = False
+
+            def unregister(self):
+                self.unregistered = True
+
+        created = []
+
+        def make_subscriber(*_args, **_kwargs):
+            subscriber = FakeSubscriber()
+            created.append(subscriber)
+            return subscriber
+
+        widget = CameraWidget.__new__(CameraWidget)
+        widget._alive = True
+        widget._subscription_active = False
+        widget._subscribers = []
+        widget._color_pending = False
+        widget._depth_pending = False
+        widget.topic = '/color'
+        widget.depth_topic = '/depth'
+        widget.color_cb = lambda _msg: None
+        widget.depth_cb = lambda _msg: None
+
+        with mock.patch(
+            'gui.widgets.camera_widget.rospy.Subscriber',
+            side_effect=make_subscriber,
+        ) as subscribe:
+            CameraWidget._subscribe_ros(widget)
+            CameraWidget._subscribe_ros(widget)
+
+        self.assertEqual(subscribe.call_count, 2)
+        self.assertTrue(widget._subscription_active)
+        CameraWidget._unsubscribe_ros(widget)
+        self.assertFalse(widget._subscription_active)
+        self.assertTrue(all(item.unregistered for item in created))
 
 
 if __name__ == '__main__':

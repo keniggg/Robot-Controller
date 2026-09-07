@@ -138,9 +138,12 @@ private:
 	   EndpointTrimConfig endpoint_trim_config_;
 	   EndpointTrimContinuity endpoint_trim_continuity_;
 	   EndpointTrimCommandOrder endpoint_trim_command_order_;
+	   double gui_direct_gesture_timeout_sec_ = 0.25;
 		   double protection_clear_stable_sec_ = 30.0;
 	   double max_enable_temperature_c_ = 60.0;
 	   double max_plausible_temperature_c_ = 125.0;
+	   double max_temperature_slew_c_per_sec_ = 8.0;
+	   double temperature_slew_tolerance_c_ = 5.0;
 	   int e1_confirm_consecutive_frames_ = 3;
 	   int temperature_over_limit_confirm_samples_ = 3;
 	   double reconnect_sync_tolerance_rad_ = 0.05;
@@ -202,6 +205,11 @@ private:
 	   double endpoint_trim_last_response_latency_sec_ = 0.0;
 	   size_t endpoint_trim_stalled_retry_count_ = 0;
 	   size_t endpoint_feedback_trim_iteration_ = 0;
+	   bool gui_direct_gesture_active_ = false;
+	   int gui_direct_edited_index_ = -1;
+	   ros::Time gui_direct_last_command_time_;
+	   std::vector<double> gui_direct_hold_joint_angles_;
+	   double gui_direct_hold_gripper_rad_ = 0.0;
 	   ros::Time last_command_sent_time_;
 	   std::vector<uint8_t> last_sent_sdk_command_frame_;
 	   ros::Time last_sent_sdk_command_time_;
@@ -244,6 +252,8 @@ private:
 	   ros::Time last_self_check_query_time_;
 	   ros::Time last_self_check_time_;
 	   std::vector<float> latest_temperatures_c_;
+	   std::vector<float> last_plausible_temperatures_c_;
+	   std::vector<ros::Time> last_plausible_temperature_times_;
 	   uint16_t latest_self_check_mask_ = 0;
 };
 #endif // ALICiA_D_DRIVER_NODE_H

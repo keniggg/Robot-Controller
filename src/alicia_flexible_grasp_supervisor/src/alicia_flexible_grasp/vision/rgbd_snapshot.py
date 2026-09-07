@@ -6,6 +6,8 @@ import time
 import cv2
 import numpy as np
 
+from .target_observation import TargetTrackIdentity, validate_target_identity
+
 
 @dataclass
 class RgbdSample:
@@ -19,7 +21,7 @@ class RgbdSample:
     joint_positions: np.ndarray
     stamp_ns: int = 0
     target_epoch: int = 0
-    target_identity: tuple = ()
+    target_identity: TargetTrackIdentity = None
 
 
 @dataclass(frozen=True)
@@ -52,14 +54,17 @@ class SnapshotResult:
     source_mode: str
     stamp_ns: int = 0
     target_epoch: int = 0
-    target_identity: tuple = ()
+    target_identity: TargetTrackIdentity = None
     sample_stamp_ns: tuple = ()
 
     def __post_init__(self):
         for name in ('color_bgr', 'depth_raw', 'target_depth_raw', 'object_mask'):
             object.__setattr__(self, name, _readonly_copy(getattr(self, name)))
         object.__setattr__(self, 'bbox', tuple(self.bbox or ()))
-        object.__setattr__(self, 'target_identity', tuple(self.target_identity or ()))
+        if self.target_identity is not None:
+            validate_target_identity(self.target_identity)
+            if self.target_identity.epoch != self.target_epoch:
+                raise ValueError('snapshot epoch does not match target identity')
         object.__setattr__(
             self,
             'sample_stamp_ns',
@@ -223,9 +228,11 @@ def fuse_stable_samples(
     if not samples:
         return _failure(samples, 'DEPTH_UNSTABLE', 'no synchronized RGB-D samples', source_mode)
 
-    identities = {tuple(getattr(item, 'target_identity', ()) or ()) for item in samples}
+    identities = {getattr(item, 'target_identity', None) for item in samples}
     epochs = {int(getattr(item, 'target_epoch', 0) or 0) for item in samples}
-    if len(identities) != 1 or len(epochs) != 1:
+    if (len(identities) != 1 or len(epochs) != 1
+            or any(not isinstance(value, TargetTrackIdentity) for value in identities)
+            or any(value.epoch not in epochs for value in identities if value is not None)):
         return _failure(
             samples,
             'TARGET_INSTANCE_MISMATCH',
@@ -453,7 +460,7 @@ def fuse_stable_samples(
         source_mode=source_mode,
         stamp_ns=int(getattr(latest, 'stamp_ns', round(float(latest.stamp_sec) * 1e9))),
         target_epoch=int(getattr(latest, 'target_epoch', 0) or 0),
-        target_identity=tuple(getattr(latest, 'target_identity', ()) or ()),
+        target_identity=getattr(latest, 'target_identity', None),
         sample_stamp_ns=sample_stamp_ns,
     )
 
@@ -520,7 +527,7 @@ class SynchronizedRgbdBuffer:
         target_epoch=0,
         target_identity=None,
     ):
-        identity = tuple(target_identity or ())
+        identity = validate_target_identity(target_identity)
         self._update_entry(
             stamp_sec,
             object_msg=deepcopy(object_msg),
@@ -562,7 +569,7 @@ class SynchronizedRgbdBuffer:
         deadline = self._monotonic_clock() + timeout
         wall_deadline = time.monotonic() + timeout
         identity = (
-            None if target_identity is None else tuple(target_identity)
+            None if target_identity is None else validate_target_identity(target_identity)
         )
         window_key = (bool(require_mask), identity)
         with self._condition:
@@ -606,7 +613,7 @@ class SynchronizedRgbdBuffer:
                             or int(entry.get('revision', 0)) != collected[key][0]
                             or (
                                 identity is not None
-                                and tuple(entry.get('target_identity', ()) or ())
+                                and entry.get('target_identity', None)
                                 != identity
                             )
                         ):
@@ -615,7 +622,7 @@ class SynchronizedRgbdBuffer:
                         (key, entry)
                         for key, entry in complete
                         if identity is None
-                        or tuple(entry.get('target_identity', ()) or ())
+                        or entry.get('target_identity', None)
                         == identity
                     ]
                     for key, entry in admissible_complete[-count:]:
@@ -875,5 +882,5 @@ class SynchronizedRgbdBuffer:
             joint_positions=np.asarray(entry.get('joint_positions', ()), dtype=float).copy(),
             stamp_ns=int(entry['stamp_ns']),
             target_epoch=int(entry.get('target_epoch', 0) or 0),
-            target_identity=tuple(entry.get('target_identity', ()) or ()),
+            target_identity=entry.get('target_identity', None),
         )

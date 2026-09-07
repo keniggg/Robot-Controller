@@ -11,6 +11,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT / 'src') not in sys.path:
     sys.path.insert(0, str(ROOT / 'src'))
 
+from alicia_flexible_grasp.vision.target_observation import TargetTrackIdentity
+
 from alicia_flexible_grasp.grasp.grasp6d_stability import (
     CandidateObservation,
     CandidateTracker,
@@ -51,6 +53,7 @@ def observation(
     request_id,
     *,
     target_epoch=3,
+    target_track_id=None,
     target_label='carton',
     model_choice='carton_segmentation',
     center_x=0.100,
@@ -78,6 +81,7 @@ def observation(
         request_id=request_id,
         snapshot_stamp_sec=100.0 + request_id,
         target_epoch=target_epoch,
+        target_track_id=target_track_id or TargetTrackIdentity.from_stream(0, target_epoch).track_id,
         target_label=target_label,
         model_choice=model_choice,
         center_base_xyz=(center_x, 0.0, 0.4),
@@ -355,8 +359,7 @@ def test_arbitrary_180_degree_rotation_is_not_parallel_jaw_equivalent():
     'changed',
     [
         {'target_epoch': 4},
-        {'target_label': 'other-carton'},
-        {'model_choice': 'generic_object'},
+        {'target_track_id': 'replacement-track'},
         {'center_x': 0.126},
         {'quaternion': (0.0, 0.0, math.sin(math.radians(13.0)),
                         math.cos(math.radians(13.0)))},
@@ -376,8 +379,7 @@ def test_target_identity_pose_approach_and_width_are_hard_match_gates(changed):
     'changed_identity',
     [
         {'target_epoch': 4},
-        {'target_label': 'replacement-carton'},
-        {'model_choice': 'replacement-model'},
+        {'target_track_id': 'replacement-track'},
     ],
 )
 def test_active_target_identity_switch_removes_old_stable_tracks(changed_identity):
@@ -418,8 +420,8 @@ def test_mixed_target_identity_batch_is_rejected_without_consuming_request():
 
 def test_explicit_target_identity_switch_clears_old_stable_on_empty_batch():
     tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=3))
-    old_identity = (3, 'carton', 'carton_segmentation')
-    new_identity = (4, 'carton', 'carton_segmentation')
+    old_identity = TargetTrackIdentity.from_stream(0, 3)
+    new_identity = TargetTrackIdentity.from_stream(0, 4)
     for request_id in (1, 2, 3):
         tracker.update(
             request_id,
@@ -439,8 +441,8 @@ def test_explicit_target_identity_switch_clears_old_stable_on_empty_batch():
 
 def test_explicit_identity_must_match_nonempty_batch_before_state_changes():
     tracker = CandidateTracker(two_hit_config())
-    old_identity = (3, 'carton', 'carton_segmentation')
-    new_identity = (4, 'carton', 'carton_segmentation')
+    old_identity = TargetTrackIdentity.from_stream(0, 3)
+    new_identity = TargetTrackIdentity.from_stream(0, 4)
     tracker.update(1, [observation(1)], target_identity=old_identity)
 
     with pytest.raises(ValueError, match='target_identity'):
@@ -479,15 +481,15 @@ def test_explicit_target_identity_validation_is_fail_closed(invalid_identity):
     assert tracker.update(
         1,
         [],
-        target_identity=(3, 'carton', 'carton_segmentation'),
+        target_identity=TargetTrackIdentity.from_stream(0, 3),
     ) == []
 
 
 def test_track_ids_remain_unique_and_monotonic_across_identity_resets():
     tracker = CandidateTracker(TrackingConfig(window_size=5, min_hits=1))
-    first_identity = (3, 'carton', 'carton_segmentation')
-    second_identity = (4, 'carton', 'carton_segmentation')
-    third_identity = (5, 'replacement', 'replacement_model')
+    first_identity = TargetTrackIdentity.from_stream(0, 3)
+    second_identity = TargetTrackIdentity.from_stream(0, 4)
+    third_identity = TargetTrackIdentity.from_stream(0, 5)
 
     first = tracker.update(
         1,
@@ -506,6 +508,7 @@ def test_track_ids_remain_unique_and_monotonic_across_identity_resets():
             observation(
                 4,
                 target_epoch=5,
+                target_track_id=TargetTrackIdentity.from_stream(0, 5).track_id,
                 target_label='replacement',
                 model_choice='replacement_model',
             )
@@ -577,6 +580,7 @@ def test_observation_defensively_copies_normalizes_and_freezes_numpy_inputs():
         request_id=1,
         snapshot_stamp_sec=101.0,
         target_epoch=3,
+        target_track_id=TargetTrackIdentity.from_stream(0, 3).track_id,
         target_label='carton',
         model_choice='carton_segmentation',
         center_base_xyz=center,
@@ -652,6 +656,7 @@ def test_observation_rejects_bad_dimensions_non_finite_and_zero_norm(field, valu
         'request_id': 1,
         'snapshot_stamp_sec': 101.0,
         'target_epoch': 3,
+        'target_track_id': 'g0-t3',
         'target_label': 'carton',
         'model_choice': 'carton_segmentation',
         'center_base_xyz': (0.1, 0.0, 0.4),

@@ -56,6 +56,28 @@ class HandeyeJointPosePanelHelpersTest(unittest.TestCase):
         self.assertTrue(clamped)
         self.assertEqual(target[1], 1.0)
 
+    def test_actuation_status_sync_gate_tracks_reconnect_states(self):
+        self.assertTrue(
+            PANEL.actuation_status_needs_driver_sync(
+                "PENDING:POSITIVE_ENABLE_REQUESTED"
+            )
+        )
+        self.assertTrue(
+            PANEL.actuation_status_needs_driver_sync(
+                "UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT"
+            )
+        )
+        self.assertFalse(
+            PANEL.actuation_status_needs_driver_sync(
+                "PENDING:COMMAND_SYNCHRONIZED"
+            )
+        )
+        self.assertFalse(
+            PANEL.actuation_status_needs_driver_sync(
+                "CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE"
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

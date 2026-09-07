@@ -73,8 +73,16 @@ class RealSenseManager:
 
     def _clip_depth_range(self, depth):
         clipped = np.asanyarray(depth).copy()
-        depth_m = clipped.astype(np.float64) * float(self.depth_scale)
-        clipped[(depth_m < self.depth_min_m) | (depth_m > self.depth_max_m)] = 0
+        depth_scale = float(self.depth_scale)
+        if np.issubdtype(clipped.dtype, np.integer) and depth_scale > 0.0:
+            # RealSense depth is uint16. Compare in raw units so the 30 FPS
+            # acquisition path avoids a full-frame float64 allocation.
+            min_raw = int(np.ceil(self.depth_min_m / depth_scale - 1e-9))
+            max_raw = int(np.floor(self.depth_max_m / depth_scale + 1e-9))
+            clipped[(clipped < min_raw) | (clipped > max_raw)] = 0
+        else:
+            depth_m = clipped.astype(np.float64) * depth_scale
+            clipped[(depth_m < self.depth_min_m) | (depth_m > self.depth_max_m)] = 0
         return clipped
 
     def _configure_depth_filters(self):

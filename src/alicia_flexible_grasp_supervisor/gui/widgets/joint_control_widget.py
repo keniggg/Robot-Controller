@@ -1,4 +1,5 @@
 from PyQt5 import QtWidgets, QtCore
+import math
 import threading
 import time
 
@@ -14,6 +15,48 @@ try:
 except Exception:
     SwitchController = None
     SwitchControllerRequest = None
+
+
+class DirectCommandGesture:
+    """Latch the unedited joints for one direct-control gesture."""
+
+    def __init__(self):
+        self._held_target = None
+        self._edited_index = None
+
+    @property
+    def edited_index(self):
+        return self._edited_index
+
+    @property
+    def active(self):
+        return self._held_target is not None
+
+    def begin(self, baseline_target, edited_index):
+        target = list(baseline_target)
+        index = int(edited_index)
+        if not 0 <= index < len(target):
+            self.clear()
+            return False
+        self._held_target = target
+        self._edited_index = index
+        return True
+
+    def compose(self, slider_target):
+        current = list(slider_target)
+        if (
+            self._held_target is None or
+            self._edited_index is None or
+            len(self._held_target) != len(current)
+        ):
+            return current
+        target = list(self._held_target)
+        target[self._edited_index] = current[self._edited_index]
+        return target
+
+    def clear(self):
+        self._held_target = None
+        self._edited_index = None
 
 
 class DirectControlRecovery:
@@ -35,6 +78,9 @@ class DirectControlRecovery:
         self._actuation_status = ''
         self._feedback_ready = False
         self._pending_target = None
+        self._pending_edited_index = None
+        self._pending_edited_value = None
+        self._pending_rebase_unedited = True
         self._pending_deadline = 0.0
         self._pending_enable_attempted = False
         self._last_enable_request_time = float('-inf')
@@ -43,6 +89,12 @@ class DirectControlRecovery:
         self._latest_feedback_target = None
         self._sync_target_sent = False
         self._probe_target_sent = False
+        self._last_action_edited_index = None
+
+    @property
+    def last_action_edited_index(self):
+        with self._lock:
+            return self._last_action_edited_index
 
     @staticmethod
     def _state_name(status):
@@ -60,16 +112,34 @@ class DirectControlRecovery:
         with self._lock:
             self._last_joint_feedback_time = float(now_sec)
             self._latest_feedback_target = list(target)
+            if self._pending_rebase_unedited:
+                self._rebase_pending_target_to_feedback()
 
     def cancel(self):
         with self._lock:
             self._clear_pending()
 
-    def submit(self, target, now_sec):
+    def submit(
+        self,
+        target,
+        now_sec,
+        edited_index=None,
+        rebase_unedited=True,
+    ):
         """Record a user target and return (action, target, detail)."""
         now = float(now_sec)
         with self._lock:
             self._pending_target = list(target)
+            self._pending_edited_index = None
+            self._pending_edited_value = None
+            self._pending_rebase_unedited = bool(rebase_unedited)
+            if edited_index is not None:
+                index = int(edited_index)
+                if 0 <= index < len(self._pending_target):
+                    self._pending_edited_index = index
+                    self._pending_edited_value = self._pending_target[index]
+                    if self._pending_rebase_unedited:
+                        self._rebase_pending_target_to_feedback()
             self._pending_deadline = now + self.timeout_sec
             if (
                 now - self._last_enable_request_time >=
@@ -91,7 +161,7 @@ class DirectControlRecovery:
                     'clear',
                     None,
                     '直控恢复超时；驱动状态=%s；已丢弃未确认滑条目标，'
-                    '需要机械臂重新上电后再同步关节' % status,
+                    '请再次移动目标关节滑条以发起新的有界恢复' % status,
                 )
             return self._decide(now, allow_enable=True)
 
@@ -112,7 +182,7 @@ class DirectControlRecovery:
                     'clear',
                     None,
                     '有界验证步后未检测到真实关节运动；已丢弃完整滑条目标，'
-                    '需要机械臂重新上电后再同步关节',
+                    '没有重发使能；请再次移动目标关节滑条重试',
                 )
             # A rejected positive-enable request leaves the state blocked.
             # Do not even publish the zero-motion synchronization target until
@@ -135,6 +205,7 @@ class DirectControlRecovery:
                 if self._latest_feedback_target is None:
                     return 'wait', None, self._actuation_status
                 self._sync_target_sent = True
+                self._last_action_edited_index = None
                 return (
                     'sync',
                     list(self._latest_feedback_target),
@@ -143,7 +214,9 @@ class DirectControlRecovery:
             reason = str(self._actuation_status or '').partition(':')[2]
             if state == 'CONFIRMED':
                 target = list(self._pending_target)
+                edited_index = self._pending_edited_index
                 self._clear_pending()
+                self._last_action_edited_index = edited_index
                 return 'publish', target, self._actuation_status
             if reason == 'COMMAND_SYNCHRONIZED' and not self._probe_target_sent:
                 probe_target = self._bounded_probe_target()
@@ -156,12 +229,17 @@ class DirectControlRecovery:
                         '已丢弃未确认目标',
                     )
                 self._probe_target_sent = True
+                self._last_action_edited_index = (
+                    self._pending_edited_index
+                )
                 return 'probe', probe_target, self._actuation_status
             return 'wait', None, self._actuation_status
 
         if state == 'CONFIRMED' and self._feedback_ready:
             target = list(self._pending_target)
+            edited_index = self._pending_edited_index
             self._clear_pending()
+            self._last_action_edited_index = edited_index
             return 'publish', target, self._actuation_status
 
         if state == 'PENDING':
@@ -173,6 +251,18 @@ class DirectControlRecovery:
                 self._awaiting_feedback_after_enable = True
                 self._last_enable_request_time = now
                 self._sync_target_sent = False
+                self._probe_target_sent = False
+            elif reason == 'COMMAND_SYNCHRONIZED':
+                # A previous slider action may have completed the zero-motion
+                # synchronization but then been discarded because its delta
+                # was too small (or because it addressed only the gripper).
+                # Bind this new explicit arm-slider action to the already
+                # synchronized driver state. Require feedback newer than the
+                # new action, then proceed directly to its bounded probe;
+                # never leave COMMAND_SYNCHRONIZED as a terminal wait state.
+                self._awaiting_feedback_after_enable = True
+                self._last_enable_request_time = now
+                self._sync_target_sent = True
                 self._probe_target_sent = False
             return 'wait', None, self._actuation_status
 
@@ -208,7 +298,16 @@ class DirectControlRecovery:
             self._pending_target[index] - self._latest_feedback_target[index]
             for index in range(arm_joint_count)
         ]
-        joint_index = max(range(arm_joint_count), key=lambda index: abs(deltas[index]))
+        if (
+            self._pending_edited_index is not None and
+            0 <= int(self._pending_edited_index) < arm_joint_count
+        ):
+            joint_index = int(self._pending_edited_index)
+        else:
+            joint_index = max(
+                range(arm_joint_count),
+                key=lambda index: abs(deltas[index]),
+            )
         requested_delta = deltas[joint_index]
         if abs(requested_delta) < self.PROBE_REQUIRED_DELTA_RAD:
             return None
@@ -219,8 +318,27 @@ class DirectControlRecovery:
         )
         return probe_target
 
+    def _rebase_pending_target_to_feedback(self):
+        """Keep only the actively edited slider across autonomous arm motion."""
+        if (
+            self._pending_target is None or
+            self._latest_feedback_target is None or
+            self._pending_edited_index is None or
+            len(self._pending_target) != len(self._latest_feedback_target)
+        ):
+            return
+        index = int(self._pending_edited_index)
+        if not 0 <= index < len(self._pending_target):
+            return
+        rebased = list(self._latest_feedback_target)
+        rebased[index] = self._pending_edited_value
+        self._pending_target = rebased
+
     def _clear_pending(self):
         self._pending_target = None
+        self._pending_edited_index = None
+        self._pending_edited_value = None
+        self._pending_rebase_unedited = True
         self._pending_deadline = 0.0
         self._pending_enable_attempted = False
         self._awaiting_feedback_after_enable = False
@@ -230,19 +348,34 @@ class DirectControlRecovery:
 
 class JointControlWidget(QtWidgets.QWidget):
     state_signal = QtCore.pyqtSignal(object)
+    pose_target_changed = QtCore.pyqtSignal()
 
-    def __init__(self, color_topic=None, depth_topic=None):
+    def __init__(
+        self,
+        color_topic=None,
+        depth_topic=None,
+        show_feedback_angles=False,
+        arm_only=False,
+        calibration_mode=False,
+        preserve_controller_state_on_startup=None,
+    ):
         super().__init__()
         self._alive = True
         self._subscriber = None
-        self.names=['Joint1','Joint2','Joint3','Joint4','Joint5','Joint6','right_finger']
+        self.show_feedback_angles = bool(show_feedback_angles)
+        self.calibration_mode = bool(calibration_mode)
+        self.names=['Joint1','Joint2','Joint3','Joint4','Joint5','Joint6']
+        if not arm_only:
+            self.names.append('right_finger')
         self.pub=rospy.Publisher('/joint_commands', JointState, queue_size=10)
         self.enable_pub = rospy.Publisher('/demonstration', Bool, queue_size=1)
-        self.sliders=[]; self.labels=[]
+        self.sliders=[]; self.labels=[]; self.feedback_labels=[]
         self.current_state = None
         self.waypoints = []
         self._syncing_sliders = False
         self._pending_direct_publish = False
+        self._active_direct_slider_index = None
+        self._direct_gesture = DirectCommandGesture()
         self.direct_recovery = DirectControlRecovery(
             timeout_sec=rospy.get_param(
                 '/gui/direct_control_recovery_timeout_sec',
@@ -255,37 +388,71 @@ class JointControlWidget(QtWidgets.QWidget):
         )
         self.controller_names = ['alicia_controller', 'hand_controller']
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(14)
+        if self.calibration_mode:
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(8)
+        else:
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(14)
         controls = QtWidgets.QVBoxLayout()
         controls.setSpacing(0)
-        frame, body = panel('关节 / 夹爪控制')
+        panel_title = '手眼标定姿态控制' if self.calibration_mode else '关节 / 夹爪控制'
+        frame, body = panel(panel_title)
+        if self.calibration_mode:
+            body.setContentsMargins(10, 8, 10, 10)
+            body.setSpacing(6)
         controls.addWidget(frame)
 
         grid = QtWidgets.QGridLayout()
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(10)
+        grid.setHorizontalSpacing(8 if self.calibration_mode else 14)
+        grid.setVerticalSpacing(4 if self.calibration_mode else 10)
         body.addLayout(grid)
 
+        row_offset = 0
+        if self.show_feedback_angles:
+            target_header = QtWidgets.QLabel('滑条目标')
+            target_header.setObjectName('MutedLabel')
+            feedback_header = QtWidgets.QLabel('实时角度')
+            feedback_header.setObjectName('MutedLabel')
+            feedback_header.setAlignment(QtCore.Qt.AlignCenter)
+            grid.addWidget(target_header, 0, 2)
+            grid.addWidget(feedback_header, 0, 3)
+            row_offset = 1
+
         for row_index, name in enumerate(self.names):
+            grid_row = row_index + row_offset
             lab=QtWidgets.QLabel(name)
-            lab.setMinimumWidth(92)
+            lab.setMinimumWidth(68 if self.calibration_mode else 92)
             val=metric_chip('0.000')
-            val.setMinimumWidth(86)
+            val.setMinimumWidth(70 if self.calibration_mode else 86)
             val.setAlignment(QtCore.Qt.AlignCenter)
             s=QtWidgets.QSlider(QtCore.Qt.Horizontal)
             s.setMinimum(-3140); s.setMaximum(3140)
             if name=='right_finger':
                 s.setMinimum(0); s.setMaximum(50)
             s.valueChanged.connect(self.handle_slider_changed)
-            s.sliderReleased.connect(self.publish_direct_if_realtime)
-            grid.addWidget(lab, row_index, 0)
-            grid.addWidget(s, row_index, 1)
-            grid.addWidget(val, row_index, 2)
+            s.sliderPressed.connect(self.handle_slider_pressed)
+            s.sliderReleased.connect(self.handle_slider_released)
+            grid.addWidget(lab, grid_row, 0)
+            grid.addWidget(s, grid_row, 1)
+            grid.addWidget(val, grid_row, 2)
+            if self.show_feedback_angles:
+                feedback = metric_chip('--')
+                feedback.setObjectName('JointFeedbackAngle')
+                feedback.setMinimumWidth(78 if self.calibration_mode else 96)
+                feedback.setAlignment(QtCore.Qt.AlignCenter)
+                feedback.setToolTip('来自 /joint_states 的实时实测值')
+                grid.addWidget(feedback, grid_row, 3)
+                self.feedback_labels.append(feedback)
             self.sliders.append(s); self.labels.append(val)
 
         mode_row = QtWidgets.QHBoxLayout()
-        self.realtime_direct = QtWidgets.QCheckBox('关节直控模式（滑条直接驱动机械臂）')
+        direct_label = (
+            '关节直控（滑条直接驱动）'
+            if self.calibration_mode
+            else '关节直控模式（滑条直接驱动机械臂）'
+        )
+        self.realtime_direct = QtWidgets.QCheckBox(direct_label)
         self.realtime_direct.setChecked(self._default_direct_control_enabled())
         self.realtime_direct.toggled.connect(self.update_control_mode)
         self.command_conn_chip = metric_chip('/joint_commands 连接 0', accent=True)
@@ -310,7 +477,16 @@ class JointControlWidget(QtWidgets.QWidget):
         add_btn.clicked.connect(self.add_waypoint)
         clear_btn.clicked.connect(self.clear_waypoints)
         play_btn.clicked.connect(self.execute_waypoints)
-        for index, button in enumerate([sync_btn, self.plan_btn, self.exec_btn, add_btn, clear_btn, play_btn]):
+        action_buttons = [sync_btn]
+        if not self.calibration_mode:
+            action_buttons.extend([
+                self.plan_btn,
+                self.exec_btn,
+                add_btn,
+                clear_btn,
+                play_btn,
+            ])
+        for index, button in enumerate(action_buttons):
             actions.addWidget(button, index // 3, index % 3)
         body.addLayout(actions)
 
@@ -318,7 +494,10 @@ class JointControlWidget(QtWidgets.QWidget):
         self.status = QtWidgets.QLabel('等待操作')
         self.status.setObjectName('StateBanner')
         self.status.setWordWrap(True)
-        body.addWidget(self.waypoint_chip)
+        if self.calibration_mode:
+            self.status.setMaximumHeight(62)
+        if not self.calibration_mode:
+            body.addWidget(self.waypoint_chip)
         body.addWidget(self.status)
         controls.addStretch(1)
         layout.addLayout(controls, 5)
@@ -346,10 +525,12 @@ class JointControlWidget(QtWidgets.QWidget):
         self.direct_timer.timeout.connect(self.flush_direct_publish)
         self.direct_timer.start(50)
         self.update_control_mode(self.realtime_direct.isChecked(), apply_controller_switch=False)
-        if not bool(rospy.get_param(
+        if preserve_controller_state_on_startup is None:
+            preserve_controller_state_on_startup = bool(rospy.get_param(
                 '~preserve_controller_state_on_startup',
                 False,
-        )):
+            ))
+        if not preserve_controller_state_on_startup:
             QtCore.QTimer.singleShot(400, self._refresh_control_mode_later)
 
     def _refresh_control_mode_later(self):
@@ -422,14 +603,107 @@ class JointControlWidget(QtWidgets.QWidget):
     def update_labels(self):
         self.positions()
 
-    def handle_slider_changed(self):
+    def _current_feedback_target(self):
+        if self.current_state is None:
+            return None
+        name_to_pos = dict(zip(
+            self.current_state.name,
+            self.current_state.position,
+        ))
+        fallback = list(self.current_state.position)
+        target = []
+        for index, name in enumerate(self.names):
+            value = name_to_pos.get(
+                name,
+                fallback[index] if index < len(fallback) else None,
+            )
+            if value is None or not math.isfinite(float(value)):
+                return None
+            target.append(float(value))
+        return target
+
+    def _begin_direct_slider_gesture(self, edited_index):
+        index = int(edited_index)
+        baseline = self._current_feedback_target()
+        if baseline is None:
+            baseline = self.positions()
+        if not self._direct_gesture.begin(baseline, index):
+            return
+        # Refresh the visual targets once.  From this point until release,
+        # neither the visuals nor the published targets follow live feedback.
+        self._rebase_unedited_sliders_to_feedback(index)
+
+    def _end_direct_slider_gesture(self):
+        self._direct_gesture.clear()
+        self._active_direct_slider_index = None
+
+    def _rebase_unedited_sliders_to_feedback(self, edited_index):
+        """Set unedited slider visuals from feedback once at gesture start."""
+        if self.current_state is None:
+            return
+        name_to_pos = dict(zip(
+            self.current_state.name,
+            self.current_state.position,
+        ))
+        fallback = list(self.current_state.position)
+        self._syncing_sliders = True
+        try:
+            for index, (name, slider) in enumerate(zip(self.names, self.sliders)):
+                if index == int(edited_index):
+                    continue
+                value = name_to_pos.get(
+                    name,
+                    fallback[index] if index < len(fallback) else None,
+                )
+                if value is None or not math.isfinite(float(value)):
+                    continue
+                target = int(max(
+                    slider.minimum(),
+                    min(slider.maximum(), round(float(value) * 1000.0)),
+                ))
+                slider.blockSignals(True)
+                try:
+                    slider.setValue(target)
+                finally:
+                    slider.blockSignals(False)
+        finally:
+            self._syncing_sliders = False
+
+    def handle_slider_changed(self, _value=None):
+        sender = self.sender()
+        if sender in self.sliders:
+            self._active_direct_slider_index = self.sliders.index(sender)
+            if (
+                self.realtime_direct.isChecked() and
+                self._direct_gesture.edited_index !=
+                self._active_direct_slider_index
+            ):
+                # Keyboard/wheel changes do not emit sliderPressed, so start
+                # their short gesture on the first valueChanged event.
+                self._begin_direct_slider_gesture(
+                    self._active_direct_slider_index
+                )
         self.update_labels()
+        if not self._syncing_sliders:
+            self.pose_target_changed.emit()
         if self.realtime_direct.isChecked() and not self._syncing_sliders:
             self._pending_direct_publish = True
 
-    def publish_direct_if_realtime(self):
+    def handle_slider_pressed(self):
+        sender = self.sender()
+        if sender not in self.sliders:
+            return
+        self._active_direct_slider_index = self.sliders.index(sender)
+        if self.realtime_direct.isChecked():
+            self._begin_direct_slider_gesture(
+                self._active_direct_slider_index
+            )
+
+    def handle_slider_released(self):
         if self.realtime_direct.isChecked() and not self._syncing_sliders:
+            self._pending_direct_publish = False
             self.publish_direct('已发送关节直控目标')
+        self._end_direct_slider_gesture()
 
     def flush_direct_publish(self):
         if not self.__dict__.get('_alive', False):
@@ -439,16 +713,32 @@ class JointControlWidget(QtWidgets.QWidget):
             return
         if self._pending_direct_publish:
             self._pending_direct_publish = False
+            edited_index = self._direct_gesture.edited_index
+            slider_is_down = (
+                edited_index is not None and
+                self.sliders[edited_index].isSliderDown()
+            )
             self.publish_direct('已发送关节直控目标')
+            if not slider_is_down:
+                self._end_direct_slider_gesture()
             return
         action, target, detail = self.direct_recovery.poll(time.monotonic())
         self._apply_direct_recovery_action(action, target, detail)
 
     def publish_direct(self, message='已显式发送到 /joint_commands'):
-        pos = self.positions()
+        slider_pos = self.positions()
+        pos = self._direct_gesture.compose(slider_pos)
+        edited_index = self._direct_gesture.edited_index
+        if edited_index is None:
+            edited_index = self._active_direct_slider_index
         action, target, detail = self.direct_recovery.submit(
             pos,
             time.monotonic(),
+            edited_index=edited_index,
+            # The gesture already resolved stale GUI values from one fresh
+            # feedback snapshot.  Never replace its held joints with later
+            # feedback, which would ratchet physical drift into new targets.
+            rebase_unedited=not self._direct_gesture.active,
         )
         self._apply_direct_recovery_action(action, target, detail, message)
 
@@ -475,30 +765,34 @@ class JointControlWidget(QtWidgets.QWidget):
             )
             return
         if action == 'sync':
-            self._publish_joint_target(target)
+            self._publish_joint_target(target, edited_index=None)
             self.status.setText(
                 '已用最新实测关节姿态完成零运动同步；等待驱动确认后发送滑条目标'
             )
             return
         if action == 'probe':
-            self._publish_joint_target(target)
+            self._publish_joint_target(
+                target,
+                edited_index=self.direct_recovery.last_action_edited_index,
+            )
             self.status.setText(
                 '已沿滑条方向发送 0.025 rad 以内的有界验证步；'
                 '只有编码器确认真实运动后才会发送完整目标'
             )
             return
         if action == 'publish':
-            self._publish_joint_target(target)
+            self._publish_joint_target(
+                target,
+                edited_index=self.direct_recovery.last_action_edited_index,
+            )
             connections = self.pub.get_num_connections()
             self.status.setText('%s；订阅连接数=%d' % (published_message, connections))
             return
         if action == 'clear':
-            # A positive-enable request clears the driver's retained command
-            # before asking for torque-on. This bounds a failed recovery to
-            # the small probe and never emits the opposite torque-off value.
-            enable_msg = Bool()
-            enable_msg.data = False
-            self.enable_pub.publish(enable_msg)
+            # The failed handshake has already issued its one explicit
+            # positive-enable request.  Do not create an orphan PENDING state
+            # after discarding the user target; the next slider action owns
+            # the next bounded recovery attempt.
             self.status.setText(detail)
             return
         if action == 'timeout':
@@ -507,12 +801,24 @@ class JointControlWidget(QtWidgets.QWidget):
         if action == 'wait' and detail:
             self.status.setText('等待直控恢复：%s' % detail)
 
-    def _publish_joint_target(self, target):
+    def _publish_joint_target(self, target, edited_index=None):
         msg = JointState()
         msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = 'gui_direct'
+        msg.header.frame_id = (
+            'gui_direct_sync'
+            if edited_index is None
+            else 'gui_direct'
+        )
         msg.name = self.names
         msg.position = list(target)
+        msg.effort = [0.0] * len(msg.name)
+        if edited_index is not None:
+            index = int(edited_index)
+            if 0 <= index < len(msg.effort):
+                # One-hot intent metadata lets the real driver distinguish
+                # the one explicitly edited channel from the full GUI display
+                # vector. Ordinary JointState consumers ignore effort here.
+                msg.effort[index] = 1.0
         self.pub.publish(msg)
 
     def _actuation_status_cb(self, msg):
@@ -537,6 +843,47 @@ class JointControlWidget(QtWidgets.QWidget):
 
     def update_current_state(self, msg):
         self.current_state = msg
+        if not self.show_feedback_angles:
+            return
+        name_to_pos = dict(zip(msg.name, msg.position))
+        fallback = list(msg.position)
+        for index, (name, label) in enumerate(zip(self.names, self.feedback_labels)):
+            value = name_to_pos.get(
+                name,
+                fallback[index] if index < len(fallback) else None,
+            )
+            label.setText(self._format_feedback_value(name, value))
+
+    def feedback_positions_degrees(self):
+        """Return the latest six arm encoder angles in degrees."""
+        if self.current_state is None:
+            return None
+        name_to_pos = dict(zip(self.current_state.name, self.current_state.position))
+        fallback = list(self.current_state.position)
+        values = []
+        for index, name in enumerate(self.names[:6]):
+            value = name_to_pos.get(
+                name,
+                fallback[index] if index < len(fallback) else None,
+            )
+            if value is None or not math.isfinite(float(value)):
+                return None
+            values.append(math.degrees(float(value)))
+        return values
+
+    @staticmethod
+    def _format_feedback_value(name, value):
+        if value is None:
+            return '--'
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return '--'
+        if not math.isfinite(value):
+            return '--'
+        if name == 'right_finger':
+            return '%.3f m' % value
+        return '%+.2f°' % math.degrees(value)
 
     def sync_current_state(self):
         if self.current_state is None:

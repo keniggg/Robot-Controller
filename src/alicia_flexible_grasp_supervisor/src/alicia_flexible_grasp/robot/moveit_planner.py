@@ -481,12 +481,28 @@ class MoveItPlanner:
         poses = tuple(targets or ())
         names = tuple(stage_names or ())
         linear_flags = tuple(linear or ())
+        total_path_cost = 0.0
+        max_joint_delta = 0.0
+        total_duration = 0.0
+        hardware_limiting_joint = ''
+        max_stage_duration = 0.0
+
+        def sequence_metrics():
+            return {
+                'path_cost': total_path_cost,
+                'max_delta': max_joint_delta,
+                'joint_duration_lower_bound_sec': total_duration,
+                # Historical alias retained for existing callers.
+                'execution_duration_lower_bound_sec': total_duration,
+                'hardware_limiting_joint': hardware_limiting_joint,
+            }
+
         if not self.ready:
             return (
                 False,
                 'MOVEIT_CHECK_ERROR',
                 '',
-                {'path_cost': 0.0, 'max_delta': 0.0},
+                sequence_metrics(),
                 self.error or 'MoveIt not ready',
             )
         if not poses or len(poses) > 5:
@@ -494,7 +510,7 @@ class MoveItPlanner:
                 False,
                 'MOVEIT_CHECK_ERROR',
                 '',
-                {'path_cost': 0.0, 'max_delta': 0.0},
+                sequence_metrics(),
                 'strict pose sequence requires between one and five targets',
             )
         if len(names) != len(poses) or len(linear_flags) != len(poses):
@@ -502,7 +518,7 @@ class MoveItPlanner:
                 False,
                 'MOVEIT_CHECK_ERROR',
                 '',
-                {'path_cost': 0.0, 'max_delta': 0.0},
+                sequence_metrics(),
                 'strict pose sequence metadata length does not match targets',
             )
         if not hasattr(self, 'robot') or not hasattr(self.robot, 'get_current_state'):
@@ -510,12 +526,10 @@ class MoveItPlanner:
                 False,
                 'MOVEIT_CHECK_ERROR',
                 names[0],
-                {'path_cost': 0.0, 'max_delta': 0.0},
+                sequence_metrics(),
                 'strict pose sequence current robot state is unavailable',
             )
 
-        total_path_cost = 0.0
-        max_joint_delta = 0.0
         self._last_pose_plan = None
         try:
             start_state = deepcopy(self.robot.get_current_state())
@@ -532,10 +546,7 @@ class MoveItPlanner:
                         False,
                         'MOVEIT_TIMEOUT',
                         str(stage_name),
-                        {
-                            'path_cost': total_path_cost,
-                            'max_delta': max_joint_delta,
-                        },
+                        sequence_metrics(),
                         'strict sequence deadline consumed before %s'
                         % stage_name,
                     )
@@ -562,10 +573,7 @@ class MoveItPlanner:
                         False,
                         'MOVEIT_TIMEOUT',
                         str(stage_name),
-                        {
-                            'path_cost': total_path_cost,
-                            'max_delta': max_joint_delta,
-                        },
+                        sequence_metrics(),
                         'strict sequence deadline consumed during %s'
                         % stage_name,
                     )
@@ -574,29 +582,51 @@ class MoveItPlanner:
                         False,
                         'MOVEIT_UNREACHABLE',
                         str(stage_name),
-                        {
-                            'path_cost': total_path_cost,
-                            'max_delta': max_joint_delta,
-                        },
+                        sequence_metrics(),
                         'strict sequence %s unreachable: %s'
                         % (stage_name, reason),
                     )
+                trajectory = getattr(plan, 'joint_trajectory', None)
+                points = list(getattr(trajectory, 'points', []) or [])
+                if len(points) < 2:
+                    return (
+                        False,
+                        'MOVEIT_UNREACHABLE',
+                        str(stage_name),
+                        sequence_metrics(),
+                        'strict sequence %s returned an empty or incomplete trajectory'
+                        % stage_name,
+                    )
                 metrics = self._plan_joint_path_metrics(plan)
+                stage_duration = float(
+                    metrics.get(
+                        'joint_duration_lower_bound_sec',
+                        metrics.get('execution_duration_lower_bound_sec', 0.0),
+                    )
+                )
+                if not math.isfinite(stage_duration) or stage_duration < 0.0:
+                    raise ValueError(
+                        'strict sequence %s has non-finite joint duration'
+                        % stage_name
+                    )
                 total_path_cost += max(0.0, float(metrics['path_cost']))
                 max_joint_delta = max(
                     max_joint_delta,
                     max(0.0, float(metrics['max_delta'])),
                 )
+                total_duration += stage_duration
+                if stage_duration > max_stage_duration:
+                    max_stage_duration = stage_duration
+                    hardware_limiting_joint = str(
+                        metrics.get('hardware_limiting_joint', '') or ''
+                    )
                 next_state = self._robot_state_after_plan(start_state, plan)
                 if next_state is None:
                     return (
                         False,
                         'MOVEIT_CHECK_ERROR',
                         str(stage_name),
-                        {
-                            'path_cost': total_path_cost,
-                            'max_delta': max_joint_delta,
-                        },
+                        sequence_metrics(),
                         'strict sequence %s has no usable terminal joint state'
                         % stage_name,
                     )
@@ -605,25 +635,29 @@ class MoveItPlanner:
                 True,
                 '',
                 '',
-                {
-                    'path_cost': total_path_cost,
-                    'max_delta': max_joint_delta,
-                },
+                sequence_metrics(),
                 (
                     'strict pose sequence planned stages=%s '
-                    'joint_path_cost=%.3f joint_max_delta=%.3f'
+                    'joint_path_cost=%.3f joint_max_delta=%.3f '
+                    'joint_duration_lower_bound_sec=%.3f '
+                    'execution_duration_lower_bound_sec=%.3f '
+                    'hardware_limiting_joint=%s'
                 )
-                % (','.join(str(name) for name in names), total_path_cost, max_joint_delta),
+                % (
+                    ','.join(str(name) for name in names),
+                    total_path_cost,
+                    max_joint_delta,
+                    total_duration,
+                    total_duration,
+                    hardware_limiting_joint or 'unavailable',
+                ),
             )
         except Exception as exc:
             return (
                 False,
                 'MOVEIT_CHECK_ERROR',
                 '',
-                {
-                    'path_cost': total_path_cost,
-                    'max_delta': max_joint_delta,
-                },
+                sequence_metrics(),
                 'strict pose sequence exception: %s' % exc,
             )
         finally:
@@ -2200,26 +2234,114 @@ class MoveItPlanner:
         metrics = cached.get('metrics') or {}
         if not metrics:
             return ''
-        return ' joint_path_cost=%.3f joint_max_delta=%.3f' % (
+        message = ' joint_path_cost=%.3f joint_max_delta=%.3f' % (
             float(metrics.get('path_cost', 0.0)),
             float(metrics.get('max_delta', 0.0)),
         )
+        duration_lower_bound = float(
+            metrics.get('execution_duration_lower_bound_sec', 0.0)
+        )
+        limiting_joint = str(
+            metrics.get('hardware_limiting_joint', '') or ''
+        )
+        if duration_lower_bound > 0.0 and limiting_joint:
+            message += (
+                ' joint_duration_lower_bound_sec=%.3f'
+                ' execution_duration_lower_bound_sec=%.3f'
+                ' hardware_limiting_joint=%s'
+            ) % (
+                duration_lower_bound,
+                duration_lower_bound,
+                limiting_joint,
+            )
+        return message
 
-    @staticmethod
-    def _plan_joint_path_metrics(plan):
+    def _plan_joint_path_metrics(self, plan):
         trajectory = getattr(plan, 'joint_trajectory', None)
         points = list(getattr(trajectory, 'points', []) or [])
         positions = [list(getattr(point, 'positions', []) or []) for point in points]
+        # Legacy callers may provide trajectory points without positions (for
+        # example, a lightweight success sentinel).  Ignore those here; strict
+        # sequence validation below rejects incomplete trajectories fail-closed.
         positions = [values for values in positions if values]
+        if any(
+            not all(math.isfinite(float(value)) for value in values)
+            for values in positions
+        ):
+            raise ValueError('joint trajectory contains non-finite positions')
         if len(positions) < 2:
-            return {'path_cost': 0.0, 'max_delta': 0.0}
+            return {
+                'path_cost': 0.0,
+                'max_delta': 0.0,
+                'execution_duration_lower_bound_sec': 0.0,
+                'joint_duration_lower_bound_sec': 0.0,
+                'hardware_limiting_joint': '',
+            }
         path_cost = 0.0
+        joint_count = min(len(values) for values in positions)
+        joint_travel = [0.0] * joint_count
         for previous, current in zip(positions, positions[1:]):
-            size = min(len(previous), len(current))
-            path_cost += math.sqrt(sum((float(current[i]) - float(previous[i])) ** 2 for i in range(size)))
-        size = min(len(positions[0]), len(positions[-1]))
-        max_delta = max(abs(float(positions[-1][i]) - float(positions[0][i])) for i in range(size))
-        return {'path_cost': float(path_cost), 'max_delta': float(max_delta)}
+            deltas = [
+                float(current[index]) - float(previous[index])
+                for index in range(joint_count)
+            ]
+            path_cost += math.sqrt(sum(delta * delta for delta in deltas))
+            for index, delta in enumerate(deltas):
+                joint_travel[index] += abs(delta)
+        max_delta = max(
+            abs(float(positions[-1][index]) - float(positions[0][index]))
+            for index in range(joint_count)
+        )
+
+        joint_names = list(getattr(trajectory, 'joint_names', []) or [])
+        global_limit = float(
+            getattr(self, 'strict_execution_max_joint_velocity_rad_s', 0.08)
+        )
+        if not math.isfinite(global_limit) or global_limit <= 0.0:
+            raise ValueError('joint velocity limit is non-finite or non-positive')
+        global_limit = max(1e-6, global_limit)
+        configured_limits = dict(
+            getattr(
+                self,
+                'strict_execution_joint_velocity_limits_rad_s',
+                {},
+            )
+            or {}
+        )
+        duration_candidates = []
+        for index, travel in enumerate(joint_travel):
+            joint_name = (
+                str(joint_names[index])
+                if index < len(joint_names)
+                else 'joint_%d' % index
+            )
+            limit = global_limit
+            if joint_name in configured_limits:
+                configured_limit = float(configured_limits[joint_name])
+                if not math.isfinite(configured_limit) or configured_limit <= 0.0:
+                    raise ValueError(
+                        'joint velocity limit for %s is non-finite or non-positive'
+                        % joint_name
+                    )
+                limit = min(limit, configured_limit)
+            duration_candidates.append((float(travel) / limit, joint_name))
+        duration_lower_bound, limiting_joint = max(
+            duration_candidates or [(0.0, '')],
+            key=lambda item: item[0],
+        )
+        if not math.isfinite(path_cost) or not math.isfinite(max_delta):
+            raise ValueError('joint trajectory metrics are non-finite')
+        if not math.isfinite(duration_lower_bound) or duration_lower_bound < 0.0:
+            raise ValueError('joint trajectory duration is non-finite')
+        return {
+            'path_cost': float(path_cost),
+            'max_delta': float(max_delta),
+            'execution_duration_lower_bound_sec': float(
+                duration_lower_bound
+            ),
+            'joint_duration_lower_bound_sec': float(duration_lower_bound),
+            'hardware_limiting_joint': str(limiting_joint),
+        }
 
     def _cached_plan_goal_reached_with_hardware_tolerance(self, plan):
         tolerance = max(

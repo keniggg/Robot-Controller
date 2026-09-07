@@ -6,14 +6,13 @@ handeye:
   parent_frame: "tool0"
   camera_frame: "camera_link"
   child_frame: "camera_link"
-  calibration_file: "~/.ros/easy_handeye/d405_cc200_recalib_20260802_eye_on_hand.yaml"
-  # 2026-08-02 operator-authorized pruned-28 provisional deployment. Samples
-  # 1 and 30 were excluded and the Daniilidis result was persisted for
-  # continued testing. Rotation passes the internal gate, but translation
-  # cross-validation remains outside the formal 3/5 mm RMS/maximum contract
-  # at 3.146/5.609 mm; this is not a formal calibration pass.
-  translation_xyz: [-0.07871787621671505, 0.005044897787180159, -0.13783896256445793]
-  rotation_xyzw: [0.020886305332462274, -0.7227629402161271, 0.02978465572232033, 0.6901379346066996]
+  calibration_file: "~/.ros/easy_handeye/d405_cc200_recalib_20260809_eye_on_hand.yaml"
+  # 2026-08-10 CC200 pruned-27 formal deployment. Original samples 8, 26
+  # and 27 were excluded after raw-sample backup. The OpenCV/Park result
+  # passed the five-fold 3/5 mm and 1/2 deg contract at 2.812/4.606 mm and
+  # 0.863/1.351 deg.
+  translation_xyz: [-0.08327671107922277, 0.004843742371779117, -0.12907560357461276]
+  rotation_xyzw: [0.005929097277682129, -0.7167581240677906, 0.018061735450252286, 0.6970627024169479]
   publish_static_tf: true
   use_tf: true
   # 感知线程只处理最新帧后，使用最新 TF 可避免时间戳 TF 查询失败时落到错误静态兜底。

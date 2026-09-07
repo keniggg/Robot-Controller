@@ -21,6 +21,14 @@ from alicia_flexible_grasp.grasp.tabletop_geometry_candidates import (  # noqa: 
 from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
     GripperGeometry,
 )
+from alicia_flexible_grasp.vision.multiview_surface import (  # noqa: E402
+    SurfaceView,
+    append_registered_view,
+    fused_surface_from_view,
+)
+from alicia_flexible_grasp.vision.target_observation import (  # noqa: E402
+    TargetTrackIdentity,
+)
 
 
 GRIPPER = GripperGeometry(
@@ -55,6 +63,38 @@ def box_cloud(size_xyz, yaw_rad=0.0):
     return np.asarray(points, dtype=float).dot(rotation_about_z(yaw_rad).T)
 
 
+def measured_fused_surface(two_sides=True):
+    identity = TargetTrackIdentity.from_stream(3, 9)
+    xs = np.linspace(-0.020, 0.020, 17)
+    ys = np.linspace(-0.0175, 0.0175, 15)
+    zs = np.linspace(0.0, 0.021, 15)
+    top = np.asarray([(x, y, 0.021) for x in xs for y in ys])
+    negative = np.asarray(
+        [(x, -0.0175, z) for x in xs for z in zs[:-1]]
+    )
+    reference = SurfaceView(
+        identity, 1_000_000_000, np.vstack((top, negative)),
+        np.array([0.0, 0.0, 1.0]), 0.0, 12,
+    )
+    surface = fused_surface_from_view(reference)
+    if not two_sides:
+        top_view = SurfaceView(
+            identity, 1_000_000_000, top,
+            np.array([0.0, 0.0, 1.0]), 0.0, 12,
+        )
+        return fused_surface_from_view(top_view)
+    positive = np.asarray(
+        [(x, 0.0175, z) for x in xs for z in zs[:-1]]
+    )
+    moving = SurfaceView(
+        identity, 1_100_000_000, np.vstack((top, positive)),
+        np.array([0.0, 0.0, 1.0]), 0.0, 12,
+    )
+    registration, surface = append_registered_view(surface, reference, moving)
+    assert registration.ok
+    return surface
+
+
 def carton_result(**overrides):
     values = {
         'object_points_base': box_cloud((0.051, 0.035, 0.011)),
@@ -69,6 +109,71 @@ def carton_result(**overrides):
     return generate_tabletop_proposals(**values)
 
 
+def test_top_only_fused_surface_cannot_gain_contact_from_complete_obb():
+    result = carton_result(
+        fused_surface=measured_fused_surface(two_sides=False),
+        finger_geometry=GRIPPER,
+        obb_center_base=np.array([0.0, 0.0, 0.0105]),
+        obb_size_xyz_m=np.array([0.051, 0.035, 0.021]),
+    )
+
+    assert not result.ok
+    assert result.failure_code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+def test_registered_opposing_views_supply_proposal_width_height_and_provenance():
+    result = carton_result(
+        fused_surface=measured_fused_surface(),
+        finger_geometry=GRIPPER,
+        obb_center_base=np.array([0.0, 0.0, 0.0105]),
+        obb_size_xyz_m=np.array([0.051, 0.035, 0.021]),
+    )
+
+    assert result.ok
+    best = result.proposals[0]
+    assert best.required_open_width_m == pytest.approx(0.039, abs=0.0025)
+    assert best.negative_contact_count >= 12
+    assert best.positive_contact_count >= 12
+    assert best.audit['negative_jaw_unique_view_count'] >= 1
+    assert best.audit['positive_jaw_unique_view_count'] >= 1
+    assert best.audit['measured_width_m'] == pytest.approx(0.035, abs=0.0025)
+    assert (
+        best.audit['bilateral_contact_height_max_m']
+        > best.audit['bilateral_contact_height_min_m']
+    )
+    assert best.audit['contact_height_bounds_source'] == (
+        'fused_measured_bilateral_surface'
+    )
+
+
+def test_obb_height_cannot_change_fused_measured_proposals():
+    surface = measured_fused_surface()
+    common = {
+        'fused_surface': surface,
+        'finger_geometry': GRIPPER,
+        'obb_center_base': np.array([0.0, 0.0, 0.0105]),
+    }
+    short = carton_result(
+        **common,
+        obb_size_xyz_m=np.array([0.051, 0.035, 0.021]),
+    )
+    tall = carton_result(
+        **common,
+        obb_size_xyz_m=np.array([0.051, 0.035, 0.081]),
+    )
+
+    assert short.ok and tall.ok
+    assert [proposal.audit for proposal in short.proposals] == [
+        proposal.audit for proposal in tall.proposals
+    ]
+    for first, second in zip(short.proposals, tall.proposals):
+        np.testing.assert_array_equal(
+            first.contact_center_base, second.contact_center_base
+        )
+        np.testing.assert_array_equal(first.jaw_axis_base, second.jaw_axis_base)
+        assert first.required_open_width_m == second.required_open_width_m
+
+
 def test_real_carton_prefers_35mm_side_and_requires_39mm():
     result = carton_result()
 
@@ -78,6 +183,39 @@ def test_real_carton_prefers_35mm_side_and_requires_39mm():
     assert best.required_open_width_m == pytest.approx(0.039, abs=5e-4)
     assert abs(np.dot(best.jaw_axis_base, [0.0, 1.0, 0.0])) > 0.999
     assert np.dot(best.insertion_axis_base, [0.0, 0.0, 1.0]) < -0.999
+
+
+def test_width_projection_trim_ignores_sparse_mask_edge_outliers():
+    points = box_cloud((0.051, 0.035, 0.011))
+    points = np.vstack(
+        (
+            points,
+            np.array(
+                [
+                    [0.0, -0.021, 0.006],
+                    [0.0, 0.021, 0.006],
+                ],
+                dtype=float,
+            ),
+        )
+    )
+
+    result = carton_result(
+        object_points_base=points,
+        config=TabletopGeometryConfig(
+            opening_fit_clearance_each_side_m=0.0005,
+            width_projection_trim_fraction=0.01,
+        ),
+    )
+
+    assert result.ok
+    best = result.proposals[0]
+    assert best.required_open_width_m == pytest.approx(0.036, abs=5e-4)
+    assert best.audit['width_projection_trim_fraction'] == pytest.approx(0.01)
+    assert (
+        best.audit['projection_raw_max_m']
+        - best.audit['projection_raw_min_m']
+    ) == pytest.approx(0.042)
 
 
 def test_visible_cloud_bias_does_not_move_tabletop_contact_center():

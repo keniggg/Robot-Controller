@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import time
 
+import numpy as np
 import rospy
 from sensor_msgs.msg import Image
 try:
@@ -14,6 +15,9 @@ class CameraNode:
         self.cfg = rospy.get_param('/camera', {})
         self.color_topic = self.cfg.get('color_topic', '/supervisor/camera/color/image_raw')
         self.depth_topic = self.cfg.get('depth_topic', '/supervisor/camera/depth/image_raw')
+        self.depth_preview_topic = str(self.cfg.get('depth_preview_topic', '') or '')
+        self.depth_preview_width = max(1, int(self.cfg.get('depth_preview_width', 320)))
+        self.depth_preview_height = max(1, int(self.cfg.get('depth_preview_height', 240)))
         self.frame_id = self.cfg.get('frame_id', 'camera_color_optical_frame')
         self.width = self.cfg.get('width', 640)
         self.height = self.cfg.get('height', 480)
@@ -32,6 +36,10 @@ class CameraNode:
         self.bridge = CvBridge() if CvBridge else None
         self.pub_color = rospy.Publisher(self.color_topic, Image, queue_size=2)
         self.pub_depth = rospy.Publisher(self.depth_topic, Image, queue_size=2)
+        self.pub_depth_preview = (
+            rospy.Publisher(self.depth_preview_topic, Image, queue_size=1)
+            if self.depth_preview_topic else None
+        )
         simulate = bool(self.cfg.get('simulate', False))
         self.cam = None
         self._camera_started = False
@@ -128,6 +136,40 @@ class CameraNode:
         msg.header.frame_id = self.frame_id
         pub.publish(msg)
 
+    @staticmethod
+    def _resize_depth_preview(depth, width, height):
+        array = np.asanyarray(depth)
+        source_height, source_width = array.shape[:2]
+        width = max(1, int(width))
+        height = max(1, int(height))
+        if (source_width, source_height) == (width, height):
+            return array
+        x_indices = np.linspace(
+            0,
+            source_width - 1,
+            width,
+        ).astype(np.intp)
+        y_indices = np.linspace(
+            0,
+            source_height - 1,
+            height,
+        ).astype(np.intp)
+        return array[np.ix_(y_indices, x_indices)]
+
+    def publish_depth_preview(self, depth, stamp):
+        pub = self.pub_depth_preview
+        if pub is None:
+            return
+        connection_count = getattr(pub, 'get_num_connections', lambda: 1)()
+        if int(connection_count) <= 0:
+            return
+        preview = self._resize_depth_preview(
+            depth,
+            self.depth_preview_width,
+            self.depth_preview_height,
+        )
+        self.publish_image(pub, preview, '16UC1', stamp)
+
     def _publish_runtime_camera_params(self):
         if hasattr(self.cam, 'depth_scale'):
             depth_scale = float(self.cam.depth_scale)
@@ -137,10 +179,26 @@ class CameraNode:
     def _publication_is_due(self):
         now = self._monotonic()
         previous = self._last_publish_monotonic
-        if previous is not None and now >= previous:
-            if (now - previous) < self._publish_period_sec:
-                return False
-        self._last_publish_monotonic = now
+        if previous is None or now < previous:
+            self._last_publish_monotonic = now
+            return True
+
+        # Keep the ideal publication clock instead of rebasing it to the
+        # hardware-frame timestamp. Rebasing quantizes a 30 FPS camera with a
+        # 20 FPS publication target to every second frame (about 15 FPS).
+        # Advancing the scheduled clock produces the intended alternating
+        # one-frame/two-frame cadence without publishing bursts after a stall.
+        scheduled = previous + self._publish_period_sec
+        epsilon = min(1e-6, self._publish_period_sec * 1e-3)
+        if now + epsilon < scheduled:
+            return False
+        elapsed_periods = max(
+            0,
+            int((now - scheduled + epsilon) / self._publish_period_sec),
+        )
+        self._last_publish_monotonic = (
+            scheduled + elapsed_periods * self._publish_period_sec
+        )
         return True
 
     def _pace_simulated_camera(self):
@@ -169,6 +227,7 @@ class CameraNode:
                 self.publish_image(self.pub_color, color, 'bgr8', stamp)
             if depth is not None:
                 self.publish_image(self.pub_depth, depth, '16UC1', stamp)
+                self.publish_depth_preview(depth, stamp)
             # RealSense wait_for_frames() already blocks until the next hardware
             # frame. Sleeping again here halves the effective camera rate.
             # Simulated reads return immediately, so they still need pacing.

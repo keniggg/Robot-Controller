@@ -11,3 +11,12 @@ string diagnostic
 string candidate_source
 string[] candidate_source_lineage
 bool has_candidate_model_width
+string target_track_id
+string refinement_status
+uint32 refinement_inlier_count
+float32 refinement_overlap_fraction
+float32 refinement_rmse_m
+float32 refinement_translation_m
+float32 refinement_rotation_deg
+bool refinement_source_clipped
+uint32 fused_view_count

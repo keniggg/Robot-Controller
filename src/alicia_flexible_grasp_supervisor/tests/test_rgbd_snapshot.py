@@ -10,6 +10,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT / 'src') not in sys.path:
     sys.path.insert(0, str(ROOT / 'src'))
 
+from alicia_flexible_grasp.vision.target_observation import TargetTrackIdentity
+
 from alicia_flexible_grasp.vision.rgbd_snapshot import (
     DepthQuality,
     RgbdSample,
@@ -48,6 +50,8 @@ def sample(depth_value, mask, stamp, joints=None, bbox=(5, 4, 20, 12)):
         bbox=bbox,
         object_msg=types.SimpleNamespace(detected=True),
         stamp_sec=float(stamp),
+        target_epoch=0,
+        target_identity=TargetTrackIdentity.from_stream(0, 0),
         frame_id='camera_link',
         joint_positions=np.asarray(joints or [0.0] * 6, dtype=float),
     )
@@ -87,7 +91,7 @@ def add_complete_sample(buffer, stamp):
     buffer.update_color(color, stamp, 'camera_link')
     buffer.update_depth(depth, stamp, 'camera_link')
     buffer.update_mask(mask, stamp, 'camera_link')
-    buffer.update_object(detected, stamp)
+    buffer.update_object(detected, stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
 
 def add_identity_bound_sample(buffer, stamp, target_identity):
@@ -96,7 +100,7 @@ def add_identity_bound_sample(buffer, stamp, target_identity):
     mask = np.ones((3, 4), dtype=np.uint8) * 255
     detected = types.SimpleNamespace(
         detected=True,
-        label=target_identity[1],
+        label='carton',
         bbox_x=0,
         bbox_y=0,
         bbox_width=4,
@@ -109,7 +113,7 @@ def add_identity_bound_sample(buffer, stamp, target_identity):
     buffer.update_object(
         detected,
         stamp,
-        target_epoch=target_identity[0],
+        target_epoch=target_identity.epoch,
         target_identity=target_identity,
     )
 
@@ -121,7 +125,7 @@ def test_zero_timeout_polls_accumulate_low_rate_exact_samples_persistently():
         source_clock_ns=lambda: source_now_ns[0],
         monotonic_clock=lambda: monotonic_now[0],
     )
-    identity = (3, 'carton', 'carton_segment')
+    identity = TargetTrackIdentity.from_stream(0, 3)
 
     for index, stamp_ns in enumerate(
         (10_000_000_000, 10_670_000_000, 11_340_000_000)
@@ -154,8 +158,8 @@ def test_persistent_window_never_mixes_target_identity_epochs():
         source_clock_ns=lambda: source_now_ns[0],
         monotonic_clock=lambda: monotonic_now[0],
     )
-    old_identity = (7, 'carton', 'carton_segment')
-    new_identity = (8, 'carton', 'carton_segment')
+    old_identity = TargetTrackIdentity.from_stream(0, 7)
+    new_identity = TargetTrackIdentity.from_stream(0, 8)
 
     for index, identity in enumerate(
         (old_identity, old_identity, new_identity, new_identity)
@@ -201,7 +205,7 @@ def test_persistent_window_never_mixes_target_identity_epochs():
 
 def test_explicit_identity_mask_mode_switch_keeps_only_current_window_key():
     buffer = synchronized_buffer_at(30_000_000_000)
-    identity = (9, 'carton', 'carton_segment')
+    identity = TargetTrackIdentity.from_stream(0, 9)
     add_identity_bound_sample(buffer, 30.0, identity)
 
     assert len(
@@ -236,7 +240,7 @@ def test_persistent_window_caps_one_hundred_720p_frame_equivalents_to_count():
         source_clock_ns=lambda: source_now_ns[0],
         monotonic_clock=lambda: monotonic_now[0],
     )
-    identity = (10, 'carton', 'carton_segment')
+    identity = TargetTrackIdentity.from_stream(0, 10)
     requested_count = 3
     for index in range(100):
         stamp_ns = 40_000_000_000 + index * 100_000_000
@@ -271,7 +275,7 @@ def test_persistent_window_materializes_only_newest_count_from_large_backlog():
         source_clock_ns=lambda: source_now_ns[0],
         monotonic_clock=lambda: 70.0,
     )
-    identity = (11, 'carton', 'carton_segment')
+    identity = TargetTrackIdentity.from_stream(0, 11)
     for index in range(100):
         stamp_ns = 60_000_000_000 + index * 100_000_000
         source_now_ns[0] = stamp_ns
@@ -690,7 +694,7 @@ def test_synchronized_buffer_requires_exact_timestamp_components_and_returns_cop
         buffer.update_color(color, stamp, 'camera_link')
         buffer.update_depth(depth, stamp + 0.001, 'camera_link')
         buffer.update_mask(mask, stamp, 'camera_link')
-        buffer.update_object(detected, stamp)
+        buffer.update_object(detected, stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     assert buffer.wait_for_samples(3, 0.01, require_mask=True, max_age_sec=10.0) == []
 
@@ -724,6 +728,7 @@ def test_detect_buffer_ignores_mask_but_requires_detected_object():
                 bbox_height=3,
             ),
             stamp,
+            target_identity=TargetTrackIdentity.from_stream(0, 0),
         )
 
     assert buffer.wait_for_samples(3, 0.01, require_mask=False, max_age_sec=10.0) == []
@@ -737,6 +742,7 @@ def test_detect_buffer_ignores_mask_but_requires_detected_object():
             bbox_height=3,
         ),
         2.03,
+        target_identity=TargetTrackIdentity.from_stream(0, 0),
     )
     samples = buffer.wait_for_samples(3, 0.01, require_mask=False, max_age_sec=10.0)
 
@@ -759,7 +765,7 @@ def test_buffer_rejects_components_from_different_camera_frames():
     for stamp in (2.00, 2.03, 2.06):
         buffer.update_color(color, stamp, 'camera_link')
         buffer.update_depth(depth, stamp, 'different_camera')
-        buffer.update_object(detected, stamp)
+        buffer.update_object(detected, stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     assert buffer.wait_for_samples(3, 0.01, require_mask=False, max_age_sec=10.0) == []
 
@@ -784,7 +790,7 @@ def test_wait_for_samples_blocks_until_three_complete_entries_arrive():
             buffer.update_color(color, stamp, 'camera_link')
             buffer.update_depth(depth, stamp, 'camera_link')
             buffer.update_mask(mask, stamp, 'camera_link')
-            buffer.update_object(detected, stamp)
+            buffer.update_object(detected, stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     thread = threading.Thread(target=publish)
     thread.start()
@@ -833,7 +839,7 @@ def test_request_collector_accumulates_three_fresh_one_hz_samples_past_shared_re
             source_now_ns[0] = stamp_ns + 800_000_000
             monotonic_now[0] = 10.8 + index
             buffer.update_mask(mask, stamp, 'camera_link')
-            buffer.update_object(detected, stamp)
+            buffer.update_object(detected, stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
             assert admitted[index].wait(1.0)
 
     thread = threading.Thread(target=publish)
@@ -893,7 +899,7 @@ def test_request_collector_enforces_bounded_source_stamp_span():
             stamp = stamp_ns * 1e-9
             buffer.update_color(color, stamp, 'camera_link')
             buffer.update_depth(depth, stamp, 'camera_link')
-            buffer.update_object(detected, stamp)
+            buffer.update_object(detected, stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
             assert admitted[index].wait(1.0)
         monotonic_now[0] = 14.1
         buffer.update_joints([0.0] * 6)
@@ -948,7 +954,7 @@ def test_request_collector_invalidates_same_stamp_mask_updated_to_empty():
         buffer.update_color(color, 1.0, 'camera_link')
         buffer.update_depth(depth, 1.0, 'camera_link')
         buffer.update_mask(mask, 1.0, 'camera_link')
-        buffer.update_object(detected, 1.0)
+        buffer.update_object(detected, 1.0, target_identity=TargetTrackIdentity.from_stream(0, 0))
         assert first_admitted.wait(1.0)
         monotonic_now[0] = 10.1
         buffer.update_mask(np.zeros_like(mask), 1.0, 'camera_link')
@@ -957,14 +963,14 @@ def test_request_collector_invalidates_same_stamp_mask_updated_to_empty():
         buffer.update_color(color, 2.0, 'camera_link')
         buffer.update_depth(depth, 2.0, 'camera_link')
         buffer.update_mask(mask, 2.0, 'camera_link')
-        buffer.update_object(detected, 2.0)
+        buffer.update_object(detected, 2.0, target_identity=TargetTrackIdentity.from_stream(0, 0))
         assert second_admitted.wait(1.0)
         source_now_ns[0] = 3_000_000_000
         monotonic_now[0] = 12.0
         buffer.update_color(color, 3.0, 'camera_link')
         buffer.update_depth(depth, 3.0, 'camera_link')
         buffer.update_mask(mask, 3.0, 'camera_link')
-        buffer.update_object(detected, 3.0)
+        buffer.update_object(detected, 3.0, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     thread = threading.Thread(target=publish)
     thread.start()
@@ -1004,7 +1010,7 @@ def test_buffer_accepts_bounded_delayed_inference_immediately_after_completion()
     source_now_ns[0] = 1_890_000_000
     monotonic_now[0] = 10.89
     buffer.update_mask(mask, 1.0, 'camera_link')
-    buffer.update_object(detected, 1.0)
+    buffer.update_object(detected, 1.0, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     samples = buffer.wait_for_samples(
         1,
@@ -1037,7 +1043,7 @@ def test_complete_empty_mask_is_never_admitted_as_a_sample():
     buffer.update_color(color, 1.0, 'camera_link')
     buffer.update_depth(depth, 1.0, 'camera_link')
     buffer.update_mask(np.zeros((3, 4), dtype=np.uint8), 1.0, 'camera_link')
-    buffer.update_object(detected, 1.0)
+    buffer.update_object(detected, 1.0, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     assert buffer.wait_for_samples(
         1,
@@ -1070,7 +1076,7 @@ def test_pre_request_duplicate_does_not_refresh_completion_age():
     buffer.update_color(color, 1.0, 'camera_link')
     buffer.update_depth(depth, 1.0, 'camera_link')
     buffer.update_mask(mask, 1.0, 'camera_link')
-    buffer.update_object(detected, 1.0)
+    buffer.update_object(detected, 1.0, target_identity=TargetTrackIdentity.from_stream(0, 0))
     source_now_ns[0] = 1_300_000_000
     monotonic_now[0] = 10.3
     buffer.update_mask(mask, 1.0, 'camera_link')
@@ -1108,7 +1114,7 @@ def test_buffer_rejects_inference_that_completes_over_latency_limit():
     source_now_ns[0] = 2_210_000_000
     monotonic_now[0] = 11.21
     buffer.update_mask(mask, 1.0, 'camera_link')
-    buffer.update_object(detected, 1.0)
+    buffer.update_object(detected, 1.0, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     assert buffer.wait_for_samples(
         1,
@@ -1142,7 +1148,7 @@ def test_buffer_rejects_completed_sample_after_post_completion_age_limit():
     source_now_ns[0] = 1_800_000_000
     monotonic_now[0] = 10.8
     buffer.update_mask(mask, 1.0, 'camera_link')
-    buffer.update_object(detected, 1.0)
+    buffer.update_object(detected, 1.0, target_identity=TargetTrackIdentity.from_stream(0, 0))
     monotonic_now[0] = 11.151
 
     assert buffer.wait_for_samples(
@@ -1179,7 +1185,7 @@ def test_buffer_keeps_adjacent_large_epoch_nanosecond_stamps_distinct():
     for stamp in stamps:
         buffer.update_color(color, stamp, 'camera_link')
         buffer.update_depth(depth, stamp, 'camera_link')
-        buffer.update_object(detected, stamp)
+        buffer.update_object(detected, stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     samples = buffer.wait_for_samples(2, 0.01, require_mask=False, max_age_sec=10.0)
 
@@ -1211,7 +1217,7 @@ def test_exact_nanosecond_discard_preserves_next_large_epoch_entry():
     for stamp in rejected_stamps:
         buffer.update_color(color, stamp, 'camera_link')
         buffer.update_depth(depth, stamp, 'camera_link')
-        buffer.update_object(detected, stamp)
+        buffer.update_object(detected, stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     first_window = buffer.wait_for_samples(3, 0.01, require_mask=False, max_age_sec=10.0)
 
@@ -1223,7 +1229,7 @@ def test_exact_nanosecond_discard_preserves_next_large_epoch_entry():
     fresh_stamp = Stamp(1_700_000_000, 4)
     buffer.update_color(color, fresh_stamp, 'camera_link')
     buffer.update_depth(depth, fresh_stamp, 'camera_link')
-    buffer.update_object(detected, fresh_stamp)
+    buffer.update_object(detected, fresh_stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
     buffer.discard_through_ns(first_window[-1].stamp_ns)
     remaining = buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=10.0)
     assert [item.stamp_ns for item in remaining] == [base_ns + 4]
@@ -1245,7 +1251,7 @@ def test_buffer_rejects_replayed_source_stamp_received_now():
     stale_stamp = (now_ns - 1_210_000_000) * 1e-9
     buffer.update_color(color, stale_stamp, 'camera_link')
     buffer.update_depth(depth, stale_stamp, 'camera_link')
-    buffer.update_object(detected, stale_stamp)
+    buffer.update_object(detected, stale_stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     assert buffer.wait_for_samples(
         1,
@@ -1353,7 +1359,7 @@ def test_buffer_accepts_fresh_source_stamp_from_injected_clock():
     fresh_stamp = (now_ns - 100_000_000) * 1e-9
     buffer.update_color(color, fresh_stamp, 'camera_link')
     buffer.update_depth(depth, fresh_stamp, 'camera_link')
-    buffer.update_object(detected, fresh_stamp)
+    buffer.update_object(detected, fresh_stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     samples = buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=0.35)
 
@@ -1376,7 +1382,7 @@ def test_buffer_rejects_future_source_stamp():
     future_stamp = (now_ns + 1_000_000) * 1e-9
     buffer.update_color(color, future_stamp, 'camera_link')
     buffer.update_depth(depth, future_stamp, 'camera_link')
-    buffer.update_object(detected, future_stamp)
+    buffer.update_object(detected, future_stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
     assert buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=10.0) == []
 
@@ -1398,7 +1404,7 @@ def test_buffer_retention_uses_monotonic_receive_time():
     fresh_stamp = (now_ns - 100_000_000) * 1e-9
     buffer.update_color(color, fresh_stamp, 'camera_link')
     buffer.update_depth(depth, fresh_stamp, 'camera_link')
-    buffer.update_object(detected, fresh_stamp)
+    buffer.update_object(detected, fresh_stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
     assert len(buffer.wait_for_samples(1, 0.01, require_mask=False, max_age_sec=10.0)) == 1
 
     monotonic_now[0] = 12.1

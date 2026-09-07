@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+import dataclasses
 import importlib.util
+import io
 import json
 import math
 import pathlib
@@ -38,6 +40,18 @@ from alicia_flexible_grasp.grasp.grasp6d_pipeline import (  # noqa: E402
     bounded_moveit_select,
     soft_candidate_cost,
 )
+from alicia_flexible_grasp.vision.multiview_surface import (
+    FusedTargetSurface,
+    RegistrationConfig,
+    SurfaceView,
+    append_registered_view,
+    fused_surface_from_view,
+)
+from alicia_flexible_grasp.vision.target_observation import (
+    TargetObservation,
+    TargetTrackIdentity,
+)
+
 from alicia_flexible_grasp.grasp.grasp6d_stability import (  # noqa: E402
     CandidateObservation,
     CandidateTracker,
@@ -128,7 +142,16 @@ def snapshot(stamp_sec):
     )
 
 
-def near_field_phase(active, phase_id=1, start_sec=20.0, deadline_sec=50.0):
+def near_field_phase(
+    active,
+    phase_id=1,
+    start_sec=20.0,
+    deadline_sec=50.0,
+    reference_center=None,
+    reference_label='carton',
+    reference_stamp_sec=None,
+    reference_target_track_id='',
+):
     message = remote_node.NearFieldPlanningPhase()
     message.header.stamp = remote_node.rospy.Time.from_sec(float(start_sec))
     message.active = bool(active)
@@ -136,6 +159,20 @@ def near_field_phase(active, phase_id=1, start_sec=20.0, deadline_sec=50.0):
     message.deadline = remote_node.rospy.Time.from_sec(
         float(deadline_sec) if active else 0.0
     )
+    if reference_center is not None:
+        message.reference_center_valid = True
+        message.reference_label = str(reference_label)
+        message.reference_target_track_id = str(reference_target_track_id)
+        message.reference_center_base.x = float(reference_center[0])
+        message.reference_center_base.y = float(reference_center[1])
+        message.reference_center_base.z = float(reference_center[2])
+        message.reference_source_stamp = remote_node.rospy.Time.from_sec(
+            float(
+                start_sec - 0.1
+                if reference_stamp_sec is None
+                else reference_stamp_sec
+            )
+        )
     return message
 
 
@@ -170,10 +207,45 @@ def streaming_node(clock=None, prepare=None, start_worker=True):
     return node
 
 
-def test_explicit_near_field_phase_resets_tracker_and_invalidates_prior_epoch():
+def measured_surface_points():
+    xs = np.linspace(-0.040, 0.040, 17)
+    ys = np.linspace(-0.025, 0.025, 13)
+    zs = np.linspace(0.004, 0.034, 9)
+    top = np.asarray([(x, y, 0.034) for x in xs for y in ys])
+    front = np.asarray([(x, -0.025, z) for x in xs for z in zs[:-1]])
+    return np.vstack((top, front))
+
+
+def measured_observation(
+    node,
+    stamp_sec=19.9,
+    points=None,
+    source_label='diagnostic-only',
+    bbox=(100, 100, 120, 120),
+):
+    identity = node._current_stream_target_identity()
+    x, y, width, height = bbox
+    return TargetObservation(
+        identity=identity,
+        stamp_ns=remote_node.rospy.Time.from_sec(float(stamp_sec)).to_nsec(),
+        frame_id='base_link',
+        points_base=(measured_surface_points() if points is None else points),
+        support_normal_base=(0.0, 0.0, 1.0),
+        support_offset_m=0.0,
+        bbox_xywh=bbox,
+        image_shape_hw=(480, 640),
+        edge_clearance_px=min(x, y, 640 - x - width, 480 - y - height),
+        source_kind='instance_mask',
+        source_label=source_label,
+    )
+
+
+def test_explicit_near_field_phase_resets_tracker_and_requests_preserving_target():
     node = streaming_node(start_worker=False)
     assert node.start_streaming() is True
     original_epoch = node.target_instance_epoch
+    original_identity = node._current_stream_target_identity()
+    original_generation = node._stream_generation
     original_tracker = node.tracker
     node._stable_variant_runtime = {(7, 1): {'phase': 'far_field'}}
 
@@ -187,22 +259,633 @@ def test_explicit_near_field_phase_resets_tracker_and_invalidates_prior_epoch():
     node.near_field_state_cb(near_field_phase(True))
 
     assert node.near_field_planning_active is True
-    assert node.target_instance_epoch == original_epoch + 1
+    assert node.target_instance_epoch == original_epoch
+    assert node._current_stream_target_identity() == original_identity
+    assert node._stream_generation > original_generation
     assert node.tracker is not original_tracker
     assert node._stable_variant_runtime == {}
 
     near_field_epoch = node.target_instance_epoch
+    near_field_generation = node._stream_generation
     near_field_tracker = node.tracker
     node.near_field_state_cb(near_field_phase(True))
 
     assert node.target_instance_epoch == near_field_epoch
+    assert node._current_stream_target_identity() == original_identity
+    assert node._stream_generation == near_field_generation
     assert node.tracker is near_field_tracker
 
     node.near_field_state_cb(near_field_phase(False))
 
     assert node.near_field_planning_active is False
-    assert node.target_instance_epoch == near_field_epoch + 1
+    assert node.target_instance_epoch == near_field_epoch
+    assert node._current_stream_target_identity() == original_identity
+    assert node._stream_generation > near_field_generation
+    assert node.tracker is not near_field_tracker
     node.shutdown_streaming_worker()
+
+
+def test_near_field_phase_captures_task_reached_measured_surface():
+    node = streaming_node(start_worker=False)
+    observation = measured_observation(node)
+    node._latest_target_observation = observation
+
+    reached_center = [-0.1050, -0.4310, 0.0967]
+    node.near_field_state_cb(
+        near_field_phase(
+            True,
+            phase_id=7,
+            reference_center=reached_center,
+            reference_stamp_sec=19.9,
+            reference_target_track_id=node._current_stream_target_identity().track_id,
+        )
+    )
+
+    surface = node._near_field_fused_surface
+    assert isinstance(surface, FusedTargetSurface)
+    assert surface.identity == observation.identity
+    assert surface.view_stamps_ns == (observation.stamp_ns,)
+    assert set(map(tuple, surface.points_base)) == set(map(tuple, observation.points_base))
+    assert np.array_equal(surface.view_indices, np.zeros(len(surface.points_base), dtype=np.int64))
+    assert node._near_field_surface_phase_id == 7
+    assert node._near_field_surface_generation == node._stream_generation
+    assert node._near_field_reference_center_base.tolist() == reached_center
+    node.shutdown_streaming_worker()
+
+
+def test_near_field_phase_rejects_missing_reached_view_anchor_contract():
+    node = streaming_node(start_worker=False)
+
+    node.near_field_state_cb(near_field_phase(True, phase_id=8))
+
+    assert node._near_field_fused_surface is None
+    assert node._near_field_reference_view is None
+    node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('stamp_delta_ns', [0, 1, -1])
+def test_reached_surface_binds_exact_ros_wire_nanoseconds(stamp_delta_ns):
+    node = streaming_node(start_worker=False)
+    stamp = remote_node.rospy.Time(1_788_600_000, 123_456_789)
+    observation = dataclasses.replace(measured_observation(node), stamp_ns=stamp.to_nsec())
+    node._latest_target_observation = observation
+    phase = near_field_phase(
+        True, phase_id=7, start_sec=1_788_600_001,
+        deadline_sec=1_788_600_031, reference_center=[0.0, 0.0, 0.034],
+        reference_target_track_id=observation.identity.track_id,
+    )
+    phase.reference_source_stamp = remote_node.rospy.Time(
+        stamp.secs, stamp.nsecs + stamp_delta_ns)
+    wire = io.BytesIO()
+    phase.serialize(wire)
+    received = remote_node.NearFieldPlanningPhase().deserialize(wire.getvalue())
+
+    node.near_field_state_cb(received)
+
+    if stamp_delta_ns == 0:
+        assert node._near_field_fused_surface.view_stamps_ns == (stamp.to_nsec(),)
+    else:
+        assert node._near_field_fused_surface is None
+    node.shutdown_streaming_worker()
+
+
+def test_new_active_phase_captures_new_exact_reference_and_drops_old_surface():
+    node = streaming_node(start_worker=False)
+    for phase_id, stamp_sec in ((7, 19.0), (8, 20.0)):
+        observation = measured_observation(node, stamp_sec=stamp_sec)
+        node._latest_target_observation = observation
+        node.near_field_state_cb(near_field_phase(
+            True, phase_id=phase_id, start_sec=21.0, deadline_sec=51.0,
+            reference_center=[0.0, 0.0, 0.034], reference_stamp_sec=stamp_sec,
+            reference_target_track_id=observation.identity.track_id,
+        ))
+        assert node._near_field_fused_surface.view_stamps_ns == (observation.stamp_ns,)
+        assert node._near_field_surface_phase_id == phase_id
+    node.shutdown_streaming_worker()
+
+
+def seed_measured_reference_surface(node):
+    reference_observation = measured_observation(node)
+    reference_view = remote_node.surface_view_from_observation(reference_observation)
+    node.multiview_registration_config = RegistrationConfig()
+    node.geometry_voxel_size_m = 0.0025
+    node.near_field_planning_active = True
+    node._near_field_phase_id = 7
+    node._near_field_surface_phase_id = 7
+    node._near_field_surface_generation = node._stream_generation
+    node._near_field_reference_view = reference_view
+    node._near_field_fused_surface = fused_surface_from_view(reference_view)
+    node._latest_registration_evidence = None
+    return reference_observation
+
+
+def bound_surface_plan(observation):
+    plan = remote_node.Grasp6DPlan()
+    plan.target_track_id = observation.identity.track_id
+    plan.header.stamp = remote_node.rospy.Time(*divmod(observation.stamp_ns, 1_000_000_000))
+    plan.object_geometry.header.stamp = plan.header.stamp
+    plan.object_geometry.target_track_id = observation.identity.track_id
+    plan.refinement_status = 'NOT_EVALUATED'
+    return plan
+
+
+def test_near_field_surface_registers_same_track_and_populates_plan_and_audit():
+    node = streaming_node(start_worker=False)
+    reference_observation = seed_measured_reference_surface(node)
+
+    yaw = np.deg2rad(3.0)
+    rotation = np.asarray(
+        [[np.cos(yaw), -np.sin(yaw), 0.0],
+         [np.sin(yaw), np.cos(yaw), 0.0],
+         [0.0, 0.0, 1.0]]
+    )
+    correction = np.asarray([0.003, -0.002, 0.001])
+    moving_points = (measured_surface_points() - correction).dot(rotation)
+    moving_observation = measured_observation(
+        node,
+        stamp_sec=20.1,
+        points=moving_points,
+        source_label='renamed-diagnostic',
+        bbox=(232, 364, 115, 116),
+    )
+
+    result = node._register_near_field_surface(moving_observation)
+    plan = bound_surface_plan(moving_observation)
+    node._apply_registration_evidence_to_plan(plan, moving_observation)
+    audit = node._multiview_surface_audit()
+
+    assert result.ok is True
+    assert node._near_field_fused_surface.view_stamps_ns == (
+        reference_observation.stamp_ns,
+        moving_observation.stamp_ns,
+    )
+    assert plan.refinement_status == 'VALID_3D'
+    assert plan.refinement_inlier_count == result.inlier_count
+    assert plan.refinement_overlap_fraction == pytest.approx(result.overlap_fraction)
+    assert plan.refinement_rmse_m == pytest.approx(result.rmse_m)
+    assert plan.refinement_source_clipped is True
+    assert plan.fused_view_count == 2
+    assert audit['source_stamps_ns'] == [
+        reference_observation.stamp_ns,
+        moving_observation.stamp_ns,
+    ]
+    assert audit['view_indices'] == [0, 1]
+    assert audit['target_track_id'] == moving_observation.identity.track_id
+
+
+def test_selected_bundle_strict_checks_the_registered_four_pose_plan():
+    """The post-registration plan, hash, audit and publication must agree."""
+
+    node = streaming_node(clock=MutableClock(21.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(20.1))
+        ticket = node._stream_worker_ticket
+        reference_observation = seed_measured_reference_surface(node)
+        node.near_field_strategy = 'single_snapshot_direct'
+        node._near_field_phase_deadline_sec = 25.0
+        node.grasp_config = {
+            'observation_camera_target_nominal_distance_m': 0.200,
+            'observation_camera_target_min_distance_m': 0.180,
+            'observation_camera_target_max_distance_m': 0.220,
+        }
+        node.gripper_tool_jaw_axis = 'y'
+
+        yaw = np.deg2rad(3.0)
+        rotation = np.asarray(
+            [[np.cos(yaw), -np.sin(yaw), 0.0],
+             [np.sin(yaw), np.cos(yaw), 0.0],
+             [0.0, 0.0, 1.0]]
+        )
+        requested_correction = np.asarray([0.003, -0.002, 0.001])
+        moving_points = (
+            measured_surface_points() - requested_correction
+        ).dot(rotation)
+        moving_observation = measured_observation(
+            node,
+            stamp_sec=20.1,
+            points=moving_points,
+            source_label='mask-diagnostic-only',
+        )
+        registration = node._register_near_field_surface(
+            moving_observation
+        )
+        assert registration.ok is True
+        assert np.linalg.norm(registration.transform_base[:3, 3]) > 1e-4
+        assert node._near_field_fused_surface.view_stamps_ns == (
+            reference_observation.stamp_ns,
+            moving_observation.stamp_ns,
+        )
+
+        grasp_pose = remote_node.make_pose_stamped(
+            'base_link',
+            (0.10, -0.20, 0.12),
+            (0.0, 0.0, 0.0, 1.0),
+            stamp=20.1,
+        )
+        original_sequence = remote_node.make_grasp_sequence_from_grasp_pose(
+            grasp_pose,
+            pregrasp_distance_m=0.08,
+            approach_offset_m=0.03,
+            lift_height_m=0.05,
+            approach_direction_base=(0.0, 0.0, -1.0),
+            pregrasp_direction_base=(0.0, 0.0, -1.0),
+            lift_direction_base=(0.0, 0.0, 1.0),
+        )
+        gate = CandidateGateResult(
+            ok=True,
+            failure_code='',
+            failure_reason='',
+            required_open_width_m=0.039,
+            center_distance_m=0.0,
+            support_clearance_m=0.003,
+            jaw_alignment=1.0,
+            motion_cost=0.0,
+            geometry_cost=0.0,
+            failed_gate='',
+            passed_gate_count=6,
+        )
+        transform = remote_node.pose_matrix(grasp_pose)
+        normalized = remote_node.NormalizedPlanningCandidate(
+            candidate_source='tabletop_geometry',
+            source_index=2,
+            variant_index=0,
+            source_lineage=('tabletop_geometry',),
+            contact_center_base=transform[:3, 3],
+            T_base_tool0=transform,
+            insertion_axis_base=(0.0, 0.0, -1.0),
+            jaw_axis_base=(0.0, 1.0, 0.0),
+            required_open_width_m=0.039,
+            model_width_m=None,
+            model_score=None,
+            source_local_score=0.4,
+            common_physical_cost=0.4,
+            geometry_gate=gate,
+            grasp_sequence=original_sequence,
+            payload=None,
+            audit={},
+        )
+        stable = types.SimpleNamespace(
+            track_id=3,
+            hit_count=3,
+            hit_request_ids=(1, 2, 3),
+            request_id=3,
+            snapshot_stamp_sec=20.0,
+            target_epoch=ticket.target_epoch,
+            target_track_id=moving_observation.identity.track_id,
+            target_label='mask-diagnostic-only',
+            model_choice='known-mask-bootstrap',
+            center_base_xyz=tuple(transform[:3, 3]),
+            approach_base_xyz=(0.0, 0.0, -1.0),
+            required_open_width_m=0.039,
+            model_width_m=None,
+            model_score=None,
+            candidate_source='tabletop_geometry',
+            source_lineage=('tabletop_geometry',),
+        )
+        features = SoftCandidateFeatures(
+            model_score=None,
+            cloud_distance_m=0.0,
+            center_distance_m=0.0,
+            downward_approach_cos=1.0,
+            visibility_center_cost=0.0,
+            support_margin_m=0.003,
+            jaw_tilt_cos=1.0,
+            geometry_margin_m=0.003,
+            joint_path_cost=0.2,
+            joint_max_delta_rad=0.1,
+            stability_hit_ratio=0.6,
+            position_dispersion_m=0.002,
+            orientation_dispersion_rad=0.03,
+        )
+        selected = types.SimpleNamespace(
+            track_id=3,
+            variant_index=0,
+            stable_candidate=stable,
+            payload=normalized,
+            pre_moveit_score=0.4,
+            evaluation_request_id=ticket.request_id,
+            evaluation_snapshot_stamp_sec=20.1,
+            final_score=0.6,
+            soft_features=features,
+            score_weights=SoftScoreWeights(),
+            moveit_result=MoveItResult(
+                reachable=True,
+                joint_path_cost=0.2,
+                joint_max_delta_rad=0.1,
+                reason='original sequence reachable',
+                collision_free=True,
+                within_joint_limits=True,
+                ik_valid=True,
+                planning_success=True,
+            ),
+        )
+        geometry = tabletop_geometry((0.050, 0.035, 0.021))
+        prepared = types.SimpleNamespace(
+            ticket=ticket,
+            stamp=remote_node.rospy.Time.from_sec(20.1),
+            geometry=geometry,
+            snapshot=types.SimpleNamespace(
+                target_identity=moving_observation.identity,
+                source_mode='instance_mask',
+            ),
+            target_observation=moving_observation,
+            near_field=True,
+            near_field_phase_id=7,
+            near_field_phase_deadline_sec=25.0,
+            request_invalidation_generation=0,
+        )
+        node._stable_variant_runtime = {
+            (3, 0): {
+                'prepared': prepared,
+                'sequence': original_sequence,
+                'grasp_pose': grasp_pose,
+                'geometry_gate': gate,
+            }
+        }
+        strict_calls = []
+
+        def strict_final(stages, deadline_sec=0.0):
+            strict_calls.append((tuple(stages), float(deadline_sec)))
+            return (
+                MoveItResult(
+                    reachable=True,
+                    joint_path_cost=0.25,
+                    joint_max_delta_rad=0.11,
+                    reason='registered final sequence reachable',
+                    collision_free=True,
+                    within_joint_limits=True,
+                    ik_valid=True,
+                    planning_success=True,
+                ),
+                {'joint_path_cost': 0.25, 'joint_max_delta': 0.11},
+            )
+
+        node._strict_moveit_sequence_evaluation = strict_final
+
+        bundle = node._build_selected_preview_bundle(selected)
+        plan = bundle['rich_plan']
+        checked_stages, checked_deadline = strict_calls[0]
+        assert [name for name, _pose in checked_stages] == [
+            'pregrasp', 'approach', 'grasp', 'lift'
+        ]
+        assert checked_deadline == pytest.approx(25.0)
+        original_positions = np.asarray([
+            remote_node.pose_matrix(getattr(original_sequence, name))[:3, 3]
+            for name in ('pregrasp', 'approach', 'grasp', 'lift')
+        ])
+        checked_positions = np.asarray([
+            remote_node.pose_matrix(pose)[:3, 3]
+            for _name, pose in checked_stages
+        ])
+        plan_positions = np.asarray([
+            [pose.position.x, pose.position.y, pose.position.z]
+            for pose in plan.poses
+        ])
+        checked_orientations = np.asarray([
+            [
+                pose.pose.orientation.x,
+                pose.pose.orientation.y,
+                pose.pose.orientation.z,
+                pose.pose.orientation.w,
+            ]
+            for _name, pose in checked_stages
+        ])
+        plan_orientations = np.asarray([
+            [
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            ]
+            for pose in plan.poses
+        ])
+        assert not np.allclose(checked_positions, original_positions)
+        assert checked_positions == pytest.approx(plan_positions)
+        assert checked_orientations == pytest.approx(plan_orientations)
+        assert [
+            [pose.position.x, pose.position.y, pose.position.z]
+            for pose in bundle['legacy_plan'].poses
+        ] == pytest.approx(plan_positions)
+        assert [
+            [
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            ]
+            for pose in bundle['legacy_plan'].poses
+        ] == pytest.approx(plan_orientations)
+        assert plan.plan_id == remote_node.compute_plan_id(plan)
+        assert plan.candidate_source == 'tabletop_geometry'
+        assert plan.candidate_source_lineage == ['tabletop_geometry']
+        assert plan.target_track_id == moving_observation.identity.track_id
+        assert plan.refinement_status == 'VALID_3D'
+        assert [
+            plan.object_geometry.support_normal_base.x,
+            plan.object_geometry.support_normal_base.y,
+            plan.object_geometry.support_normal_base.z,
+        ] == pytest.approx(geometry.support_normal_base)
+        assert plan.object_geometry.support_offset_m == pytest.approx(
+            geometry.support_offset_m
+        )
+        bundle['commit_callback']()
+        assert node._latest_streaming_audit[
+            'final_registered_sequence_checked'
+        ] is True
+        assert node._latest_streaming_audit[
+            'final_registered_sequence_plan_id'
+        ] == plan.plan_id
+
+        node._latest_streaming_audit = {'sentinel': 'previous-success'}
+
+        def strict_final_failure(stages, deadline_sec=0.0):
+            assert [name for name, _pose in stages] == [
+                'pregrasp', 'approach', 'grasp', 'lift'
+            ]
+            assert float(deadline_sec) == pytest.approx(25.0)
+            return (
+                MoveItResult(
+                    reachable=False,
+                    joint_path_cost=0.3,
+                    joint_max_delta_rad=0.2,
+                    reason='corrected pregrasp is unreachable',
+                    failure_code='MOVEIT_UNREACHABLE',
+                ),
+                {'joint_path_cost': 0.3, 'joint_max_delta': 0.2},
+            )
+
+        node._strict_moveit_sequence_evaluation = strict_final_failure
+        with pytest.raises(remote_node.CandidateContractError) as rejected:
+            node._build_selected_preview_bundle(selected)
+        assert rejected.value.code == 'MOVEIT_UNREACHABLE'
+        assert 'registration-bound four-stage sequence' in str(rejected.value)
+        assert node._latest_streaming_audit == {
+            'sentinel': 'previous-success'
+        }
+        runtime = node._stable_variant_runtime[(3, 0)]
+        assert 'final_execution_sequence' not in runtime
+        assert 'final_strict_moveit_result' not in runtime
+        assert 'final_strict_plan_id' not in runtime
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('mismatch', ['observation_stamp', 'plan_stamp', 'geometry_stamp', 'geometry_track', 'phase', 'generation', 'track'])
+def test_registration_metrics_cannot_attach_to_another_snapshot_or_lifecycle(mismatch):
+    node = streaming_node(start_worker=False)
+    seed_measured_reference_surface(node)
+    observation = measured_observation(node, stamp_sec=20.1)
+    assert node._register_near_field_surface(observation).ok
+    plan = bound_surface_plan(observation)
+    if mismatch == 'observation_stamp':
+        observation = dataclasses.replace(observation, stamp_ns=observation.stamp_ns + 1)
+    elif mismatch == 'plan_stamp':
+        plan.header.stamp = remote_node.rospy.Time(*divmod(observation.stamp_ns + 1, 1_000_000_000))
+    elif mismatch == 'geometry_stamp':
+        plan.object_geometry.header.stamp = remote_node.rospy.Time(*divmod(observation.stamp_ns + 1, 1_000_000_000))
+    elif mismatch == 'geometry_track':
+        plan.object_geometry.target_track_id = 'other-track'
+    elif mismatch == 'phase':
+        node._near_field_phase_id += 1
+    elif mismatch == 'generation':
+        node._stream_generation += 1
+    else:
+        node.target_instance_epoch += 1
+    assert node._apply_registration_evidence_to_plan(plan, observation) is False
+    assert plan.refinement_status == 'NOT_EVALUATED'
+    assert plan.fused_view_count == 0
+
+
+def test_rejected_near_view_publishes_invalid_metrics_without_fusing_points():
+    node = streaming_node(start_worker=False)
+    seed_measured_reference_surface(node)
+    original = node._near_field_fused_surface
+    observation = dataclasses.replace(measured_observation(node, stamp_sec=20.1), support_offset_m=0.005)
+    result = node._register_near_field_surface(observation)
+    plan = bound_surface_plan(observation)
+    assert node._apply_registration_evidence_to_plan(plan, observation)
+    assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+    assert node._near_field_fused_surface is original
+    assert plan.refinement_status == 'INVALID_3D'
+    assert plan.fused_view_count == 1
+
+
+def test_geometry_work_crossing_generation_cannot_repopulate_new_surface(monkeypatch):
+    node = streaming_node(start_worker=False)
+    seed_measured_reference_surface(node)
+    snapshot = types.SimpleNamespace(
+        depth_raw=np.ones((2, 2), dtype=np.uint16), source_mode='instance_mask', bbox=(0, 0, 2, 2))
+    node.geometry_min_object_points = 1
+    node._snapshot_geometry_inputs = lambda _snapshot: (snapshot.depth_raw, snapshot.depth_raw)
+    node._snapshot_base_optical_transform = lambda *_args: np.eye(4)
+    node._camera_intrinsics = lambda: types.SimpleNamespace(depth_scale=0.001)
+    observation = measured_observation(node, stamp_sec=20.1)
+    new_surfaces = []
+
+    def estimate_in_old_generation(**_kwargs):
+        node._advance_target_instance_epoch('NEW_PHASE', preserve_identity=True)
+        seed_measured_reference_surface(node)
+        new_surfaces.append(node._near_field_fused_surface)
+        return types.SimpleNamespace(ok=True)
+
+    monkeypatch.setattr(remote_node, 'estimate_object_geometry', estimate_in_old_generation)
+    monkeypatch.setattr(remote_node, 'observation_from_snapshot', lambda *_args: observation)
+    node._prepare_snapshot_geometry(snapshot, remote_node.rospy.Time(20, 100_000_000))
+
+    assert node._near_field_fused_surface is new_surfaces[0]
+    assert node._latest_registration_evidence is None
+
+
+def test_registration_evidence_requires_exact_identity_stamp_and_active_surface():
+    node = streaming_node(start_worker=False)
+    observation = measured_observation(node)
+    node._latest_registration_evidence = types.SimpleNamespace(
+        identity=observation.identity,
+        stamp_ns=observation.stamp_ns,
+    )
+    plan = remote_node.Grasp6DPlan()
+    plan.target_track_id = observation.identity.track_id
+    plan.refinement_status = 'NOT_EVALUATED'
+
+    stale = dataclasses.replace(observation, stamp_ns=observation.stamp_ns + 1)
+    node._apply_registration_evidence_to_plan(plan, stale)
+
+    assert plan.refinement_status == 'NOT_EVALUATED'
+    assert plan.fused_view_count == 0
+
+
+def test_multiview_config_loader_fails_closed_instead_of_widening_bounds():
+    good = {
+        'multiview': {
+            field.name: getattr(RegistrationConfig(), field.name)
+            for field in dataclasses.fields(RegistrationConfig)
+        }
+    }
+    loaded = remote_node.load_multiview_registration_config(good)
+    assert loaded == RegistrationConfig()
+
+    for invalid in (
+        {'multiview': []},
+        {'multiview': dict(good['multiview'], maximum_translation_m=0.026)},
+        {'multiview': dict(good['multiview'], maximum_yaw_deg=10.1)},
+        {'multiview': dict(good['multiview'], minimum_inliers=80.0)},
+        {'multiview': dict(good['multiview'], maximum_rmse_m=float('nan'))},
+    ):
+        with pytest.raises(remote_node.CandidateContractError) as raised:
+            remote_node.load_multiview_registration_config(invalid)
+        assert raised.value.code == 'MULTIVIEW_CONFIG_INVALID'
+
+
+@pytest.mark.parametrize('field', tuple(RegistrationConfig.__dataclass_fields__))
+def test_multiview_config_rejects_each_widened_bound(field):
+    values = dataclasses.asdict(RegistrationConfig())
+    values[field] += -1 if field == 'minimum_inliers' else (
+        -0.01 if field == 'minimum_overlap_fraction' else 1)
+    with pytest.raises(remote_node.CandidateContractError) as raised:
+        remote_node.load_multiview_registration_config({'multiview': values})
+    assert raised.value.code == 'MULTIVIEW_CONFIG_INVALID'
+
+
+@pytest.mark.parametrize('raw', [None, {}, {'unexpected': 1}])
+def test_multiview_explicit_incomplete_policy_fails_closed(raw):
+    with pytest.raises(remote_node.CandidateContractError) as raised:
+        remote_node.load_multiview_registration_config({'multiview': raw})
+    assert raised.value.code == 'MULTIVIEW_CONFIG_INVALID'
+
+
+def test_multiview_missing_policy_uses_exact_defaults_and_allows_tightening():
+    assert remote_node.load_multiview_registration_config({}) == RegistrationConfig()
+    values = dataclasses.asdict(RegistrationConfig())
+    values.update(minimum_inliers=100, minimum_overlap_fraction=0.4,
+                  maximum_translation_m=0.02, maximum_yaw_deg=8.0)
+    assert remote_node.load_multiview_registration_config({'multiview': values}) == RegistrationConfig(**values)
+
+
+def test_generation_or_track_change_resets_surface_without_relabeling_target():
+    node = streaming_node(start_worker=False)
+    assert node.start_streaming() is True
+    identity = node._current_stream_target_identity()
+    observation = measured_observation(node)
+    reference_view = remote_node.surface_view_from_observation(observation)
+    node._near_field_reference_view = reference_view
+    node._near_field_fused_surface = fused_surface_from_view(reference_view)
+    node._latest_registration_evidence = object()
+
+    node._advance_target_instance_epoch('PHASE_ONLY', preserve_identity=True)
+
+    assert node._current_stream_target_identity() == identity
+    assert node._near_field_fused_surface is None
+    assert node._near_field_reference_view is None
+    assert node._latest_registration_evidence is None
+
+    changed_identity = node._current_stream_target_identity()
+    node._near_field_reference_view = reference_view
+    node._near_field_fused_surface = fused_surface_from_view(reference_view)
+    node._advance_target_instance_epoch('TARGET_CHANGED')
+
+    assert node._current_stream_target_identity() != changed_identity
+    assert node._near_field_fused_surface is None
 
 
 def seed_stream_execution_authority(node, authority_ticket=None):
@@ -367,6 +1050,149 @@ def tabletop_candidates_for(geometry):
             tabletop_gripper(),
         )
     )[:8]
+
+
+def registered_bilateral_surface(height_m=0.021):
+    identity = TargetTrackIdentity.from_stream(5, 13)
+    xs = np.linspace(-0.020, 0.020, 17)
+    ys = np.linspace(-0.0175, 0.0175, 15)
+    zs = np.linspace(0.0, float(height_m), 15)
+    top = np.asarray([(x, y, height_m) for x in xs for y in ys])
+    negative = np.asarray(
+        [(x, -0.0175, z) for x in xs for z in zs[:-1]]
+    )
+    positive = np.asarray(
+        [(x, 0.0175, z) for x in xs for z in zs[:-1]]
+    )
+    reference = SurfaceView(
+        identity, 1_000_000_000, np.vstack((top, negative)),
+        np.array([0.0, 0.0, 1.0]), 0.0, 12,
+    )
+    moving = SurfaceView(
+        identity, 1_100_000_000, np.vstack((top, positive)),
+        np.array([0.0, 0.0, 1.0]), 0.0, 12,
+    )
+    registration, fused = append_registered_view(
+        fused_surface_from_view(reference), reference, moving
+    )
+    assert registration.ok
+    return fused, reference
+
+
+def top_only_surface(height_m=0.021):
+    identity = TargetTrackIdentity.from_stream(5, 13)
+    xs = np.linspace(-0.020, 0.020, 17)
+    ys = np.linspace(-0.0175, 0.0175, 15)
+    top = np.asarray([(x, y, height_m) for x in xs for y in ys])
+    reference = SurfaceView(
+        identity, 1_000_000_000, top,
+        np.array([0.0, 0.0, 1.0]), 0.0, 12,
+    )
+    return fused_surface_from_view(reference), reference
+
+
+def attach_bilateral_surface(node, height_m=0.011):
+    surface, reference = registered_bilateral_surface(height_m)
+    node._active_multiview_surface = lambda: (surface, reference)
+    return surface
+
+
+@pytest.mark.parametrize('tilt_deg', [15.0, 35.0, -35.0])
+def test_tilted_top_only_surface_cannot_authorize_contact(tilt_deg):
+    # The former insertion-only projection invents height from a dense top face.
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    surface, reference = top_only_surface()
+    reference = dataclasses.replace(reference, points_base=np.asarray([
+        (x, y, 0.021)
+        for x in np.linspace(-0.020, 0.020, 41)
+        for y in np.linspace(-0.0175, 0.0175, 31)
+    ]))
+    surface = fused_surface_from_view(reference, voxel_size_m=0.0005)
+    node._active_multiview_surface = lambda: (surface, reference)
+    tilt = np.deg2rad(tilt_deg)
+    insertion = np.array([np.sin(tilt), 0.0, -np.cos(tilt)])
+    jaw = np.array([0.0, 1.0, 0.0])
+    rotation = np.column_stack((np.cross(jaw, insertion), jaw, insertion))
+    _surface, evidence, bounds, _axis = node._current_bilateral_surface_measurement(
+        [0.0, 0.0, 0.0105], rotation,
+    )
+    assert evidence.negative_jaw_points >= 12
+    assert evidence.positive_jaw_points >= 12
+    assert not evidence.ok
+    assert bounds is None
+
+
+def test_contact_overlap_audit_rejects_cached_evidence_after_surface_loss():
+    # Cached candidate evidence must not bypass the current phase's surface.
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    attach_bilateral_surface(node, height_m=0.021)
+    center = np.array([0.0, 0.0, 0.0105])
+    transform = np.eye(4)
+    transform[:3, :3] = np.diag([-1.0, 1.0, -1.0])
+    transform[:3, 3] = center
+    _, evidence, bounds, axis = node._current_bilateral_surface_measurement(
+        center, transform[:3, :3],
+    )
+    assert evidence.ok
+    node._active_multiview_surface = lambda: (None, None)
+    with pytest.raises(remote_node.CandidateContractError) as rejected:
+        node._contact_overlap_audit(
+            geometry=tabletop_geometry((0.050, 0.035, 0.021)),
+            candidate_center_base=center,
+            T_base_tool0=transform,
+            stage_profile=types.SimpleNamespace(
+                depth_uncertainty_m=0.002, execution_position_error_m=0.0,
+                contact_overlap_requirement_m=0.001,
+            ),
+            contact_execution_phase=True,
+            contact_height_bounds_m=bounds,
+            bilateral_surface_evidence=evidence,
+            contact_height_axis_base_override=axis,
+        )
+    assert rejected.value.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+@pytest.mark.parametrize('jaw_axis,insertion_axis', [('-y', 'z'), ('y', '-z')])
+def test_measured_contact_rejects_negative_local_tool_axis_configuration(
+    jaw_axis, insertion_axis,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = jaw_axis
+    node.gripper_tool_finger_length_axis = insertion_axis
+    attach_bilateral_surface(node, height_m=0.021)
+    with pytest.raises(remote_node.CandidateContractError) as rejected:
+        node._current_bilateral_surface_measurement(
+            [0., 0., 0.0105], np.diag([-1., 1., -1.]),
+        )
+    assert rejected.value.code == 'GRIPPER_MODEL_MISMATCH'
+
+
+@pytest.mark.parametrize('field,value', [
+    ('_near_field_surface_phase_id', 99),
+    ('_near_field_surface_generation', 99),
+    ('near_field_planning_active', False),
+    ('target_instance_epoch', 99),
+])
+def test_measured_contact_requires_current_phase_generation_and_opaque_track(field, value):
+    node = streaming_node(start_worker=False)
+    seed_measured_reference_surface(node)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    assert node._active_multiview_surface()[0] is not None
+    setattr(node, field, value)
+    surface, evidence, bounds, axis = node._current_bilateral_surface_measurement(
+        [0., 0., 0.0105], np.diag([-1., 1., -1.]),
+    )
+    assert surface is evidence is bounds is axis is None
+    node.shutdown_streaming_worker()
 
 
 @pytest.mark.parametrize(
@@ -1368,12 +2194,12 @@ def test_tracker_empty_batch_always_carries_explicit_target_identity():
     stable = node._update_candidate_tracker(
         request_id=9,
         observations=(),
-        target_identity=(4, 'carton', 'carton_segment'),
+        target_identity=TargetTrackIdentity.from_stream(0, 4),
     )
 
     assert stable == []
     assert node.tracker.calls == [
-        (9, (), (4, 'carton', 'carton_segment'))
+        (9, (), TargetTrackIdentity.from_stream(0, 4))
     ]
 
 
@@ -1440,7 +2266,8 @@ def test_empty_remote_batch_creates_explicit_no_candidates_rejection():
             'after_collision': 0,
         },
         snapshot=types.SimpleNamespace(
-            object_msg=types.SimpleNamespace(label='carton')
+            object_msg=types.SimpleNamespace(label='carton'),
+            target_identity=TargetTrackIdentity.from_stream(0, 4),
         ),
         ticket=types.SimpleNamespace(target_epoch=4),
         model_choice='carton_segment',
@@ -1519,8 +2346,10 @@ def test_real_graspnet_normalization_and_analytical_gate_use_prepared_geometry()
         geometry=prepared_geometry,
         pose_estimator=estimator,
         snapshot=types.SimpleNamespace(
-            object_msg=types.SimpleNamespace(detected=True, label='carton')
+            object_msg=types.SimpleNamespace(detected=True, label='carton'),
+            target_identity=TargetTrackIdentity.from_stream(0, 4),
         ),
+        near_field=False,
         model_choice='carton_segment',
     )
     raw_candidate = RemoteGraspCandidate(
@@ -1773,7 +2602,8 @@ def test_local_pipeline_keeps_tabletop_candidate_when_graspnet_hits_table(
         ticket=ticket,
         stamp=remote_node.rospy.Time.from_sec(20.0),
         snapshot=types.SimpleNamespace(
-            object_msg=types.SimpleNamespace(detected=True, label='carton')
+            object_msg=types.SimpleNamespace(detected=True, label='carton'),
+            target_identity=TargetTrackIdentity.from_stream(0, 4),
         ),
         geometry=geometry,
         pose_estimator=types.SimpleNamespace(transform_sha256='frozen-cloud'),
@@ -1786,6 +2616,7 @@ def test_local_pipeline_keeps_tabletop_candidate_when_graspnet_hits_table(
         },
         remote_failure_code='',
         remote_failure_reason='',
+        near_field=False,
         model_choice='carton_segment',
     )
 
@@ -1826,7 +2657,10 @@ def test_prepared_geometry_generation_fails_closed_with_stable_code(
     node.gripper_tool_jaw_axis = 'y'
     node.gripper_tool_finger_length_axis = 'z'
 
-    candidates, diagnostics = node._generate_tabletop_candidates(geometry)
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        geometry,
+        contact_execution_phase=False,
+    )
 
     assert candidates == ()
     assert diagnostics['failure_code'] == expected_code
@@ -2340,6 +3174,7 @@ def test_tabletop_contact_boundary_resolves_live_uncertainty_and_is_stratified()
     node.gripper_tool_finger_length_axis = 'z'
     node.candidate_min_downward_approach_cos = 0.65
     node.candidate_max_final_approach_lateral_m = 0.010
+    attach_bilateral_surface(node)
     snapshot = types.SimpleNamespace(
         quality=types.SimpleNamespace(
             depth_mad_m=0.009,
@@ -2390,13 +3225,266 @@ def test_tabletop_contact_boundary_resolves_live_uncertainty_and_is_stratified()
         proposal_index = int(item.audit['proposal_source_index'])
         first_by_proposal.setdefault(proposal_index, item)
     for proposal_index, item in first_by_proposal.items():
-        polarity_index = (
-            0
-            if float(item.audit['approach_tilt_polarity']) < 0.0
-            else 1
-        )
-        branch_index = 2 * polarity_index + int(item.variant_index)
-        assert branch_index == proposal_index % 4
+        assert item.audit['approach_tilt_deg'] == pytest.approx(0.0)
+        assert int(item.variant_index) == proposal_index % 2
+
+
+@pytest.mark.parametrize('target_label', ('carton', 'canton', 'unknown', ''))
+def test_contact_phase_top_only_surface_fails_identically_for_every_label(
+    target_label,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=24)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    geometry = tabletop_geometry((0.050, 0.035, 0.021))
+    points = np.asarray(geometry.object_points_base, dtype=float)
+    geometry.object_points_base = points[
+        np.isclose(points[:, 2], 0.021)
+    ]
+    surface, reference = top_only_surface()
+    node._active_multiview_surface = lambda: (surface, reference)
+
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        geometry,
+        contact_execution_phase=True,
+        target_label=target_label,
+    )
+
+    assert candidates == ()
+    assert diagnostics['failure_code'] == (
+        'BILATERAL_SURFACE_EVIDENCE_MISSING'
+    )
+    assert diagnostics['contact_execution_gate_deferred'] is False
+
+
+def test_far_field_top_only_plan_explicitly_defers_contact_gate():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=24)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    geometry = tabletop_geometry((0.050, 0.035, 0.021))
+    points = np.asarray(geometry.object_points_base, dtype=float)
+    geometry.object_points_base = points[
+        np.isclose(points[:, 2], 0.021)
+    ]
+
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        geometry,
+        contact_execution_phase=False,
+        target_label='carton',
+    )
+
+    assert candidates
+    assert diagnostics['plan_phase'] == remote_node.FAR_FIELD_OBSERVATION_PLAN
+    assert diagnostics['contact_execution_gate_deferred'] is True
+    assert diagnostics['required_contact_patch_overlap_m'] == pytest.approx(0.0)
+    assert all(
+        item.audit['contact_overlap_decision_rule']
+        == 'deferred_to_near_field_contact_plan'
+        for item in candidates
+    )
+
+
+def test_contact_phase_requires_current_multiview_surface():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=24)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    geometry = tabletop_geometry((0.050, 0.035, 0.021))
+    node._active_multiview_surface = lambda: (None, None)
+
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        geometry,
+        contact_execution_phase=True,
+    )
+
+    assert candidates == ()
+    assert diagnostics['failure_code'] == (
+        'BILATERAL_SURFACE_EVIDENCE_MISSING'
+    )
+
+
+def test_registered_opposing_views_are_label_and_obb_height_invariant():
+    records = {0.021: [], 0.081: []}
+    surface, reference = registered_bilateral_surface()
+    for target_label in ('carton', 'canton', 'unknown', ''):
+        for obb_height in (0.021, 0.081):
+            node = remote_node.RemoteGrasp6DNode.__new__(
+                remote_node.RemoteGrasp6DNode
+            )
+            node.tabletop_geometry_enabled = True
+            node.tabletop_geometry_config = TabletopGeometryConfig(
+                max_candidates=24
+            )
+            node.gripper_geometry = tabletop_gripper()
+            node.gripper_tool_jaw_axis = 'y'
+            node.gripper_tool_finger_length_axis = 'z'
+            node.candidate_min_downward_approach_cos = 0.65
+            node.candidate_max_final_approach_lateral_m = 0.010
+            node._active_multiview_surface = lambda: (surface, reference)
+            geometry = tabletop_geometry((0.050, 0.035, obb_height))
+            geometry.center_base = np.array([0.0, 0.0, 0.0105])
+
+            candidates, diagnostics = node._generate_tabletop_candidates(
+                geometry,
+                contact_execution_phase=True,
+                target_label=target_label,
+            )
+
+            assert candidates
+            assert diagnostics['failure_code'] == ''
+            records[obb_height].append((
+                [
+                    (
+                        item.T_base_tool0.tobytes(),
+                        item.contact_center_base.tobytes(),
+                        item.jaw_axis_base.tobytes(),
+                        item.insertion_axis_base.tobytes(),
+                        float(item.required_open_width_m),
+                        float(item.source_score),
+                        dict(item.audit),
+                    )
+                    for item in candidates
+                ],
+                diagnostics,
+            ))
+
+    for height_records in records.values():
+        first_candidates, first_diagnostics = height_records[0]
+        for candidates, diagnostics in height_records[1:]:
+            assert candidates == first_candidates
+            assert diagnostics == first_diagnostics
+
+    evidence_keys = (
+        'negative_contact_count',
+        'positive_contact_count',
+        'negative_jaw_unique_view_count',
+        'positive_jaw_unique_view_count',
+        'measured_width_m',
+        'measured_contact_height_m',
+        'contact_height_bounds_m',
+        'contact_height_bounds_source',
+    )
+    short = records[0.021][0][0]
+    tall = records[0.081][0][0]
+    def by_physical_axis(items):
+        return {
+            (
+                item[2],
+                item[3],
+            ): item[-1]
+            for item in items
+        }
+
+    short_by_axis = by_physical_axis(short)
+    tall_by_axis = by_physical_axis(tall)
+    common_axes = set(short_by_axis).intersection(tall_by_axis)
+    assert common_axes
+    for axis_key in common_axes:
+        short_audit = short_by_axis[axis_key]
+        tall_audit = tall_by_axis[axis_key]
+        assert {
+            key: short_audit[key] for key in evidence_keys
+        } == {
+            key: tall_audit[key] for key in evidence_keys
+        }
+
+
+def test_graspnet_contact_gate_uses_current_fused_surface_and_fails_closed(
+    monkeypatch,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.opening_fit_clearance_each_side_m = 0.002
+    node.candidate_max_final_approach_lateral_m = 0.0
+    node._record_geometry_gate_result = lambda _result: None
+    node._candidate_center_base_xyz = lambda *_args: np.array(
+        [0.0, 0.0, 0.0105]
+    )
+    geometry = tabletop_geometry((0.050, 0.035, 0.021))
+    geometry.center_base = np.array([0.0, 0.0, 0.0105])
+    rotation = np.diag([-1.0, 1.0, -1.0])
+    pose = remote_node.make_pose_stamped(
+        'base_link',
+        [0.0, 0.0, 0.0105],
+        remote_node.quaternion_from_matrix(
+            np.block([[rotation, np.zeros((3, 1))],
+                      [np.zeros((1, 3)), np.ones((1, 1))]])
+        ),
+    )
+    plan = types.SimpleNamespace(
+        pregrasp=pose,
+        approach=pose,
+        grasp=pose,
+        lift=pose,
+        adaptive_stage_profile=types.SimpleNamespace(
+            depth_uncertainty_m=0.002,
+            execution_position_error_m=0.0,
+            contact_overlap_requirement_m=0.001,
+        ),
+    )
+    candidate = types.SimpleNamespace(depth_m=0.03, width_m=0.01)
+    node._active_multiview_surface = lambda: (None, None)
+    monkeypatch.setattr(
+        remote_node,
+        'evaluate_candidate',
+        lambda **_kwargs: pytest.fail(
+            'missing fused evidence must fail before the physical gate'
+        ),
+    )
+
+    missing = node._evaluate_candidate_geometry(
+        None, candidate, pose, plan, geometry, contact_execution_phase=True
+    )
+
+    assert not missing.ok
+    assert missing.failure_code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+    surface = attach_bilateral_surface(node, height_m=0.021)
+    calls = []
+    passing = CandidateGateResult(
+        True, '', '', 0.039, 0.0, 0.003, 1.0, 0.0, 0.0, '', 6
+    )
+
+    def evaluate(**kwargs):
+        calls.append(kwargs)
+        return passing
+
+    monkeypatch.setattr(remote_node, 'evaluate_candidate', evaluate)
+    accepted = node._evaluate_candidate_geometry(
+        None, candidate, pose, plan, geometry, contact_execution_phase=True
+    )
+
+    assert accepted.ok
+    assert len(calls) == 1
+    assert np.array_equal(calls[0]['target_points_base'], surface.points_base)
+    assert calls[0]['bilateral_surface_evidence'].ok
+    assert calls[0]['contact_height_bounds_m'][1] > (
+        calls[0]['contact_height_bounds_m'][0]
+    )
+    top_surface, reference = top_only_surface()
+    node._active_multiview_surface = lambda: (top_surface, reference)
+    top_rejected = node._evaluate_candidate_geometry(
+        None, candidate, pose, plan, geometry, contact_execution_phase=True
+    )
+    assert not top_rejected.ok
+    assert top_rejected.failure_code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+    assert len(calls) == 1
 
 
 def test_far_field_defers_contact_while_near_field_uses_snapshot_uncertainty():
@@ -2408,6 +3496,7 @@ def test_far_field_defers_contact_while_near_field_uses_snapshot_uncertainty():
     node.gripper_tool_finger_length_axis = 'z'
     node.candidate_min_downward_approach_cos = 0.65
     node.candidate_max_final_approach_lateral_m = 0.010
+    attach_bilateral_surface(node)
     geometry = tabletop_geometry((0.040, 0.035, 0.011))
     snapshot = types.SimpleNamespace(
         quality=types.SimpleNamespace(
@@ -2512,7 +3601,8 @@ def test_tabletop_bounded_batch_represents_each_live_proposal_before_repeats():
     node.candidate_max_final_approach_lateral_m = 0.010
 
     candidates, diagnostics = node._generate_tabletop_candidates(
-        tabletop_geometry((0.040, 0.035, 0.011))
+        tabletop_geometry((0.040, 0.035, 0.011)),
+        contact_execution_phase=False,
     )
 
     proposal_indices = [
@@ -2528,6 +3618,10 @@ def test_tabletop_bounded_batch_represents_each_live_proposal_before_repeats():
     assert diagnostics['bounded_proposal_count'] == len(set(proposal_indices))
     assert len(set(proposal_indices[:diagnostics['proposal_count']])) == (
         diagnostics['proposal_count']
+    )
+    assert all(
+        candidates[index].audit['approach_tilt_deg'] == pytest.approx(0.0)
+        for index in range(diagnostics['proposal_count'])
     )
 
 
@@ -2547,13 +3641,13 @@ def test_target_epoch_invalidation_clears_tracks_from_both_sources():
     tracker.update(
         1,
         (graspnet, geometry),
-        target_identity=(4, 'carton', 'carton_segment'),
+        target_identity=TargetTrackIdentity.from_stream(0, 4),
     )
 
     stable = tracker.update(
         2,
         (),
-        target_identity=(5, 'carton', 'carton_segment'),
+        target_identity=TargetTrackIdentity.from_stream(0, 5),
     )
 
     assert stable == []
@@ -2614,7 +3708,8 @@ def test_remote_failure_only_records_invalid_before_local_pipeline_early_return(
         prepared = remote_node.PreparedPrediction(
             ticket=ticket,
             snapshot=types.SimpleNamespace(
-                object_msg=types.SimpleNamespace(detected=True, label='carton')
+                object_msg=types.SimpleNamespace(detected=True, label='carton'),
+                target_identity=node._current_stream_target_identity(),
             ),
             stamp=remote_node.rospy.Time.from_sec(19.8),
             geometry=tabletop_geometry(),
@@ -2827,7 +3922,8 @@ def test_remote_failure_preview_keeps_old_execution_without_actuation(
         prepared = remote_node.PreparedPrediction(
             ticket=ticket,
             snapshot=types.SimpleNamespace(
-                object_msg=types.SimpleNamespace(detected=True, label='carton')
+                object_msg=types.SimpleNamespace(detected=True, label='carton'),
+                target_identity=node._current_stream_target_identity(),
             ),
             stamp=remote_node.rospy.Time.from_sec(19.8),
             geometry=tabletop_geometry(),
@@ -3052,7 +4148,7 @@ def test_normal_distance_approach_and_visibility_are_soft_not_hard():
     common_gate = {
         'request_id': 9,
         'snapshot_stamp_sec': 20.0,
-        'target_identity': (4, 'carton', 'carton_segment'),
+        'target_identity': TargetTrackIdentity.from_stream(0, 4),
         'track_id': 3,
         'variant_index': 0,
         'center_base_xyz': (0.12, 0.0, 0.2),
@@ -3116,7 +4212,7 @@ def test_streaming_hard_facts_remain_rejected(overrides, expected_code):
     values = {
         'request_id': 9,
         'snapshot_stamp_sec': 20.0,
-        'target_identity': (4, 'carton', 'carton_segment'),
+        'target_identity': TargetTrackIdentity.from_stream(0, 4),
         'track_id': 3,
         'variant_index': 0,
         'center_base_xyz': (0.12, 0.0, 0.2),
@@ -3201,7 +4297,7 @@ def test_stream_poll_waits_for_fresh_window_and_submits_only_once(
         node.shutdown_streaming_worker()
 
 
-def test_direct_near_field_poll_submits_exactly_one_fused_snapshot(
+def test_direct_near_field_poll_submits_once_per_phase_preserving_target(
     monkeypatch,
 ):
     class RecordingFrames:
@@ -3236,7 +4332,7 @@ def test_direct_near_field_poll_submits_exactly_one_fused_snapshot(
             requires_instance_mask=False
         )
         node._active_profile_requires_mask = lambda: False
-        fused_snapshots = [snapshot(9.9), snapshot(10.0)]
+        fused_snapshots = [snapshot(9.9), snapshot(10.6)]
         for fused in fused_snapshots:
             fused.ok = True
         monkeypatch.setattr(
@@ -3246,12 +4342,38 @@ def test_direct_near_field_poll_submits_exactly_one_fused_snapshot(
         )
 
         node.start_streaming()
+        identity = node._current_stream_target_identity()
+        node.near_field_state_cb(near_field_phase(True, start_sec=9.8, deadline_sec=39.8))
 
         assert node._poll_stream_snapshot() is True
         assert node._poll_stream_snapshot() is False
         assert len(node.frames.calls) == 1
         assert node.frames.calls[0][0][0] == 3
         assert node.last_submitted_stamp_ns == 9_900_000_000
+        assert node.inference_coordinator.pending_count == 0
+        original_ticket = node._stream_worker_ticket
+
+        node.near_field_state_cb(
+            near_field_phase(True, phase_id=2, start_sec=10.5, deadline_sec=18.5)
+        )
+
+        assert node.streaming_enabled is True
+        assert node._current_stream_target_identity() == identity
+        assert node._stream_generation > original_ticket.generation
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._require_stream_ticket_current(original_ticket)
+        stale = node.inference_coordinator.complete(original_ticket, now_sec=10.6)
+        assert stale.accepted is False
+        assert stale.code == 'GENERATION_STALE'
+        assert node._poll_stream_snapshot() is True
+        assert node._poll_stream_snapshot() is False
+        assert len(node.frames.calls) == 2
+        assert node.frames.calls[1][1]['target_identity'] == identity
+        assert node.frames.calls[1][1]['newest_after_ns'] == 10_500_000_000
+        assert node.frames.calls[1][1]['require_all_after_ns'] is True
+        assert node._stream_worker_ticket.request_id != original_ticket.request_id
+        assert node._stream_worker_ticket.generation == node._stream_generation
+        assert node._stream_worker_ticket.snapshot_stamp_sec == 10.6
         assert node.inference_coordinator.pending_count == 0
     finally:
         node.shutdown_streaming_worker()
@@ -3263,17 +4385,12 @@ def test_submit_atomically_rejects_snapshot_from_previous_target_identity():
         node.latest_object = types.SimpleNamespace(detected=True, label='carton')
         node._last_model_choice = 'carton_segment'
         node.start_streaming()
-        current_identity = (
-            node.target_instance_epoch,
-            'carton',
-            'carton_segment',
-        )
+        current_identity = node._current_stream_target_identity()
         stale = snapshot(29.8)
-        stale.target_epoch = current_identity[0] - 1
-        stale.target_identity = (
-            current_identity[0] - 1,
-            current_identity[1],
-            current_identity[2],
+        stale.target_epoch = current_identity.epoch - 1
+        stale.target_identity = TargetTrackIdentity.from_stream(
+            node._target_identity_generation,
+            stale.target_epoch,
         )
 
         assert node.submit_stream_snapshot(stale) is False
@@ -3281,7 +4398,7 @@ def test_submit_atomically_rejects_snapshot_from_previous_target_identity():
         assert node.last_submitted_stamp_ns == 0
 
         fresh = snapshot(29.9)
-        fresh.target_epoch = current_identity[0]
+        fresh.target_epoch = current_identity.epoch
         fresh.target_identity = current_identity
         assert node.submit_stream_snapshot(fresh) is True
         assert node._stream_worker_ticket.snapshot_stamp_sec == 29.9
@@ -3641,6 +4758,185 @@ def test_far_field_moveit_tries_safe_rolls_and_binds_reachable_branch():
         assert runtime['observation_orientation_search'][
             'attempted_variant_count'
         ] == 2
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_far_field_moveit_selects_reachable_roll_with_least_joint_motion():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        grasp_pose = remote_node.PoseStamped()
+        first_pose = remote_node.PoseStamped()
+        first_pose.pose.position.x = 0.10
+        second_pose = remote_node.PoseStamped()
+        second_pose.pose.position.x = 0.20
+        first_sequence = types.SimpleNamespace(pregrasp=first_pose)
+        second_sequence = types.SimpleNamespace(pregrasp=second_pose)
+        variants = (
+            {
+                'sequence': first_sequence,
+                'observation_envelope': None,
+                'observation_side_evidence': {},
+                'observation_view': {'camera_roll_offset_deg': 0.0},
+                'observation_translation_delta_m': 0.08,
+                'camera_roll_offset_deg': 0.0,
+                'preference_index': 0,
+            },
+            {
+                'sequence': second_sequence,
+                'observation_envelope': None,
+                'observation_side_evidence': {},
+                'observation_view': {'camera_roll_offset_deg': 90.0},
+                'observation_translation_delta_m': 0.08,
+                'camera_roll_offset_deg': 90.0,
+                'preference_index': 1,
+            },
+        )
+        runtime = {
+            'prepared': types.SimpleNamespace(ticket=ticket),
+            'grasp_pose': grasp_pose,
+            'observation_sequence': first_sequence,
+            'observation_variants': variants,
+            'sequence': types.SimpleNamespace(
+                pregrasp=remote_node.PoseStamped(),
+                approach=remote_node.PoseStamped(),
+                grasp=grasp_pose,
+                lift=remote_node.PoseStamped(),
+            ),
+            'soft_evidence': {},
+        }
+        node._stable_variant_runtime = {(3, 1): runtime}
+        checked = []
+
+        def strict_checker(pose):
+            checked.append(pose)
+            if pose is first_pose:
+                path_cost, max_delta = 2.5, 1.74
+            else:
+                path_cost, max_delta = 0.9, 0.42
+            return (
+                MoveItResult(
+                    reachable=True,
+                    joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta,
+                    reason='reachable',
+                    collision_free=True,
+                    within_joint_limits=True,
+                    ik_valid=True,
+                    planning_success=True,
+                ),
+                {},
+                '',
+            )
+
+        node._strict_moveit_evaluation = strict_checker
+
+        result = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=3, variant_index=1)
+        )
+
+        assert result.reachable is True
+        assert result.joint_max_delta_rad == 0.42
+        assert checked == [first_pose, second_pose]
+        assert runtime['observation_sequence'] is second_sequence
+        search = runtime['observation_orientation_search']
+        assert search['attempted_variant_count'] == 2
+        assert search['reachable_variant_count'] == 2
+        assert search['selected_joint_path_cost'] == 0.9
+        assert search['selected_joint_max_delta_rad'] == 0.42
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_far_field_moveit_prefers_hardware_limited_duration_over_max_delta():
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        grasp_pose = remote_node.PoseStamped()
+        slow_pose = remote_node.PoseStamped()
+        slow_pose.pose.position.x = 0.10
+        fast_pose = remote_node.PoseStamped()
+        fast_pose.pose.position.x = 0.20
+        slow_sequence = types.SimpleNamespace(pregrasp=slow_pose)
+        fast_sequence = types.SimpleNamespace(pregrasp=fast_pose)
+        variants = (
+            {
+                'sequence': slow_sequence,
+                'observation_envelope': None,
+                'observation_side_evidence': {},
+                'observation_view': {'camera_roll_offset_deg': 0.0},
+                'observation_translation_delta_m': 0.08,
+                'camera_roll_offset_deg': 0.0,
+                'preference_index': 0,
+            },
+            {
+                'sequence': fast_sequence,
+                'observation_envelope': None,
+                'observation_side_evidence': {},
+                'observation_view': {'camera_roll_offset_deg': 90.0},
+                'observation_translation_delta_m': 0.08,
+                'camera_roll_offset_deg': 90.0,
+                'preference_index': 1,
+            },
+        )
+        runtime = {
+            'prepared': types.SimpleNamespace(ticket=ticket),
+            'grasp_pose': grasp_pose,
+            'observation_sequence': slow_sequence,
+            'observation_variants': variants,
+            'sequence': types.SimpleNamespace(
+                pregrasp=remote_node.PoseStamped(),
+                approach=remote_node.PoseStamped(),
+                grasp=grasp_pose,
+                lift=remote_node.PoseStamped(),
+            ),
+            'soft_evidence': {},
+        }
+        node._stable_variant_runtime = {(3, 1): runtime}
+
+        def strict_checker(pose):
+            if pose is slow_pose:
+                path_cost, max_delta, duration, joint = 0.6, 0.42, 70.0, 'Joint6'
+            else:
+                path_cost, max_delta, duration, joint = 1.2, 0.90, 20.0, 'Joint1'
+            return (
+                MoveItResult(
+                    reachable=True,
+                    joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta,
+                    reason=(
+                        'reachable joint_path_cost=%.3f joint_max_delta=%.3f '
+                        'execution_duration_lower_bound_sec=%.3f '
+                        'hardware_limiting_joint=%s'
+                    ) % (path_cost, max_delta, duration, joint),
+                    collision_free=True,
+                    within_joint_limits=True,
+                    ik_valid=True,
+                    planning_success=True,
+                ),
+                {},
+                '',
+            )
+
+        node._strict_moveit_evaluation = strict_checker
+
+        result = node._check_moveit_stable_candidate(
+            types.SimpleNamespace(track_id=3, variant_index=1)
+        )
+
+        assert result.reachable is True
+        assert result.joint_max_delta_rad == pytest.approx(0.90)
+        assert runtime['observation_sequence'] is fast_sequence
+        search = runtime['observation_orientation_search']
+        assert search['selected_execution_duration_lower_bound_sec'] == (
+            pytest.approx(20.0)
+        )
+        assert search['selected_hardware_limiting_joint'] == 'Joint1'
     finally:
         node.shutdown_streaming_worker()
 
@@ -4337,6 +5633,7 @@ def test_top_n_uses_node_strict_moveit_checker_for_only_three_candidates():
                 request_id=3,
                 snapshot_stamp_sec=49.8,
                 target_epoch=ticket.target_epoch,
+                target_track_id=TargetTrackIdentity.from_stream(0, ticket.target_epoch).track_id,
                 target_label='carton',
                 model_choice='carton_segmentation',
                 center_base_xyz=center,
@@ -4366,6 +5663,7 @@ def test_top_n_uses_node_strict_moveit_checker_for_only_three_candidates():
                 request_id=3,
                 snapshot_stamp_sec=49.8,
                 target_epoch=ticket.target_epoch,
+                target_track_id=TargetTrackIdentity.from_stream(0, ticket.target_epoch).track_id,
                 target_label='carton',
                 model_choice='carton_segmentation',
                 track_id=track_id,
@@ -4955,6 +6253,7 @@ def matching_observation(request_id):
         request_id=request_id,
         snapshot_stamp_sec=20.0 + request_id * 0.01,
         target_epoch=4,
+        target_track_id=TargetTrackIdentity.from_stream(0, 4).track_id,
         target_label='carton',
         model_choice='carton_segment',
         center_base_xyz=(0.1, 0.0, 0.2),
@@ -4982,7 +6281,8 @@ def prepared_prediction(request_id):
     return types.SimpleNamespace(
         ticket=ticket,
         snapshot=types.SimpleNamespace(
-            object_msg=types.SimpleNamespace(detected=True, label='carton')
+            object_msg=types.SimpleNamespace(detected=True, label='carton'),
+            target_identity=TargetTrackIdentity.from_stream(0, 4),
         ),
         candidates=('raw',),
         remote_diagnostics={},
@@ -5795,6 +7095,7 @@ def test_current_recheck_binds_conservative_latest_required_width():
         request_id=3,
         snapshot_stamp_sec=19.9,
         target_epoch=4,
+        target_track_id=TargetTrackIdentity.from_stream(0, 4).track_id,
         target_label='carton',
         model_choice='carton_segment',
         center_base_xyz=(0.1, 0.0, 0.2),
@@ -5834,7 +7135,8 @@ def test_current_recheck_binds_conservative_latest_required_width():
             T_base_camera_link=np.eye(4),
         ),
         snapshot=types.SimpleNamespace(
-            object_msg=types.SimpleNamespace(detected=True, label='carton')
+            object_msg=types.SimpleNamespace(detected=True, label='carton'),
+            target_identity=TargetTrackIdentity.from_stream(0, 4),
         ),
         near_field=False,
         model_choice='carton_segment',
@@ -5896,6 +7198,7 @@ def test_tabletop_stable_recheck_uses_fused_pose_without_depth(monkeypatch):
     node.soft_score_weights = SoftScoreWeights()
     node.camera_visibility_gate_enabled = False
     node.camera_visibility_diagnostic_enabled = False
+    surface = attach_bilateral_surface(node)
     geometry = tabletop_geometry()
     gate = CandidateGateResult(
         ok=True,
@@ -5910,10 +7213,16 @@ def test_tabletop_stable_recheck_uses_fused_pose_without_depth(monkeypatch):
         failed_gate='',
         passed_gate_count=6,
     )
+    explicit_calls = []
+
+    def evaluate_explicit(**kwargs):
+        explicit_calls.append(kwargs)
+        return gate
+
     monkeypatch.setattr(
         remote_node,
         'evaluate_explicit_candidate',
-        lambda **_kwargs: gate,
+        evaluate_explicit,
     )
     ticket = InferenceTicket(
         request_id=4,
@@ -5929,7 +7238,8 @@ def test_tabletop_stable_recheck_uses_fused_pose_without_depth(monkeypatch):
         geometry=geometry,
         pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
         snapshot=types.SimpleNamespace(
-            object_msg=types.SimpleNamespace(detected=True, label='carton')
+            object_msg=types.SimpleNamespace(detected=True, label='carton'),
+            target_identity=TargetTrackIdentity.from_stream(0, 4),
         ),
         model_choice='carton_segment',
     )
@@ -5945,6 +7255,7 @@ def test_tabletop_stable_recheck_uses_fused_pose_without_depth(monkeypatch):
         request_id=3,
         snapshot_stamp_sec=19.9,
         target_epoch=4,
+        target_track_id=TargetTrackIdentity.from_stream(0, 4).track_id,
         target_label='carton',
         model_choice='carton_segment',
         center_base_xyz=normalized.contact_center_base,
@@ -5999,6 +7310,23 @@ def test_tabletop_stable_recheck_uses_fused_pose_without_depth(monkeypatch):
     assert all(item.latest_safety.depth_required is False for item in scored)
     assert all(item.latest_safety.depth_valid is None for item in scored)
     assert all(item.stable_candidate.model_width_m is None for item in scored)
+    assert explicit_calls
+    assert all(
+        np.array_equal(call['target_points_base'], surface.points_base)
+        and call['bilateral_surface_evidence'].ok
+        and call['contact_height_bounds_m'][1]
+        > call['contact_height_bounds_m'][0]
+        for call in explicit_calls
+    )
+    runtime = next(iter(node._stable_variant_runtime.values()))
+    resolved_gate = node._resolved_sequence_geometry_gate(
+        runtime,
+        runtime['sequence'],
+    )
+    assert resolved_gate.ok
+    assert np.array_equal(
+        explicit_calls[-1]['target_points_base'], surface.points_base
+    )
     fusion_audits = [
         value['fusion_vs_latest_observation']
         for value in node._stable_variant_runtime.values()
@@ -6037,6 +7365,7 @@ def test_fusion_vs_latest_observation_audit_is_diagnostic_only():
     node.soft_score_weights = SoftScoreWeights()
     node.camera_visibility_gate_enabled = False
     node.camera_visibility_diagnostic_enabled = False
+    attach_bilateral_surface(node)
     geometry = tabletop_geometry()
     ticket = InferenceTicket(
         request_id=4,
@@ -6052,7 +7381,8 @@ def test_fusion_vs_latest_observation_audit_is_diagnostic_only():
         geometry=geometry,
         pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
         snapshot=types.SimpleNamespace(
-            object_msg=types.SimpleNamespace(detected=True, label='carton')
+            object_msg=types.SimpleNamespace(detected=True, label='carton'),
+            target_identity=TargetTrackIdentity.from_stream(0, 4),
         ),
         near_field=True,
         model_choice='carton_segment',
@@ -6131,7 +7461,7 @@ def test_common_soft_features_rewards_real_opening_margin_not_support_floor():
     ).total
 
 
-def test_tabletop_stable_recheck_refreshes_width_from_current_cloud():
+def test_tabletop_stable_recheck_refreshes_width_from_current_fused_surface():
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     configure_identity_handeye(node)
     node.target_instance_epoch = 4
@@ -6149,6 +7479,7 @@ def test_tabletop_stable_recheck_refreshes_width_from_current_cloud():
     node.soft_score_weights = SoftScoreWeights()
     node.camera_visibility_gate_enabled = False
     node.camera_visibility_diagnostic_enabled = False
+    surface = attach_bilateral_surface(node)
     geometry = tabletop_geometry()
     ticket = InferenceTicket(
         request_id=4,
@@ -6164,7 +7495,8 @@ def test_tabletop_stable_recheck_refreshes_width_from_current_cloud():
         geometry=geometry,
         pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
         snapshot=types.SimpleNamespace(
-            object_msg=types.SimpleNamespace(detected=True, label='carton')
+            object_msg=types.SimpleNamespace(detected=True, label='carton'),
+            target_identity=TargetTrackIdentity.from_stream(0, 4),
         ),
         model_choice='carton_segment',
     )
@@ -6181,6 +7513,7 @@ def test_tabletop_stable_recheck_refreshes_width_from_current_cloud():
         request_id=3,
         snapshot_stamp_sec=19.9,
         target_epoch=4,
+        target_track_id=TargetTrackIdentity.from_stream(0, 4).track_id,
         target_label='carton',
         model_choice='carton_segment',
         center_base_xyz=normalized.contact_center_base,
@@ -6206,13 +7539,42 @@ def test_tabletop_stable_recheck_refreshes_width_from_current_cloud():
     assert len(scored) == 2
     assert all(item.latest_safety.collision_free is True for item in scored)
     assert all(
-        item.stable_candidate.required_open_width_m == pytest.approx(stale_width)
+        item.stable_candidate.required_open_width_m == pytest.approx(
+            0.035 + 2.0 * node.gripper_geometry.jaw_clearance_each_side_m,
+            abs=0.0025,
+        )
         for item in scored
     )
     assert all(
-        runtime['geometry_gate'].required_open_width_m == pytest.approx(stale_width)
+        runtime['geometry_gate'].required_open_width_m == pytest.approx(
+            0.035 + 2.0 * node.gripper_geometry.jaw_clearance_each_side_m,
+            abs=0.0025,
+        )
         for runtime in node._stable_variant_runtime.values()
     )
+    assert all(
+        runtime['geometry_gate'].required_open_width_m
+        != pytest.approx(stale_width)
+        for runtime in node._stable_variant_runtime.values()
+    )
+    assert len(surface.view_stamps_ns) == 2
+
+    runtimes = tuple(node._stable_variant_runtime.values())
+    assert all(node._resolved_sequence_geometry_gate(item, item['sequence']).ok
+               for item in runtimes)
+    for unavailable in ((None, None), top_only_surface()):
+        node._active_multiview_surface = lambda: unavailable
+        with pytest.raises(remote_node.CandidateContractError) as rejected:
+            node._normalize_tabletop_candidate(prepared, tabletop_candidates_for(geometry)[0])
+        assert rejected.value.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+        for item in runtimes:
+            gate = node._resolved_sequence_geometry_gate(item, item['sequence'])
+            assert not gate.ok
+            assert gate.failure_code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+        rejected_stable = node._recheck_and_score_stable(prepared, (stable,))
+        assert not rejected_stable or all(
+            not item.latest_safety.collision_free for item in rejected_stable
+        )
 
 
 def test_tabletop_stable_recheck_reprojects_tracker_drift_to_support_clearance():
@@ -6233,6 +7595,7 @@ def test_tabletop_stable_recheck_reprojects_tracker_drift_to_support_clearance()
     node.soft_score_weights = SoftScoreWeights()
     node.camera_visibility_gate_enabled = False
     node.camera_visibility_diagnostic_enabled = False
+    attach_bilateral_surface(node)
     geometry = tabletop_geometry()
     ticket = InferenceTicket(
         request_id=4,
@@ -6248,7 +7611,8 @@ def test_tabletop_stable_recheck_reprojects_tracker_drift_to_support_clearance()
         geometry=geometry,
         pose_estimator=types.SimpleNamespace(transform_sha256='current-tf'),
         snapshot=types.SimpleNamespace(
-            object_msg=types.SimpleNamespace(detected=True, label='carton')
+            object_msg=types.SimpleNamespace(detected=True, label='carton'),
+            target_identity=TargetTrackIdentity.from_stream(0, 4),
         ),
         model_choice='carton_segment',
     )
@@ -6274,6 +7638,7 @@ def test_tabletop_stable_recheck_reprojects_tracker_drift_to_support_clearance()
         request_id=3,
         snapshot_stamp_sec=19.9,
         target_epoch=4,
+        target_track_id=TargetTrackIdentity.from_stream(0, 4).track_id,
         target_label='carton',
         model_choice='carton_segment',
         center_base_xyz=normalized.contact_center_base,
@@ -6465,6 +7830,7 @@ def promotion_transaction_node(tmp_path):
         request_id=3,
         snapshot_stamp_sec=9.7,
         target_epoch=ticket.target_epoch,
+        target_track_id=TargetTrackIdentity.from_stream(0, ticket.target_epoch).track_id,
         target_label='carton',
         model_choice='carton_segment',
         center_base_xyz=(0.1, 0.0, 0.3),
@@ -6494,6 +7860,7 @@ def promotion_transaction_node(tmp_path):
         request_id=ticket.request_id,
         snapshot_stamp_sec=ticket.snapshot_stamp_sec,
         target_epoch=ticket.target_epoch,
+        target_track_id=TargetTrackIdentity.from_stream(0, ticket.target_epoch).track_id,
         target_label='carton',
         model_choice='carton_segment',
         track_id=7,
@@ -6866,6 +8233,8 @@ def test_streaming_audit_records_exact_moveit_sequence_and_pre_call_joints(
         assert [
             stage['stage'] for stage in sequence_audit['stages']
         ] == ['pregrasp', 'approach', 'grasp', 'lift']
+        assert evaluation['final_execution_sequence_checked'] is False
+        assert evaluation['final_strict_plan_id'] == ''
         assert [
             stage['position_m'][2] for stage in sequence_audit['stages']
         ] == pytest.approx([0.18, 0.13, 0.10, 0.15])
@@ -8337,12 +9706,14 @@ def test_stale_ticket_cannot_append_promotion_to_streaming_audit():
 def test_target_signature_ignores_track_and_parallel_jaw_variant_identity():
     first = types.SimpleNamespace(
         target_epoch=4,
+        target_track_id=TargetTrackIdentity.from_stream(0, 4).track_id,
         target_label='carton',
         model_choice='carton_segment',
         track_id=1,
     )
     rebuilt = types.SimpleNamespace(
         target_epoch=4,
+        target_track_id=TargetTrackIdentity.from_stream(0, 4).track_id,
         target_label='carton',
         model_choice='carton_segment',
         track_id=99,
@@ -8536,16 +9907,19 @@ def test_direct_near_field_rank_tries_smallest_frozen_pose_change_first():
             track_id=1,
             variant_index=0,
             pre_moveit_score=0.0,
+            required_open_width_m=0.040,
         ),
         types.SimpleNamespace(
             track_id=2,
             variant_index=0,
             pre_moveit_score=100.0,
+            required_open_width_m=0.040,
         ),
         types.SimpleNamespace(
             track_id=3,
             variant_index=0,
             pre_moveit_score=50.0,
+            required_open_width_m=0.040,
         ),
     ]
     node._stable_variant_runtime = {
@@ -8575,6 +9949,45 @@ def test_direct_near_field_rank_tries_smallest_frozen_pose_change_first():
     )
 
     assert [candidate.track_id for candidate in ranked] == [3, 2, 1]
+
+
+def test_direct_near_field_rank_prefers_narrow_side_before_wrist_delta():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    narrow = types.SimpleNamespace(
+        track_id=1,
+        variant_index=0,
+        pre_moveit_score=10.0,
+        required_open_width_m=0.040,
+    )
+    oblique = types.SimpleNamespace(
+        track_id=2,
+        variant_index=0,
+        pre_moveit_score=0.0,
+        required_open_width_m=0.048,
+    )
+    node._stable_variant_runtime = {
+        (1, 0): {
+            'soft_evidence': {
+                'contact_start_orientation_delta_rad': 1.0,
+                'contact_start_translation_delta_m': 0.020,
+            }
+        },
+        (2, 0): {
+            'soft_evidence': {
+                'contact_start_orientation_delta_rad': 0.1,
+                'contact_start_translation_delta_m': 0.005,
+            }
+        },
+    }
+
+    ranked = sorted(
+        [oblique, narrow],
+        key=node._direct_near_field_moveit_rank_key,
+    )
+
+    assert [candidate.track_id for candidate in ranked] == [1, 2]
 
 
 def test_frozen_tool_pose_delta_uses_one_snapshot_for_translation_and_rotation():
@@ -8611,11 +10024,13 @@ def test_direct_near_field_rank_retains_missing_motion_evidence_as_fallback():
         track_id=1,
         variant_index=0,
         pre_moveit_score=100.0,
+        required_open_width_m=0.040,
     )
     missing = types.SimpleNamespace(
         track_id=2,
         variant_index=0,
         pre_moveit_score=0.0,
+        required_open_width_m=0.040,
     )
     node._stable_variant_runtime = {
         (1, 0): {

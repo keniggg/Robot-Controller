@@ -15,11 +15,16 @@ for path in (ROOT, ROOT / 'src'):
 
 from PyQt5 import QtCore, QtGui, QtTest, QtWidgets
 import rospy
+from sensor_msgs.msg import JointState
 
 from gui import theme
 from gui.main_gui import MainWindow
 from gui.widgets import perception_widget as perception_widget_module
 from gui.widgets.grasp6d_control_widget import Grasp6DControlWidget
+from gui.widgets.handeye_calibration_widget import (
+    HandeyeCalibrationWidget,
+    OnDemandRgbView,
+)
 
 
 class InertRosEndpoint:
@@ -222,12 +227,13 @@ class GuiLayoutContractTest(unittest.TestCase):
 
         tabs = window.findChild(QtWidgets.QTabWidget)
         self.assertIsNotNone(tabs)
-        self.assertEqual(tabs.count(), 8)
+        self.assertEqual(tabs.count(), 9)
         expected_tabs = (
             '总览监控',
             '关节控制',
             '笛卡尔控制',
             'TCP标定',
+            '手眼标定',
             '目标识别',
             '6D抓取',
             '电子皮肤',
@@ -249,6 +255,84 @@ class GuiLayoutContractTest(unittest.TestCase):
         ]
         self.assertEqual(visible_scroll_buttons, [])
 
+        handeye = window.findChild(HandeyeCalibrationWidget)
+        self.assertIsNotNone(handeye)
+        tabs.setCurrentIndex(4)
+        self.app.processEvents()
+        image_panel = handeye.findChild(
+            QtWidgets.QFrame,
+            'HandeyeImagePanel',
+        )
+        sampling_panel = handeye.findChild(
+            QtWidgets.QFrame,
+            'HandeyeSamplingPanel',
+        )
+        self.assertIsNotNone(image_panel)
+        self.assertIsNotNone(sampling_panel)
+        self.assertTrue(handeye.joint_control.isVisible())
+        self.assertTrue(image_panel.isVisible())
+        self.assertTrue(sampling_panel.isVisible())
+        self.assertGreaterEqual(handeye.joint_control.width(), 500)
+        self.assertGreaterEqual(image_panel.width(), 430)
+        self.assertEqual(handeye.findChildren(QtWidgets.QScrollArea), [])
+        feedback_angles = handeye.findChildren(
+            QtWidgets.QLabel,
+            'JointFeedbackAngle',
+        )
+        self.assertEqual(len(feedback_angles), 6)
+        feedback = JointState()
+        feedback.name = [
+            'Joint1',
+            'Joint2',
+            'Joint3',
+            'Joint4',
+            'Joint5',
+            'Joint6',
+        ]
+        feedback.position = [0.0, 0.1, -0.2, 0.3, -0.4, 0.5]
+        handeye.joint_control.update_current_state(feedback)
+        self.assertEqual(feedback_angles[0].text(), '+0.00°')
+        self.assertEqual(feedback_angles[1].text(), '+5.73°')
+        self.assertEqual(feedback_angles[2].text(), '-11.46°')
+        image_view = handeye.findChild(OnDemandRgbView)
+        self.assertIsNotNone(image_view)
+        self.assertFalse(image_view.streaming)
+        self.assertFalse(image_view.isVisible())
+        image_selector = handeye.findChild(
+            QtWidgets.QComboBox,
+            'HandeyeImageModeSelector',
+        )
+        self.assertIsNotNone(image_selector)
+        self.assertEqual(image_selector.count(), 2)
+        self.assertEqual(image_selector.currentData(), 'off')
+        image_selector.setCurrentIndex(image_selector.findData('on'))
+        self.app.processEvents()
+        self.assertTrue(image_view.streaming)
+        self.assertTrue(image_view.isVisible())
+        self.assertTrue(handeye.joint_control.isVisible())
+        self.assertTrue(sampling_panel.isVisible())
+        for widget in (
+            handeye.joint_control,
+            image_panel,
+            sampling_panel,
+            image_selector,
+            handeye.stable_btn,
+            handeye.take_sample_btn,
+            handeye.sample_table,
+            handeye.calibration_output,
+        ):
+            with self.subTest(handeye_widget=widget.objectName() or type(widget).__name__):
+                top_left = widget.mapTo(handeye, QtCore.QPoint(0, 0))
+                bottom_right = widget.mapTo(
+                    handeye,
+                    QtCore.QPoint(widget.width() - 1, widget.height() - 1),
+                )
+                self.assertTrue(handeye.rect().contains(top_left))
+                self.assertTrue(handeye.rect().contains(bottom_right))
+        image_selector.setCurrentIndex(image_selector.findData('off'))
+        self.app.processEvents()
+        self.assertFalse(image_view.streaming)
+        self.assertFalse(image_view.isVisible())
         compact = next(
             widget
             for widget in window.findChildren(Grasp6DControlWidget)

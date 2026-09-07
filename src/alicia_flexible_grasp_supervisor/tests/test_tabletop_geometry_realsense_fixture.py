@@ -200,12 +200,12 @@ def test_benchmark_uses_production_tabletop_configuration():
     config = BENCHMARK.load_production_tabletop_config()
 
     assert config.max_inner_gap_m == 0.050
-    assert config.angle_step_deg == 15.0
-    assert config.angle_dedup_deg == 2.0
+    assert config.angle_step_deg == 5.0
+    assert config.angle_dedup_deg == 1.0
     assert config.jaw_clearance_each_side_m == 0.002
     assert config.min_contact_band_points == 6
     assert config.contact_band_fraction == 0.12
-    assert config.max_candidates == 24
+    assert config.max_candidates == 32
     assert config.approach_tilt_degrees == ()
 
 

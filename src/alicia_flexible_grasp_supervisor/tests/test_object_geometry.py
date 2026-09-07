@@ -16,6 +16,7 @@ for path in (ROOT, ROOT / 'src'):
 from alicia_flexible_grasp.vision import object_geometry as geometry_module
 from alicia_flexible_grasp.vision.object_geometry import (
     GeometryEstimate,
+    anchor_geometry_center_in_support_plane,
     deproject_depth,
     estimate_object_geometry,
 )
@@ -356,6 +357,76 @@ def test_geometry_estimate_arrays_are_defensive_read_only_copies():
         assert not value.flags.writeable
         with pytest.raises(ValueError):
             value.flat[0] = 0.0
+
+
+def test_near_field_center_anchor_changes_only_support_plane_center():
+    normal = _normalize([0.0294509, 0.1478259, 0.9885748])
+    raw_center = np.asarray([-0.1065832, -0.4474756, 0.0847730])
+    reference = np.asarray([-0.0936888, -0.4540888, 0.0966739])
+    points = np.asarray(
+        [
+            [-0.120, -0.460, 0.090],
+            [-0.090, -0.430, 0.100],
+        ]
+    )
+    estimate = GeometryEstimate(
+        ok=True,
+        failure_code='',
+        failure_reason='',
+        center_base=raw_center,
+        axes_base=np.eye(3),
+        size_xyz_m=[0.0494, 0.0344, 0.0208],
+        support_normal_base=normal,
+        support_offset_m=-0.0041,
+        support_inlier_ratio=0.86,
+        object_points_base=points,
+        source_mode='instance_mask',
+    )
+
+    anchored, metrics = anchor_geometry_center_in_support_plane(
+        estimate,
+        reference,
+        max_planar_shift_m=0.025,
+    )
+
+    residual = reference - anchored.center_base
+    np.testing.assert_allclose(
+        residual - np.dot(residual, normal) * normal,
+        np.zeros(3),
+        atol=1e-12,
+    )
+    assert metrics['planar_shift_m'] == pytest.approx(0.0151, abs=0.0002)
+    np.testing.assert_allclose(anchored.axes_base, estimate.axes_base)
+    np.testing.assert_allclose(anchored.size_xyz_m, estimate.size_xyz_m)
+    np.testing.assert_allclose(
+        anchored.support_normal_base,
+        estimate.support_normal_base,
+    )
+    np.testing.assert_allclose(anchored.object_points_base, points)
+    np.testing.assert_allclose(estimate.center_base, raw_center)
+
+
+def test_near_field_center_anchor_rejects_unbounded_planar_drift():
+    estimate = GeometryEstimate(
+        ok=True,
+        failure_code='',
+        failure_reason='',
+        center_base=[0.0, 0.0, 0.02],
+        axes_base=np.eye(3),
+        size_xyz_m=[0.05, 0.04, 0.02],
+        support_normal_base=[0.0, 0.0, 1.0],
+        support_offset_m=0.0,
+        support_inlier_ratio=1.0,
+        object_points_base=[[0.0, 0.0, 0.02]],
+        source_mode='instance_mask',
+    )
+
+    with pytest.raises(ValueError, match='planar center shift'):
+        anchor_geometry_center_in_support_plane(
+            estimate,
+            [0.030, 0.0, 0.02],
+            max_planar_shift_m=0.025,
+        )
 
 
 def test_spatial_neighbor_means_match_bruteforce_across_bucket_boundaries():

@@ -27,6 +27,8 @@ from alicia_flexible_grasp.grasp.grasp6d_pipeline import (  # noqa: E402
     soft_candidate_cost,
     source_neutral_candidate_cost,
 )
+from alicia_flexible_grasp.vision.target_observation import TargetTrackIdentity
+
 from alicia_flexible_grasp.grasp.grasp6d_stability import (  # noqa: E402
     CandidateObservation,
     CandidateTracker,
@@ -122,6 +124,7 @@ def valid_safety_input(**overrides):
         'request_id': 3,
         'snapshot_stamp_sec': 10.0,
         'target_epoch': 7,
+        'target_track_id': 'g0-t7',
         'target_label': 'carton',
         'model_choice': 'carton_segmentation',
         'track_id': 1,
@@ -214,6 +217,7 @@ def stable_candidate(track_id, pre_moveit_score=0.0):
         request_id=3,
         snapshot_stamp_sec=10.0,
         target_epoch=7,
+        target_track_id=TargetTrackIdentity.from_stream(0, 7).track_id,
         target_label='carton',
         model_choice='carton_segmentation',
         center_base_xyz=np.array([0.1, 0.0, 0.2]),
@@ -236,6 +240,7 @@ def tracker_observation(request_id):
         request_id=request_id,
         snapshot_stamp_sec=100.0 + request_id,
         target_epoch=7,
+        target_track_id=TargetTrackIdentity.from_stream(0, 7).track_id,
         target_label='carton',
         model_choice='carton_segmentation',
         center_base_xyz=(0.1, 0.0, 0.2),
@@ -287,6 +292,7 @@ def safety_for_candidate(
         request_id=evaluation_request_id,
         snapshot_stamp_sec=evaluation_snapshot_stamp_sec,
         target_epoch=stable.target_epoch,
+        target_track_id=TargetTrackIdentity.from_stream(0, stable.target_epoch).track_id,
         target_label=stable.target_label,
         model_choice=stable.model_choice,
         track_id=stable.track_id,
@@ -1290,8 +1296,7 @@ def test_evaluation_identity_fields_are_strictly_validated(field, value):
         ({'snapshot_stamp_sec': 9.5}, 'SAFETY_EVIDENCE_STALE'),
         ({'snapshot_context_revision': 'ctx-old'}, 'SAFETY_EVIDENCE_STALE'),
         ({'target_epoch': 8}, 'SAFETY_BINDING_MISMATCH'),
-        ({'target_label': 'other'}, 'SAFETY_BINDING_MISMATCH'),
-        ({'model_choice': 'other-model'}, 'SAFETY_BINDING_MISMATCH'),
+        ({'target_track_id': 'other-track'}, 'SAFETY_BINDING_MISMATCH'),
         ({'track_id': 99}, 'SAFETY_BINDING_MISMATCH'),
         ({'variant_index': 1}, 'SAFETY_BINDING_MISMATCH'),
         ({'center_base_xyz': (0.1001, 0.0, 0.2)}, 'SAFETY_BINDING_MISMATCH'),
@@ -1317,6 +1322,19 @@ def test_stale_or_mismatched_safety_evidence_never_reaches_moveit(
 
     assert calls == []
     assert result.funnel.rejection_counts == {expected_code: 1}
+
+
+@pytest.mark.parametrize('diagnostics', [
+    {'model_choice': 'other-model', 'target_label': 'bottle'},
+    {'model_choice': '', 'target_label': ''},
+])
+def test_diagnostic_names_do_not_reject_bound_geometric_safety_evidence(diagnostics):
+    candidate = scored_candidate(6, 0.0)
+    candidate = replace(candidate, latest_safety=replace(
+        candidate.latest_safety, **diagnostics))
+    result = bounded_moveit_select([candidate], lambda _item: reachable_moveit_result())
+    assert result.selected.track_id == 6
+    assert result.funnel.rejection_counts == {}
 
 
 def test_fused_width_cannot_be_replaced_by_narrower_safety_evidence():

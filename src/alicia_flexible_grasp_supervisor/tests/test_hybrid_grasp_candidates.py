@@ -23,6 +23,8 @@ from alicia_flexible_grasp.grasp.hybrid_grasp_candidates import (
     bilateral_contact_balance,
     merge_hybrid_candidates,
 )
+from alicia_flexible_grasp.vision.target_observation import TargetTrackIdentity
+
 from alicia_flexible_grasp.grasp.grasp6d_stability import (
     CandidateObservation,
     CandidateTracker,
@@ -358,7 +360,7 @@ def test_exact_tie_creates_one_three_hit_track_independent_of_input_metadata():
     )
     selected_records = []
     stable = ()
-    identity = (4, 'carton', 'carton_segment')
+    identity = TargetTrackIdentity.from_stream(0, 4)
     for request_id, confidence in enumerate((0.99, 0.10, 0.75), start=1):
         graspnet = normalized_candidate(
             'graspnet',
@@ -381,9 +383,10 @@ def test_exact_tie_creates_one_three_hit_track_independent_of_input_metadata():
         observation = CandidateObservation(
             request_id=request_id,
             snapshot_stamp_sec=10.0 + request_id,
-            target_epoch=identity[0],
-            target_label=identity[1],
-            model_choice=identity[2],
+            target_epoch=identity.epoch,
+            target_track_id=TargetTrackIdentity.from_stream(0, identity.epoch).track_id,
+            target_label='carton',
+            model_choice='carton_segment',
             center_base_xyz=selected.contact_center_base,
             tool0_position_xyz=selected.T_base_tool0[:3, 3],
             quaternion_xyzw=(0.0, 0.0, 0.0, 1.0),

@@ -3,6 +3,7 @@
 #include "alicia_d_driver/actuation_confirmation.hpp"
 #include "alicia_d_driver/endpoint_trim_continuity.hpp"
 #include "alicia_d_driver/endpoint_trim_driver_admission.hpp"
+#include "alicia_d_driver/gui_direct_hold.hpp"
 
 #include <cmath>
 #include <limits>
@@ -275,6 +276,38 @@ TEST(ActuationConfirmationTest, ExplicitDisableIsTheDisabledTransition)
     EXPECT_EQ(confirmation.state(), ActuationState::DISABLED);
     EXPECT_FALSE(confirmation.motion_confirmed(10.2));
     EXPECT_EQ(confirmation.status_text(), "DISABLED:EXPLICIT_TORQUE_OFF");
+}
+
+TEST(GuiDirectHoldTest, PreservesRecentStreamedSetpointsForUneditedJoints)
+{
+    const std::vector<double> measured =
+        joints(0.0, 0.555, -0.262, 0.0, -0.324, 0.046);
+    const std::vector<double> streamed =
+        joints(0.0, 0.560, -0.253, 0.0, -0.321, 0.049);
+
+    EXPECT_EQ(
+        select_gui_direct_hold_reference(measured, streamed, true),
+        streamed
+    );
+}
+
+TEST(GuiDirectHoldTest, FallsBackToFeedbackWithoutAUsableStreamedSetpoint)
+{
+    const std::vector<double> measured =
+        joints(0.0, 0.555, -0.262, 0.0, -0.324, 0.046);
+
+    EXPECT_EQ(
+        select_gui_direct_hold_reference(measured, joints(), false),
+        measured
+    );
+    EXPECT_EQ(
+        select_gui_direct_hold_reference(
+            measured,
+            std::vector<double>{0.0, 0.1},
+            true
+        ),
+        measured
+    );
 }
 
 TEST(EndpointTrimContinuityTest, SerializesLiveCorrectionAndDelaysLeaseRelease)

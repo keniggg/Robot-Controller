@@ -5,9 +5,14 @@ import hmac
 import math
 import re
 import struct
+from collections.abc import Mapping
+from numbers import Integral, Real
+
+from alicia_flexible_grasp.vision.target_observation import validate_track_id
+from alicia_flexible_grasp.vision.multiview_surface import RegistrationConfig
 
 
-_CANONICAL_PREFIX = b'ALICIA_GRASP6D_PLAN_V1\x00'
+_CANONICAL_PREFIX = b'ALICIA_GRASP6D_PLAN_V2\x00'
 _PLAN_ID_PATTERN = re.compile(r'^[0-9a-f]{24}$')
 SUPPORTED_GEOMETRY_SOURCE_MODES = frozenset(('instance_mask', 'bbox_depth'))
 SUPPORTED_CANDIDATE_SOURCES = frozenset(('graspnet', 'tabletop_geometry'))
@@ -20,6 +25,104 @@ def float32_wire_value(value):
 
 
 GRIPPER_MAX_OPEN_WIDTH_F32 = float32_wire_value(GRIPPER_MAX_OPEN_WIDTH_M)
+
+# Keep the task-side refinement contract aligned with the measured multiview
+# registration contract.  ``minimum_fused_view_count`` is plan provenance
+# rather than an ICP setting, so it is kept here as the one additional field.
+REFINEMENT_REGISTRATION_FIELDS = (
+    'minimum_inliers',
+    'minimum_fused_view_count',
+    'minimum_overlap_fraction',
+    'maximum_rmse_m',
+    'maximum_translation_m',
+    'maximum_yaw_deg',
+    'maximum_support_normal_angle_deg',
+    'maximum_support_offset_delta_m',
+)
+_REFINEMENT_DEFAULTS = {
+    'minimum_inliers': int(RegistrationConfig().minimum_inliers),
+    'minimum_fused_view_count': 2,
+    'minimum_overlap_fraction': float(RegistrationConfig().minimum_overlap_fraction),
+    'maximum_rmse_m': float(RegistrationConfig().maximum_rmse_m),
+    'maximum_translation_m': float(RegistrationConfig().maximum_translation_m),
+    'maximum_yaw_deg': float(RegistrationConfig().maximum_yaw_deg),
+    'maximum_support_normal_angle_deg': float(
+        RegistrationConfig().maximum_support_normal_angle_deg
+    ),
+    'maximum_support_offset_delta_m': float(
+        RegistrationConfig().maximum_support_offset_delta_m
+    ),
+}
+
+
+def refinement_registration_policy(config=None):
+    """Return a validated refinement policy; runtime values may only tighten.
+
+    The returned dictionary intentionally contains no ``maximum_iterations`` or
+    correspondence setting: those are producer-side registration controls and
+    are not evidence acceptance claims carried by ``Grasp6DPlan``.
+    """
+    if config is None:
+        raw = {}
+    elif isinstance(config, RegistrationConfig):
+        raw = {
+            name: getattr(config, name)
+            for name in REFINEMENT_REGISTRATION_FIELDS
+            if hasattr(config, name)
+        }
+    elif isinstance(config, Mapping):
+        raw = dict(config)
+    else:
+        raise ValueError('refinement registration policy must be a mapping')
+    unknown = set(raw).difference(REFINEMENT_REGISTRATION_FIELDS)
+    if unknown:
+        raise ValueError(
+            'refinement registration policy has unknown fields: %s'
+            % ', '.join(sorted(str(name) for name in unknown))
+        )
+    policy = dict(_REFINEMENT_DEFAULTS)
+    policy.update(raw)
+    integer_fields = ('minimum_inliers', 'minimum_fused_view_count')
+    for name in integer_fields:
+        value = policy[name]
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            raise ValueError('%s must be an integer' % name)
+        if int(value) < 1:
+            raise ValueError('%s must be >= 1' % name)
+        policy[name] = int(value)
+    for name in set(REFINEMENT_REGISTRATION_FIELDS).difference(integer_fields):
+        value = policy[name]
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise ValueError('%s must be a finite number' % name)
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError('%s must be finite' % name)
+        if name == 'minimum_overlap_fraction' and not 0.0 < value <= 1.0:
+            raise ValueError('%s must be in (0, 1]' % name)
+        if name == 'maximum_yaw_deg' and not 0.0 < value <= 180.0:
+            raise ValueError('%s must be in (0, 180]' % name)
+        if name == 'maximum_support_normal_angle_deg' and not 0.0 <= value <= 180.0:
+            raise ValueError('%s must be in [0, 180]' % name)
+        if name not in ('minimum_overlap_fraction', 'maximum_yaw_deg',
+                        'maximum_support_normal_angle_deg') and value < 0.0:
+            raise ValueError('%s must be nonnegative' % name)
+        policy[name] = value
+    for name in ('minimum_inliers', 'minimum_fused_view_count'):
+        if policy[name] < _REFINEMENT_DEFAULTS[name]:
+            raise ValueError('%s may only be tightened' % name)
+    for name in (
+        'minimum_overlap_fraction',
+    ):
+        if policy[name] < _REFINEMENT_DEFAULTS[name]:
+            raise ValueError('%s may only be tightened' % name)
+    for name in (
+        'maximum_rmse_m', 'maximum_translation_m', 'maximum_yaw_deg',
+        'maximum_support_normal_angle_deg',
+        'maximum_support_offset_delta_m',
+    ):
+        if policy[name] > _REFINEMENT_DEFAULTS[name]:
+            raise ValueError('%s may only be tightened' % name)
+    return policy
 
 
 def required_open_width_is_valid(value):
@@ -79,9 +182,7 @@ def validate_finite_pose(pose, name='pose'):
 def validate_rich_geometry(geometry):
     if geometry is None or not bool(getattr(geometry, 'valid', False)):
         raise ValueError('object geometry is invalid')
-    label = str(getattr(geometry, 'label', '') or '')
-    if not label or label != label.strip():
-        raise ValueError('object geometry label must be non-empty and canonical')
+    validate_track_id(getattr(geometry, 'target_track_id', None))
     source_mode = str(getattr(geometry, 'source_mode', '') or '')
     if source_mode not in SUPPORTED_GEOMETRY_SOURCE_MODES:
         raise ValueError(
@@ -172,8 +273,6 @@ def canonical_plan_bytes(plan):
     if stamp_ns <= 0:
         raise ValueError('snapshot header stamp must be non-zero')
     model_text = str(getattr(plan, 'model_choice', '') or '')
-    if not model_text or model_text != model_text.strip():
-        raise ValueError('model choice must be non-empty and canonical')
     model = model_text.encode('utf-8')
     source_text, lineage = validate_candidate_source(
         getattr(plan, 'candidate_source', None),
@@ -188,6 +287,17 @@ def canonical_plan_bytes(plan):
         raise ValueError('rich plan must contain exactly four poses')
 
     payload = bytearray(_CANONICAL_PREFIX)
+    track = validate_track_id(getattr(plan, 'target_track_id', None))
+    if track != getattr(getattr(plan, 'object_geometry', None), 'target_track_id', None):
+        raise ValueError('plan and geometry target track must match')
+    track_bytes = track.encode('utf-8')
+    payload.extend(struct.pack('>I', len(track_bytes)))
+    payload.extend(track_bytes)
+    status, counts, metrics, clipped = validate_refinement_evidence(plan)
+    status_bytes = status.encode('ascii')
+    payload.extend(struct.pack('>I', len(status_bytes)))
+    payload.extend(status_bytes)
+    payload.extend(struct.pack('>II4f?', *counts, *metrics, clipped))
     payload.extend(struct.pack('>qI', stamp_ns, len(model)))
     payload.extend(model)
     payload.extend(struct.pack('>II', len(source), len(lineage_bytes)))
@@ -224,6 +334,73 @@ def canonical_plan_bytes(plan):
     # ObjectGeometry.support_offset_m is also float32 on the ROS wire.
     payload.extend(struct.pack('>f', support[3]))
     return bytes(payload)
+
+
+def validate_refinement_evidence(plan, registration_config=None):
+    """Validate structured evidence at ROS wire precision, never infer success.
+
+    ``registration_config`` is an optional task/runtime policy.  It is parsed
+    through :func:`refinement_registration_policy`, which rejects malformed or
+    widened values and keeps the wire-boundary comparisons deterministic.
+    """
+    policy = refinement_registration_policy(registration_config)
+    status = getattr(plan, 'refinement_status', None)
+    if status not in ('NOT_EVALUATED', 'VALID_3D', 'CLEAR_VIEW_REQUIRED', 'INVALID_3D'):
+        raise ValueError('unsupported refinement status')
+    counts = tuple(getattr(plan, name, None) for name in (
+        'refinement_inlier_count', 'fused_view_count'))
+    if any(isinstance(value, bool) or not isinstance(value, Integral)
+           or not 0 <= value <= 0xffffffff for value in counts):
+        raise ValueError('refinement counts must be uint32 values')
+    try:
+        metrics = tuple(float32_wire_value(getattr(plan, name)) for name in (
+            'refinement_overlap_fraction', 'refinement_rmse_m',
+            'refinement_translation_m', 'refinement_rotation_deg'))
+    except (AttributeError, TypeError, ValueError, OverflowError, struct.error) as exc:
+        raise ValueError('refinement metrics must be finite float32 values') from exc
+    if any(not math.isfinite(value) or value < 0 for value in metrics):
+        raise ValueError('refinement metrics must be finite and nonnegative')
+    if metrics[0] > 1 or metrics[3] > 180:
+        raise ValueError('refinement overlap or rotation outside physical bounds')
+    clipped = getattr(plan, 'refinement_source_clipped', None)
+    if not isinstance(clipped, bool):
+        raise ValueError('refinement_source_clipped must be bool')
+    if status == 'VALID_3D':
+        # Acceptance is deliberately strict at the float32 wire boundary.  A
+        # forged VALID_3D marker with weak registration evidence must fail
+        # closed before it can become execution authority.
+        inliers, views = counts
+        overlap, rmse, translation, rotation = metrics
+        if (
+            inliers < policy['minimum_inliers']
+            or views < policy['minimum_fused_view_count']
+            or overlap < float32_wire_value(policy['minimum_overlap_fraction'])
+        ):
+            raise ValueError(
+                'VALID_3D registration counts/overlap below configured thresholds'
+            )
+        if rmse > float32_wire_value(policy['maximum_rmse_m']):
+            raise ValueError('VALID_3D registration RMSE exceeds threshold')
+        if translation > float32_wire_value(policy['maximum_translation_m']):
+            raise ValueError('VALID_3D translation exceeds threshold')
+        if rotation > float32_wire_value(policy['maximum_yaw_deg']):
+            raise ValueError('VALID_3D rotation exceeds threshold')
+    if status == 'CLEAR_VIEW_REQUIRED':
+        # A clear view is an observation-quality remedy only.  It must not be
+        # used for malformed, stale, mismatched, or over-bound registrations.
+        if not clipped:
+            raise ValueError('CLEAR_VIEW_REQUIRED requires a clipped source')
+        if not (
+            counts[0] < policy['minimum_inliers']
+            or counts[1] < policy['minimum_fused_view_count']
+            or metrics[0] < float32_wire_value(policy['minimum_overlap_fraction'])
+        ):
+            raise ValueError(
+                'CLEAR_VIEW_REQUIRED is only valid for insufficient evidence'
+            )
+    if status == 'NOT_EVALUATED' and (any(counts) or any(metrics) or clipped):
+        raise ValueError('NOT_EVALUATED must not assert refinement evidence')
+    return status, counts, metrics, clipped
 
 
 def compute_plan_id(plan):

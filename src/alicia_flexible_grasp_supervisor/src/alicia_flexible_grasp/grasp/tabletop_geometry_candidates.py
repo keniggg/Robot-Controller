@@ -12,11 +12,13 @@ from .gripper_geometry import (
     ANALYTICAL_JAW_CLEARANCE_EACH_SIDE_M,
     ANALYTICAL_MAX_INNER_GAP_M,
     ANALYTICAL_PALM_CENTER_TOOL_XYZ_M,
+    BilateralSurfaceEvidence,
     GripperGeometry,
+    bilateral_surface_contact_bounds_m,
     bilateral_contact_height_bounds_m,
+    evaluate_bilateral_surface_evidence,
     gripper_box_centers,
     parse_tool_axis,
-    projected_cloud_width_m,
 )
 
 
@@ -55,6 +57,7 @@ class TabletopGeometryConfig:
     angle_dedup_deg: float = 2.0
     jaw_clearance_each_side_m: float = 0.002
     opening_fit_clearance_each_side_m: float = 0.002
+    width_projection_trim_fraction: float = 0.0
     min_contact_band_points: int = 6
     contact_band_fraction: float = 0.12
     max_candidates: int = 8
@@ -146,6 +149,8 @@ def generate_tabletop_proposals(
     support_point_base,
     support_normal_base,
     config,
+    fused_surface=None,
+    finger_geometry=None,
 ):
     """Return bounded, category-independent grasp proposals without side effects."""
     try:
@@ -156,6 +161,18 @@ def generate_tabletop_proposals(
         _positive_vector(obb_size_xyz_m, 'obb_size_xyz_m')
         support_point = _finite_vector(support_point_base, 'support_point_base')
         normal = _unit_vector(support_normal_base, 'support_normal_base')
+        if (fused_surface is None) != (finger_geometry is None):
+            raise _InputInvalid(
+                'fused_surface and finger_geometry must be supplied together'
+            )
+        if fused_surface is not None:
+            if not isinstance(finger_geometry, GripperGeometry):
+                raise _InputInvalid(
+                    'finger_geometry must be a GripperGeometry'
+                )
+            points = _finite_points(
+                fused_surface.points_base, checked_config
+            )
     except _TargetCloudInvalid as error:
         return _failure('TARGET_CLOUD_INVALID', str(error))
     except _SupportPlaneInvalid as error:
@@ -173,32 +190,89 @@ def generate_tabletop_proposals(
     proposals = []
     width_valid_count = 0
     contact_valid_count = 0
+    bilateral_evidence_attempted = fused_surface is not None
     contact_center = center
     for angle_deg, jaw_axis in angles:
         projection = points.dot(jaw_axis)
-        lower = float(np.min(projection))
-        upper = float(np.max(projection))
+        raw_lower = float(np.min(projection))
+        raw_upper = float(np.max(projection))
+        trim_fraction = checked_config.width_projection_trim_fraction
+        if trim_fraction > 0.0:
+            lower, upper = (
+                float(value)
+                for value in np.quantile(
+                    projection,
+                    (trim_fraction, 1.0 - trim_fraction),
+                )
+            )
+        else:
+            lower, upper = raw_lower, raw_upper
         span = upper - lower
-        required = projected_cloud_width_m(
-            points,
-            jaw_axis,
-            checked_config.opening_fit_clearance_each_side_m,
-        )
+        evidence = None
+        measured_insertion_bounds = None
+        if fused_surface is not None:
+            evidence = evaluate_bilateral_surface_evidence(
+                fused_surface,
+                contact_center,
+                jaw_axis,
+                -normal,
+                finger_geometry,
+                minimum_points_per_side=max(
+                    12, checked_config.min_contact_band_points
+                ),
+                support_normal_base=normal,
+            )
+            if evidence.ok:
+                measured_insertion_bounds = (
+                    bilateral_surface_contact_bounds_m(
+                        fused_surface,
+                        contact_center,
+                        jaw_axis,
+                        -normal,
+                        finger_geometry,
+                        minimum_points_per_side=max(
+                            12, checked_config.min_contact_band_points
+                        ),
+                        support_normal_base=normal,
+                    )
+                )
+            required = (
+                float(evidence.measured_width_m)
+                + 2.0 * checked_config.opening_fit_clearance_each_side_m
+            )
+        else:
+            required = (
+                span
+                + 2.0 * checked_config.opening_fit_clearance_each_side_m
+            )
         if span <= 1e-9 or not 0.0 < required <= checked_config.max_inner_gap_m:
             continue
         width_valid_count += 1
-        negative, positive = _contact_counts(
-            projection, lower, upper, checked_config.contact_band_fraction
-        )
-        if min(negative, positive) < checked_config.min_contact_band_points:
-            continue
-        contact_height_bounds = bilateral_contact_height_bounds_m(
-            points,
-            contact_center,
-            jaw_axis,
-            normal,
-            checked_config.contact_band_fraction,
-        )
+        if evidence is not None:
+            negative = int(evidence.negative_jaw_points)
+            positive = int(evidence.positive_jaw_points)
+            if not evidence.ok or measured_insertion_bounds is None:
+                continue
+            # The proposal audit and downstream physical gate use support-up
+            # coordinates.  The measured evaluator's fixed tool-Z insertion
+            # axis is support-down for these tabletop proposals.
+            contact_height_bounds = (
+                -float(measured_insertion_bounds[1]),
+                -float(measured_insertion_bounds[0]),
+            )
+        else:
+            negative, positive = _contact_counts(
+                projection, lower, upper, checked_config.contact_band_fraction
+            )
+            if min(negative, positive) < checked_config.min_contact_band_points:
+                continue
+            contact_height_bounds = bilateral_contact_height_bounds_m(
+                points,
+                contact_center,
+                jaw_axis,
+                normal,
+                checked_config.contact_band_fraction,
+            )
         if contact_height_bounds is None:
             continue
         contact_valid_count += 1
@@ -217,13 +291,38 @@ def generate_tabletop_proposals(
                 source_score=-(checked_config.max_inner_gap_m - required) - 0.01 * symmetry,
                 angle_deg=angle_deg,
                 audit={
+                    'projection_raw_min_m': raw_lower,
+                    'projection_raw_max_m': raw_upper,
                     'projection_min_m': lower,
                     'projection_max_m': upper,
+                    'width_projection_trim_fraction': trim_fraction,
                     'bilateral_contact_height_min_m': float(
                         contact_height_bounds[0]
                     ),
                     'bilateral_contact_height_max_m': float(
                         contact_height_bounds[1]
+                    ),
+                    **(
+                        {
+                            'bilateral_surface_evidence_code': evidence.code,
+                            'negative_jaw_unique_view_count': int(
+                                evidence.negative_view_count
+                            ),
+                            'positive_jaw_unique_view_count': int(
+                                evidence.positive_view_count
+                            ),
+                            'measured_width_m': float(
+                                evidence.measured_width_m
+                            ),
+                            'measured_contact_height_m': float(
+                                evidence.contact_height_m
+                            ),
+                            'contact_height_bounds_source': (
+                                'fused_measured_bilateral_surface'
+                            ),
+                        }
+                        if isinstance(evidence, BilateralSurfaceEvidence)
+                        else {}
                     ),
                 },
             )
@@ -244,6 +343,13 @@ def generate_tabletop_proposals(
             sampled_angles,
         )
     assert contact_valid_count == 0
+    if bilateral_evidence_attempted:
+        return TabletopGenerationResult(
+            (),
+            'BILATERAL_SURFACE_EVIDENCE_MISSING',
+            'no aperture-valid jaw direction has measured bilateral surface evidence',
+            sampled_angles,
+        )
     return TabletopGenerationResult(
         (),
         'CONTACT_SUPPORT_INVALID',
@@ -636,6 +742,7 @@ def _validated_config(config):
         'angle_dedup_deg',
         'jaw_clearance_each_side_m',
         'opening_fit_clearance_each_side_m',
+        'width_projection_trim_fraction',
         'contact_band_fraction',
     )
     values = {}
@@ -670,6 +777,10 @@ def _validated_config(config):
         raise _InputInvalid(
             'opening_fit_clearance_each_side_m must not exceed the fixed '
             '2 mm gripper contract'
+        )
+    if not 0.0 <= values['width_projection_trim_fraction'] <= 0.05:
+        raise _InputInvalid(
+            'width_projection_trim_fraction must be in [0, 0.05]'
         )
     if not 0.0 < values['contact_band_fraction'] < 0.5:
         raise _InputInvalid('contact_band_fraction must be in (0, 0.5)')

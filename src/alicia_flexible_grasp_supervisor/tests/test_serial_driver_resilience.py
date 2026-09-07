@@ -10,6 +10,7 @@ DRIVER_HEADER = (
     ROOT / 'real-arm' / 'alicia_d_driver' / 'include'
     / 'alicia_d_driver' / 'alicia_d_driver_node.hpp'
 )
+DRIVER_PACKAGE = ROOT / 'real-arm' / 'alicia_d_driver'
 
 
 def _function_body(source, signature):
@@ -28,6 +29,20 @@ def _function_body(source, signature):
 
 
 class SerialDriverResilienceTest(unittest.TestCase):
+    def test_full_bringup_uses_one_shot_controller_loader_without_shutdown_stop(self):
+        launch = (
+            DRIVER_PACKAGE / 'launch' / 'alicia_d_bringup.launch'
+        ).read_text()
+        loader = (
+            DRIVER_PACKAGE / 'scripts' / 'controller_loader_once.py'
+        ).read_text()
+
+        self.assertIn('type="controller_loader_once.py"', launch)
+        self.assertNotIn('type="spawner"', launch)
+        self.assertNotIn('rospy.on_shutdown', loader)
+        self.assertNotIn('UnloadController', loader)
+        self.assertIn('switch_controller(\n            to_start,\n            [],', loader)
+
     def test_read_thread_does_not_call_full_disconnect_from_inside_itself(self):
         source = (DRIVER_SRC / 'serial_communicator.cpp').read_text()
         body = _function_body(source, 'void SerialCommunicator::read_thread_loop()')
@@ -127,18 +142,68 @@ class SerialDriverResilienceTest(unittest.TestCase):
             'std::numeric_limits<float>::quiet_NaN()',
             body,
         )
-        rejection = body.index('Rejected %zu implausible SDK temperature')
+        rejection = body.index('Rejected SDK temperature telemetry')
         telemetry_refresh = body.index('latest_temperatures_c_ = msg.data;')
-        self.assertLess(rejection, telemetry_refresh)
+        conversion_complete = body.index('msg.data.push_back(value);')
+        self.assertGreater(rejection, telemetry_refresh)
         self.assertIn(
             'if (std::isfinite(value))',
             body,
         )
-        self.assertNotIn('return;', body[rejection:telemetry_refresh])
+        self.assertNotIn(
+            'return;',
+            body[conversion_complete:telemetry_refresh],
+        )
         self.assertIn(
             'consecutive_high_temperature_samples_by_channel_[i]',
-            body[telemetry_refresh:],
+            body,
         )
+
+    def test_temperature_slew_filter_rejects_short_uart_like_spike_but_not_real_rise(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        header = DRIVER_HEADER.read_text()
+        body = _function_body(
+            source,
+            'void AliciaDDriverNode::parse_sdk_temperature_frame',
+        )
+
+        self.assertIn('max_temperature_slew_c_per_sec_', header)
+        self.assertIn('temperature_slew_tolerance_c_', header)
+        self.assertIn('last_plausible_temperatures_c_', header)
+        self.assertIn('last_plausible_temperature_times_', header)
+        self.assertIn('allowed_delta_c', body)
+        self.assertIn('slew_rejected_temperature_channels', body)
+
+        max_slew_c_per_sec = 8.0
+        tolerance_c = 5.0
+        previous = 36.0
+        previous_time = 0.0
+
+        def admit(value, now):
+            nonlocal previous, previous_time
+            allowed = tolerance_c + max_slew_c_per_sec * (now - previous_time)
+            if abs(value - previous) > allowed:
+                return False
+            previous = value
+            previous_time = now
+            return True
+
+        # The retained 36 -> 98 C corruption lasted five seconds. Comparing
+        # every frame with the last plausible sample keeps all five invalid.
+        self.assertEqual(
+            [admit(98.0, second) for second in range(1, 6)],
+            [False, False, False, False, False],
+        )
+        self.assertTrue(admit(36.0, 6.0))
+
+        # A physically progressive rise remains accepted and still supplies
+        # three consecutive >=60 C samples to the unchanged protection gate.
+        accepted = [
+            value
+            for second, value in enumerate((48.0, 59.0, 60.0, 61.0, 62.0), 7)
+            if admit(value, float(second))
+        ]
+        self.assertEqual(accepted[-3:], [60.0, 61.0, 62.0])
 
     def test_temperature_telemetry_cannot_autonomously_remove_torque(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()

@@ -1,4 +1,5 @@
 #include "alicia_d_driver/alicia_d_driver_node.hpp"
+#include "alicia_d_driver/gui_direct_hold.hpp"
 #include <cmath>
 #include <numeric> // For std::accumulate
 #include <map>
@@ -311,6 +312,11 @@ void AliciaDDriverNode::load_parameters()
         endpoint_feedback_trim_response_min_quantums_,
         endpoint_feedback_trim_response_deadline_sec_
     );
+    pnh_.param<double>(
+        "gui_direct_gesture_timeout_sec",
+        gui_direct_gesture_timeout_sec_,
+        0.25
+    );
     endpoint_feedback_trim_stable_sec_ =
         std::max(0.0, endpoint_feedback_trim_stable_sec_);
     endpoint_feedback_trim_activation_error_rad_ =
@@ -324,6 +330,10 @@ void AliciaDDriverNode::load_parameters()
         1.0,
         endpoint_feedback_trim_task_lease_timeout_sec_
     );
+    gui_direct_gesture_timeout_sec_ = std::max(
+        0.10,
+        gui_direct_gesture_timeout_sec_
+    );
     pnh_.param<double>("protection_clear_stable_sec", protection_clear_stable_sec_, 30.0);
     pnh_.param<double>("max_enable_temperature_c", max_enable_temperature_c_, 60.0);
     pnh_.param<double>(
@@ -334,6 +344,24 @@ void AliciaDDriverNode::load_parameters()
     max_plausible_temperature_c_ = std::max(
         max_enable_temperature_c_,
         max_plausible_temperature_c_
+    );
+    pnh_.param<double>(
+        "max_temperature_slew_c_per_sec",
+        max_temperature_slew_c_per_sec_,
+        8.0
+    );
+    pnh_.param<double>(
+        "temperature_slew_tolerance_c",
+        temperature_slew_tolerance_c_,
+        5.0
+    );
+    max_temperature_slew_c_per_sec_ = std::max(
+        0.1,
+        max_temperature_slew_c_per_sec_
+    );
+    temperature_slew_tolerance_c_ = std::max(
+        0.0,
+        temperature_slew_tolerance_c_
     );
     pnh_.param<int>("e1_confirm_consecutive_frames", e1_confirm_consecutive_frames_, 3);
     pnh_.param<int>("temperature_over_limit_confirm_samples", temperature_over_limit_confirm_samples_, 3);
@@ -626,6 +654,11 @@ void AliciaDDriverNode::clear_retained_command_state()
         endpoint_feedback_trim_task_lease_active_ = false;
         endpoint_feedback_trim_task_lease_expires_at_ = ros::Time(0);
         endpoint_feedback_trim_task_lease_reference_.clear();
+        gui_direct_gesture_active_ = false;
+        gui_direct_edited_index_ = -1;
+        gui_direct_last_command_time_ = ros::Time(0);
+        gui_direct_hold_joint_angles_.clear();
+        gui_direct_hold_gripper_rad_ = 0.0;
     }
     {
         std::lock_guard<std::mutex> lock(send_mutex_);
@@ -958,11 +991,212 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         "Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"
     };
 
+    const bool gui_direct_command =
+        msg->header.frame_id == "gui_direct";
+    const bool gui_direct_sync_command =
+        msg->header.frame_id == "gui_direct_sync";
+    int gui_direct_edited_index = -1;
+    if (gui_direct_command) {
+        if (
+            msg->effort.size() != msg->name.size() ||
+            msg->effort.empty()
+        ) {
+            ROS_WARN_THROTTLE(
+                1.0,
+                "Rejected gui_direct command without one-hot joint intent metadata"
+            );
+            return;
+        }
+        int marked_count = 0;
+        for (size_t i = 0; i < msg->name.size(); ++i) {
+            if (!std::isfinite(msg->effort[i])) {
+                ROS_WARN_THROTTLE(
+                    1.0,
+                    "Rejected gui_direct command with non-finite joint intent metadata"
+                );
+                return;
+            }
+            if (msg->effort[i] <= 0.5) {
+                continue;
+            }
+            ++marked_count;
+            const auto arm_it = std::find(
+                hardware_joint_names.begin(),
+                hardware_joint_names.end(),
+                msg->name[i]
+            );
+            if (arm_it != hardware_joint_names.end()) {
+                gui_direct_edited_index = static_cast<int>(
+                    std::distance(hardware_joint_names.begin(), arm_it)
+                );
+            } else if (msg->name[i] == "right_finger") {
+                gui_direct_edited_index = 6;
+            } else {
+                gui_direct_edited_index = -1;
+            }
+        }
+        if (marked_count != 1 || gui_direct_edited_index < 0) {
+            ROS_WARN_THROTTLE(
+                1.0,
+                "Rejected gui_direct command with invalid one-hot joint intent metadata"
+            );
+            return;
+        }
+        const std::string edited_name =
+            gui_direct_edited_index < 6
+                ? hardware_joint_names[gui_direct_edited_index]
+                : "right_finger";
+        const auto edited_value = joint_map.find(edited_name);
+        if (
+            edited_value == joint_map.end() ||
+            !std::isfinite(edited_value->second)
+        ) {
+            ROS_WARN_THROTTLE(
+                1.0,
+                "Rejected gui_direct command without a finite value for %s",
+                edited_name.c_str()
+            );
+            return;
+        }
+    }
+
     std::vector<double> joint_angles;
+    std::vector<double> feedback_joint_angles;
+    std::vector<double> streamed_hold_joint_angles;
+    bool streamed_hold_is_fresh = false;
     double gripper_value = 0.0; // incoming normalized value -> radians for gripper
-    {
+    if (gui_direct_command) {
+        double feedback_gripper_rad = 0.0;
+        bool feedback_is_fresh = false;
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            feedback_is_fresh =
+                has_real_feedback_ &&
+                current_joint_positions_.size() ==
+                    hardware_joint_names.size() &&
+                !last_feedback_time_.isZero() &&
+                (command_time - last_feedback_time_).toSec() >= 0.0 &&
+                (command_time - last_feedback_time_).toSec() <=
+                    feedback_stale_timeout_sec_;
+            if (feedback_is_fresh) {
+                feedback_joint_angles = current_joint_positions_;
+                feedback_gripper_rad = current_gripper_position_;
+            }
+            const double streamed_hold_max_age_sec =
+                command_keepalive_rate_hz_ > 0.0
+                    ? std::max(
+                        feedback_stale_timeout_sec_,
+                        2.0 / command_keepalive_rate_hz_
+                    )
+                    : feedback_stale_timeout_sec_;
+            const double streamed_hold_age_sec =
+                last_streamed_joint_positions_time_.isZero()
+                    ? std::numeric_limits<double>::infinity()
+                    : (
+                        command_time -
+                        last_streamed_joint_positions_time_
+                    ).toSec();
+            streamed_hold_is_fresh =
+                last_streamed_joint_positions_.size() ==
+                    hardware_joint_names.size() &&
+                streamed_hold_age_sec >= 0.0 &&
+                streamed_hold_age_sec <= streamed_hold_max_age_sec;
+            if (streamed_hold_is_fresh) {
+                streamed_hold_joint_angles =
+                    last_streamed_joint_positions_;
+            }
+        }
+        if (!feedback_is_fresh) {
+            ROS_WARN_THROTTLE(
+                1.0,
+                "Rejected gui_direct command without fresh six-joint encoder feedback"
+            );
+            return;
+        }
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
-        joint_angles = latest_joint_angles_;
+        const double gesture_gap_sec =
+            gui_direct_last_command_time_.isZero()
+                ? std::numeric_limits<double>::infinity()
+                : (command_time - gui_direct_last_command_time_).toSec();
+        const bool continue_gesture =
+            gui_direct_gesture_active_ &&
+            gui_direct_edited_index_ == gui_direct_edited_index &&
+            gesture_gap_sec >= 0.0 &&
+            gesture_gap_sec <= gui_direct_gesture_timeout_sec_ &&
+            gui_direct_hold_joint_angles_.size() ==
+                hardware_joint_names.size();
+        if (!continue_gesture) {
+            gui_direct_hold_joint_angles_ = select_gui_direct_hold_reference(
+                feedback_joint_angles,
+                streamed_hold_joint_angles,
+                streamed_hold_is_fresh
+            );
+            gui_direct_hold_gripper_rad_ = feedback_gripper_rad;
+        }
+        gui_direct_gesture_active_ = true;
+        gui_direct_edited_index_ = gui_direct_edited_index;
+        gui_direct_last_command_time_ = command_time;
+        joint_angles = gui_direct_hold_joint_angles_;
+        gripper_value = gui_direct_hold_gripper_rad_;
+    } else {
+        if (gui_direct_sync_command) {
+            std::lock_guard<std::mutex> data_lock(data_mutex_);
+            feedback_joint_angles = current_joint_positions_;
+            const double streamed_hold_max_age_sec =
+                command_keepalive_rate_hz_ > 0.0
+                    ? std::max(
+                        feedback_stale_timeout_sec_,
+                        2.0 / command_keepalive_rate_hz_
+                    )
+                    : feedback_stale_timeout_sec_;
+            const double streamed_hold_age_sec =
+                last_streamed_joint_positions_time_.isZero()
+                    ? std::numeric_limits<double>::infinity()
+                    : (
+                        command_time -
+                        last_streamed_joint_positions_time_
+                    ).toSec();
+            streamed_hold_is_fresh =
+                last_streamed_joint_positions_.size() ==
+                    hardware_joint_names.size() &&
+                streamed_hold_age_sec >= 0.0 &&
+                streamed_hold_age_sec <= streamed_hold_max_age_sec;
+            if (streamed_hold_is_fresh) {
+                streamed_hold_joint_angles =
+                    last_streamed_joint_positions_;
+            }
+        }
+        std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
+        const double direct_age_sec =
+            gui_direct_last_command_time_.isZero()
+                ? std::numeric_limits<double>::infinity()
+                : (command_time - gui_direct_last_command_time_).toSec();
+        if (
+            gui_direct_gesture_active_ &&
+            !gui_direct_sync_command &&
+            direct_age_sec >= 0.0 &&
+            direct_age_sec <= gui_direct_gesture_timeout_sec_
+        ) {
+            ROS_WARN_THROTTLE(
+                1.0,
+                "Ignored %s /joint_commands source during active gui_direct gesture",
+                msg->header.frame_id.empty()
+                    ? "unidentified"
+                    : msg->header.frame_id.c_str()
+            );
+            return;
+        }
+        gui_direct_gesture_active_ = false;
+        gui_direct_edited_index_ = -1;
+        gui_direct_hold_joint_angles_.clear();
+        joint_angles =
+            gui_direct_sync_command && streamed_hold_is_fresh
+                ? select_gui_direct_hold_reference(
+                    feedback_joint_angles,
+                    streamed_hold_joint_angles,
+                    true
+                )
+                : latest_joint_angles_;
         gripper_value = latest_gripper_rad_;
     }
     if (joint_angles.size() != hardware_joint_names.size()) {
@@ -970,6 +1204,15 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
     }
 
     for (size_t i = 0; i < hardware_joint_names.size(); ++i) {
+        if (
+            (
+                gui_direct_command &&
+                static_cast<int>(i) != gui_direct_edited_index
+            ) ||
+            (gui_direct_sync_command && streamed_hold_is_fresh)
+        ) {
+            continue;
+        }
         auto it = joint_map.find(hardware_joint_names[i]);
         if (it != joint_map.end()) {
             joint_angles[i] = it->second;
@@ -977,7 +1220,11 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
     }
 
     auto it_grip = joint_map.find("right_finger");
-    if (it_grip != joint_map.end()) {
+    if (
+        it_grip != joint_map.end() &&
+        (!gui_direct_command || gui_direct_edited_index == 6) &&
+        !(gui_direct_sync_command && streamed_hold_is_fresh)
+    ) {
         if (gripper_input_is_percent_) {
             // map [0..1] percent to radians [0..100deg]
             const double pct = std::max(0.0, std::min(1.0, it_grip->second));
@@ -1074,8 +1321,16 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
     }
 
     if (log_command_flow_) {
-        ROS_INFO_THROTTLE(1.0, "Received /joint_commands target: joints_deg=%s gripper_rad=%.3f",
-                          format_radians_as_degrees(joint_angles).c_str(), gripper_value);
+        ROS_INFO_THROTTLE(
+            1.0,
+            "Received /joint_commands source=%s edited_index=%d target: joints_deg=%s gripper_rad=%.3f",
+            msg->header.frame_id.empty()
+                ? "unidentified"
+                : msg->header.frame_id.c_str(),
+            gui_direct_edited_index,
+            format_radians_as_degrees(joint_angles).c_str(),
+            gripper_value
+        );
     }
 }
 
@@ -2217,7 +2472,7 @@ void AliciaDDriverNode::parse_sdk_temperature_frame(const std::vector<uint8_t>& 
 
     std_msgs::Float32MultiArray msg;
     msg.data.reserve(data_payload.size());
-    float max_temperature = 0.0f;
+    const ros::Time temperature_time = ros::Time::now();
     size_t invalid_temperature_channels = 0;
     for (uint8_t raw : data_payload) {
         float value = static_cast<float>(raw);
@@ -2229,35 +2484,58 @@ void AliciaDDriverNode::parse_sdk_temperature_frame(const std::vector<uint8_t>& 
             ++invalid_temperature_channels;
         }
         msg.data.push_back(value);
-        if (std::isfinite(value)) {
-            max_temperature = std::max(max_temperature, value);
-        }
     }
 
-    if (invalid_temperature_channels > 0) {
-        // The retained real-arm failure contained CRC-valid response bursts
-        // that simultaneously produced impossible 164--250 C temperature
-        // bytes, changing self-check masks, and 130/180 degree encoder jumps.
-        // Exclude only those impossible channel values.  Other channels in
-        // the same response remain independent protection evidence: the
-        // recorded 60--61 C channel must still be able to accumulate the
-        // unchanged consecutive same-channel over-temperature block.
-        ROS_ERROR_THROTTLE(
-            1.0,
-            "Rejected %zu implausible SDK temperature channel(s) above telemetry plausibility ceiling %.1f C; raw=[%s] accepted_values_c=%s",
-            invalid_temperature_channels,
-            max_plausible_temperature_c_,
-            format_bytes_as_hex(data_payload).c_str(),
-            format_temperatures(msg.data).c_str()
-        );
-    }
-
+    size_t slew_rejected_temperature_channels = 0;
     int high_temperature_sample_count = 0;
     int high_temperature_channel_index = -1;
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
+        if (
+            last_plausible_temperatures_c_.size() != msg.data.size() ||
+            last_plausible_temperature_times_.size() != msg.data.size()
+        ) {
+            last_plausible_temperatures_c_.assign(
+                msg.data.size(),
+                std::numeric_limits<float>::quiet_NaN()
+            );
+            last_plausible_temperature_times_.assign(
+                msg.data.size(),
+                ros::Time(0)
+            );
+        }
+        for (size_t i = 0; i < msg.data.size(); ++i) {
+            float& value = msg.data[i];
+            if (!std::isfinite(value)) {
+                continue;
+            }
+            const float previous = last_plausible_temperatures_c_[i];
+            const ros::Time previous_time =
+                last_plausible_temperature_times_[i];
+            if (std::isfinite(previous) && !previous_time.isZero()) {
+                const double elapsed_sec =
+                    (temperature_time - previous_time).toSec();
+                if (elapsed_sec >= 0.0) {
+                    const double allowed_delta_c =
+                        temperature_slew_tolerance_c_ +
+                        max_temperature_slew_c_per_sec_ * elapsed_sec;
+                    if (
+                        std::abs(
+                            static_cast<double>(value) -
+                            static_cast<double>(previous)
+                        ) > allowed_delta_c
+                    ) {
+                        value = std::numeric_limits<float>::quiet_NaN();
+                        ++slew_rejected_temperature_channels;
+                        continue;
+                    }
+                }
+            }
+            last_plausible_temperatures_c_[i] = value;
+            last_plausible_temperature_times_[i] = temperature_time;
+        }
         latest_temperatures_c_ = msg.data;
-        last_temperature_time_ = ros::Time::now();
+        last_temperature_time_ = temperature_time;
         has_temperature_feedback_ = true;
         if (
             consecutive_high_temperature_samples_by_channel_.size() !=
@@ -2291,6 +2569,34 @@ void AliciaDDriverNode::parse_sdk_temperature_frame(const std::vector<uint8_t>& 
             high_temperature_sample_count;
         consecutive_high_temperature_channel_index_ =
             high_temperature_channel_index;
+    }
+    float max_temperature = 0.0f;
+    for (float value : msg.data) {
+        if (std::isfinite(value)) {
+            max_temperature = std::max(max_temperature, value);
+        }
+    }
+    if (
+        invalid_temperature_channels > 0 ||
+        slew_rejected_temperature_channels > 0
+    ) {
+        // Retained CRC-valid response bursts produced both impossible absolute
+        // bytes and 36 -> 98/100 C one-second jumps while neighbouring motor
+        // channels remained in the 30--40 C range. Reject those channels
+        // against the last plausible sample. The allowance grows with elapsed
+        // time, so a genuinely sustained rise becomes admissible once it is
+        // physically reachable and still accumulates the unchanged 60 C,
+        // three-sample, same-channel protection streak.
+        ROS_ERROR_THROTTLE(
+            1.0,
+            "Rejected SDK temperature telemetry: above_ceiling=%zu slew_invalid=%zu max_slew=%.1fC/s tolerance=%.1fC raw=[%s] accepted_values_c=%s",
+            invalid_temperature_channels,
+            slew_rejected_temperature_channels,
+            max_temperature_slew_c_per_sec_,
+            temperature_slew_tolerance_c_,
+            format_bytes_as_hex(data_payload).c_str(),
+            format_temperatures(msg.data).c_str()
+        );
     }
     temperature_pub_.publish(msg);
     if (max_temperature >= 50.0f) {

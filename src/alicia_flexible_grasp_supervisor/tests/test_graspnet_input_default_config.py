@@ -27,11 +27,29 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
         )
         self.assertEqual(
             config['grasp']['near_field_replan_timeout_sec'],
-            30.0,
+            60.0,
         )
         self.assertEqual(
             config['grasp']['near_field_strategy'],
             'single_snapshot_direct',
+        )
+        self.assertTrue(
+            config['grasp']['post_lift_visual_verification_enabled']
+        )
+        self.assertTrue(config['grasp']['final_visual_refine_enabled'])
+        self.assertTrue(config['grasp']['final_visual_refine_required'])
+        self.assertFalse(
+            config['grasp']['final_visual_refine_center_fallback_enabled']
+        )
+        self.assertNotIn(
+            'post_lift_visual_verification_enabled',
+            config['grasp_6d'],
+        )
+        self.assertEqual(
+            config['gripper'][
+                'plan_bound_opening_clearance_each_side_m'
+            ],
+            0.002,
         )
         self.assertIn('--max-snapshot-age-sec', start_script)
         self.assertIn('MUJOCO_MAX_SNAPSHOT_AGE_SEC:-120.0', start_script)
@@ -56,6 +74,27 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
         self.assertEqual(remote['graspnet_input_mode'], 'context_roi')
         self.assertTrue(remote['candidate_target_gate_enabled'])
         self.assertTrue(remote['target_cloud_support_plane_enabled'])
+
+    def test_production_default_uses_exact_bounded_multiview_registration(self):
+        with (ROOT / 'config' / 'grasp_params.yaml').open(
+            'r', encoding='utf-8'
+        ) as stream:
+            remote = yaml.safe_load(stream)['grasp_6d']['remote']
+
+        self.assertEqual(
+            remote['multiview'],
+            {
+                'correspondence_max_m': 0.008,
+                'minimum_inliers': 80,
+                'minimum_overlap_fraction': 0.30,
+                'maximum_rmse_m': 0.004,
+                'maximum_translation_m': 0.025,
+                'maximum_yaw_deg': 10.0,
+                'maximum_support_normal_angle_deg': 4.0,
+                'maximum_support_offset_delta_m': 0.004,
+                'maximum_iterations': 12,
+            },
+        )
 
     def test_production_default_keeps_joint_flip_gate_tightly_bounded(self):
         with (ROOT / 'config' / 'grasp_params.yaml').open(
@@ -118,8 +157,8 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
             grasp['observation_endpoint_correction_attempts'],
             0,
         )
-        self.assertFalse(grasp['final_visual_refine_enabled'])
-        self.assertFalse(grasp['final_visual_refine_required'])
+        self.assertTrue(grasp['final_visual_refine_enabled'])
+        self.assertTrue(grasp['final_visual_refine_required'])
         self.assertEqual(
             grasp['final_visual_refine_max_translation_m'],
             0.025,
@@ -134,7 +173,7 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
         )
         self.assertEqual(
             grasp['final_visual_refine_center_fallback_delay_sec'],
-            3.0,
+            0.0,
         )
         self.assertEqual(
             grasp['final_visual_refine_center_fallback_required_samples'],
@@ -174,7 +213,7 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
         self.assertEqual(remote['planning_snapshot_timeout_sec'], 8.0)
         self.assertEqual(remote['planning_snapshot_max_span_sec'], 6.0)
         self.assertEqual(remote['max_candidates'], 300)
-        self.assertEqual(remote['near_field_max_candidates'], 1)
+        self.assertEqual(remote['near_field_max_candidates'], 12)
 
     def test_production_default_enables_bounded_tabletop_geometry_candidates(self):
         with (ROOT / 'config' / 'grasp_params.yaml').open(
@@ -187,13 +226,14 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
             geometry,
             {
                 'enabled': True,
-                'angle_step_deg': 15.0,
-                'angle_dedup_deg': 2.0,
+                'angle_step_deg': 5.0,
+                'angle_dedup_deg': 1.0,
                 'jaw_clearance_each_side_m': 0.002,
+                'width_projection_trim_fraction': 0.01,
                 'min_contact_band_points': 6,
                 'contact_band_fraction': 0.12,
                 'min_finger_support_clearance_m': 0.003,
-                'max_candidates': 24,
+                'max_candidates': 32,
                 'approach_tilt_degrees': [],
                 'merge_center_distance_m': 0.005,
                 'merge_insertion_angle_deg': 10.0,

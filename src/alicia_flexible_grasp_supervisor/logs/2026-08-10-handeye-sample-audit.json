@@ -1,0 +1,1829 @@
+{
+  "algorithms": {
+    "OpenCV/Andreff": {
+      "T_tool_camera": [
+        [
+          -0.029529583392950212,
+          -0.035119321823938066,
+          -0.9989467638164036,
+          -0.06902270160009968
+        ],
+        [
+          0.016652878450200803,
+          0.9992265985774764,
+          -0.03562143083327418,
+          0.0043116254115630566
+        ],
+        [
+          0.9994251774615056,
+          -0.01768722504842335,
+          -0.02892190737356018,
+          -0.058313683322992055
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "cross_validation": {
+        "candidate_spread": {
+          "count": 5,
+          "mean_quaternion_xyzw": [
+            0.006412256554226687,
+            -0.7172440496833733,
+            0.01863954711656421,
+            0.6965431956763106
+          ],
+          "mean_translation_m": [
+            -0.06913078699931999,
+            0.0044135452381627435,
+            -0.05806873981035134
+          ],
+          "orientation_max_deg": 0.20466849118977765,
+          "orientation_max_rad": 0.0035721390463506262,
+          "orientation_rms_deg": 0.18146168854209985,
+          "orientation_rms_rad": 0.003167103931288111,
+          "translation_max_m": 0.008460543973678406,
+          "translation_rms_m": 0.005367197919897952
+        },
+        "folds": [
+          {
+            "fold": 1,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.373144103386855,
+              "orientation_rms_deg": 1.0530356772884497,
+              "translation_max_m": 0.020333770296491836,
+              "translation_rms_m": 0.013074467620658833
+            },
+            "test_indices_1based": [
+              1,
+              6,
+              11,
+              16,
+              21,
+              26
+            ],
+            "train_indices_1based": [
+              2,
+              3,
+              4,
+              5,
+              7,
+              8,
+              9,
+              10,
+              12,
+              13,
+              14,
+              15,
+              17,
+              18,
+              19,
+              20,
+              22,
+              23,
+              24,
+              25,
+              27,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 2,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.2998614801768464,
+              "orientation_rms_deg": 0.9772281608207705,
+              "translation_max_m": 0.01852203525267996,
+              "translation_rms_m": 0.011938423729792029
+            },
+            "test_indices_1based": [
+              2,
+              7,
+              12,
+              17,
+              22,
+              27
+            ],
+            "train_indices_1based": [
+              1,
+              3,
+              4,
+              5,
+              6,
+              8,
+              9,
+              10,
+              11,
+              13,
+              14,
+              15,
+              16,
+              18,
+              19,
+              20,
+              21,
+              23,
+              24,
+              25,
+              26,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 3,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.3868911985621464,
+              "orientation_rms_deg": 0.956108299442834,
+              "translation_max_m": 0.022105680786843468,
+              "translation_rms_m": 0.014548518531296276
+            },
+            "test_indices_1based": [
+              3,
+              8,
+              13,
+              18,
+              23,
+              28
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              4,
+              5,
+              6,
+              7,
+              9,
+              10,
+              11,
+              12,
+              14,
+              15,
+              16,
+              17,
+              19,
+              20,
+              21,
+              22,
+              24,
+              25,
+              26,
+              27,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 4,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.38061006776193,
+              "orientation_rms_deg": 0.7448959867103055,
+              "translation_max_m": 0.025420748121118136,
+              "translation_rms_m": 0.017435610357437986
+            },
+            "test_indices_1based": [
+              4,
+              9,
+              14,
+              19,
+              24,
+              29
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              5,
+              6,
+              7,
+              8,
+              10,
+              11,
+              12,
+              13,
+              15,
+              16,
+              17,
+              18,
+              20,
+              21,
+              22,
+              23,
+              25,
+              26,
+              27,
+              28,
+              30
+            ]
+          },
+          {
+            "fold": 5,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.4220883715969679,
+              "orientation_rms_deg": 0.8954923554042998,
+              "translation_max_m": 0.022007889552552444,
+              "translation_rms_m": 0.01561296399641313
+            },
+            "test_indices_1based": [
+              5,
+              10,
+              15,
+              20,
+              25,
+              30
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              4,
+              6,
+              7,
+              8,
+              9,
+              11,
+              12,
+              13,
+              14,
+              16,
+              17,
+              18,
+              19,
+              21,
+              22,
+              23,
+              24,
+              26,
+              27,
+              28,
+              29
+            ]
+          }
+        ],
+        "passes_thresholds": false,
+        "summary": {
+          "count": 30,
+          "orientation_max_deg": 1.4220883715969679,
+          "orientation_rms_deg": 0.9311045790684973,
+          "translation_max_m": 0.025420748121118136,
+          "translation_rms_m": 0.014648496233135196
+        }
+      },
+      "in_sample": {
+        "count": 30,
+        "mean_quaternion_xyzw": [
+          0.7243496134841785,
+          0.6847359951665964,
+          -0.04777203449457298,
+          0.06459169519978265
+        ],
+        "mean_translation_m": [
+          -0.17361804013560267,
+          -0.558444989363035,
+          0.010367358668852638
+        ],
+        "orientation_max_deg": 1.363180826014382,
+        "orientation_max_rad": 0.023791993714006938,
+        "orientation_rms_deg": 0.8967949395760919,
+        "orientation_rms_rad": 0.015652024410826405,
+        "translation_max_m": 0.02384865998052004,
+        "translation_rms_m": 0.014209953928386407
+      },
+      "quaternion_xyzw": [
+        0.006436718945500699,
+        -0.7172304527388647,
+        0.01858142514659329,
+        0.6965585237097752
+      ],
+      "translation_m": [
+        -0.06902270160009968,
+        0.0043116254115630566,
+        -0.058313683322992055
+      ],
+      "worst_samples": [
+        {
+          "index_1based": 15,
+          "orientation_error_deg": 0.5675844127675853,
+          "translation_error_m": 0.02384865998052004
+        },
+        {
+          "index_1based": 14,
+          "orientation_error_deg": 0.5942975158767849,
+          "translation_error_m": 0.0232499840752053
+        },
+        {
+          "index_1based": 18,
+          "orientation_error_deg": 1.3021374891000144,
+          "translation_error_m": 0.02145100927560694
+        },
+        {
+          "index_1based": 1,
+          "orientation_error_deg": 0.8229059207931745,
+          "translation_error_m": 0.020787551123068397
+        },
+        {
+          "index_1based": 10,
+          "orientation_error_deg": 1.16871966777121,
+          "translation_error_m": 0.018382581882887446
+        },
+        {
+          "index_1based": 17,
+          "orientation_error_deg": 1.131771703093431,
+          "translation_error_m": 0.01823752213131449
+        },
+        {
+          "index_1based": 25,
+          "orientation_error_deg": 0.5195415238400118,
+          "translation_error_m": 0.018081223435833522
+        },
+        {
+          "index_1based": 24,
+          "orientation_error_deg": 0.44926657018474636,
+          "translation_error_m": 0.01749681925675775
+        },
+        {
+          "index_1based": 8,
+          "orientation_error_deg": 1.1633822650000676,
+          "translation_error_m": 0.016328332177286263
+        },
+        {
+          "index_1based": 19,
+          "orientation_error_deg": 0.4073183241263597,
+          "translation_error_m": 0.01588172952696426
+        }
+      ]
+    },
+    "OpenCV/Daniilidis": {
+      "T_tool_camera": [
+        [
+          -0.029622398629321214,
+          -0.04393217955146151,
+          -0.9985952518910266,
+          -0.0826865274072994
+        ],
+        [
+          0.014199110981881,
+          0.9989143692500607,
+          -0.04436742220455771,
+          0.004732457214576799
+        ],
+        [
+          0.9994603037373566,
+          -0.015493434274278926,
+          -0.028966441749355143,
+          -0.13030163727440064
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "cross_validation": {
+        "candidate_spread": {
+          "count": 5,
+          "mean_quaternion_xyzw": [
+            0.01037243759430367,
+            -0.7172019449238203,
+            0.020975765861962103,
+            0.6964723971431646
+          ],
+          "mean_translation_m": [
+            -0.0826877647462532,
+            0.004727607325422358,
+            -0.1303183243055479
+          ],
+          "orientation_max_deg": 0.24436285428158255,
+          "orientation_max_rad": 0.004264936376784738,
+          "orientation_rms_deg": 0.21515831631578122,
+          "orientation_rms_rad": 0.0037552210327578177,
+          "translation_max_m": 0.0013520002823522869,
+          "translation_rms_m": 0.0008706041167064931
+        },
+        "folds": [
+          {
+            "fold": 1,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.4170406390594632,
+              "orientation_rms_deg": 1.0496241443108443,
+              "translation_max_m": 0.005763212797858359,
+              "translation_rms_m": 0.003595934629988036
+            },
+            "test_indices_1based": [
+              1,
+              6,
+              11,
+              16,
+              21,
+              26
+            ],
+            "train_indices_1based": [
+              2,
+              3,
+              4,
+              5,
+              7,
+              8,
+              9,
+              10,
+              12,
+              13,
+              14,
+              15,
+              17,
+              18,
+              19,
+              20,
+              22,
+              23,
+              24,
+              25,
+              27,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 2,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.3118044008859322,
+              "orientation_rms_deg": 0.9859690065569061,
+              "translation_max_m": 0.004821232613253557,
+              "translation_rms_m": 0.0036667282825341373
+            },
+            "test_indices_1based": [
+              2,
+              7,
+              12,
+              17,
+              22,
+              27
+            ],
+            "train_indices_1based": [
+              1,
+              3,
+              4,
+              5,
+              6,
+              8,
+              9,
+              10,
+              11,
+              13,
+              14,
+              15,
+              16,
+              18,
+              19,
+              20,
+              21,
+              23,
+              24,
+              25,
+              26,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 3,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.4997116678616491,
+              "orientation_rms_deg": 0.9795502390363044,
+              "translation_max_m": 0.006154834120570014,
+              "translation_rms_m": 0.0035392970798166974
+            },
+            "test_indices_1based": [
+              3,
+              8,
+              13,
+              18,
+              23,
+              28
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              4,
+              5,
+              6,
+              7,
+              9,
+              10,
+              11,
+              12,
+              14,
+              15,
+              16,
+              17,
+              19,
+              20,
+              21,
+              22,
+              24,
+              25,
+              26,
+              27,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 4,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.360931138019207,
+              "orientation_rms_deg": 0.7612398619184892,
+              "translation_max_m": 0.003943587732184147,
+              "translation_rms_m": 0.002700570514816303
+            },
+            "test_indices_1based": [
+              4,
+              9,
+              14,
+              19,
+              24,
+              29
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              5,
+              6,
+              7,
+              8,
+              10,
+              11,
+              12,
+              13,
+              15,
+              16,
+              17,
+              18,
+              20,
+              21,
+              22,
+              23,
+              25,
+              26,
+              27,
+              28,
+              30
+            ]
+          },
+          {
+            "fold": 5,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.3814216372047496,
+              "orientation_rms_deg": 0.8802642429976932,
+              "translation_max_m": 0.003845386790408641,
+              "translation_rms_m": 0.002630650552770575
+            },
+            "test_indices_1based": [
+              5,
+              10,
+              15,
+              20,
+              25,
+              30
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              4,
+              6,
+              7,
+              8,
+              9,
+              11,
+              12,
+              13,
+              14,
+              16,
+              17,
+              18,
+              19,
+              21,
+              22,
+              23,
+              24,
+              26,
+              27,
+              28,
+              29
+            ]
+          }
+        ],
+        "passes_thresholds": false,
+        "summary": {
+          "count": 30,
+          "orientation_max_deg": 1.4997116678616491,
+          "orientation_rms_deg": 0.9367727218361077,
+          "translation_max_m": 0.006154834120570014,
+          "translation_rms_m": 0.003259314940798734
+        }
+      },
+      "in_sample": {
+        "count": 30,
+        "mean_quaternion_xyzw": [
+          0.7272759525029532,
+          0.6815697557534401,
+          -0.04725981784992012,
+          0.06556574235003046
+        ],
+        "mean_translation_m": [
+          -0.1685851822520178,
+          -0.5317669229713029,
+          0.07699430548703079
+        ],
+        "orientation_max_deg": 1.391665565456503,
+        "orientation_max_rad": 0.024289146203844644,
+        "orientation_rms_deg": 0.9015127970166925,
+        "orientation_rms_rad": 0.0157343665568046,
+        "translation_max_m": 0.005682572969684028,
+        "translation_rms_m": 0.003127865257561358
+      },
+      "quaternion_xyzw": [
+        0.010364288084248231,
+        -0.7171999737919572,
+        0.020866166573578555,
+        0.6964778404356066
+      ],
+      "translation_m": [
+        -0.0826865274072994,
+        0.004732457214576799,
+        -0.13030163727440064
+      ],
+      "worst_samples": [
+        {
+          "index_1based": 8,
+          "orientation_error_deg": 1.1664045328763575,
+          "translation_error_m": 0.005682572969684028
+        },
+        {
+          "index_1based": 26,
+          "orientation_error_deg": 1.3399859251251607,
+          "translation_error_m": 0.005453265139601542
+        },
+        {
+          "index_1based": 27,
+          "orientation_error_deg": 1.2866771408184812,
+          "translation_error_m": 0.005051452775891416
+        },
+        {
+          "index_1based": 7,
+          "orientation_error_deg": 1.1986039922613279,
+          "translation_error_m": 0.004555708903664421
+        },
+        {
+          "index_1based": 28,
+          "orientation_error_deg": 1.2487263776761741,
+          "translation_error_m": 0.004227164250837088
+        },
+        {
+          "index_1based": 29,
+          "orientation_error_deg": 1.273609817146459,
+          "translation_error_m": 0.003936096509021947
+        },
+        {
+          "index_1based": 17,
+          "orientation_error_deg": 1.2201618656946427,
+          "translation_error_m": 0.003847126938992823
+        },
+        {
+          "index_1based": 30,
+          "orientation_error_deg": 1.2946857669219383,
+          "translation_error_m": 0.0037560281341971515
+        },
+        {
+          "index_1based": 16,
+          "orientation_error_deg": 1.3822909228201907,
+          "translation_error_m": 0.0033809299326126706
+        },
+        {
+          "index_1based": 24,
+          "orientation_error_deg": 0.4997793855471793,
+          "translation_error_m": 0.0033411031318710243
+        }
+      ]
+    },
+    "OpenCV/Horaud": {
+      "T_tool_camera": [
+        [
+          -0.029868827648734195,
+          -0.0368420330392607,
+          -0.998874625634481,
+          -0.08288659083484307
+        ],
+        [
+          0.016850881313576874,
+          0.999159919271544,
+          -0.0373564388056107,
+          0.00461708367739962
+        ],
+        [
+          0.9994117774640473,
+          -0.01794771079596543,
+          -0.02922291469614946,
+          -0.12959960612570606
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "cross_validation": {
+        "candidate_spread": {
+          "count": 5,
+          "mean_quaternion_xyzw": [
+            0.006960553111575086,
+            -0.7173406718598384,
+            0.019346789631177558,
+            0.6964191359569492
+          ],
+          "mean_translation_m": [
+            -0.0828598640651151,
+            0.004622338069128392,
+            -0.12963853918960072
+          ],
+          "orientation_max_deg": 0.2220977266189799,
+          "orientation_max_rad": 0.003876336590695453,
+          "orientation_rms_deg": 0.18603618857613088,
+          "orientation_rms_rad": 0.0032469440185145452,
+          "translation_max_m": 0.0019435335337847194,
+          "translation_rms_m": 0.0011522151752924766
+        },
+        "folds": [
+          {
+            "fold": 1,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.3812122224785355,
+              "orientation_rms_deg": 1.0536149001270414,
+              "translation_max_m": 0.005876269218998585,
+              "translation_rms_m": 0.003589558295938974
+            },
+            "test_indices_1based": [
+              1,
+              6,
+              11,
+              16,
+              21,
+              26
+            ],
+            "train_indices_1based": [
+              2,
+              3,
+              4,
+              5,
+              7,
+              8,
+              9,
+              10,
+              12,
+              13,
+              14,
+              15,
+              17,
+              18,
+              19,
+              20,
+              22,
+              23,
+              24,
+              25,
+              27,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 2,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.295282604667943,
+              "orientation_rms_deg": 0.9775348995084502,
+              "translation_max_m": 0.004828871240579288,
+              "translation_rms_m": 0.0035841648793549855
+            },
+            "test_indices_1based": [
+              2,
+              7,
+              12,
+              17,
+              22,
+              27
+            ],
+            "train_indices_1based": [
+              1,
+              3,
+              4,
+              5,
+              6,
+              8,
+              9,
+              10,
+              11,
+              13,
+              14,
+              15,
+              16,
+              18,
+              19,
+              20,
+              21,
+              23,
+              24,
+              25,
+              26,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 3,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.4043390255594208,
+              "orientation_rms_deg": 0.9576429200557776,
+              "translation_max_m": 0.006017039871913177,
+              "translation_rms_m": 0.00346926806792859
+            },
+            "test_indices_1based": [
+              3,
+              8,
+              13,
+              18,
+              23,
+              28
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              4,
+              5,
+              6,
+              7,
+              9,
+              10,
+              11,
+              12,
+              14,
+              15,
+              16,
+              17,
+              19,
+              20,
+              21,
+              22,
+              24,
+              25,
+              26,
+              27,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 4,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.3767910641004906,
+              "orientation_rms_deg": 0.7452642399504348,
+              "translation_max_m": 0.003997636883750579,
+              "translation_rms_m": 0.002582431993958475
+            },
+            "test_indices_1based": [
+              4,
+              9,
+              14,
+              19,
+              24,
+              29
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              5,
+              6,
+              7,
+              8,
+              10,
+              11,
+              12,
+              13,
+              15,
+              16,
+              17,
+              18,
+              20,
+              21,
+              22,
+              23,
+              25,
+              26,
+              27,
+              28,
+              30
+            ]
+          },
+          {
+            "fold": 5,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.4130469607442981,
+              "orientation_rms_deg": 0.8915779281751354,
+              "translation_max_m": 0.003777363503980343,
+              "translation_rms_m": 0.0027120979892477515
+            },
+            "test_indices_1based": [
+              5,
+              10,
+              15,
+              20,
+              25,
+              30
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              4,
+              6,
+              7,
+              8,
+              9,
+              11,
+              12,
+              13,
+              14,
+              16,
+              17,
+              18,
+              19,
+              21,
+              22,
+              23,
+              24,
+              26,
+              27,
+              28,
+              29
+            ]
+          }
+        ],
+        "passes_thresholds": false,
+        "summary": {
+          "count": 30,
+          "orientation_max_deg": 1.4130469607442981,
+          "orientation_rms_deg": 0.9309230676288599,
+          "translation_max_m": 0.006017039871913177,
+          "translation_rms_m": 0.0032184287494427173
+        }
+      },
+      "in_sample": {
+        "count": 30,
+        "mean_quaternion_xyzw": [
+          0.7248068507826818,
+          0.6842132235721865,
+          -0.04762683922987848,
+          0.06510743377233996
+        ],
+        "mean_translation_m": [
+          -0.16734177831061559,
+          -0.5330898554083475,
+          0.07668171897247526
+        ],
+        "orientation_max_deg": 1.3608359866503694,
+        "orientation_max_rad": 0.023751068546674546,
+        "orientation_rms_deg": 0.896662070493535,
+        "orientation_rms_rad": 0.015649705407861682,
+        "translation_max_m": 0.005581513915391904,
+        "translation_rms_m": 0.0030975897390728203
+      },
+      "quaternion_xyzw": [
+        0.006967204889179438,
+        -0.7173304088104081,
+        0.019274294286955693,
+        0.6964316507968783
+      ],
+      "translation_m": [
+        -0.08288659083484307,
+        0.00461708367739962,
+        -0.12959960612570606
+      ],
+      "worst_samples": [
+        {
+          "index_1based": 26,
+          "orientation_error_deg": 1.3608359866503694,
+          "translation_error_m": 0.005581513915391904
+        },
+        {
+          "index_1based": 8,
+          "orientation_error_deg": 1.15996156283467,
+          "translation_error_m": 0.005575713806890446
+        },
+        {
+          "index_1based": 27,
+          "orientation_error_deg": 1.3114257215256446,
+          "translation_error_m": 0.005058169026529669
+        },
+        {
+          "index_1based": 7,
+          "orientation_error_deg": 1.2183743652367731,
+          "translation_error_m": 0.004441136509284488
+        },
+        {
+          "index_1based": 28,
+          "orientation_error_deg": 1.2523565168103394,
+          "translation_error_m": 0.004131422805669313
+        },
+        {
+          "index_1based": 29,
+          "orientation_error_deg": 1.2894536179662588,
+          "translation_error_m": 0.004002593522561528
+        },
+        {
+          "index_1based": 17,
+          "orientation_error_deg": 1.147300779612893,
+          "translation_error_m": 0.003836476599082101
+        },
+        {
+          "index_1based": 30,
+          "orientation_error_deg": 1.326184578112945,
+          "translation_error_m": 0.0037072746287370797
+        },
+        {
+          "index_1based": 16,
+          "orientation_error_deg": 1.3389234542910162,
+          "translation_error_m": 0.003509189281543477
+        },
+        {
+          "index_1based": 21,
+          "orientation_error_deg": 0.8323076696123296,
+          "translation_error_m": 0.003317309054816302
+        }
+      ]
+    },
+    "OpenCV/Park": {
+      "T_tool_camera": [
+        [
+          -0.02978692833532648,
+          -0.036630743449401315,
+          -0.998884841978636,
+          -0.08288981340170387
+        ],
+        [
+          0.016934626499863284,
+          0.9991663468241989,
+          -0.03714606034688714,
+          0.004628623942694547
+        ],
+        [
+          0.9994128062645853,
+          -0.018022208752775715,
+          -0.02914176840919125,
+          -0.12958826330675619
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "cross_validation": {
+        "candidate_spread": {
+          "count": 5,
+          "mean_quaternion_xyzw": [
+            0.0068585894577061855,
+            -0.7173143046875397,
+            0.019300875478627584,
+            0.6964485797580757
+          ],
+          "mean_translation_m": [
+            -0.08286255338511482,
+            0.004633713938948933,
+            -0.12962772579224754
+          ],
+          "orientation_max_deg": 0.2223879464971706,
+          "orientation_max_rad": 0.0038814018831246177,
+          "orientation_rms_deg": 0.18511136702063166,
+          "orientation_rms_rad": 0.0032308028373776686,
+          "translation_max_m": 0.0019396750129699394,
+          "translation_rms_m": 0.001149595597818298
+        },
+        "folds": [
+          {
+            "fold": 1,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.378603736417014,
+              "orientation_rms_deg": 1.0534841159459545,
+              "translation_max_m": 0.0058773414174275035,
+              "translation_rms_m": 0.003586976293075768
+            },
+            "test_indices_1based": [
+              1,
+              6,
+              11,
+              16,
+              21,
+              26
+            ],
+            "train_indices_1based": [
+              2,
+              3,
+              4,
+              5,
+              7,
+              8,
+              9,
+              10,
+              12,
+              13,
+              14,
+              15,
+              17,
+              18,
+              19,
+              20,
+              22,
+              23,
+              24,
+              25,
+              27,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 2,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.2959636583730665,
+              "orientation_rms_deg": 0.9772074667355933,
+              "translation_max_m": 0.004834096465737728,
+              "translation_rms_m": 0.0035779141508340555
+            },
+            "test_indices_1based": [
+              2,
+              7,
+              12,
+              17,
+              22,
+              27
+            ],
+            "train_indices_1based": [
+              1,
+              3,
+              4,
+              5,
+              6,
+              8,
+              9,
+              10,
+              11,
+              13,
+              14,
+              15,
+              16,
+              18,
+              19,
+              20,
+              21,
+              23,
+              24,
+              25,
+              26,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 3,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.4013306195446968,
+              "orientation_rms_deg": 0.9572319225527743,
+              "translation_max_m": 0.006012945613523058,
+              "translation_rms_m": 0.0034668275699781268
+            },
+            "test_indices_1based": [
+              3,
+              8,
+              13,
+              18,
+              23,
+              28
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              4,
+              5,
+              6,
+              7,
+              9,
+              10,
+              11,
+              12,
+              14,
+              15,
+              16,
+              17,
+              19,
+              20,
+              21,
+              22,
+              24,
+              25,
+              26,
+              27,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 4,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.377475561530451,
+              "orientation_rms_deg": 0.7454351881298178,
+              "translation_max_m": 0.003998974702325919,
+              "translation_rms_m": 0.002582568169837054
+            },
+            "test_indices_1based": [
+              4,
+              9,
+              14,
+              19,
+              24,
+              29
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              5,
+              6,
+              7,
+              8,
+              10,
+              11,
+              12,
+              13,
+              15,
+              16,
+              17,
+              18,
+              20,
+              21,
+              22,
+              23,
+              25,
+              26,
+              27,
+              28,
+              30
+            ]
+          },
+          {
+            "fold": 5,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.4143767873088051,
+              "orientation_rms_deg": 0.8921363665555091,
+              "translation_max_m": 0.0037781500396061206,
+              "translation_rms_m": 0.0027157059281846105
+            },
+            "test_indices_1based": [
+              5,
+              10,
+              15,
+              20,
+              25,
+              30
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              4,
+              6,
+              7,
+              8,
+              9,
+              11,
+              12,
+              13,
+              14,
+              16,
+              17,
+              18,
+              19,
+              21,
+              22,
+              23,
+              24,
+              26,
+              27,
+              28,
+              29
+            ]
+          }
+        ],
+        "passes_thresholds": false,
+        "summary": {
+          "count": 30,
+          "orientation_max_deg": 1.4143767873088051,
+          "orientation_rms_deg": 0.9308745442197147,
+          "translation_max_m": 0.006012945613523058,
+          "translation_rms_m": 0.0032165658407071088
+        }
+      },
+      "in_sample": {
+        "count": 30,
+        "mean_quaternion_xyzw": [
+          0.7247353975277222,
+          0.684294124073875,
+          -0.047601629976568714,
+          0.06507103927152727
+        ],
+        "mean_translation_m": [
+          -0.16728340499104954,
+          -0.5331058491509134,
+          0.07665485883361516
+        ],
+        "orientation_max_deg": 1.3612031102926956,
+        "orientation_max_rad": 0.023757476062995053,
+        "orientation_rms_deg": 0.8966675787919602,
+        "orientation_rms_rad": 0.015649801545805385,
+        "translation_max_m": 0.005583793900333324,
+        "translation_rms_m": 0.0030956816393554855
+      },
+      "quaternion_xyzw": [
+        0.006864642191494157,
+        -0.7173031164662385,
+        0.019227669528137238,
+        0.6964620682563563
+      ],
+      "translation_m": [
+        -0.08288981340170387,
+        0.004628623942694547,
+        -0.12958826330675619
+      ],
+      "worst_samples": [
+        {
+          "index_1based": 26,
+          "orientation_error_deg": 1.3612031102926956,
+          "translation_error_m": 0.005583793900333324
+        },
+        {
+          "index_1based": 8,
+          "orientation_error_deg": 1.1603803371050119,
+          "translation_error_m": 0.005574019141766487
+        },
+        {
+          "index_1based": 27,
+          "orientation_error_deg": 1.3128341125554281,
+          "translation_error_m": 0.005062707195452597
+        },
+        {
+          "index_1based": 7,
+          "orientation_error_deg": 1.2191045336551927,
+          "translation_error_m": 0.004434790314836075
+        },
+        {
+          "index_1based": 28,
+          "orientation_error_deg": 1.2530307199445772,
+          "translation_error_m": 0.004130829212400618
+        },
+        {
+          "index_1based": 29,
+          "orientation_error_deg": 1.2901888512469928,
+          "translation_error_m": 0.00400458796533038
+        },
+        {
+          "index_1based": 17,
+          "orientation_error_deg": 1.1440667003140867,
+          "translation_error_m": 0.003823891966538369
+        },
+        {
+          "index_1based": 30,
+          "orientation_error_deg": 1.327652510296929,
+          "translation_error_m": 0.003706644853378923
+        },
+        {
+          "index_1based": 16,
+          "orientation_error_deg": 1.336699097681832,
+          "translation_error_m": 0.003505040843748685
+        },
+        {
+          "index_1based": 21,
+          "orientation_error_deg": 0.8327603904426042,
+          "translation_error_m": 0.003319570087009222
+        }
+      ]
+    },
+    "OpenCV/Tsai-Lenz": {
+      "T_tool_camera": [
+        [
+          -0.027661448824865875,
+          -0.03341106111309813,
+          -0.9990588297213564,
+          -0.08333405913626664
+        ],
+        [
+          0.015309779983167217,
+          0.999309881133323,
+          -0.03384334655690181,
+          0.004892559774360072
+        ],
+        [
+          0.99950010249413,
+          -0.01623152687212042,
+          -0.027130843142506356,
+          -0.12908199910572044
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "cross_validation": {
+        "candidate_spread": {
+          "count": 5,
+          "mean_quaternion_xyzw": [
+            0.006283201974598276,
+            -0.7166316574332985,
+            0.017666778144383773,
+            0.6971997374406758
+          ],
+          "mean_translation_m": [
+            -0.08330117085467104,
+            0.004882623514772578,
+            -0.12909389580054248
+          ],
+          "orientation_max_deg": 0.268302832670758,
+          "orientation_max_rad": 0.004682767822532138,
+          "orientation_rms_deg": 0.2290847086759608,
+          "orientation_rms_rad": 0.003998282432367536,
+          "translation_max_m": 0.001647311497092449,
+          "translation_rms_m": 0.0010994470932553415
+        },
+        "folds": [
+          {
+            "fold": 1,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.3611041677467348,
+              "orientation_rms_deg": 1.047217913268858,
+              "translation_max_m": 0.005825600012390083,
+              "translation_rms_m": 0.00355983466576841
+            },
+            "test_indices_1based": [
+              1,
+              6,
+              11,
+              16,
+              21,
+              26
+            ],
+            "train_indices_1based": [
+              2,
+              3,
+              4,
+              5,
+              7,
+              8,
+              9,
+              10,
+              12,
+              13,
+              14,
+              15,
+              17,
+              18,
+              19,
+              20,
+              22,
+              23,
+              24,
+              25,
+              27,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 2,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.2982449323037837,
+              "orientation_rms_deg": 0.9785669437041604,
+              "translation_max_m": 0.00486705222158297,
+              "translation_rms_m": 0.0035780262894765363
+            },
+            "test_indices_1based": [
+              2,
+              7,
+              12,
+              17,
+              22,
+              27
+            ],
+            "train_indices_1based": [
+              1,
+              3,
+              4,
+              5,
+              6,
+              8,
+              9,
+              10,
+              11,
+              13,
+              14,
+              15,
+              16,
+              18,
+              19,
+              20,
+              21,
+              23,
+              24,
+              25,
+              26,
+              28,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 3,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.3894579186335707,
+              "orientation_rms_deg": 0.9605185946758844,
+              "translation_max_m": 0.0061197349758272054,
+              "translation_rms_m": 0.003475247510697636
+            },
+            "test_indices_1based": [
+              3,
+              8,
+              13,
+              18,
+              23,
+              28
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              4,
+              5,
+              6,
+              7,
+              9,
+              10,
+              11,
+              12,
+              14,
+              15,
+              16,
+              17,
+              19,
+              20,
+              21,
+              22,
+              24,
+              25,
+              26,
+              27,
+              29,
+              30
+            ]
+          },
+          {
+            "fold": 4,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.388423162195813,
+              "orientation_rms_deg": 0.7565755073699301,
+              "translation_max_m": 0.004030136496008675,
+              "translation_rms_m": 0.00264277254438024
+            },
+            "test_indices_1based": [
+              4,
+              9,
+              14,
+              19,
+              24,
+              29
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              5,
+              6,
+              7,
+              8,
+              10,
+              11,
+              12,
+              13,
+              15,
+              16,
+              17,
+              18,
+              20,
+              21,
+              22,
+              23,
+              25,
+              26,
+              27,
+              28,
+              30
+            ]
+          },
+          {
+            "fold": 5,
+            "summary": {
+              "count": 6,
+              "orientation_max_deg": 1.441027091541351,
+              "orientation_rms_deg": 0.9008900936222244,
+              "translation_max_m": 0.0037478086306251437,
+              "translation_rms_m": 0.002688263101384247
+            },
+            "test_indices_1based": [
+              5,
+              10,
+              15,
+              20,
+              25,
+              30
+            ],
+            "train_indices_1based": [
+              1,
+              2,
+              3,
+              4,
+              6,
+              7,
+              8,
+              9,
+              11,
+              12,
+              13,
+              14,
+              16,
+              17,
+              18,
+              19,
+              21,
+              22,
+              23,
+              24,
+              26,
+              27,
+              28,
+              29
+            ]
+          }
+        ],
+        "passes_thresholds": false,
+        "summary": {
+          "count": 30,
+          "orientation_max_deg": 1.441027091541351,
+          "orientation_rms_deg": 0.933901927510437,
+          "translation_max_m": 0.0061197349758272054,
+          "translation_rms_m": 0.003217547061349558
+        }
+      },
+      "in_sample": {
+        "count": 30,
+        "mean_quaternion_xyzw": [
+          0.7241246910191952,
+          0.6851101248193635,
+          -0.047601048731659476,
+          0.06325890361046213
+        ],
+        "mean_translation_m": [
+          -0.16730225994548148,
+          -0.5333835339135322,
+          0.07607953490764956
+        ],
+        "orientation_max_deg": 1.3582808258755747,
+        "orientation_max_rad": 0.02370647257823657,
+        "orientation_rms_deg": 0.8978029376670051,
+        "orientation_rms_rad": 0.015669617296366657,
+        "translation_max_m": 0.00566083889454424,
+        "translation_rms_m": 0.00306664038504688
+      },
+      "quaternion_xyzw": [
+        0.006314926450828668,
+        -0.7166069656898222,
+        0.017469434371468546,
+        0.697229802354638
+      ],
+      "translation_m": [
+        -0.08333405913626664,
+        0.004892559774360072,
+        -0.12908199910572044
+      ],
+      "worst_samples": [
+        {
+          "index_1based": 8,
+          "orientation_error_deg": 1.179258027638675,
+          "translation_error_m": 0.00566083889454424
+        },
+        {
+          "index_1based": 26,
+          "orientation_error_deg": 1.3582808258755747,
+          "translation_error_m": 0.005518117378498892
+        },
+        {
+          "index_1based": 27,
+          "orientation_error_deg": 1.3308430638887987,
+          "translation_error_m": 0.005097362362237671
+        },
+        {
+          "index_1based": 7,
+          "orientation_error_deg": 1.234194915120093,
+          "translation_error_m": 0.0044903416093319245
+        },
+        {
+          "index_1based": 28,
+          "orientation_error_deg": 1.2614568712769056,
+          "translation_error_m": 0.004029310939965107
+        },
+        {
+          "index_1based": 29,
+          "orientation_error_deg": 1.296026687766833,
+          "translation_error_m": 0.003978438480341604
+        },
+        {
+          "index_1based": 30,
+          "orientation_error_deg": 1.3412929193273058,
+          "translation_error_m": 0.003658375404840639
+        },
+        {
+          "index_1based": 17,
+          "orientation_error_deg": 1.1052043809127055,
+          "translation_error_m": 0.003528583996594672
+        },
+        {
+          "index_1based": 21,
+          "orientation_error_deg": 0.837516736870408,
+          "translation_error_m": 0.003322673437356824
+        },
+        {
+          "index_1based": 16,
+          "orientation_error_deg": 1.3044817277041303,
+          "translation_error_m": 0.003261201180738319
+        }
+      ]
+    }
+  },
+  "created_at": "2026-08-10T19:14:38-0700",
+  "fold_contract": "five deterministic folds; test indices fold::5",
+  "namespace": "/d405_cc200_recalib_20260809_eye_on_hand",
+  "sample_count": 30,
+  "thresholds": {
+    "orientation_max_deg": 2.0,
+    "orientation_rms_deg": 1.0,
+    "translation_max_m": 0.005,
+    "translation_rms_m": 0.003
+  }
+}

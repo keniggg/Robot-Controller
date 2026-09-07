@@ -1,19 +1,17 @@
 grasp:
   use_grasp6d_plan: true
-  # Real contact videos show a one-finger-first miss. The operator-authorized
-  # pruned-28 hand-eye result has 5.609 mm held-out maximum translation error.
-  # This is narrowly below the 5.7 mm one-sided margin of the observed 38.6 mm
-  # carton in a 50 mm opening, but it still fails the formal 5 mm translation
-  # maximum. Keep the persistent interlock active; any use is a runtime-only,
-  # explicitly authorized provisional override.
-  calibration_interlock_active: true
-  calibration_interlock_reason: "HAND_EYE_TRANSLATION_CROSS_VALIDATION_FAILED"
+  # 2026-08-10 CC200 pruned-27 OpenCV/Park hand-eye result passes the formal
+  # five-fold contract: 2.812/4.606 mm translation and 0.863/1.351 deg
+  # rotation. The centering-margin gate remains active and still compares the
+  # object-specific jaw margin against this measured maximum translation error.
+  calibration_interlock_active: false
+  calibration_interlock_reason: "HAND_EYE_CROSS_VALIDATION_PASSED"
   calibration_centering_margin_gate_enabled: true
-  handeye_translation_max_error_m: 0.00560877893301
-  # This is separate from calibration_interlock_active so a generic temporary
-  # interlock release cannot silently erase the newly measured jaw-margin
-  # contradiction. It may only be changed by a new explicit risk decision.
-  calibration_centering_margin_override: false
+  handeye_translation_max_error_m: 0.00460616416406
+  # Explicit operator risk decision on 2026-08-10: keep this override enabled
+  # for future physical grasps. Collision, MoveIt, target-drift, and measured
+  # endpoint gates remain mandatory.
+  calibration_centering_margin_override: true
   # Automatic grasp needs a live driver heartbeat whose state was established
   # by directionally consistent encoder response after the latest positive
   # enable/reconnect. Manual GUI synchronization and the small proof move remain
@@ -129,18 +127,39 @@ grasp:
   # contact pose.
   observation_reuse_position_tolerance_m: 0.025
   # One fused request, authoritative rank ordering, and first-reachable
-  # selection are bounded together. The direct strategy does not run the old
-  # cross-request stability/MuJoCo/final-refine chain.
-  near_field_replan_timeout_sec: 30.0
+  # selection are bounded together. The 2026-08-11 anchored real request
+  # completed about 0.75 s after the former 30 s deadline and was discarded as
+  # GENERATION_STALE. Sixty seconds bounds that same fail-closed pipeline
+  # without relaxing any geometry, collision, MoveIt or centering gate.
+  near_field_replan_timeout_sec: 60.0
   near_field_replan_poll_sec: 0.05
   near_field_replan_snapshot_slack_sec: 3.0
-  # At the candidate-specific 36 mm pregrasp, collect one more current Preview
-  # window before the last 20 mm approach. Keep the selected candidate family,
-  # update only bounded xyz and support-normal yaw, and preserve the prior
-  # roll/pitch. The corrected sequence must pass strict MoveIt again.
-  final_visual_refine_enabled: false
-  final_visual_refine_required: false
-  final_visual_refine_timeout_sec: 150.0
+  # Independently verify at the task boundary that the remote near-field plan
+  # kept the same support-plane center as the unobstructed far-field plan.
+  # Height may update from the current support plane; planar residual may not.
+  near_field_planar_center_anchor_validation_enabled: true
+  near_field_planar_center_anchor_validation_required: true
+  near_field_planar_center_anchor_max_residual_m: 0.003
+  # This is a task-side check and must stay under /grasp: grasp_task_node reads
+  # its execution configuration from that namespace.  A fresh same-label
+  # detection that remains near the original support plane after the commanded
+  # lift is direct evidence of an empty grasp.  Occlusion remains inconclusive;
+  # it is never converted into an automatic stop or disable action.
+  post_lift_visual_verification_enabled: true
+  post_lift_visual_verification_timeout_sec: 3.0
+  post_lift_visual_verification_poll_sec: 0.05
+  post_lift_visual_minimum_lift_fraction: 0.5
+  post_lift_visual_height_tolerance_m: 0.005
+  post_lift_visual_max_planar_drift_m: 0.040
+  # The 2026-09-02 real replay showed an 11--13 mm disagreement between the
+  # reached-view target surface center and the contact plan. Every near-field
+  # strategy must therefore collect a final stable center window at the
+  # candidate pregrasp. Keep the selected candidate family, update only bounded
+  # xyz/support-normal yaw, and require the corrected four-stage sequence to
+  # pass strict MoveIt again before contact.
+  final_visual_refine_enabled: true
+  final_visual_refine_required: true
+  final_visual_refine_timeout_sec: 20.0
   final_visual_refine_poll_sec: 0.05
   final_visual_refine_snapshot_slack_sec: 3.0
   final_visual_refine_service_timeout_sec: 3.0
@@ -149,11 +168,9 @@ grasp:
   final_visual_refine_max_translation_m: 0.025
   final_visual_refine_max_yaw_deg: 10.0
   final_visual_refine_max_roll_pitch_change_deg: 4.0
-  # The 2026-07-25 collision showed that a clipped mask centroid is not a
-  # physical object center. Keep center-only fallback disabled. The edge gate
-  # remains mandatory if this fallback is re-enabled after calibration.
+  # Center fallback is retained only as clipped-source audit evidence.
   final_visual_refine_center_fallback_enabled: false
-  final_visual_refine_center_fallback_delay_sec: 3.0
+  final_visual_refine_center_fallback_delay_sec: 0.0
   final_visual_refine_center_fallback_required_samples: 5
   final_visual_refine_center_fallback_max_jitter_m: 0.006
   final_visual_refine_center_fallback_edge_margin_px: 4
@@ -169,6 +186,20 @@ grasp:
   # five genuinely newer post-move observations independently confirm its
   # support-surface center within the same 6 mm residual gate.
   final_visual_refine_accept_unchanged_after_post_move_confirm: true
+  # Conservative non-zero camera-body radius for clear-view no-contact
+  # planning. Palm/finger CAD boxes are always added from the analytical
+  # Alicia contract; runtime rejects a missing/non-positive radius.
+  clear_view_reacquisition_camera_body_radius_m: 0.025
+  # If a clipped close-range view does not contain enough registered surface,
+  # make one symmetric, collision-checked observation move before rebuilding
+  # the contact plan.  The attempt is consumed before preflight and can never
+  # become an unbounded retry loop.
+  clear_view_reacquisition_enabled: true
+  clear_view_reacquisition_max_attempts: 1
+  clear_view_reacquisition_lateral_offset_m: 0.060
+  clear_view_reacquisition_radial_retreat_m: 0.040
+  clear_view_reacquisition_minimum_contact_clearance_m: 0.080
+  clear_view_reacquisition_preferred_side: "negative"
 
 force:
   contact_threshold_mn: 200.0
@@ -191,9 +222,11 @@ gripper:
   # 不调用柔顺闭合服务，也不把触觉状态作为抓取成功条件。
   use_compliant_close: false
   # 冻结 6D 计划已经携带候选所需的真实开口。闭合时从该开口减去
-  # 2 mm 形成位置预载，而不是继续顶到 0 mm 机械端；普通非 6D 命令仍使用
-  # simple_close_position_m。该边界避免物体已经夹住后持续最大误差堵转。
+  # 规划阶段两侧各 2 mm 的进场余量，再减去 2 mm 形成位置预载，而不是继续
+  # 顶到 0 mm 机械端；普通非 6D 命令仍使用 simple_close_position_m。该边界
+  # 避免把进场余量误当成物体实体宽度，也避免物体夹住后持续最大误差堵转。
   use_plan_bound_close_position: true
+  plan_bound_opening_clearance_each_side_m: 0.002
   plan_bound_close_preload_m: 0.002
   simple_close_position_m: 0.0
   simple_close_wait_sec: 0.8
@@ -308,6 +341,19 @@ grasp_6d:
     target_cloud_voxel_size_m: 0.0025
     target_cloud_outlier_neighbors: 16
     target_cloud_outlier_std_ratio: 2.0
+    # Fuse only bounded, registered measured points from the exact target track.
+    # These are safety maxima/minima; runtime overrides may tighten but never
+    # widen them.
+    multiview:
+      correspondence_max_m: 0.008
+      minimum_inliers: 80
+      minimum_overlap_fraction: 0.30
+      maximum_rmse_m: 0.004
+      maximum_translation_m: 0.025
+      maximum_yaw_deg: 10.0
+      maximum_support_normal_angle_deg: 4.0
+      maximum_support_offset_delta_m: 0.004
+      maximum_iterations: 12
     max_gripper_width_m: 0.05
     candidate_width_tolerance_m: 0.0
     gripper_geometry:
@@ -352,13 +398,26 @@ grasp_6d:
     runtime_execution_error_max_age_sec: 180.0
     tabletop_geometry_candidates:
       enabled: true
-      angle_step_deg: 15.0
-      angle_dedup_deg: 2.0
+      # A 15 deg world-frame lattice can leave a reachable jaw yaw between
+      # the live OBB axis and the next global sample. Five-degree refinement
+      # retained the 80 deg / 40.5 mm direction in the real carton replay;
+      # every direction still passes measured-width, CAD and strict MoveIt
+      # gates before it can acquire execution authority.
+      angle_step_deg: 5.0
+      angle_dedup_deg: 1.0
       jaw_clearance_each_side_m: 0.002
+      # The instance-mask cloud can retain a few boundary pixels after the
+      # statistical outlier filter. Trim only the outermost 1% on each side
+      # when measuring aperture; raw extrema remain in the gate audit.
+      width_projection_trim_fraction: 0.01
       min_contact_band_points: 6
       contact_band_fraction: 0.12
       min_finger_support_clearance_m: 0.003
-      max_candidates: 24
+      # First retain one support-normal candidate for every live jaw direction,
+      # then use the remaining slots for geometry-derived tilt alternatives.
+      # The former 24-item cap exactly matched 24 proposals and accidentally
+      # starved every vertical candidate behind a 45-degree variant.
+      max_candidates: 32
       # Populated at runtime by adaptive_stage_generation.
       approach_tilt_degrees: []
       merge_center_distance_m: 0.005
@@ -370,11 +429,13 @@ grasp_6d:
     # Bound only the learned near-field input. The independently generated 24
     # tabletop geometry candidates remain complete and pass every existing
     # analytical and strict-MoveIt gate before execution authority is created.
-    # Direct near field keeps one learned proposal as a fallback.  Live
-    # timing evidence showed that normalizing the returned learned batch can
-    # consume the shared 30 s phase before the independently generated,
-    # repeatedly selected tabletop candidates reach strict MoveIt.
-    near_field_max_candidates: 1
+    # Direct near field keeps a bounded learned set. The 2026-09-03 carton
+    # snapshot had 22 collision-passing remote candidates, but the former
+    # one-item cap exposed only an 80.9-degree insertion that correctly failed
+    # the live 38.4-degree hard tilt profile. Twelve preserves the independent
+    # tabletop branch and the unchanged 30 s direct-phase deadline while
+    # allowing strict local geometry to inspect more than one learned mode.
+    near_field_max_candidates: 12
     failure_backoff_sec: 10.0
     # GraspNet baseline always predicts in OpenCV optical coordinates:
     # x right, y down, z forward. This is a production assertion, not a switch:

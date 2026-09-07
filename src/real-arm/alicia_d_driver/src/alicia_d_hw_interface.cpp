@@ -138,6 +138,7 @@ void AliciaDHardwareInterface::write(const ros::Time& time, const ros::Duration&
 
     sensor_msgs::JointState command_msg;
     command_msg.header.stamp = ros::Time::now();
+    command_msg.header.frame_id = "ros_control";
     command_msg.name.reserve(joint_names_.size());
     command_msg.position.reserve(joint_position_commands_.size());
     for (size_t i = 0; i < joint_names_.size() && i < joint_position_commands_.size(); ++i)

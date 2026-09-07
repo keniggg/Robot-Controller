@@ -10,6 +10,8 @@
 - 关节名使用 `Joint1` ~ `Joint6` 与 `right_finger`。
 - MoveIt 默认 group 使用 `alicia`，夹爪 group 使用 `hand`。
 - 上位机新增实时摄像头画面显示功能，默认订阅 `/supervisor/camera/color/image_raw`。
+- 主 GUI 新增独立“手眼标定”页，按需显示 RGB/ChArUco 图像并整合关节滑条、
+  实时关节角度、质量门控和 easy_handeye 采样/计算流程。
 
 ## 推荐工作空间结构
 
@@ -32,6 +34,7 @@ catkin_ws/src/
 - 电子皮肤力反馈：封装 Electronic-Skin-ML SDK，发布压力数组和总力
 - 自主柔顺抓取状态机：视觉定位 → 预抓取 → 力反馈闭合 → 抬升验证
 - ROS 话题总表：`docs/ros_topics.md`
+- 手眼标定 GUI 操作与参数：`docs/handeye_calibration_gui.md`
 
 ## 安装依赖
 
@@ -97,6 +100,9 @@ roslaunch alicia_flexible_grasp_supervisor full_system.launch start_real_arm:=tr
 - 如果未安装 RealSense SDK 或未接相机，可将 `config/camera.yaml` 中 `simulate: true`，GUI 会显示模拟图像。
 - 默认不会在 RealSense 读帧失败时自动切到模拟图像；相机节点会尝试重启真实相机流，避免 GUI 显示误导性的假画面。
 - GUI 的摄像头显示控件默认订阅 `/supervisor/camera/color/image_raw`。
+- “手眼标定”页默认不订阅 RGB 或深度图；在“图像输出”下拉框选择“开启图像”
+  后才订阅 `/charuco/result`，选择“关闭图像”后立即注销。关节滑条、图像和采样
+  功能同页可见，不使用内部滚动窗口；该页不使用深度图。
 
 ## YOLOv8 目标识别说明
 

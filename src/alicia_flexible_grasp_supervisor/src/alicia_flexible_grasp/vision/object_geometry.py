@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import cv2
 import numpy as np
@@ -43,6 +43,60 @@ class GeometryEstimate:
         if points.size == 0:
             points = np.zeros((0, 3), dtype=float)
         object.__setattr__(self, 'object_points_base', _readonly_copy(points, (-1, 3)))
+
+
+def anchor_geometry_center_in_support_plane(
+    estimate,
+    reference_center_base,
+    max_planar_shift_m,
+):
+    """Keep close-view dimensions while anchoring its planar box center.
+
+    An oblique close view can expose only the camera-facing surfaces of a box.
+    Fitting a minimum-area rectangle to those visible points then moves the OBB
+    center toward the camera even though the object did not move.  The earlier
+    unobstructed view supplies the planar center; the current estimate keeps
+    its support plane, height, axes, dimensions, and measured surface points.
+    """
+
+    if not isinstance(estimate, GeometryEstimate) or not bool(estimate.ok):
+        raise ValueError('a valid geometry estimate is required')
+    reference = np.asarray(reference_center_base, dtype=float).reshape(-1)
+    if reference.shape != (3,) or not np.all(np.isfinite(reference)):
+        raise ValueError('reference center must be finite xyz')
+    limit = float(max_planar_shift_m)
+    if not np.isfinite(limit) or limit < 0.0:
+        raise ValueError('maximum planar shift must be finite and non-negative')
+    normal = np.asarray(
+        estimate.support_normal_base,
+        dtype=float,
+    ).reshape(3).copy()
+    normal_norm = float(np.linalg.norm(normal))
+    if not np.isfinite(normal_norm) or normal_norm <= 1e-12:
+        raise ValueError('support normal is degenerate')
+    normal /= normal_norm
+    delta = reference - np.asarray(estimate.center_base, dtype=float)
+    normal_delta = float(np.dot(delta, normal))
+    planar_delta = delta - normal_delta * normal
+    planar_shift = float(np.linalg.norm(planar_delta))
+    if planar_shift > limit + 1e-12:
+        raise ValueError(
+            'near-field planar center shift %.6fm exceeds %.6fm'
+            % (planar_shift, limit)
+        )
+    anchored = replace(
+        estimate,
+        center_base=np.asarray(estimate.center_base, dtype=float) + planar_delta,
+    )
+    metrics = {
+        'planar_shift_m': planar_shift,
+        'planar_shift_xyz_m': planar_delta.copy(),
+        'normal_delta_m': normal_delta,
+        'reference_center_base_m': reference.copy(),
+        'raw_center_base_m': np.asarray(estimate.center_base, dtype=float).copy(),
+        'anchored_center_base_m': np.asarray(anchored.center_base, dtype=float).copy(),
+    }
+    return anchored, metrics
 
 
 def _failure(code, reason, source_mode):
