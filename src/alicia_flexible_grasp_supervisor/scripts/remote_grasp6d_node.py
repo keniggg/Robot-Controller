@@ -2179,6 +2179,38 @@ def transform_matrix(translation_xyz, quaternion_xyzw):
     return matrix
 
 
+def rebase_obb_rotation_to_support_normal(R_base_obb, support_normal_base):
+    """Preserve the OBB's planar heading on a registered support plane."""
+
+    rotation = np.asarray(R_base_obb, dtype=float).reshape(3, 3)
+    normal = np.asarray(support_normal_base, dtype=float).reshape(3).copy()
+    normal_norm = float(np.linalg.norm(normal))
+    if (
+        not np.all(np.isfinite(rotation))
+        or not np.isfinite(normal_norm)
+        or normal_norm <= 1e-12
+    ):
+        raise ValueError('OBB rotation and support normal must be finite')
+    normal /= normal_norm
+    first = rotation[:, 0] - float(np.dot(rotation[:, 0], normal)) * normal
+    first_norm = float(np.linalg.norm(first))
+    if first_norm <= 1e-9:
+        second = rotation[:, 1] - float(np.dot(rotation[:, 1], normal)) * normal
+        second_norm = float(np.linalg.norm(second))
+        if second_norm <= 1e-9:
+            raise ValueError('OBB has no axis resolvable in the support plane')
+        second /= second_norm
+        first = np.cross(second, normal)
+    else:
+        first /= first_norm
+    second = np.cross(normal, first)
+    second /= np.linalg.norm(second)
+    if float(np.dot(second, rotation[:, 1])) < 0.0:
+        first = -first
+        second = -second
+    return np.column_stack((first, second, normal))
+
+
 def pose_matrix(pose_stamped):
     pose = pose_stamped.pose
     return transform_matrix(
@@ -5494,6 +5526,12 @@ class RemoteGrasp6DNode:
                     'rotation_deg': self._registration_rotation_deg(
                         evidence.result.transform_base
                     ),
+                    'support_normal_angle_deg': float(
+                        evidence.result.support_normal_angle_deg
+                    ),
+                    'support_plane_separation_m': float(
+                        evidence.result.support_plane_separation_m
+                    ),
                     'source_clipped': bool(evidence.source_clipped),
                 }
             return audit
@@ -7567,6 +7605,7 @@ class RemoteGrasp6DNode:
             dtype=float,
         )
         support_point = -float(geometry.support_offset_m) * support_normal
+        tabletop_rotation = np.asarray(geometry.axes_base, dtype=float)
         fused_surface = None
         if bool(contact_execution_phase):
             fused_surface, reference = self._active_multiview_surface()
@@ -7587,10 +7626,14 @@ class RemoteGrasp6DNode:
                 }
             support_normal = reference.support_normal_base
             support_point = -float(reference.support_offset_m) * support_normal
+            tabletop_rotation = rebase_obb_rotation_to_support_normal(
+                geometry.axes_base,
+                support_normal,
+            )
         generation = generate_tabletop_proposals(
             object_points_base=geometry.object_points_base,
             obb_center_base=geometry.center_base,
-            R_base_obb=geometry.axes_base,
+            R_base_obb=tabletop_rotation,
             obb_size_xyz_m=geometry.size_xyz_m,
             support_point_base=support_point,
             support_normal_base=support_normal,

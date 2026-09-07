@@ -173,6 +173,7 @@ class RegistrationResult:
     overlap_fraction: float
     rmse_m: float
     support_normal_angle_deg: float
+    support_plane_separation_m: float
 
     def __post_init__(self):
         if type(self.ok) is not bool:
@@ -204,6 +205,15 @@ class RegistrationResult:
                 'support_normal_angle_deg',
                 minimum=0.0,
                 maximum=180.0,
+            ),
+        )
+        object.__setattr__(
+            self,
+            'support_plane_separation_m',
+            _strict_number(
+                self.support_plane_separation_m,
+                'support_plane_separation_m',
+                minimum=0.0,
             ),
         )
 
@@ -387,6 +397,7 @@ def _failure(
     overlap_fraction=0.0,
     rmse_m=0.0,
     support_normal_angle_deg=0.0,
+    support_plane_separation_m=0.0,
 ):
     return RegistrationResult(
         ok=False,
@@ -396,6 +407,7 @@ def _failure(
         overlap_fraction=float(overlap_fraction),
         rmse_m=float(rmse_m),
         support_normal_angle_deg=float(support_normal_angle_deg),
+        support_plane_separation_m=float(support_plane_separation_m),
     )
 
 
@@ -480,15 +492,39 @@ def register_surface_view(reference, moving, config=None):
         return _failure('STAMP_NOT_MONOTONIC')
     dot = float(np.dot(reference.support_normal_base, moving.support_normal_base))
     normal_angle = float(np.degrees(np.arccos(np.clip(dot, -1.0, 1.0))))
+    # Raw plane offsets are relative to the coordinate origin. A small normal
+    # fit change can move that coefficient by millimetres for a distant target
+    # even when both planes agree locally. Compare signed distances at a robust
+    # target-local anchor so this gate measures physical plane separation.
+    anchor = 0.5 * (
+        np.median(reference.points_base, axis=0)
+        + np.median(moving.points_base, axis=0)
+    )
+    support_plane_separation = abs(float(
+        np.dot(
+            reference.support_normal_base - moving.support_normal_base,
+            anchor,
+        )
+        + reference.support_offset_m
+        - moving.support_offset_m
+    ))
+    def reject(*args, **kwargs):
+        kwargs['support_plane_separation_m'] = support_plane_separation
+        return _failure(*args, **kwargs)
+
     if normal_angle > config.maximum_support_normal_angle_deg:
-        return _failure(
-            'SUPPORT_NORMAL_MISMATCH', support_normal_angle_deg=normal_angle)
+        return reject(
+            'SUPPORT_NORMAL_MISMATCH',
+            support_normal_angle_deg=normal_angle,
+        )
     if (
-        abs(reference.support_offset_m - moving.support_offset_m)
+        support_plane_separation
         > config.maximum_support_offset_delta_m
     ):
-        return _failure(
-            'SUPPORT_OFFSET_MISMATCH', support_normal_angle_deg=normal_angle)
+        return reject(
+            'SUPPORT_OFFSET_MISMATCH',
+            support_normal_angle_deg=normal_angle,
+        )
 
     reference_points = _sorted_points(reference.points_base)
     moving_points = _sorted_points(moving.points_base)
@@ -517,11 +553,11 @@ def register_surface_view(reference, moving, config=None):
         yaw_deg = abs(_yaw_degrees(transform[:3, :3], basis))
         translation_m = float(np.linalg.norm(transform[:3, 3]))
         if yaw_deg > config.maximum_yaw_deg:
-            return _failure(
+            return reject(
                 'YAW_BOUND_EXCEEDED', transform=transform,
                 support_normal_angle_deg=normal_angle)
         if translation_m > config.maximum_translation_m:
-            return _failure(
+            return reject(
                 'TRANSLATION_BOUND_EXCEEDED', transform=transform,
                 support_normal_angle_deg=normal_angle)
 
@@ -542,7 +578,7 @@ def register_surface_view(reference, moving, config=None):
             break
         if (not _has_planar_support(transformed[kept], basis)
                 or not _has_planar_support(reference_points[indices[kept]], basis)):
-            return _failure('DEGENERATE_SUPPORT', transform=transform,
+            return reject('DEGENERATE_SUPPORT', transform=transform,
                             support_normal_angle_deg=normal_angle)
         update_rotation, update_translation = _rigid_update_about_support(
             transformed[kept], reference_points[indices[kept]], basis
@@ -556,11 +592,11 @@ def register_surface_view(reference, moving, config=None):
         translation_m = float(np.linalg.norm(updated[:3, 3]))
         transform = updated
         if yaw_deg > config.maximum_yaw_deg:
-            return _failure(
+            return reject(
                 'YAW_BOUND_EXCEEDED', transform=transform,
                 support_normal_angle_deg=normal_angle)
         if translation_m > config.maximum_translation_m:
-            return _failure(
+            return reject(
                 'TRANSLATION_BOUND_EXCEEDED', transform=transform,
                 support_normal_angle_deg=normal_angle)
         if (
@@ -573,7 +609,7 @@ def register_surface_view(reference, moving, config=None):
         reference_points, moving_points, transform, config)
     if (not _has_planar_support(_transformed[inliers], basis)
             or not _has_planar_support(reference_points[_indices[inliers]], basis)):
-        return _failure('DEGENERATE_SUPPORT', transform=transform,
+        return reject('DEGENERATE_SUPPORT', transform=transform,
                         support_normal_angle_deg=normal_angle)
     inlier_count = int(np.count_nonzero(inliers))
     overlap = float(inlier_count) / float(len(moving_points))
@@ -585,22 +621,30 @@ def register_surface_view(reference, moving, config=None):
     yaw_deg = abs(_yaw_degrees(transform[:3, :3], basis))
     translation_m = float(np.linalg.norm(transform[:3, 3]))
     if yaw_deg > config.maximum_yaw_deg:
-        return _failure(
+        return reject(
             'YAW_BOUND_EXCEEDED', transform, inlier_count, overlap, rmse, normal_angle)
     if translation_m > config.maximum_translation_m:
-        return _failure(
+        return reject(
             'TRANSLATION_BOUND_EXCEEDED', transform, inlier_count, overlap, rmse, normal_angle)
     if inlier_count < config.minimum_inliers:
-        return _failure(
+        return reject(
             'INLIERS_INSUFFICIENT', transform, inlier_count, overlap, rmse, normal_angle)
     if overlap < config.minimum_overlap_fraction:
-        return _failure(
+        return reject(
             'OVERLAP_INSUFFICIENT', transform, inlier_count, overlap, rmse, normal_angle)
     if rmse > config.maximum_rmse_m:
-        return _failure(
+        return reject(
             'RMSE_EXCEEDED', transform, inlier_count, overlap, rmse, normal_angle)
     return RegistrationResult(
-        True, 'REGISTERED', transform, inlier_count, overlap, rmse, normal_angle)
+        True,
+        'REGISTERED',
+        transform,
+        inlier_count,
+        overlap,
+        rmse,
+        normal_angle,
+        support_plane_separation,
+    )
 
 
 def _voxel_deduplicate(points, view_indices, voxel_size_m):

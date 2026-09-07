@@ -489,6 +489,12 @@ def test_near_field_surface_registers_same_track_and_populates_plan_and_audit():
     ]
     assert audit['view_indices'] == [0, 1]
     assert audit['target_track_id'] == moving_observation.identity.track_id
+    assert audit['latest_registration']['support_normal_angle_deg'] == (
+        pytest.approx(result.support_normal_angle_deg)
+    )
+    assert audit['latest_registration']['support_plane_separation_m'] == (
+        pytest.approx(result.support_plane_separation_m)
+    )
 
 
 def test_selected_bundle_strict_checks_the_registered_four_pose_plan():
@@ -3373,6 +3379,37 @@ def test_contact_phase_requires_current_multiview_surface():
     assert diagnostics['failure_code'] == (
         'BILATERAL_SURFACE_EVIDENCE_MISSING'
     )
+
+
+def test_contact_tabletop_obb_is_rebased_to_registered_support_normal():
+    node = remote_node.RemoteGrasp6DNode.__new__(
+        remote_node.RemoteGrasp6DNode
+    )
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=24)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    surface, reference = registered_bilateral_surface()
+    angle = np.deg2rad(0.9)
+    reference = dataclasses.replace(
+        reference,
+        support_normal_base=np.asarray(
+            [0.0, np.sin(angle), np.cos(angle)]
+        ),
+    )
+    node._active_multiview_surface = lambda: (surface, reference)
+
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        tabletop_geometry((0.050, 0.035, 0.021)),
+        contact_execution_phase=True,
+    )
+
+    assert candidates
+    assert diagnostics['failure_code'] == ''
+    assert diagnostics['failure_reason'] == ''
 
 
 def test_registered_opposing_views_are_label_and_obb_height_invariant():

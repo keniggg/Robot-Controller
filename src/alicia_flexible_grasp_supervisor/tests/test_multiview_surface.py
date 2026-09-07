@@ -547,6 +547,65 @@ def test_support_offset_bound_is_exact(outside):
         assert result.code == 'SUPPORT_OFFSET_MISMATCH'
 
 
+def test_support_plane_gate_uses_target_local_separation_for_tilted_fit():
+    points, _other_view = rectangular_prism_views()
+    points = points + np.asarray([-0.12, -0.38, 0.06])
+    anchor = np.median(points, axis=0)
+    reference_normal = np.asarray([0.0, 0.0, 1.0])
+    angle = np.deg2rad(0.9)
+    moving_normal = np.asarray([0.0, np.sin(angle), np.cos(angle)])
+    reference_offset = -float(np.dot(reference_normal, anchor))
+    moving_offset = -float(np.dot(moving_normal, anchor))
+    assert abs(reference_offset - moving_offset) > 0.004
+    reference = view(
+        points,
+        1_000_000_000,
+        normal=reference_normal,
+        offset=reference_offset,
+    )
+    moving = view(
+        points,
+        1_100_000_000,
+        normal=moving_normal,
+        offset=moving_offset,
+    )
+
+    result = register_surface_view(reference, moving)
+
+    assert result.ok
+    assert result.code == 'REGISTERED'
+    assert result.support_plane_separation_m == pytest.approx(0.0, abs=1e-12)
+
+
+def test_support_plane_gate_rejects_target_local_separation_over_bound():
+    points, _other_view = rectangular_prism_views()
+    points = points + np.asarray([-0.12, -0.38, 0.06])
+    anchor = np.median(points, axis=0)
+    reference_normal = np.asarray([0.0, 0.0, 1.0])
+    angle = np.deg2rad(0.9)
+    moving_normal = np.asarray([0.0, np.sin(angle), np.cos(angle)])
+    reference_offset = -float(np.dot(reference_normal, anchor))
+    moving_offset = -float(np.dot(moving_normal, anchor)) + 0.0041
+    reference = view(
+        points,
+        1_000_000_000,
+        normal=reference_normal,
+        offset=reference_offset,
+    )
+    moving = view(
+        points,
+        1_100_000_000,
+        normal=moving_normal,
+        offset=moving_offset,
+    )
+
+    result = register_surface_view(reference, moving)
+
+    assert not result.ok
+    assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+    assert result.support_plane_separation_m == pytest.approx(0.0041)
+
+
 @pytest.mark.parametrize('outside', [False, True])
 def test_support_angle_bound_is_exact(outside):
     reference, moving = registered_pair()
