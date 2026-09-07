@@ -219,14 +219,15 @@ GUI 现有“停止抓取”只调用 `/grasp/stop`，是机械臂执行急停�
 
 调度器任何时刻最多允许一个 WSL 请求正在执行，以及一个待处理的最新
 快照。新快照覆盖旧的待处理快照；旧 generation、旧 request ID、目标 epoch 不匹配或
-返回时已超过 `result_max_age_sec=1.2` 秒的结果只记录 metrics，不得进入候选池。
+返回时已超过 `result_max_age_sec=15.0` 秒的排队结果只记录 metrics，不得进入候选池。
 这个上界不能通过只提高 timer 频率来绕过。
 
 每个请求仍从滚动 RGB-D-mask-object 数据中组成稳定快照：segment 模式要求
 精确同时间戳的 RGB/depth/object/mask，detect 模式要求 RGB/depth/object。源帧到完整
 样本的推理流水线延迟不得超过
-`planning_snapshot_max_inference_latency_sec=1.2` 秒；样本完整后又必须在
-`planning_snapshot_max_age_sec=0.35` 秒内采纳。三帧窗口还需通过：
+`planning_snapshot_max_inference_latency_sec=3.0` 秒；同步缓冲区按该上限保留
+原始 RGB-D，样本完整后又必须在 `planning_snapshot_max_age_sec=0.35` 秒内采纳。
+五帧远场窗口最多跨 12 秒，三帧近场窗口沿用同样的逐帧时序门限，并且还需通过：
 
 - mask IoU、质心漂移和关节变化；
 - mask 腐蚀、内部小孔处理、有效深度比例和 MAD 去异常值；

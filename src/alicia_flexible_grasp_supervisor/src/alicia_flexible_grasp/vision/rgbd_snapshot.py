@@ -498,6 +498,16 @@ class SynchronizedRgbdBuffer:
         self._monotonic_clock = monotonic_clock or time.monotonic
         self._update_sequence = 0
         self._collection_windows = {}
+        self._entry_retention_sec = 2.0
+
+    def configure_retention(self, max_age_sec, max_inference_latency_sec):
+        retention_sec = max(
+            2.0,
+            max(0.0, float(max_inference_latency_sec))
+            + max(0.0, float(max_age_sec)),
+        )
+        with self._condition:
+            self._entry_retention_sec = retention_sec
 
     def update_color(self, color_bgr, stamp_sec, frame_id):
         self._update_entry(
@@ -550,10 +560,11 @@ class SynchronizedRgbdBuffer:
         if stamp_ns <= 0:
             return None
         deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        retention_sec = self._entry_retention_sec
         with self._condition:
             while True:
                 now = self._monotonic_clock()
-                self._prune_locked(now)
+                self._prune_locked(now, retention_sec=retention_sec)
                 for key, entry in self._complete_entries_locked(
                     bool(require_mask), now, max_age_sec, max_inference_latency_sec,
                 ):
@@ -589,6 +600,7 @@ class SynchronizedRgbdBuffer:
                 else max_inference_latency_sec
             ),
         )
+        retention_sec = self._entry_retention_sec
         timeout = max(0.0, float(timeout_sec))
         deadline = self._monotonic_clock() + timeout
         wall_deadline = time.monotonic() + timeout
@@ -604,7 +616,7 @@ class SynchronizedRgbdBuffer:
             collected = self._collection_windows.setdefault(window_key, {})
             while True:
                 monotonic_now = self._monotonic_clock()
-                self._prune_locked(monotonic_now)
+                self._prune_locked(monotonic_now, retention_sec=retention_sec)
                 complete = self._complete_entries_locked(
                     bool(require_mask),
                     monotonic_now,
@@ -771,7 +783,10 @@ class SynchronizedRgbdBuffer:
         now = self._monotonic_clock()
         source_now_ns = int(self._source_clock_ns())
         with self._condition:
-            self._prune_locked(now)
+            self._prune_locked(
+                now,
+                retention_sec=self._entry_retention_sec,
+            )
             if 'object_mask' in values:
                 if self._latest_mask_stamp_ns is None or key >= self._latest_mask_stamp_ns:
                     self._latest_mask_stamp_ns = key
@@ -805,8 +820,8 @@ class SynchronizedRgbdBuffer:
                 entry['joint_positions'] = self._joint_positions.copy()
             self._condition.notify_all()
 
-    def _prune_locked(self, now):
-        cutoff = float(now) - 2.0
+    def _prune_locked(self, now, retention_sec=2.0):
+        cutoff = float(now) - max(2.0, float(retention_sec))
         for key in [
             key
             for key, entry in self._entries.items()

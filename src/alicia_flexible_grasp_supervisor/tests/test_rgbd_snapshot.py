@@ -1084,6 +1084,46 @@ def test_buffer_accepts_bounded_delayed_inference_immediately_after_completion()
     assert [item.stamp_ns for item in samples] == [1_000_000_000]
 
 
+def test_buffer_retains_rgbd_until_configured_delayed_inference_completes():
+    source_now_ns = [1_000_000_000]
+    monotonic_now = [10.0]
+    buffer = SynchronizedRgbdBuffer(
+        source_clock_ns=lambda: source_now_ns[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    color = np.zeros((3, 4, 3), dtype=np.uint8)
+    depth = np.full((3, 4), 2200, dtype=np.uint16)
+    mask = np.ones((3, 4), dtype=np.uint8) * 255
+    detected = types.SimpleNamespace(
+        detected=True,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_width=4,
+        bbox_height=3,
+    )
+    identity = TargetTrackIdentity.from_stream(0, 0)
+    buffer.configure_retention(0.35, 3.0)
+    buffer.update_joints([0.0] * 6)
+    buffer.update_color(color, 1.0, 'camera_link')
+    buffer.update_depth(depth, 1.0, 'camera_link')
+    source_now_ns[0] = 3_400_000_000
+    monotonic_now[0] = 12.4
+    buffer.update_mask(mask, 1.0, 'camera_link')
+    buffer.update_object(detected, 1.0, target_identity=identity)
+
+    result = buffer.wait_for_exact_sample(
+        1_000_000_000,
+        identity,
+        timeout_sec=0.0,
+        require_mask=True,
+        max_age_sec=0.35,
+        max_inference_latency_sec=3.0,
+    )
+
+    assert result is not None
+    assert result.stamp_ns == 1_000_000_000
+
+
 def test_complete_empty_mask_is_never_admitted_as_a_sample():
     source_now_ns = [1_100_000_000]
     monotonic_now = [10.1]

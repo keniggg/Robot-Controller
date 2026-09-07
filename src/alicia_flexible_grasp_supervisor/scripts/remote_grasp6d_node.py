@@ -3543,6 +3543,10 @@ class RemoteGrasp6DNode:
                 )
             ),
         )
+        self.frames.configure_retention(
+            self.planning_snapshot_max_age_sec,
+            self.planning_snapshot_max_inference_latency_sec,
+        )
         self.planning_snapshot_max_span_sec = max(
             0.0,
             float(
@@ -16243,6 +16247,16 @@ class RemoteGrasp6DNode:
                     continuous_config
                 )
                 condition.notify_all()
+        configure_retention = getattr(
+            getattr(self, 'frames', None),
+            'configure_retention',
+            None,
+        )
+        if callable(configure_retention):
+            configure_retention(
+                self.planning_snapshot_max_age_sec,
+                self.planning_snapshot_max_inference_latency_sec,
+            )
 
     @staticmethod
     def _stage_runtime_params(staged):

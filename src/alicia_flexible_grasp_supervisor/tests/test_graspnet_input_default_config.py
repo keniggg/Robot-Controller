@@ -211,6 +211,10 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
         self.assertEqual(remote['planning_snapshot_frames'], 5)
         self.assertEqual(remote['near_field_planning_snapshot_frames'], 3)
         self.assertEqual(remote['planning_snapshot_timeout_sec'], 8.0)
+        self.assertEqual(
+            remote['planning_snapshot_max_inference_latency_sec'],
+            3.0,
+        )
         self.assertEqual(remote['planning_snapshot_max_span_sec'], 12.0)
         self.assertEqual(remote['max_candidates'], 300)
         self.assertEqual(remote['near_field_max_candidates'], 12)
