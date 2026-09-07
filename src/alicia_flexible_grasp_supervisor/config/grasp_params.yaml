@@ -310,11 +310,13 @@ grasp_6d:
     near_field_planning_snapshot_frames: 3
     planning_snapshot_timeout_sec: 8.0
     # A synchronized frame may spend bounded time in YOLO inference, but once
-    # RGB-D-mask-object is complete it must be admitted promptly.  Admitted
-    # frames may then accumulate within max_span for a 1-2 Hz three-frame window.
+    # RGB-D-mask-object is complete it must be admitted promptly. Admitted
+    # frames may then accumulate within max_span; twelve seconds accommodates
+    # the measured sub-Hz detector rate while retaining all five far-field
+    # samples and the existing mask, motion, and per-frame latency gates.
     planning_snapshot_max_inference_latency_sec: 1.2
     planning_snapshot_max_age_sec: 0.35
-    planning_snapshot_max_span_sec: 6.0
+    planning_snapshot_max_span_sec: 12.0
     planning_mask_min_iou: 0.85
     planning_mask_max_centroid_shift_px: 5.0
     planning_max_joint_delta_rad: 0.01
