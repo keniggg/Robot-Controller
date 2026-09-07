@@ -540,6 +540,30 @@ class SynchronizedRgbdBuffer:
             self._joint_positions = np.asarray(joint_positions, dtype=float).reshape(-1).copy()
             self._condition.notify_all()
 
+    def wait_for_exact_sample(
+        self, stamp_ns, target_identity, timeout_sec, require_mask,
+        max_age_sec, max_inference_latency_sec,
+    ):
+        """Copy one exact reached-view frame, retaining normal admission gates."""
+        stamp_ns = int(stamp_ns)
+        identity = validate_target_identity(target_identity)
+        if stamp_ns <= 0:
+            return None
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        with self._condition:
+            while True:
+                now = self._monotonic_clock()
+                self._prune_locked(now)
+                for key, entry in self._complete_entries_locked(
+                    bool(require_mask), now, max_age_sec, max_inference_latency_sec,
+                ):
+                    if key == stamp_ns and entry.get('target_identity') == identity:
+                        return self._sample_from_entry(entry, bool(require_mask))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    return None
+                self._condition.wait(remaining)
+
     def wait_for_samples(
         self,
         count,

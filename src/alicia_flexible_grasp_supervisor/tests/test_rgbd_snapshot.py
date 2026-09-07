@@ -94,6 +94,67 @@ def add_complete_sample(buffer, stamp):
     buffer.update_object(detected, stamp, target_identity=TargetTrackIdentity.from_stream(0, 0))
 
 
+def test_exact_reached_view_keeps_requested_stamp_when_newer_frame_exists():
+    buffer = synchronized_buffer_at(20_000_000_000)
+    add_complete_sample(buffer, 19.8)
+    add_complete_sample(buffer, 19.9)
+    identity = TargetTrackIdentity.from_stream(0, 0)
+    result = buffer.wait_for_exact_sample(
+        19_800_000_000, identity, timeout_sec=0.0, require_mask=True,
+        max_age_sec=0.35, max_inference_latency_sec=1.2,
+    )
+    assert result.stamp_ns == 19_800_000_000
+    result.depth_raw[:] = 0
+    again = buffer.wait_for_exact_sample(
+        19_800_000_000, identity, timeout_sec=0.0, require_mask=True,
+        max_age_sec=0.35, max_inference_latency_sec=1.2,
+    )
+    assert np.all(again.depth_raw == 2200)
+
+
+def test_exact_reached_view_rejects_missing_stamp_wrong_track_and_stale_frame():
+    now = [10.0]
+    buffer = synchronized_buffer_at(20_000_000_000, lambda: now[0])
+    add_complete_sample(buffer, 19.8)
+    identity = TargetTrackIdentity.from_stream(0, 0)
+    kwargs = dict(timeout_sec=0.0, require_mask=True, max_age_sec=0.35,
+                  max_inference_latency_sec=1.2)
+    assert buffer.wait_for_exact_sample(19_800_000_001, identity, **kwargs) is None
+    assert buffer.wait_for_exact_sample(
+        19_800_000_000, TargetTrackIdentity.from_stream(1, 1), **kwargs) is None
+    now[0] += 0.36
+    assert buffer.wait_for_exact_sample(19_800_000_000, identity, **kwargs) is None
+
+
+def test_exact_reached_view_waits_for_delayed_matching_mask():
+    buffer = synchronized_buffer_at(20_000_000_000)
+    add_complete_sample(buffer, 19.8)
+    buffer.update_mask(np.zeros((3, 4), dtype=np.uint8), 19.8, 'camera_link')
+    result = []
+    worker = threading.Thread(target=lambda: result.append(buffer.wait_for_exact_sample(
+        19_800_000_000, TargetTrackIdentity.from_stream(0, 0),
+        timeout_sec=0.5, require_mask=True, max_age_sec=0.35,
+        max_inference_latency_sec=1.2)))
+    worker.start()
+    buffer.update_mask(np.full((3, 4), 255, dtype=np.uint8), 19.8, 'camera_link')
+    worker.join(1.0)
+    assert len(result) == 1 and result[0].stamp_ns == 19_800_000_000
+
+
+def test_exact_reached_view_keeps_latency_future_and_frame_alignment_gates():
+    identity = TargetTrackIdentity.from_stream(0, 0)
+    kwargs = dict(timeout_sec=0.0, require_mask=True, max_age_sec=0.35,
+                  max_inference_latency_sec=1.2)
+    for stamp in (18.0, 21.0):
+        buffer = synchronized_buffer_at(20_000_000_000)
+        add_complete_sample(buffer, stamp)
+        assert buffer.wait_for_exact_sample(int(stamp * 1e9), identity, **kwargs) is None
+    buffer = synchronized_buffer_at(20_000_000_000)
+    add_complete_sample(buffer, 19.8)
+    buffer.update_mask(np.full((3, 4), 255, dtype=np.uint8), 19.8, 'wrong_frame')
+    assert buffer.wait_for_exact_sample(19_800_000_000, identity, **kwargs) is None
+
+
 def add_identity_bound_sample(buffer, stamp, target_identity):
     color = np.zeros((3, 4, 3), dtype=np.uint8)
     depth = np.full((3, 4), 2200, dtype=np.uint16)

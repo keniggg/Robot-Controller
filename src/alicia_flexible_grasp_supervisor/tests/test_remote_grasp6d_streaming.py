@@ -313,6 +313,64 @@ def test_near_field_phase_captures_task_reached_measured_surface():
     node.shutdown_streaming_worker()
 
 
+@pytest.mark.parametrize('invalidate', ['', 'target', 'stop', 'phase'])
+def test_reached_phase_builds_exact_surface_after_far_field_motion(monkeypatch, invalidate):
+    node = streaming_node(start_worker=False)
+    node.start_streaming()
+    identity = node._current_stream_target_identity()
+    node._latest_target_observation = measured_observation(node, stamp_sec=10.0)
+    node.frames = remote_node.SynchronizedRgbdBuffer(source_clock_ns=lambda: 20_000_000_000)
+    node.frames.update_joints([0.] * 6)
+    stamp = remote_node.rospy.Time(19, 900_000_000)
+    shape = (40, 50)
+    obj = types.SimpleNamespace(detected=True, bbox_x=5, bbox_y=5,
+                                bbox_width=40, bbox_height=30, label='carton')
+    node.frames.update_color(np.zeros(shape + (3,), dtype=np.uint8), stamp, 'camera_link')
+    node.frames.update_depth(np.full(shape, 2600, dtype=np.uint16), stamp, 'camera_link')
+    node.frames.update_mask(np.full(shape, 255, dtype=np.uint8), stamp, 'camera_link')
+    node.frames.update_object(obj, stamp, target_epoch=identity.epoch, target_identity=identity)
+    node._active_profile_requires_mask = lambda: True
+    node._snapshot_depth_config = lambda: (0.0001, 0.03, 2.0)
+    node._camera_intrinsics = lambda: types.SimpleNamespace(depth_scale=0.0001)
+    tf_calls = []
+    node._snapshot_base_optical_transform = lambda snapshot, ts: (
+        tf_calls.append(ts.to_nsec()) or np.eye(4))
+    estimate = types.SimpleNamespace(
+        ok=True, object_points_base=measured_surface_points(),
+        support_normal_base=np.array([0., 0., 1.]), support_offset_m=0.0)
+    def estimate_with_lifecycle_change(**kwargs):
+        if invalidate == 'target':
+            node._advance_target_instance_epoch('TARGET_INSTANCE_CHANGED')
+        elif invalidate == 'stop':
+            node.stop_streaming()
+        elif invalidate == 'phase':
+            node._near_field_phase_id = 99
+        return estimate
+    monkeypatch.setattr(remote_node, 'estimate_object_geometry', estimate_with_lifecycle_change)
+
+    phase = near_field_phase(
+        True, phase_id=7, reference_center=[0., 0., 0.017],
+        reference_stamp_sec=19.9, reference_target_track_id=identity.track_id)
+    phase.reference_source_stamp = stamp
+    node.near_field_state_cb(phase)
+
+    surface, reference = node._active_multiview_surface()
+    if invalidate:
+        assert surface is None and reference is None
+        node.shutdown_streaming_worker()
+        return
+    assert isinstance(surface, FusedTargetSurface)
+    assert reference.stamp_ns == stamp.to_nsec()
+    assert surface.identity == identity
+    assert tf_calls == [stamp.to_nsec()]
+    # The next frame must register against that measured view, not a stale
+    # far-field planning snapshot or a synthetic OBB surface.
+    result = node._register_near_field_surface(measured_observation(node, stamp_sec=20.1))
+    assert result.ok
+    assert len(node._active_multiview_surface()[0].view_stamps_ns) == 2
+    node.shutdown_streaming_worker()
+
+
 def test_near_field_phase_rejects_missing_reached_view_anchor_contract():
     node = streaming_node(start_worker=False)
 

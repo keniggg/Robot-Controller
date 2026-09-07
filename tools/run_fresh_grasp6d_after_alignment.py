@@ -343,21 +343,24 @@ class FreshPreviewRunner:
             )
             return 4
 
-        self.stop_candidate_computation()
-        still_matches, verified_after_stop = self.current_plan_matches(
+        # Keep inference and its opaque target identity alive across the
+        # observation move. The task owns near-field phase transitions;
+        # stopping here changes the track before its reached-view handoff.
+        still_matches, verified_before_start = self.current_plan_matches(
             current_plan,
             plan_id,
         )
         if not still_matches:
             print(
-                "PLAN_ID_VERIFY_AFTER_CANDIDATE_STOP_FAILED "
+                "PLAN_ID_VERIFY_BEFORE_START_FAILED "
                 "expected_plan_id=%s" % plan_id,
                 flush=True,
             )
+            self.stop_candidate_computation()
             return 5
         print(
             "PLAN_ID_VERIFIED plan_id=%s message=%s"
-            % (plan_id, verified_after_stop.message),
+            % (plan_id, verified_before_start.message),
             flush=True,
         )
         print("GRASP_START_CALL plan_id=%s" % plan_id, flush=True)
@@ -367,6 +370,7 @@ class FreshPreviewRunner:
             % (result.success, result.message),
             flush=True,
         )
+        self.stop_candidate_computation()
         return 0 if result.success else 6
 
 

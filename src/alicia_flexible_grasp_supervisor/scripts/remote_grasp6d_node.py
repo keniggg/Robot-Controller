@@ -4383,6 +4383,67 @@ class RemoteGrasp6DNode:
         self._near_field_reference_center_base = None
         self._latest_registration_evidence = None
 
+    def _resolve_reached_view_observation(self, msg):
+        """Reconstruct the task's exact measured frame after observation motion.
+
+        The last inference snapshot predates the move. Perception continues
+        filling the synchronized buffer while inference is busy; use the
+        requested integer stamp, never whichever planning snapshot is latest.
+        """
+        identity = self._current_stream_target_identity()
+        stamp_ns = _stamp_to_nsec(getattr(msg, 'reference_source_stamp', None))
+        started_ns = _stamp_to_nsec(getattr(getattr(msg, 'header', None), 'stamp', None))
+        center = getattr(msg, 'reference_center_base', None)
+        if (
+            not bool(getattr(msg, 'reference_center_valid', False))
+            or str(getattr(msg, 'reference_target_track_id', '')) != identity.track_id
+            or stamp_ns <= 0 or stamp_ns > started_ns
+            or not all(math.isfinite(float(getattr(center, axis, float('nan'))))
+                       for axis in ('x', 'y', 'z'))
+        ):
+            return None
+        observation = getattr(self, '_latest_target_observation', None)
+        if (isinstance(observation, TargetObservation)
+                and observation.identity == identity and observation.stamp_ns == stamp_ns):
+            return observation
+        frames = getattr(self, 'frames', None)
+        if not isinstance(frames, SynchronizedRgbdBuffer):
+            return None
+        require_mask = bool(self._active_profile_requires_mask())
+        sample = frames.wait_for_exact_sample(
+            stamp_ns, identity, timeout_sec=0.5, require_mask=require_mask,
+            max_age_sec=float(getattr(self, 'planning_snapshot_max_age_sec', 0.35)),
+            max_inference_latency_sec=float(getattr(
+                self, 'planning_snapshot_max_inference_latency_sec', 1.2)),
+        )
+        if sample is None:
+            rospy.logwarn('Reached-view RGB-D unavailable: track=%s stamp_ns=%d',
+                          identity.track_id, stamp_ns)
+            return None
+        depth_scale, depth_min, depth_max = self._snapshot_depth_config()
+        snapshot = fuse_stable_samples(
+            [sample], require_mask=require_mask,
+            min_mask_iou=float(getattr(self, 'planning_mask_min_iou', 0.85)),
+            max_centroid_shift_px=float(getattr(self, 'planning_mask_max_centroid_shift_px', 5.0)),
+            max_joint_delta_rad=float(getattr(self, 'planning_max_joint_delta_rad', 0.01)),
+            erosion_px=int(getattr(self, 'mask_erosion_px', 2)),
+            depth_scale=depth_scale, depth_min_m=depth_min, depth_max_m=depth_max,
+            mad_scale=float(getattr(self, 'depth_mad_scale', 3.5)),
+            mad_absolute_floor_m=float(getattr(self, 'depth_mad_absolute_floor_m', 0.002)),
+            internal_hole_max_area_px=int(getattr(self, 'mask_internal_hole_max_area_px', 25)),
+        )
+        if not snapshot.ok:
+            rospy.logwarn('Reached-view RGB-D rejected: %s: %s',
+                          snapshot.failure_code, snapshot.failure_reason)
+            return None
+        estimate, _depth, transform = self._prepare_snapshot_geometry(
+            snapshot, msg.reference_source_stamp)
+        if not estimate.ok:
+            rospy.logwarn('Reached-view geometry rejected: %s: %s',
+                          estimate.failure_code, estimate.failure_reason)
+            return None
+        return observation_from_snapshot(snapshot, estimate, transform, 'base_link')
+
     def near_field_state_cb(self, msg):
         """Reset candidate evidence only at the explicit near-field boundary."""
 
@@ -4423,7 +4484,24 @@ class RemoteGrasp6DNode:
         active = bool(requested_active and valid_active_contract)
         captured_reference_view = None
         captured_reference_center = None
+        # Do not hold the geometry lock while waiting for independently
+        # delivered RGB/depth/mask/object callbacks. Revalidate the lifecycle
+        # after reconstruction so a target change or stop cannot install it.
         with self._geometry_state_guard():
+            reference_lifecycle = self._multiview_lifecycle_token()
+            new_active_phase = active and (
+                not bool(getattr(self, 'near_field_planning_active', False))
+                or phase_id != int(getattr(self, '_near_field_phase_id', 0)))
+        resolved_observation = None
+        if new_active_phase:
+            try:
+                resolved_observation = self._resolve_reached_view_observation(msg)
+            except Exception as exc:
+                rospy.logwarn('Reached-view surface reconstruction failed: %s', str(exc))
+        with self._geometry_state_guard():
+            if reference_lifecycle != self._multiview_lifecycle_token():
+                rospy.logwarn('Discarded reached-view handoff after lifecycle change')
+                return
             previous = bool(
                 getattr(self, 'near_field_planning_active', False)
             )
@@ -4439,9 +4517,7 @@ class RemoteGrasp6DNode:
                 deadline_sec if active else 0.0
             )
             if active and (not previous or phase_id != previous_phase_id):
-                observation = getattr(
-                    self, '_latest_target_observation', None
-                )
+                observation = resolved_observation
                 reference_valid = bool(
                     getattr(msg, 'reference_center_valid', False)
                 )
