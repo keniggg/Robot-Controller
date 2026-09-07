@@ -314,7 +314,7 @@ grasp_6d:
     # frames may then accumulate within max_span; twelve seconds accommodates
     # the measured sub-Hz detector rate while retaining all five far-field
     # samples and the existing mask, motion, and per-frame latency gates.
-    planning_snapshot_max_inference_latency_sec: 3.0
+    planning_snapshot_max_inference_latency_sec: 5.0
     planning_snapshot_max_age_sec: 0.35
     planning_snapshot_max_span_sec: 12.0
     planning_mask_min_iou: 0.85

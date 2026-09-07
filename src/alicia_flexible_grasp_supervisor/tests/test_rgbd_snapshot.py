@@ -1102,12 +1102,12 @@ def test_buffer_retains_rgbd_until_configured_delayed_inference_completes():
         bbox_height=3,
     )
     identity = TargetTrackIdentity.from_stream(0, 0)
-    buffer.configure_retention(0.35, 3.0)
+    buffer.configure_retention(0.35, 5.0)
     buffer.update_joints([0.0] * 6)
     buffer.update_color(color, 1.0, 'camera_link')
     buffer.update_depth(depth, 1.0, 'camera_link')
-    source_now_ns[0] = 3_400_000_000
-    monotonic_now[0] = 12.4
+    source_now_ns[0] = 4_700_000_000
+    monotonic_now[0] = 13.7
     buffer.update_mask(mask, 1.0, 'camera_link')
     buffer.update_object(detected, 1.0, target_identity=identity)
 
@@ -1117,7 +1117,7 @@ def test_buffer_retains_rgbd_until_configured_delayed_inference_completes():
         timeout_sec=0.0,
         require_mask=True,
         max_age_sec=0.35,
-        max_inference_latency_sec=3.0,
+        max_inference_latency_sec=5.0,
     )
 
     assert result is not None
