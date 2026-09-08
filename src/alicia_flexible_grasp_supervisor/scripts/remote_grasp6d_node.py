@@ -137,6 +137,8 @@ from alicia_flexible_grasp.vision.multiview_surface import (
     SurfaceView,
     append_registered_view,
     fused_surface_from_view,
+    maximum_point_displacement_m,
+    support_plane_separation_m,
     surface_view_from_observation,
 )
 from alicia_flexible_grasp.vision.object_geometry import (
@@ -2528,24 +2530,12 @@ def project_base_target_at_tool_pose(tool_pose, target_base_xyz, tool_from_camer
     return u, v, optical_z
 
 
-def centered_observation_pose_at_camera_distance(
-    reference_tool_pose,
-    target_base_xyz,
-    tool_from_camera,
+def observation_camera_distance_variants(
     nominal_camera_target_distance_m,
     min_camera_target_distance_m,
     max_camera_target_distance_m,
 ):
-    """Solve a target-centred view at one camera-to-target distance.
-
-    Contact and observation are different planning phases.  Hold the supplied
-    observation-reference wrist orientation fixed, place the camera optical
-    centre on the optical-axis line through the live target, and use the
-    configured nominal camera working distance.  The resulting tool0 move
-    from the reference pose is deliberately derived rather than constrained:
-    an eye-in-hand camera working distance must not be confused with a
-    TCP-to-TCP offset.
-    """
+    """Return at most five nominal-first distances within the existing band."""
 
     try:
         nominal_distance = float(nominal_camera_target_distance_m)
@@ -2569,6 +2559,41 @@ def centered_observation_pose_at_camera_distance(
             'OBSERVATION_VIEW_GEOMETRY_INVALID',
             'nominal observation distance must be inside finite positive bounds',
         )
+    distances = []
+    for distance in (
+        nominal_distance,
+        0.5 * nominal_distance + 0.5 * min_distance,
+        0.5 * nominal_distance + 0.5 * max_distance,
+        min_distance,
+        max_distance,
+    ):
+        if not any(abs(distance - previous) <= 1e-9 for previous in distances):
+            distances.append(distance)
+    return tuple(distances)
+
+
+def centered_observation_pose_at_camera_distance(
+    reference_tool_pose,
+    target_base_xyz,
+    tool_from_camera,
+    nominal_camera_target_distance_m,
+    min_camera_target_distance_m,
+    max_camera_target_distance_m,
+):
+    """Solve a target-centred view at one camera-to-target distance.
+
+    Hold the supplied wrist orientation fixed and place the camera optical
+    centre on the optical-axis line through the target. The requested distance
+    must remain inside the configured observation band.
+    """
+
+    nominal_distance = observation_camera_distance_variants(
+        nominal_camera_target_distance_m,
+        min_camera_target_distance_m,
+        max_camera_target_distance_m,
+    )[0]
+    min_distance = float(min_camera_target_distance_m)
+    max_distance = float(max_camera_target_distance_m)
 
     target = _finite_vector3(target_base_xyz, 'observation target')
     transform = np.asarray(tool_from_camera, dtype=float).reshape(4, 4)
@@ -5411,10 +5436,16 @@ class RemoteGrasp6DNode:
             # unbounded evidence leaves the candidate untouched and is
             # rejected below.
             correction = np.asarray(result.transform_base, dtype=float)
+            try:
+                measured_displacement_m = maximum_point_displacement_m(
+                    observation.points_base, correction,
+                )
+            except (TypeError, ValueError):
+                return False
             if result.ok:
                 if correction.shape != (4, 4) or not np.all(np.isfinite(correction)):
                     return False
-                if float32_wire_value(float(np.linalg.norm(correction[:3, 3]))) > float32_wire_value(
+                if float32_wire_value(measured_displacement_m) > float32_wire_value(
                     policy['maximum_translation_m']
                 ):
                     return False
@@ -5438,9 +5469,9 @@ class RemoteGrasp6DNode:
                     policy['maximum_support_normal_angle_deg']
                 ):
                     return False
-                support_offset_delta = abs(float(_reference.support_offset_m) - float(
-                    observation.support_offset_m
-                ))
+                support_offset_delta = support_plane_separation_m(
+                    _reference, surface_view_from_observation(observation),
+                )
                 if float32_wire_value(support_offset_delta) > float32_wire_value(
                     policy['maximum_support_offset_delta_m']
                 ):
@@ -5471,9 +5502,7 @@ class RemoteGrasp6DNode:
                 result.overlap_fraction
             )
             plan.refinement_rmse_m = float(result.rmse_m)
-            plan.refinement_translation_m = float(
-                np.linalg.norm(result.transform_base[:3, 3])
-            )
+            plan.refinement_translation_m = measured_displacement_m
             plan.refinement_rotation_deg = self._registration_rotation_deg(
                 result.transform_base
             )
@@ -5520,7 +5549,10 @@ class RemoteGrasp6DNode:
                         evidence.result.overlap_fraction
                     ),
                     'rmse_m': float(evidence.result.rmse_m),
-                    'translation_m': float(np.linalg.norm(
+                    'translation_m': float(
+                        evidence.result.maximum_point_displacement_m
+                    ),
+                    'raw_translation_m': float(np.linalg.norm(
                         evidence.result.transform_base[:3, 3]
                     )),
                     'rotation_deg': self._registration_rotation_deg(
@@ -6746,6 +6778,7 @@ class RemoteGrasp6DNode:
         insertion_axis_base,
         snapshot=None,
         observation_reference_pose=None,
+        observation_camera_distance_m=None,
     ):
         nominal_camera_distance = float(
             self.grasp_config.get(
@@ -6764,6 +6797,11 @@ class RemoteGrasp6DNode:
                 'observation_camera_target_max_distance_m',
                 0.220,
             )
+        )
+        selected_camera_distance = (
+            nominal_camera_distance
+            if observation_camera_distance_m is None
+            else float(observation_camera_distance_m)
         )
         profile = self._contact_stage_profile(
             geometry,
@@ -6788,7 +6826,7 @@ class RemoteGrasp6DNode:
                 ),
                 geometry.center_base,
                 self._tool_from_camera_matrix(),
-                nominal_camera_distance,
+                selected_camera_distance,
                 min_camera_distance,
                 max_camera_distance,
             )
@@ -6796,6 +6834,9 @@ class RemoteGrasp6DNode:
         sequence.pregrasp = observation_pose
         setattr(sequence, 'adaptive_stage_profile', profile)
         view_audit = dict(view_audit)
+        view_audit['nominal_camera_target_distance_m'] = nominal_camera_distance
+        if observation_camera_distance_m is not None:
+            view_audit['selection_rule'] = 'bounded_camera_target_distance_search'
         view_audit['orientation_source'] = (
             'contact_candidate'
             if observation_reference_pose is None
@@ -6845,8 +6886,27 @@ class RemoteGrasp6DNode:
 
         passing = []
         rejected = []
-        for reference_variant in self._observation_reference_roll_variants(
+        reference_variants = self._observation_reference_roll_variants(
             observation_reference_pose
+        )
+        distances = observation_camera_distance_variants(
+            self.grasp_config.get(
+                'observation_camera_target_nominal_distance_m', 0.200,
+            ),
+            self.grasp_config.get(
+                'observation_camera_target_min_distance_m', 0.180,
+            ),
+            self.grasp_config.get(
+                'observation_camera_target_max_distance_m', 0.220,
+            ),
+        )
+        # Keep all original nominal roll branches first. At most five
+        # distances times the existing 25-roll bound reach endpoint checking;
+        # strict MoveIt and its duration ranking still decide reachability.
+        for distance_index, camera_distance, reference_variant in (
+            (index, distance, variant)
+            for index, distance in enumerate(distances)
+            for variant in reference_variants
         ):
             sequence = self._make_observation_sequence(
                 grasp_pose,
@@ -6856,6 +6916,7 @@ class RemoteGrasp6DNode:
                 observation_reference_pose=(
                     reference_variant['reference_pose']
                 ),
+                observation_camera_distance_m=camera_distance,
             )
             view_audit = dict(
                 getattr(sequence, 'observation_view_audit', {}) or {}
@@ -6870,6 +6931,8 @@ class RemoteGrasp6DNode:
                 'camera_roll_preference_index': int(
                     reference_variant['preference_index']
                 ),
+                'camera_target_distance_m': float(camera_distance),
+                'camera_distance_preference_index': int(distance_index),
                 'object_yaw_used': False,
             })
             setattr(sequence, 'observation_view_audit', view_audit)
@@ -6891,6 +6954,7 @@ class RemoteGrasp6DNode:
                     or not envelope.ok
                 ):
                     rejected.append({
+                        'camera_target_distance_m': float(camera_distance),
                         'camera_roll_offset_deg': float(
                             reference_variant['camera_roll_offset_deg']
                         ),
@@ -6918,6 +6982,7 @@ class RemoteGrasp6DNode:
                     })
                     continue
             passing.append({
+                'camera_target_distance_m': float(camera_distance),
                 'sequence': sequence,
                 'observation_envelope': envelope,
                 'observation_side_evidence': dict(side_evidence),
@@ -6932,7 +6997,8 @@ class RemoteGrasp6DNode:
                     reference_variant['camera_roll_offset_deg']
                 ),
                 'preference_index': int(
-                    reference_variant['preference_index']
+                    distance_index * len(reference_variants)
+                    + reference_variant['preference_index']
                 ),
             })
         return tuple(passing), tuple(rejected)
@@ -7624,12 +7690,9 @@ class RemoteGrasp6DNode:
                     'plan_phase': CONTACT_EXECUTION_PLAN,
                     'contact_execution_gate_deferred': False,
                 }
-            support_normal = reference.support_normal_base
-            support_point = -float(reference.support_offset_m) * support_normal
-            tabletop_rotation = rebase_obb_rotation_to_support_normal(
-                geometry.axes_base,
-                support_normal,
-            )
+            # Clearance construction and every candidate gate must share the
+            # current request's frozen plane. The reference view supplies
+            # registered contact evidence, not a second clearance plane.
         generation = generate_tabletop_proposals(
             object_points_base=geometry.object_points_base,
             obb_center_base=geometry.center_base,
@@ -9159,7 +9222,7 @@ class RemoteGrasp6DNode:
             insertion_axis_base=tabletop_candidate.insertion_axis_base,
             jaw_axis_base=tabletop_candidate.jaw_axis_base,
             required_open_width_m=float(
-                tabletop_candidate.required_open_width_m
+                gate.required_open_width_m
             ),
             model_width_m=None,
             model_score=None,
@@ -13041,6 +13104,68 @@ class RemoteGrasp6DNode:
             lift=stamped[3],
         )
 
+    def _prepare_final_registered_contact_plan(self, plan, prepared, runtime):
+        """Restore tabletop clearance, then gate the exact registered family."""
+
+        runtime.pop('final_registered_geometry_gate', None)
+        runtime.pop('registration_support_lift_m', None)
+        adjusted = deepcopy(plan)
+        geometry = prepared.geometry
+        normal = np.asarray(geometry.support_normal_base, dtype=float)
+        normal = normal / np.linalg.norm(normal)
+        support_lift_m = 0.0
+        if str(plan.candidate_source) == 'tabletop_geometry':
+            # Registration can move a boundary-clearance grasp below the
+            # current frozen plane. Only lift the whole family as needed;
+            # retain every orientation and relative approach/lift vector.
+            sequence = self._rich_plan_execution_sequence(adjusted)
+            for stage in ('pregrasp', 'approach', 'grasp', 'lift'):
+                transform = pose_matrix(getattr(sequence, stage))
+                safe_translation = solve_tool0_translation_for_support_clearance(
+                    rotation=transform[:3, :3],
+                    lateral_target=transform[:3, 3],
+                    support_point=-float(geometry.support_offset_m) * normal,
+                    support_normal=normal,
+                    clearance_m=float(self.gripper_geometry.support_clearance_m),
+                    gripper=self.gripper_geometry,
+                    tool_jaw_axis=self.gripper_tool_jaw_axis,
+                    tool_finger_length_axis=self.gripper_tool_finger_length_axis,
+                )
+                support_lift_m = max(support_lift_m, float(np.dot(
+                    safe_translation - transform[:3, 3], normal)))
+            if support_lift_m < 1e-10:
+                support_lift_m = 0.0
+            # The sum conservatively bounds registration plus this additional
+            # displacement; compensation cannot escape the existing bound.
+            total_displacement_m = float(plan.refinement_translation_m) + support_lift_m
+            policy = refinement_registration_policy(getattr(
+                self, 'multiview_registration_config', RegistrationConfig()))
+            if float32_wire_value(total_displacement_m) > float32_wire_value(
+                policy['maximum_translation_m']
+            ):
+                raise CandidateContractError('TRANSLATION_BOUND_EXCEEDED',
+                    'registration and clearance restoration exceed the correction bound')
+            for pose in adjusted.poses:
+                pose.position.x += float(support_lift_m * normal[0])
+                pose.position.y += float(support_lift_m * normal[1])
+                pose.position.z += float(support_lift_m * normal[2])
+            adjusted.refinement_translation_m = total_displacement_m
+        sequence = self._rich_plan_execution_sequence(adjusted)
+        final_runtime = dict(runtime, grasp_pose=sequence.grasp)
+        gate = self._resolved_sequence_geometry_gate(final_runtime, sequence)
+        gate = self._apply_final_approach_lateral_gate(gate, sequence, normal)
+        if not isinstance(gate, CandidateGateResult) or not gate.ok:
+            raise CandidateContractError(
+                str(getattr(gate, 'failure_code', '') or 'GRIPPER_SWEEP_COLLISION'),
+                'final registered contact family failed frozen geometry: %s'
+                % str(getattr(gate, 'failure_reason', '') or 'missing evidence'),
+            )
+        plan.poses = adjusted.poses
+        plan.refinement_translation_m = adjusted.refinement_translation_m
+        plan.required_open_width_m = float(gate.required_open_width_m)
+        runtime['final_registered_geometry_gate'] = asdict(gate)
+        runtime['registration_support_lift_m'] = support_lift_m
+
     def _strict_check_final_near_field_plan(
         self,
         plan,
@@ -13187,6 +13312,10 @@ class RemoteGrasp6DNode:
             if near_field
             else FAR_FIELD_OBSERVATION_PLAN
         )
+        if near_field:
+            self._prepare_final_registered_contact_plan(
+                rich_plan, prepared, runtime,
+            )
         rich_plan.plan_id = compute_plan_id(rich_plan)
         final_strict_result = None
         final_strict_metrics = {}
@@ -13242,6 +13371,10 @@ class RemoteGrasp6DNode:
                 else None
             ),
             'final_strict_moveit_metrics': dict(final_strict_metrics),
+            'final_registered_geometry_gate': runtime.get(
+                'final_registered_geometry_gate'),
+            'registration_support_lift_m': float(runtime.get(
+                'registration_support_lift_m', 0.0)),
             'strict_sequence_stages': (
                 ['pregrasp', 'approach', 'grasp', 'lift']
                 if near_field

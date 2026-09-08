@@ -23,6 +23,7 @@ from alicia_flexible_grasp.vision.multiview_surface import (  # noqa: E402
     register_surface_view,
     surface_view_from_observation,
 )
+from alicia_flexible_grasp.vision import multiview_surface  # noqa: E402
 from alicia_flexible_grasp.vision.target_observation import (  # noqa: E402
     TargetObservation,
     TargetTrackIdentity,
@@ -272,6 +273,107 @@ def test_registration_rejects_corrections_outside_bounds(
 
     assert result.ok is False
     assert result.code == expected_code
+
+
+@pytest.mark.parametrize('shift', [(0., 0., 0.), (-.126, -.402, .047), (.5, .5, .047)])
+def test_registration_bounds_measured_motion_independently_of_base_origin(shift):
+    points, _ = rectangular_prism_views()
+    shift = np.asarray(shift)
+    reference = view(points + shift, 1_000_000_000, offset=-shift[2])
+    moving = view(
+        transform_points_inverse(points, yaw_deg=3.5, translation=(-.001, 0., 0.))
+        + shift,
+        1_100_000_000,
+        offset=-shift[2],
+    )
+
+    result = register_surface_view(reference, moving)
+
+    assert result.ok, result.code
+    assert result.inlier_count == len(points)
+    assert result.maximum_point_displacement_m == pytest.approx(0.003535787058871823)
+    if np.any(shift):
+        assert np.linalg.norm(result.transform_base[:3, 3]) > 0.025
+
+
+def test_registration_rejects_excess_measured_motion_with_zero_raw_translation():
+    points, _ = rectangular_prism_views()
+    points = points + [-.126, -.402, .047]
+    reference = view(points, 1_000_000_000, offset=-.047)
+    moving = view(
+        transform_points_inverse(points, yaw_deg=3.5, translation=(0., 0., 0.)),
+        1_100_000_000,
+        offset=-.047,
+    )
+    original = fused_surface_from_view(reference)
+
+    result, fused = append_registered_view(original, reference, moving)
+
+    assert not result.ok
+    assert result.code == 'TRANSLATION_BOUND_EXCEEDED'
+    assert fused is original
+    assert np.linalg.norm(result.transform_base[:3, 3]) < 1e-12
+    assert result.maximum_point_displacement_m == pytest.approx(0.027981344972193543)
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_pure_translation_preserves_exact_twenty_five_millimeter_bound(outside):
+    points, _ = rectangular_prism_views()
+    points = points[points[:, 2] == 0.034] - [0., 0., 0.034]
+    displacement = np.nextafter(0.025, np.inf) if outside else 0.025
+    reference = view(points, 1_000_000_000)
+    moving = view(points - [0., 0., displacement], 1_100_000_000)
+
+    result = register_surface_view(
+        reference, moving, RegistrationConfig(correspondence_max_m=0.040)
+    )
+
+    assert result.ok is (not outside), result.code
+    assert result.maximum_point_displacement_m == displacement
+    if outside:
+        assert result.code == 'TRANSLATION_BOUND_EXCEEDED'
+
+
+@pytest.mark.parametrize('bad_value', [True, -0.001, float('nan'), float('inf'), '0.001'])
+def test_registration_result_rejects_invalid_measured_displacement(bad_value):
+    result = register_surface_view(*registered_pair())
+    with pytest.raises(ValueError):
+        dataclasses.replace(result, maximum_point_displacement_m=bad_value)
+
+
+@pytest.mark.parametrize('points,transform', [
+    (np.empty((0, 3)), np.eye(4)),
+    (np.zeros(3), np.eye(4)),
+    (np.full((1, 3), np.nan), np.eye(4)),
+    (np.full((1, 3), np.inf), np.eye(4)),
+    (np.zeros((1, 3)), np.eye(3)),
+    (np.zeros((1, 3)), np.full((4, 4), np.nan)),
+    (np.zeros((1, 3)), np.diag([2., 1., 1., 1.])),
+    (np.zeros((1, 3)), np.diag([-1., 1., 1., 1.])),
+    (np.zeros((1, 3)), np.diag([1., 1., 1., 2.])),
+])
+def test_maximum_point_displacement_rejects_invalid_inputs(points, transform):
+    helper = getattr(multiview_surface, 'maximum_point_displacement_m', None)
+    assert callable(helper)
+    with pytest.raises(ValueError):
+        helper(points, transform)
+
+
+def test_maximum_point_displacement_consumer_recomputes_from_measured_points():
+    reference, moving = registered_pair()
+    result = register_surface_view(reference, moving)
+    helper = getattr(multiview_surface, 'maximum_point_displacement_m', None)
+    assert callable(helper)
+    expected = np.max(np.linalg.norm(
+        moving.points_base.dot(result.transform_base[:3, :3].T)
+        + result.transform_base[:3, 3] - moving.points_base,
+        axis=1,
+    ))
+    assert result.maximum_point_displacement_m == pytest.approx(expected)
+    defaulted = dataclasses.replace(result, maximum_point_displacement_m=0.)
+    assert helper(moving.points_base, defaulted.transform_base) == (
+        result.maximum_point_displacement_m
+    )
 
 
 def target_observation(points, bbox):
@@ -645,7 +747,7 @@ def test_reported_registration_metric_bound_is_exact(field, code, outside):
     baseline = register_surface_view(reference, moving, config)
     assert baseline.ok
     values = {
-        'maximum_translation_m': float(np.linalg.norm(baseline.transform_base[:3, 3])),
+        'maximum_translation_m': baseline.maximum_point_displacement_m,
         # For normal +Z the support basis is (-Y, +X, +Z).
         'maximum_yaw_deg': abs(float(np.degrees(np.arctan2(-baseline.transform_base[0, 1], baseline.transform_base[1, 1])))),
         'maximum_rmse_m': baseline.rmse_m,

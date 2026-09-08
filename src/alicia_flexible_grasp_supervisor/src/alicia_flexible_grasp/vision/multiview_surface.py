@@ -67,6 +67,44 @@ def _immutable_integer_array(value, shape, name):
     return np.frombuffer(converted.tobytes(), dtype=np.int64).reshape(shape)
 
 
+def _immutable_rigid_transform(value):
+    transform = _immutable_float_array(value, (4, 4), 'transform_base')
+    rotation = transform[:3, :3]
+    if (
+        not np.allclose(transform[3], [0.0, 0.0, 0.0, 1.0], rtol=0, atol=1e-9)
+        or not np.allclose(rotation.T.dot(rotation), np.eye(3), rtol=0, atol=1e-8)
+        or not np.isclose(np.linalg.det(rotation), 1.0, rtol=0, atol=1e-8)
+    ):
+        raise ValueError('transform_base must be rigid')
+    return transform
+
+
+def maximum_point_displacement_m(points_base, transform_base):
+    """Measure the largest rigid correction of any supplied measured point.
+
+    Unlike the raw transform translation, this metric is independent of the
+    base origin and includes displacement caused by rotation. Consumers can
+    recompute it from their exact source observation before applying a result.
+    """
+
+    points = np.asarray(points_base, dtype=np.float64)
+    if (
+        points.ndim != 2
+        or points.shape[1:] != (3,)
+        or not len(points)
+        or not np.all(np.isfinite(points))
+    ):
+        raise ValueError('points_base must contain finite Nx3 measured points')
+    transform = _immutable_rigid_transform(transform_base)
+    # (R - I) p + t avoids subtracting two full base-coordinate positions.
+    displacement = points.dot((transform[:3, :3] - np.eye(3)).T) + transform[:3, 3]
+    return _strict_number(
+        float(np.max(np.linalg.norm(displacement, axis=1))),
+        'maximum_point_displacement_m',
+        minimum=0.0,
+    )
+
+
 @dataclass(frozen=True)
 class SurfaceView:
     identity: TargetTrackIdentity
@@ -111,12 +149,28 @@ class SurfaceView:
         return self.edge_clearance_px == 0
 
 
+def support_plane_separation_m(reference, moving):
+    """Compare measured support planes at a shared target-local anchor."""
+
+    if not isinstance(reference, SurfaceView) or not isinstance(moving, SurfaceView):
+        raise ValueError('reference and moving must be SurfaceView instances')
+    anchor = 0.5 * (
+        np.median(reference.points_base, axis=0)
+        + np.median(moving.points_base, axis=0)
+    )
+    return abs(float(
+        np.dot(reference.support_normal_base - moving.support_normal_base, anchor)
+        + reference.support_offset_m - moving.support_offset_m
+    ))
+
+
 @dataclass(frozen=True)
 class RegistrationConfig:
     correspondence_max_m: float = 0.008
     minimum_inliers: int = 80
     minimum_overlap_fraction: float = 0.30
     maximum_rmse_m: float = 0.004
+    # Bound every moving measured point's displacement under the correction.
     maximum_translation_m: float = 0.025
     maximum_yaw_deg: float = 10.0
     maximum_support_normal_angle_deg: float = 4.0
@@ -174,22 +228,14 @@ class RegistrationResult:
     rmse_m: float
     support_normal_angle_deg: float
     support_plane_separation_m: float
+    maximum_point_displacement_m: float = 0.0
 
     def __post_init__(self):
         if type(self.ok) is not bool:
             raise ValueError('ok must be a boolean')
         if not isinstance(self.code, str) or not self.code:
             raise ValueError('code must be a non-empty string')
-        transform = _immutable_float_array(
-            self.transform_base, (4, 4), 'transform_base'
-        )
-        rotation = transform[:3, :3]
-        if (
-            not np.allclose(transform[3], [0.0, 0.0, 0.0, 1.0], rtol=0, atol=1e-9)
-            or not np.allclose(rotation.T.dot(rotation), np.eye(3), rtol=0, atol=1e-8)
-            or not np.isclose(np.linalg.det(rotation), 1.0, rtol=0, atol=1e-8)
-        ):
-            raise ValueError('transform_base must be rigid')
+        transform = _immutable_rigid_transform(self.transform_base)
         object.__setattr__(self, 'transform_base', transform)
         object.__setattr__(self, 'inlier_count', _strict_integer(
             self.inlier_count, 'inlier_count'))
@@ -213,6 +259,15 @@ class RegistrationResult:
             _strict_number(
                 self.support_plane_separation_m,
                 'support_plane_separation_m',
+                minimum=0.0,
+            ),
+        )
+        object.__setattr__(
+            self,
+            'maximum_point_displacement_m',
+            _strict_number(
+                self.maximum_point_displacement_m,
+                'maximum_point_displacement_m',
                 minimum=0.0,
             ),
         )
@@ -398,6 +453,7 @@ def _failure(
     rmse_m=0.0,
     support_normal_angle_deg=0.0,
     support_plane_separation_m=0.0,
+    maximum_point_displacement_m=0.0,
 ):
     return RegistrationResult(
         ok=False,
@@ -408,6 +464,7 @@ def _failure(
         rmse_m=float(rmse_m),
         support_normal_angle_deg=float(support_normal_angle_deg),
         support_plane_separation_m=float(support_plane_separation_m),
+        maximum_point_displacement_m=float(maximum_point_displacement_m),
     )
 
 
@@ -496,20 +553,17 @@ def register_surface_view(reference, moving, config=None):
     # fit change can move that coefficient by millimetres for a distant target
     # even when both planes agree locally. Compare signed distances at a robust
     # target-local anchor so this gate measures physical plane separation.
-    anchor = 0.5 * (
-        np.median(reference.points_base, axis=0)
-        + np.median(moving.points_base, axis=0)
-    )
-    support_plane_separation = abs(float(
-        np.dot(
-            reference.support_normal_base - moving.support_normal_base,
-            anchor,
-        )
-        + reference.support_offset_m
-        - moving.support_offset_m
-    ))
+    support_plane_separation = support_plane_separation_m(reference, moving)
     def reject(*args, **kwargs):
         kwargs['support_plane_separation_m'] = support_plane_separation
+        rejected_transform = kwargs.get('transform')
+        if rejected_transform is None and len(args) > 1:
+            rejected_transform = args[1]
+        kwargs['maximum_point_displacement_m'] = (
+            0.0 if rejected_transform is None else maximum_point_displacement_m(
+                moving.points_base, rejected_transform
+            )
+        )
         return _failure(*args, **kwargs)
 
     if normal_angle > config.maximum_support_normal_angle_deg:
@@ -551,7 +605,7 @@ def register_surface_view(reference, moving, config=None):
             reference_points, moving_points, basis
         )
         yaw_deg = abs(_yaw_degrees(transform[:3, :3], basis))
-        translation_m = float(np.linalg.norm(transform[:3, 3]))
+        translation_m = maximum_point_displacement_m(moving.points_base, transform)
         if yaw_deg > config.maximum_yaw_deg:
             return reject(
                 'YAW_BOUND_EXCEEDED', transform=transform,
@@ -589,7 +643,7 @@ def register_surface_view(reference, moving, config=None):
             update_rotation.dot(transform[:3, 3]) + update_translation
         )
         yaw_deg = abs(_yaw_degrees(updated[:3, :3], basis))
-        translation_m = float(np.linalg.norm(updated[:3, 3]))
+        translation_m = maximum_point_displacement_m(moving.points_base, updated)
         transform = updated
         if yaw_deg > config.maximum_yaw_deg:
             return reject(
@@ -619,7 +673,7 @@ def register_surface_view(reference, moving, config=None):
         else 0.0
     )
     yaw_deg = abs(_yaw_degrees(transform[:3, :3], basis))
-    translation_m = float(np.linalg.norm(transform[:3, 3]))
+    translation_m = maximum_point_displacement_m(moving.points_base, transform)
     if yaw_deg > config.maximum_yaw_deg:
         return reject(
             'YAW_BOUND_EXCEEDED', transform, inlier_count, overlap, rmse, normal_angle)
@@ -644,6 +698,7 @@ def register_surface_view(reference, moving, config=None):
         rmse,
         normal_angle,
         support_plane_separation,
+        translation_m,
     )
 
 

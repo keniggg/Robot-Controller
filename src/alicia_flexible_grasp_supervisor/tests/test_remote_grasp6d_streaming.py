@@ -497,6 +497,86 @@ def test_near_field_surface_registers_same_track_and_populates_plan_and_audit():
     )
 
 
+@pytest.mark.parametrize('base_shift', [[0.0, 0.0, 0.0], [-0.126, -0.402, 0.047]])
+def test_plan_registration_bounds_actual_surface_motion_independent_of_origin(base_shift):
+    node = streaming_node(start_worker=False)
+    reference_observation = seed_measured_reference_surface(node)
+    shift = np.asarray(base_shift)
+    reference_observation = dataclasses.replace(
+        reference_observation,
+        points_base=reference_observation.points_base + shift,
+        support_offset_m=-float(shift[2]),
+    )
+    reference = remote_node.surface_view_from_observation(reference_observation)
+    node._near_field_reference_view = reference
+    node._near_field_fused_surface = fused_surface_from_view(reference)
+    yaw = np.deg2rad(3.5)
+    rotation = np.asarray([[np.cos(yaw), -np.sin(yaw), 0.0],
+                           [np.sin(yaw), np.cos(yaw), 0.0], [0.0, 0.0, 1.0]])
+    moving = dataclasses.replace(
+        measured_observation(node, stamp_sec=20.1,
+            points=(measured_surface_points() + [0.001, 0.0, 0.0]).dot(rotation) + shift),
+        support_offset_m=-float(shift[2]),
+    )
+    result = node._register_near_field_surface(moving)
+    assert result.ok, result.code
+    expected = float(np.max(np.linalg.norm(
+        moving.points_base.dot(result.transform_base[:3, :3].T)
+        + result.transform_base[:3, 3] - moving.points_base, axis=1)))
+    plan = bound_surface_plan(moving)
+    assert node._apply_registration_evidence_to_plan(plan, moving)
+    assert plan.refinement_status == 'VALID_3D'
+    assert plan.refinement_translation_m == pytest.approx(expected)
+    audit = node._multiview_surface_audit()['latest_registration']
+    assert audit['translation_m'] == pytest.approx(expected)
+    assert expected < 0.005
+
+
+def test_plan_registration_recomputes_motion_instead_of_trusting_zero_metric():
+    node = streaming_node(start_worker=False)
+    seed_measured_reference_surface(node)
+    moving = measured_observation(node, stamp_sec=20.1,
+        points=measured_surface_points() + [-0.126, -0.402, 0.047])
+    reference = remote_node.surface_view_from_observation(
+        dataclasses.replace(moving, stamp_ns=moving.stamp_ns - 1))
+    node._near_field_reference_view = reference
+    node._near_field_fused_surface = fused_surface_from_view(reference)
+    assert node._register_near_field_surface(moving).ok
+    yaw = np.deg2rad(3.5)
+    transform = np.eye(4)
+    transform[:3, :3] = [[np.cos(yaw), -np.sin(yaw), 0.0],
+                         [np.sin(yaw), np.cos(yaw), 0.0], [0.0, 0.0, 1.0]]
+    evidence = node._latest_registration_evidence
+    node._latest_registration_evidence = dataclasses.replace(evidence,
+        result=dataclasses.replace(evidence.result, transform_base=transform,
+                                  maximum_point_displacement_m=0.0))
+    plan = bound_surface_plan(moving)
+    assert node._apply_registration_evidence_to_plan(plan, moving) is False
+    assert plan.refinement_status == 'NOT_EVALUATED'
+
+
+def test_plan_registration_compares_support_planes_at_target_not_base_origin():
+    node = streaming_node(start_worker=False)
+    observation = seed_measured_reference_surface(node)
+    shift = np.asarray([-0.126, -0.402, 0.047])
+    observation = dataclasses.replace(observation,
+        points_base=observation.points_base + shift, support_offset_m=-shift[2])
+    reference = remote_node.surface_view_from_observation(observation)
+    node._near_field_reference_view = reference
+    node._near_field_fused_surface = fused_surface_from_view(reference)
+    angle = np.deg2rad(1.0)
+    normal = np.asarray([0.0, np.sin(angle), np.cos(angle)])
+    moving = dataclasses.replace(observation,
+        stamp_ns=observation.stamp_ns + 100_000_000,
+        support_normal_base=normal, support_offset_m=-float(normal.dot(shift)))
+    assert abs(moving.support_offset_m - reference.support_offset_m) > 0.004
+    result = node._register_near_field_surface(moving)
+    assert result.ok, result.code
+    plan = bound_surface_plan(moving)
+    assert node._apply_registration_evidence_to_plan(plan, moving)
+    assert plan.refinement_status == 'VALID_3D'
+
+
 def test_selected_bundle_strict_checks_the_registered_four_pose_plan():
     """The post-registration plan, hash, audit and publication must agree."""
 
@@ -686,6 +766,9 @@ def test_selected_bundle_strict_checks_the_registered_four_pose_plan():
             )
 
         node._strict_moveit_sequence_evaluation = strict_final
+        # This test isolates the strict-plan/hash contract using arbitrary
+        # poses. Real contact/CAD restoration is covered separately below.
+        node._prepare_final_registered_contact_plan = lambda *_args: None
 
         bundle = node._build_selected_preview_bundle(selected)
         plan = bundle['rich_plan']
@@ -3290,6 +3373,130 @@ def test_tabletop_generation_materializes_geometry_derived_stage_profiles():
         round(float(profile['tilt_deg']), 6)
         for profile in profiles
     }.issubset(materialized_tilts)
+
+
+@pytest.mark.parametrize('offset_delta_m', [-0.000025, 0.000025])
+def test_tabletop_generation_and_collision_gate_share_frozen_support_plane(
+    offset_delta_m,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=32)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.gripper_physical_open_width_m = 0.05
+    node.grasp_config = {
+        'tool_approach_axis': 'z',
+        'pregrasp_distance_m': 0.08,
+        'final_approach_offset_m': 0.015,
+        'lift_height_m': 0.05,
+    }
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    node.soft_score_weights = SoftScoreWeights()
+    node.target_absolute_sanity_distance_m = 0.15
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    configure_identity_handeye(node)
+    attach_bilateral_surface(node, height_m=0.021)
+    geometry = tabletop_geometry((0.040, 0.035, 0.021))
+    # The two measured fits differ by only 25 micrometres. Constructing
+    # exactly on the reference clearance, then checking the current fit,
+    # used to reject every otherwise feasible candidate for one sign.
+    geometry.support_offset_m = offset_delta_m
+    prepared = types.SimpleNamespace(
+        geometry=geometry,
+        stamp=remote_node.rospy.Time(1),
+        snapshot=types.SimpleNamespace(
+            quality=types.SimpleNamespace(depth_repeatability_m=0.0),
+        ),
+        near_field=True,
+    )
+    candidates, _diagnostics = node._generate_tabletop_candidates(
+        geometry, snapshot=prepared.snapshot, contact_execution_phase=True,
+    )
+    passed = []
+    rejected = []
+    for candidate in candidates:
+        try:
+            passed.append(node._normalize_tabletop_candidate(prepared, candidate))
+        except remote_node.CandidateContractError as exc:
+            rejected.append(str(exc))
+
+    assert passed, rejected
+    assert any(item.audit['approach_tilt_deg'] == 0.0 for item in passed)
+    assert all(
+        item.geometry_gate.support_clearance_m >= 0.003 - 1e-9
+        for item in passed
+    )
+
+
+@pytest.mark.parametrize('registration_z_m', [-0.001, 0.001])
+def test_final_registered_tabletop_restores_clearance_and_checks_actual_family(registration_z_m):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=32)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.gripper_physical_open_width_m = 0.05
+    node.grasp_config = {'tool_approach_axis': 'z', 'pregrasp_distance_m': 0.08,
+                         'final_approach_offset_m': 0.015, 'lift_height_m': 0.05}
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    node.soft_score_weights = SoftScoreWeights()
+    node.target_absolute_sanity_distance_m = 0.15
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    configure_identity_handeye(node)
+    attach_bilateral_surface(node, height_m=0.021)
+    geometry = tabletop_geometry((0.040, 0.035, 0.021))
+    prepared = types.SimpleNamespace(geometry=geometry, stamp=remote_node.rospy.Time(1),
+        snapshot=types.SimpleNamespace(quality=types.SimpleNamespace(depth_repeatability_m=0.0)),
+        near_field=True)
+    candidates, _ = node._generate_tabletop_candidates(geometry, snapshot=prepared.snapshot)
+    candidate = candidates[0]
+    normalized = node._normalize_tabletop_candidate(prepared, candidate)
+    sequence = normalized.grasp_sequence
+    _, profile = node._make_contact_sequence(sequence.grasp, geometry,
+        insertion_axis_base=candidate.insertion_axis_base, snapshot=prepared.snapshot)
+    runtime = {'prepared': prepared, 'grasp_pose': sequence.grasp,
+        'adaptive_stage_profile': profile,
+        'scored_candidate': types.SimpleNamespace(payload=normalized,
+            stable_candidate=types.SimpleNamespace(center_base_xyz=candidate.contact_center_base,
+                required_open_width_m=candidate.required_open_width_m))}
+    plan = remote_node.Grasp6DPlan()
+    plan.candidate_source = 'tabletop_geometry'
+    plan.required_open_width_m = candidate.required_open_width_m
+    plan.refinement_translation_m = abs(registration_z_m)
+    plan.poses = [remote_node.deepcopy(getattr(sequence, stage).pose)
+                  for stage in ('pregrasp', 'approach', 'grasp', 'lift')]
+    for pose in plan.poses:
+        pose.position.z += registration_z_m
+    before = np.asarray([[p.position.x, p.position.y, p.position.z] for p in plan.poses])
+    # The complete production CAD gate observes the corrected grasp, not the
+    # old runtime pose. Its negative case reproduces the 3 -> 2 mm regression.
+    final_runtime = dict(runtime, grasp_pose=node._rich_plan_execution_sequence(plan).grasp)
+    before_gate = node._resolved_sequence_geometry_gate(
+        final_runtime, node._rich_plan_execution_sequence(plan))
+    assert before_gate.ok is (registration_z_m > 0)
+
+    node._prepare_final_registered_contact_plan(plan, prepared, runtime)
+
+    after = np.asarray([[p.position.x, p.position.y, p.position.z] for p in plan.poses])
+    expected_shift = max(0.0, -registration_z_m)
+    np.testing.assert_allclose(after - before,
+        np.tile([0.0, 0.0, expected_shift], (4, 1)), atol=1e-9)
+    assert runtime['final_registered_geometry_gate']['ok'] is True
+    assert runtime['final_registered_geometry_gate']['support_clearance_m'] >= 0.003 - 1e-9
+    assert runtime['registration_support_lift_m'] == pytest.approx(expected_shift)
+
+    # Removing measured support must still reject the final family.
+    node._active_multiview_surface = lambda: (None, None)
+    with pytest.raises(remote_node.CandidateContractError) as rejected:
+        node._prepare_final_registered_contact_plan(plan, prepared, runtime)
+    assert rejected.value.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
 
 
 def test_tabletop_contact_boundary_resolves_live_uncertainty_and_is_stratified():
