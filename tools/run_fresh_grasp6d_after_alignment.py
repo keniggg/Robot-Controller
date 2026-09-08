@@ -128,8 +128,10 @@ class FreshPreviewRunner:
             not all(math.isfinite(value) for value in (distance, minimum, maximum))
             or minimum < 0.18
             or maximum > 0.22
-            or distance < minimum
-            or distance > maximum
+            # Rigid-transform arithmetic can move a boundary by one ULP.
+            # This picometre tolerance is numerical, not a motion margin.
+            or distance < minimum - 1.0e-12
+            or distance > maximum + 1.0e-12
         ):
             return "camera-target distance is outside the 18-22 cm observation band"
 
