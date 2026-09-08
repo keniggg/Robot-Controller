@@ -6917,6 +6917,8 @@ class RemoteGrasp6DNode:
             for index, distance in enumerate(distances)
             for variant in reference_variants
         ):
+            if getattr(self, '_stream_condition', None) is not None:
+                self._require_stream_ticket_current(prepared.ticket)
             sequence = self._make_observation_sequence(
                 grasp_pose,
                 geometry,
@@ -11406,6 +11408,11 @@ class RemoteGrasp6DNode:
             if not isinstance(normalized, NormalizedPlanningCandidate):
                 continue
             for variant_index in (0, 1):
+                # A far-field recheck may overlap the reached-view handoff.
+                # Release the worker before spending the near-field deadline
+                # on another variant from the cancelled request.
+                if getattr(self, '_stream_condition', None) is not None:
+                    self._require_stream_ticket_current(prepared.ticket)
                 try:
                     grasp_pose = self._stable_variant_pose(
                         stable,
@@ -11990,6 +11997,8 @@ class RemoteGrasp6DNode:
                         ),
                     }
                     scored.append(candidate)
+                except StreamResultCancelled:
+                    raise
                 except Exception as exc:
                     rospy.logwarn(
                         'remote 6D stable variant recheck failed: '
