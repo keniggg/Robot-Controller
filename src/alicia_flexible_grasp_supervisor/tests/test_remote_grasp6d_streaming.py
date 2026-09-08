@@ -4662,8 +4662,9 @@ def test_stream_poll_waits_for_fresh_window_and_submits_only_once(
         node.shutdown_streaming_worker()
 
 
+@pytest.mark.parametrize('prior_worker_busy', [False, True])
 def test_direct_near_field_poll_submits_once_per_phase_preserving_target(
-    monkeypatch,
+    monkeypatch, prior_worker_busy,
 ):
     class RecordingFrames:
         def __init__(self):
@@ -4710,6 +4711,14 @@ def test_direct_near_field_poll_submits_once_per_phase_preserving_target(
         identity = node._current_stream_target_identity()
         node.near_field_state_cb(near_field_phase(True, start_sec=9.8, deadline_sec=39.8))
 
+        if prior_worker_busy:
+            node._stream_worker_busy = True
+            assert node._poll_stream_snapshot() is False
+            assert node.frames.calls == []
+            assert node.last_submitted_stamp_ns == 0
+            assert node._direct_near_field_submission_generation is None
+            node._stream_worker_busy = False
+
         assert node._poll_stream_snapshot() is True
         assert node._poll_stream_snapshot() is False
         assert len(node.frames.calls) == 1
@@ -4740,6 +4749,24 @@ def test_direct_near_field_poll_submits_once_per_phase_preserving_target(
         assert node._stream_worker_ticket.generation == node._stream_generation
         assert node._stream_worker_ticket.snapshot_stamp_sec == 10.6
         assert node.inference_coordinator.pending_count == 0
+    finally:
+        node.shutdown_streaming_worker()
+
+
+def test_idle_worker_admission_rechecks_busy_state_without_consuming_snapshot():
+    node = streaming_node(start_worker=False)
+    try:
+        node.start_streaming()
+        node._stream_worker_busy = True
+        assert node.submit_stream_snapshot(
+            snapshot(9.9), require_idle_worker=True) is False
+        assert node.last_submitted_stamp_ns == 0
+        assert node._pipeline_counters['submitted'] == 0
+        assert node.inference_coordinator.pending_count == 0
+        node._stream_worker_busy = False
+        assert node.submit_stream_snapshot(
+            snapshot(10.0), require_idle_worker=True) is True
+        assert node._stream_worker_ticket.snapshot_stamp_sec == 10.0
     finally:
         node.shutdown_streaming_worker()
 

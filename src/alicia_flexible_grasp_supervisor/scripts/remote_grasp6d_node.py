@@ -6145,6 +6145,7 @@ class RemoteGrasp6DNode:
 
     def submit_stream_snapshot(
         self, snapshot, graspnet_input_config=None, expected_generation=None,
+        require_idle_worker=False,
     ):
         stamp_sec = _finite_pipeline_number(
             getattr(snapshot, 'stamp_sec', float('nan')),
@@ -6156,6 +6157,8 @@ class RemoteGrasp6DNode:
         replaced_request_id = None
         with self._stream_condition:
             if not self.streaming_enabled:
+                return False
+            if require_idle_worker and self._stream_worker_busy:
                 return False
             # Collection/fusion can overlap a planning-phase callback. Bind
             # the admission atomically to the generation that requested the
@@ -9618,6 +9621,11 @@ class RemoteGrasp6DNode:
                 == submission_generation
             ):
                 return False
+            # A direct phase has one measured snapshot. Collect it when the
+            # physical worker can start, so old-phase cleanup cannot consume
+            # its source-age budget while it sits in the pending queue.
+            if direct_single_snapshot and self._stream_worker_busy:
+                return False
             target_identity = self._current_stream_target_identity()
             newest_after_ns = self.last_submitted_stamp_ns
             if direct_single_snapshot:
@@ -9684,6 +9692,7 @@ class RemoteGrasp6DNode:
             snapshot,
             graspnet_input_config=input_config,
             expected_generation=submission_generation,
+            require_idle_worker=direct_single_snapshot,
         )
         if submitted and direct_single_snapshot:
             with self._stream_condition:
