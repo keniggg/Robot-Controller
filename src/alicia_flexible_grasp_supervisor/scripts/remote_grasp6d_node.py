@@ -47,6 +47,7 @@ from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     validate_rich_geometry,
 )
 from alicia_flexible_grasp.grasp.gripper_geometry import (
+    ANALYTICAL_MAX_INNER_GAP_M,
     BilateralSurfaceEvidence,
     CandidateGateResult,
     GripperGeometry,
@@ -63,6 +64,7 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (
     finger_contact_patch_overlap_m,
     gripper_contract_mismatch_reason,
     parse_tool_axis,
+    _obb_line_interval,
 )
 from alicia_flexible_grasp.grasp.hybrid_grasp_candidates import (
     MergeConfig,
@@ -7836,8 +7838,41 @@ class RemoteGrasp6DNode:
             else 'deferred_to_near_field_contact_plan'
         )
         contact_height_sources = Counter()
+        diagnostics['proposal_reach_rejections'] = []
         for proposal in generation.proposals:
             try:
+                if bool(contact_execution_phase):
+                    # Tilt changes insertion about the jaw axis; neither the
+                    # proposal's contact center nor its unoriented jaw line
+                    # changes. Prove an unavoidable final finger-reach failure
+                    # before spending hundreds of CAD solves on that line.
+                    interval = _obb_line_interval(
+                        proposal.contact_center_base, proposal.jaw_axis_base,
+                        geometry.center_base, geometry.axes_base,
+                        geometry.size_xyz_m)
+                    fit_clearance = getattr(
+                        self, 'opening_fit_clearance_each_side_m', None)
+                    if fit_clearance is None:
+                        fit_clearance = self.gripper_geometry.jaw_clearance_each_side_m
+                    maximum_reach = 0.5 * min(
+                        self.gripper_geometry.max_inner_gap_m,
+                        ANALYTICAL_MAX_INNER_GAP_M)
+                    if interval is not None and interval[0] < 0.0 < interval[1]:
+                        negative_reach = -float(interval[0]) + fit_clearance
+                        positive_reach = float(interval[1]) + fit_clearance
+                        # Keep boundary-rounding cases for the full gate.
+                        if max(negative_reach, positive_reach) > maximum_reach + 1.001e-9:
+                            rejections['GRIPPER_SWEEP_COLLISION'] += 1
+                            diagnostics['proposal_reach_rejections'].append({
+                                'proposal_source_index': int(proposal.source_index),
+                                'angle_deg': float(proposal.angle_deg),
+                                'negative_reach_m': negative_reach,
+                                'positive_reach_m': positive_reach,
+                                'maximum_side_reach_m': maximum_reach,
+                                'failure_code': 'GRIPPER_SWEEP_COLLISION',
+                                'failed_gate': 'finger_reach',
+                            })
+                            continue
                 contact_height_bounds = self._proposal_contact_height_bounds(
                     proposal
                 )
@@ -8217,6 +8252,7 @@ class RemoteGrasp6DNode:
             input_config.candidate_target_gate_enabled
         )
         stamp = self._snapshot_ros_stamp(snapshot)
+        parameters_prepared_at = time.perf_counter()
         estimate, depth_for_remote, transform = self._prepare_snapshot_geometry(
             snapshot,
             stamp,
@@ -8226,6 +8262,7 @@ class RemoteGrasp6DNode:
                 estimate.failure_code,
                 estimate.failure_reason,
             )
+        geometry_prepared_at = time.perf_counter()
         tabletop_candidates, tabletop_diagnostics = (
             self._generate_tabletop_candidates(
                 estimate,
@@ -8236,6 +8273,7 @@ class RemoteGrasp6DNode:
                 ),
             )
         )
+        tabletop_prepared_at = time.perf_counter()
         pose_estimator = FrozenSnapshotCandidatePoseEstimator(
             transform,
             stamp,
@@ -8265,9 +8303,10 @@ class RemoteGrasp6DNode:
             **support_plane_kwargs,
         )
         model_choice = str(getattr(self, '_last_model_choice', '') or '')
+        input_prepared_at = time.perf_counter()
         ros_prepare_ms = max(
             0.0,
-            (time.perf_counter() - prepare_started) * 1000.0,
+            (input_prepared_at - prepare_started) * 1000.0,
         )
         self._require_stream_ticket_current(ticket)
         remote_failure_code = ''
@@ -8302,6 +8341,12 @@ class RemoteGrasp6DNode:
             remote_failure_reason = str(exc)
         diagnostics = dict(diagnostics)
         diagnostics['tabletop_geometry'] = dict(tabletop_diagnostics)
+        diagnostics['ros_prepare_stages_ms'] = {
+            'parameters': (parameters_prepared_at - prepare_started) * 1000.0,
+            'geometry_registration': (geometry_prepared_at - parameters_prepared_at) * 1000.0,
+            'tabletop_candidates': (tabletop_prepared_at - geometry_prepared_at) * 1000.0,
+            'remote_input': (input_prepared_at - tabletop_prepared_at) * 1000.0,
+        }
         return PreparedPrediction(
             ticket=ticket,
             snapshot=snapshot,
@@ -15233,6 +15278,10 @@ class RemoteGrasp6DNode:
             )
             if metrics is not None and error is not None:
                 metrics['error'] = str(error)
+            if metrics is not None and prepared is not None:
+                metrics['ros_prepare_stages_ms'] = _thaw_request_evidence(
+                    getattr(prepared, 'remote_diagnostics', {}) or {}
+                ).get('ros_prepare_stages_ms', {})
             active_audit = getattr(self, '_active_gate_audit_report', None)
             if (
                 metrics is not None

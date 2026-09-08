@@ -3336,6 +3336,32 @@ def test_200mm_observation_real_plan_fixture_increases_table_clearance():
     ] == pytest.approx(0.128335548, abs=1e-9)
 
 
+def test_contact_generation_skips_proven_overwidth_proposals_before_tilt_search(monkeypatch):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=24)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = 0.65
+    node.candidate_max_final_approach_lateral_m = 0.010
+    attach_bilateral_surface(node)
+
+    def unexpected_materialization(**_kwargs):
+        pytest.fail('fixed jaw line cannot fit the OBB at any insertion tilt')
+
+    monkeypatch.setattr(remote_node, 'materialize_tabletop_candidates',
+                        unexpected_materialization)
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        tabletop_geometry((.060, .055, .011)))
+
+    assert candidates == ()
+    assert diagnostics['proposal_count'] > 0
+    assert len(diagnostics['proposal_reach_rejections']) == diagnostics['proposal_count']
+    assert diagnostics['failure_code'] == 'GRIPPER_SWEEP_COLLISION'
+    assert diagnostics['contact_boundary_profiles'] == ()
+
+
 def test_tabletop_generation_materializes_geometry_derived_stage_profiles():
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node.tabletop_geometry_enabled = True
