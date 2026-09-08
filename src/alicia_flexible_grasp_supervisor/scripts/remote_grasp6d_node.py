@@ -7515,6 +7515,7 @@ class RemoteGrasp6DNode:
                     self.gripper_tool_finger_length_axis
                 ),
                 approach_tilt_degrees=(float(angle_deg),),
+                branch_key=(int(branch_key[0]), float(branch_key[1])),
             )
             for item in variants:
                 if (

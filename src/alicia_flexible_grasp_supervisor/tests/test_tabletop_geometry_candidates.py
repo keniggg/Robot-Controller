@@ -259,6 +259,45 @@ def test_opening_fit_clearance_allows_near_limit_tabletop_short_side():
     )
 
 
+@pytest.mark.parametrize('jaw_variant', (0, 1))
+@pytest.mark.parametrize('polarity', (-1.0, 0.0, 1.0))
+def test_single_branch_matches_complete_materialization(jaw_variant, polarity, monkeypatch):
+    import alicia_flexible_grasp.grasp.tabletop_geometry_candidates as module
+    kwargs = dict(
+        proposal=carton_result().proposals[0],
+        support_point_base=np.zeros(3),
+        support_normal_base=np.array([0.0, 0.0, 1.0]),
+        gripper=GRIPPER, approach_tilt_degrees=(10.0, 15.0),
+    )
+    expected = [item for item in materialize_tabletop_candidates(**kwargs)
+                if item.variant_index == jaw_variant
+                and item.audit['approach_tilt_polarity'] == polarity]
+    solved = []
+    original = module.solve_tool0_translation_for_support_clearance
+    def record_solve(**values):
+        solved.append(values['rotation'])
+        return original(**values)
+    monkeypatch.setattr(module, 'solve_tool0_translation_for_support_clearance', record_solve)
+    actual = materialize_tabletop_candidates(
+        **kwargs, branch_key=(jaw_variant, polarity))
+    assert len(solved) == len(expected) == len(actual)
+    for wanted, got in zip(expected, actual):
+        np.testing.assert_array_equal(got.T_base_tool0, wanted.T_base_tool0)
+        assert got.source_index == wanted.source_index
+        assert got.variant_index == wanted.variant_index
+        assert got.audit == wanted.audit
+        assert got.required_open_width_m == wanted.required_open_width_m
+
+
+@pytest.mark.parametrize('branch', [(2, 1), (0, 2), (0,), 'invalid', (False, 1)])
+def test_invalid_materialization_branch_is_rejected(branch):
+    with pytest.raises(TabletopCandidateContractError):
+        materialize_tabletop_candidates(
+            proposal=carton_result().proposals[0], support_point_base=np.zeros(3),
+            support_normal_base=(0, 0, 1), gripper=GRIPPER, branch_key=branch,
+        )
+
+
 def test_materialized_carton_candidate_places_fingers_above_table():
     candidates = materialize_tabletop_candidates(
         proposal=carton_result().proposals[0],

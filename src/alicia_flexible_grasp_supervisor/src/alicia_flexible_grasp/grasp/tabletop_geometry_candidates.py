@@ -366,8 +366,21 @@ def materialize_tabletop_candidates(
     tool_jaw_axis='y',
     tool_finger_length_axis='z',
     approach_tilt_degrees=(),
+    branch_key=None,
 ):
     """Materialize one proposal as CAD-grounded approach/jaw variants."""
+    if branch_key is not None and (
+        not isinstance(branch_key, tuple)
+        or len(branch_key) != 2
+        or type(branch_key[0]) is not int
+        or branch_key[0] not in (0, 1)
+        or type(branch_key[1]) not in (int, float)
+        or branch_key[1] not in (-1.0, 0.0, 1.0)
+    ):
+        raise TabletopCandidateContractError(
+            'TABLETOP_APPROACH_INVALID',
+            'branch_key must contain jaw variant 0/1 and tilt polarity -1/0/1',
+        )
     if not isinstance(proposal, TabletopProposal):
         raise TabletopCandidateContractError(
             'TOOL0_GEOMETRY_INVALID',
@@ -431,6 +444,8 @@ def materialize_tabletop_candidates(
     variants = []
     approach_variant_count = 1 + 2 * len(tilt_degrees)
     for jaw_variant_index, jaw_axis in enumerate((jaw, -jaw)):
+        if branch_key is not None and jaw_variant_index != branch_key[0]:
+            continue
         insertion_variants = _approach_insertion_variants(
             insertion,
             jaw_axis,
@@ -442,6 +457,8 @@ def materialize_tabletop_candidates(
             tilt_deg,
             tilt_polarity,
         ) in enumerate(insertion_variants):
+            if branch_key is not None and tilt_polarity != branch_key[1]:
+                continue
             try:
                 rotation = semantic_axes_to_tool_rotation(
                     insertion_axis_base=tilted_insertion,
