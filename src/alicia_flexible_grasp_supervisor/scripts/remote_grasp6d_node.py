@@ -6143,7 +6143,9 @@ class RemoteGrasp6DNode:
             )
         return True
 
-    def submit_stream_snapshot(self, snapshot, graspnet_input_config=None):
+    def submit_stream_snapshot(
+        self, snapshot, graspnet_input_config=None, expected_generation=None,
+    ):
         stamp_sec = _finite_pipeline_number(
             getattr(snapshot, 'stamp_sec', float('nan')),
             default=float('nan'),
@@ -6154,6 +6156,13 @@ class RemoteGrasp6DNode:
         replaced_request_id = None
         with self._stream_condition:
             if not self.streaming_enabled:
+                return False
+            # Collection/fusion can overlap a planning-phase callback. Bind
+            # the admission atomically to the generation that requested the
+            # frames, so a far-field batch cannot consume the near-field slot.
+            if expected_generation is not None and int(expected_generation) != int(
+                self._stream_generation
+            ):
                 return False
             snapshot_identity = getattr(snapshot, 'target_identity', None)
             snapshot_epoch = getattr(snapshot, 'target_epoch', None)
@@ -9627,6 +9636,7 @@ class RemoteGrasp6DNode:
         submitted = self.submit_stream_snapshot(
             snapshot,
             graspnet_input_config=input_config,
+            expected_generation=submission_generation,
         )
         if submitted and direct_single_snapshot:
             with self._stream_condition:

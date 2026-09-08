@@ -4744,6 +4744,68 @@ def test_direct_near_field_poll_submits_once_per_phase_preserving_target(
         node.shutdown_streaming_worker()
 
 
+@pytest.mark.parametrize('transition_during', ['collection', 'fusion'])
+def test_far_field_poll_crossing_phase_cannot_consume_near_field_submission(
+    monkeypatch, transition_during,
+):
+    node = streaming_node(start_worker=False)
+    try:
+        node.near_field_strategy = 'single_snapshot_direct'
+        node.near_field_planning_active = False
+        node.rate_hz = 2.0
+        node.planning_snapshot_timeout_sec = 4.0
+        node.planning_snapshot_frames = 5
+        node.near_field_planning_snapshot_frames = 3
+        node.planning_snapshot_max_age_sec = 0.35
+        node.planning_snapshot_max_span_sec = 12.0
+        node.planning_snapshot_max_inference_latency_sec = 5.0
+        node.planning_mask_min_iou = 0.85
+        node.planning_mask_max_centroid_shift_px = 5.0
+        node.planning_max_joint_delta_rad = 0.01
+        node.mask_erosion_px = 2
+        node.mask_internal_hole_max_area_px = 25
+        node.depth_mad_scale = 3.5
+        node.depth_mad_absolute_floor_m = 0.002
+        node._snapshot_depth_config = lambda: (0.001, 0.03, 2.0)
+        node._freeze_graspnet_input_config = lambda: types.SimpleNamespace(
+            requires_instance_mask=False)
+        node._active_profile_requires_mask = lambda: False
+        calls = []
+
+        def advance_phase():
+            if not node.near_field_planning_active:
+                node.near_field_state_cb(near_field_phase(True,
+                    start_sec=10.5, deadline_sec=40.5))
+
+        def collect(count, *args, **kwargs):
+            calls.append((count, kwargs))
+            if transition_during == 'collection':
+                advance_phase()
+            return [object()] * count
+
+        def fuse(*args, **kwargs):
+            if transition_during == 'fusion':
+                advance_phase()
+            result = snapshot(10.6 if len(calls) == 1 else 11.0)
+            result.ok = True
+            return result
+
+        node.frames = types.SimpleNamespace(wait_for_samples=collect)
+        monkeypatch.setattr(remote_node, 'fuse_stable_samples', fuse)
+        node.start_streaming()
+        assert node._poll_stream_snapshot() is False
+        assert node.last_submitted_stamp_ns == 0
+        assert node._stream_worker_ticket is None
+        assert node._poll_stream_snapshot() is True
+        assert [item[0] for item in calls] == [5, 3]
+        assert calls[1][1]['require_all_after_ns'] is True
+        assert calls[1][1]['newest_after_ns'] == 10_500_000_000
+        assert node._stream_worker_ticket.snapshot_stamp_sec == 11.0
+        assert node._poll_stream_snapshot() is False
+    finally:
+        node.shutdown_streaming_worker()
+
+
 def test_submit_atomically_rejects_snapshot_from_previous_target_identity():
     node = streaming_node(clock=MutableClock(30.0), start_worker=False)
     try:
