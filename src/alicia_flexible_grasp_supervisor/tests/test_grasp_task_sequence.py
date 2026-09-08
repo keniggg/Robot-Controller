@@ -279,10 +279,14 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(preview, original_preview)
 
     def _accept_refinement_preview(self, bound, preview, gcfg=None,
-                                   minimum_stamp_ns=9_500_000_000):
+                                   minimum_stamp_ns=9_500_000_000,
+                                   target_position=None):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_grasp6d_preview_plan = preview
         node.latest_obj = self._object(stamp_sec=9.9)
+        if target_position is not None:
+            position = node.latest_obj.pose_base.pose.position
+            position.x, position.y, position.z = target_position
         node.latest_obj_time = node.latest_obj.header.stamp
         original_bound = grasp_task_node.deepcopy(bound)
         original_preview = grasp_task_node.deepcopy(preview)
@@ -314,6 +318,28 @@ class GraspTaskSequenceTest(unittest.TestCase):
         result, candidate = self._accept_refinement_preview(bound, preview)
         self.assertEqual(result.code, 'FINAL_REFINE_3D_INVALID')
         self.assertIsNone(candidate)
+
+    def test_refinement_compares_plane_separation_at_target_not_base_origin(self):
+        for separation_m in (0.0, 0.00401):
+            with self.subTest(separation_m=separation_m):
+                bound = self._rich_plan(stamp_sec=9.0)
+                preview = self._mark_valid_3d(self._rich_plan(stamp_sec=9.95))
+                center = (-.4, .1, .02)
+                for plan in (bound, preview):
+                    position = plan.object_geometry.pose_base.position
+                    position.x, position.y, position.z = center
+                angle = math.radians(1.)
+                normal = (math.sin(angle), 0., math.cos(angle))
+                support = preview.object_geometry.support_normal_base
+                support.x, support.y, support.z = normal
+                preview.object_geometry.support_offset_m = separation_m - (
+                    normal[0] * center[0] + (normal[2] - 1.) * center[2])
+                self.assertGreater(abs(preview.object_geometry.support_offset_m), .004)
+                preview.plan_id = compute_plan_id(preview)
+
+                result = grasp_task_node.validate_final_refinement_execution(bound, preview)
+
+                self.assertEqual(result.ok, separation_m == 0.0, result.reason)
 
     def test_refinement_runtime_thresholds_reject_otherwise_canonical_metrics(self):
         cases = (
@@ -358,6 +384,11 @@ class GraspTaskSequenceTest(unittest.TestCase):
     def test_refinement_exact_default_bounds_pass_after_ros_wire_roundtrip(self):
         bound = self._rich_plan(stamp_sec=9.0)
         preview = self._mark_valid_3d(self._rich_plan(stamp_sec=9.95))
+        # Pivot the normal change at the shared target, so d is exactly the
+        # local separation being exercised by this wire-boundary fixture.
+        for plan in (bound, preview):
+            position = plan.object_geometry.pose_base.position
+            position.x = position.y = position.z = 0.0
         preview.refinement_overlap_fraction = 0.30
         preview.refinement_rmse_m = 0.004
         preview.refinement_translation_m = 0.025
@@ -370,7 +401,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
         wire = io.BytesIO()
         preview.serialize(wire)
         preview = Grasp6DPlan().deserialize(wire.getvalue())
-        result, candidate = self._accept_refinement_preview(bound, preview)
+        result, candidate = self._accept_refinement_preview(
+            bound, preview, target_position=(0., 0., 0.))
         self.assertTrue(result.ok, result)
         self.assertEqual(candidate.plan_id, preview.plan_id)
 
@@ -388,6 +420,9 @@ class GraspTaskSequenceTest(unittest.TestCase):
         bound = self._rich_plan(stamp_sec=9.0)
         preview = self._mark_valid_3d(self._rich_plan(stamp_sec=9.95))
         preview.refinement_inlier_count = 100
+        for plan in (bound, preview):
+            position = plan.object_geometry.pose_base.position
+            position.x = position.y = position.z = 0.0
         preview.fused_view_count = 3
         preview.refinement_overlap_fraction = float32_wire_value(0.6)
         preview.refinement_rmse_m = float32_wire_value(0.002)
@@ -399,7 +434,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
         preview.object_geometry.support_offset_m = float32_wire_value(0.002)
         preview.plan_id = compute_plan_id(preview)
         result, candidate = self._accept_refinement_preview(
-            bound, preview, {'final_visual_refine_registration': limits})
+            bound, preview, {'final_visual_refine_registration': limits},
+            target_position=(0., 0., 0.))
         self.assertTrue(result.ok, result)
         self.assertIsNotNone(candidate)
 

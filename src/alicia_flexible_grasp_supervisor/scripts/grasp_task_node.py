@@ -134,11 +134,11 @@ def _final_refinement_registration_policy(gcfg):
 
 
 def _support_plane_delta(first_plan, second_plan):
-    """Return support-normal angle and plane-offset residual for two plans."""
+    """Return normal angle and plane separation at the shared target center."""
     first_geometry = getattr(first_plan, 'object_geometry', None)
     second_geometry = getattr(second_plan, 'object_geometry', None)
-    _first_pose, _first_size, first_support = validate_rich_geometry(first_geometry)
-    _second_pose, _second_size, second_support = validate_rich_geometry(second_geometry)
+    first_pose, _first_size, first_support = validate_rich_geometry(first_geometry)
+    second_pose, _second_size, second_support = validate_rich_geometry(second_geometry)
     # ObjectGeometry declares a unit support normal.  Do not silently
     # renormalize arbitrary vectors: that would let malformed geometry alter
     # the support-plane authority while still passing continuity checks.
@@ -153,7 +153,16 @@ def _support_plane_delta(first_plan, second_plan):
     second_normal = _normalize_vector3(second_support[:3], 'second support normal')
     dot = max(-1.0, min(1.0, _dot3(first_normal, second_normal)))
     angle_deg = math.degrees(math.acos(dot))
-    offset_delta_m = abs(float(first_support[3]) - float(second_support[3]))
+    # A plane's d coefficient is tied to the base origin. Normal fit jitter
+    # can change d by several millimetres for a distant object while the two
+    # planes still agree at that object. As in measured-surface registration,
+    # compare signed plane distances at one shared target-local anchor. The
+    # rich message supplies OBB centers rather than the full measured cloud.
+    anchor = tuple(0.5 * (first_pose[i] + second_pose[i]) for i in range(3))
+    normal_delta = tuple(first_normal[i] - second_normal[i] for i in range(3))
+    offset_delta_m = abs(
+        _dot3(normal_delta, anchor)
+        + float(first_support[3]) - float(second_support[3]))
     if not math.isfinite(angle_deg) or not math.isfinite(offset_delta_m):
         raise ValueError('support plane residual is non-finite')
     return angle_deg, offset_delta_m
