@@ -331,7 +331,10 @@ grasp_6d:
     # permanently diagnostic-only and can never publish an executable plan.
     graspnet_input_mode: "context_roi" # masked_target | context_roi | full_scene
     graspnet_input_context_margin_px: 24.0
-    graspnet_input_context_expand_ratio: 0.30
+    # Bound surrounding support pixels without diluting the measured target.
+    # Three reached-view RGB-D replays retain every target pixel at 0.25 and
+    # pass the unchanged 15% target-fraction gate (17.0--17.1% measured).
+    graspnet_input_context_expand_ratio: 0.25
     graspnet_input_context_max_margin_px: 64.0
     graspnet_input_target_guard_px: 2
     graspnet_input_support_band_m: 0.006
