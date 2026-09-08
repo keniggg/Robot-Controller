@@ -1978,6 +1978,69 @@ def test_stop_during_acceptance_does_not_double_drop_or_predict_promoted_ticket(
         node.shutdown_streaming_worker()
 
 
+@pytest.mark.parametrize('transition', ['near_field', 'target_change'])
+def test_worker_dispatches_new_pending_request_after_cancelling_promoted_ticket(
+    transition,
+):
+    prepare_entered = threading.Event()
+    prepare_release = threading.Event()
+    accept_entered = threading.Event()
+    accept_release = threading.Event()
+    prepared_ids = []
+
+    def prepare(ticket):
+        prepared_ids.append(ticket.request_id)
+        if ticket.request_id == 1:
+            prepare_entered.set()
+            assert prepare_release.wait(2.0)
+        return types.SimpleNamespace(ticket=ticket)
+
+    node = streaming_node(clock=MutableClock(10.0), prepare=prepare)
+
+    def accept(prepared):
+        if prepared.ticket.request_id == 1:
+            accept_entered.set()
+            assert accept_release.wait(2.0)
+        node._require_stream_ticket_current(prepared.ticket)
+
+    node._accept_prediction = accept
+    try:
+        node.start_streaming()
+        assert node.submit_stream_snapshot(snapshot(9.7))
+        assert prepare_entered.wait(1.0)
+        assert node.submit_stream_snapshot(snapshot(9.8))
+        prepare_release.set()
+        assert accept_entered.wait(1.0)
+
+        # Request 2 is coordinator-active but has not entered the worker.
+        # The transition makes it stale while request 1 is still in selection.
+        if transition == 'near_field':
+            node.near_field_state_cb(
+                near_field_phase(True, start_sec=9.85, deadline_sec=39.85)
+            )
+        else:
+            node._advance_target_instance_epoch('TARGET_INSTANCE_CHANGED')
+        assert node.submit_stream_snapshot(snapshot(9.9))
+        accept_release.set()
+
+        wait_until(lambda: any(
+            item['request_id'] == 3 for item in node.pipeline_metrics
+        ))
+        assert prepared_ids == [1, 3]
+        terminal = {item['request_id']: item for item in node.pipeline_metrics}
+        assert terminal[2]['status'] == (
+            'GENERATION_STALE' if transition == 'near_field'
+            else 'TARGET_EPOCH_STALE'
+        )
+        assert terminal[3]['status'] == 'ACCEPTED'
+        assert sorted(item['request_id'] for item in node.pipeline_metrics) == [1, 2, 3]
+        assert node.inference_coordinator.pending_count == 0
+    finally:
+        prepare_release.set()
+        accept_release.set()
+        node.shutdown_streaming_worker()
+
+
 def test_worker_records_post_completion_cancellation_as_stale_not_accepted():
     clock = MutableClock(10.0)
     accept_entered = threading.Event()

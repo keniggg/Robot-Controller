@@ -15061,37 +15061,43 @@ class RemoteGrasp6DNode:
 
             with self._stream_condition:
                 self._stream_worker_busy = False
-                cancellation_code = ''
-                next_terminal_claimed = False
-                if completion.next_ticket is not None:
+                cancelled_tickets = []
+                next_ticket = completion.next_ticket
+                while next_ticket is not None:
                     cancellation_code = (
                         self._stream_ticket_cancellation_code_locked(
-                            completion.next_ticket
+                            next_ticket
                         )
                     )
                     if not cancellation_code:
-                        self._stream_worker_ticket = completion.next_ticket
+                        self._stream_worker_ticket = next_ticket
                         self._stream_condition.notify_all()
-                    else:
-                        try:
-                            self.inference_coordinator.complete(
-                                completion.next_ticket,
-                                now_sec=float(self._stream_source_clock()),
-                                target_epoch=self.target_instance_epoch,
-                            )
-                        except Exception:
-                            pass
-                        next_terminal_claimed = (
-                            self._claim_terminal_request_locked(
-                                completion.next_ticket.request_id,
-                                cancellation_code,
-                            )
-                        )
-            if completion.next_ticket is not None and cancellation_code:
+                        break
+                    terminal_claimed = self._claim_terminal_request_locked(
+                        next_ticket.request_id,
+                        cancellation_code,
+                    )
+                    cancelled_tickets.append(
+                        (next_ticket.request_id, cancellation_code, terminal_claimed)
+                    )
+                    try:
+                        # Selection may overlap a phase/target change. Retiring
+                        # its stale promoted ticket can promote the new phase's
+                        # pending ticket; that ticket still needs a worker.
+                        next_ticket = self.inference_coordinator.complete(
+                            next_ticket,
+                            now_sec=float(self._stream_source_clock()),
+                            target_epoch=self.target_instance_epoch,
+                        ).next_ticket
+                        if next_ticket is not None:
+                            self._pending_request_id = None
+                    except Exception:
+                        break
+            for request_id, cancellation_code, terminal_claimed in cancelled_tickets:
                 self._emit_pending_drop_metrics(
-                    completion.next_ticket.request_id,
+                    request_id,
                     cancellation_code,
-                    terminal_claimed=next_terminal_claimed,
+                    terminal_claimed=terminal_claimed,
                 )
 
     def spin(self):
