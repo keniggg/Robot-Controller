@@ -6977,7 +6977,7 @@ def test_direct_near_field_uses_current_request_and_first_reachable_without_mujo
         continue_checking=None,
         continuation_stop_reason='',
     ):
-        del checker
+        captured['checker'] = checker
         captured.update(
             {
                 'candidates': tuple(candidates),
@@ -7057,6 +7057,7 @@ def test_direct_near_field_uses_current_request_and_first_reachable_without_mujo
         for candidate in rechecked[0]
     )
     assert captured['candidates'] == rechecked[0]
+    assert captured['checker'] == node._check_direct_registered_candidate
     assert captured['top_n'] == len(current)
     assert callable(captured['ranking_key'])
     assert captured['exhaustive'] is False

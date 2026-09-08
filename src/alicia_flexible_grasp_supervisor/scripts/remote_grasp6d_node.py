@@ -13241,6 +13241,50 @@ class RemoteGrasp6DNode:
         runtime['final_strict_plan_id'] = str(plan.plan_id)
         return sequence, result, dict(metrics or {})
 
+    def _check_direct_registered_candidate(self, candidate):
+        """Keep final contact failures inside the bounded ranked search."""
+        result = self._check_moveit_stable_candidate(candidate)
+        if not result.reachable:
+            return result
+        final_score = soft_candidate_cost(
+            replace(
+                candidate.soft_features,
+                joint_path_cost=result.joint_path_cost,
+                joint_max_delta_rad=result.joint_max_delta_rad,
+            ),
+            candidate.score_weights,
+        ).total
+        evaluated = replace(
+            candidate, moveit_result=result, final_score=final_score,
+        )
+        runtime = self._stable_variant_runtime[
+            (candidate.track_id, candidate.variant_index)]
+        runtime.pop('final_contact_rejection', None)
+        try:
+            # This builds and validates without publishing.  The subsequent
+            # publication reuses the exact-sequence MoveIt cache; selection
+            # must see the post-registration geometry and motion evidence.
+            self._build_selected_preview_bundle(evaluated)
+        except CandidateContractError as exc:
+            runtime['final_contact_rejection'] = {
+                'code': exc.code, 'reason': str(exc),
+            }
+            rospy.loginfo(
+                'remote 6D final candidate rejected: track=%d variant=%d '
+                'code=%s reason=%s',
+                candidate.track_id, candidate.variant_index, exc.code, str(exc),
+            )
+            return MoveItResult(
+                reachable=False,
+                joint_path_cost=result.joint_path_cost,
+                joint_max_delta_rad=result.joint_max_delta_rad,
+                reason='%s: %s' % (exc.code, exc),
+                # A geometry rejection is not structured evidence of an IK
+                # or collision-service failure.  Keep its exact code above.
+                failure_code='MOVEIT_CHECK_ERROR',
+            )
+        return MoveItResult(**runtime['final_strict_moveit_result'])
+
     def _build_selected_preview_bundle(self, selected):
         """Build one immutable candidate-bound preview without publishing it."""
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
@@ -14044,6 +14088,8 @@ class RemoteGrasp6DNode:
                 'pre_moveit_score': float(evaluated.pre_moveit_score),
                 'final_score': final_score,
                 'moveit': moveit,
+                'final_contact_rejection': deepcopy(
+                    candidate_runtime.get('final_contact_rejection')),
                 'execution_sequence': self._execution_sequence_audit(
                     audited_sequence,
                     near_field,
@@ -14703,7 +14749,11 @@ class RemoteGrasp6DNode:
         )
         selection = bounded_moveit_select(
             moveit_candidates,
-            self._check_moveit_stable_candidate,
+            (
+                self._check_direct_registered_candidate
+                if direct_near_field
+                else self._check_moveit_stable_candidate
+            ),
             top_n=(
                 max(1, len(moveit_candidates))
                 if direct_near_field
