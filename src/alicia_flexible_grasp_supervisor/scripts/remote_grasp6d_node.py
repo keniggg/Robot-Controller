@@ -6890,8 +6890,45 @@ class RemoteGrasp6DNode:
         snapshot,
         observation_reference_pose,
         prepared,
+        view_cache=None,
     ):
         """Return every object-yaw-independent, endpoint-safe camera view."""
+
+        if getattr(self, '_stream_condition', None) is not None:
+            self._require_stream_ticket_current(prepared.ticket)
+        if (
+            view_cache is not None
+            and view_cache.get('prepared') is prepared
+            and view_cache.get('geometry') is geometry
+            and view_cache.get('snapshot') is snapshot
+            and view_cache.get('reference') is observation_reference_pose
+        ):
+            templates = view_cache['passing']
+            if not templates:
+                return (), deepcopy(view_cache['rejected'])
+            # Observation poses depend only on the frozen view and geometry.
+            # Contact poses and their profile remain specific to this candidate.
+            contact_family = self._make_observation_sequence(
+                grasp_pose, geometry, insertion_axis_base,
+                snapshot=snapshot,
+                observation_reference_pose=observation_reference_pose,
+                observation_camera_distance_m=templates[0][
+                    'camera_target_distance_m'],
+            )
+            passing = []
+            for template in templates:
+                if getattr(self, '_stream_condition', None) is not None:
+                    self._require_stream_ticket_current(prepared.ticket)
+                row = deepcopy(template)
+                sequence = deepcopy(contact_family)
+                sequence.pregrasp = deepcopy(template['sequence'].pregrasp)
+                sequence.observation_view_audit = deepcopy(
+                    template['sequence'].observation_view_audit)
+                row['sequence'] = sequence
+                row['observation_side_evidence'] = self._observation_side_evidence(
+                    geometry, sequence.pregrasp, sequence.adaptive_stage_profile)
+                passing.append(row)
+            return tuple(passing), deepcopy(view_cache['rejected'])
 
         passing = []
         rejected = []
@@ -7011,6 +7048,13 @@ class RemoteGrasp6DNode:
                     distance_index * len(reference_variants)
                     + reference_variant['preference_index']
                 ),
+            })
+        if view_cache is not None:
+            view_cache.update({
+                'prepared': prepared, 'geometry': geometry, 'snapshot': snapshot,
+                'reference': observation_reference_pose,
+                'passing': deepcopy(tuple(passing)),
+                'rejected': deepcopy(tuple(rejected)),
             })
         return tuple(passing), tuple(rejected)
 
@@ -11404,6 +11448,7 @@ class RemoteGrasp6DNode:
         )
         runtime = {}
         scored = []
+        observation_view_cache = {}
         for stable in tuple(stable_candidates):
             normalized = stable.payload
             if not isinstance(normalized, NormalizedPlanningCandidate):
@@ -11731,6 +11776,7 @@ class RemoteGrasp6DNode:
                             prepared.snapshot,
                             observation_reference_pose,
                             prepared,
+                            view_cache=observation_view_cache,
                         )
                         if not observation_variants:
                             best_rejection = max(

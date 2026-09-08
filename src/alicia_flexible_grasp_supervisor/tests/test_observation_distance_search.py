@@ -113,6 +113,69 @@ def test_recorded_carton_admits_unrolled_view_inside_existing_distance_band():
                for row in rejected)
 
 
+@pytest.mark.parametrize('tilt_deg', (0.0, 15.0))
+def test_request_view_cache_preserves_each_contact_family_and_all_view_evidence(monkeypatch, tilt_deg):
+    from copy import deepcopy
+    node, geometry, prepared, reference = recorded_scene((0.0, 15.0))
+    cache = {}
+    initial, initial_rejected = node._far_field_observation_variants(
+        reference, geometry, -geometry.support_normal_base, None,
+        reference, prepared, view_cache=cache,
+    )
+    changed = deepcopy(reference)
+    changed.pose.position.x += 0.012
+    insertion = (-np.cos(np.deg2rad(tilt_deg)) * geometry.support_normal_base
+                 + np.sin(np.deg2rad(tilt_deg)) * geometry.axes_base[:, 0])
+    expected, rejected = node._far_field_observation_variants(
+        changed, geometry, insertion, None,
+        reference, prepared,
+    )
+    monkeypatch.setattr(node, '_observation_envelope_gate',
+        lambda *a: pytest.fail('same frozen view must reuse its CAD evidence'))
+    actual, actual_rejected = node._far_field_observation_variants(
+        changed, geometry, insertion, None,
+        reference, prepared, view_cache=cache,
+    )
+    assert actual_rejected == rejected == initial_rejected
+    assert len(actual) == len(expected) == len(initial) > 0
+    for got, want, old in zip(actual, expected, initial):
+        assert set(got) == set(want)
+        for key in got:
+            if key != 'sequence':
+                assert got[key] == want[key]
+        for stage in ('pregrasp', 'approach', 'grasp', 'lift'):
+            np.testing.assert_array_equal(
+                remote.pose_matrix(getattr(got['sequence'], stage)),
+                remote.pose_matrix(getattr(want['sequence'], stage)),
+            )
+        assert got['sequence'].adaptive_stage_profile == want['sequence'].adaptive_stage_profile
+        assert got['sequence'].observation_view_audit == want['sequence'].observation_view_audit
+        assert got['sequence'].grasp.pose.position.x != old['sequence'].grasp.pose.position.x
+    actual[0]['sequence'].pregrasp.pose.position.x += 1.0
+    assert actual[0]['sequence'].pregrasp.pose.position.x != initial[0]['sequence'].pregrasp.pose.position.x
+
+
+def test_observation_cache_does_not_cross_frozen_requests(monkeypatch):
+    from copy import copy
+    node, geometry, prepared, reference = recorded_scene()
+    cache = {}
+    node._far_field_observation_variants(
+        reference, geometry, -geometry.support_normal_base, None,
+        reference, prepared, view_cache=cache,
+    )
+    checked = []
+    original = node._observation_envelope_gate
+    def record(*args):
+        checked.append(args[1])
+        return original(*args)
+    monkeypatch.setattr(node, '_observation_envelope_gate', record)
+    node._far_field_observation_variants(
+        reference, geometry, -geometry.support_normal_base, None,
+        reference, copy(prepared), view_cache=cache,
+    )
+    assert len(checked) == 5
+
+
 def test_distance_and_roll_search_is_bounded_and_nominal_first():
     node, geometry, prepared, reference = recorded_scene(
         remote.DEFAULT_OBSERVATION_CAMERA_ROLL_OFFSETS_DEG,
