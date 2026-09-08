@@ -2459,6 +2459,85 @@ def test_zero_locally_valid_candidates_report_primary_failure_not_stability():
     assert node._stable_variant_runtime == {}
 
 
+@pytest.mark.parametrize('source', ['graspnet', 'tabletop'])
+@pytest.mark.parametrize('cancel_inside_normalizer', [False, True])
+def test_local_candidate_loop_releases_obsolete_generation(
+    source, cancel_inside_normalizer,
+):
+    node = streaming_node(start_worker=False)
+    calls = []
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(9.8))
+        ticket = node._stream_worker_ticket
+        prepared = types.SimpleNamespace(
+            ticket=ticket,
+            candidates=('first', 'second') if source == 'graspnet' else (),
+            tabletop_candidates=('first', 'second') if source == 'tabletop' else (),
+            remote_diagnostics={},
+        )
+
+        def normalize(_prepared, candidate, *_args):
+            calls.append(candidate)
+            node._advance_target_instance_epoch(
+                'PLANNING_PHASE_NEAR_FIELD', preserve_identity=True,
+            )
+            if cancel_inside_normalizer:
+                node._require_stream_ticket_current(ticket)
+            raise remote_node.CandidateContractError('TEST_REJECTION', 'rejected')
+
+        node._normalize_graspnet_candidate = normalize
+        node._normalize_tabletop_candidate = normalize
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._evaluate_local_candidates(prepared)
+        assert calls == ['first']
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('variant_count', [1, 2])
+def test_raw_gate_audit_releases_obsolete_generation(monkeypatch, variant_count):
+    node = streaming_node(start_worker=False)
+    calls = []
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(9.8))
+        prepared = types.SimpleNamespace(ticket=node._stream_worker_ticket)
+        node.pose_estimator = object()
+        node.candidate_frame_convention = 'test'
+        node.model_grasp_to_tool_quaternion = object()
+        node.orientation_variant_quaternions = [object()] * variant_count
+        for function_name in (
+            'convert_candidate_to_camera_link', 'align_candidate_to_tool_frame',
+            'make_parallel_jaw_variant',
+        ):
+            monkeypatch.setattr(
+                remote_node, function_name,
+                lambda candidate, *_args, **_kwargs: candidate,
+            )
+        monkeypatch.setattr(
+            remote_node, 'make_candidate_base_pose_and_center',
+            lambda *_args: (object(), np.zeros(3)),
+        )
+
+        def audit_row(candidate_index, variant_index, *_args, **_kwargs):
+            calls.append((candidate_index, variant_index))
+            node._advance_target_instance_epoch(
+                'PLANNING_PHASE_NEAR_FIELD', preserve_identity=True,
+            )
+            return {}
+
+        node._candidate_gate_audit_row = audit_row
+        with pytest.raises(remote_node.StreamResultCancelled):
+            node._run_candidate_gate_audit(
+                [types.SimpleNamespace(), types.SimpleNamespace()],
+                None, 'camera', prepared=prepared, commit_state=False,
+            )
+        assert calls == [(0, 0)]
+    finally:
+        node.shutdown_streaming_worker()
+
+
 def test_empty_remote_batch_creates_explicit_no_candidates_rejection():
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node.require_candidate_depth = True

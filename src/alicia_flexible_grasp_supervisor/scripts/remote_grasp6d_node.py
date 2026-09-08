@@ -8217,6 +8217,7 @@ class RemoteGrasp6DNode:
         """Prepare immutable request facts and perform one correlated WSL call."""
 
         prepare_started = time.perf_counter()
+        self._require_stream_ticket_current(ticket)
         with self._geometry_state_guard():
             near_field = bool(
                 getattr(self, 'near_field_planning_active', False)
@@ -8248,6 +8249,7 @@ class RemoteGrasp6DNode:
         request_invalidation_generation = self._capture_geometry_generation()
         self._require_graspnet_input_prerequisites(snapshot, input_config)
         self._refresh_runtime_params()
+        self._require_stream_ticket_current(ticket)
         self.candidate_target_gate_enabled = bool(
             input_config.candidate_target_gate_enabled
         )
@@ -8257,6 +8259,7 @@ class RemoteGrasp6DNode:
             snapshot,
             stamp,
         )
+        self._require_stream_ticket_current(ticket)
         if not estimate.ok:
             raise CandidateContractError(
                 estimate.failure_code,
@@ -8274,6 +8277,7 @@ class RemoteGrasp6DNode:
             )
         )
         tabletop_prepared_at = time.perf_counter()
+        self._require_stream_ticket_current(ticket)
         pose_estimator = FrozenSnapshotCandidatePoseEstimator(
             transform,
             stamp,
@@ -9423,6 +9427,8 @@ class RemoteGrasp6DNode:
         )
 
         for source_index, raw_candidate in enumerate(graspnet_candidates):
+            if hasattr(self, '_stream_condition'):
+                self._require_stream_ticket_current(prepared.ticket)
             try:
                 normalized = self._normalize_graspnet_candidate(
                     prepared,
@@ -9436,6 +9442,8 @@ class RemoteGrasp6DNode:
                 if not decision.ok:
                     raise CandidateContractError(decision.code, decision.reason)
                 normalized_by_source['graspnet'].append(normalized)
+            except StreamResultCancelled:
+                raise
             except Exception as exc:
                 code = str(
                     getattr(exc, 'code', 'CANDIDATE_CONTRACT_INVALID')
@@ -9453,6 +9461,8 @@ class RemoteGrasp6DNode:
                     })
 
         for tabletop_candidate in tabletop_candidates:
+            if hasattr(self, '_stream_condition'):
+                self._require_stream_ticket_current(prepared.ticket)
             try:
                 normalized = self._normalize_tabletop_candidate(
                     prepared,
@@ -9465,6 +9475,8 @@ class RemoteGrasp6DNode:
                 if not decision.ok:
                     raise CandidateContractError(decision.code, decision.reason)
                 normalized_by_source['tabletop_geometry'].append(normalized)
+            except StreamResultCancelled:
+                raise
             except Exception as exc:
                 code = str(
                     getattr(exc, 'code', 'CANDIDATE_CONTRACT_INVALID')
@@ -9488,6 +9500,8 @@ class RemoteGrasp6DNode:
                         ),
                     })
 
+        if hasattr(self, '_stream_condition'):
+            self._require_stream_ticket_current(prepared.ticket)
         if source_rejection_samples['graspnet']:
             rospy.logwarn(
                 'remote 6D GraspNet candidate rejection samples: %s',
@@ -17916,6 +17930,8 @@ class RemoteGrasp6DNode:
         if not variants:
             variants = [np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)]
         for candidate_index, candidate in enumerate(candidates):
+            if prepared is not None and hasattr(self, '_stream_condition'):
+                self._require_stream_ticket_current(prepared.ticket)
             try:
                 camera_candidate = convert_candidate_to_camera_link(
                     candidate,
@@ -17940,6 +17956,8 @@ class RemoteGrasp6DNode:
                     )
                 continue
             for variant_index, correction in enumerate(variants):
+                if prepared is not None and hasattr(self, '_stream_condition'):
+                    self._require_stream_ticket_current(prepared.ticket)
                 try:
                     variant_candidate = make_parallel_jaw_variant(
                         camera_candidate,
@@ -17999,6 +18017,8 @@ class RemoteGrasp6DNode:
                                     snapshot=prepared.snapshot,
                                 )
                             )
+                    except StreamResultCancelled:
+                        raise
                     except Exception as exc:
                         visibility_sequence_error = str(exc)
                 rows.append(
@@ -18014,6 +18034,8 @@ class RemoteGrasp6DNode:
                     )
                 )
 
+        if prepared is not None and hasattr(self, '_stream_condition'):
+            self._require_stream_ticket_current(prepared.ticket)
         clearance_thresholds = self._audit_thresholds(
             getattr(self, 'candidate_min_finger_support_clearance_m', 0.003),
             (0.003, 0.0, -0.003, -0.010),
