@@ -588,7 +588,7 @@ def register_surface_view(reference, moving, config=None):
     # A support-plane footprint supplies a deterministic coarse yaw/translation
     # only when the raw measured clouds already overlap enough to justify it.
     # This avoids allowing distant outliers to manufacture an initial pose.
-    _initial_points, _initial_indices, _initial_distances, initial_inliers = (
+    _initial_points, _initial_indices, initial_distances, initial_inliers = (
         _registration_correspondences(
             reference_points, moving_points, transform, config
         )
@@ -601,9 +601,28 @@ def register_surface_view(reference, moving, config=None):
             reference_points, moving_points, basis
         )
     ):
-        transform = _initial_support_transform(
+        coarse_transform = _initial_support_transform(
             reference_points, moving_points, basis
         )
+        _points, _indices, coarse_distances, coarse_inliers = (
+            _registration_correspondences(
+                reference_points, moving_points, coarse_transform, config)
+        )
+        # PCA describes sampling density as well as object orientation. A
+        # missing corner or newly visible face can rotate that axis on a
+        # stationary object. Compare both initial guesses against the same
+        # measured correspondences before allowing PCA to replace identity.
+        # Unmatched/duplicate correspondences receive the full distance cost,
+        # so collapsing onto a small matching subset cannot improve the score.
+        # Selection never depends on the motion bounds; a better-fitting
+        # out-of-bounds correction is still rejected below.
+        unmatched_cost = config.correspondence_max_m ** 2
+        initial_cost = float(np.mean(np.where(
+            initial_inliers, initial_distances ** 2, unmatched_cost)))
+        coarse_cost = float(np.mean(np.where(
+            coarse_inliers, coarse_distances ** 2, unmatched_cost)))
+        if coarse_cost <= initial_cost:
+            transform = coarse_transform
         yaw_deg = abs(_yaw_degrees(transform[:3, :3], basis))
         translation_m = maximum_point_displacement_m(moving.points_base, transform)
         if yaw_deg > config.maximum_yaw_deg:

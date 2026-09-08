@@ -275,6 +275,33 @@ def test_registration_rejects_corrections_outside_bounds(
     assert result.code == expected_code
 
 
+@pytest.mark.parametrize('noise_m', [0.0, 0.0002])
+def test_partial_stationary_footprint_does_not_inherit_spurious_pca_yaw(noise_m):
+    points = np.asarray([(x, y, .025)
+                         for x in np.linspace(-.025, .025, 21)
+                         for y in np.linspace(-.022, .022, 19)])
+    # The same measured top loses one corner; its density axis rotates even
+    # though the object has not moved. Both footprints retain their full span.
+    moving_points = points[~((points[:, 0] > .004) & (points[:, 1] > .004))]
+    moving_points = moving_points + np.random.RandomState(7).normal(
+        0.0, noise_m, moving_points.shape)
+    reference = view(points, 1_000_000_000)
+    moving = view(moving_points, 1_100_000_000)
+    basis = multiview_surface._support_basis(reference.support_normal_base)
+    coarse = multiview_surface._initial_support_transform(
+        reference.points_base, moving.points_base, basis)
+    assert abs(multiview_surface._yaw_degrees(coarse[:3, :3], basis)) > 10.
+
+    result = register_surface_view(reference, moving)
+
+    assert result.ok, result.code
+    assert result.inlier_count == len(moving_points)
+    assert result.overlap_fraction == 1.0
+    assert result.rmse_m < .0005
+    assert result.maximum_point_displacement_m < .0001
+    assert abs(multiview_surface._yaw_degrees(result.transform_base[:3, :3], basis)) < .1
+
+
 @pytest.mark.parametrize('shift', [(0., 0., 0.), (-.126, -.402, .047), (.5, .5, .047)])
 def test_registration_bounds_measured_motion_independently_of_base_origin(shift):
     points, _ = rectangular_prism_views()
