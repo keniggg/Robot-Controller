@@ -10019,7 +10019,9 @@ class RemoteGrasp6DNode:
         This is only an ordering policy for candidates that already passed
         every hard geometry and collision gate. Aperture margin is physical
         room for centering error, so it takes precedence over avoiding a wrist
-        rotation. Equal-width candidates still minimize frozen-pose change.
+        rotation. Widths indistinguishable in the float32 plan message still
+        minimize frozen-pose change. Rigid-transform roundoff in equivalent
+        jaw variants must not choose a large wrist turn ahead of a small one.
         """
 
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
@@ -10054,7 +10056,7 @@ class RemoteGrasp6DNode:
             required_width = float('inf')
 
         return (
-            required_width,
+            float32_wire_value(required_width),
             nonnegative_finite('contact_start_orientation_delta_rad'),
             nonnegative_finite('contact_start_translation_delta_m'),
             candidate.pre_moveit_score,

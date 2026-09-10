@@ -10511,6 +10511,28 @@ def test_direct_near_field_rank_tries_smallest_frozen_pose_change_first():
     assert [candidate.track_id for candidate in ranked] == [3, 2, 1]
 
 
+@pytest.mark.parametrize('width_delta, expected_first', [(1e-17, 2), (1e-6, 1)])
+def test_direct_near_field_rank_ignores_sub_wire_width_noise(
+    width_delta, expected_first,
+):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    width = 0.042335369408045415
+    candidates = [
+        types.SimpleNamespace(track_id=1, variant_index=0, pre_moveit_score=0.0,
+                              required_open_width_m=width),
+        types.SimpleNamespace(track_id=2, variant_index=0, pre_moveit_score=0.0,
+                              required_open_width_m=width + width_delta),
+    ]
+    node._stable_variant_runtime = {
+        (1, 0): {'soft_evidence': {'contact_start_orientation_delta_rad': 2.191784,
+                                 'contact_start_translation_delta_m': 0.123634}},
+        (2, 0): {'soft_evidence': {'contact_start_orientation_delta_rad': 1.121854,
+                                 'contact_start_translation_delta_m': 0.123523}},
+    }
+    ranked = sorted(candidates, key=node._direct_near_field_moveit_rank_key)
+    assert ranked[0].track_id == expected_first
+
+
 def test_direct_near_field_rank_prefers_narrow_side_before_wrist_delta():
     node = remote_node.RemoteGrasp6DNode.__new__(
         remote_node.RemoteGrasp6DNode
