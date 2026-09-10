@@ -343,7 +343,10 @@ grasp_6d:
     graspnet_input_min_total_points: 320
     graspnet_input_min_target_fraction: 0.15
     graspnet_input_bbox_min_iou: 0.50
-    target_cloud_voxel_size_m: 0.0025
+    # Preserve measured side-wall bands finer than the 2mm contact margin.
+    # The recorded RGB-D regression loses every valid contact at 2.5mm;
+    # 1.5mm retains distinct measured samples without changing physical gates.
+    target_cloud_voxel_size_m: 0.0015
     target_cloud_outlier_neighbors: 16
     target_cloud_outlier_std_ratio: 2.0
     # Fuse only bounded, registered measured points from the exact target track.

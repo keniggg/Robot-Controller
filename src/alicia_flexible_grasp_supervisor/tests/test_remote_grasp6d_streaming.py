@@ -3441,6 +3441,101 @@ def test_contact_generation_skips_proven_overwidth_proposals_before_tilt_search(
     assert diagnostics['contact_boundary_profiles'] == ()
 
 
+def test_configured_resolution_preserves_recorded_bilateral_contact():
+    """Catch downsampling that deletes the measured narrow-side contact band.
+
+    Two stationary RGB-D windows from 2026-09-10, before any contact motion.
+    Only hardware services/TF are absent: geometry, registration, generation
+    and final analytical gates all run on the original recorded depth pixels.
+    """
+    import yaml
+
+    config = yaml.safe_load((ROOT / 'config/grasp_params.yaml').read_text())
+    remote = config['grasp_6d']['remote']
+    gripper = remote['gripper_geometry']
+    voxel = float(remote['target_cloud_voxel_size_m'])
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.gripper_geometry = GripperGeometry(
+        max_inner_gap_m=gripper['max_inner_gap_m'],
+        jaw_clearance_each_side_m=gripper['width_safety_margin_per_side_m'],
+        finger_size_xyz_m=np.asarray(gripper['finger_box_xyz_m']),
+        palm_size_xyz_m=np.asarray(gripper['palm_box_xyz_m']),
+        support_clearance_m=0.003,
+    )
+    node.opening_fit_clearance_each_side_m = (
+        remote_node.load_opening_fit_clearance_config(gripper, node.gripper_geometry)
+    )
+    (node.tabletop_geometry_enabled, node.tabletop_geometry_config,
+     node.hybrid_merge_config) = remote_node.load_tabletop_geometry_config(
+        remote, node.gripper_geometry, node.opening_fit_clearance_each_side_m,
+    )
+    node.adaptive_stage_limits = remote_node.load_adaptive_stage_config(remote)
+    node.gripper_tool_jaw_axis = gripper['tool_jaw_axis']
+    node.gripper_tool_finger_length_axis = gripper['tool_finger_length_axis']
+    node.gripper_physical_open_width_m = config['gripper']['open_position_m']
+    node.grasp_config = config['grasp']
+    node.soft_score_weights = SoftScoreWeights()
+    node.target_absolute_sanity_distance_m = 0.15
+    node.candidate_min_downward_approach_cos = remote['candidate_min_downward_approach_cos']
+    node.candidate_max_final_approach_lateral_m = remote['candidate_max_final_approach_lateral_m']
+    node.camera_visibility_gate_enabled = False
+    node.camera_visibility_diagnostic_enabled = False
+    node.handeye_translation_xyz = (0., 0., 0.)
+    node.handeye_rotation_xyzw = (0., 0., 0., 1.)
+    views = []
+    identity = TargetTrackIdentity.from_stream(1, 1)
+    with np.load(str(ROOT / 'tests/fixtures/measured_contact_rgbd_20260910.npz')) as saved:
+        for index in range(2):
+            intrinsics = types.SimpleNamespace(**dict(zip(
+                ('width', 'height', 'fx', 'fy', 'cx', 'cy', 'depth_scale'),
+                saved['intrinsics_%d' % index],
+            )))
+            geometry = remote_node.estimate_object_geometry(
+                depth_raw=saved['depth_%d' % index],
+                target_depth_raw=saved['target_depth_%d' % index],
+                object_mask=saved['mask_%d' % index],
+                bbox=saved['bbox_%d' % index], intrinsics=intrinsics,
+                depth_scale=intrinsics.depth_scale,
+                T_base_camera=saved['transform_%d' % index], source_mode='instance_mask',
+                support_bbox_expand_ratio=0.30, support_distance_threshold_m=0.004,
+                voxel_size_m=voxel, min_support_points=200, min_object_points=120,
+                min_size_m=0.005, max_size_m=0.600, max_height_m=0.500,
+                previous_axes_base=None, outlier_neighbors=16, outlier_std_ratio=2.0,
+            )
+            assert geometry.ok, geometry.failure_reason
+            views.append(SurfaceView(
+                identity, int(saved['stamp_%d' % index]), geometry.object_points_base,
+                geometry.support_normal_base, geometry.support_offset_m, 12,
+            ))
+    surface = fused_surface_from_view(views[0], voxel_size_m=voxel)
+    registration, surface = append_registered_view(
+        surface, views[0], views[1], voxel_size_m=voxel,
+    )
+    assert registration.ok, registration.code
+    node._active_multiview_surface = lambda: (surface, views[0])
+    snapshot = types.SimpleNamespace(quality=types.SimpleNamespace(
+        depth_repeatability_m=0.0, depth_mad_m=0.0,
+    ))
+    prepared = types.SimpleNamespace(
+        geometry=geometry, stamp=remote_node.rospy.Time(1), snapshot=snapshot,
+        near_field=True,
+    )
+    candidates, diagnostics = node._generate_tabletop_candidates(
+        geometry, snapshot=snapshot,
+    )
+    accepted = []
+    for candidate in candidates:
+        try:
+            normalized = node._normalize_tabletop_candidate(prepared, candidate)
+        except remote_node.CandidateContractError:
+            continue
+        assert normalized.geometry_gate.ok
+        assert normalized.required_open_width_m <= 0.050
+        assert normalized.geometry_gate.support_clearance_m >= 0.003 - 1e-12
+        accepted.append(normalized)
+    assert accepted, diagnostics
+
+
 def test_tabletop_generation_materializes_geometry_derived_stage_profiles():
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node.tabletop_geometry_enabled = True
