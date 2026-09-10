@@ -22,6 +22,58 @@ from alicia_flexible_grasp.vision.object_geometry import (
 )
 
 
+def test_plane_triplet_sampling_covers_every_ordered_triple_once():
+    # Exhaust all combinations of compressed ranks, proving the mapping is
+    # one-to-one onto uniform ordered triples, without a probabilistic test.
+    import itertools
+
+    for point_count in (3, 4, 7):
+        ranks = np.asarray(list(itertools.product(
+            range(point_count), range(point_count - 1), range(point_count - 2),
+        )))
+
+        class RankSource:
+            def __init__(self):
+                self.column = 0
+
+            def randint(self, high, size):
+                assert high == point_count - self.column
+                assert size == len(ranks)
+                result = ranks[:, self.column].copy()
+                self.column += 1
+                return result
+
+        actual = geometry_module._sample_plane_triplets(
+            RankSource(), point_count, len(ranks),
+        )
+        expected = set(itertools.permutations(range(point_count), 3))
+        assert {tuple(row) for row in actual} == expected
+        assert len(actual) == len(expected)
+
+
+@pytest.mark.parametrize('point_count', [0, 1, 2])
+def test_plane_triplet_sampling_rejects_insufficient_points(point_count):
+    with pytest.raises(ValueError, match='at least three'):
+        geometry_module._sample_plane_triplets(
+            np.random.RandomState(0), point_count, 96,
+        )
+
+
+def test_support_plane_fits_noisy_inliers_with_large_outlier_population():
+    rng = np.random.RandomState(40)
+    xy = rng.uniform(-0.3, 0.3, size=(1400, 2))
+    z = 0.15 + 0.2 * xy[:, 0] - 0.1 * xy[:, 1]
+    points = np.column_stack((xy, z + rng.normal(0.0, 0.0005, len(z))))
+    points[:400, 2] += rng.uniform(0.03, 0.12, 400)
+    normal, offset, ratio = geometry_module._fit_support_plane(points, 0.004, 200)
+    residual = points[400:] @ normal + offset
+    assert np.max(np.abs(residual)) < 0.002
+    assert ratio == pytest.approx(1000 / 1400)
+    again = geometry_module._fit_support_plane(points, 0.004, 200)
+    np.testing.assert_array_equal(again[0], normal)
+    assert again[1:] == (offset, ratio)
+
+
 def _normalize(vector):
     vector = np.asarray(vector, dtype=float)
     return vector / np.linalg.norm(vector)

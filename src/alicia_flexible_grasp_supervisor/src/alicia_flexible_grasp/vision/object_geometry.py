@@ -218,6 +218,22 @@ def _expanded_bbox_mask(shape, bbox, expand_ratio):
     return expanded, bbox_mask
 
 
+def _sample_plane_triplets(rng, point_count, iterations):
+    """Uniform ordered triples without shuffling the entire point cloud."""
+
+    if point_count < 3:
+        raise ValueError('support plane requires at least three points')
+    first = rng.randint(point_count, size=iterations)
+    second = rng.randint(point_count - 1, size=iterations)
+    second += second >= first
+    # Draw from the remaining n-2 ranks, then skip both occupied indices.
+    # Each ordered triple has probability 1 / (n * (n-1) * (n-2)).
+    third = rng.randint(point_count - 2, size=iterations)
+    third += third >= np.minimum(first, second)
+    third += third >= np.maximum(first, second)
+    return np.column_stack((first, second, third))
+
+
 def _fit_support_plane(points, threshold_m, min_support_points):
     points = np.asarray(points, dtype=float).reshape(-1, 3)
     if len(points) < min_support_points:
@@ -229,8 +245,8 @@ def _fit_support_plane(points, threshold_m, min_support_points):
     best_inliers = None
     best_count = 0
     iterations = max(96, min(512, len(points)))
-    for _ in range(iterations):
-        chosen = rng.choice(len(points), 3, replace=False)
+    triplets = _sample_plane_triplets(rng, len(points), iterations)
+    for chosen in triplets:
         first, second, third = points[chosen]
         normal = np.cross(second - first, third - first)
         norm = float(np.linalg.norm(normal))
