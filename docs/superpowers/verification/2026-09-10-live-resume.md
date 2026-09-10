@@ -54,3 +54,13 @@ choice累计1.556秒。改为从n、n-1、n-2三个区间抽整数，再映射�
 回放脚本保存于`.ros_log/alignment_20260910/geometry_replay/`。
 
 这不是物理抓取成功证据；需在本轮对准确认后使用新鲜绑定计划验证。
+
+01:14仅退出原full_system中的remote_grasp6d_node（无respawn），由
+`alicia-remote-grasp6d-20260910.service`单独加载5ae00e8。该服务在同一
+工作目录source ROS/devel后执行rosrun，节点日志为本轮目录下
+`remote_grasp6d_repaired.log`，stdout为根目录
+`.ros_log/remote_grasp6d_repaired_20260910.log`。主ROS、驱动、控制器、
+上位机和录制服务持续运行。后续规划修复可在任务空闲时单独重载此服务。
+截至本次保存，识别carton、使能已确认、任务IDLE，仍等待本轮操作者
+“已对准”消息；未触发自动抓取。确认后使用
+`tools/run_fresh_grasp6d_after_alignment.py`建立本轮新鲜快照、审计和计划绑定。
