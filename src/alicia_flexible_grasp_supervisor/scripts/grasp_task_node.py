@@ -2162,6 +2162,8 @@ class GraspTaskNode:
         self.latest_actuation_status_time = rospy.Time.now()
 
     def _automatic_actuation_gate(self, gcfg, now_sec=None):
+        if rospy.get_param('/gui/joint_direct_mode', False) is True:
+            return False, 'MANUAL_CONTROL_ACTIVE: joint sliders own motion'
         if not self._cfg_bool(
             gcfg,
             'require_actuation_confirmation',
@@ -2207,6 +2209,40 @@ class GraspTaskNode:
                 % (age, freshness),
             )
         return True, ''
+
+    def _actuation_bootstrap_allowed(self, gcfg):
+        if rospy.get_param('/gui/joint_direct_mode', False) is True:
+            return False
+        from alicia_flexible_grasp.robot.actuation_bootstrap import PENDING_BOOTSTRAP_STATES
+        if not (self._cfg_bool(gcfg, 'auto_confirm_actuation_from_observation', False)
+                and self._cfg_bool(gcfg, 'use_grasp6d_plan', False)):
+            return False
+        stamp = getattr(self, 'latest_actuation_status_time', None)
+        age = float('inf') if stamp is None else _stamp_seconds(rospy.Time.now()) - _stamp_seconds(stamp)
+        return (0.0 <= age <= 2.0 and getattr(self, 'latest_actuation_status', '') in PENDING_BOOTSTRAP_STATES)
+
+    def _bootstrap_bound_actuation(self, plan, gcfg):
+        if plan is None or _plan_phase(plan) != _FAR_FIELD_OBSERVATION_PLAN:
+            self.set_state(GraspStages.FAILED, 'ACTUATION_PREFIX_REQUIRES_FAR_FIELD_OBSERVATION')
+            return False
+        if not self._actuation_bootstrap_allowed(gcfg):
+            self.set_state(GraspStages.FAILED, 'ACTUATION_PREFIX_STATE_CHANGED')
+            return False
+        observation = split_rich_plan_poses(plan)[0]
+        rospy.wait_for_service('/supervisor/confirm_actuation_for_observation', timeout=5.0)
+        service = rospy.ServiceProxy('/supervisor/confirm_actuation_for_observation', SetTargetPose)
+        self.set_state(GraspStages.MOVE_PREGRASP, 'confirming actuation along bounded observation prefix')
+        validation, response = self._invoke_plan_bound_action(
+            plan, gcfg, 'actuation observation prefix', lambda: service(observation, True),
+        )
+        if not validation.ok or response is None or not response.success:
+            reason = validation.reason if not validation.ok else getattr(response, 'message', 'no response')
+            self.set_state(GraspStages.FAILED, 'ACTUATION_BOOTSTRAP_FAILED: ' + reason)
+            return False
+        confirmed, reason = self._automatic_actuation_gate(gcfg)
+        if not confirmed:
+            self.set_state(GraspStages.FAILED, reason)
+        return confirmed
 
     def raw_detection_cb(self, msg):
         self.latest_raw_detection = bool(msg.data)
@@ -2687,7 +2723,8 @@ class GraspTaskNode:
             rospy.logerr_throttle(1.0, 'Rejected grasp start: %s', message)
             return StartGraspResponse(False, message)
         actuation_ok, actuation_reason = self._automatic_actuation_gate(gcfg)
-        if not actuation_ok:
+        bootstrap_actuation = not actuation_ok and self._actuation_bootstrap_allowed(gcfg)
+        if not actuation_ok and not bootstrap_actuation:
             rospy.logerr_throttle(
                 1.0,
                 'Rejected grasp start: %s',
@@ -2711,6 +2748,8 @@ class GraspTaskNode:
                             False,
                             '%s: %s' % (validation.code, validation.reason),
                         )
+                    if bootstrap_actuation and _plan_phase(bound_plan) != _FAR_FIELD_OBSERVATION_PLAN:
+                        return StartGraspResponse(False, 'ACTUATION_PREFIX_REQUIRES_FAR_FIELD_OBSERVATION')
                     bound_plan = self._freeze_execution_plan(bound_plan)
                 self._clear_view_reacquisition_attempts = 0
                 self._clear_view_reacquisition_minimum_stamp_ns = 0
@@ -2718,6 +2757,9 @@ class GraspTaskNode:
                 self.active = True
         self._set_near_field_active(False)
         try:
+            if bootstrap_actuation and not self._bootstrap_bound_actuation(bound_plan, gcfg):
+                response_message = 'actuation bootstrap failed'
+                return StartGraspResponse(False, response_message)
             result = self.execute(grasp6d_plan=bound_plan)
             response_message = 'success' if result else 'failed'
             return StartGraspResponse(result, response_message)
@@ -5789,6 +5831,8 @@ class GraspTaskNode:
             return result
 
     def _validate_bound_plan_locked(self, plan, gcfg):
+        if rospy.get_param('/gui/joint_direct_mode', False) is True:
+            return PlanValidationResult(False, 'MANUAL_CONTROL_ACTIVE', 'joint sliders own motion')
         if not bool(getattr(self, 'active', False)):
             return PlanValidationResult(
                 False,

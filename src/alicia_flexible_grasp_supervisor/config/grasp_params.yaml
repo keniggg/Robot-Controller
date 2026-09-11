@@ -17,6 +17,7 @@ grasp:
   # enable/reconnect. Manual GUI synchronization and the small proof move remain
   # available while this gate is pending or unconfirmed.
   require_actuation_confirmation: true
+  auto_confirm_actuation_from_observation: true
   actuation_confirmation_freshness_sec: 2.0
   grasp6d_plan_topic: "/grasp_6d/plan"
   grasp6d_enriched_plan_topic: "/grasp_6d/plan_enriched"

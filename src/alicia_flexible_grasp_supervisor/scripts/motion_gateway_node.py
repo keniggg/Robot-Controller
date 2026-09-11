@@ -4,7 +4,8 @@ import threading
 
 import rospy
 from control_msgs.msg import JointTrajectoryControllerState
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
+from alicia_flexible_grasp.robot.actuation_bootstrap import PENDING_BOOTSTRAP_STATES
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from alicia_flexible_grasp.robot.joint_commander import JointCommander
 from alicia_flexible_grasp.robot.gripper_commander import GripperCommander
@@ -71,6 +72,11 @@ class MotionGateway:
         self._last_planner_attempt = 0.0
         self._gripper_arm_hold_positions = None
         self._last_gripper_command_time = 0.0
+        self._actuation_status = ''
+        self._actuation_received_sec = 0.0
+        self._actuation_sub = rospy.Subscriber('/alicia_d/actuation_status', String, self._actuation_cb, queue_size=1)
+        self._gui_direct_mode = rospy.get_param('/gui/joint_direct_mode', False) is True
+        self._gui_mode_sub = rospy.Subscriber('/gui/joint_direct_mode', Bool, self._gui_mode_cb, queue_size=1)
         self.jogger = CartesianJogger(self.planner)
         rospy.Service('/supervisor/move_to_joints', SetJointCommand, self.handle_joints)
         rospy.Service('/supervisor/set_gripper', SetFloat, self.handle_gripper)
@@ -94,10 +100,80 @@ class MotionGateway:
             self.handle_pose_strict_plan_execute,
         )
         rospy.Service('/supervisor/cartesian_jog', CartesianJog, self.handle_jog)
+        rospy.Service('/supervisor/confirm_actuation_for_observation', SetTargetPose, self.handle_observation_actuation)
         rospy.Service('/supervisor/trigger_zero', TriggerZero, self.handle_zero)
         rospy.loginfo('MotionGateway ready: commands -> %s', cfg.get('joint_command_topic','/joint_commands'))
 
+    def _gui_mode_cb(self, msg):
+        was_manual = getattr(self, '_gui_direct_mode', False)
+        self._gui_direct_mode = bool(msg.data)
+        if self._gui_direct_mode and not was_manual:
+            # Cancel only MoveIt's active trajectory; controllers and joint
+            # torque remain enabled. The driver independently installs hold
+            # and rejects all non-slider SDK targets while the mode is active.
+            planner = getattr(self, 'planner', None)
+            if planner is not None and getattr(planner, 'ready', False):
+                planner.manipulator.stop()
+
+    def _manual_control_active(self):
+        return (getattr(self, '_gui_direct_mode', False) or
+                rospy.get_param('/gui/joint_direct_mode', False) is True)
+
+    def _actuation_cb(self, msg):
+        self._actuation_status = str(msg.data).strip()
+        self._actuation_received_sec = float(rospy.get_time())
+
+    def _fresh_actuation_status(self):
+        age = float(rospy.get_time()) - getattr(self, '_actuation_received_sec', 0.0)
+        return getattr(self, '_actuation_status', '') if 0.0 <= age <= 2.0 else ''
+
+    def handle_observation_actuation(self, req):
+        if self._manual_control_active():
+            return SetTargetPoseResponse(False, 'MANUAL_CONTROL_ACTIVE: joint sliders own motion')
+        if not req.execute:
+            return SetTargetPoseResponse(False, 'ACTUATION_PREFIX requires execute=true')
+        with self._planner_operation_lock():
+            status = self._fresh_actuation_status()
+            if status.startswith('CONFIRMED:'):
+                return SetTargetPoseResponse(True, 'actuation already confirmed')
+            if status not in PENDING_BOOTSTRAP_STATES:
+                return SetTargetPoseResponse(False, 'ACTUATION_PREFIX_NOT_PERMITTED: ' + status)
+            planner = self._ensure_planner()
+            if planner is None:
+                return SetTargetPoseResponse(False, self._moveit_not_ready_message())
+            ok, message = self._ensure_trajectory_controllers_started()
+            if not ok:
+                return SetTargetPoseResponse(False, message)
+            ok, message = self._synchronize_trajectory_controller_to_feedback()
+            if not ok:
+                return SetTargetPoseResponse(False, message)
+            # Explicit zero-displacement synchronization also reaches the
+            # driver when the controller suppresses unchanged hold commands.
+            self.joint_cmd.publish(list(self.joint_cmd.last_positions))
+            ok, message = planner.move_to_pose(req.target, execute=False, allow_fallbacks=False)
+            if not ok:
+                return SetTargetPoseResponse(False, 'ACTUATION_PREFIX_PLAN_FAILED: ' + message)
+            status = self._fresh_actuation_status()
+            if status.startswith('CONFIRMED:'):
+                return SetTargetPoseResponse(True, 'actuation confirmed during synchronization')
+            if status not in PENDING_BOOTSTRAP_STATES:
+                return SetTargetPoseResponse(False, 'ACTUATION_PREFIX_STATE_CHANGED: ' + status)
+            rospy.logwarn('Executing bounded observation prefix to establish measured actuation response')
+            if self._manual_control_active():
+                return SetTargetPoseResponse(False, 'MANUAL_CONTROL_ACTIVE')
+            ok, message = planner.execute_cached_observation_prefix(req.target)
+            if not ok:
+                return SetTargetPoseResponse(False, message)
+            deadline = float(rospy.get_time()) + 1.0
+            while not rospy.is_shutdown() and float(rospy.get_time()) < deadline:
+                if self._fresh_actuation_status().startswith('CONFIRMED:'):
+                    return SetTargetPoseResponse(True, message + '; measured actuation confirmed')
+                rospy.sleep(0.02)
+            return SetTargetPoseResponse(False, 'ACTUATION_PREFIX_NO_RESPONSE: ' + self._fresh_actuation_status())
+
     def handle_joints(self, req):
+        if req.execute and self._manual_control_active():
+            return SetJointCommandResponse(False, 'MANUAL_CONTROL_ACTIVE')
         with self._planner_operation_lock():
             planner = self._ensure_planner()
             if planner is None:
@@ -106,11 +182,15 @@ class MotionGateway:
         return SetJointCommandResponse(ok, msg)
 
     def handle_gripper(self, req):
+        if self._manual_control_active():
+            return SetFloatResponse(False, 'MANUAL_CONTROL_ACTIVE')
         arm_positions = self._gripper_arm_positions_for_command()
         self.gripper.set_position(req.value, arm_positions=arm_positions)
         return SetFloatResponse(True, 'gripper command published')
 
     def handle_pose(self, req):
+        if req.execute and self._manual_control_active():
+            return SetTargetPoseResponse(False, 'MANUAL_CONTROL_ACTIVE')
         self._log_pose_request(req)
         with self._planner_operation_lock():
             planner = self._ensure_planner()
@@ -271,6 +351,8 @@ class MotionGateway:
         )
 
     def handle_pose_strict_execute(self, req):
+        if self._manual_control_active():
+            return SetTargetPoseResponse(False, 'MANUAL_CONTROL_ACTIVE')
         self._log_pose_request(req, operation='execute_pose_strict')
         if not req.execute:
             return SetTargetPoseResponse(
@@ -314,6 +396,8 @@ class MotionGateway:
         return SetTargetPoseResponse(ok, msg)
 
     def handle_pose_strict_plan_execute(self, req):
+        if self._manual_control_active():
+            return SetTargetPoseResponse(False, 'MANUAL_CONTROL_ACTIVE')
         operation = 'plan_and_execute_pose_strict'
         self._log_pose_request(req, operation=operation)
         if not req.execute:
@@ -373,6 +457,8 @@ class MotionGateway:
         return SetTargetPoseResponse(ok, msg)
 
     def handle_pose_linear(self, req):
+        if req.execute and self._manual_control_active():
+            return SetTargetPoseResponse(False, 'MANUAL_CONTROL_ACTIVE')
         self._log_pose_request(req, operation='move_to_pose_linear')
         with self._planner_operation_lock():
             planner = self._ensure_planner()
@@ -395,6 +481,8 @@ class MotionGateway:
         return SetTargetPoseResponse(ok, msg)
 
     def handle_jog(self, req):
+        if self._manual_control_active():
+            return CartesianJogResponse(False, 'MANUAL_CONTROL_ACTIVE')
         with self._planner_operation_lock():
             planner = self._ensure_planner()
             if planner is None:

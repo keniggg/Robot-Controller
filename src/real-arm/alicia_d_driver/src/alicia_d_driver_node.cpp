@@ -209,6 +209,7 @@ void AliciaDDriverNode::load_parameters()
     pnh_.param<int>("servo_count", servo_count_, 9);
     pnh_.param<bool>("debug_mode", debug_mode_, false);
     pnh_.param<bool>("auto_torque_on_startup", auto_torque_on_startup_, false);
+    nh_.param<bool>("/gui/joint_direct_mode", gui_control_mode_, false);
     pnh_.param<double>("rate_limit_sec", rate_limit_sec_, 0.01);
     pnh_.param<double>("command_rate_hz", command_rate_hz_, 200.0);
     pnh_.param<double>("state_poll_rate_hz", state_poll_rate_hz_, 20.0);
@@ -502,6 +503,7 @@ void AliciaDDriverNode::setup_ros_communications()
         this
     );
     joint_command_sub_ = nh_.subscribe("/joint_commands", 10, &AliciaDDriverNode::joint_command_callback, this);
+    gui_control_mode_sub_ = nh_.subscribe("/gui/joint_direct_mode", 1, &AliciaDDriverNode::gui_control_mode_callback, this);
     zero_calib_sub_ = nh_.subscribe("/zero_calibrate", 10, &AliciaDDriverNode::zero_calibrate_callback, this);
     demo_mode_sub_ = nh_.subscribe("/demonstration", 10, &AliciaDDriverNode::demonstration_mode_callback, this);
     processing_timer_ = nh_.createTimer(ros::Duration(0.01), &AliciaDDriverNode::process_serial_data_callback, this);
@@ -521,6 +523,12 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
     std_srvs::SetBool::Response& response
 )
 {
+    std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);
+    if (gui_control_mode_) {
+        response.success = false;
+        response.message = "MANUAL_CONTROL_ACTIVE: task endpoint correction cannot own slider motion";
+        return true;
+    }
     const ros::Time now = ros::Time::now();
     std::vector<double> release_feedback;
     bool release_feedback_is_fresh = false;
@@ -969,8 +977,59 @@ void AliciaDDriverNode::reconnect_callback(const ros::TimerEvent& event)
 
 }
 
+void AliciaDDriverNode::gui_control_mode_callback(const std_msgs::Bool::ConstPtr& msg)
+{
+    // Serialize ownership changes with both command admission and SDK writes.
+    std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);
+    if (gui_control_mode_ == msg->data) return;
+    gui_control_mode_ = msg->data;
+    control_mode_changed_time_ = ros::Time::now();
+    control_mode_needs_sync_ = !gui_control_mode_;
+    std::lock_guard<std::mutex> send_lock(send_mutex_);
+    std::vector<double> feedback;
+    double gripper = 0.0;
+    bool fresh = false;
+    {
+        std::lock_guard<std::mutex> data_lock(data_mutex_);
+        feedback = current_joint_positions_;
+        gripper = current_gripper_position_;
+        const double age = (control_mode_changed_time_ - last_accepted_joint_feedback_time_).toSec();
+        fresh = has_real_feedback_ && age >= 0.0 && age <= feedback_stale_timeout_sec_;
+    }
+    {
+        std::lock_guard<std::mutex> command_lock(latest_cmd_mutex_);
+        latest_joint_angles_ = feedback;
+        latest_gripper_rad_ = gripper;
+        has_latest_command_ = fresh;
+        endpoint_trim_continuity_ = EndpointTrimContinuity(endpoint_trim_config_);
+        endpoint_trim_command_order_.reset();
+        endpoint_feedback_trim_task_lease_active_ = false;
+        gui_direct_gesture_active_ = false;
+        gui_direct_edited_index_ = -1;
+        gui_direct_hold_joint_angles_.clear();
+    }
+    cmd_joint_angles_ = feedback;
+    cmd_gripper_rad_ = gripper;
+    cmd_joint_velocities_.assign(6, 0.0);
+    cmd_gripper_vel_rad_s_ = 0.0;
+    command_state_seeded_from_feedback_ = fresh;
+    last_sent_sdk_command_frame_.clear();
+    {
+        std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
+        actuation_confirmation_.reset_command_synchronization();
+    }
+    ROS_WARN("Control ownership changed: gui_direct_mode=%s; previous interpolation discarded, measured hold retained", gui_control_mode_ ? "true" : "false");
+}
+
 void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::ConstPtr& msg)
 {
+    std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);
+    if (!joint_source_allowed_by_control_mode(gui_control_mode_, msg->header.frame_id)) {
+        ROS_WARN_THROTTLE(1.0, "Rejected /joint_commands source=%s: gui_direct_mode=%s", msg->header.frame_id.c_str(), gui_control_mode_ ? "true" : "false");
+        return;
+    }
+    if (!control_mode_changed_time_.isZero() &&
+        (msg->header.stamp.isZero() || msg->header.stamp < control_mode_changed_time_)) return;
     if (!communicator_->is_connected()) return;
     const ros::Time command_time = ros::Time::now();
     const EndpointTrimCommandSource endpoint_trim_command_source =
@@ -1268,6 +1327,16 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
     }
 
     std::string actuation_rejection;
+    if (control_mode_needs_sync_) {
+        if (joint_angles.size() != feedback_joint_angles.size() || joint_angles.empty()) return;
+        for (size_t i = 0; i < joint_angles.size(); ++i) {
+            if (std::abs(joint_angles[i] - feedback_joint_angles[i]) > 0.003) {
+                ROS_WARN_THROTTLE(1.0, "CONTROL_MODE_SYNC_REQUIRED: stale controller target rejected after manual release");
+                return;
+            }
+        }
+        control_mode_needs_sync_ = false;
+    }
     {
         std::lock_guard<std::mutex> lock(actuation_mutex_);
         if (!actuation_confirmation_.admit_command(
@@ -1362,6 +1431,7 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
 
 void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event)
 {
+    std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);
     if (!communicator_ || !communicator_->is_connected()) return;
 
     std::unique_lock<std::mutex> send_lock(send_mutex_, std::try_to_lock);

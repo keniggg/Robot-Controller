@@ -3,6 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <string>
+
+inline bool joint_source_allowed_by_control_mode(bool direct_mode, const std::string& source)
+{
+    const bool slider = source == "gui_direct" || source == "gui_direct_sync";
+    return direct_mode ? slider : !slider;
+}
 
 // A position-controlled servo can hold a repeatable measured offset from its
 // SDK setpoint.  Replacing an unedited joint's live SDK setpoint with its raw

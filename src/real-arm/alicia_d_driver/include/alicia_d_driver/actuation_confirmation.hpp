@@ -55,6 +55,15 @@ public:
         return connected && motion_commands_enabled && motion_confirmed(now_sec);
     }
 
+    void reset_command_synchronization()
+    {
+        synchronized_ = false;
+        clear_probe();
+        if (state_ == ActuationState::PENDING) {
+            reason_ = "POSITIVE_ENABLE_REQUESTED";
+        }
+    }
+
     void reset_for_positive_enable(double now_sec)
     {
         (void)now_sec;
@@ -215,15 +224,50 @@ public:
              state_ != ActuationState::UNCONFIRMED) ||
             !valid_joints(target) ||
             latest_feedback_.size() != target.size() ||
-            !std::isfinite(stamp_sec)
+            !std::isfinite(stamp_sec) ||
+            stamp_sec < latest_feedback_stamp_sec_ ||
+            stamp_sec - latest_feedback_stamp_sec_ > config_.confirmation_freshness_sec
         ) {
             return;
         }
 
+        if (stream_baseline_.empty()) {
+            bool unchanged = true;
+            for (std::size_t i = 0; i < target.size(); ++i) {
+                unchanged = unchanged && std::abs(target[i] - latest_feedback_[i]) <= 1e-9;
+            }
+            if (unchanged) {
+                return;
+            }
+        }
+        // Smooth trajectories arrive as small increments. Measuring each
+        // increment against the latest feedback can wait forever when the
+        // servo follows well. Keep a short, continuously streamed command
+        // window and measure the requested/actual displacement from its start.
+        bool feedback_ahead_of_command = false;
+        if (stream_baseline_.size() == target.size() &&
+            stream_target_.size() == target.size()) {
+            for (std::size_t i = 0; i < target.size(); ++i) {
+                feedback_ahead_of_command = feedback_ahead_of_command ||
+                    std::abs(latest_feedback_[i] - stream_baseline_[i]) >
+                        std::abs(stream_target_[i] - stream_baseline_[i]) +
+                            config_.measured_response_min_delta_rad;
+            }
+        }
+        if (feedback_ahead_of_command || stream_baseline_.size() != target.size() ||
+            stamp_sec < stream_start_sec_ ||
+            stamp_sec - stream_last_sec_ > config_.response_timeout_sec ||
+            stamp_sec - stream_start_sec_ >
+                config_.response_timeout_sec + config_.confirmation_freshness_sec) {
+            stream_baseline_ = latest_feedback_;
+            stream_start_sec_ = stamp_sec;
+        }
+        stream_target_ = target;
+        stream_last_sec_ = stamp_sec;
         bool non_trivial = false;
         for (std::size_t i = 0; i < target.size(); ++i) {
             if (
-                std::abs(target[i] - latest_feedback_[i]) >=
+                std::abs(target[i] - stream_baseline_[i]) >=
                 config_.command_probe_min_delta_rad
             ) {
                 non_trivial = true;
@@ -235,7 +279,7 @@ public:
         }
 
         probe_active_ = true;
-        probe_baseline_ = latest_feedback_;
+        probe_baseline_ = stream_baseline_;
         probe_target_ = target;
         probe_start_sec_ = stamp_sec;
         state_ = ActuationState::PENDING;
@@ -341,12 +385,20 @@ private:
 
     void clear_probe()
     {
+        stream_baseline_.clear();
+        stream_target_.clear();
+        stream_start_sec_ = 0.0;
+        stream_last_sec_ = 0.0;
         probe_active_ = false;
         probe_baseline_.clear();
         probe_target_.clear();
         probe_start_sec_ = 0.0;
     }
 
+    std::vector<double> stream_baseline_;
+    std::vector<double> stream_target_;
+    double stream_start_sec_ = 0.0;
+    double stream_last_sec_ = 0.0;
     ActuationConfirmationConfig config_;
     ActuationState state_ = ActuationState::DISABLED;
     std::string reason_ = "NOT_REQUESTED";

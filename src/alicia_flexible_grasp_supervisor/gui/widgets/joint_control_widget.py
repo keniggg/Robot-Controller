@@ -348,6 +348,7 @@ class DirectControlRecovery:
 
 class JointControlWidget(QtWidgets.QWidget):
     state_signal = QtCore.pyqtSignal(object)
+    control_mode_signal = QtCore.pyqtSignal(bool)
     pose_target_changed = QtCore.pyqtSignal()
 
     def __init__(
@@ -369,6 +370,7 @@ class JointControlWidget(QtWidgets.QWidget):
             self.names.append('right_finger')
         self.pub=rospy.Publisher('/joint_commands', JointState, queue_size=10)
         self.enable_pub = rospy.Publisher('/demonstration', Bool, queue_size=1)
+        self.control_mode_pub = rospy.Publisher('/gui/joint_direct_mode', Bool, queue_size=1, latch=True)
         self.sliders=[]; self.labels=[]; self.feedback_labels=[]
         self.current_state = None
         self.waypoints = []
@@ -508,6 +510,8 @@ class JointControlWidget(QtWidgets.QWidget):
 
         self.state_signal.connect(self.update_current_state)
         self._subscriber = rospy.Subscriber('/joint_states', JointState, self._emit_if_alive, queue_size=1)
+        self.control_mode_signal.connect(self._apply_remote_control_mode)
+        self._mode_subscriber = rospy.Subscriber('/gui/joint_direct_mode', Bool, self._control_mode_cb, queue_size=1)
         self._actuation_subscriber = rospy.Subscriber(
             '/alicia_d/actuation_status',
             String,
@@ -577,7 +581,7 @@ class JointControlWidget(QtWidgets.QWidget):
             except Exception:
                 pass
             self._subscriber_unregistered = True
-        for name in ('_actuation_subscriber', '_feedback_subscriber'):
+        for name in ('_actuation_subscriber', '_feedback_subscriber', '_mode_subscriber'):
             subscriber = self.__dict__.get(name, None)
             marker = name + '_unregistered'
             if subscriber is None or self.__dict__.get(marker, False):
@@ -843,6 +847,8 @@ class JointControlWidget(QtWidgets.QWidget):
 
     def update_current_state(self, msg):
         self.current_state = msg
+        if not self.realtime_direct.isChecked():
+            self._refresh_sliders_from_feedback()
         if not self.show_feedback_angles:
             return
         name_to_pos = dict(zip(msg.name, msg.position))
@@ -884,6 +890,26 @@ class JointControlWidget(QtWidgets.QWidget):
         if name == 'right_finger':
             return '%.3f m' % value
         return '%+.2f°' % math.degrees(value)
+
+    def _refresh_sliders_from_feedback(self):
+        if self.current_state is None:
+            return
+        values = dict(zip(self.current_state.name, self.current_state.position))
+        self._syncing_sliders = True
+        try:
+            for name, slider in zip(self.names, self.sliders):
+                value = values.get(name)
+                if value is None or not math.isfinite(float(value)):
+                    continue
+                target = int(max(slider.minimum(), min(slider.maximum(), round(value * 1000.0))))
+                previous = slider.blockSignals(True)
+                try:
+                    slider.setValue(target)
+                finally:
+                    slider.blockSignals(previous)
+            self.update_labels()
+        finally:
+            self._syncing_sliders = False
 
     def sync_current_state(self):
         if self.current_state is None:
@@ -951,21 +977,39 @@ class JointControlWidget(QtWidgets.QWidget):
         except Exception as exc:
             return False, '轨迹控制器切换不可用：%s' % exc
 
-    def update_control_mode(self, direct_enabled, apply_controller_switch=True):
+    def _control_mode_cb(self, msg):
+        if self.__dict__.get('_alive', False):
+            self.control_mode_signal.emit(bool(msg.data))
+
+    def _apply_remote_control_mode(self, enabled):
+        if self.realtime_direct.isChecked() == enabled:
+            return
+        self.realtime_direct.blockSignals(True)
+        self.realtime_direct.setChecked(enabled)
+        self.realtime_direct.blockSignals(False)
+        self.update_control_mode(enabled, publish_mode=False)
+
+    def update_control_mode(self, direct_enabled, apply_controller_switch=True, publish_mode=True):
+        del apply_controller_switch
+        if publish_mode:
+            rospy.set_param('/gui/joint_direct_mode', bool(direct_enabled))
+            self.control_mode_pub.publish(Bool(data=bool(direct_enabled)))
         self.plan_btn.setEnabled(not direct_enabled)
         self.exec_btn.setEnabled(not direct_enabled)
-        controller_msg = ''
-        if apply_controller_switch:
-            ok, controller_msg = self.switch_trajectory_controllers(not direct_enabled)
-            controller_msg = '；' + controller_msg
+        for slider in self.sliders:
+            slider.setEnabled(bool(direct_enabled))
         if direct_enabled:
-            self.status.setText('关节直控模式：滑动滑条会直接连续发布 /joint_commands%s' % controller_msg)
+            self._refresh_sliders_from_feedback()
+            self.status.setText('关节直控：滑条拥有最高控制权，自动运动已禁止')
         else:
             self._pending_direct_publish = False
             self.direct_recovery.cancel()
-            self.status.setText('规划模式：滑条只设目标，请使用“规划当前目标/执行规划目标”%s' % controller_msg)
+            self._end_direct_slider_gesture()
+            self._refresh_sliders_from_feedback()
+            self.status.setText('自动模式：允许自主运动，滑条实时显示实测关节角度')
 
     @staticmethod
     def _default_direct_control_enabled():
         configured = rospy.get_param('/gui/default_joint_direct_control', False)
-        return bool(rospy.get_param('~default_joint_direct_control', configured))
+        default = bool(rospy.get_param('~default_joint_direct_control', configured))
+        return bool(rospy.get_param('/gui/joint_direct_mode', default))

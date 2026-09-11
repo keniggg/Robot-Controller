@@ -91,6 +91,18 @@ TEST(ActuationConfirmationTest, PositiveEnableIsPendingNotConfirmed)
     );
 }
 
+TEST(GuiControlOwnershipTest, CheckedModeExclusivelyAdmitsSliderCommands)
+{
+    EXPECT_TRUE(joint_source_allowed_by_control_mode(true, "gui_direct"));
+    EXPECT_TRUE(joint_source_allowed_by_control_mode(true, "gui_direct_sync"));
+    for (const std::string source : {"", "motion_gateway", "ros_control", "task"}) {
+        EXPECT_FALSE(joint_source_allowed_by_control_mode(true, source));
+        EXPECT_TRUE(joint_source_allowed_by_control_mode(false, source));
+    }
+    EXPECT_FALSE(joint_source_allowed_by_control_mode(false, "gui_direct"));
+    EXPECT_FALSE(joint_source_allowed_by_control_mode(false, "gui_direct_sync"));
+}
+
 TEST(ActuationConfirmationTest, RequiresFreshFeedbackAndNearFeedbackSync)
 {
     ActuationConfirmation confirmation(test_config());
@@ -199,6 +211,81 @@ TEST(JointFeedbackRecoveryTest, SmallUnchangedOrInvalidSamplesDoNotSupplyRecover
         joints(), joints(std::numeric_limits<double>::quiet_NaN()), joints(), 0.05));
     EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
         joints(), joints(0.2), joints(0.2), 0.0));
+}
+
+TEST(ActuationConfirmationTest, SmoothFollowingConfirmsAccumulatedCommandResponse)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    for (int step = 1; step <= 25; ++step) {
+        const double stamp = 10.2 + 0.1 * step;
+        confirmation.note_streamed_target(joints(0.001 * step), stamp);
+        confirmation.note_feedback(joints(0.001 * step - 0.0005), stamp + 0.01);
+        confirmation.update(stamp + 0.02);
+    }
+    EXPECT_TRUE(confirmation.motion_confirmed(12.8));
+}
+
+TEST(ActuationConfirmationTest, SmoothCommandWithoutResponseStillTimesOut)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    for (int step = 1; step <= 25; ++step) {
+        const double stamp = 10.2 + 0.1 * step;
+        confirmation.note_streamed_target(joints(0.001 * step), stamp);
+        confirmation.note_feedback(joints(), stamp + 0.01);
+    }
+    confirmation.update(13.5);
+    EXPECT_FALSE(confirmation.motion_confirmed(13.5));
+    EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT");
+}
+
+TEST(ActuationConfirmationTest, CommandGapDropsAccumulationBaseline)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.01), 10.3);
+    confirmation.note_feedback(joints(0.01), 10.4);
+    confirmation.note_feedback(joints(0.02), 12.0);
+    confirmation.note_streamed_target(joints(0.025), 12.1);
+    confirmation.note_feedback(joints(0.025), 12.2);
+    EXPECT_FALSE(confirmation.motion_confirmed(12.3));
+    confirmation.mark_unconfirmed("DISCONTINUOUS_FEEDBACK_RECOVERY", 12.4);
+    confirmation.note_streamed_target(joints(0.026), 12.5);
+    confirmation.note_feedback(joints(0.026), 12.6);
+    EXPECT_FALSE(confirmation.motion_confirmed(12.6));
+}
+
+TEST(ActuationConfirmationTest, MotionBeforeACommandCannotSupplyAccumulatedResponse)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(), 10.3);
+    confirmation.note_feedback(joints(0.025), 10.4);
+    confirmation.note_streamed_target(joints(0.025), 10.5);
+    confirmation.note_feedback(joints(0.025), 10.6);
+    EXPECT_FALSE(confirmation.motion_confirmed(10.7));
+}
+
+TEST(ActuationConfirmationTest, OwnershipChangeDiscardsUnfinishedProbe)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.025), 10.3);
+    confirmation.reset_command_synchronization();
+    confirmation.note_feedback(joints(0.01), 10.4);
+    EXPECT_FALSE(confirmation.motion_confirmed(10.5));
+    EXPECT_FALSE(confirmation.synchronized());
 }
 
 TEST(ActuationConfirmationTest, ZeroResponseTimesOutUnconfirmed)

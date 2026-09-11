@@ -5,6 +5,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import rospy
+from alicia_flexible_grasp.robot.actuation_bootstrap import bounded_observation_prefix
 
 class MoveItPlanner:
     DEFAULT_CANDIDATE_ORIENTATIONS_XYZW = (
@@ -361,6 +362,34 @@ class MoveItPlanner:
             return False, 'strict cached execute exception: %s; %s' % (exc, target_text)
         finally:
             self._clear_targets()
+
+    def execute_cached_observation_prefix(self, pose_stamped_or_pose):
+        """Consume a matching strict plan, executing at most 0.025 rad per joint."""
+        pose = getattr(pose_stamped_or_pose, 'pose', pose_stamped_or_pose)
+        cached, mismatch = self._matching_cached_strict_pose_plan(pose)
+        if mismatch:
+            return False, 'ACTUATION_PREFIX_PLAN_INVALID: ' + mismatch
+        # Never retain the full observation trajectory after this partial move.
+        self._last_pose_plan = None
+        try:
+            prefix = bounded_observation_prefix(cached['plan'])
+            current = list(self.manipulator.get_current_joint_values())
+            origin = prefix.joint_trajectory.points[0].positions
+            if len(current) != 6 or any(not math.isfinite(v) for v in current):
+                return False, 'ACTUATION_PREFIX_FEEDBACK_INVALID'
+            if max(abs(a-b) for a, b in zip(origin, current)) > 0.003:
+                return False, 'ACTUATION_PREFIX_START_CHANGED: replan from measured feedback'
+            if not getattr(self, 'strict_execution_retime_enabled', False):
+                return False, 'ACTUATION_PREFIX_RETIMING_REQUIRED'
+            prefix, reason = self._retime_strict_execution_plan(prefix)
+            if prefix is None:
+                return False, 'ACTUATION_PREFIX_RETIMING_FAILED: ' + reason
+            # execute() waits for this bounded trajectory only. No full-plan
+            # continuation, go() fallback, stop(), or torque command is issued.
+            ok = bool(self.manipulator.execute(prefix, wait=True))
+            return ok, 'ACTUATION_OBSERVATION_PREFIX max_delta_rad=0.025 execution=%s; %s' % (ok, reason)
+        except Exception as exc:
+            return False, 'ACTUATION_PREFIX_FAILED: %s' % exc
 
     def _compute_cartesian_plan(self, pose):
         compute_path = self.manipulator.compute_cartesian_path

@@ -52,6 +52,12 @@ private:
    void joint_command_callback(const sensor_msgs::JointState::ConstPtr& msg);
    void zero_calibrate_callback(const std_msgs::Bool::ConstPtr& msg);
    void demonstration_mode_callback(const std_msgs::Bool::ConstPtr& msg);
+   void gui_control_mode_callback(const std_msgs::Bool::ConstPtr& msg);
+   std::mutex control_mode_mutex_;
+   bool gui_control_mode_ = false;
+   bool control_mode_needs_sync_ = false;
+   ros::Time control_mode_changed_time_;
+   ros::Subscriber gui_control_mode_sub_;
     
     // Timer callbacks
    void process_serial_data_callback(const ros::TimerEvent& event);
