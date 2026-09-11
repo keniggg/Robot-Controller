@@ -1,5 +1,9 @@
 # 2026-09-11 ROS恢复及近场观察恢复
 
+本文件保留启动时段的历史记录。后续修改与当前状态汇总在
+[主运行日志](../../../src/alicia_flexible_grasp_supervisor/logs/2026-07-23-ros-latest-node-launch.md)，
+最新实机及原位置诊断见[观察速度与补拍预算](2026-09-11-observation-speed-and-budget.md)。
+
 操作者要求按日志启动最新完整ROS和上位机，直接正向使能，由操作者
 手动对准并再次确认后才抓取。9月10日的对准不作为本轮触发。
 
