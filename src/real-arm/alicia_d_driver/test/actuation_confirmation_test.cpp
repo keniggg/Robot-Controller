@@ -228,6 +228,21 @@ TEST(ActuationConfirmationTest, SmoothFollowingConfirmsAccumulatedCommandRespons
     EXPECT_TRUE(confirmation.motion_confirmed(12.8));
 }
 
+TEST(ActuationConfirmationTest, SmoothResponseUsesDisplacementDespiteFixedEncoderOffset)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(-0.008), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    for (int step = 1; step <= 25; ++step) {
+        const double stamp = 10.2 + 0.1 * step;
+        confirmation.note_streamed_target(joints(0.001 * step), stamp);
+        confirmation.note_feedback(joints(0.001 * step - 0.008), stamp + 0.01);
+        confirmation.update(stamp + 0.02);
+    }
+    EXPECT_TRUE(confirmation.motion_confirmed(12.8));
+}
+
 TEST(ActuationConfirmationTest, SmoothCommandWithoutResponseStillTimesOut)
 {
     ActuationConfirmation confirmation(test_config());

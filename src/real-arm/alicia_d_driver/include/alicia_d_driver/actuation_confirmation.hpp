@@ -250,7 +250,7 @@ public:
             for (std::size_t i = 0; i < target.size(); ++i) {
                 feedback_ahead_of_command = feedback_ahead_of_command ||
                     std::abs(latest_feedback_[i] - stream_baseline_[i]) >
-                        std::abs(stream_target_[i] - stream_baseline_[i]) +
+                        std::abs(stream_target_[i] - stream_command_baseline_[i]) +
                             config_.measured_response_min_delta_rad;
             }
         }
@@ -260,6 +260,15 @@ public:
             stamp_sec - stream_start_sec_ >
                 config_.response_timeout_sec + config_.confirmation_freshness_sec) {
             stream_baseline_ = latest_feedback_;
+            // For a smooth stream compare command changes and encoder changes
+            // separately. A fixed servo setpoint/encoder offset is not motion.
+            // Preserve the original immediate probe for a nontrivial step.
+            double immediate_delta = 0.0;
+            for (std::size_t i = 0; i < target.size(); ++i) {
+                immediate_delta = std::max(immediate_delta, std::abs(target[i] - latest_feedback_[i]));
+            }
+            stream_command_baseline_ = immediate_delta >= config_.command_probe_min_delta_rad
+                ? latest_feedback_ : target;
             stream_start_sec_ = stamp_sec;
         }
         stream_target_ = target;
@@ -267,7 +276,7 @@ public:
         bool non_trivial = false;
         for (std::size_t i = 0; i < target.size(); ++i) {
             if (
-                std::abs(target[i] - stream_baseline_[i]) >=
+                std::abs(target[i] - stream_command_baseline_[i]) >=
                 config_.command_probe_min_delta_rad
             ) {
                 non_trivial = true;
@@ -281,6 +290,9 @@ public:
         probe_active_ = true;
         probe_baseline_ = stream_baseline_;
         probe_target_ = target;
+        for (std::size_t i = 0; i < target.size(); ++i) {
+            probe_target_[i] = probe_baseline_[i] + target[i] - stream_command_baseline_[i];
+        }
         probe_start_sec_ = stamp_sec;
         state_ = ActuationState::PENDING;
         reason_ = "AWAITING_ENCODER_RESPONSE";
@@ -387,6 +399,7 @@ private:
     {
         stream_baseline_.clear();
         stream_target_.clear();
+        stream_command_baseline_.clear();
         stream_start_sec_ = 0.0;
         stream_last_sec_ = 0.0;
         probe_active_ = false;
@@ -397,6 +410,7 @@ private:
 
     std::vector<double> stream_baseline_;
     std::vector<double> stream_target_;
+    std::vector<double> stream_command_baseline_;
     double stream_start_sec_ = 0.0;
     double stream_last_sec_ = 0.0;
     ActuationConfirmationConfig config_;

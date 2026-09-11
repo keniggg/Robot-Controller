@@ -378,7 +378,7 @@ class MoveItPlanner:
             if len(current) != 6 or any(not math.isfinite(v) for v in current):
                 return False, 'ACTUATION_PREFIX_FEEDBACK_INVALID'
             if max(abs(a-b) for a, b in zip(origin, current)) > 0.003:
-                return False, 'ACTUATION_PREFIX_START_CHANGED: replan from measured feedback'
+                return False, 'ACTUATION_PREFIX_START_CHANGED: planned=%s measured=%s; replan from measured feedback' % (list(origin), current)
             if not getattr(self, 'strict_execution_retime_enabled', False):
                 return False, 'ACTUATION_PREFIX_RETIMING_REQUIRED'
             prefix, reason = self._retime_strict_execution_plan(prefix)

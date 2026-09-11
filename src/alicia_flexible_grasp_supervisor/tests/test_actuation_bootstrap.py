@@ -84,6 +84,7 @@ def test_gateway_requires_confirmation_after_exact_prefix(monkeypatch):
     state = ['PENDING:POSITIVE_ENABLE_REQUESTED']
     gateway._fresh_actuation_status = lambda: state[0]
     gateway.joint_cmd = NS(last_positions=[0]*7, publish=lambda q: events.append(('sync', q)))
+    gateway._wait_for_stationary_arm_feedback = lambda: (True, 'settled')
     def execute(target):
         events.append(('prefix', target))
         state[0] = 'CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE'
@@ -93,7 +94,8 @@ def test_gateway_requires_confirmation_after_exact_prefix(monkeypatch):
     monkeypatch.setattr(motion_gateway_node.rospy, 'get_time', lambda: 10)
     result = gateway.handle_observation_actuation(NS(execute=True, target=make_pose()))
     assert result.success
-    assert [e[0] for e in events] == ['sync', 'prefix']
+    assert [e[0] for e in events] == ['prefix']
+    assert gateway.controller_syncs == 1
     assert gateway.planner.calls[0][1:] == (False, False)
 
 
@@ -136,3 +138,24 @@ def test_task_does_not_bootstrap_stale_pending_or_fault_state(monkeypatch):
     assert node._actuation_bootstrap_allowed(config)
     node.latest_actuation_status = 'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT'
     assert not node._actuation_bootstrap_allowed(config)
+
+
+@pytest.mark.parametrize('behavior', ['settles', 'moving', 'stale'])
+def test_bootstrap_planning_waits_for_measured_settling(monkeypatch, behavior):
+    gateway = gateway_tests.MotionGatewayControllerStartTest().make_gateway()
+    clock = [10.0]
+    gateway._manual_control_active = lambda: False
+    gateway.joint_cmd = NS(last_state_time_sec=clock[0])
+    gateway._current_arm_positions_snapshot = lambda: [
+        min(clock[0]-10.0, .3) if behavior == 'settles' else clock[0]-10.0
+    ] + [0]*5
+    def advance(dt):
+        clock[0] += dt
+        if behavior != 'stale': gateway.joint_cmd.last_state_time_sec = clock[0]
+    monkeypatch.setattr(motion_gateway_node.rospy, 'get_time', lambda: clock[0])
+    monkeypatch.setattr(motion_gateway_node.rospy, 'sleep', advance)
+    monkeypatch.setattr(motion_gateway_node.rospy, 'is_shutdown', lambda: False)
+    ok, message = gateway._wait_for_stationary_arm_feedback()
+    assert ok is (behavior == 'settles')
+    if ok: assert clock[0] >= 10.55
+    else: assert 'FEEDBACK_' in message

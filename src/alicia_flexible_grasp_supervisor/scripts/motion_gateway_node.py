@@ -147,9 +147,12 @@ class MotionGateway:
             ok, message = self._synchronize_trajectory_controller_to_feedback()
             if not ok:
                 return SetTargetPoseResponse(False, message)
-            # Explicit zero-displacement synchronization also reaches the
-            # driver when the controller suppresses unchanged hold commands.
-            self.joint_cmd.publish(list(self.joint_cmd.last_positions))
+            # The controller bridge already sends a synchronized reference.
+            # Sending encoder positions again ratchets servo setpoint/feedback
+            # offset into a second real move. Plan only after measured settling.
+            ok, message = self._wait_for_stationary_arm_feedback()
+            if not ok:
+                return SetTargetPoseResponse(False, message)
             ok, message = planner.move_to_pose(req.target, execute=False, allow_fallbacks=False)
             if not ok:
                 return SetTargetPoseResponse(False, 'ACTUATION_PREFIX_PLAN_FAILED: ' + message)
@@ -170,6 +173,26 @@ class MotionGateway:
                     return SetTargetPoseResponse(True, message + '; measured actuation confirmed')
                 rospy.sleep(0.02)
             return SetTargetPoseResponse(False, 'ACTUATION_PREFIX_NO_RESPONSE: ' + self._fresh_actuation_status())
+
+    def _wait_for_stationary_arm_feedback(self):
+        started = float(rospy.get_time())
+        stable_since = started
+        anchor = None
+        while not rospy.is_shutdown() and float(rospy.get_time()) - started <= 2.0:
+            if self._manual_control_active():
+                return False, 'MANUAL_CONTROL_ACTIVE'
+            now = float(rospy.get_time())
+            stamp = getattr(self.joint_cmd, 'last_state_time_sec', None)
+            measured = self._current_arm_positions_snapshot()
+            if (stamp is None or not 0.0 <= now-float(stamp) <= 0.5 or
+                    len(measured) != 6 or not all(math.isfinite(v) for v in measured)):
+                return False, 'ACTUATION_PREFIX_FEEDBACK_STALE'
+            if anchor is None or max(abs(a-b) for a,b in zip(anchor, measured)) > 2.0*math.pi/4096.0 + 1e-9:
+                anchor, stable_since = list(measured), now
+            if now-stable_since >= 0.25:
+                return True, 'measured arm positions stationary after controller synchronization'
+            rospy.sleep(0.02)
+        return False, 'ACTUATION_PREFIX_FEEDBACK_NOT_SETTLED'
 
     def handle_joints(self, req):
         if req.execute and self._manual_control_active():
