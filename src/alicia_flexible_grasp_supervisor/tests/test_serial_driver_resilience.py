@@ -541,6 +541,25 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertLess(feedback, consume)
         self.assertIn('endpoint_trim_terminal_release_code', timer)
 
+    def test_only_repeated_user_enable_may_preserve_fresh_confirmation(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        enable = _function_body(
+            source, 'bool AliciaDDriverNode::request_positive_enable',
+        )
+        self.assertIn('preserve_fresh_confirmation &&', enable)
+        self.assertLess(
+            enable.index('can_preserve_positive_enable('),
+            enable.index('clear_retained_command_state();'),
+        )
+        self.assertLess(
+            enable.index('if (sustained_temperature_protection)'),
+            enable.index('can_preserve_positive_enable('),
+        )
+        self.assertIn('request_positive_enable("startup");', source)
+        self.assertIn('request_positive_enable("serial_reconnect");', source)
+        self.assertIn('request_positive_enable("demonstration_false", true);', source)
+        self.assertIn('bool preserve_fresh_confirmation = false', DRIVER_HEADER.read_text())
+
     def test_retained_command_clear_resets_coordinator_at_every_call_site(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         clear = _function_body(

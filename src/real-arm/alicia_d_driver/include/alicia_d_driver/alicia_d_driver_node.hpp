@@ -40,7 +40,8 @@ private:
    void load_parameters();
    void setup_ros_communications();
    void clear_retained_command_state();
-   bool request_positive_enable(const std::string& source);
+   bool request_positive_enable(
+       const std::string& source, bool preserve_fresh_confirmation = false);
    void publish_actuation_status();
    bool set_task_endpoint_precision_callback(
        std_srvs::SetBool::Request& request,

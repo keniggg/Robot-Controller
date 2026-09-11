@@ -1,5 +1,6 @@
 #include "alicia_d_driver/alicia_d_driver_node.hpp"
 #include "alicia_d_driver/gui_direct_hold.hpp"
+#include "alicia_d_driver/joint_feedback_recovery.hpp"
 #include <cmath>
 #include <numeric> // For std::accumulate
 #include <map>
@@ -716,7 +717,8 @@ void AliciaDDriverNode::publish_actuation_status()
     }
 }
 
-bool AliciaDDriverNode::request_positive_enable(const std::string& source)
+bool AliciaDDriverNode::request_positive_enable(
+    const std::string& source, bool preserve_fresh_confirmation)
 {
     const ros::Time now = ros::Time::now();
     bool sustained_temperature_protection = false;
@@ -746,6 +748,30 @@ bool AliciaDDriverNode::request_positive_enable(const std::string& source)
             source.c_str()
         );
         return false;
+    }
+
+    bool preserve_confirmation = false;
+    {
+        // Keep the feedback callback's data -> actuation lock order. A repeated
+        // request must not discard a still-fresh measured response or the hold
+        // target. Reconnect and unconfirmed states retain the reset path below.
+        std::lock_guard<std::mutex> data_lock(data_mutex_);
+        std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
+        preserve_confirmation =
+            preserve_fresh_confirmation &&
+            actuation_confirmation_.can_preserve_positive_enable(
+                communicator_ && communicator_->is_connected(),
+                motion_commands_enabled_,
+                now.toSec()
+            );
+    }
+    if (preserve_confirmation) {
+        publish_actuation_status();
+        ROS_INFO(
+            "Positive enable from %s already confirmed by fresh encoder response; preserving command and feedback state.",
+            source.c_str()
+        );
+        return true;
     }
 
     clear_retained_command_state();
@@ -2197,9 +2223,12 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
                         previous_command_error_rad +
                             command_consistency_margin_rad;
                     command_consistent_recovery =
-                        candidate_command_error_rad +
-                            command_consistency_margin_rad <
-                        previous_command_error_rad;
+                        alicia_d_driver::command_consistent_feedback_recovery(
+                            current_joint_positions_,
+                            candidate_joint_positions,
+                            last_streamed_joint_positions_,
+                            feedback_jump_confirmation_tolerance_rad_
+                        );
                 }
             }
             bool matches_pending =
@@ -2808,7 +2837,7 @@ void AliciaDDriverNode::demonstration_mode_callback(const std_msgs::Bool::ConstP
         };
         communicator_->write_raw_frame(torque_off_frame);
     } else {
-        request_positive_enable("demonstration_false");
+        request_positive_enable("demonstration_false", true);
     }
 }
 

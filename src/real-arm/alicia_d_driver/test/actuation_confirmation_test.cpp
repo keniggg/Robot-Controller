@@ -4,6 +4,7 @@
 #include "alicia_d_driver/endpoint_trim_continuity.hpp"
 #include "alicia_d_driver/endpoint_trim_driver_admission.hpp"
 #include "alicia_d_driver/gui_direct_hold.hpp"
+#include "alicia_d_driver/joint_feedback_recovery.hpp"
 
 #include <cmath>
 #include <limits>
@@ -134,6 +135,70 @@ TEST(ActuationConfirmationTest, DirectionalEncoderResponseConfirmsActuation)
         confirmation.status_text(),
         "CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE"
     );
+}
+
+TEST(ActuationConfirmationTest, RepeatedEnablePreservesOnlyFreshConnectedConfirmation)
+{
+    ActuationConfirmation confirmation(test_config());
+    EXPECT_FALSE(confirmation.can_preserve_positive_enable(true, true, 10.0));
+    confirmation.reset_for_positive_enable(10.0);
+    EXPECT_FALSE(confirmation.can_preserve_positive_enable(true, true, 10.1));
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.0, 0.10), 10.3);
+    confirmation.note_feedback(joints(0.0, 0.006), 10.4);
+
+    EXPECT_TRUE(confirmation.can_preserve_positive_enable(true, true, 10.5));
+    EXPECT_TRUE(confirmation.synchronized());
+    EXPECT_TRUE(confirmation.motion_confirmed(10.5));
+    EXPECT_FALSE(confirmation.can_preserve_positive_enable(false, true, 10.5));
+    EXPECT_FALSE(confirmation.can_preserve_positive_enable(true, false, 10.5));
+    EXPECT_FALSE(confirmation.can_preserve_positive_enable(true, true, 12.5));
+    EXPECT_FALSE(confirmation.can_preserve_positive_enable(true, true, 10.0));
+    confirmation.mark_unconfirmed("DISCONTINUOUS_FEEDBACK_RECOVERY", 10.6);
+    EXPECT_FALSE(confirmation.can_preserve_positive_enable(true, true, 10.7));
+    confirmation.mark_overheat_blocked("TEMPERATURE", 10.8);
+    EXPECT_FALSE(confirmation.can_preserve_positive_enable(true, true, 10.9));
+}
+
+TEST(JointFeedbackRecoveryTest, September11RepeatedJoint3SampleAgreesWithHeldCommand)
+{
+    // Captured delta 0.147262, previous error 0.135398, candidate error
+    // 0.011864 rad: the old 0.1323 rad polling margin rejected 273 frames.
+    const auto previous = joints(-1.922078, 0.443320, -0.004602, -0.005, -0.30833, -0.001534);
+    const auto candidate = joints(-1.922078, 0.443320, -0.151864, -0.005, -0.30833, -0.001534);
+    const auto command = joints(-1.922078, 0.443320, -0.140000, -0.005, -0.30833, -0.001534);
+    EXPECT_TRUE(alicia_d_driver::command_consistent_feedback_recovery(
+        previous, candidate, command, 0.05));
+}
+
+TEST(JointFeedbackRecoveryTest, MovingTowardCommandWithoutReachingItDoesNotRecover)
+{
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(), joints(0.0, 0.2), joints(0.0, 0.5), 0.05));
+}
+
+TEST(JointFeedbackRecoveryTest, CorruptionAwayFromHeldCommandDoesNotRecover)
+{
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(), joints(0.0, -2.4), joints(0.0, 0.1), 0.05));
+    // Correcting the largest jump cannot conceal another inconsistent joint.
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(), joints(0.5, -0.2), joints(0.5, 0.0), 0.05));
+}
+
+TEST(JointFeedbackRecoveryTest, SmallUnchangedOrInvalidSamplesDoNotSupplyRecoveryEvidence)
+{
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(), joints(), joints(), 0.05));
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(), joints(0.01), joints(0.01), 0.05));
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(), joints(0.2), {}, 0.05));
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(), joints(std::numeric_limits<double>::quiet_NaN()), joints(), 0.05));
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(), joints(0.2), joints(0.2), 0.0));
 }
 
 TEST(ActuationConfirmationTest, ZeroResponseTimesOutUnconfirmed)

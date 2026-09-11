@@ -46,6 +46,15 @@ public:
             std::max(0.0, config_.confirmation_freshness_sec);
     }
 
+    bool can_preserve_positive_enable(
+        bool connected,
+        bool motion_commands_enabled,
+        double now_sec
+    ) const
+    {
+        return connected && motion_commands_enabled && motion_confirmed(now_sec);
+    }
+
     void reset_for_positive_enable(double now_sec)
     {
         (void)now_sec;
