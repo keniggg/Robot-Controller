@@ -132,12 +132,13 @@ grasp:
   # completed about 0.75 s after the former 30 s deadline and was discarded as
   # GENERATION_STALE. Sixty seconds bounds that same fail-closed pipeline
   # without relaxing any geometry, collision, MoveIt or centering gate.
-  near_field_replan_timeout_sec: 60.0
+  # Includes the initial registered snapshot, one observation recovery and a
+  # second fresh snapshot. The absolute deadline is fixed at phase entry.
+  near_field_replan_timeout_sec: 90.0
   near_field_replan_poll_sec: 0.05
   near_field_replan_snapshot_slack_sec: 3.0
-  # Independently verify at the task boundary that the remote near-field plan
-  # kept the same support-plane center as the unobstructed far-field plan.
-  # Height may update from the current support plane; planar residual may not.
+  # Registered contact plans use shared 3D registration/support continuity.
+  # The planar-center bound is retained only for legacy unregistered plans.
   near_field_planar_center_anchor_validation_enabled: true
   near_field_planar_center_anchor_validation_required: true
   near_field_planar_center_anchor_max_residual_m: 0.003
@@ -201,6 +202,7 @@ grasp:
   clear_view_reacquisition_radial_retreat_m: 0.040
   clear_view_reacquisition_minimum_contact_clearance_m: 0.080
   clear_view_reacquisition_preferred_side: "negative"
+  clear_view_reacquisition_inference_reserve_sec: 20.0
 
 force:
   contact_threshold_mn: 200.0
@@ -624,13 +626,18 @@ robot:
   strict_execution_velocity_scaling: 0.20
   strict_execution_acceleration_scaling: 0.30
   strict_execution_max_joint_velocity_rad_s: 0.08
+  # Observation-only planner/cache. Recent user-controlled encoder motion
+  # reached 0.08 rad/s on Joint3 and 0.23 rad/s on Joint4/6 after driver repair.
+  # Verify following during the actual observation; contact retains its limits.
+  observation_max_joint_velocity_rad_s: 0.08
   # Enforce the bound against every local trajectory segment, not only
   # endpoint displacement / total duration. Three independent observation
   # runs reached Joint3's 0.120 rad path boundary. In the latest raw trace,
   # Joint3 advanced 5.2 deg over 4.397 s (0.0206 rad/s) while the reference
   # advanced near 0.052 rad/s and feedback stalled for the final interval.
   # Use the measured sustained following rate as a hardware-joint limit.
-  # This applies to every target and stage; it is not an object pose constant.
+  # Retained for the contact profile. Observation has its own planner/cache;
+  # neither profile depends on target class or a fixed object pose.
   strict_execution_joint_velocity_limits_rad_s:
     Joint3: 0.02
     # Two independent far-field observation paths commanded Joint4 at

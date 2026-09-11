@@ -13032,7 +13032,7 @@ class RemoteGrasp6DNode:
                 start=1,
             ):
                 moveit_pose = observation_variant['sequence'].pregrasp
-                evaluation = self._strict_moveit_evaluation(moveit_pose)
+                evaluation = self._strict_moveit_evaluation(moveit_pose, observation=True)
                 with self._stream_condition:
                     self._require_stream_ticket_current_locked(
                         prepared.ticket
@@ -20707,7 +20707,7 @@ class RemoteGrasp6DNode:
                 metrics,
             )
 
-    def _strict_moveit_evaluation(self, grasp_pose):
+    def _strict_moveit_evaluation(self, grasp_pose, observation=False):
         """Run strict MoveIt without committing request-shared diagnostics."""
 
         try:
@@ -20715,7 +20715,8 @@ class RemoteGrasp6DNode:
             # check.  Configuration is validated earlier, but this hard-coded
             # endpoint prevents a partially constructed/test node from ever
             # turning candidate screening into a motion-capable service call.
-            service_name = '/supervisor/check_pose_strict'
+            service_name = ('/supervisor/check_observation_pose_strict' if observation
+                            else '/supervisor/check_pose_strict')
             try:
                 rospy.wait_for_service(service_name, timeout=0.25)
             except Exception as exc:

@@ -2828,6 +2828,11 @@ class GraspTaskNode:
         self.set_state(GraspStages.EMERGENCY_STOP if req.emergency else GraspStages.IDLE, 'stop requested')
         return StopGraspResponse(True, 'stop requested')
 
+    def _route_bound_pose_service(self, target, execute, contact_service, observation_service):
+        with self._grasp6d_plan_guard():
+            observation = _plan_phase(getattr(self, '_bound_execution_plan', None)) == _FAR_FIELD_OBSERVATION_PLAN
+        return (observation_service if observation else contact_service)(target, execute)
+
     def execute(self, grasp6d_plan=None):
         gcfg = rospy.get_param('/grasp', {})
         use_grasp6d_plan = bool(gcfg.get('use_grasp6d_plan', False))
@@ -2838,13 +2843,21 @@ class GraspTaskNode:
                 '/supervisor/plan_and_execute_pose_strict',
                 timeout=10,
             )
-            move_pose = rospy.ServiceProxy(
+            contact_check = rospy.ServiceProxy(
                 '/supervisor/check_pose_strict', SetTargetPose
             )
-            strict_execute_pose = rospy.ServiceProxy(
+            contact_execute = rospy.ServiceProxy(
                 '/supervisor/plan_and_execute_pose_strict',
                 SetTargetPose,
             )
+            rospy.wait_for_service('/supervisor/check_observation_pose_strict', timeout=10)
+            rospy.wait_for_service('/supervisor/plan_and_execute_observation_pose_strict', timeout=10)
+            observation_check = rospy.ServiceProxy('/supervisor/check_observation_pose_strict', SetTargetPose)
+            observation_execute = rospy.ServiceProxy('/supervisor/plan_and_execute_observation_pose_strict', SetTargetPose)
+            move_pose = lambda target, execute: self._route_bound_pose_service(
+                target, execute, contact_check, observation_check)
+            strict_execute_pose = lambda target, execute: self._route_bound_pose_service(
+                target, execute, contact_execute, observation_execute)
         else:
             rospy.wait_for_service('/supervisor/move_to_pose', timeout=10)
             move_pose = rospy.ServiceProxy('/supervisor/move_to_pose', SetTargetPose)
@@ -4139,15 +4152,20 @@ class GraspTaskNode:
                     'CLEAR_VIEW_REACQUISITION_FAILED',
                     'selected clear-view candidate could not be strictly replanned',
                 )
+            selected_metrics = self._clear_view_preflight_metrics(selected_response)
         checkpoint = getattr(self, '_execution_checkpoint', None)
         if self._cfg_bool(config, 'clear_view_observation_range_required', False):
             deadline = float(getattr(self, '_near_field_phase_deadline_sec', 0.0))
             motion_seconds = float(selected_metrics['joint_duration_lower_bound_sec'])
+            inference_reserve = self._cfg_float(
+                config, 'clear_view_reacquisition_inference_reserve_sec', 20.0)
             if (not math.isfinite(deadline)
-                    or _stamp_seconds(rospy.Time.now()) + motion_seconds + 0.9 >= deadline):
+                    or not math.isfinite(inference_reserve) or inference_reserve <= 0.0
+                    or _stamp_seconds(rospy.Time.now()) + motion_seconds + 0.9
+                    + inference_reserve >= deadline):
                 return PlanValidationResult(
                     False, 'NEAR_FIELD_DIRECT_TIMEOUT',
-                    'remaining near-field budget cannot cover observation motion and settling')
+                    'remaining near-field budget cannot cover observation motion, settling and fresh inference')
         if callable(checkpoint) and not checkpoint(
             current_plan,
             config,

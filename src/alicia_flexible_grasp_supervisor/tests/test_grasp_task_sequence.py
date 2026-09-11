@@ -62,6 +62,18 @@ class FakeTime:
 
 
 class GraspTaskSequenceTest(unittest.TestCase):
+    def test_bound_plan_routes_observation_and_contact_to_distinct_motion_profiles(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        contact, observation = mock.Mock(return_value='contact'), mock.Mock(return_value='observation')
+        node._bound_execution_plan = types.SimpleNamespace(diagnostic='FAR_FIELD_OBSERVATION_PLAN')
+        self.assertEqual(node._route_bound_pose_service('pose', True, contact, observation), 'observation')
+        node._bound_execution_plan = types.SimpleNamespace(diagnostic='CONTACT_EXECUTION_PLAN')
+        self.assertEqual(node._route_bound_pose_service('pose', True, contact, observation), 'contact')
+        node._bound_execution_plan = None
+        self.assertEqual(node._route_bound_pose_service('pose', False, contact, observation), 'contact')
+        self.assertEqual(observation.call_count, 1)
+        self.assertEqual(contact.call_count, 2)
+
     def test_track_binding_ignores_semantic_label_and_model_choice(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         plan = types.SimpleNamespace(
@@ -684,6 +696,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 self.assertEqual(result.ok, accepted, result.reason)
 
     def setUp(self):
+        patcher = mock.patch.object(grasp_task_node.rospy, 'get_param',
+                                    side_effect=lambda name, default=None: default)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self._mujoco_audit_directory = tempfile.TemporaryDirectory()
         self._mujoco_audit_sequence = 0
         self._mujoco_audit_path = os.path.join(
@@ -1614,7 +1630,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(node._clear_view_reacquisition_attempts, 1)
 
     def test_surface_observation_move_respects_camera_range_and_remaining_budget(self):
-        for case in ('valid', 'outer_edge', 'range', 'deadline'):
+        for case in ('valid', 'outer_edge', 'range', 'deadline', 'inference_budget', 'replan_over_budget'):
             with self.subTest(case=case):
                 node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
                 plan = self._rich_plan(stamp_sec=9.0)
@@ -1625,7 +1641,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 node._current_tool_pose_base = lambda: current
                 node._current_camera_pose_base = lambda: current
                 node._clear_view_reacquisition_attempts = 0
-                node._near_field_phase_deadline_sec = 11.0 if case == 'deadline' else 30.0
+                node._near_field_phase_deadline_sec = (11.0 if case == 'deadline' else
+                                                      15.0 if case == 'inference_budget' else 30.0)
                 node.set_state = lambda *args: None
                 node._execution_checkpoint = lambda *args: True
                 node._invoke_plan_bound_action = lambda plan, cfg, label, action: (
@@ -1637,15 +1654,17 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 def planner(pose, execute):
                     self.assertFalse(execute)
                     plans.append(pose)
+                    duration = 20.0 if case == 'replan_over_budget' and len(plans) == 3 else 2.0
                     return FakeServiceResponse(True,
-                        'joint_duration_lower_bound_sec=2.0 joint_path_cost=0.5 '
-                        'joint_max_delta=0.1')
+                        'joint_duration_lower_bound_sec=%.3f joint_path_cost=0.5 '
+                        'joint_max_delta=0.1' % duration)
 
                 def executor(pose, execute):
                     executed.append(pose)
                     return FakeServiceResponse(True)
 
                 cfg = {'clear_view_observation_range_required': True,
+                       'clear_view_reacquisition_inference_reserve_sec': 5.0,
                        'clear_view_reacquisition_camera_body_radius_m': 0.025,
                        'clear_view_reacquisition_lateral_offset_m': 0.040,
                        'clear_view_reacquisition_radial_retreat_m': 0.0,
@@ -5831,6 +5850,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         proxy_names = []
 
         def fake_service_proxy(name, _srv_type):
+            name = {
+                '/supervisor/check_observation_pose_strict': '/supervisor/check_pose_strict',
+                '/supervisor/plan_and_execute_observation_pose_strict': '/supervisor/plan_and_execute_pose_strict',
+            }.get(name, name)
             proxy_names.append(name)
             if name in (
                 '/supervisor/check_pose_strict',
@@ -5926,6 +5949,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
+            name = {
+                '/supervisor/check_observation_pose_strict': '/supervisor/check_pose_strict',
+                '/supervisor/plan_and_execute_observation_pose_strict': '/supervisor/plan_and_execute_pose_strict',
+            }.get(name, name)
             if name in (
                 '/supervisor/check_pose_strict',
                 '/supervisor/plan_and_execute_pose_strict',
@@ -6094,6 +6121,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 }
 
         def fake_service_proxy(name, _srv_type):
+            name = {
+                '/supervisor/check_observation_pose_strict': '/supervisor/check_pose_strict',
+                '/supervisor/plan_and_execute_observation_pose_strict': '/supervisor/plan_and_execute_pose_strict',
+            }.get(name, name)
             if name in (
                 '/supervisor/check_pose_strict',
                 '/supervisor/plan_and_execute_pose_strict',
@@ -6757,6 +6788,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node.set_state = lambda *args, **kwargs: states.append(args)
 
         def fake_service_proxy(name, _srv_type):
+            name = {
+                '/supervisor/check_observation_pose_strict': '/supervisor/check_pose_strict',
+                '/supervisor/plan_and_execute_observation_pose_strict': '/supervisor/plan_and_execute_pose_strict',
+            }.get(name, name)
             if name in (
                 '/supervisor/check_pose_strict',
                 '/supervisor/plan_and_execute_pose_strict',
@@ -7856,6 +7891,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
+            name = {
+                '/supervisor/check_observation_pose_strict': '/supervisor/check_pose_strict',
+                '/supervisor/plan_and_execute_observation_pose_strict': '/supervisor/plan_and_execute_pose_strict',
+            }.get(name, name)
             if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, bool(execute)))
@@ -7936,6 +7975,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
+            name = {
+                '/supervisor/check_observation_pose_strict': '/supervisor/check_pose_strict',
+                '/supervisor/plan_and_execute_observation_pose_strict': '/supervisor/plan_and_execute_pose_strict',
+            }.get(name, name)
             if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, bool(execute)))
@@ -7992,6 +8035,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
+            name = {
+                '/supervisor/check_observation_pose_strict': '/supervisor/check_pose_strict',
+                '/supervisor/plan_and_execute_observation_pose_strict': '/supervisor/plan_and_execute_pose_strict',
+            }.get(name, name)
             if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, bool(execute)))
@@ -8056,6 +8103,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         calls = []
 
         def fake_service_proxy(name, _srv_type):
+            name = {
+                '/supervisor/check_observation_pose_strict': '/supervisor/check_pose_strict',
+                '/supervisor/plan_and_execute_observation_pose_strict': '/supervisor/plan_and_execute_pose_strict',
+            }.get(name, name)
             if name in ('/supervisor/move_to_pose', '/supervisor/move_to_pose_linear'):
                 def move_pose(pose, execute):
                     calls.append(('move', pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, bool(execute)))

@@ -83,6 +83,12 @@ class MotionGateway:
         rospy.Service('/supervisor/move_to_pose', SetTargetPose, self.handle_pose)
         rospy.Service('/supervisor/move_to_pose_linear', SetTargetPose, self.handle_pose_linear)
         rospy.Service('/supervisor/check_pose_strict', SetTargetPose, self.handle_pose_strict)
+        rospy.Service('/supervisor/check_observation_pose_strict', SetTargetPose,
+                      self.handle_observation_pose_strict)
+        rospy.Service('/supervisor/execute_observation_pose_strict', SetTargetPose,
+                      self.handle_observation_pose_strict_execute)
+        rospy.Service('/supervisor/plan_and_execute_observation_pose_strict', SetTargetPose,
+                      self.handle_observation_pose_strict_plan_execute)
         rospy.Service(
             '/supervisor/check_pose_sequence_strict',
             CheckPoseSequence,
@@ -100,7 +106,8 @@ class MotionGateway:
             self.handle_pose_strict_plan_execute,
         )
         rospy.Service('/supervisor/cartesian_jog', CartesianJog, self.handle_jog)
-        rospy.Service('/supervisor/confirm_actuation_for_observation', SetTargetPose, self.handle_observation_actuation)
+        rospy.Service('/supervisor/confirm_actuation_for_observation', SetTargetPose,
+                      lambda req: self._with_observation_planner(req, self.handle_observation_actuation))
         rospy.Service('/supervisor/trigger_zero', TriggerZero, self.handle_zero)
         rospy.loginfo('MotionGateway ready: commands -> %s', cfg.get('joint_command_topic','/joint_commands'))
 
@@ -114,6 +121,43 @@ class MotionGateway:
             planner = getattr(self, 'planner', None)
             if planner is not None and getattr(planner, 'ready', False):
                 planner.manipulator.stop()
+
+    def _with_observation_planner(self, req, handler):
+        """Keep observation speed and cached paths separate from contact paths."""
+        if req.execute and self._manual_control_active():
+            return SetTargetPoseResponse(False, 'MANUAL_CONTROL_ACTIVE')
+        with self._planner_operation_lock():
+            original = self.planner
+            planner = getattr(self, '_observation_planner', None)
+            if planner is None or not planner.ready:
+                planner = MoveItPlanner(self.manipulator_group, self.gripper_group, self.velocity)
+                if not planner.ready:
+                    return SetTargetPoseResponse(False, planner.error or 'observation MoveIt unavailable')
+                limit = rospy.get_param('/robot/observation_max_joint_velocity_rad_s', 0.08)
+                if (isinstance(limit, bool) or not isinstance(limit, (int, float))
+                        or not math.isfinite(limit) or not 0.0 < limit <=
+                        planner.strict_execution_max_joint_velocity_rad_s):
+                    return SetTargetPoseResponse(False, 'invalid observation joint velocity limit')
+                planner.strict_execution_max_joint_velocity_rad_s = float(limit)
+                planner.strict_execution_joint_velocity_limits_rad_s = {}
+                self._observation_planner = planner
+            try:
+                self.planner = planner
+                result = handler(req)
+                result.message += ' speed_profile=observation joint_limit_rad_s=%.3f' % (
+                    planner.strict_execution_max_joint_velocity_rad_s)
+                return result
+            finally:
+                self.planner = original
+
+    def handle_observation_pose_strict(self, req):
+        return self._with_observation_planner(req, self.handle_pose_strict)
+
+    def handle_observation_pose_strict_execute(self, req):
+        return self._with_observation_planner(req, self.handle_pose_strict_execute)
+
+    def handle_observation_pose_strict_plan_execute(self, req):
+        return self._with_observation_planner(req, self.handle_pose_strict_plan_execute)
 
     def _manual_control_active(self):
         return (getattr(self, '_gui_direct_mode', False) or

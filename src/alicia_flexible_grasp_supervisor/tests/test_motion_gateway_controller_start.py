@@ -97,6 +97,13 @@ class FakeJogger:
 
 
 class MotionGatewayControllerStartTest(unittest.TestCase):
+    def setUp(self):
+        # Unit cases must not depend on the live operator's control checkbox.
+        patcher = mock.patch.object(motion_gateway_node.rospy, 'get_param',
+                                    side_effect=lambda name, default=None: default)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def make_gateway(
         self,
         controller_result=(True, 'controllers started'),
@@ -145,6 +152,52 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
             hold_after_failure
         )
         return gateway
+
+    def test_observation_profile_has_separate_cache_and_restores_contact_planner(self):
+        gateway = self.make_gateway()
+        contact = gateway.planner
+        observation = FakePlanner()
+        observation.ready = True
+        observation.strict_execution_max_joint_velocity_rad_s = 0.08
+        gateway._observation_planner = observation
+        req = types.SimpleNamespace(target='observation', execute=False)
+        result = gateway.handle_observation_pose_strict(req)
+        self.assertTrue(result.success)
+        self.assertIn('speed_profile=observation', result.message)
+        self.assertEqual(observation.calls, [('observation', False, False)])
+        self.assertEqual(contact.calls, [])
+        self.assertIs(gateway.planner, contact)
+        gateway.handle_pose_strict(req)
+        self.assertEqual(contact.calls, [('observation', False, False)])
+        with self.assertRaisesRegex(RuntimeError, 'test error'):
+            gateway._with_observation_planner(req, mock.Mock(side_effect=RuntimeError('test error')))
+        self.assertIs(gateway.planner, contact)
+
+    def test_observation_profile_initialization_preserves_contact_limits(self):
+        gateway = self.make_gateway()
+        contact = gateway.planner
+        contact.strict_execution_joint_velocity_limits_rad_s = {'Joint6': 0.02}
+        gateway.manipulator_group, gateway.gripper_group, gateway.velocity = 'alicia', 'hand', 0.3
+        observation = FakePlanner()
+        observation.ready = True
+        observation.strict_execution_max_joint_velocity_rad_s = 0.08
+        observation.strict_execution_joint_velocity_limits_rad_s = {'Joint6': 0.02}
+        with mock.patch.object(motion_gateway_node, 'MoveItPlanner', return_value=observation):
+            result = gateway.handle_observation_pose_strict(types.SimpleNamespace(target='pose', execute=False))
+        self.assertTrue(result.success)
+        self.assertEqual(observation.strict_execution_joint_velocity_limits_rad_s, {})
+        self.assertEqual(contact.strict_execution_joint_velocity_limits_rad_s, {'Joint6': 0.02})
+
+    def test_observation_execution_never_initializes_when_manual_control_owns_arm(self):
+        gateway = self.make_gateway()
+        gateway._gui_direct_mode = True
+        with mock.patch.object(motion_gateway_node, 'MoveItPlanner') as constructor:
+            for handler in (gateway.handle_observation_pose_strict_execute,
+                            gateway.handle_observation_pose_strict_plan_execute):
+                result = handler(types.SimpleNamespace(target='pose', execute=True))
+                self.assertFalse(result.success)
+                self.assertIn('MANUAL_CONTROL_ACTIVE', result.message)
+            constructor.assert_not_called()
 
     def test_execute_pose_starts_trajectory_controllers_before_moveit(self):
         gateway = self.make_gateway()

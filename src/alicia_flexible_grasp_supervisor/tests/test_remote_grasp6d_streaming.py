@@ -85,6 +85,28 @@ class MutableClock:
         return self.value
 
 
+@pytest.mark.parametrize('observation, endpoint', [
+    (False, '/supervisor/check_pose_strict'),
+    (True, '/supervisor/check_observation_pose_strict'),
+])
+def test_strict_screening_uses_read_only_service_for_the_selected_speed_profile(
+        monkeypatch, observation, endpoint):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    calls = []
+    monkeypatch.setattr(remote_node.rospy, 'wait_for_service',
+                        lambda name, timeout: calls.append(('wait', name)))
+    def proxy(name, service_type):
+        calls.append(('proxy', name))
+        def call(target, execute):
+            calls.append(('execute', execute))
+            return types.SimpleNamespace(success=True, message='planned joint_path_cost=0.2 joint_max_delta=0.1')
+        return call
+    monkeypatch.setattr(remote_node.rospy, 'ServiceProxy', proxy)
+    result, _, _ = node._strict_moveit_evaluation(object(), observation=observation)
+    assert result.reachable
+    assert calls == [('wait', endpoint), ('proxy', endpoint), ('execute', False)]
+
+
 class RecordingPublisher:
     def __init__(self):
         self.messages = []
@@ -5330,7 +5352,7 @@ def test_far_field_moveit_checks_only_observation_pose():
         }
         checked = []
 
-        def strict_checker(pose):
+        def strict_checker(pose, observation=False):
             checked.append(pose)
             return (
                 MoveItResult(
@@ -5417,7 +5439,7 @@ def test_far_field_moveit_tries_safe_rolls_and_binds_reachable_branch():
         node._stable_variant_runtime = {(3, 1): runtime}
         checked = []
 
-        def strict_checker(pose):
+        def strict_checker(pose, observation=False):
             checked.append(pose)
             reachable = pose is second_pose
             return (
@@ -5508,7 +5530,7 @@ def test_far_field_moveit_selects_reachable_roll_with_least_joint_motion():
         node._stable_variant_runtime = {(3, 1): runtime}
         checked = []
 
-        def strict_checker(pose):
+        def strict_checker(pose, observation=False):
             checked.append(pose)
             if pose is first_pose:
                 path_cost, max_delta = 2.5, 1.74
@@ -5596,7 +5618,7 @@ def test_far_field_moveit_prefers_hardware_limited_duration_over_max_delta():
         }
         node._stable_variant_runtime = {(3, 1): runtime}
 
-        def strict_checker(pose):
+        def strict_checker(pose, observation=False):
             if pose is slow_pose:
                 path_cost, max_delta, duration, joint = 0.6, 0.42, 70.0, 'Joint6'
             else:
@@ -6415,7 +6437,7 @@ def test_top_n_uses_node_strict_moveit_checker_for_only_three_candidates():
         node._stable_variant_runtime = runtime
         calls = []
 
-        def strict_checker(pose):
+        def strict_checker(pose, observation=False):
             calls.append(pose)
             return (
                 MoveItResult(
