@@ -7416,6 +7416,67 @@ def test_direct_near_field_empty_current_request_has_exact_status(
     )
 
 
+@pytest.mark.parametrize('override, registration_ok, stamp_matches, expected', [
+    ({}, True, True, True),
+    ({}, False, True, False),
+    ({}, True, False, False),
+    ({'failure_code': 'GRIPPER_SWEEP_COLLISION'}, True, True, False),
+    ({'plan_phase': 'FAR_FIELD_OBSERVATION_PLAN'}, True, True, False),
+    ({'contact_execution_gate_deferred': True}, True, True, False),
+    ({'required_contact_patch_overlap_m': float('nan')}, True, True, False),
+    ({'required_contact_patch_overlap_m': 0.0}, True, True, False),
+    ({'contact_boundary_profiles': []}, True, True, False),
+    ({'contact_boundary_profiles': [None]}, True, True, False),
+    ({'contact_boundary_profiles': [{
+        'contact_height_bounds_source': 'contact_gate_deferred',
+        'contact_height_bounds_m': [0.007, 0.008],
+    }]}, True, True, False),
+    ({'contact_boundary_profiles': [{
+        'contact_height_bounds_source': 'fused_measured_bilateral_surface',
+        'contact_height_bounds_m': [0.007, float('nan')],
+    }]}, True, True, False),
+    ({'contact_boundary_profiles': [{
+        'contact_height_bounds_source': 'fused_measured_bilateral_surface',
+        'contact_height_bounds_m': [0.008, 0.007],
+    }]}, True, True, False),
+    # Sufficient measured height with a CAD overlap miss must stay rejected.
+    ({'contact_boundary_profiles': [{
+        'contact_height_bounds_source': 'fused_measured_bilateral_surface',
+        'contact_height_bounds_m': [0.0, 0.002],
+    }]}, True, True, False),
+])
+def test_near_field_thin_measured_contact_requests_registered_view_only(
+        override, registration_ok, stamp_matches, expected):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    prepared = prepared_prediction(1)
+    prepared.snapshot.stamp_ns = 20_010_000_000
+    tabletop = {
+        'failure_code': 'GRIPPER_CONTACT_PATCH_MISS',
+        'plan_phase': 'CONTACT_EXECUTION_PLAN',
+        'contact_execution_gate_deferred': False,
+        'required_contact_patch_overlap_m': 0.002,
+        # The four measured bands from live request 1443 (2026-09-11).
+        'contact_boundary_profiles': [{
+            'contact_height_bounds_source': 'fused_measured_bilateral_surface',
+            'contact_height_bounds_m': bounds,
+        } for bounds in (
+            (0.007307897158853244, 0.008691092495736746),
+            (0.007495090729842165, 0.008630701396270722),
+            (0.007325862638258378, 0.00859770500213308),
+            (0.007355650769188144, 0.008675922124593715),
+        )],
+    }
+    tabletop.update(override)
+    prepared.remote_diagnostics = {'tabletop_geometry': tabletop}
+    node._latest_registration_evidence = remote_node.RegistrationEvidence(
+        identity=prepared.snapshot.target_identity,
+        stamp_ns=prepared.snapshot.stamp_ns + (0 if stamp_matches else 1),
+        result=types.SimpleNamespace(ok=registration_ok), source_clipped=False,
+    )
+
+    assert node._near_field_surface_view_required(prepared) is expected
+
+
 def test_direct_near_field_deadline_uses_phase_contract_not_snapshot():
     node = remote_node.RemoteGrasp6DNode.__new__(
         remote_node.RemoteGrasp6DNode

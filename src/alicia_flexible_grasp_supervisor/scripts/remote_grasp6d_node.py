@@ -10013,10 +10013,41 @@ class RemoteGrasp6DNode:
             publisher.publish(String(rich.diagnostic))
 
     def _near_field_surface_view_required(self, prepared):
-        """Distinguish missing measured contact from a failed registration."""
+        """Request one registered view when measured contact is insufficient."""
         diagnostics = dict(getattr(prepared, 'remote_diagnostics', {}) or {})
         tabletop = dict(diagnostics.get('tabletop_geometry', {}) or {})
-        if tabletop.get('failure_code') != 'BILATERAL_SURFACE_EVIDENCE_MISSING':
+        failure = tabletop.get('failure_code')
+        missing_surface = failure == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+        if failure == 'GRIPPER_CONTACT_PATCH_MISS':
+            # A thin measured band is also incomplete observation evidence.
+            # Only classify it here when every reach-feasible proposal has
+            # less measured support-height extent than the existing contact
+            # requirement. A CAD overlap miss with sufficient measured height
+            # remains a physical failure, not a reason to retry contact.
+            try:
+                required = float(tabletop['required_contact_patch_overlap_m'])
+                profiles = tabletop['contact_boundary_profiles']
+                missing_surface = bool(
+                    tabletop.get('plan_phase') == 'CONTACT_EXECUTION_PLAN'
+                    and tabletop.get('contact_execution_gate_deferred') is False
+                    and math.isfinite(required) and required > 0.0
+                    and profiles
+                    and all(
+                        profile.get('contact_height_bounds_source')
+                        == 'fused_measured_bilateral_surface'
+                        and len(profile['contact_height_bounds_m']) == 2
+                        and all(math.isfinite(float(value)) for value in
+                                profile['contact_height_bounds_m'])
+                        and 0.0 < (
+                            float(profile['contact_height_bounds_m'][1])
+                            - float(profile['contact_height_bounds_m'][0])
+                        ) < required
+                        for profile in profiles
+                    )
+                )
+            except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
+                missing_surface = False
+        if not missing_surface:
             return False
         snapshot = getattr(prepared, 'snapshot', None)
         with self._geometry_state_guard():
