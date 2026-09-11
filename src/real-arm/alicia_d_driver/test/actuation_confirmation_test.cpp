@@ -357,6 +357,47 @@ TEST(ActuationConfirmationTest, RepeatedKeepaliveDoesNotResetProbeDeadline)
     );
 }
 
+TEST(ActuationConfirmationTest, TimedOutProbeCannotRearmFromRetainedTargets)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.0, 0.025), 10.3);
+    confirmation.update(11.31);
+
+    // The September 11 slider probe kept streaming after its timeout. That
+    // keepalive must not hide the failure from the GUI's next explicit action.
+    for (int step = 0; step <= 30; ++step) {
+        const double stamp = 11.4 + 0.1 * step;
+        confirmation.note_feedback(joints(), stamp);
+        confirmation.note_streamed_target(joints(0.0, 0.025), stamp);
+        confirmation.update(stamp);
+        EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT");
+    }
+    // Late movement alone cannot authorize a discarded full slider target.
+    confirmation.note_feedback(joints(0.0, 0.006), 14.5);
+    EXPECT_FALSE(confirmation.motion_confirmed(14.5));
+}
+
+TEST(ActuationConfirmationTest, NewPositiveEnableCanRecoverTimedOutProbe)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.0, 0.025), 10.3);
+    confirmation.update(11.31);
+
+    confirmation.reset_for_positive_enable(12.0);
+    EXPECT_FALSE(confirmation.admit_command(joints(), 12.01, nullptr));
+    confirmation.note_feedback(joints(), 12.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 12.2, nullptr));
+    confirmation.note_streamed_target(joints(0.0, 0.025), 12.3);
+    confirmation.note_feedback(joints(0.0, 0.006), 12.4);
+    EXPECT_TRUE(confirmation.motion_confirmed(12.4));
+}
+
 TEST(ActuationConfirmationTest, FreshFeedbackKeepsConfirmationAlive)
 {
     ActuationConfirmation confirmation(test_config());
@@ -401,7 +442,8 @@ TEST(ActuationConfirmationTest, ConfirmedStreamLosesResponseDespiteFreshFeedback
             EXPECT_FALSE(confirmation.can_preserve_positive_enable(true, true, stamp + 0.02));
             EXPECT_TRUE(confirmation.synchronized());
             response_lost = true;
-            break;
+        } else {
+            EXPECT_FALSE(response_lost) << "An old stream cannot restore a failed confirmation";
         }
     }
     EXPECT_TRUE(response_lost);

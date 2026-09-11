@@ -216,12 +216,14 @@ public:
         double stamp_sec
     )
     {
+        // An SDK keepalive can outlive the GUI/task request that timed out.
+        // Keep failure evidence stable until an explicit positive-enable
+        // handshake resets it; streaming an old target is not a new request.
         if (
             !synchronized_ ||
             !has_feedback_ ||
             probe_active_ ||
             (state_ != ActuationState::PENDING &&
-             state_ != ActuationState::UNCONFIRMED &&
              state_ != ActuationState::CONFIRMED) ||
             !valid_joints(target) ||
             latest_feedback_.size() != target.size() ||
