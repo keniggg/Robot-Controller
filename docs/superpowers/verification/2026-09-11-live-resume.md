@@ -126,3 +126,23 @@ ACTUATION_UNCONFIRMED: PENDING:POSITIVE_ENABLE_REQUESTED，runner退出6。
 偏离命令的破损反馈、其他关节不一致、无效数据及重复使能的新鲜性判断。
 Python串口集成约束28项通过，验证启动/重连不会走保留路径，
 git diff --check通过。软件测试不代表本轮已实现实机抓取。
+
+## 00:39部署驱动f9f7c7c及剩余阻塞
+
+确认/grasp/state为IDLE、active=false后，退出旧驱动PID9495。
+析构仅关闭串口，不发送torque_off；控制器、相机、GUI和任务节点继续运行。
+00:39:09独立用户服务`alicia-driver-repaired-20260911.service`从同一工作树
+启动已编译驱动，继承原节点参数，auto_torque_on_startup=true，
+ALICIA_CODE_REV=f9f7c7c。首次部署脚本因ROS节点地址接口返回类型不匹配
+在变更任何进程之前退出；修正lookupNode接口后部署成功。
+
+stdout为根目录`.ros_log/driver_repaired_20260911.log`，节点日志路径为
+本轮UUID目录下`driver_repaired.log`。00:39:56至00:40:11的20秒只读订阅
+看到关节时间戳持续更新、位置基本不变，目标检测置信度0.895–0.899；
+任务仍IDLE，actuation_status=PENDING:POSITIVE_ENABLE_REQUESTED。
+驱动、完整ROS、GUI、task、remote及反馈录制六个用户服务均active。
+
+新驱动重启后必须重新取得实际命令对应的编码器响应；不从先前日志回填
+确认，也不把静止反馈当成电机已响应。因此尚不能开始本轮6D运动。
+需要操作者在GUI小幅调节后重新对准，再以新鲜绑定计划继续；不会复用
+已过期的36f3f33dfb87551df01a4ad2。到此没有物理抓取成功证据。
