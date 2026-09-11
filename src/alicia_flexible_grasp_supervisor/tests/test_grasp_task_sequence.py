@@ -1614,12 +1614,13 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(node._clear_view_reacquisition_attempts, 1)
 
     def test_surface_observation_move_respects_camera_range_and_remaining_budget(self):
-        for case in ('valid', 'range', 'deadline'):
+        for case in ('valid', 'outer_edge', 'range', 'deadline'):
             with self.subTest(case=case):
                 node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
                 plan = self._rich_plan(stamp_sec=9.0)
                 center = node._plan_geometry_center_xyz(plan)
-                distance = 0.219 if case == 'range' else 0.200
+                distance = (0.230 if case == 'range' else
+                            0.219 if case == 'outer_edge' else 0.200)
                 current = self._pose(center[0], center[1], center[2] + distance)
                 node._current_tool_pose_base = lambda: current
                 node._current_camera_pose_base = lambda: current
@@ -1653,7 +1654,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
                                        return_value=grasp_task_node.rospy.Time.from_sec(10.0)):
                     result = node._execute_clear_view_reacquisition(
                         plan, cfg, planner, executor)
-                if case == 'valid':
+                if case in ('valid', 'outer_edge'):
                     self.assertTrue(result.ok, result.reason)
                     self.assertEqual(len(executed), 1)
                     for pose in plans:
@@ -1661,6 +1662,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
                         radius = math.sqrt(sum((p[i] - center[i]) ** 2 for i in range(3)))
                         self.assertGreaterEqual(radius, 0.180)
                         self.assertLessEqual(radius, 0.215)
+                        self.assertAlmostEqual(radius, min(distance, 0.215), places=10)
                 else:
                     self.assertFalse(result.ok)
                     self.assertEqual(executed, [])

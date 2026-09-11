@@ -7444,6 +7444,13 @@ def test_direct_near_field_empty_current_request_has_exact_status(
         'contact_height_bounds_source': 'fused_measured_bilateral_surface',
         'contact_height_bounds_m': [0.0, 0.002],
     }]}, True, True, False),
+    # A physical failure on one direction does not eliminate the independent
+    # observation opportunity on another reach-feasible jaw direction.
+    ({'contact_boundary_profiles': [{
+        'contact_height_bounds_source': 'fused_measured_bilateral_surface',
+        'contact_height_bounds_m': bounds,
+    } for bounds in ([0.006195, 0.008368], [0.006658, 0.008487])]},
+     True, True, True),
 ])
 def test_near_field_thin_measured_contact_requests_registered_view_only(
         override, registration_ok, stamp_matches, expected):

@@ -1175,6 +1175,7 @@ def make_clear_view_reacquisition_poses(
     envelope_radius_m=0.025,
     opening_width_m=None,
     gripper_geometry=None,
+    camera_distance_band_m=None,
 ):
     """Build two symmetric, no-contact observation poses.
 
@@ -1329,8 +1330,23 @@ def make_clear_view_reacquisition_poses(
         tangent_raw = _cross3(support, fallback_axis)
     tangent = _normalize_vector3(tangent_raw, 'support-plane tangent')
 
+    radial_distance = radial_norm + radial_retreat
+    if camera_distance_band_m is not None:
+        # Near-field observation already sits in the 18-22 cm band. A pure
+        # lateral translation would leave that band at its outer edge. Orbit
+        # the frozen target instead, preserving the measured camera mount and
+        # applying the same physical envelope checks below.
+        lower, upper = tuple(float(value) for value in camera_distance_band_m)
+        if (not use_measured_camera or not math.isfinite(lower)
+                or not math.isfinite(upper) or lower <= effective_clearance
+                or upper < lower or radial_retreat != 0.0):
+            raise ValueError('invalid camera distance band for observation orbit')
+        distance = max(lower, min(upper, radial_norm))
+        if lateral >= distance:
+            raise ValueError('observation lateral offset exceeds camera distance')
+        radial_distance = math.sqrt(distance ** 2 - lateral ** 2)
     midpoint = tuple(
-        current_camera_xyz[index] + radial[index] * radial_retreat
+        target_xyz[index] + radial[index] * radial_distance
         for index in range(3)
     )
     if use_measured_camera:
@@ -3970,17 +3986,23 @@ class GraspTaskNode:
         try:
             lateral_offset = self._cfg_float(
                 config, 'clear_view_reacquisition_lateral_offset_m', 0.060)
+            camera_distance_band = None
             if self._cfg_bool(config, 'clear_view_observation_range_required', False):
                 camera_xyz = self._pose_position_xyz(current_camera_pose)
                 radius_squared = sum((camera_xyz[i] - target_center[i]) ** 2
                                      for i in range(3))
                 maximum = self._cfg_float(
                     config, 'observation_camera_target_max_distance_m', 0.220)
-                # Reserve 5 mm for measured endpoint error, before planning.
-                available_squared = (maximum - 0.005) ** 2 - radius_squared
-                if not math.isfinite(available_squared) or available_squared <= 0.0:
-                    raise ValueError('no lateral observation room inside camera range')
-                lateral_offset = min(lateral_offset, math.sqrt(available_squared))
+                minimum = self._cfg_float(
+                    config, 'observation_camera_target_min_distance_m', 0.180)
+                if (not all(math.isfinite(value) for value in
+                            (minimum, maximum, radius_squared))
+                        or minimum <= 0.0 or maximum - minimum <= 0.010
+                        or not minimum ** 2 <= radius_squared <= maximum ** 2):
+                    raise ValueError('current camera is outside observation range')
+                # Reserve the same 5 mm endpoint margin, including when the
+                # measured start is near the maximum observation distance.
+                camera_distance_band = (minimum + 0.005, maximum - 0.005)
             candidates = make_clear_view_reacquisition_poses(
                 current_pose,
                 target_center,
@@ -4004,6 +4026,7 @@ class GraspTaskNode:
                 envelope_radius_m=envelope_radius,
                 opening_width_m=opening,
                 gripper_geometry=runtime_gripper,
+                camera_distance_band_m=camera_distance_band,
             )
         except Exception as exc:
             return PlanValidationResult(

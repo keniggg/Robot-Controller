@@ -10020,7 +10020,7 @@ class RemoteGrasp6DNode:
         missing_surface = failure == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
         if failure == 'GRIPPER_CONTACT_PATCH_MISS':
             # A thin measured band is also incomplete observation evidence.
-            # Only classify it here when every reach-feasible proposal has
+            # Only classify it here when a reach-feasible proposal has
             # less measured support-height extent than the existing contact
             # requirement. A CAD overlap miss with sufficient measured height
             # remains a physical failure, not a reason to retry contact.
@@ -10032,7 +10032,7 @@ class RemoteGrasp6DNode:
                     and tabletop.get('contact_execution_gate_deferred') is False
                     and math.isfinite(required) and required > 0.0
                     and profiles
-                    and all(
+                    and any(
                         profile.get('contact_height_bounds_source')
                         == 'fused_measured_bilateral_surface'
                         and len(profile['contact_height_bounds_m']) == 2
