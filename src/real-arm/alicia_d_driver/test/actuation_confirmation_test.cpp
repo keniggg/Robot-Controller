@@ -129,6 +129,24 @@ TEST(ActuationConfirmationTest, RequiresFreshFeedbackAndNearFeedbackSync)
     EXPECT_TRUE(reason.empty());
 }
 
+TEST(GuiControlOwnershipTest, September11RestartBridgeCannotSupplyMeasuredHold)
+{
+    const auto measured = joints(-1.5201749607946704, -0.17640779060684875,
+        0.18100973297050565, -1.3054176504906807, 0.2423689644859313,
+        -0.2316310989707318);
+    const auto old_bridge = joints(-1.5199479757853986, -0.19938344973840005,
+        0.2000837867708086, -1.2868773658785526, 0.24417114956652705,
+        -0.2501198781127774);
+    // The reconnect allowance alone admits this 0.023 rad bridge sample;
+    // automatic ownership must first require a near-zero-motion hold.
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(measured, 10.1);
+    ASSERT_TRUE(confirmation.admit_command(old_bridge, 10.2, nullptr));
+    EXPECT_FALSE(controller_handoff_matches_feedback(old_bridge, measured, true));
+    EXPECT_TRUE(controller_handoff_matches_feedback(measured, measured, true));
+}
+
 TEST(ActuationConfirmationTest, DirectionalEncoderResponseConfirmsActuation)
 {
     ActuationConfirmation confirmation(test_config());

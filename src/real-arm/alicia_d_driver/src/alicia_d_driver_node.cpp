@@ -1327,7 +1327,18 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
     }
 
     std::string actuation_rejection;
-    if (control_mode_needs_sync_) {
+    bool automatic_command_needs_sync = control_mode_needs_sync_;
+    if (!gui_control_mode_) {
+        std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
+        // A driver restart/positive-enable reset leaves ros_control running
+        // with its previous desired vector. Its first bridge sample can be
+        // inside the broad reconnect tolerance yet large enough to start an
+        // unintended response probe. Require the same measured hold as a
+        // manual-to-automatic handoff before admitting that controller again.
+        automatic_command_needs_sync = automatic_command_needs_sync ||
+            !actuation_confirmation_.synchronized();
+    }
+    if (automatic_command_needs_sync) {
         // Automatic commands do not enter the GUI feedback snapshot branches.
         // Read the live encoder state here, where the handoff needs it.
         bool feedback_is_fresh = false;
@@ -1342,7 +1353,7 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         }
         if (!controller_handoff_matches_feedback(
                 joint_angles, feedback_joint_angles, feedback_is_fresh)) {
-            ROS_WARN_THROTTLE(1.0, "CONTROL_MODE_SYNC_REQUIRED: controller target must match fresh six-joint feedback after manual release");
+            ROS_WARN_THROTTLE(1.0, "CONTROL_MODE_SYNC_REQUIRED: controller target must match fresh six-joint feedback after ownership or actuation reset");
             return;
         }
         control_mode_needs_sync_ = false;
