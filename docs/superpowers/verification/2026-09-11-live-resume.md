@@ -78,3 +78,18 @@ confidence=0；label=carton来自perception_node发布前预填的object_label�
 同次当前RGB画面朝向地面/椅子和大型开口纸箱，并未对准此前的小纸盒。
 图像戳1789111342287551641ns，保存在
 `.ros_log/alignment_20260911/current_camera.jpg`。未触发抓取。
+
+## 00:24加载已提交修复
+
+代码提交063bbbd后，读取任务IDLE、active=false，仅退出原full_system中
+无respawn的grasp_task_node和remote_grasp6d_node，未重启驱动或控制器。
+独立用户服务`alicia-grasp-task-20260911.service`及
+`alicia-remote-grasp6d-20260911.service`从同一工作目录source ROS/devel后
+分别rosrun对应脚本，环境ALICIA_CODE_REV=063bbbd，ROS_MASTER_URI为
+http://localhost:11311，ROS_LOG_DIR为根目录`.ros_log`。
+
+stdout分别为`.ros_log/grasp_task_repaired_20260911.log`和
+`.ros_log/remote_grasp6d_repaired_20260911.log`；节点日志在本轮UUID目录下
+`grasp_task_repaired.log`、`remote_grasp6d_repaired.log`。
+00:25五个用户服务均active，remote确认WSL online。后台录制已增长至15MB。
+仍未收到本轮对准确认、未执行抓取，等待操作者手动对准。
