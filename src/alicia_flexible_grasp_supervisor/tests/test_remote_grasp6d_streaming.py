@@ -7506,6 +7506,41 @@ def test_near_field_thin_measured_contact_requests_registered_view_only(
     assert node._near_field_surface_view_required(prepared) is expected
 
 
+@pytest.mark.parametrize('row_override, registration_ok, expected', [
+    ({}, True, True),
+    ({}, False, False),
+    ({'negative_reach_m': 0.0261}, True, False),
+    ({'positive_reach_m': 0.0261}, True, False),
+    ({'maximum_side_reach_m': 0.030}, True, False),
+    ({'negative_reach_m': float('nan')}, True, False),
+    ({'failure_code': 'GRIPPER_SWEEP_COLLISION'}, True, False),
+])
+def test_collision_on_other_jaw_directions_keeps_missing_surface_view(
+        row_override, registration_ok, expected):
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    prepared = prepared_prediction(1)
+    prepared.snapshot.stamp_ns = 20_010_000_000
+    row = {
+        'failure_code': 'BILATERAL_SURFACE_EVIDENCE_MISSING',
+        'negative_reach_m': 0.020,
+        'positive_reach_m': 0.021,
+        'maximum_side_reach_m': 0.025,
+    }
+    row.update(row_override)
+    prepared.remote_diagnostics = {'tabletop_geometry': {
+        'failure_code': 'GRIPPER_SWEEP_COLLISION',
+        'plan_phase': 'CONTACT_EXECUTION_PLAN',
+        'contact_execution_gate_deferred': False,
+        'surface_evidence_rejections': [row],
+    }}
+    node._latest_registration_evidence = remote_node.RegistrationEvidence(
+        identity=prepared.snapshot.target_identity,
+        stamp_ns=prepared.snapshot.stamp_ns,
+        result=types.SimpleNamespace(ok=registration_ok), source_clipped=False,
+    )
+    assert node._near_field_surface_view_required(prepared) is expected
+
+
 def test_direct_near_field_deadline_uses_phase_contract_not_snapshot():
     node = remote_node.RemoteGrasp6DNode.__new__(
         remote_node.RemoteGrasp6DNode

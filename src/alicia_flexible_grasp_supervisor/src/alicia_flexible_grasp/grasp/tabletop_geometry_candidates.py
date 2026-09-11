@@ -14,6 +14,7 @@ from .gripper_geometry import (
     ANALYTICAL_PALM_CENTER_TOOL_XYZ_M,
     BilateralSurfaceEvidence,
     GripperGeometry,
+    _obb_line_interval,
     bilateral_surface_contact_bounds_m,
     bilateral_contact_height_bounds_m,
     evaluate_bilateral_surface_evidence,
@@ -129,6 +130,7 @@ class TabletopGenerationResult:
     failure_code: str
     failure_reason: str
     sampled_angles_deg: tuple
+    surface_evidence_rejections: tuple = ()
 
     def __post_init__(self):
         object.__setattr__(self, 'proposals', tuple(self.proposals))
@@ -158,7 +160,7 @@ def generate_tabletop_proposals(
         points = _finite_points(object_points_base, checked_config)
         center = _finite_vector(obb_center_base, 'obb_center_base')
         rotation = _validated_rotation(R_base_obb)
-        _positive_vector(obb_size_xyz_m, 'obb_size_xyz_m')
+        obb_size = _positive_vector(obb_size_xyz_m, 'obb_size_xyz_m')
         support_point = _finite_vector(support_point_base, 'support_point_base')
         normal = _unit_vector(support_normal_base, 'support_normal_base')
         if (fused_surface is None) != (finger_geometry is None):
@@ -191,6 +193,7 @@ def generate_tabletop_proposals(
     width_valid_count = 0
     contact_valid_count = 0
     bilateral_evidence_attempted = fused_surface is not None
+    surface_evidence_rejections = []
     contact_center = center
     for angle_deg, jaw_axis in angles:
         projection = points.dot(jaw_axis)
@@ -236,6 +239,28 @@ def generate_tabletop_proposals(
                         support_normal_base=normal,
                     )
                 )
+            if not evidence.ok or measured_insertion_bounds is None:
+                # Retain observation opportunities even when other measured
+                # directions later fail physical materialization. OBB reach
+                # only authorizes requesting a view, never a contact proposal.
+                interval = _obb_line_interval(
+                    contact_center, jaw_axis, center, rotation, obb_size)
+                maximum_reach = 0.5 * min(
+                    checked_config.max_inner_gap_m,
+                    finger_geometry.max_inner_gap_m,
+                    ANALYTICAL_MAX_INNER_GAP_M)
+                if interval is not None and interval[0] < 0.0 < interval[1]:
+                    clearance = checked_config.opening_fit_clearance_each_side_m
+                    negative_reach = -float(interval[0]) + clearance
+                    positive_reach = float(interval[1]) + clearance
+                    if max(negative_reach, positive_reach) <= maximum_reach:
+                        surface_evidence_rejections.append({
+                            'angle_deg': float(angle_deg),
+                            'failure_code': 'BILATERAL_SURFACE_EVIDENCE_MISSING',
+                            'negative_reach_m': negative_reach,
+                            'positive_reach_m': positive_reach,
+                            'maximum_side_reach_m': maximum_reach,
+                        })
             required = (
                 float(evidence.measured_width_m)
                 + 2.0 * checked_config.opening_fit_clearance_each_side_m
@@ -334,13 +359,15 @@ def generate_tabletop_proposals(
     )
     sampled_angles = tuple(item[0] for item in angles)
     if bounded:
-        return TabletopGenerationResult(bounded, '', '', sampled_angles)
+        return TabletopGenerationResult(
+            bounded, '', '', sampled_angles, tuple(surface_evidence_rejections))
     if width_valid_count == 0:
         return TabletopGenerationResult(
             (),
             'NO_FIT_DIRECTION',
             'no sampled jaw direction fits the 50 mm gripper',
             sampled_angles,
+            tuple(surface_evidence_rejections),
         )
     assert contact_valid_count == 0
     if bilateral_evidence_attempted:
@@ -349,6 +376,7 @@ def generate_tabletop_proposals(
             'BILATERAL_SURFACE_EVIDENCE_MISSING',
             'no aperture-valid jaw direction has measured bilateral surface evidence',
             sampled_angles,
+            tuple(surface_evidence_rejections),
         )
     return TabletopGenerationResult(
         (),

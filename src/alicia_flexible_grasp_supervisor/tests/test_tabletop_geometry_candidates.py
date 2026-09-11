@@ -119,6 +119,21 @@ def test_top_only_fused_surface_cannot_gain_contact_from_complete_obb():
 
     assert not result.ok
     assert result.failure_code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+    assert result.surface_evidence_rejections
+    for row in result.surface_evidence_rejections:
+        assert 0.0 < row['negative_reach_m'] <= row['maximum_side_reach_m'] <= 0.025
+        assert 0.0 < row['positive_reach_m'] <= row['maximum_side_reach_m']
+
+
+def test_missing_surface_does_not_request_view_for_an_oversize_obb():
+    result = carton_result(
+        fused_surface=measured_fused_surface(two_sides=False),
+        finger_geometry=GRIPPER,
+        obb_center_base=np.array([0.0, 0.0, 0.0105]),
+        obb_size_xyz_m=np.array([0.070, 0.065, 0.021]),
+    )
+    assert not result.ok
+    assert not result.surface_evidence_rejections
 
 
 def test_registered_opposing_views_supply_proposal_width_height_and_provenance():

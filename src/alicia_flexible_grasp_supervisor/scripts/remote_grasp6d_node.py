@@ -7817,6 +7817,8 @@ class RemoteGrasp6DNode:
             'failure_code': str(generation.failure_code or ''),
             'failure_reason': str(generation.failure_reason or ''),
             'sampled_angles_deg': tuple(generation.sampled_angles_deg),
+            'surface_evidence_rejections': tuple(
+                dict(row) for row in generation.surface_evidence_rejections),
             'adaptive_stage_profiles': (),
             'rejection_counts': {},
             'plan_phase': (
@@ -10018,7 +10020,23 @@ class RemoteGrasp6DNode:
         tabletop = dict(diagnostics.get('tabletop_geometry', {}) or {})
         failure = tabletop.get('failure_code')
         missing_surface = failure == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
-        if failure == 'GRIPPER_CONTACT_PATCH_MISS':
+        if not missing_surface and (
+                tabletop.get('plan_phase') == CONTACT_EXECUTION_PLAN
+                and tabletop.get('contact_execution_gate_deferred') is False):
+            try:
+                missing_surface = any(
+                    row.get('failure_code') == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+                    and all(math.isfinite(float(row[key])) for key in (
+                        'negative_reach_m', 'positive_reach_m', 'maximum_side_reach_m'))
+                    and 0.0 < float(row['negative_reach_m'])
+                    <= float(row['maximum_side_reach_m']) <= 0.025
+                    and 0.0 < float(row['positive_reach_m'])
+                    <= float(row['maximum_side_reach_m'])
+                    for row in tabletop.get('surface_evidence_rejections', ())
+                )
+            except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
+                missing_surface = False
+        if not missing_surface and failure == 'GRIPPER_CONTACT_PATCH_MISS':
             # A thin measured band is also incomplete observation evidence.
             # Only classify it here when a reach-feasible proposal has
             # less measured support-height extent than the existing contact
