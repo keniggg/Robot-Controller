@@ -313,6 +313,49 @@ def test_near_field_phase_captures_task_reached_measured_surface():
     node.shutdown_streaming_worker()
 
 
+@pytest.mark.parametrize('fault', ['', 'registration', 'stale_view', 'extended_deadline'])
+def test_surface_recovery_phase_preserves_registered_pre_move_measurements(fault):
+    node = streaming_node(start_worker=False)
+    node.start_streaming()
+    before = measured_observation(node, stamp_sec=19.9)
+    node._latest_target_observation = before
+    identity = before.identity
+    node.near_field_state_cb(near_field_phase(
+        True, phase_id=1, start_sec=20.0, deadline_sec=50.0,
+        reference_center=[0., 0., 0.017], reference_stamp_sec=19.9,
+        reference_target_track_id=identity.track_id))
+    old_generation = node._stream_generation
+    node._surface_view_recovery_token = node._multiview_lifecycle_token()
+    extra_side = np.asarray([(0.040, y, z)
+                             for y in np.linspace(-0.025, 0.025, 13)
+                             for z in np.linspace(0.004, 0.030, 8)])
+    points = np.vstack((before.points_base, extra_side))
+    if fault == 'registration':
+        points = points + [0.080, 0., 0.]
+    stamp = 19.9 if fault == 'stale_view' else 29.9
+    after = measured_observation(node, stamp_sec=stamp, points=points)
+    node._latest_target_observation = after
+    node.near_field_state_cb(near_field_phase(
+        True, phase_id=2, start_sec=30.,
+        deadline_sec=50.1 if fault == 'extended_deadline' else 50.,
+        reference_center=[0., 0., 0.017], reference_stamp_sec=stamp,
+        reference_target_track_id=identity.track_id))
+    surface, reference = node._active_multiview_surface()
+    if fault:
+        assert surface is None and reference is None
+    else:
+        assert reference.stamp_ns == before.stamp_ns
+        assert surface.view_stamps_ns == (before.stamp_ns, after.stamp_ns)
+        assert len(surface.points_base) > len(before.points_base)
+        assert node._current_stream_target_identity() == identity
+        assert node._stream_generation > old_generation
+        assert node._near_field_phase_deadline_sec == 50.
+        assert node._register_near_field_surface(
+            measured_observation(node, stamp_sec=30.1, points=points)).ok
+        assert len(node._active_multiview_surface()[0].view_stamps_ns) == 3
+    node.shutdown_streaming_worker()
+
+
 @pytest.mark.parametrize('invalidate', ['', 'target', 'stop', 'phase'])
 def test_reached_phase_builds_exact_surface_after_far_field_motion(monkeypatch, invalidate):
     node = streaming_node(start_worker=False)
@@ -7305,7 +7348,15 @@ def test_direct_near_field_uses_current_request_and_first_reachable_without_mujo
     assert result['funnel']['tracking_evidence']['required_hits'] == 1
 
 
-def test_direct_near_field_empty_current_request_has_exact_status():
+@pytest.mark.parametrize('surface_failure, registration_ok, stamp_matches, expected', [
+    ('', True, True, 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'),
+    ('BILATERAL_SURFACE_EVIDENCE_MISSING', True, True, 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'),
+    ('BILATERAL_SURFACE_EVIDENCE_MISSING', False, True, 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'),
+    ('BILATERAL_SURFACE_EVIDENCE_MISSING', True, False, 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'),
+    ('GRIPPER_SWEEP_COLLISION', True, True, 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'),
+])
+def test_direct_near_field_empty_current_request_has_exact_status(
+        surface_failure, registration_ok, stamp_matches, expected):
     node = remote_node.RemoteGrasp6DNode.__new__(
         remote_node.RemoteGrasp6DNode
     )
@@ -7345,11 +7396,18 @@ def test_direct_near_field_empty_current_request_has_exact_status():
     node._observe_execution_candidate_invalid = lambda **_kwargs: None
     prepared = prepared_prediction(1)
     prepared.near_field = True
+    prepared.snapshot.stamp_ns = 20_010_000_000
+    prepared.remote_diagnostics = {'tabletop_geometry': {'failure_code': surface_failure}}
+    node._latest_registration_evidence = remote_node.RegistrationEvidence(
+        identity=prepared.snapshot.target_identity,
+        stamp_ns=prepared.snapshot.stamp_ns + (0 if stamp_matches else 1),
+        result=types.SimpleNamespace(ok=registration_ok), source_clipped=False,
+    )
 
     result = node._accept_prediction(prepared)
 
-    assert result['status'] == 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'
-    assert terminals[0][1] == 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'
+    assert result['status'] == expected
+    assert terminals[0][1] == expected
     assert (
         result['funnel']['snapshot_evidence'][
             'disjoint_window_required'

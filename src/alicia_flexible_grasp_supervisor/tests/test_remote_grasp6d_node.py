@@ -198,7 +198,8 @@ class SequenceSampleBuffer:
 
 class FakeTf2Module:
     class Buffer:
-        pass
+        def __init__(self, cache_time=None):
+            self.cache_time = cache_time
 
     class TransformListener:
         def __init__(self, buffer):
@@ -1170,10 +1171,15 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             self.assertIs(prepared.geometry, geometry)
             self.assertIs(prepared.candidates[0], candidate)
             self.assertEqual(prepared.candidates, baseline.candidates)
-            self.assertEqual(
-                dict(prepared.remote_diagnostics),
-                dict(baseline.remote_diagnostics),
-            )
+            # Wall-clock stage timings differ even when semantic inputs and
+            # outputs are identical; they are instrumentation, not selection.
+            diagnostics = dict(prepared.remote_diagnostics)
+            baseline_diagnostics = dict(baseline.remote_diagnostics)
+            timings = diagnostics.pop('ros_prepare_stages_ms')
+            baseline_diagnostics.pop('ros_prepare_stages_ms')
+            self.assertTrue(all(np.isfinite(v) and v >= 0.0
+                                for v in timings.values()))
+            self.assertEqual(diagnostics, baseline_diagnostics)
             self.assertEqual(
                 dict(prepared.remote_performance),
                 dict(baseline.remote_performance),
@@ -6973,6 +6979,37 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertIs(tf_listener.buffer, tf_buffer)
         self.assertIs(estimator.tf_buffer, tf_buffer)
         self.assertFalse(estimator.allow_static_fallback)
+
+    def test_remote_tf_retains_exact_snapshot_during_measured_queue_delay(self):
+        from geometry_msgs.msg import TransformStamped
+        import tf2_ros
+
+        # Exercise real TF history eviction without ROS subscriptions/services.
+        module = types.SimpleNamespace(
+            Buffer=lambda **kwargs: tf2_ros.Buffer(debug=False, **kwargs),
+            TransformListener=FakeTf2Module.TransformListener,
+        )
+        _, buffer, _ = remote_node.make_remote_pose_estimator(
+            {'frame_id': 'camera_link'},
+            {'use_tf': True, 'tf_lookup_latest': False,
+             'allow_static_fallback': False},
+            {}, tf2_module=module,
+        )
+        for seconds in (100.0, 101.0, 113.0):
+            transform = TransformStamped()
+            transform.header.frame_id = 'base_link'
+            transform.child_frame_id = 'camera_link'
+            transform.header.stamp = remote_node.rospy.Time.from_sec(seconds)
+            transform.transform.rotation.w = 1.0
+            transform.transform.translation.x = (seconds - 100.0) * 0.01
+            buffer.set_transform(transform, 'recorded_delay_regression')
+
+        # Live request failed after 12.614 s with the default 10 s history.
+        stamp = remote_node.rospy.Time.from_sec(100.386)
+        measured = buffer.lookup_transform_core('base_link', 'camera_link', stamp)
+        self.assertEqual(measured.header.stamp, stamp)
+        self.assertAlmostEqual(measured.transform.translation.x, 0.00386)
+        self.assertNotAlmostEqual(measured.transform.translation.x, 0.13)
 
     @staticmethod
     def _make_mujoco_selection_node(candidates):

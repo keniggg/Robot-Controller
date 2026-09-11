@@ -225,6 +225,7 @@ _DIRECT_NEAR_FIELD_TERMINAL_CODES = frozenset(
     (
         'NEAR_FIELD_DIRECT_TIMEOUT',
         'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE',
+        'NEAR_FIELD_SURFACE_VIEW_REQUIRED',
         'NEAR_FIELD_NO_REACHABLE_CANDIDATE',
         'WSL_PREDICT_FAILED',
         'WSL_UNAVAILABLE',
@@ -2482,6 +2483,7 @@ class GraspTaskNode:
         force=False,
         budget_sec=None,
         reference_plan=None,
+        absolute_deadline_sec=None,
     ):
         """Publish the explicit near-field planning phase without moving hardware."""
 
@@ -2514,6 +2516,11 @@ class GraspTaskNode:
                     'near-field phase budget must be finite and positive'
                 )
             deadline_sec = now_sec + requested_budget_sec
+            if absolute_deadline_sec is not None:
+                absolute = float(absolute_deadline_sec)
+                if not math.isfinite(absolute) or absolute <= now_sec:
+                    raise ValueError('near-field absolute deadline must be in the future')
+                deadline_sec = min(deadline_sec, absolute)
             self._near_field_phase_started_sec = now_sec
             self._near_field_phase_deadline_sec = deadline_sec
         else:
@@ -3165,6 +3172,8 @@ class GraspTaskNode:
             gcfg,
             gripper_cfg,
             plan,
+            move_pose=move_pose,
+            strict_execute_pose=strict_execute_pose,
         )
         if rebound is None:
             return False
@@ -3416,6 +3425,8 @@ class GraspTaskNode:
         gcfg,
         gripper_cfg,
         current_plan,
+        move_pose=None,
+        strict_execute_pose=None,
     ):
         if not self._cfg_bool(gcfg, 'near_field_replan_enabled', False):
             return current_plan
@@ -3502,6 +3513,9 @@ class GraspTaskNode:
             'NEAR_FIELD_PLAN_WAITING',
             'waiting for fresh Preview rich plan',
         )
+        recovery_attempted = False
+        recovery_waiting = False
+        recovery_stamp_ns = 0
         while self.active and not rospy.is_shutdown():
             within_budget = (
                 _stamp_seconds(rospy.Time.now()) < phase_deadline_sec
@@ -3510,6 +3524,30 @@ class GraspTaskNode:
             )
             if not within_budget:
                 break
+            if recovery_waiting:
+                last_result = self._clear_view_observation_ready(
+                    current_plan, recovery_stamp_ns, gcfg)
+                if not last_result.ok:
+                    if last_result.code == 'CLEAR_VIEW_OBSERVATION_WAITING':
+                        rospy.sleep(poll_sec)
+                        continue
+                    self._set_near_field_preview_stream(gcfg, False)
+                    self.set_state(GraspStages.FAILED,
+                                   '%s: %s' % (last_result.code, last_result.reason))
+                    return None
+                # Keep the original deadline and target identity. The phase
+                # handoff cancels old tickets and registers this new view
+                # against the measured surface from before the motion.
+                remaining = phase_deadline_sec - _stamp_seconds(rospy.Time.now())
+                if remaining <= 0.0:
+                    break
+                self._set_near_field_active(
+                    True, force=True, budget_sec=remaining,
+                    reference_plan=current_plan,
+                    absolute_deadline_sec=phase_deadline_sec)
+                minimum_stamp_ns = max(minimum_stamp_ns, recovery_stamp_ns,
+                                       _stamp_nanoseconds(rospy.Time.now()))
+                recovery_waiting = False
             last_result, candidate = self._copy_near_field_preview_candidate(
                 current_plan,
                 minimum_stamp_ns,
@@ -3547,6 +3585,34 @@ class GraspTaskNode:
                 ):
                     return None
                 return frozen
+            if (direct_near_field
+                    and last_result.code == 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'
+                    and not recovery_attempted
+                    and _plan_phase(current_plan) == _FAR_FIELD_OBSERVATION_PLAN
+                    and callable(move_pose) and callable(strict_execute_pose)):
+                recovery_attempted = True
+                recovery_config = dict(gcfg)
+                # This observation starts 18-22 cm away. Keep it in that
+                # range; the final-refinement retreat profile starts closer.
+                recovery_config['clear_view_reacquisition_radial_retreat_m'] = 0.0
+                recovery_config['clear_view_reacquisition_lateral_offset_m'] = min(
+                    0.040, self._cfg_float(gcfg,
+                        'clear_view_reacquisition_lateral_offset_m', 0.060))
+                recovery_config['clear_view_observation_range_required'] = True
+                last_result = self._execute_clear_view_reacquisition(
+                    current_plan, recovery_config, move_pose,
+                    strict_execute_pose, gripper_cfg)
+                if not last_result.ok:
+                    self._set_near_field_preview_stream(gcfg, False)
+                    self.set_state(GraspStages.FAILED,
+                                   '%s: %s' % (last_result.code, last_result.reason))
+                    return None
+                recovery_stamp_ns = int(getattr(
+                    self, '_clear_view_reacquisition_minimum_stamp_ns', 0) or 0)
+                if recovery_stamp_ns <= 0:
+                    recovery_stamp_ns = _stamp_nanoseconds(rospy.Time.now()) + 1
+                recovery_waiting = True
+                continue
             if (
                 direct_near_field
                 and last_result.code in _DIRECT_NEAR_FIELD_TERMINAL_CODES
@@ -3860,6 +3926,19 @@ class GraspTaskNode:
                 'measured tool/camera poses and frozen support geometry are required',
             )
         try:
+            lateral_offset = self._cfg_float(
+                config, 'clear_view_reacquisition_lateral_offset_m', 0.060)
+            if self._cfg_bool(config, 'clear_view_observation_range_required', False):
+                camera_xyz = self._pose_position_xyz(current_camera_pose)
+                radius_squared = sum((camera_xyz[i] - target_center[i]) ** 2
+                                     for i in range(3))
+                maximum = self._cfg_float(
+                    config, 'observation_camera_target_max_distance_m', 0.220)
+                # Reserve 5 mm for measured endpoint error, before planning.
+                available_squared = (maximum - 0.005) ** 2 - radius_squared
+                if not math.isfinite(available_squared) or available_squared <= 0.0:
+                    raise ValueError('no lateral observation room inside camera range')
+                lateral_offset = min(lateral_offset, math.sqrt(available_squared))
             candidates = make_clear_view_reacquisition_poses(
                 current_pose,
                 target_center,
@@ -3868,11 +3947,7 @@ class GraspTaskNode:
                     normal_msg.y,
                     normal_msg.z,
                 ),
-                lateral_offset_m=self._cfg_float(
-                    config,
-                    'clear_view_reacquisition_lateral_offset_m',
-                    0.060,
-                ),
+                lateral_offset_m=lateral_offset,
                 radial_retreat_m=self._cfg_float(
                     config,
                     'clear_view_reacquisition_radial_retreat_m',
@@ -3984,6 +4059,14 @@ class GraspTaskNode:
                     'selected clear-view candidate could not be strictly replanned',
                 )
         checkpoint = getattr(self, '_execution_checkpoint', None)
+        if self._cfg_bool(config, 'clear_view_observation_range_required', False):
+            deadline = float(getattr(self, '_near_field_phase_deadline_sec', 0.0))
+            motion_seconds = float(selected_metrics['joint_duration_lower_bound_sec'])
+            if (not math.isfinite(deadline)
+                    or _stamp_seconds(rospy.Time.now()) + motion_seconds + 0.9 >= deadline):
+                return PlanValidationResult(
+                    False, 'NEAR_FIELD_DIRECT_TIMEOUT',
+                    'remaining near-field budget cannot cover observation motion and settling')
         if callable(checkpoint) and not checkpoint(
             current_plan,
             config,

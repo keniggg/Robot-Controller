@@ -2676,7 +2676,10 @@ def make_remote_pose_estimator(cam_cfg, hcfg, gcfg, tf2_module=None):
     tf_buffer = None
     tf_listener = None
     if bool(hcfg.get('use_tf', True)) and tf_module is not None:
-        tf_buffer = tf_module.Buffer()
+        # A valid RGB-D window can span 12 s before queued inference/geometry
+        # finishes. Keep its exact-time transform beyond TF's 10 s default;
+        # snapshot freshness and execution validity remain separately bounded.
+        tf_buffer = tf_module.Buffer(cache_time=rospy.Duration(30.0))
         tf_listener = tf_module.TransformListener(tf_buffer)
     elif bool(hcfg.get('use_tf', True)):
         rospy.logwarn('tf2_ros is unavailable; remote 6D grasp will use configured static handeye transform')
@@ -4439,6 +4442,7 @@ class RemoteGrasp6DNode:
             self.robot_execution_active = active
 
     def _reset_multiview_surface(self):
+        self._surface_view_recovery_token = None
         self._near_field_reference_view = None
         self._near_field_fused_surface = None
         self._near_field_surface_phase_id = 0
@@ -4547,11 +4551,16 @@ class RemoteGrasp6DNode:
         active = bool(requested_active and valid_active_contract)
         captured_reference_view = None
         captured_reference_center = None
+        captured_surface = None
         # Do not hold the geometry lock while waiting for independently
         # delivered RGB/depth/mask/object callbacks. Revalidate the lifecycle
         # after reconstruction so a target change or stop cannot install it.
         with self._geometry_state_guard():
             reference_lifecycle = self._multiview_lifecycle_token()
+            recovery_handoff = (getattr(self, '_surface_view_recovery_token', None)
+                                == reference_lifecycle)
+            previous_surface, previous_reference = self._active_multiview_surface()
+            previous_deadline = float(getattr(self, '_near_field_phase_deadline_sec', 0.0))
             new_active_phase = active and (
                 not bool(getattr(self, 'near_field_planning_active', False))
                 or phase_id != int(getattr(self, '_near_field_phase_id', 0)))
@@ -4629,6 +4638,38 @@ class RemoteGrasp6DNode:
                         observation
                     )
                     captured_reference_center = reference_center.copy()
+                if previous and recovery_handoff:
+                    # A handoff after the surface-view terminal is the single
+                    # recovery. Its new view must register to the old measured
+                    # surface, not erase it and assert a fresh baseline.
+                    can_continue = bool(
+                        captured_reference_view is not None
+                        and previous_surface is not None
+                        and previous_reference is not None
+                        and phase_id > previous_phase_id
+                        and 0.0 < started_sec < previous_deadline
+                        and deadline_sec <= previous_deadline + 1e-6
+                        and captured_reference_view.stamp_ns
+                            > max(previous_surface.view_stamps_ns)
+                    )
+                    if can_continue:
+                        registration, fused = append_registered_view(
+                            previous_surface, previous_reference,
+                            captured_reference_view,
+                            config=getattr(self, 'multiview_registration_config',
+                                           RegistrationConfig()),
+                            voxel_size_m=float(getattr(
+                                self, 'geometry_voxel_size_m', 0.0025)))
+                        if registration.ok:
+                            captured_surface = fused
+                            captured_reference_view = previous_reference
+                        else:
+                            rospy.logwarn('Observation recovery registration failed: %s',
+                                          registration.code)
+                            captured_reference_view = None
+                    else:
+                        rospy.logwarn('Observation recovery rejected stale view or extended deadline')
+                        captured_reference_view = None
                 self._reset_multiview_surface()
             elif not active:
                 self._reset_multiview_surface()
@@ -4656,11 +4697,13 @@ class RemoteGrasp6DNode:
             if active and captured_reference_view is not None:
                 with self._geometry_state_guard():
                     self._near_field_reference_view = captured_reference_view
-                    self._near_field_fused_surface = fused_surface_from_view(
-                        captured_reference_view,
-                        voxel_size_m=float(
-                            getattr(self, 'geometry_voxel_size_m', 0.0025)
-                        ),
+                    self._near_field_fused_surface = (
+                        captured_surface if captured_surface is not None
+                        else fused_surface_from_view(
+                            captured_reference_view,
+                            voxel_size_m=float(getattr(
+                                self, 'geometry_voxel_size_m', 0.0025)),
+                        )
                     )
                     self._near_field_surface_phase_id = phase_id
                     self._near_field_surface_generation = int(
@@ -9969,6 +10012,22 @@ class RemoteGrasp6DNode:
         if publisher is not None:
             publisher.publish(String(rich.diagnostic))
 
+    def _near_field_surface_view_required(self, prepared):
+        """Distinguish missing measured contact from a failed registration."""
+        diagnostics = dict(getattr(prepared, 'remote_diagnostics', {}) or {})
+        tabletop = dict(diagnostics.get('tabletop_geometry', {}) or {})
+        if tabletop.get('failure_code') != 'BILATERAL_SURFACE_EVIDENCE_MISSING':
+            return False
+        snapshot = getattr(prepared, 'snapshot', None)
+        with self._geometry_state_guard():
+            evidence = getattr(self, '_latest_registration_evidence', None)
+            return bool(
+                isinstance(evidence, RegistrationEvidence)
+                and evidence.result.ok
+                and evidence.identity == getattr(snapshot, 'target_identity', None)
+                and evidence.stamp_ns == getattr(snapshot, 'stamp_ns', 0)
+            )
+
     @staticmethod
     def _single_request_stable_candidates(observations):
         """Adapt one hard-safe fused snapshot to the strict recheck contract."""
@@ -14820,6 +14879,10 @@ class RemoteGrasp6DNode:
                 if direct_near_field
                 else 'STABILITY_PENDING'
             )
+            if direct_near_field and self._near_field_surface_view_required(prepared):
+                status = 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'
+                with self._geometry_state_guard():
+                    self._surface_view_recovery_token = self._multiview_lifecycle_token()
             local_stage = dict(
                 funnel.get('stage_counts', {}).get(
                     'locally_valid',

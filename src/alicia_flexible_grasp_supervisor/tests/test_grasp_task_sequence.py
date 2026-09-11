@@ -1067,6 +1067,20 @@ class GraspTaskSequenceTest(unittest.TestCase):
             99.9,
         )
 
+    def test_recovery_phase_keeps_deadline_despite_time_spent_publishing(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node._near_field_active = True
+        node._near_field_phase_id = 1
+        node.near_field_phase_pub = mock.Mock()
+        node.near_field_pub = mock.Mock()
+        with mock.patch.object(grasp_task_node.rospy.Time, 'now',
+                               return_value=grasp_task_node.rospy.Time.from_sec(12.015)):
+            node._set_near_field_active(
+                True, force=True, budget_sec=28.0, absolute_deadline_sec=40.0)
+        phase = node.near_field_phase_pub.publish.call_args[0][0]
+        self.assertEqual(phase.deadline.to_sec(), 40.0)
+        self.assertEqual(node._near_field_phase_deadline_sec, 40.0)
+
     def test_fresh_direct_terminal_preview_returns_exact_failure(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -1598,6 +1612,62 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertTrue(executions[0][1])
         self.assertIs(executions[0][0], preflight[1][0])
         self.assertEqual(node._clear_view_reacquisition_attempts, 1)
+
+    def test_surface_observation_move_respects_camera_range_and_remaining_budget(self):
+        for case in ('valid', 'range', 'deadline'):
+            with self.subTest(case=case):
+                node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+                plan = self._rich_plan(stamp_sec=9.0)
+                center = node._plan_geometry_center_xyz(plan)
+                distance = 0.219 if case == 'range' else 0.200
+                current = self._pose(center[0], center[1], center[2] + distance)
+                node._current_tool_pose_base = lambda: current
+                node._current_camera_pose_base = lambda: current
+                node._clear_view_reacquisition_attempts = 0
+                node._near_field_phase_deadline_sec = 11.0 if case == 'deadline' else 30.0
+                node.set_state = lambda *args: None
+                node._execution_checkpoint = lambda *args: True
+                node._invoke_plan_bound_action = lambda plan, cfg, label, action: (
+                    grasp_task_node.PlanValidationResult(True), action())
+                node._wait_for_motion_settle = lambda *args: True
+                node._request_near_field_preview_stream = lambda *args: True
+                plans, executed = [], []
+
+                def planner(pose, execute):
+                    self.assertFalse(execute)
+                    plans.append(pose)
+                    return FakeServiceResponse(True,
+                        'joint_duration_lower_bound_sec=2.0 joint_path_cost=0.5 '
+                        'joint_max_delta=0.1')
+
+                def executor(pose, execute):
+                    executed.append(pose)
+                    return FakeServiceResponse(True)
+
+                cfg = {'clear_view_observation_range_required': True,
+                       'clear_view_reacquisition_camera_body_radius_m': 0.025,
+                       'clear_view_reacquisition_lateral_offset_m': 0.040,
+                       'clear_view_reacquisition_radial_retreat_m': 0.0,
+                       'observation_camera_target_max_distance_m': 0.220}
+                with mock.patch.object(grasp_task_node.rospy.Time, 'now',
+                                       return_value=grasp_task_node.rospy.Time.from_sec(10.0)):
+                    result = node._execute_clear_view_reacquisition(
+                        plan, cfg, planner, executor)
+                if case == 'valid':
+                    self.assertTrue(result.ok, result.reason)
+                    self.assertEqual(len(executed), 1)
+                    for pose in plans:
+                        p = node._pose_position_xyz(pose)
+                        radius = math.sqrt(sum((p[i] - center[i]) ** 2 for i in range(3)))
+                        self.assertGreaterEqual(radius, 0.180)
+                        self.assertLessEqual(radius, 0.215)
+                else:
+                    self.assertFalse(result.ok)
+                    self.assertEqual(executed, [])
+                    if case == 'range':
+                        self.assertEqual(plans, [])
+                    else:
+                        self.assertEqual(result.code, 'NEAR_FIELD_DIRECT_TIMEOUT')
 
     def test_post_move_confirmation_requires_five_fresh_3d_registration_frames(self):
         node = grasp_task_node.GraspTaskNode.__new__(
@@ -3254,6 +3324,82 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 'failed strict MoveIt'
             ),
         )
+
+    def test_near_field_surface_recovery_is_once_and_requires_post_move_target(self):
+        for outcome in ('fresh', 'still_missing', 'wrong_target', 'move_failed'):
+            with self.subTest(outcome=outcome):
+                node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+                bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
+                bound.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+                node.active = True
+                node._near_field_phase_started_sec = 9.5
+                node._near_field_phase_deadline_sec = 40.0
+                states, motions, phase_calls, preview_windows = [], [], [], []
+                node.set_state = lambda stage, message='', *a: states.append(message)
+                stream_calls = []
+                node._set_near_field_preview_stream = lambda cfg, enabled: (
+                    stream_calls.append(enabled) or True)
+                clock = [10.0]
+                post_move_ns = 12_000_000_001
+
+                def move(plan, cfg, planner, executor, gripper_cfg):
+                    self.assertIs(plan, bound)
+                    self.assertEqual(cfg['clear_view_reacquisition_radial_retreat_m'], 0.0)
+                    self.assertLessEqual(cfg['clear_view_reacquisition_lateral_offset_m'], 0.04)
+                    motions.append(True)
+                    clock[0] = 12.0
+                    node._clear_view_reacquisition_minimum_stamp_ns = post_move_ns
+                    return grasp_task_node.PlanValidationResult(
+                        outcome != 'move_failed', 'CLEAR_VIEW_REACQUISITION_FAILED', 'move result')
+
+                node._execute_clear_view_reacquisition = move
+                ready_calls = []
+
+                def ready(plan, stamp, cfg):
+                    self.assertGreaterEqual(stamp, post_move_ns)
+                    ready_calls.append(True)
+                    if len(ready_calls) == 1:
+                        return grasp_task_node.PlanValidationResult(
+                            False, 'CLEAR_VIEW_OBSERVATION_WAITING', 'cached pre-move target')
+                    return grasp_task_node.PlanValidationResult(
+                        outcome != 'wrong_target', 'FINAL_REFINE_3D_INVALID', 'track check')
+
+                node._clear_view_observation_ready = ready
+                node._set_near_field_active = lambda active, **kw: phase_calls.append(kw)
+                fresh = self._rich_plan(plan_id='fresh', stamp_sec=12.2)
+                node._freeze_execution_plan = lambda plan, **kw: plan
+
+                def preview(plan, minimum, cfg, **kw):
+                    preview_windows.append((minimum, kw))
+                    if len(preview_windows) == 1 or outcome == 'still_missing':
+                        return (grasp_task_node.PlanValidationResult(
+                            False, 'NEAR_FIELD_SURFACE_VIEW_REQUIRED', 'measured side missing'), None)
+                    self.assertGreaterEqual(minimum, post_move_ns)
+                    self.assertGreaterEqual(len(ready_calls), 2)
+                    return grasp_task_node.PlanValidationResult(True, age_sec=0.1), fresh
+
+                node._copy_near_field_preview_candidate = preview
+                cfg = {'near_field_strategy': 'single_snapshot_direct',
+                       'near_field_replan_enabled': True, 'near_field_replan_required': True,
+                       'near_field_replan_timeout_sec': 30.0}
+                with mock.patch.object(grasp_task_node.rospy.Time, 'now',
+                                       side_effect=lambda: grasp_task_node.rospy.Time.from_sec(clock[0])), \
+                     mock.patch.object(grasp_task_node.rospy, 'sleep', return_value=None):
+                    result = node._maybe_rebind_near_field_grasp6d_plan(
+                        cfg, {}, bound, move_pose=lambda *a: None,
+                        strict_execute_pose=lambda *a: None)
+                self.assertEqual(len(motions), 1)
+                if outcome == 'fresh':
+                    self.assertIs(result, fresh)
+                    self.assertEqual(stream_calls, [True])
+                    self.assertEqual(len(phase_calls), 1)
+                    self.assertTrue(phase_calls[0]['force'])
+                    self.assertEqual(phase_calls[0]['budget_sec'], 28.0)
+                else:
+                    self.assertIsNone(result)
+                    self.assertFalse(stream_calls[-1])
+                    if outcome in ('wrong_target', 'move_failed'):
+                        self.assertEqual(phase_calls, [])
 
     def test_direct_near_field_preview_window_starts_at_phase_boundary(self):
         node = grasp_task_node.GraspTaskNode.__new__(
