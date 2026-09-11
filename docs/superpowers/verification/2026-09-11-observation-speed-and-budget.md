@@ -267,3 +267,20 @@ ActuationConfirmation尚未同步时也使用同一0.003rad实测保持规则。
 这覆盖启动、重连与正向使能重置，防止旧控制器目标先于新轨迹同步进入。
 GUI单轴指令、扭矩许可及控制器运行状态不变。捕获的旧桥接向量回归加入
 测试，69项C++测试通过，驱动编译成功；仍需实机验证新的衔接结果。
+
+## 04:22 衔接修复部署后的最终实机结果
+
+驱动f5aefd7部署后，运行二进制与构建产物SHA256均为
+`bf1235620fc9232102f5e64be7fb6083122946fd46cdf0d897e1d99769f1e7b2`。
+新鲜计划b47a27355ab4b2d46e8568aa通过严格MoveIt验证并开始任务。
+04:21:57.939自动控制成功同步，57.948状态COMMAND_SYNCHRONIZED；
+58.493执行计划内有界观察步，04:22:00.682进入AWAITING_ENCODER_RESPONSE，
+01.681超时后保持UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT，未再循环重试。
+
+本次记录294条关节反馈、142条关节命令；最大命令位移Joint4约0.025rad，
+六轴实测位移范围全部为0。任务结束为ACTUATION_PREFIX_NO_RESPONSE，
+未执行接触、闭爪或抬升。同步修复已经通过实机衔接验证，但正向使能与
+软件重连后实体仍无响应；不得把本次软件修复称为成功抓取或硬件恢复。
+完整数据和execution_summary.json保存在
+`.ros_log/grasp_attempt_20260911_restart_handoff_fixed/`。
+操作者最新模式仍为false；ROS节点与独立滚动数据记录保持运行。
