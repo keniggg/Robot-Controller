@@ -11,6 +11,23 @@ inline bool joint_source_allowed_by_control_mode(bool direct_mode, const std::st
     return direct_mode ? slider : !slider;
 }
 
+inline bool controller_handoff_matches_feedback(
+    const std::vector<double>& command,
+    const std::vector<double>& feedback,
+    bool feedback_is_fresh)
+{
+    if (!feedback_is_fresh || command.size() != 6 || feedback.size() != 6) {
+        return false;
+    }
+    for (size_t i = 0; i < command.size(); ++i) {
+        if (!std::isfinite(command[i]) || !std::isfinite(feedback[i]) ||
+            std::abs(command[i] - feedback[i]) > 0.003) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // A position-controlled servo can hold a repeatable measured offset from its
 // SDK setpoint.  Replacing an unedited joint's live SDK setpoint with its raw
 // encoder value therefore creates a real target change and can look like

@@ -27,7 +27,11 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
         )
         self.assertEqual(
             config['grasp']['near_field_replan_timeout_sec'],
-            60.0,
+            90.0,
+        )
+        self.assertEqual(
+            config['grasp']['clear_view_reacquisition_inference_reserve_sec'],
+            20.0,
         )
         self.assertEqual(
             config['grasp']['near_field_strategy'],

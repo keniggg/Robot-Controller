@@ -1328,14 +1328,25 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
 
     std::string actuation_rejection;
     if (control_mode_needs_sync_) {
-        if (joint_angles.size() != feedback_joint_angles.size() || joint_angles.empty()) return;
-        for (size_t i = 0; i < joint_angles.size(); ++i) {
-            if (std::abs(joint_angles[i] - feedback_joint_angles[i]) > 0.003) {
-                ROS_WARN_THROTTLE(1.0, "CONTROL_MODE_SYNC_REQUIRED: stale controller target rejected after manual release");
-                return;
-            }
+        // Automatic commands do not enter the GUI feedback snapshot branches.
+        // Read the live encoder state here, where the handoff needs it.
+        bool feedback_is_fresh = false;
+        {
+            std::lock_guard<std::mutex> data_lock(data_mutex_);
+            feedback_joint_angles = current_joint_positions_;
+            const double age =
+                (command_time - last_accepted_joint_feedback_time_).toSec();
+            feedback_is_fresh = has_real_feedback_ &&
+                !last_accepted_joint_feedback_time_.isZero() &&
+                age >= 0.0 && age <= feedback_stale_timeout_sec_;
+        }
+        if (!controller_handoff_matches_feedback(
+                joint_angles, feedback_joint_angles, feedback_is_fresh)) {
+            ROS_WARN_THROTTLE(1.0, "CONTROL_MODE_SYNC_REQUIRED: controller target must match fresh six-joint feedback after manual release");
+            return;
         }
         control_mode_needs_sync_ = false;
+        ROS_INFO("Control ownership synchronized to live encoders; automatic commands admitted");
     }
     {
         std::lock_guard<std::mutex> lock(actuation_mutex_);

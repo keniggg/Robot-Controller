@@ -1684,6 +1684,26 @@ TEST(EndpointTrimDriverOrchestrationTest,
     EXPECT_EQ(idle.state().composed_target, joints(0.2));
 }
 
+TEST(GuiControlOwnershipTest, ManualReleaseRequiresFreshCompleteMatchedFeedback)
+{
+    const std::vector<double> measured{-1.95, 0.63, -0.23, -0.15, -0.42, 0.15};
+    EXPECT_TRUE(controller_handoff_matches_feedback(measured, measured, true));
+    EXPECT_FALSE(controller_handoff_matches_feedback(measured, {}, true));
+    EXPECT_FALSE(controller_handoff_matches_feedback(measured, measured, false));
+    EXPECT_FALSE(controller_handoff_matches_feedback({}, {}, true));
+    auto stale_target = measured;
+    stale_target[1] -= 0.52;
+    EXPECT_FALSE(controller_handoff_matches_feedback(stale_target, measured, true));
+    auto nearby_target = measured;
+    nearby_target[2] += 0.002;
+    EXPECT_TRUE(controller_handoff_matches_feedback(nearby_target, measured, true));
+    nearby_target[2] += 0.002;
+    EXPECT_FALSE(controller_handoff_matches_feedback(nearby_target, measured, true));
+    nearby_target[2] = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_FALSE(controller_handoff_matches_feedback(nearby_target, measured, true));
+    EXPECT_FALSE(controller_handoff_matches_feedback(measured, nearby_target, true));
+}
+
 int main(int argc, char** argv)
 {
     testing::InitGoogleTest(&argc, argv);
