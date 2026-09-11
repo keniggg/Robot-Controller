@@ -1515,6 +1515,30 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 opening_width_m=0.050,
             )
 
+    def test_near_field_orbit_uses_available_outer_band_for_palm_clearance(self):
+        # Saved 2026-09-11 measured start: keeping its radius leaves the CAD
+        # envelope at 77.1 mm; the permitted 215 mm radius gives 81.6 mm.
+        tool = self._pose(-0.0647527633, -0.2696717948, 0.0793958613)
+        camera = self._pose(-0.0783343425, -0.2380174017, 0.2291707723)
+        for pose, q in (
+            (tool, (-0.8246197500, -0.4370122282, 0.2481206266, -0.2597281942)),
+            (camera, (-0.4064023496, -0.1020974365, 0.7619084857, -0.4938711402)),
+        ):
+            pose.pose.orientation.x, pose.pose.orientation.y = q[:2]
+            pose.pose.orientation.z, pose.pose.orientation.w = q[2:]
+        kwargs = dict(
+            current_pose=tool,
+            target_center_base=(-0.1125304554, -0.3803423254, 0.0781489316),
+            support_normal_base=(-0.0312161772, 0.1623529811, 0.9862388452),
+            lateral_offset_m=0.04, radial_retreat_m=0.0,
+            current_camera_pose=camera,
+        )
+        self.assertEqual(len(grasp_task_node.make_clear_view_reacquisition_poses(
+            **kwargs, camera_distance_band_m=(0.185, 0.215))), 2)
+        with self.assertRaisesRegex(ValueError, 'minimum contact clearance'):
+            grasp_task_node.make_clear_view_reacquisition_poses(
+                **kwargs, camera_distance_band_m=(0.185, 0.210))
+
     def test_clear_view_preserves_handeye_and_aims_camera_link_optical_axis(self):
         current_tool = self._pose(0.35, 0.0, 0.25)
         current_camera = self._pose(0.40, 0.0, 0.25)
@@ -1681,7 +1705,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
                         radius = math.sqrt(sum((p[i] - center[i]) ** 2 for i in range(3)))
                         self.assertGreaterEqual(radius, 0.180)
                         self.assertLessEqual(radius, 0.215)
-                        self.assertAlmostEqual(radius, min(distance, 0.215), places=10)
+                        self.assertAlmostEqual(radius, 0.215, places=10)
                 else:
                     self.assertFalse(result.ok)
                     self.assertEqual(executed, [])

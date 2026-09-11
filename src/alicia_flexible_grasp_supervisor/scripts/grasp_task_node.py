@@ -1356,7 +1356,10 @@ def make_clear_view_reacquisition_poses(
                 or not math.isfinite(upper) or lower <= effective_clearance
                 or upper < lower or radial_retreat != 0.0):
             raise ValueError('invalid camera distance band for observation orbit')
-        distance = max(lower, min(upper, radial_norm))
+        # Use the outer edge of the already reserved observation band. Merely
+        # preserving the current radius can leave the palm envelope inside
+        # the clearance even when a few millimetres of allowed retreat fit.
+        distance = upper
         if lateral >= distance:
             raise ValueError('observation lateral offset exceeds camera distance')
         radial_distance = math.sqrt(distance ** 2 - lateral ** 2)
