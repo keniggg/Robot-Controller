@@ -4461,6 +4461,29 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.code, 'NEAR_FIELD_CENTER_ANCHOR_OK')
 
+    def test_registered_contact_uses_measured_evidence_not_detector_center_proxy(self):
+        for case in ('valid', 'missing', 'weak', 'wrong_track', 'support_changed'):
+            with self.subTest(case=case):
+                far = self._rich_plan(stamp_sec=10.0)
+                near = self._mark_valid_3d(self._rich_plan(stamp_sec=11.0))
+                near.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+                near.object_geometry.pose_base.position.x += 0.0005
+                if case == 'missing':
+                    near.refinement_status = 'NOT_EVALUATED'
+                elif case == 'weak':
+                    near.refinement_inlier_count = 1
+                elif case == 'wrong_track':
+                    near.target_track_id = near.object_geometry.target_track_id = 'g0-t2'
+                elif case == 'support_changed':
+                    near.object_geometry.support_offset_m += 0.020
+                result = grasp_task_node.validate_near_field_planar_center_anchor(
+                    far, near,
+                    {'near_field_planar_center_anchor_validation_enabled': True},
+                    reference_center_base=(0.405, 0.005, 0.20))
+                self.assertEqual(result.ok, case == 'valid', result.reason)
+                self.assertEqual(result.code, 'NEAR_FIELD_REGISTERED_SURFACE_OK'
+                                 if case == 'valid' else 'NEAR_FIELD_REGISTERED_SURFACE_INVALID')
+
     def test_post_lift_visual_rejects_target_still_on_table(self):
         plan = self._rich_plan()
         plan.poses[2].position.z = 0.20

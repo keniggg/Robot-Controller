@@ -363,7 +363,7 @@ def validate_near_field_planar_center_anchor(
     grasp_config,
     reference_center_base=None,
 ):
-    """Require the close-view OBB to retain the far-view planar center."""
+    """Validate registered contact geometry or the legacy planar anchor."""
 
     config = grasp_config if isinstance(grasp_config, dict) else {}
     enabled = config.get(
@@ -387,6 +387,21 @@ def validate_near_field_planar_center_anchor(
             not required,
             'NEAR_FIELD_CENTER_ANCHOR_UNAVAILABLE',
             'far-field and near-field rich plans are both required',
+        )
+    if _plan_phase(near_field_plan) == _CONTACT_EXECUTION_PLAN:
+        # Registered contact plans replaced the old bbox-derived center
+        # translation. Their measured cloud is bound to the reached RGB-D
+        # reference by track/stamp, with registration evidence in the plan.
+        # Comparing that OBB to a detector surface pixel minus half-height
+        # mixes two different geometric quantities and can reject a stable
+        # object even though the real clouds align to submillimetre accuracy.
+        registered = validate_final_refinement_execution(
+            far_field_plan, near_field_plan, config)
+        return PlanValidationResult(
+            registered.ok,
+            ('NEAR_FIELD_REGISTERED_SURFACE_OK' if registered.ok
+             else 'NEAR_FIELD_REGISTERED_SURFACE_INVALID'),
+            (registered.reason or 'same-target measured registration and support continuity verified'),
         )
     try:
         far_geometry = far_field_plan.object_geometry
@@ -454,7 +469,7 @@ def validate_near_field_planar_center_anchor(
         )
 
     reason = (
-        'far/near planar center residual %.4fm within %.4fm; '
+        'far/near planar center residual %.4fm; limit %.4fm; '
         'normal-only center delta %.4fm'
         % (planar_residual, maximum, normal_delta)
     )
@@ -3266,9 +3281,10 @@ class GraspTaskNode:
                     ),
                 )
                 return False
-            if anchor_validation.code == 'NEAR_FIELD_CENTER_ANCHOR_OK':
+            if anchor_validation.code in (
+                    'NEAR_FIELD_CENTER_ANCHOR_OK', 'NEAR_FIELD_REGISTERED_SURFACE_OK'):
                 rospy.loginfo(
-                    'Near-field planar center anchor verified: %s',
+                    'Near-field geometry continuity verified: %s',
                     anchor_validation.reason,
                 )
         centering_validation = validate_calibration_centering_margin(
