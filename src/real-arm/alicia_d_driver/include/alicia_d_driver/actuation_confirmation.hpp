@@ -127,17 +127,17 @@ public:
         has_feedback_ = true;
 
         if (
-            state_ != ActuationState::PENDING ||
+            (state_ != ActuationState::PENDING &&
+             state_ != ActuationState::CONFIRMED) ||
             !probe_active_ ||
             probe_baseline_.size() != joints.size() ||
-            probe_target_.size() != joints.size()
+            probe_requested_delta_.size() != joints.size()
         ) {
             return;
         }
 
         for (std::size_t i = 0; i < joints.size(); ++i) {
-            const double requested_delta =
-                probe_target_[i] - probe_baseline_[i];
+            const double requested_delta = probe_requested_delta_[i];
             if (
                 std::abs(requested_delta) <
                 config_.command_probe_min_delta_rad
@@ -221,7 +221,8 @@ public:
             !has_feedback_ ||
             probe_active_ ||
             (state_ != ActuationState::PENDING &&
-             state_ != ActuationState::UNCONFIRMED) ||
+             state_ != ActuationState::UNCONFIRMED &&
+             state_ != ActuationState::CONFIRMED) ||
             !valid_joints(target) ||
             latest_feedback_.size() != target.size() ||
             !std::isfinite(stamp_sec) ||
@@ -248,6 +249,13 @@ public:
         if (stream_baseline_.size() == target.size() &&
             stream_target_.size() == target.size()) {
             for (std::size_t i = 0; i < target.size(); ++i) {
+                if (state_ == ActuationState::CONFIRMED &&
+                    (target[i] - stream_command_baseline_[i]) *
+                        (latest_feedback_[i] - stream_baseline_[i]) <= 0.0) {
+                    // Motion on an uncommanded axis or against the requested
+                    // direction cannot reset the response observation window.
+                    continue;
+                }
                 feedback_ahead_of_command = feedback_ahead_of_command ||
                     std::abs(latest_feedback_[i] - stream_baseline_[i]) >
                         std::abs(stream_target_[i] - stream_command_baseline_[i]) +
@@ -267,7 +275,11 @@ public:
             for (std::size_t i = 0; i < target.size(); ++i) {
                 immediate_delta = std::max(immediate_delta, std::abs(target[i] - latest_feedback_[i]));
             }
-            stream_command_baseline_ = immediate_delta >= config_.command_probe_min_delta_rad
+            // Once confirmed, monitor NEW command displacement. An unchanged
+            // hold with a fixed encoder/setpoint offset is not a new motion
+            // request and must not manufacture a missing-response timeout.
+            stream_command_baseline_ = state_ != ActuationState::CONFIRMED &&
+                immediate_delta >= config_.command_probe_min_delta_rad
                 ? latest_feedback_ : target;
             stream_start_sec_ = stamp_sec;
         }
@@ -289,13 +301,21 @@ public:
 
         probe_active_ = true;
         probe_baseline_ = stream_baseline_;
-        probe_target_ = target;
+        probe_requested_delta_.resize(target.size());
         for (std::size_t i = 0; i < target.size(); ++i) {
-            probe_target_[i] = probe_baseline_[i] + target[i] - stream_command_baseline_[i];
+            // Retain the exact delta used by the admission threshold above.
+            // Reconstructing an absolute encoder target and subtracting again
+            // can round a valid boundary delta below the threshold forever.
+            probe_requested_delta_[i] = target[i] - stream_command_baseline_[i];
         }
         probe_start_sec_ = stamp_sec;
-        state_ = ActuationState::PENDING;
-        reason_ = "AWAITING_ENCODER_RESPONSE";
+        // Continue checking streamed motion after the initial confirmation.
+        // Keep the confirmed state while awaiting the next bounded response;
+        // fresh packets alone must not preserve it after a servo stalls.
+        if (state_ != ActuationState::CONFIRMED) {
+            state_ = ActuationState::PENDING;
+            reason_ = "AWAITING_ENCODER_RESPONSE";
+        }
     }
 
     void update(double now_sec)
@@ -308,8 +328,9 @@ public:
             now_sec - probe_start_sec_ >
                 config_.response_timeout_sec
         ) {
+            reason_ = state_ == ActuationState::CONFIRMED
+                ? "ENCODER_RESPONSE_LOST" : "ENCODER_RESPONSE_TIMEOUT";
             state_ = ActuationState::UNCONFIRMED;
-            reason_ = "ENCODER_RESPONSE_TIMEOUT";
             clear_probe();
             return;
         }
@@ -404,7 +425,7 @@ private:
         stream_last_sec_ = 0.0;
         probe_active_ = false;
         probe_baseline_.clear();
-        probe_target_.clear();
+        probe_requested_delta_.clear();
         probe_start_sec_ = 0.0;
     }
 
@@ -422,7 +443,7 @@ private:
     double latest_feedback_stamp_sec_ = 0.0;
     bool probe_active_ = false;
     std::vector<double> probe_baseline_;
-    std::vector<double> probe_target_;
+    std::vector<double> probe_requested_delta_;
     double probe_start_sec_ = 0.0;
 };
 

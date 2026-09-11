@@ -378,6 +378,91 @@ TEST(ActuationConfirmationTest, FreshFeedbackKeepsConfirmationAlive)
     );
 }
 
+TEST(ActuationConfirmationTest, ConfirmedStreamLosesResponseDespiteFreshFeedback)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.025), 10.3);
+    confirmation.note_feedback(joints(0.025), 10.4);
+    ASSERT_TRUE(confirmation.motion_confirmed(10.4));
+
+    // The SDK keeps accepting a 0.02 rad/s stream while all encoders stop.
+    // Repeated packets are fresh telemetry, not fresh actuation evidence.
+    bool response_lost = false;
+    for (int step = 0; step <= 40; ++step) {
+        const double stamp = 10.5 + 0.1 * step;
+        confirmation.note_streamed_target(joints(0.025 + 0.002 * step), stamp);
+        confirmation.note_feedback(joints(0.025), stamp + 0.01);
+        confirmation.update(stamp + 0.02);
+        if (!confirmation.motion_confirmed(stamp + 0.02)) {
+            EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+            EXPECT_FALSE(confirmation.can_preserve_positive_enable(true, true, stamp + 0.02));
+            EXPECT_TRUE(confirmation.synchronized());
+            response_lost = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(response_lost);
+}
+
+TEST(ActuationConfirmationTest, ConfirmedSmoothFollowingRemainsConfirmed)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.025), 10.3);
+    confirmation.note_feedback(joints(0.025), 10.4);
+    for (int step = 0; step <= 150; ++step) {
+        const double stamp = 10.5 + 0.1 * step;
+        confirmation.note_streamed_target(joints(0.05 + 0.002 * step), stamp);
+        confirmation.note_feedback(joints(driver_sdk_quantize(0.025 + 0.002 * step)), stamp + 0.01);
+        confirmation.update(stamp + 0.02);
+        EXPECT_TRUE(confirmation.motion_confirmed(stamp + 0.02)) << step;
+    }
+}
+
+TEST(ActuationConfirmationTest, ConfirmedStationaryKeepaliveWithOffsetIsNotMotion)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.05), 10.3);
+    confirmation.note_feedback(joints(0.025), 10.4);
+    for (int step = 0; step <= 100; ++step) {
+        const double stamp = 10.5 + 0.1 * step;
+        confirmation.note_streamed_target(joints(0.05), stamp);
+        confirmation.note_feedback(joints(0.025), stamp + 0.01);
+        confirmation.update(stamp + 0.02);
+        EXPECT_TRUE(confirmation.motion_confirmed(stamp + 0.02));
+    }
+}
+
+TEST(ActuationConfirmationTest, ConfirmedStreamDoesNotAcceptUnrelatedJointMotion)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.025), 10.3);
+    confirmation.note_feedback(joints(0.025), 10.4);
+    bool response_lost = false;
+    for (int step = 0; step <= 40; ++step) {
+        const double stamp = 10.5 + 0.1 * step;
+        confirmation.note_streamed_target(joints(0.025 + 0.002 * step), stamp);
+        confirmation.note_feedback(joints(0.025, 0.004 * step), stamp + 0.01);
+        confirmation.update(stamp + 0.02);
+        if (!confirmation.motion_confirmed(stamp + 0.02)) {
+            response_lost = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(response_lost);
+}
+
 TEST(ActuationConfirmationTest, OverheatBlocksWithoutAConfirmedState)
 {
     ActuationConfirmation confirmation(test_config());

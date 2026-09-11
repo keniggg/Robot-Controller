@@ -11,6 +11,14 @@ from test_motion_gateway_controller_start import motion_gateway_node
 from test_grasp_task_sequence import grasp_task_node
 
 
+@pytest.fixture(autouse=True)
+def isolate_live_ros_parameters(monkeypatch):
+    # These unit tests may run while the operator is using the real GUI.
+    # Read local defaults; never consume or change the live mode parameter.
+    monkeypatch.setattr(motion_gateway_node.rospy, 'get_param',
+                        lambda key, default=None: default)
+
+
 def path(*rows):
     return JointPlan([[v, v/2, 0, 0, 0, 0] for v in rows], duration_sec=4)
 
@@ -68,7 +76,7 @@ def test_prefix_rejects_invalid_authority_before_motion(failure):
     assert not manipulator.executed_plans
 
 
-@pytest.mark.parametrize('status', ['', 'DISABLED:NOT_REQUESTED', 'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT', 'OVERHEAT_BLOCKED:TEMPERATURE'])
+@pytest.mark.parametrize('status', ['', 'DISABLED:NOT_REQUESTED', 'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT', 'UNCONFIRMED:ENCODER_RESPONSE_LOST', 'OVERHEAT_BLOCKED:TEMPERATURE'])
 def test_gateway_never_bootstraps_disabled_faulted_or_missing_state(status):
     gateway = gateway_tests.MotionGatewayControllerStartTest().make_gateway()
     gateway._fresh_actuation_status = lambda: status
@@ -136,8 +144,9 @@ def test_task_does_not_bootstrap_stale_pending_or_fault_state(monkeypatch):
     assert not node._actuation_bootstrap_allowed(config)
     node.latest_actuation_status_time = grasp_task_node.rospy.Time.from_sec(12.9)
     assert node._actuation_bootstrap_allowed(config)
-    node.latest_actuation_status = 'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT'
-    assert not node._actuation_bootstrap_allowed(config)
+    for reason in ('ENCODER_RESPONSE_TIMEOUT', 'ENCODER_RESPONSE_LOST'):
+        node.latest_actuation_status = 'UNCONFIRMED:' + reason
+        assert not node._actuation_bootstrap_allowed(config)
 
 
 @pytest.mark.parametrize('behavior', ['settles', 'moving', 'stale'])
