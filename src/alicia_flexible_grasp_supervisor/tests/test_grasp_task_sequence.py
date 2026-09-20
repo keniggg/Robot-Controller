@@ -65,14 +65,93 @@ class GraspTaskSequenceTest(unittest.TestCase):
     def test_bound_plan_routes_observation_and_contact_to_distinct_motion_profiles(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         contact, observation = mock.Mock(return_value='contact'), mock.Mock(return_value='observation')
-        node._bound_execution_plan = types.SimpleNamespace(diagnostic='FAR_FIELD_OBSERVATION_PLAN')
-        self.assertEqual(node._route_bound_pose_service('pose', True, contact, observation), 'observation')
+        node._bound_execution_plan = self._rich_plan()
+        node._bound_execution_plan.diagnostic = 'FAR_FIELD_OBSERVATION_PLAN'
+        self.assertEqual(node._route_bound_pose_service(self._pose(0.1), True, contact, observation), 'observation')
         node._bound_execution_plan = types.SimpleNamespace(diagnostic='CONTACT_EXECUTION_PLAN')
         self.assertEqual(node._route_bound_pose_service('pose', True, contact, observation), 'contact')
         node._bound_execution_plan = None
         self.assertEqual(node._route_bound_pose_service('pose', False, contact, observation), 'contact')
         self.assertEqual(observation.call_count, 1)
         self.assertEqual(contact.call_count, 2)
+
+    def test_derived_observation_check_and_execute_bind_frozen_header_without_changing_pose(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        plan = self._rich_plan(stamp_sec=9.0)
+        plan.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        plan.plan_id = compute_plan_id(plan)
+        node._freeze_execution_plan(plan)
+        target = self._pose(0.1234567890123, -0.0, 0.1876543210987)
+        target.header.stamp = grasp_task_node.rospy.Time.from_sec(10.23456789)
+        target.header.seq = 42
+        target.pose.orientation.x = 0.1012345678901
+        target.pose.orientation.y = -0.2123456789012
+        target.pose.orientation.z = 0.3234567890123
+        target.pose.orientation.w = -0.9198765432109
+        original = grasp_task_node.deepcopy(target)
+        original_pose_wire = io.BytesIO()
+        original.pose.serialize(original_pose_wire)
+        contact = mock.Mock(return_value=FakeServiceResponse(True))
+        observation = mock.Mock(return_value=FakeServiceResponse(True))
+        for execute in (False, True):
+            response = node._route_bound_pose_service(target, execute, contact, observation)
+            self.assertTrue(response.success)
+            forwarded, forwarded_execute = observation.call_args[0]
+            self.assertIsNot(forwarded, target)
+            self.assertEqual(forwarded_execute, execute)
+            self.assertEqual(forwarded.header, plan.header)
+            self.assertIsNot(forwarded.header, node._bound_execution_plan.header)
+            forwarded_pose_wire = io.BytesIO()
+            forwarded.pose.serialize(forwarded_pose_wire)
+            self.assertEqual(forwarded_pose_wire.getvalue(), original_pose_wire.getvalue())
+            self.assertEqual(target, original)
+        self.assertFalse(contact.called)
+        self.assertEqual(node._bound_execution_plan, plan)
+
+    def test_observation_route_rejects_foreign_or_missing_frame_without_service_call(self):
+        for frame in ('camera_link', 'map', '', '/base_link'):
+            for execute in (False, True):
+                with self.subTest(frame=frame, execute=execute):
+                    node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+                    plan = self._rich_plan(stamp_sec=9.0)
+                    plan.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+                    node._bound_execution_plan = plan
+                    target = self._pose(0.1)
+                    target.header.frame_id = frame
+                    original = grasp_task_node.deepcopy(target)
+                    contact, observation = mock.Mock(), mock.Mock()
+                    result = node._route_bound_pose_service(target, execute, contact, observation)
+                    self.assertFalse(result.success)
+                    self.assertIn('OBSERVATION_SOURCE_FRAME_MISMATCH', result.message)
+                    self.assertFalse(contact.called)
+                    self.assertFalse(observation.called)
+                    self.assertEqual(target, original)
+
+    def test_contact_pose_route_preserves_original_object_and_header(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node._bound_execution_plan = self._rich_plan(stamp_sec=9.0)
+        node._bound_execution_plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+        target = self._pose(0.2)
+        target.header.stamp = grasp_task_node.rospy.Time.from_sec(10.5)
+        original = grasp_task_node.deepcopy(target)
+        contact, observation = mock.Mock(return_value=FakeServiceResponse(True)), mock.Mock()
+        for execute in (False, True):
+            self.assertTrue(node._route_bound_pose_service(target, execute, contact, observation).success)
+            self.assertIs(contact.call_args[0][0], target)
+            self.assertEqual(contact.call_args[0][1], execute)
+            self.assertEqual(target, original)
+        self.assertFalse(observation.called)
+
+    def test_observation_route_requires_nonzero_frozen_source_stamp(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node._bound_execution_plan = self._rich_plan(stamp_sec=0.0)
+        node._bound_execution_plan.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        contact, observation = mock.Mock(), mock.Mock()
+        result = node._route_bound_pose_service(self._pose(0.1), False, contact, observation)
+        self.assertFalse(result.success)
+        self.assertIn('OBSERVATION_SOURCE_BINDING_INVALID', result.message)
+        self.assertFalse(contact.called)
+        self.assertFalse(observation.called)
 
     def test_track_binding_ignores_semantic_label_and_model_choice(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
@@ -321,6 +400,25 @@ class GraspTaskSequenceTest(unittest.TestCase):
         result, candidate = self._accept_refinement_preview(bound, preview)
         self.assertEqual(result.code, 'FINAL_REFINE_3D_INVALID')
         self.assertIsNone(candidate)
+
+    def test_direct_fresh_invalid_preview_is_terminal_but_old_preview_is_not(self):
+        bound = self._rich_plan(stamp_sec=9.0)
+        bound.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        bound.plan_id = compute_plan_id(bound)
+        for stamp, terminal in ((9.0, False), (9.95, True)):
+            with self.subTest(stamp=stamp):
+                preview = self._mark_valid_3d(self._rich_plan(stamp_sec=stamp))
+                preview.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+                angle = math.radians(4.6598)
+                preview.object_geometry.support_normal_base.x = math.sin(angle)
+                preview.object_geometry.support_normal_base.z = math.cos(angle)
+                preview.plan_id = compute_plan_id(preview)
+                result, candidate = self._accept_refinement_preview(
+                    bound, preview, {'near_field_strategy': 'single_snapshot_direct'})
+                self.assertFalse(result.ok)
+                self.assertEqual(result.code, 'FINAL_REFINE_3D_INVALID')
+                self.assertEqual(getattr(result, 'terminal_for_request', False), terminal)
+                self.assertIsNone(candidate)
 
     def test_refinement_support_offset_disagreement_rejects_rehashed_preview(self):
         bound = self._rich_plan(stamp_sec=9.0)
@@ -816,6 +914,394 @@ class GraspTaskSequenceTest(unittest.TestCase):
         msg.position = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.05]
         return msg
 
+    def _measured_observation_fixture(self, z=0.20):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        plan = self._rich_plan(stamp_sec=9.0)
+        plan.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        plan.plan_id = compute_plan_id(plan)
+        node.active = True
+        node._freeze_execution_plan(plan)
+        node.latest_obj = self._object_at(0.40, stamp_sec=9.9)
+        node.latest_obj_time = node.latest_obj.header.stamp
+        joints = self._joint_state()
+        joints.header.frame_id = 'sdk_measured'
+        joints.header.stamp = grasp_task_node.rospy.Time.from_sec(9.95)
+        node.latest_accepted_joint_state = joints
+        node.latest_joint_state = grasp_task_node.deepcopy(joints)
+        actual = self._pose(0.10, 0.0, z)
+        actual.header.stamp = grasp_task_node.rospy.Time.from_sec(9.96)
+        node._current_tool_pose_base = lambda: actual
+        node.set_state = mock.Mock()
+        return node, plan, actual
+
+    @staticmethod
+    def _run_measured_observation_gate(node, plan, robot_config=None, now=10.0,
+                                     parent_frame='tool0'):
+        with mock.patch.object(
+            grasp_task_node.rospy.Time, 'now',
+            return_value=grasp_task_node.rospy.Time.from_sec(now),
+        ), mock.patch.object(
+            grasp_task_node.rospy, 'get_param',
+            side_effect=lambda name, default=None: (
+                (robot_config or {}) if name == '/robot' else
+                parent_frame if name == '/handeye/parent_frame' else default
+            ),
+        ):
+            return node._validate_measured_observation_envelope(
+                plan, {}, 'offline measured observation',
+            )
+
+    def test_measured_observation_gate_accepts_frozen_scene_not_short_admission_ttl(self):
+        node, plan, actual = self._measured_observation_fixture()
+        # An admitted far scene remains fixed through a long move; latest/near
+        # geometry cannot replace it and its admission TTL is not re-applied.
+        plan.header.stamp = grasp_task_node.rospy.Time.from_sec(1.0)
+        plan.object_geometry.header.stamp = plan.header.stamp
+        plan.plan_id = compute_plan_id(plan)
+        node._freeze_execution_plan(plan)
+        node.latest_target_geometry = None
+        self.assertTrue(self._run_measured_observation_gate(node, plan))
+        audit = node._last_measured_observation_envelope_sample
+        self.assertEqual(audit['geometry_source_stamp_ns'], 1000000000)
+        self.assertEqual(audit['actual_position_m'], [0.10, 0.0, 0.20])
+        self.assertEqual(audit['required_support_clearance_m'], 0.003)
+        self.assertEqual(audit['measured_opening_width_m'], 0.05)
+        self.assertGreater(audit['minimum_support_clearance_m'], 0.003)
+        self.assertFalse(node.set_state.called)
+
+    def test_measured_observation_cad_rejects_2mm_despite_nominal_and_camera_range(self):
+        # Identity tool0 palm bottom is z - 0.13214 m. A nominal endpoint can
+        # have ample clearance, yet actual following leaves only 2 mm.
+        node, plan, actual = self._measured_observation_fixture(z=0.13414)
+        plan.poses[0].position.z = actual.pose.position.z + 0.015
+        plan.plan_id = compute_plan_id(plan)
+        node._freeze_execution_plan(plan)
+        node._last_observation_camera_range_evidence = {'distance_m': 0.200}
+        self.assertFalse(self._run_measured_observation_gate(node, plan))
+        audit = node._last_measured_observation_envelope_sample
+        self.assertEqual(audit['code'], 'OBSERVATION_SUPPORT_COLLISION')
+        self.assertAlmostEqual(audit['minimum_support_clearance_m'], 0.002)
+        self.assertEqual(audit['required_support_clearance_m'], 0.003)
+
+    def test_measured_observation_support_boundary_does_not_weaken_3mm(self):
+        for clearance, accepted in ((0.003, True), (0.003 - 2e-9, False)):
+            with self.subTest(clearance=clearance):
+                node, plan, _actual = self._measured_observation_fixture(z=0.13214 + clearance)
+                self.assertEqual(self._run_measured_observation_gate(node, plan), accepted)
+
+    def test_measured_observation_uses_actual_orientation_not_nominal(self):
+        node, plan, actual = self._measured_observation_fixture(z=0.150)
+        self.assertTrue(self._run_measured_observation_gate(node, plan))
+        actual.pose.orientation.x = math.sin(math.radians(15.0))
+        actual.pose.orientation.w = math.cos(math.radians(15.0))
+        before = grasp_task_node.deepcopy(actual)
+        self.assertFalse(self._run_measured_observation_gate(node, plan))
+        self.assertEqual(node._last_measured_observation_envelope_sample['code'],
+                         'OBSERVATION_SUPPORT_COLLISION')
+        self.assertEqual(actual, before)
+
+    def test_measured_observation_checks_target_obb_not_only_support(self):
+        node, plan, actual = self._measured_observation_fixture(z=0.23)
+        actual.pose.position.x = 0.40
+        self.assertFalse(self._run_measured_observation_gate(node, plan))
+        audit = node._last_measured_observation_envelope_sample
+        self.assertEqual(audit['code'], 'OBSERVATION_TARGET_COLLISION')
+        self.assertGreater(audit['minimum_support_clearance_m'], 0.003)
+
+    def test_measured_observation_uses_accepted_opening_and_name_mapping(self):
+        node, plan, _actual = self._measured_observation_fixture()
+        state = node.latest_accepted_joint_state
+        state.position[-1] = 0.021
+        state.name = list(reversed(state.name))
+        state.position = list(reversed(state.position))
+        state.name.append('irrelevant_aux_joint')
+        state.position.append(0.123)
+        self.assertTrue(self._run_measured_observation_gate(node, plan))
+        audit = node._last_measured_observation_envelope_sample
+        self.assertEqual(audit['measured_opening_width_m'], 0.021)
+        self.assertEqual(audit['actual_arm_joint_positions_rad'],
+                         [0.1, -0.2, 0.3, -0.4, 0.5, -0.6])
+
+    def test_measured_observation_rejects_missing_stale_or_ambiguous_measurement(self):
+        cases = (
+            'no_tf', 'zero_tf_stamp', 'old_tf', 'future_tf', 'wrong_tf_frame',
+            'no_accepted', 'zero_accepted_stamp', 'old_accepted', 'future_accepted',
+            'wrong_accepted_source', 'missing_arm', 'duplicate_arm',
+            'missing_gripper', 'nonfinite_gripper', 'oversized_gripper',
+            'zero_quaternion', 'tiny_quaternion', 'nonfinite_quaternion',
+            'overflow_quaternion', 'nonfinite_tool',
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                node, plan, actual = self._measured_observation_fixture()
+                joints = node.latest_accepted_joint_state
+                if case == 'no_tf':
+                    node._current_tool_pose_base = lambda: None
+                elif case == 'zero_tf_stamp':
+                    actual.header.stamp = grasp_task_node.rospy.Time(0)
+                elif case == 'old_tf':
+                    actual.header.stamp = grasp_task_node.rospy.Time.from_sec(9.49)
+                elif case == 'future_tf':
+                    actual.header.stamp = grasp_task_node.rospy.Time.from_sec(10.01)
+                elif case == 'wrong_tf_frame':
+                    actual.header.frame_id = 'camera_link'
+                elif case == 'no_accepted':
+                    node.latest_accepted_joint_state = None
+                elif case == 'zero_accepted_stamp':
+                    joints.header.stamp = grasp_task_node.rospy.Time(0)
+                elif case == 'old_accepted':
+                    joints.header.stamp = grasp_task_node.rospy.Time.from_sec(9.49)
+                elif case == 'future_accepted':
+                    joints.header.stamp = grasp_task_node.rospy.Time.from_sec(10.01)
+                elif case == 'wrong_accepted_source':
+                    joints.header.frame_id = 'heartbeat'
+                elif case == 'missing_arm':
+                    joints.name[1] = 'missing_joint_2'
+                elif case == 'duplicate_arm':
+                    joints.name[1] = joints.name[0]
+                elif case == 'missing_gripper':
+                    joints.name[-1] = 'wrong_gripper'
+                elif case == 'nonfinite_gripper':
+                    joints.position[-1] = float('nan')
+                elif case == 'oversized_gripper':
+                    joints.position[-1] = 0.051
+                elif case == 'zero_quaternion':
+                    actual.pose.orientation.w = 0.0
+                elif case == 'tiny_quaternion':
+                    actual.pose.orientation.w = 1e-10
+                elif case == 'nonfinite_quaternion':
+                    actual.pose.orientation.w = float('nan')
+                elif case == 'overflow_quaternion':
+                    actual.pose.orientation.w = 1e300
+                elif case == 'nonfinite_tool':
+                    actual.pose.position.x = float('nan')
+                self.assertFalse(self._run_measured_observation_gate(node, plan))
+                self.assertEqual(node._last_measured_observation_envelope_sample['code'],
+                                 'MEASURED_OBSERVATION_EVIDENCE_INVALID')
+
+    def test_measured_observation_missing_or_changed_frozen_geometry_fails_closed(self):
+        for case in ('no_frozen', 'revoked', 'mutated_geometry', 'stale_source_binding'):
+            with self.subTest(case=case):
+                node, plan, _actual = self._measured_observation_fixture()
+                if case == 'no_frozen':
+                    node._bound_execution_plan = None
+                elif case == 'revoked':
+                    node._execution_authority_revoked = True
+                elif case == 'mutated_geometry':
+                    plan.object_geometry.support_offset_m += 0.015
+                elif case == 'stale_source_binding':
+                    plan.object_geometry.header.stamp = grasp_task_node.rospy.Time.from_sec(8.0)
+                self.assertFalse(self._run_measured_observation_gate(node, plan))
+                self.assertEqual(node._last_measured_observation_envelope_sample['code'],
+                                 'MEASURED_OBSERVATION_GEOMETRY_INVALID')
+
+    def test_measured_observation_revalidates_authority_after_tf_lookup(self):
+        node, plan, actual = self._measured_observation_fixture()
+        def lookup():
+            node._execution_authority_revoked = True
+            return actual
+        node._current_tool_pose_base = lookup
+        self.assertFalse(self._run_measured_observation_gate(node, plan))
+        self.assertEqual(node._last_measured_observation_envelope_sample['code'],
+                         'MEASURED_OBSERVATION_GEOMETRY_INVALID')
+
+    def test_measured_observation_never_disables_freshness_with_bad_configuration(self):
+        for value in (0.0, -1.0, float('nan'), float('inf'), 'invalid'):
+            with self.subTest(value=value):
+                node, plan, _actual = self._measured_observation_fixture()
+                self.assertFalse(self._run_measured_observation_gate(
+                    node, plan,
+                    {'strict_execution_controller_sync_max_feedback_age_sec': value},
+                ))
+
+    def test_measured_observation_rejects_non_tool0_cad_frame_configuration(self):
+        node, plan, _actual = self._measured_observation_fixture()
+        self.assertFalse(self._run_measured_observation_gate(
+            node, plan, parent_frame='Link6',
+        ))
+        self.assertIn('unchanged tool0 frame',
+                      node._last_measured_observation_envelope_sample['reason'])
+
+    def test_primary_and_reused_observation_cad_failure_blocks_near_field_even_without_residual_gate(self):
+        for reused in (False, True):
+            with self.subTest(reused=reused):
+                node, plan, actual = self._measured_observation_fixture(z=0.13414)
+                plan.poses[0] = grasp_task_node.deepcopy(actual.pose)
+                plan.plan_id = compute_plan_id(plan)
+                node._freeze_execution_plan(plan)
+                node._near_field_active = False
+                node._position_only_execute_globally_enabled = lambda: False
+                node._execution_checkpoint = mock.Mock(return_value=True)
+                node._command_gripper_position = mock.Mock(return_value=True)
+                node._wait_for_motion_settle = mock.Mock(return_value=True)
+                node._current_observation_view_reusable = mock.Mock(return_value=reused)
+                node._plan_and_execute_pose = mock.Mock(return_value=True)
+                node._wait_for_fresh_observation_camera_target_range = mock.Mock(
+                    return_value=grasp_task_node.PlanValidationResult(True),
+                )
+                node._maybe_rebind_near_field_grasp6d_plan = mock.Mock(return_value=plan)
+                with mock.patch.object(
+                    grasp_task_node.rospy.Time, 'now',
+                    return_value=grasp_task_node.rospy.Time.from_sec(10.0),
+                ), mock.patch.object(
+                    grasp_task_node.rospy, 'get_param',
+                    side_effect=lambda _name, default=None: default,
+                ):
+                    result = node._execute_grasp6d_plan(
+                        {
+                            'near_field_replan_enabled': True,
+                            'near_field_replan_required': True,
+                            'observation_reuse_position_tolerance_m': 0.025 if reused else 0.0,
+                            'measured_endpoint_check_enabled': False,
+                        },
+                        {'open_position_m': 0.05}, 0.05,
+                        mock.Mock(return_value=FakeServiceResponse(True)),
+                        object(), object(), None, plan,
+                        strict_execute_pose=mock.Mock(),
+                    )
+                self.assertFalse(result)
+                self.assertEqual(node._plan_and_execute_pose.call_count, 0 if reused else 1)
+                self.assertFalse(node._wait_for_fresh_observation_camera_target_range.called)
+                self.assertFalse(node._maybe_rebind_near_field_grasp6d_plan.called)
+                self.assertEqual(node._last_measured_observation_envelope_sample['code'],
+                                 'OBSERVATION_SUPPORT_COLLISION')
+
+    def test_radial_observation_correction_requires_actual_cad_after_existing_move(self):
+        node, plan, actual = self._measured_observation_fixture(z=0.13414)
+        node._last_observation_camera_range_evidence = {
+            'camera_position_m': [0.18, 0.0, 0.20],
+            'target_position_m': [0.0, 0.0, 0.20],
+            'distance_m': 0.18,
+        }
+        node._last_measured_endpoint_sample = {
+            'plan_id': plan.plan_id,
+            'plan_phase': grasp_task_node._FAR_FIELD_OBSERVATION_PLAN,
+            'position_error_vector_m': [0.01, 0.0, 0.0],
+        }
+        node._plan_and_execute_pose = mock.Mock(return_value=True)
+        with mock.patch.object(
+            grasp_task_node.rospy.Time, 'now',
+            return_value=grasp_task_node.rospy.Time.from_sec(10.0),
+        ), mock.patch.object(
+            grasp_task_node.rospy, 'get_param',
+            side_effect=lambda _name, default=None: default,
+        ):
+            result = node._maybe_execute_observation_camera_retreat(
+                plan,
+                {
+                    'observation_camera_target_retreat_correction_enabled': True,
+                    'observation_camera_target_min_distance_m': 0.190,
+                    'observation_camera_target_nominal_distance_m': 0.200,
+                },
+                grasp_task_node.PlanValidationResult(
+                    False, 'OBSERVATION_CAMERA_TARGET_OUT_OF_RANGE', 'too close',
+                ),
+                mock.Mock(return_value=FakeServiceResponse(True)), object(),
+            )
+        self.assertIsNone(result)
+        self.assertEqual(node._plan_and_execute_pose.call_count, 1)
+        self.assertEqual(node._last_measured_observation_envelope_sample['code'],
+                         'OBSERVATION_SUPPORT_COLLISION')
+
+    def test_reused_observation_settle_false_prevents_cad_and_near_field(self):
+        node, plan, actual = self._measured_observation_fixture()
+        plan.poses[0] = grasp_task_node.deepcopy(actual.pose)
+        plan.plan_id = compute_plan_id(plan)
+        node._freeze_execution_plan(plan)
+        node._position_only_execute_globally_enabled = lambda: False
+        node._execution_checkpoint = mock.Mock(return_value=True)
+        node._command_gripper_position = mock.Mock(return_value=True)
+        node._wait_for_motion_settle = mock.Mock(return_value=False)
+        node._current_observation_view_reusable = mock.Mock(return_value=True)
+        node._validate_measured_observation_envelope = mock.Mock(return_value=True)
+        node._record_and_validate_measured_endpoint = mock.Mock(return_value=True)
+        node._maybe_rebind_near_field_grasp6d_plan = mock.Mock(return_value=plan)
+        move = mock.Mock(return_value=FakeServiceResponse(True))
+        with mock.patch.object(
+            grasp_task_node.rospy.Time, 'now',
+            return_value=grasp_task_node.rospy.Time.from_sec(10.0),
+        ):
+            result = node._execute_grasp6d_plan(
+                {
+                    'near_field_replan_enabled': True,
+                    'near_field_replan_required': True,
+                    'observation_reuse_position_tolerance_m': 0.025,
+                    'measured_endpoint_check_enabled': True,
+                },
+                {'open_position_m': 0.05}, 0.05, move,
+                object(), object(), None, plan, strict_execute_pose=mock.Mock(),
+            )
+        self.assertFalse(result)
+        self.assertFalse(move.called)
+        self.assertFalse(node._validate_measured_observation_envelope.called)
+        self.assertFalse(node._record_and_validate_measured_endpoint.called)
+        self.assertFalse(node._maybe_rebind_near_field_grasp6d_plan.called)
+        self.assertIn('MEASURED_OBSERVATION_NOT_SETTLED', node.set_state.call_args[0][1])
+
+    def test_clear_view_settle_false_prevents_cad_and_preview(self):
+        node, plan, actual = self._measured_observation_fixture()
+        node._current_camera_pose_base = lambda: actual
+        node._clear_view_reacquisition_attempts = 0
+        node._execution_checkpoint = mock.Mock(return_value=True)
+        node._wait_for_motion_settle = mock.Mock(return_value=False)
+        node._validate_measured_observation_envelope = mock.Mock(return_value=True)
+        node._request_near_field_preview_stream = mock.Mock(return_value=True)
+        node._invoke_plan_bound_action = lambda _p, _c, _label, action: (
+            grasp_task_node.PlanValidationResult(True), action(),
+        )
+        preflight = mock.Mock(return_value=FakeServiceResponse(
+            True, 'joint_duration_lower_bound_sec=1.000 joint_path_cost=0.2 joint_max_delta=0.1',
+        ))
+        execute = mock.Mock(return_value=FakeServiceResponse(True))
+        with mock.patch.object(
+            grasp_task_node, 'make_clear_view_reacquisition_poses',
+            return_value=[self._pose(0.1, 0.02, 0.20), self._pose(0.1, -0.02, 0.20)],
+        ):
+            result = node._execute_clear_view_reacquisition(
+                plan, {'clear_view_reacquisition_camera_body_radius_m': 0.025},
+                preflight, execute,
+            )
+        self.assertFalse(result.ok)
+        self.assertIn('feedback did not settle', result.reason)
+        self.assertEqual(execute.call_count, 1)
+        self.assertFalse(node._validate_measured_observation_envelope.called)
+        self.assertFalse(node._request_near_field_preview_stream.called)
+
+    def test_clear_view_supplement_cad_failure_prevents_preview_and_second_move(self):
+        node, plan, actual = self._measured_observation_fixture(z=0.13414)
+        node._current_camera_pose_base = lambda: actual
+        node._clear_view_reacquisition_attempts = 0
+        node._execution_checkpoint = mock.Mock(return_value=True)
+        node._wait_for_motion_settle = mock.Mock(return_value=True)
+        node._request_near_field_preview_stream = mock.Mock(return_value=True)
+        node._invoke_plan_bound_action = lambda _p, _c, _label, action: (
+            grasp_task_node.PlanValidationResult(True), action(),
+        )
+        preflight = mock.Mock(return_value=FakeServiceResponse(
+            True, 'joint_duration_lower_bound_sec=1.000 joint_path_cost=0.2 joint_max_delta=0.1',
+        ))
+        execute = mock.Mock(return_value=FakeServiceResponse(True))
+        with mock.patch.object(
+            grasp_task_node.rospy.Time, 'now',
+            return_value=grasp_task_node.rospy.Time.from_sec(10.0),
+        ), mock.patch.object(
+            grasp_task_node.rospy, 'get_param',
+            side_effect=lambda _name, default=None: default,
+        ), mock.patch.object(
+            grasp_task_node, 'make_clear_view_reacquisition_poses',
+            return_value=[self._pose(0.1, 0.02, 0.20), self._pose(0.1, -0.02, 0.20)],
+        ):
+            result = node._execute_clear_view_reacquisition(
+                plan, {'clear_view_reacquisition_camera_body_radius_m': 0.025},
+                preflight, execute,
+            )
+        self.assertFalse(result.ok)
+        self.assertEqual(execute.call_count, 1)
+        self.assertEqual(node._clear_view_reacquisition_attempts, 1)
+        self.assertFalse(node._request_near_field_preview_stream.called)
+        self.assertEqual(node._last_measured_observation_envelope_sample['code'],
+                         'OBSERVATION_SUPPORT_COLLISION')
+
     @staticmethod
     def _passing_mujoco_response(plan_id):
         return {
@@ -1109,9 +1595,6 @@ class GraspTaskSequenceTest(unittest.TestCase):
         terminal.header.stamp = grasp_task_node.rospy.Time.from_sec(10.1)
         terminal.valid = False
         terminal.candidate_source = 'near_field_terminal'
-        terminal.diagnostic = (
-            'NEAR_FIELD_DIRECT_TIMEOUT: shared phase deadline consumed'
-        )
         node.latest_grasp6d_preview_plan = terminal
         node._grasp6d_plan_lock = threading.RLock()
 
@@ -1120,21 +1603,25 @@ class GraspTaskSequenceTest(unittest.TestCase):
             lambda: grasp_task_node.rospy.Time.from_sec(10.2)
         )
         try:
-            result, candidate = node._copy_near_field_preview_candidate(
-                bound,
-                int(10.0 * 1e9),
-                {
-                    'near_field_strategy': 'single_snapshot_direct',
-                    'plan_validity_sec': 5.0,
-                },
-            )
+            for code, reason in (
+                ('NEAR_FIELD_DIRECT_TIMEOUT', 'shared phase deadline consumed'),
+                ('NEAR_FIELD_ACCEPT_FAILED', 'TypeError: immutable evidence'),
+            ):
+                terminal.diagnostic = '%s: %s' % (code, reason)
+                result, candidate = node._copy_near_field_preview_candidate(
+                    bound,
+                    int(10.0 * 1e9),
+                    {
+                        'near_field_strategy': 'single_snapshot_direct',
+                        'plan_validity_sec': 5.0,
+                    },
+                )
+                self.assertIsNone(candidate)
+                self.assertFalse(result.ok)
+                self.assertEqual(result.code, code)
+                self.assertEqual(result.reason, reason)
         finally:
             grasp_task_node.rospy.Time.now = original_now
-
-        self.assertIsNone(candidate)
-        self.assertFalse(result.ok)
-        self.assertEqual(result.code, 'NEAR_FIELD_DIRECT_TIMEOUT')
-        self.assertIn('shared phase deadline', result.reason)
 
     def test_active_execution_ignores_new_valid_plan_replacement(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
@@ -1586,6 +2073,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
             for actual, expected in zip(optical_axis, expected_axis):
                 self.assertAlmostEqual(actual, expected, places=6)
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_clear_view_reacquisition_preflights_both_and_executes_fastest_once(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -1653,6 +2144,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertIs(executions[0][0], preflight[1][0])
         self.assertEqual(node._clear_view_reacquisition_attempts, 1)
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_surface_observation_move_respects_camera_range_and_remaining_budget(self):
         for case in ('valid', 'outer_edge', 'range', 'deadline', 'inference_budget', 'replan_over_budget'):
             with self.subTest(case=case):
@@ -2073,6 +2568,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertEqual(executions, [])
         self.assertEqual(node._clear_view_reacquisition_attempts, 1)
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_clear_view_replans_earlier_rank_winner_before_cached_execution(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -2133,6 +2632,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertIs(executions[0][0], preflights[0][0])
         self.assertTrue(executions[0][1])
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_clear_view_success_requires_fresh_observation_and_full_plan_recheck(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -2745,6 +3248,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
             0.07,
         )
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_observation_retreat_executes_one_strict_preflight_and_move(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -2807,6 +3314,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertAlmostEqual(executed[0].pose.position.y, 2.0)
         self.assertAlmostEqual(executed[0].pose.position.z, 3.0)
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_observation_too_far_executes_one_strict_radial_correction(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -2909,6 +3420,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         )
         self.assertIn('0.1750m', result.reason)
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_far_field_range_failure_prevents_near_field_request(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -3370,6 +3885,44 @@ class GraspTaskSequenceTest(unittest.TestCase):
             ),
         )
 
+    def test_direct_fresh_invalid_geometry_does_not_wait_out_deadline(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        bound = self._rich_plan(stamp_sec=9.0)
+        bound.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        node.active = True
+        node._near_field_phase_started_sec = 9.5
+        node._near_field_phase_deadline_sec = 100.0
+        states, streams = [], []
+        node.set_state = lambda stage, message='', *a: states.append((stage, message))
+        node._set_near_field_preview_stream = lambda cfg, enabled: (streams.append(enabled) or True)
+        node._copy_near_field_preview_candidate = lambda *a, **kw: (
+            types.SimpleNamespace(ok=False, code='FINAL_REFINE_3D_INVALID',
+                                  reason='support normal changed 4.6598deg',
+                                  terminal_for_request=True), None)
+        with mock.patch.object(grasp_task_node.rospy.Time, 'now',
+                               return_value=grasp_task_node.rospy.Time.from_sec(10.0)), \
+             mock.patch.object(grasp_task_node.rospy, 'sleep',
+                               side_effect=AssertionError('known invalid snapshot cannot improve by waiting')):
+            result = node._maybe_rebind_near_field_grasp6d_plan(
+                {'near_field_strategy': 'single_snapshot_direct',
+                 'near_field_replan_enabled': True, 'near_field_replan_required': True,
+                 'near_field_replan_timeout_sec': 90.0}, {}, bound)
+        self.assertIsNone(result)
+        self.assertEqual(streams, [True, False])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+        self.assertTrue(states[-1][1].startswith('FINAL_REFINE_3D_INVALID:'))
+
+    def test_post_lift_missing_visual_evidence_cannot_authorize_success(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = True
+        node.latest_visual_obj = None
+        with mock.patch.object(grasp_task_node.time, 'monotonic', side_effect=[0.0, 1.0]):
+            result = node._post_lift_visual_verification_result(
+                self._rich_plan(), {'post_lift_visual_verification_enabled': True,
+                                    'post_lift_visual_verification_timeout_sec': 0.1}, 1)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.code, 'POST_LIFT_VISUAL_UNAVAILABLE')
+
     def test_near_field_surface_recovery_is_once_and_requires_post_move_target(self):
         for outcome in ('fresh', 'still_missing', 'wrong_target', 'move_failed'):
             with self.subTest(outcome=outcome):
@@ -3391,6 +3944,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
                     self.assertIs(plan, bound)
                     self.assertEqual(cfg['clear_view_reacquisition_radial_retreat_m'], 0.0)
                     self.assertLessEqual(cfg['clear_view_reacquisition_lateral_offset_m'], 0.04)
+                    self.assertTrue(cfg['clear_view_observation_range_required'])
                     motions.append(True)
                     clock[0] = 12.0
                     node._clear_view_reacquisition_minimum_stamp_ns = post_move_ns
@@ -3440,6 +3994,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
                     self.assertEqual(len(phase_calls), 1)
                     self.assertTrue(phase_calls[0]['force'])
                     self.assertEqual(phase_calls[0]['budget_sec'], 28.0)
+                    self.assertEqual(phase_calls[0]['absolute_deadline_sec'], 40.0)
                 else:
                     self.assertIsNone(result)
                     self.assertFalse(stream_calls[-1])
@@ -3494,6 +4049,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(observed_minimum_stamps, [int(10.0 * 1e9)])
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_direct_near_field_requires_final_precontact_refinement(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -3598,6 +4157,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
             ],
         )
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_near_field_rebind_reuses_identical_reached_pregrasp(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -3774,6 +4337,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
             states[-1][1],
         )
 
+    @mock.patch.object(
+        grasp_task_node.GraspTaskNode, '_validate_measured_observation_envelope',
+        new=lambda *_args, **_kwargs: True,
+    )
     def test_repeated_far_field_plan_preserves_reached_observation_view(self):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
@@ -3799,6 +4366,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
         node._position_only_execute_globally_enabled = lambda: False
         node._execution_checkpoint = lambda *_args, **_kwargs: True
         node._current_tool_pose_base = lambda: reached
+        node._record_reused_observation_following = mock.Mock(return_value=True)
+        node._record_and_validate_measured_endpoint = mock.Mock(return_value=False)
         node._command_gripper_position = lambda *_args, **_kwargs: True
         node._maybe_rebind_near_field_grasp6d_plan = (
             lambda *_args, **_kwargs: rebound
@@ -3829,6 +4398,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
                     'near_field_replan_enabled': True,
                     'near_field_replan_required': True,
                     'observation_reuse_position_tolerance_m': 0.025,
+                    'measured_endpoint_check_enabled': True,
                 },
                 {'open_position_m': 0.05},
                 0.05,
@@ -3848,6 +4418,8 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(preflight, [])
         self.assertEqual(settled, ['reused 6D observation'])
+        node._record_reused_observation_following.assert_called_once()
+        node._record_and_validate_measured_endpoint.assert_not_called()
         self.assertEqual(
             labels,
             ['6D near-field pregrasp', 'linear 6D approach'],

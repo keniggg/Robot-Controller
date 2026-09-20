@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   std_srvs
   sensor_msgs
+  diagnostic_msgs
   hardware_interface
   controller_manager
   controller_manager_msgs
@@ -30,7 +31,7 @@ catkin_package(
   INCLUDE_DIRS include
 #   LIBRARIES bessica_d_hw_interface # Export the library for other packages to use
   # DEPENDS is no longer needed here as catkin handles dependencies from find_package
-  CATKIN_DEPENDS rospy roscpp std_msgs std_srvs sensor_msgs hardware_interface controller_manager controller_manager_msgs serial
+  CATKIN_DEPENDS rospy roscpp std_msgs std_srvs sensor_msgs diagnostic_msgs hardware_interface controller_manager controller_manager_msgs serial
 )
 
 # --- Include Directories ---
@@ -68,6 +69,7 @@ target_link_libraries(alicia_d_hw_interface_node
 )
 
 if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(sdk_diagnostic_evidence_test test/sdk_diagnostic_evidence_test.cpp)
   catkin_add_gtest(
     actuation_confirmation_test
     test/actuation_confirmation_test.cpp

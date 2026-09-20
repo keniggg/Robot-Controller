@@ -1,0 +1,76 @@
+{
+  "/alicia_d/motion_enabled": true,
+  "/alicia_d/control_reference_epoch": {
+    "stamp_ns": 1789875872459441743,
+    "frame": "sdk_reference_epoch"
+  },
+  "/gui/joint_direct_mode": false,
+  "/grasp/state": {
+    "active": false,
+    "state": "FAILED",
+    "success": false,
+    "message": "execution slot released: failed"
+  },
+  "/alicia_d/sdk_command": {
+    "stamp_ns": 1789876628908755039,
+    "name": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "position": [
+      -1.8315730607354554,
+      0.45559229400203544,
+      -0.1932815792735908,
+      -0.047553404424454875,
+      -0.2132233295161041,
+      0.1303883669702795
+    ]
+  },
+  "/alicia_d/accepted_joint_states": {
+    "stamp_ns": 1789876629020801964,
+    "name": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6",
+      "right_finger"
+    ],
+    "position": [
+      -1.8285050991596845,
+      0.44945637085049284,
+      -0.20401944478879028,
+      -0.047553404424454875,
+      -0.2162912910918754,
+      0.13652429012182207,
+      0.04975
+    ]
+  },
+  "response_episode": {
+    "epoch_ns": "1789875872459441743",
+    "baseline_counts": [
+      854,
+      2352,
+      1922,
+      2017,
+      1909,
+      2133
+    ],
+    "goal_counts": [
+      854,
+      2345,
+      1922,
+      2017,
+      1909,
+      2133
+    ],
+    "max_counts_per_axis": 7,
+    "scene_plan_id": "e06a7a2a75005de7e435db41",
+    "state": "consumed_before_submission_no_automatic_rearm"
+  }
+}

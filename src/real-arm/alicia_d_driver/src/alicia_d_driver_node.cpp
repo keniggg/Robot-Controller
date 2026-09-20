@@ -1,5 +1,7 @@
 #include "alicia_d_driver/alicia_d_driver_node.hpp"
 #include "alicia_d_driver/gui_direct_hold.hpp"
+#include "alicia_d_driver/sdk_position_codec.hpp"
+#include "alicia_d_driver/sdk_diagnostic_evidence.hpp"
 #include "alicia_d_driver/joint_feedback_recovery.hpp"
 #include <cmath>
 #include <numeric> // For std::accumulate
@@ -12,6 +14,7 @@
 #include <sstream>
 #include <iomanip>
 #include <limits>
+#include <stdexcept>
 
 // --- Command IDs, Data Identifiers, etc. remain the same ---
 constexpr uint8_t CMD_SERVO_CONTROL = 0x04;
@@ -148,6 +151,23 @@ AliciaDDriverNode::AliciaDDriverNode()
     endpoint_trim_config_.response_deadline_sec =
         endpoint_feedback_trim_response_deadline_sec_;
     endpoint_trim_config_.max_total_trim_rad = endpoint_feedback_trim_max_rad_;
+    std::vector<int> per_joint_step_quantums;
+    if (pnh_.getParam("endpoint_feedback_trim_max_step_quantums_by_joint",
+                      per_joint_step_quantums)) {
+        if (per_joint_step_quantums.size() != 6 ||
+            std::any_of(per_joint_step_quantums.begin(), per_joint_step_quantums.end(),
+                        [this](int v) { return v < endpoint_feedback_trim_response_min_quantums_ || v > 16; })) {
+            throw std::runtime_error("invalid six-axis endpoint trim step limits");
+        }
+        for (int value : per_joint_step_quantums) {
+            endpoint_trim_config_.max_step_rad_by_joint.push_back(
+                value * SDK_JOINT_QUANTIZATION_RAD);
+        }
+        ROS_INFO("Endpoint trim per-axis maximum steps: [%d,%d,%d,%d,%d,%d] SDK counts",
+                 per_joint_step_quantums[0], per_joint_step_quantums[1],
+                 per_joint_step_quantums[2], per_joint_step_quantums[3],
+                 per_joint_step_quantums[4], per_joint_step_quantums[5]);
+    }
     endpoint_trim_continuity_ = EndpointTrimContinuity(endpoint_trim_config_);
     endpoint_trim_command_order_ = EndpointTrimCommandOrder(
         endpoint_trim_config_.joint_count,
@@ -490,9 +510,19 @@ void AliciaDDriverNode::load_parameters()
 void AliciaDDriverNode::setup_ros_communications()
 {
     joint_state_pub_std_ = nh_.advertise<sensor_msgs::JointState>("/joint_states", 10);
+    accepted_joint_state_pub_ = nh_.advertise<sensor_msgs::JointState>("/alicia_d/accepted_joint_states", 20);
+    sdk_command_pub_ = nh_.advertise<sensor_msgs::JointState>("/alicia_d/sdk_command", 20);
+    control_reference_pub_ = nh_.advertise<sensor_msgs::JointState>("/alicia_d/control_reference", 20);
+    control_reference_epoch_pub_ = nh_.advertise<std_msgs::Header>("/alicia_d/control_reference_epoch", 1, true);
     feedback_ready_pub_ = nh_.advertise<std_msgs::Bool>("/alicia_d/feedback_ready", 1, true);
     run_status_pub_ = nh_.advertise<std_msgs::UInt8>("/alicia_d/run_status", 1, true);
     temperature_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/alicia_d/temperatures_c", 1, true);
+    sdk_diagnostic_pub_ = nh_.advertise<diagnostic_msgs::DiagnosticArray>("/alicia_d/sdk_diagnostics", 40);
+    device_info_pub_ = nh_.advertise<diagnostic_msgs::DiagnosticArray>("/alicia_d/device_info", 1, true);
+    query_device_info_service_ = pnh_.advertiseService(
+        "query_device_info", &AliciaDDriverNode::query_device_info_callback, this);
+    query_motion_diagnostics_service_ = pnh_.advertiseService(
+        "query_motion_diagnostics", &AliciaDDriverNode::query_motion_diagnostics_callback, this);
     self_check_mask_pub_ = nh_.advertise<std_msgs::UInt16>("/alicia_d/self_check_mask", 1, true);
     protection_latched_pub_ = nh_.advertise<std_msgs::Bool>("/alicia_d/protection_latched", 1, true);
     motion_enabled_pub_ = nh_.advertise<std_msgs::Bool>("/alicia_d/motion_enabled", 1, true);
@@ -638,6 +668,18 @@ bool AliciaDDriverNode::set_task_endpoint_precision_callback(
 
 void AliciaDDriverNode::clear_retained_command_state()
 {
+    // Invalidate one complete command epoch. A concurrent mode callback must
+    // not restore a cached pre-reset hold between clearing targets and frames.
+    std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);
+    const uint64_t previous_epoch_ns = control_reference_reset_time_.toNSec();
+    control_reference_reset_time_ = ros::Time::now();
+    // This is a reset barrier, not a measured sample timestamp. Repeated clock
+    // values must not reuse an epoch; a reversed clock leaves a future barrier
+    // which rejects reference admission until ROS time catches up.
+    control_reference_reset_time_.fromNSec(reference_epoch_next_stamp_ns(
+        control_reference_reset_time_.toNSec(), previous_epoch_ns));
+    control_mode_hold_only_ = true;
+    control_mode_needs_sync_ = !gui_control_mode_;
     {
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
         has_latest_command_ = false;
@@ -686,7 +728,14 @@ void AliciaDDriverNode::clear_retained_command_state()
         pending_joint_feedback_.clear();
         pending_joint_feedback_count_ = 0;
         last_streamed_joint_positions_.clear();
+        last_streamed_gripper_rad_ = 0.0;
         last_streamed_joint_positions_time_ = ros::Time(0);
+    }
+    if (control_reference_epoch_pub_) {
+        std_msgs::Header epoch_msg;
+        epoch_msg.stamp = control_reference_reset_time_;
+        epoch_msg.frame_id = "sdk_reference_epoch";
+        control_reference_epoch_pub_.publish(epoch_msg);
     }
 }
 
@@ -820,11 +869,15 @@ bool AliciaDDriverNode::request_positive_enable(
 
 void AliciaDDriverNode::state_poll_timer_callback(const ros::TimerEvent& event)
 {
-    if (!communicator_ || !communicator_->is_connected()) return;
+    if (!communicator_ || !communicator_->is_connected()) {
+        std::lock_guard<std::mutex> lock(readonly_motion_query_mutex_);
+        readonly_motion_query_batch_.cancel();
+        return;
+    }
 
     // The controller can interleave responses when two query timers fire at
-    // once. Schedule every diagnostic query in a dedicated state-poll slot so
-    // only one request is outstanding on the half-duplex transport.
+    // once. Schedule at most one query per state-poll slot. This is NOT a
+    // device-response ACK or a guarantee that the previous response arrived.
     const ros::Time now = ros::Time::now();
     const bool diagnostic_queries_suppressed =
         diagnostic_query_suppressed_for_motion(now);
@@ -865,6 +918,31 @@ void AliciaDDriverNode::state_poll_timer_callback(const ros::TimerEvent& event)
             last_temperature_query_time_ = now;
         }
         return;
+    }
+
+    // Explicit, rate-limited read-only request through the existing serial
+    // owner. No startup query, background retry, second port, or motion write.
+    if (!diagnostic_queries_suppressed && device_info_query_pending_.load() &&
+        (last_device_info_query_time_.isZero() ||
+         (now - last_device_info_query_time_).toSec() >= 5.0)) {
+        device_info_query_pending_.store(false);
+        last_device_info_query_time_ = now;
+        if (!communicator_->write_raw_frame(sdk_readonly_version_query())) {
+            ROS_WARN("Read-only device-info query write failed; no automatic retry.");
+        }
+        return;
+    }
+
+    SdkReadonlyMotionQuery readonly_query;
+    {
+        std::lock_guard<std::mutex> lock(readonly_motion_query_mutex_);
+        readonly_query = readonly_motion_query_batch_.take(
+            ros::SteadyTime::now().toSec(), !diagnostic_queries_suppressed);
+    }
+    if (readonly_query != SdkReadonlyMotionQuery::None) {
+        const bool written = communicator_->write_raw_frame(sdk_readonly_motion_query(readonly_query));
+        publish_readonly_query_write(readonly_query, written);
+        return; // Never append a second query or motion command to this slot.
     }
 
     // SDK joint+gripper query:
@@ -985,40 +1063,54 @@ void AliciaDDriverNode::gui_control_mode_callback(const std_msgs::Bool::ConstPtr
     gui_control_mode_ = msg->data;
     control_mode_changed_time_ = ros::Time::now();
     control_mode_needs_sync_ = !gui_control_mode_;
+    control_mode_hold_only_ = true;
     std::lock_guard<std::mutex> send_lock(send_mutex_);
     std::vector<double> feedback;
     double gripper = 0.0;
-    bool fresh = false;
     {
         std::lock_guard<std::mutex> data_lock(data_mutex_);
         feedback = current_joint_positions_;
         gripper = current_gripper_position_;
-        const double age = (control_mode_changed_time_ - last_accepted_joint_feedback_time_).toSec();
-        fresh = has_real_feedback_ && age >= 0.0 && age <= feedback_stale_timeout_sec_;
     }
+    // Freeze at the last actual wire target, never the unsent trajectory goal
+    // or raw encoders (a servo's measured steady offset is not a new command).
+    // No cached frame means mode selection alone must not start a stream.
+    std::vector<double> hold = feedback;
+    double hold_gripper = gripper;
+    const bool retained_hold = decode_retained_sdk_hold(
+        last_sent_sdk_command_frame_, hold, hold_gripper);
     {
         std::lock_guard<std::mutex> command_lock(latest_cmd_mutex_);
-        latest_joint_angles_ = feedback;
-        latest_gripper_rad_ = gripper;
-        has_latest_command_ = fresh;
+        latest_joint_angles_ = hold;
+        latest_gripper_rad_ = hold_gripper;
+        has_latest_command_ = retained_hold;
         endpoint_trim_continuity_ = EndpointTrimContinuity(endpoint_trim_config_);
         endpoint_trim_command_order_.reset();
         endpoint_feedback_trim_task_lease_active_ = false;
         gui_direct_gesture_active_ = false;
         gui_direct_edited_index_ = -1;
         gui_direct_hold_joint_angles_.clear();
+        gui_direct_hold_gripper_rad_ = 0.0;
     }
-    cmd_joint_angles_ = feedback;
-    cmd_gripper_rad_ = gripper;
+    cmd_joint_angles_ = hold;
+    cmd_gripper_rad_ = hold_gripper;
     cmd_joint_velocities_.assign(6, 0.0);
     cmd_gripper_vel_rad_s_ = 0.0;
-    command_state_seeded_from_feedback_ = fresh;
-    last_sent_sdk_command_frame_.clear();
+    // With no sent command, seed from feedback at the first authorized write,
+    // not this mode-selection snapshot (the user may reposition meanwhile).
+    command_state_seeded_from_feedback_ = retained_hold;
+    // Ownership is not a torque/actuation reset. Preserve measured actuation
+    // confirmation; the separate control_mode_needs_sync_ gate still rejects
+    // stale automatic targets until the controller adopts this exact wire
+    // hold (or fresh encoders only when no successful SDK hold exists).
     {
         std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
-        actuation_confirmation_.reset_command_synchronization();
+        actuation_confirmation_.reset_motion_observation();
     }
-    ROS_WARN("Control ownership changed: gui_direct_mode=%s; previous interpolation discarded, measured hold retained", gui_control_mode_ ? "true" : "false");
+    publish_actuation_status();
+    ROS_WARN("Control ownership changed: gui_direct_mode=%s; previous interpolation discarded, %s",
+        gui_control_mode_ ? "true" : "false",
+        retained_hold ? "last transmitted SDK hold retained" : "no prior SDK hold; awaiting explicit command");
 }
 
 void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::ConstPtr& msg)
@@ -1032,6 +1124,14 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         (msg->header.stamp.isZero() || msg->header.stamp < control_mode_changed_time_)) return;
     if (!communicator_->is_connected()) return;
     const ros::Time command_time = ros::Time::now();
+    const bool gateway_reference_sync =
+        msg->header.frame_id == "motion_gateway_reference_sync";
+    if (gateway_reference_sync && !reference_sync_stamp_in_current_epoch(
+            msg->header.stamp.toNSec(), control_reference_reset_time_.toNSec(),
+            control_mode_changed_time_.toNSec(), command_time.toNSec())) {
+        ROS_WARN_THROTTLE(1.0, "REFERENCE_SYNC_REJECTED: missing, future or previous reset/ownership epoch stamp");
+        return;
+    }
     const EndpointTrimCommandSource endpoint_trim_command_source =
         msg->header.frame_id == "gui_direct"
             ? EndpointTrimCommandSource::GUI_DIRECT_EDIT
@@ -1075,6 +1175,15 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
     std::vector<std::string> hardware_joint_names = {
         "Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"
     };
+    if (gateway_reference_sync &&
+        (msg->name.size() != hardware_joint_names.size() ||
+         msg->position.size() != hardware_joint_names.size() ||
+         joint_map.size() != hardware_joint_names.size() ||
+         std::any_of(hardware_joint_names.begin(), hardware_joint_names.end(),
+             [&joint_map](const std::string& name) { return joint_map.count(name) != 1; }))) {
+        ROS_WARN_THROTTLE(1.0, "REFERENCE_SYNC_REJECTED: require exactly six distinct arm positions, with no gripper target");
+        return;
+    }
 
     const bool gui_direct_command =
         msg->header.frame_id == "gui_direct";
@@ -1148,10 +1257,12 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
     std::vector<double> joint_angles;
     std::vector<double> feedback_joint_angles;
     std::vector<double> streamed_hold_joint_angles;
-    bool streamed_hold_is_fresh = false;
+    bool streamed_hold_is_valid = false;
+    bool gui_sync_preserves_target = false;
     double gripper_value = 0.0; // incoming normalized value -> radians for gripper
-    if (gui_direct_command) {
+    if (endpoint_trim_explicit_gui_command) {
         double feedback_gripper_rad = 0.0;
+        double streamed_gripper_rad = 0.0;
         bool feedback_is_fresh = false;
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
@@ -1159,36 +1270,25 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
                 has_real_feedback_ &&
                 current_joint_positions_.size() ==
                     hardware_joint_names.size() &&
-                !last_feedback_time_.isZero() &&
-                (command_time - last_feedback_time_).toSec() >= 0.0 &&
-                (command_time - last_feedback_time_).toSec() <=
+                !last_accepted_joint_feedback_time_.isZero() &&
+                (command_time - last_accepted_joint_feedback_time_).toSec() >= 0.0 &&
+                (command_time - last_accepted_joint_feedback_time_).toSec() <=
                     feedback_stale_timeout_sec_;
             if (feedback_is_fresh) {
                 feedback_joint_angles = current_joint_positions_;
                 feedback_gripper_rad = current_gripper_position_;
             }
-            const double streamed_hold_max_age_sec =
-                command_keepalive_rate_hz_ > 0.0
-                    ? std::max(
-                        feedback_stale_timeout_sec_,
-                        2.0 / command_keepalive_rate_hz_
-                    )
-                    : feedback_stale_timeout_sec_;
-            const double streamed_hold_age_sec =
-                last_streamed_joint_positions_time_.isZero()
-                    ? std::numeric_limits<double>::infinity()
-                    : (
-                        command_time -
-                        last_streamed_joint_positions_time_
-                    ).toSec();
-            streamed_hold_is_fresh =
+            // A held servo command does not expire when keepalives are
+            // suppressed. Enable/reconnect/invalid feedback explicitly clears
+            // this cache. Fresh accepted encoders are independently required.
+            streamed_hold_is_valid =
                 last_streamed_joint_positions_.size() ==
                     hardware_joint_names.size() &&
-                streamed_hold_age_sec >= 0.0 &&
-                streamed_hold_age_sec <= streamed_hold_max_age_sec;
-            if (streamed_hold_is_fresh) {
+                !last_streamed_joint_positions_time_.isZero();
+            if (streamed_hold_is_valid) {
                 streamed_hold_joint_angles =
                     last_streamed_joint_positions_;
+                streamed_gripper_rad = last_streamed_gripper_rad_;
             }
         }
         if (!feedback_is_fresh) {
@@ -1199,58 +1299,14 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
             return;
         }
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
-        const double gesture_gap_sec =
-            gui_direct_last_command_time_.isZero()
-                ? std::numeric_limits<double>::infinity()
-                : (command_time - gui_direct_last_command_time_).toSec();
-        const bool continue_gesture =
-            gui_direct_gesture_active_ &&
-            gui_direct_edited_index_ == gui_direct_edited_index &&
-            gesture_gap_sec >= 0.0 &&
-            gesture_gap_sec <= gui_direct_gesture_timeout_sec_ &&
-            gui_direct_hold_joint_angles_.size() ==
-                hardware_joint_names.size();
-        if (!continue_gesture) {
-            gui_direct_hold_joint_angles_ = select_gui_direct_hold_reference(
-                feedback_joint_angles,
-                streamed_hold_joint_angles,
-                streamed_hold_is_fresh
-            );
-            gui_direct_hold_gripper_rad_ = feedback_gripper_rad;
-        }
-        gui_direct_gesture_active_ = true;
-        gui_direct_edited_index_ = gui_direct_edited_index;
-        gui_direct_last_command_time_ = command_time;
-        joint_angles = gui_direct_hold_joint_angles_;
-        gripper_value = gui_direct_hold_gripper_rad_;
+        const bool has_manual_target = gui_direct_hold_joint_angles_.size() == 6;
+        joint_angles = select_gui_direct_command_reference(
+            feedback_joint_angles, streamed_hold_joint_angles,
+            streamed_hold_is_valid, gui_direct_hold_joint_angles_);
+        gripper_value = has_manual_target ? gui_direct_hold_gripper_rad_
+            : (streamed_hold_is_valid ? streamed_gripper_rad : feedback_gripper_rad);
+        gui_sync_preserves_target = has_manual_target || streamed_hold_is_valid;
     } else {
-        if (gui_direct_sync_command) {
-            std::lock_guard<std::mutex> data_lock(data_mutex_);
-            feedback_joint_angles = current_joint_positions_;
-            const double streamed_hold_max_age_sec =
-                command_keepalive_rate_hz_ > 0.0
-                    ? std::max(
-                        feedback_stale_timeout_sec_,
-                        2.0 / command_keepalive_rate_hz_
-                    )
-                    : feedback_stale_timeout_sec_;
-            const double streamed_hold_age_sec =
-                last_streamed_joint_positions_time_.isZero()
-                    ? std::numeric_limits<double>::infinity()
-                    : (
-                        command_time -
-                        last_streamed_joint_positions_time_
-                    ).toSec();
-            streamed_hold_is_fresh =
-                last_streamed_joint_positions_.size() ==
-                    hardware_joint_names.size() &&
-                streamed_hold_age_sec >= 0.0 &&
-                streamed_hold_age_sec <= streamed_hold_max_age_sec;
-            if (streamed_hold_is_fresh) {
-                streamed_hold_joint_angles =
-                    last_streamed_joint_positions_;
-            }
-        }
         std::lock_guard<std::mutex> lock(latest_cmd_mutex_);
         const double direct_age_sec =
             gui_direct_last_command_time_.isZero()
@@ -1274,14 +1330,7 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         gui_direct_gesture_active_ = false;
         gui_direct_edited_index_ = -1;
         gui_direct_hold_joint_angles_.clear();
-        joint_angles =
-            gui_direct_sync_command && streamed_hold_is_fresh
-                ? select_gui_direct_hold_reference(
-                    feedback_joint_angles,
-                    streamed_hold_joint_angles,
-                    true
-                )
-                : latest_joint_angles_;
+        joint_angles = latest_joint_angles_;
         gripper_value = latest_gripper_rad_;
     }
     if (joint_angles.size() != hardware_joint_names.size()) {
@@ -1294,7 +1343,7 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
                 gui_direct_command &&
                 static_cast<int>(i) != gui_direct_edited_index
             ) ||
-            (gui_direct_sync_command && streamed_hold_is_fresh)
+            (gui_direct_sync_command && gui_sync_preserves_target)
         ) {
             continue;
         }
@@ -1308,7 +1357,7 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
     if (
         it_grip != joint_map.end() &&
         (!gui_direct_command || gui_direct_edited_index == 6) &&
-        !(gui_direct_sync_command && streamed_hold_is_fresh)
+        !(gui_direct_sync_command && gui_sync_preserves_target)
     ) {
         if (gripper_input_is_percent_) {
             // map [0..1] percent to radians [0..100deg]
@@ -1333,31 +1382,79 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         // A driver restart/positive-enable reset leaves ros_control running
         // with its previous desired vector. Its first bridge sample can be
         // inside the broad reconnect tolerance yet large enough to start an
-        // unintended response probe. Require the same measured hold as a
-        // manual-to-automatic handoff before admitting that controller again.
+        // unintended response probe. A cleared SDK epoch still requires
+        // measured initialization; ownership-only changes instead preserve
+        // the exact successfully written SDK baseline below.
         automatic_command_needs_sync = automatic_command_needs_sync ||
             !actuation_confirmation_.synchronized();
+    }
+    // Dedicated reference-only admission is independent of the ordinary
+    // tracking fast path. Mode, reset and successful writes share mode_lock.
+    if (gateway_reference_sync) {
+        bool feedback_is_fresh = false;
+        ros::Time reference_now;
+        {
+            std::lock_guard<std::mutex> data_lock(data_mutex_);
+            reference_now = ros::Time::now();
+            feedback_joint_angles = current_joint_positions_;
+            const double feedback_age_sec =
+                (reference_now - last_accepted_joint_feedback_time_).toSec();
+            feedback_is_fresh = has_real_feedback_ &&
+                !last_accepted_joint_feedback_time_.isZero() &&
+                feedback_age_sec >= 0.0 && feedback_age_sec <= feedback_stale_timeout_sec_;
+        }
+        const double sdk_age_sec = (reference_now - last_sent_sdk_command_time_).toSec();
+        const bool sdk_is_fresh = !last_sent_sdk_command_time_.isZero() &&
+            sdk_age_sec >= 0.0 && sdk_age_sec <= feedback_stale_timeout_sec_;
+        std::string actuation_status;
+        {
+            std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
+            actuation_status = actuation_confirmation_.status_text();
+        }
+        if (!reference_sync_matches_successful_sdk_or_initial(
+                joint_angles, gripper_value, feedback_joint_angles, feedback_is_fresh,
+                last_sent_sdk_command_frame_, sdk_is_fresh, actuation_status)) {
+            ROS_WARN_THROTTLE(1.0, "REFERENCE_SYNC_REJECTED: require current successful SDK position words or a fresh true initial positive-enable reference");
+            return;
+        }
+        if (!automatic_command_needs_sync) {
+            // Already tracking: do not replace an in-flight/trim target with
+            // the current wire point. Subsequent successful-write telemetry,
+            // not this no-op callback, is the gateway's acknowledgment.
+            return;
+        }
     }
     if (automatic_command_needs_sync) {
         // Automatic commands do not enter the GUI feedback snapshot branches.
         // Read the live encoder state here, where the handoff needs it.
         bool feedback_is_fresh = false;
+        ros::Time handoff_now;
         {
             std::lock_guard<std::mutex> data_lock(data_mutex_);
+            handoff_now = ros::Time::now();
             feedback_joint_angles = current_joint_positions_;
             const double age =
-                (command_time - last_accepted_joint_feedback_time_).toSec();
+                (handoff_now - last_accepted_joint_feedback_time_).toSec();
             feedback_is_fresh = has_real_feedback_ &&
                 !last_accepted_joint_feedback_time_.isZero() &&
                 age >= 0.0 && age <= feedback_stale_timeout_sec_;
         }
-        if (!controller_handoff_matches_feedback(
-                joint_angles, feedback_joint_angles, feedback_is_fresh)) {
-            ROS_WARN_THROTTLE(1.0, "CONTROL_MODE_SYNC_REQUIRED: controller target must match fresh six-joint feedback after ownership or actuation reset");
+        // This callback, the successful SDK writer, mode freeze and epoch
+        // reset all hold control_mode_mutex_. Never consult an unsent goal.
+        const double retained_sdk_age_sec =
+            (handoff_now - last_sent_sdk_command_time_).toSec();
+        const bool retained_frozen_and_fresh =
+            control_mode_needs_sync_ && control_mode_hold_only_ &&
+            !last_sent_sdk_command_time_.isZero() &&
+            retained_sdk_age_sec >= 0.0 &&
+            retained_sdk_age_sec <= feedback_stale_timeout_sec_;
+        if (!controller_handoff_matches_frozen_sdk_or_initial(
+                joint_angles, gripper_value, feedback_joint_angles,
+                feedback_is_fresh, last_sent_sdk_command_frame_,
+                retained_frozen_and_fresh)) {
+            ROS_WARN_THROTTLE(1.0, "CONTROL_MODE_SYNC_REQUIRED: require fresh six-joint feedback and unchanged frozen SDK position words (including gripper); only an empty SDK epoch permits initial encoder synchronization");
             return;
         }
-        control_mode_needs_sync_ = false;
-        ROS_INFO("Control ownership synchronized to live encoders; automatic commands admitted");
     }
     {
         std::lock_guard<std::mutex> lock(actuation_mutex_);
@@ -1435,6 +1532,23 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         latest_joint_angles_ = joint_angles;
         latest_gripper_rad_ = gripper_value;
         has_latest_command_ = true;
+        control_mode_hold_only_ = false;
+        if (endpoint_trim_explicit_gui_command) {
+            // Commit only after admission. Multiple explicitly edited joints
+            // retain their independent goals and may interpolate concurrently.
+            gui_direct_hold_joint_angles_ = joint_angles;
+            gui_direct_hold_gripper_rad_ = gripper_value;
+            gui_direct_gesture_active_ = gui_direct_command;
+            gui_direct_edited_index_ = gui_direct_edited_index;
+            gui_direct_last_command_time_ = command_time;
+        }
+        if (!gui_control_mode_ && automatic_command_needs_sync) {
+            control_mode_needs_sync_ = false;
+            ROS_INFO("Control ownership synchronized to %s; automatic commands admitted",
+                last_sent_sdk_command_frame_.empty()
+                    ? "fresh encoder initialization"
+                    : "frozen successfully transmitted SDK position words");
+        }
     }
 
     if (log_command_flow_) {
@@ -1459,10 +1573,10 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     std::unique_lock<std::mutex> send_lock(send_mutex_, std::try_to_lock);
     if (!send_lock.owns_lock()) return;
 
-    const ros::Time now = ros::Time::now();
-
+    ros::Time now;
     bool feedback_ready = false;
     bool feedback_stale = true;
+    double feedback_age_sec = std::numeric_limits<double>::infinity();
     bool protection_latched = false;
     bool motion_enabled = false;
     bool actuation_overheat_blocked = false;
@@ -1471,14 +1585,20 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     ros::Time feedback_sample_time;
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
+        // The parser timestamps accepted feedback under this same mutex.
+        // Sampling now before acquiring it can make a newer valid sample
+        // appear to come from the future after waiting for the parser.
+        // Keep this clock and the complete feedback snapshot in one epoch;
+        // genuine clock reversal and expired samples remain rejected below.
+        now = ros::Time::now();
         feedback_ready = has_real_feedback_;
         feedback_sample_time = last_accepted_joint_feedback_time_;
+        feedback_age_sec = (now - feedback_sample_time).toSec();
         feedback_stale =
-            !has_real_feedback_ ||
+            !feedback_ready ||
             feedback_sample_time.isZero() ||
-            (now - feedback_sample_time).toSec() < 0.0 ||
-            (now - feedback_sample_time).toSec() >
-                feedback_stale_timeout_sec_;
+            feedback_age_sec < 0.0 ||
+            feedback_age_sec > feedback_stale_timeout_sec_;
         protection_latched = protection_fault_latched_;
         motion_enabled = motion_commands_enabled_;
         feedback_joint_angles = current_joint_positions_;
@@ -1709,8 +1829,8 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
             maximum_feedback_error_rad <=
                 endpoint_feedback_trim_max_rad_;
         const bool endpoint_feedback_trim_update_allowed =
-            endpoint_feedback_trim_enabled_ ||
-            endpoint_feedback_trim_task_lease_active_;
+            !gui_control_mode_ && (endpoint_feedback_trim_enabled_ ||
+            endpoint_feedback_trim_task_lease_active_);
 
         if (
             endpoint_trim_gate.allows_correction() &&
@@ -1874,9 +1994,14 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     }
 
     if (pause_commands_when_feedback_stale_ && (!feedback_ready || feedback_stale)) {
+        const char* feedback_pause_reason = !feedback_ready ? "not_ready"
+            : (feedback_sample_time.isZero() ? "zero_stamp"
+               : (feedback_age_sec < 0.0 ? "future_stamp" : "expired"));
         ROS_WARN_THROTTLE(1.0,
-                          "Pausing SDK command stream: hardware feedback is %s (timeout %.2fs).",
+                          "Pausing SDK command stream: hardware feedback is %s (reason=%s age=%.6fs timeout=%.2fs).",
                           feedback_ready ? "stale" : "not ready",
+                          feedback_pause_reason,
+                          feedback_age_sec,
                           feedback_stale_timeout_sec_);
         return;
     }
@@ -2030,8 +2155,7 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
 
     // SDK gripper value range: 0~1000
     size_t gripper_offset = data_start + 6 * 4;
-    double gripper_deg = std::max(0.0, std::min(100.0, cmd_gripper_rad_ * 180.0 / M_PI));
-    uint16_t gripper_hw_val = static_cast<uint16_t>((gripper_deg / 100.0) * 1000.0);
+    uint16_t gripper_hw_val = sdk_gripper_position_encode(cmd_gripper_rad_);
     uint16_t gripper_speed_hw = 5500;
 
     servo_frame[gripper_offset]     = gripper_hw_val & 0xFF;
@@ -2059,18 +2183,46 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
     if (wrote) {
         last_sent_sdk_command_frame_ = servo_frame;
         last_sent_sdk_command_time_ = now;
+        std::vector<double> wire_joint_angles;
+        double wire_gripper_rad = 0.0;
+        decode_retained_sdk_hold(servo_frame, wire_joint_angles, wire_gripper_rad);
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
-            last_streamed_joint_positions_ = sdk_joint_angles;
+            last_streamed_joint_positions_ = wire_joint_angles;
+            last_streamed_gripper_rad_ = wire_gripper_rad;
             last_streamed_joint_positions_time_ = now;
         }
-        {
+        if (!control_mode_hold_only_) {
             std::lock_guard<std::mutex> lock(actuation_mutex_);
             actuation_confirmation_.note_streamed_target(
-                sdk_joint_angles,
+                wire_joint_angles,
                 now.toSec()
             );
         }
+        sensor_msgs::JointState wire_msg;
+        wire_msg.header.stamp = now;
+        wire_msg.header.frame_id = "sdk_transmitted";
+        wire_msg.name = {"Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"};
+        wire_msg.position = wire_joint_angles;
+        sdk_command_pub_.publish(wire_msg);
+        // Read-only provenance, not a command or a claim of motor arrival.
+        // Publish only beside a complete successful SDK write, under the same
+        // ownership/write locks and timestamp. No heartbeat or latch may
+        // renew an old command epoch. Keep /sdk_command's original contract.
+        sensor_msgs::JointState control_reference_msg = wire_msg;
+        control_reference_msg.header.stamp = now;
+        control_reference_msg.header.frame_id = gui_control_mode_
+            ? "sdk_manual"
+            : (control_mode_needs_sync_ && control_mode_hold_only_
+                ? "sdk_handoff_required"
+                : (!control_mode_needs_sync_ && !control_mode_hold_only_
+                    ? "sdk_tracking" : "sdk_reference_unconfirmed"));
+        control_reference_msg.name.push_back("right_finger");
+        double gripper_stroke_m = 0.05;
+        pnh_.param<double>("gripper_stroke_m", gripper_stroke_m, 0.05);
+        control_reference_msg.position.push_back(
+            static_cast<double>(gripper_hw_val) / 1000.0 * gripper_stroke_m);
+        control_reference_pub_.publish(control_reference_msg);
         publish_actuation_status();
     }
     if (log_command_flow_) {
@@ -2089,7 +2241,9 @@ void AliciaDDriverNode::process_serial_data_callback(const ros::TimerEvent& even
 
 void AliciaDDriverNode::heartbeat_publish_callback(const ros::TimerEvent& event)
 {
-    // Republish the latest known state with a current timestamp to keep MoveIt happy
+    // Heartbeat availability must follow accepted arm samples, not unrelated
+    // status/gripper traffic. Sample time under the parser's snapshot mutex.
+    std::lock_guard<std::mutex> lock2(data_mutex_);
     const ros::Time now = ros::Time::now();
 
     // Optional compatibility mode: mirror commanded state when feedback is
@@ -2098,7 +2252,6 @@ void AliciaDDriverNode::heartbeat_publish_callback(const ros::TimerEvent& event)
     const double feedback_timeout = 0.1; // seconds
     if (mirror_commanded_state_when_feedback_stale_ &&
         (now - last_feedback_time_).toSec() > feedback_timeout) {
-        std::lock_guard<std::mutex> lock(data_mutex_);
         for (size_t i = 0; i < current_joint_positions_.size() && i < cmd_joint_angles_.size(); ++i) {
             current_joint_positions_[i] = cmd_joint_angles_[i];
         }
@@ -2106,18 +2259,25 @@ void AliciaDDriverNode::heartbeat_publish_callback(const ros::TimerEvent& event)
         current_gripper_position_ = cmd_gripper_rad_;
     }
 
-    std::lock_guard<std::mutex> lock2(data_mutex_);
-    const double feedback_age = (now - last_feedback_time_).toSec();
-    const bool feedback_ready = has_real_feedback_ && feedback_age <= feedback_stale_timeout_sec_;
+    const ros::Time feedback_sample_time = last_accepted_joint_feedback_time_;
+    const double feedback_age = (now - feedback_sample_time).toSec();
+    const bool feedback_ready = has_real_feedback_ &&
+        !feedback_sample_time.isZero() && feedback_age >= 0.0 &&
+        feedback_age <= feedback_stale_timeout_sec_;
     std_msgs::Bool ready_msg;
     ready_msg.data = feedback_ready;
     feedback_ready_pub_.publish(ready_msg);
     if (!feedback_ready) {
+        const char* feedback_pause_reason = !has_real_feedback_ ? "not_ready"
+            : (feedback_sample_time.isZero() ? "zero_stamp"
+               : (feedback_age < 0.0 ? "future_stamp" : "expired"));
         ROS_WARN_THROTTLE(
             1.0,
-            "Suppressing /joint_states heartbeat: real hardware feedback is %s (age %.2fs).",
+            "Suppressing /joint_states heartbeat: real hardware feedback is %s (reason=%s age=%.6fs timeout=%.2fs).",
             has_real_feedback_ ? "stale" : "not ready",
-            feedback_age);
+            feedback_pause_reason,
+            feedback_age,
+            feedback_stale_timeout_sec_);
         return;
     }
     publish_joint_state();
@@ -2146,6 +2306,9 @@ void AliciaDDriverNode::process_serial_data()
         }
 
         std::vector<uint8_t> data_payload(packet.begin() + 3, packet.begin() + 3 + data_len);
+        // Preserve CRC-validated raw evidence BEFORE any position/temperature
+        // rejection. This does not renew accepted feedback or confirm motion.
+        publish_sdk_raw_diagnostic(command_id, function_id, data_payload);
         switch (command_id) {
             case SDK_CMD_JOINT:
                 if (function_id == SDK_FUNC_QUERY_JOINT_GRIPPER) {
@@ -2173,6 +2336,135 @@ void AliciaDDriverNode::process_serial_data()
                 break;
         }
     }
+}
+
+bool AliciaDDriverNode::query_device_info_callback(
+    std_srvs::Trigger::Request&, std_srvs::Trigger::Response& response)
+{
+    if (!communicator_ || !communicator_->is_connected() || state_poll_rate_hz_ <= 0) {
+        response.success = false;
+        response.message = "Read-only query unavailable: serial disconnected or poll timer disabled";
+        return true;
+    }
+    response.success = !device_info_query_pending_.exchange(true);
+    response.message = response.success
+        ? "Queued one read-only version query for a quiet poll slot; NOT a device response. Inspect /alicia_d/device_info source stamp."
+        : "A read-only query is already pending; no additional query queued";
+    return true;
+}
+
+bool AliciaDDriverNode::query_motion_diagnostics_callback(
+    std_srvs::Trigger::Request&, std_srvs::Trigger::Response& response)
+{
+    if (!communicator_ || !communicator_->is_connected() || state_poll_rate_hz_ <= 0) {
+        response.success = false;
+        response.message = "Read-only query unavailable: serial disconnected or poll timer disabled";
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(readonly_motion_query_mutex_);
+    response.success = readonly_motion_query_batch_.request(ros::SteadyTime::now().toSec());
+    response.message = response.success
+        ? "Queued one velocity/self-check batch for separate quiet slots; expires in 5 s. NOT a device response; inspect stamped /alicia_d/sdk_diagnostics."
+        : "Read-only batch pending or within 5 s request limit; no extra query queued";
+    return true;
+}
+
+static void sdk_diagnostic_value(diagnostic_msgs::DiagnosticStatus& status,
+                                 const std::string& key, const std::string& value)
+{
+    diagnostic_msgs::KeyValue entry;
+    entry.key = key;
+    entry.value = value;
+    status.values.push_back(entry);
+}
+
+void AliciaDDriverNode::publish_readonly_query_write(SdkReadonlyMotionQuery query, bool written)
+{
+    const auto& frame = sdk_readonly_motion_query(query);
+    if (frame.empty()) return;
+    diagnostic_msgs::DiagnosticArray message;
+    message.header.stamp = ros::Time::now();
+    message.header.frame_id = "sdk_serial_tx_readonly";
+    diagnostic_msgs::DiagnosticStatus status;
+    status.name = "alicia_d/readonly_query_tx";
+    status.level = written ? diagnostic_msgs::DiagnosticStatus::OK : diagnostic_msgs::DiagnosticStatus::WARN;
+    status.message = written ? "read-only host write completed; NOT device ACK"
+                             : "read-only host write failed; no automatic retry";
+    sdk_diagnostic_value(status, "command_function_hex", format_bytes_as_hex({frame[1], frame[2]}));
+    sdk_diagnostic_value(status, "write_success", written ? "true" : "false");
+    sdk_diagnostic_value(status, "timestamp_kind", "host_write_time_not_device_time");
+    message.status.push_back(status);
+    sdk_diagnostic_pub_.publish(message);
+}
+
+void AliciaDDriverNode::publish_sdk_raw_diagnostic(
+    uint8_t command, uint8_t function, const std::vector<uint8_t>& payload)
+{
+    diagnostic_msgs::DiagnosticArray message;
+    message.header.stamp = ros::Time::now(); // host parser receipt, NOT MCU acquisition time
+    message.header.frame_id = "sdk_serial_rx";
+    diagnostic_msgs::DiagnosticStatus status;
+    status.name = "alicia_d/sdk_raw_frame";
+    status.level = diagnostic_msgs::DiagnosticStatus::WARN;
+    status.message = "raw evidence only; device health not established";
+    sdk_diagnostic_value(status, "command_function_hex", format_bytes_as_hex({command, function}));
+    sdk_diagnostic_value(status, "payload_hex", format_bytes_as_hex(payload));
+    sdk_diagnostic_value(status, "timestamp_kind", "host_parse_time_not_device_time");
+    sdk_diagnostic_value(status, "transport", "crc_valid_serial_response_not_motion_ack");
+    if (command == SDK_CMD_JOINT && function == 0x02) {
+        std::vector<uint16_t> words;
+        if (sdk_decode_follower_velocity_words(payload, words)) {
+            std::ostringstream raw;
+            for (size_t i = 0; i < words.size(); ++i) {
+                if (i) raw << ',';
+                raw << words[i];
+            }
+            sdk_diagnostic_value(status, "velocity_raw_u16", raw.str());
+            status.message = "ten raw servo velocity words; signed units and joint mapping unverified";
+        } else {
+            status.message = "unknown follower velocity layout; raw bytes retained";
+        }
+        sdk_diagnostic_value(status, "channel_mapping", "unverified_servo_order_not_joint_indices");
+        sdk_diagnostic_value(status, "velocity_units", "raw_u16_not_joint_rad_per_second");
+    }
+    if (command == SDK_CMD_SELF_CHECK && function == SDK_FUNC_SELF_CHECK) {
+        SdkSelfCheckEvidence evidence;
+        if (sdk_decode_follower_self_check(payload, evidence)) {
+            sdk_diagnostic_value(status, "self_check_mask_raw", std::to_string(evidence.raw_mask));
+            sdk_diagnostic_value(status, "abnormal_channel_bits", std::to_string(evidence.abnormal_channel_bits));
+            sdk_diagnostic_value(status, "reserved_bits_raw", std::to_string(evidence.reserved_bits));
+            status.message = "self-check sample only; does not certify following or device health";
+        } else {
+            status.message = "unknown follower self-check layout; raw bytes retained";
+        }
+        sdk_diagnostic_value(status, "channel_mapping", "unverified_servo_order_not_joint_indices");
+    }
+    if (command == SDK_CMD_JOINT && function == SDK_FUNC_QUERY_JOINT_GRIPPER && payload.size() >= 15) {
+        sdk_diagnostic_value(status, "run_status_hex", format_bytes_as_hex({payload[14]}));
+        sdk_diagnostic_value(status, "joint_evidence", "raw_before_acceptance_filter");
+        if (payload[14] == 0xE1 || payload[14] == 0xE2) {
+            status.level = diagnostic_msgs::DiagnosticStatus::ERROR;
+            status.message = "hardware protection status event; not masked by temperature filtering";
+        }
+    }
+    if (command == 0x01 && function == 0x00) {
+        status.name = "alicia_d/device_info";
+        SdkDeviceIdentity identity;
+        if (sdk_decode_device_identity(payload, identity)) {
+            status.level = diagnostic_msgs::DiagnosticStatus::OK;
+            status.message = "version frame decoded; firmware compatibility NOT verified";
+            status.hardware_id = identity.serial;
+            sdk_diagnostic_value(status, "hardware_version_raw", std::to_string(identity.hardware_raw));
+            sdk_diagnostic_value(status, "firmware_version_raw", std::to_string(identity.firmware_raw));
+        } else {
+            status.message = "unknown version layout; raw bytes retained, no version guessed";
+        }
+        message.status.push_back(status);
+        device_info_pub_.publish(message); // latched with its original receipt stamp
+    } else {
+        message.status.push_back(status);
+    }
+    sdk_diagnostic_pub_.publish(message);
 }
 
 void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& data_payload)
@@ -2547,7 +2839,7 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
     }
 
     if (accept_joint_positions) {
-        publish_joint_state();
+        publish_joint_state(true);
     }
     }
 }
@@ -2720,6 +3012,25 @@ void AliciaDDriverNode::parse_sdk_temperature_frame(const std::vector<uint8_t>& 
         );
     }
     temperature_pub_.publish(msg);
+    const auto evidence = sdk_temperature_evidence(data_payload, msg.data, max_enable_temperature_c_);
+    diagnostic_msgs::DiagnosticArray diagnostic;
+    diagnostic.header.stamp = temperature_time;
+    diagnostic.header.frame_id = "sdk_serial_rx";
+    diagnostic_msgs::DiagnosticStatus status;
+    status.name = "alicia_d/sdk_temperature";
+    status.level = evidence.healthy_sample() ? diagnostic_msgs::DiagnosticStatus::OK
+                                          : diagnostic_msgs::DiagnosticStatus::WARN;
+    status.message = evidence.healthy_sample()
+        ? "this temperature sample accepted; not overall health or actuation permission"
+        : "raw high or incomplete/rejected telemetry; temperature health UNKNOWN";
+    sdk_diagnostic_value(status, "raw_bytes_hex", format_bytes_as_hex(data_payload));
+    sdk_diagnostic_value(status, "raw_max_c", std::to_string(evidence.raw_max_c));
+    sdk_diagnostic_value(status, "filtered_c", format_temperatures(msg.data));
+    sdk_diagnostic_value(status, "channel_quality", evidence.channel_quality);
+    sdk_diagnostic_value(status, "channel_mapping", "unverified_servo_order_not_joint_indices");
+    sdk_diagnostic_value(status, "timestamp_kind", "host_parse_time_not_device_time");
+    diagnostic.status.push_back(status);
+    sdk_diagnostic_pub_.publish(diagnostic);
     if (max_temperature >= 50.0f) {
         ROS_WARN("High or anomalous SDK temperature sample (same-channel max streak %d/%d at channel %d): values_c=%s",
                  high_temperature_sample_count,
@@ -2790,7 +3101,7 @@ void AliciaDDriverNode::parse_gripper_state_frame(const std::vector<uint8_t>& da
 
 }
 
-void AliciaDDriverNode::publish_joint_state()
+void AliciaDDriverNode::publish_joint_state(bool accepted_sdk_sample)
 {
     std::lock_guard<std::mutex> lock(topic_mutex_);
     
@@ -2816,6 +3127,19 @@ void AliciaDDriverNode::publish_joint_state()
     js_msg.position.push_back(gripper_m);
     
     joint_state_pub_std_.publish(js_msg);
+
+    // Only the accepted SDK arm/gripper parser opts into this publication,
+    // after decoding the complete packet while holding data_mutex_. Ordinary
+    // heartbeat and legacy calls retain their existing /joint_states behavior
+    // but cannot turn retained or mirrored positions into new sample evidence.
+    if (accepted_sdk_sample && has_real_feedback_ &&
+        !last_accepted_joint_feedback_time_.isZero() &&
+        js_msg.name.size() == 7 && js_msg.position.size() == 7) {
+        sensor_msgs::JointState accepted_msg = js_msg;
+        accepted_msg.header.stamp = last_accepted_joint_feedback_time_;
+        accepted_msg.header.frame_id = "sdk_measured";
+        accepted_joint_state_pub_.publish(accepted_msg);
+    }
 
     // // Measure outgoing /joint_states publish rate (logs once per second)
     // {
@@ -2936,10 +3260,7 @@ void AliciaDDriverNode::demonstration_mode_callback(const std_msgs::Bool::ConstP
 
 
 uint16_t AliciaDDriverNode::rad_to_hardware_value(double angle_rad) {
-    double angle_deg = angle_rad * 180.0 / M_PI;
-    angle_deg = std::max(-180.0, std::min(180.0, angle_deg));
-    int value = static_cast<int>((angle_deg + 180.0) / 360.0 * 4096.0);
-    return std::max(0, std::min(4095, value));
+    return sdk_joint_position_encode(angle_rad);
 }
 
 uint16_t AliciaDDriverNode::rad_to_hardware_value_grip(double angle_rad)
@@ -2955,9 +3276,7 @@ uint16_t AliciaDDriverNode::rad_to_hardware_value_grip(double angle_rad)
 
 
 double AliciaDDriverNode::hardware_value_to_rad(uint16_t hw_value) {
-    hw_value = std::max(0, std::min(4095, (int)hw_value));
-    double angle_deg = -180.0 + (static_cast<double>(hw_value) / 4096.0) * 360.0;
-    return angle_deg * M_PI / 180.0;
+    return sdk_joint_position_decode(hw_value);
 }
 double AliciaDDriverNode::hardware_value_to_rad_grip(uint16_t hw_value)
 {

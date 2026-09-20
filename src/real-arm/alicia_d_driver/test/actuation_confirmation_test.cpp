@@ -4,6 +4,7 @@
 #include "alicia_d_driver/endpoint_trim_continuity.hpp"
 #include "alicia_d_driver/endpoint_trim_driver_admission.hpp"
 #include "alicia_d_driver/gui_direct_hold.hpp"
+#include "alicia_d_driver/sdk_position_codec.hpp"
 #include "alicia_d_driver/joint_feedback_recovery.hpp"
 
 #include <cmath>
@@ -44,13 +45,7 @@ double degrees(double value)
 
 double driver_sdk_quantize(double radians)
 {
-    const double angle_deg = radians * 180.0 / M_PI;
-    const int hardware_value = static_cast<int>(
-        (angle_deg + 180.0) / 360.0 * 4096.0
-    );
-    const double decoded_deg = -180.0 +
-        (static_cast<double>(hardware_value) / 4096.0) * 360.0;
-    return decoded_deg * M_PI / 180.0;
+    return sdk_joint_position_decode(sdk_joint_position_encode(radians));
 }
 
 EndpointTrimConfig endpoint_trim_config()
@@ -321,6 +316,28 @@ TEST(ActuationConfirmationTest, OwnershipChangeDiscardsUnfinishedProbe)
     EXPECT_FALSE(confirmation.synchronized());
 }
 
+TEST(ActuationConfirmationTest, OwnershipHandoffClearsOldProbeButPreservesSynchronization)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(.025), 10.3);
+    confirmation.reset_motion_observation();
+    confirmation.note_feedback(joints(.01), 10.4);
+    EXPECT_FALSE(confirmation.motion_confirmed(10.5)); // Old motion is not confirmation.
+    EXPECT_TRUE(confirmation.synchronized());
+    EXPECT_EQ(confirmation.status_text(), "PENDING:COMMAND_SYNCHRONIZED");
+    confirmation.note_streamed_target(joints(.05), 10.6);
+    confirmation.note_feedback(joints(.02), 10.7);
+    ASSERT_TRUE(confirmation.motion_confirmed(10.8));
+    confirmation.reset_motion_observation();
+    EXPECT_TRUE(confirmation.motion_confirmed(10.8));
+    EXPECT_TRUE(confirmation.synchronized());
+    // A slider goal outside reconnect tolerance remains admissible: no torque reset.
+    EXPECT_TRUE(confirmation.admit_command(joints(.4), 10.9, nullptr));
+}
+
 TEST(ActuationConfirmationTest, ZeroResponseTimesOutUnconfirmed)
 {
     ActuationConfirmation confirmation(test_config());
@@ -523,6 +540,71 @@ TEST(ActuationConfirmationTest, ConfirmedStreamDoesNotAcceptUnrelatedJointMotion
     EXPECT_TRUE(response_lost);
 }
 
+TEST(ActuationConfirmationTest, September13SettlingThenReverseUsesNewMotionBaseline)
+{
+    // Reduced wire/encoder count sequence from the 01:29 manual Joint5
+    // reversal. Encoders moved 2084 -> 2056, yet the old detector waited
+    // for them to cross a baseline from the preceding forward movement.
+    const double quantum = 2.0 * M_PI / 4096.0;
+    const auto q = [quantum](int count) {
+        return joints(0., 0., 0., 0., (count - 2048) * quantum);
+    };
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(q(1965), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(q(1965), 10.2, nullptr));
+    confirmation.note_streamed_target(q(2031), 10.3);
+    confirmation.note_feedback(q(1973), 10.4);
+    ASSERT_TRUE(confirmation.motion_confirmed(10.4));
+    confirmation.note_streamed_target(q(2071), 10.5);
+    confirmation.note_feedback(q(1988), 10.6);
+    confirmation.note_streamed_target(q(2092), 10.7);
+    confirmation.note_feedback(q(2003), 10.8);
+    confirmation.note_streamed_target(q(2092), 10.9);
+    confirmation.note_feedback(q(2084), 11.0);
+    confirmation.note_streamed_target(q(2092), 11.1);
+    confirmation.note_streamed_target(q(2085), 11.2);
+    confirmation.note_streamed_target(q(2079), 11.3);
+    confirmation.note_streamed_target(q(2071), 11.4);
+    confirmation.note_feedback(q(2082), 11.401);
+    confirmation.note_streamed_target(q(2058), 11.5);
+    for (int i = 0; i < 10; ++i) {
+        const double now = 11.6 + .1 * i;
+        confirmation.note_feedback(q(2056), now);
+        confirmation.note_streamed_target(q(2058), now + .01);
+        confirmation.update(now + .02);
+    }
+    EXPECT_TRUE(confirmation.motion_confirmed(12.52));
+    EXPECT_EQ(confirmation.state(), ActuationState::CONFIRMED);
+}
+
+TEST(ActuationConfirmationTest, PriorSettlingCannotConfirmAStalledNewCommand)
+{
+    for (int response_kind = 0; response_kind < 3; ++response_kind) {
+        SCOPED_TRACE(response_kind); // stationary, wrong direction, other axis
+        ActuationConfirmation confirmation(test_config());
+        confirmation.reset_for_positive_enable(10.0);
+        confirmation.note_feedback(joints(), 10.1);
+        ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+        confirmation.note_streamed_target(joints(.05), 10.3);
+        confirmation.note_feedback(joints(.01), 10.4);
+        ASSERT_TRUE(confirmation.motion_confirmed(10.4));
+        confirmation.note_streamed_target(joints(.05), 10.5);
+        confirmation.note_feedback(joints(.045), 10.6);
+        confirmation.note_streamed_target(joints(.05), 10.7);
+        confirmation.note_streamed_target(joints(.08), 10.8);
+        for (int i = 0; i < 12; ++i) {
+            const double now = 10.9 + .1 * i;
+            confirmation.note_feedback(joints(
+                response_kind == 1 ? .04 : .045,
+                response_kind == 2 ? .02 : 0.), now);
+            confirmation.note_streamed_target(joints(.08), now + .01);
+            confirmation.update(now + .02);
+        }
+        EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+    }
+}
+
 TEST(ActuationConfirmationTest, OverheatBlocksWithoutAConfirmedState)
 {
     ActuationConfirmation confirmation(test_config());
@@ -620,6 +702,97 @@ TEST(GuiDirectHoldTest, FallsBackToFeedbackWithoutAUsableStreamedSetpoint)
         ),
         measured
     );
+}
+
+TEST(GuiDirectHoldTest, ChangingSliderPreservesEarlierUnfinishedManualGoals)
+{
+    const auto measured = joints(0.0, 0.1, 0.2, 0.3, 0.4, 0.5);
+    const auto streamed = joints(0.01, 0.11, 0.21, 0.31, 0.41, 0.51);
+    auto target = select_gui_direct_command_reference(measured, streamed, true, {});
+    target[0] = 0.8;  // Explicit J1 goal, not yet reached by SDK interpolation.
+    auto next = select_gui_direct_command_reference(measured, streamed, true, target);
+    next[1] = -0.6;   // Next message only edits J2; J1 must continue to 0.8.
+    EXPECT_DOUBLE_EQ(next[0], 0.8);
+    EXPECT_DOUBLE_EQ(next[1], -0.6);
+    for (size_t i = 2; i < 6; ++i) EXPECT_DOUBLE_EQ(next[i], streamed[i]);
+    // Neither encoder drift nor an idle/expired keepalive replaces admitted goals.
+    EXPECT_EQ(select_gui_direct_command_reference(joints(), {}, false, next), next);
+}
+
+TEST(GuiDirectHoldTest, SixEditedChannelsCanRetainSixConcurrentGoals)
+{
+    auto target = joints();
+    for (size_t i = 0; i < 6; ++i) {
+        target = select_gui_direct_command_reference(joints(), joints(), true, target);
+        target[i] = 0.1 * (i + 1);
+    }
+    for (size_t i = 0; i < 6; ++i) EXPECT_DOUBLE_EQ(target[i], 0.1 * (i + 1));
+}
+
+TEST(GuiDirectHoldTest, NewOwnershipEpochDoesNotResumeOldManualOrAutomaticGoals)
+{
+    const auto wire = joints(.01, .02, .03, .04, .05, .06);
+    EXPECT_EQ(select_gui_direct_command_reference(joints(), wire, true, {}), wire);
+    // An actuation/reconnect reset invalidates both manual and transmitted caches.
+    const auto feedback = joints(.3, .2, .1);
+    EXPECT_EQ(select_gui_direct_command_reference(feedback, {}, false, {}), feedback);
+    auto malformed = joints();
+    malformed[2] = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_EQ(select_gui_direct_command_reference(feedback, wire, true, malformed), wire);
+}
+
+TEST(SdkPositionCodecTest, EveryJointEncoderCountRoundTripsWithoutRatcheting)
+{
+    size_t legacy_losses = 0;
+    for (uint16_t count = 0; count < 4096; ++count) {
+        const double q = sdk_joint_position_decode(count);
+        const int legacy = static_cast<int>((q * 180.0 / M_PI + 180.0) / 360.0 * 4096.0);
+        if (legacy != count) ++legacy_losses;
+        ASSERT_EQ(sdk_joint_position_encode(q), count) << count;
+    }
+    EXPECT_GT(legacy_losses, 0u);  // Regression reproduces the old truncation bug.
+    EXPECT_EQ(sdk_joint_position_encode(-4.0), 0);
+    EXPECT_EQ(sdk_joint_position_encode(4.0), 4095);
+}
+
+TEST(SdkPositionCodecTest, EveryGripperCountRoundTripsAndKeepsBounds)
+{
+    for (uint16_t count = 0; count <= 1000; ++count) {
+        ASSERT_EQ(sdk_gripper_position_encode(sdk_gripper_position_decode(count)), count);
+    }
+    EXPECT_EQ(sdk_gripper_position_encode(-1.0), 0);
+    EXPECT_EQ(sdk_gripper_position_encode(3.0), 1000);
+}
+
+TEST(SdkPositionCodecTest, OwnershipHoldPreservesExactTransmittedCountsNotEncoders)
+{
+    std::vector<uint8_t> frame(34, 0);
+    frame[0] = 0xAA; frame[1] = 0x06; frame[2] = 0x03; frame[3] = 0x1C; frame[33] = 0xFF;
+    const std::vector<uint16_t> counts{18, 19, 45, 2423, 1875, 2045, 995};
+    for (size_t i = 0; i < 7; ++i) {
+        frame[4 + 4*i] = counts[i] & 0xFF;
+        frame[5 + 4*i] = counts[i] >> 8;
+    }
+    auto hold = joints(); // Stale/fresh encoders cannot change a valid wire hold.
+    double gripper = 0.0;
+    ASSERT_TRUE(decode_retained_sdk_hold(frame, hold, gripper));
+    for (size_t i = 0; i < 6; ++i) EXPECT_EQ(sdk_joint_position_encode(hold[i]), counts[i]);
+    EXPECT_EQ(sdk_gripper_position_encode(gripper), 995);
+    // Both directions and repeated mode toggles preserve the same counts.
+    for (int toggle = 0; toggle < 20; ++toggle) {
+        ASSERT_TRUE(decode_retained_sdk_hold(frame, hold, gripper));
+        for (size_t i = 0; i < 6; ++i) EXPECT_EQ(sdk_joint_position_encode(hold[i]), counts[i]);
+    }
+}
+
+TEST(SdkPositionCodecTest, NoPriorOrInvalidWireFrameCannotAuthorizeAnOwnershipStream)
+{
+    auto held = joints(.5);
+    double gripper = .7;
+    EXPECT_FALSE(decode_retained_sdk_hold({}, held, gripper));
+    EXPECT_EQ(held, joints(.5));
+    EXPECT_DOUBLE_EQ(gripper, .7);
+    EXPECT_FALSE(decode_retained_sdk_hold(std::vector<uint8_t>(34, 0), held, gripper));
 }
 
 TEST(EndpointTrimContinuityTest, SerializesLiveCorrectionAndDelaysLeaseRelease)
@@ -772,6 +945,157 @@ TEST(EndpointTrimContinuityTest, DeployedResponseMinimumRejectsOneQuantumUntilTw
         trim.note_feedback(two_quantum_response, 1.81, 1.81).phase,
         EndpointTrimPhase::ACTIVE_READY
     );
+}
+
+TEST(EndpointTrimContinuityTest,
+     EverySdkTwoCountResponseSettlesInBothDirections)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    config.max_step_rad = 4.0 * config.sdk_quantum_rad;
+    config.response_min_rad = 2.0 * config.sdk_quantum_rad;
+    config.settle_error_rad = 2.0 * config.sdk_quantum_rad;
+    for (int lower_count = 0; lower_count < 4094; ++lower_count) {
+        for (const int direction : {-1, 1}) {
+            const int baseline_count = lower_count + (direction < 0 ? 2 : 0);
+            const int response_count = baseline_count + 2 * direction;
+            SCOPED_TRACE(::testing::Message()
+                         << "SDK baseline=" << baseline_count
+                         << " response=" << response_count);
+            const std::vector<double> baseline =
+                joints(sdk_joint_position_decode(baseline_count));
+            const std::vector<double> response =
+                joints(sdk_joint_position_decode(response_count));
+            EndpointTrimContinuity trim(config);
+            trim.activate(response, joints(), 0.0);
+            ASSERT_EQ(
+                trim.request_correction(baseline, all_stable_joints(), 1.0, 1.0)
+                    .phase,
+                EndpointTrimPhase::WAITING_RESPONSE
+            );
+            ASSERT_EQ(
+                trim.note_feedback(response, 1.1, 1.1).phase,
+                EndpointTrimPhase::WAITING_RESPONSE
+            );
+            ASSERT_EQ(
+                trim.note_feedback(response, 1.41, 1.41).phase,
+                EndpointTrimPhase::ACTIVE_READY
+            );
+        }
+    }
+}
+
+TEST(EndpointTrimContinuityTest,
+     EverySdkOneCountResponseIsRejectedInBothDirections)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    config.response_min_rad = 2.0 * config.sdk_quantum_rad;
+    for (int lower_count = 0; lower_count < 4095; ++lower_count) {
+        for (const int direction : {-1, 1}) {
+            const int baseline_count = lower_count + (direction < 0 ? 1 : 0);
+            const int response_count = baseline_count + direction;
+            SCOPED_TRACE(::testing::Message()
+                         << "SDK baseline=" << baseline_count
+                         << " response=" << response_count);
+            const std::vector<double> baseline =
+                joints(sdk_joint_position_decode(baseline_count));
+            const std::vector<double> response =
+                joints(sdk_joint_position_decode(response_count));
+            EndpointTrimContinuity trim(config);
+            trim.activate(response, joints(), 0.0);
+            ASSERT_EQ(
+                trim.request_correction(baseline, all_stable_joints(), 1.0, 1.0)
+                    .phase,
+                EndpointTrimPhase::WAITING_RESPONSE
+            );
+            ASSERT_EQ(
+                trim.note_feedback(response, 1.1, 1.1).phase,
+                EndpointTrimPhase::WAITING_RESPONSE
+            );
+            ASSERT_EQ(
+                trim.note_feedback(response, 1.41, 1.41).phase,
+                EndpointTrimPhase::WAITING_RESPONSE
+            );
+            ASSERT_EQ(trim.update(2.0).phase, EndpointTrimPhase::FAULT);
+            ASSERT_EQ(trim.state().code, "ENDPOINT_TRIM_RESPONSE_TIMEOUT");
+        }
+    }
+}
+
+TEST(EndpointTrimContinuityTest,
+     EverySdkTwoCountRequestRejectsZeroAndOppositeDirectionalFeedback)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    config.response_min_rad = 2.0 * config.sdk_quantum_rad;
+    for (int lower_count = 0; lower_count < 4094; ++lower_count) {
+        for (const int direction : {-1, 1}) {
+            const int baseline_count = lower_count + (direction < 0 ? 2 : 0);
+            const std::vector<double> baseline =
+                joints(sdk_joint_position_decode(baseline_count));
+            const std::vector<double> reference = joints(
+                sdk_joint_position_decode(baseline_count + 2 * direction)
+            );
+            for (const int opposite_count_delta : {0, 1, 2}) {
+                const int response_count =
+                    baseline_count - direction * opposite_count_delta;
+                if (response_count < 0 || response_count > 4095) {
+                    continue;
+                }
+                SCOPED_TRACE(::testing::Message()
+                             << "SDK baseline=" << baseline_count
+                             << " direction=" << direction
+                             << " response=" << response_count);
+                const std::vector<double> response =
+                    joints(sdk_joint_position_decode(response_count));
+                EndpointTrimContinuity trim(config);
+                trim.activate(reference, joints(), 0.0);
+                ASSERT_EQ(
+                    trim.request_correction(
+                        baseline, all_stable_joints(), 1.0, 1.0
+                    ).phase,
+                    EndpointTrimPhase::WAITING_RESPONSE
+                );
+                ASSERT_EQ(
+                    trim.note_feedback(response, 1.1, 1.1).phase,
+                    EndpointTrimPhase::WAITING_RESPONSE
+                );
+                ASSERT_EQ(
+                    trim.note_feedback(response, 1.41, 1.41).phase,
+                    EndpointTrimPhase::WAITING_RESPONSE
+                );
+            }
+        }
+    }
+}
+
+TEST(EndpointTrimContinuityTest,
+     ResponseRoundoffDoesNotAdmitResolvableSubthresholdDisplacement)
+{
+    EndpointTrimConfig config = endpoint_trim_config();
+    config.response_min_rad = 2.0 * config.sdk_quantum_rad;
+    const double shortfall_rad = 1e-8 * config.sdk_quantum_rad;
+    for (const int direction : {-1, 1}) {
+        const std::vector<double> baseline = joints(sdk_joint_position_decode(1000));
+        const std::vector<double> reference = joints(
+            baseline[0] + direction * config.response_min_rad
+        );
+        const std::vector<double> response = joints(
+            reference[0] - direction * shortfall_rad
+        );
+        EndpointTrimContinuity trim(config);
+        trim.activate(reference, joints(), 0.0);
+        ASSERT_EQ(
+            trim.request_correction(baseline, all_stable_joints(), 1.0, 1.0).phase,
+            EndpointTrimPhase::WAITING_RESPONSE
+        );
+        ASSERT_EQ(
+            trim.note_feedback(response, 1.1, 1.1).phase,
+            EndpointTrimPhase::WAITING_RESPONSE
+        );
+        ASSERT_EQ(
+            trim.note_feedback(response, 1.41, 1.41).phase,
+            EndpointTrimPhase::WAITING_RESPONSE
+        );
+    }
 }
 
 TEST(EndpointTrimContinuityTest,
@@ -1847,6 +2171,305 @@ TEST(GuiControlOwnershipTest, ManualReleaseRequiresFreshCompleteMatchedFeedback)
     nearby_target[2] = std::numeric_limits<double>::quiet_NaN();
     EXPECT_FALSE(controller_handoff_matches_feedback(nearby_target, measured, true));
     EXPECT_FALSE(controller_handoff_matches_feedback(measured, nearby_target, true));
+}
+
+namespace
+{
+std::vector<uint8_t> handoff_test_frame(const std::vector<uint16_t>& counts)
+{
+    std::vector<uint8_t> frame(34, 0);
+    frame[0] = 0xAA; frame[1] = 0x06; frame[2] = 0x03; frame[3] = 0x1C; frame[33] = 0xFF;
+    for (size_t i = 0; i < counts.size(); ++i) {
+        frame[4 + 4*i] = counts[i] & 0xFF;
+        frame[5 + 4*i] = counts[i] >> 8;
+    }
+    return frame;
+}
+}
+
+TEST(GuiControlOwnershipTest, FrozenWireHandoffPreservesBaselineDespiteMeasuredResidual)
+{
+    const auto frame = handoff_test_frame({797, 1964, 2183, 2009, 1895, 2095, 995});
+    std::vector<double> wire; double grip = 0.0;
+    ASSERT_TRUE(decode_retained_sdk_hold(frame, wire, grip));
+    auto actual = wire;
+    actual[1] = sdk_joint_position_decode(1956);
+    actual[2] = sdk_joint_position_decode(2172);
+    ASSERT_FALSE(controller_handoff_matches_feedback(wire, actual, true));
+    EXPECT_TRUE(controller_handoff_matches_frozen_sdk_or_initial(
+        wire, grip, actual, true, frame, true));
+    // Repeating feedback would be a physical reference change, not a handoff.
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        actual, grip, actual, true, frame, true));
+    auto fractional_same_words = wire;
+    for (double& q : fractional_same_words) q += 0.1 * 2.0 * M_PI / 4096.0;
+    EXPECT_TRUE(controller_handoff_matches_frozen_sdk_or_initial(
+        fractional_same_words, grip, actual, true, frame, true));
+}
+
+TEST(GuiControlOwnershipTest, EveryChangedJointPositionWordRejectsFrozenHandoff)
+{
+    // All 4096 codes, both directions, every arm axis: not even one count
+    // can be authorized as a no-motion ownership transition.
+    for (size_t joint = 0; joint < 6; ++joint) {
+        for (uint16_t count = 0; count <= 4095; ++count) {
+            std::vector<uint16_t> counts(7, 2048); counts[6] = 995; counts[joint] = count;
+            const auto frame = handoff_test_frame(counts);
+            std::vector<double> wire; double grip = 0.0;
+            ASSERT_TRUE(decode_retained_sdk_hold(frame, wire, grip));
+            EXPECT_TRUE(controller_handoff_matches_frozen_sdk_or_initial(
+                wire, grip, wire, true, frame, true));
+            for (int direction : {-1, 1}) {
+                const int changed = static_cast<int>(count) + direction;
+                if (changed < 0 || changed > 4095) continue;
+                auto target = wire; target[joint] = sdk_joint_position_decode(changed);
+                EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+                    target, grip, wire, true, frame, true));
+            }
+        }
+    }
+}
+
+TEST(GuiControlOwnershipTest, GripperWordCannotChangeDuringFrozenArmHandoff)
+{
+    const auto frame = handoff_test_frame({2048, 2048, 2048, 2048, 2048, 2048, 995});
+    std::vector<double> wire; double grip = 0.0;
+    ASSERT_TRUE(decode_retained_sdk_hold(frame, wire, grip));
+    for (uint16_t count = 0; count <= 1000; ++count) {
+        EXPECT_EQ(controller_handoff_matches_frozen_sdk_or_initial(
+            wire, sdk_gripper_position_decode(count), wire, true, frame, true), count == 995);
+    }
+}
+
+TEST(GuiControlOwnershipTest, FrozenHandoffRequiresFreshCompleteFeedbackAndValidWrittenFrame)
+{
+    const auto frame = handoff_test_frame({2048, 2048, 2048, 2048, 2048, 2048, 995});
+    std::vector<double> wire; double grip = 0.0;
+    ASSERT_TRUE(decode_retained_sdk_hold(frame, wire, grip));
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        wire, grip, wire, false, frame, true));
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        wire, grip, {}, true, frame, true));
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        wire, grip, wire, true, frame, false));
+    auto invalid = frame; invalid[4] = 0xFF; invalid[5] = 0xFF;
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        wire, grip, wire, true, invalid, true));
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        wire, grip, wire, true, std::vector<uint8_t>(34, 0), true));
+    auto bad_feedback = wire; bad_feedback[3] = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        wire, grip, bad_feedback, true, frame, true));
+    auto bad_command = wire; bad_command[2] = std::numeric_limits<double>::infinity();
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        bad_command, grip, wire, true, frame, true));
+    bad_command = wire; bad_command[1] = 4.0;
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        bad_command, grip, wire, true, frame, true));
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        wire, std::numeric_limits<double>::quiet_NaN(), wire, true, frame, true));
+}
+
+TEST(GuiControlOwnershipTest, ResetWithoutWireRetainsInitialFeedbackHandshakeNotOldGoal)
+{
+    const auto frame = handoff_test_frame({2048, 2058, 2058, 2048, 2048, 2048, 995});
+    std::vector<double> previous; double grip = 0.0;
+    ASSERT_TRUE(decode_retained_sdk_hold(frame, previous, grip));
+    const auto fresh = joints();
+    const std::vector<uint8_t> cleared_after_power_reset;
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        previous, grip, fresh, true, cleared_after_power_reset, false));
+    EXPECT_TRUE(controller_handoff_matches_frozen_sdk_or_initial(
+        fresh, grip, fresh, true, cleared_after_power_reset, false));
+    EXPECT_FALSE(controller_handoff_matches_frozen_sdk_or_initial(
+        fresh, grip, fresh, false, cleared_after_power_reset, false));
+}
+
+TEST(GuiControlOwnershipTest, ReferenceSyncRequiresCurrentResetAndOwnershipEpoch)
+{
+    EXPECT_TRUE(reference_sync_stamp_in_current_epoch(120, 100, 110, 130));
+    EXPECT_TRUE(reference_sync_stamp_in_current_epoch(110, 100, 110, 110));
+    EXPECT_TRUE(reference_sync_stamp_in_current_epoch(100, 100, 0, 130));
+    EXPECT_FALSE(reference_sync_stamp_in_current_epoch(0, 100, 110, 130));
+    EXPECT_FALSE(reference_sync_stamp_in_current_epoch(120, 0, 110, 130));
+    EXPECT_FALSE(reference_sync_stamp_in_current_epoch(99, 100, 0, 130));
+    EXPECT_FALSE(reference_sync_stamp_in_current_epoch(109, 100, 110, 130));
+    EXPECT_FALSE(reference_sync_stamp_in_current_epoch(131, 100, 110, 130));
+    EXPECT_FALSE(reference_sync_stamp_in_current_epoch(120, 125, 110, 130));
+    EXPECT_FALSE(reference_sync_stamp_in_current_epoch(120, 100, 110, 90));
+    // Preserve nanosecond boundaries at real ROS epoch magnitudes.
+    const uint64_t epoch = 1789200000000000000ULL;
+    EXPECT_FALSE(reference_sync_stamp_in_current_epoch(epoch - 1, epoch, 0, epoch + 1));
+    EXPECT_TRUE(reference_sync_stamp_in_current_epoch(epoch, epoch, 0, epoch + 1));
+    EXPECT_FALSE(joint_source_allowed_by_control_mode(true, "motion_gateway_reference_sync"));
+    EXPECT_TRUE(joint_source_allowed_by_control_mode(false, "motion_gateway_reference_sync"));
+}
+
+TEST(GuiControlOwnershipTest, ReferenceEpochChangesOnlyOnResetAndNeverReusesAStamp)
+{
+    EXPECT_EQ(reference_epoch_next_stamp_ns(100, 0), 100U);
+    EXPECT_EQ(reference_epoch_next_stamp_ns(100, 100), 101U);
+    EXPECT_EQ(reference_epoch_next_stamp_ns(90, 100), 101U);
+    EXPECT_EQ(reference_epoch_next_stamp_ns(130, 100), 130U);
+    EXPECT_EQ(reference_epoch_next_stamp_ns(0, 0), 1U);
+    const uint64_t epoch = 1789200000000000000ULL;
+    EXPECT_EQ(reference_epoch_next_stamp_ns(epoch, epoch), epoch + 1);
+    // On clock reversal the future barrier rejects reference admission; it
+    // does not make a previous command new by relaxing the timestamp check.
+    EXPECT_FALSE(reference_sync_stamp_in_current_epoch(90,
+        reference_epoch_next_stamp_ns(90, 100), 0, 90));
+}
+
+TEST(GuiControlOwnershipTest, ReferenceSyncNoWireRequiresTrueInitializationAndOriginalTolerance)
+{
+    const auto actual = joints();
+    for (const std::string& status : {"PENDING:POSITIVE_ENABLE_REQUESTED", "PENDING:COMMAND_SYNCHRONIZED"}) {
+        EXPECT_TRUE(reference_sync_matches_successful_sdk_or_initial(
+            actual, 0.2, actual, true, {}, false, status));
+        auto near = actual; near[1] = 0.003;
+        EXPECT_TRUE(reference_sync_matches_successful_sdk_or_initial(
+            near, 0.2, actual, true, {}, false, status));
+        near[1] = std::nextafter(0.003, 1.0);
+        EXPECT_FALSE(reference_sync_matches_successful_sdk_or_initial(
+            near, 0.2, actual, true, {}, false, status));
+    }
+    for (const std::string& status : {"", "UNCONFIRMED:SERIAL_RECONNECTED_TORQUE_UNCHANGED",
+            "CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE", "PENDING:AWAITING_ENCODER_RESPONSE",
+            "PENDING:ENCODER_RESPONSE_TIMEOUT", "DISABLED:EXPLICIT_TORQUE_OFF"}) {
+        EXPECT_FALSE(reference_sync_matches_successful_sdk_or_initial(
+            actual, 0.2, actual, true, {}, false, status));
+    }
+    EXPECT_FALSE(reference_sync_matches_successful_sdk_or_initial(
+        actual, 0.2, actual, false, {}, false, "PENDING:POSITIVE_ENABLE_REQUESTED"));
+}
+
+TEST(GuiControlOwnershipTest, ReferenceSyncAlwaysChecksCurrentSuccessfulWordsAfterTrackingRace)
+{
+    const std::string tracking = "CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE";
+    for (size_t joint = 0; joint < 6; ++joint) {
+        for (uint16_t count = 0; count <= 4095; ++count) {
+            std::vector<uint16_t> counts(7, 2048); counts[6] = 995; counts[joint] = count;
+            const auto frame = handoff_test_frame(counts);
+            std::vector<double> wire; double grip = 0.0;
+            ASSERT_TRUE(decode_retained_sdk_hold(frame, wire, grip));
+            EXPECT_TRUE(reference_sync_matches_successful_sdk_or_initial(
+                wire, grip, wire, true, frame, true, tracking));
+            for (int direction : {-1, 1}) {
+                const int changed = static_cast<int>(count) + direction;
+                if (changed < 0 || changed > 4095) continue;
+                auto queued = wire; queued[joint] = sdk_joint_position_decode(changed);
+                EXPECT_FALSE(reference_sync_matches_successful_sdk_or_initial(
+                    queued, grip, wire, true, frame, true, tracking));
+            }
+        }
+    }
+}
+
+TEST(GuiControlOwnershipTest, ReferenceSyncPreservesGripperAndRejectsInvalidSuccessfulEvidence)
+{
+    const auto frame = handoff_test_frame({797, 1964, 2183, 2009, 1895, 2095, 995});
+    std::vector<double> wire; double grip = 0.0;
+    ASSERT_TRUE(decode_retained_sdk_hold(frame, wire, grip));
+    auto actual = wire; actual[1] -= 8 * 2.0 * M_PI / 4096.0;
+    const std::string pending = "PENDING:COMMAND_SYNCHRONIZED";
+    EXPECT_TRUE(reference_sync_matches_successful_sdk_or_initial(
+        wire, grip, actual, true, frame, true, pending));
+    for (uint16_t code = 0; code <= 1000; ++code) {
+        EXPECT_EQ(reference_sync_matches_successful_sdk_or_initial(
+            wire, sdk_gripper_position_decode(code), actual, true, frame, true, pending), code == 995);
+    }
+    EXPECT_FALSE(reference_sync_matches_successful_sdk_or_initial(
+        wire, grip, actual, true, frame, false, pending));
+    EXPECT_FALSE(reference_sync_matches_successful_sdk_or_initial(
+        wire, grip, actual, false, frame, true, pending));
+    EXPECT_FALSE(reference_sync_matches_successful_sdk_or_initial(
+        wire, grip, actual, true, std::vector<uint8_t>(34, 0), true, pending));
+    EXPECT_FALSE(reference_sync_matches_successful_sdk_or_initial(
+        wire, grip, actual, true, frame, true, "UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT"));
+}
+
+TEST(EndpointTrimPerJoint, ChangesOnlyTheConfiguredAxisLimit)
+{
+    auto config = endpoint_trim_config();
+    const double quantum = config.sdk_quantum_rad;
+    config.max_step_rad_by_joint = {4*quantum, 7*quantum, 4*quantum,
+                                    4*quantum, 4*quantum, 4*quantum};
+    EndpointTrimContinuity trim(config);
+    trim.activate(std::vector<double>(6, 20*quantum), joints(), 0.0);
+    const auto step = trim.request_correction(joints(), all_stable_joints(), 1.0, .1);
+    ASSERT_EQ(step.phase, EndpointTrimPhase::WAITING_RESPONSE);
+    for (size_t i = 0; i < 6; ++i) {
+        EXPECT_NEAR(step.applied_step[i], (i == 1 ? 7 : 4)*quantum, 1e-14);
+    }
+}
+
+TEST(EndpointTrimPerJoint, SevenCountStepAcceptsFiveCountResponseAtEncoderCoordinates)
+{
+    auto config = endpoint_trim_config();
+    const double quantum = config.sdk_quantum_rad;
+    config.response_min_rad = 2*quantum;
+    config.max_step_rad_by_joint = {4*quantum, 7*quantum, 4*quantum,
+                                    4*quantum, 4*quantum, 4*quantum};
+    for (int count : {100, 785, 1446, 2048, 2322, 4000}) {
+        EndpointTrimContinuity trim(config);
+        auto baseline = joints();
+        baseline[1] = sdk_joint_position_decode(count);
+        auto reference = baseline;
+        reference[1] += 20*quantum;
+        trim.activate(reference, joints(), 0.0);
+        trim.request_correction(baseline, {0,1,0,0,0,0}, 1.0, 1.0);
+        auto measured = baseline;
+        measured[1] = sdk_joint_position_decode(count+5);
+        trim.note_feedback(measured, 1.1, 1.1);
+        EXPECT_EQ(trim.note_feedback(measured, 1.5, 1.5).phase,
+                  EndpointTrimPhase::ACTIVE_READY) << count;
+    }
+}
+
+TEST(EndpointTrimPerJoint, NoResponseStillFaultsWithoutAnotherIncrement)
+{
+    auto config = endpoint_trim_config();
+    const double quantum = config.sdk_quantum_rad;
+    config.max_step_rad_by_joint = {4*quantum, 7*quantum, 4*quantum,
+                                    4*quantum, 4*quantum, 4*quantum};
+    EndpointTrimContinuity trim(config);
+    auto reference = joints(); reference[1] = 20*quantum;
+    trim.activate(reference, joints(), 0.0);
+    auto step = trim.request_correction(joints(), {0,1,0,0,0,0}, 1.0, .1);
+    trim.note_feedback(joints(), .8, .8);
+    EXPECT_EQ(trim.update(1.2).phase, EndpointTrimPhase::FAULT);
+    auto retry = trim.request_correction(joints(), {0,1,0,0,0,0}, 1.0, 1.3);
+    EXPECT_EQ(retry.phase, EndpointTrimPhase::FAULT);
+    EXPECT_EQ(retry.composed_target, step.composed_target);
+}
+
+TEST(EndpointTrimPerJoint, ThreeCountResponseShortfallRemainsRejected)
+{
+    auto config = endpoint_trim_config();
+    const double quantum = config.sdk_quantum_rad;
+    config.max_step_rad_by_joint = {4*quantum, 7*quantum, 4*quantum,
+                                    4*quantum, 4*quantum, 4*quantum};
+    EndpointTrimContinuity trim(config);
+    auto reference = joints(); reference[1] = 20*quantum;
+    trim.activate(reference, joints(), 0.0);
+    trim.request_correction(joints(), {0,1,0,0,0,0}, 1.0, .1);
+    auto measured = joints(); measured[1] = 4*quantum;
+    trim.note_feedback(measured, .2, .2);
+    EXPECT_EQ(trim.note_feedback(measured, .7, .7).phase,
+              EndpointTrimPhase::WAITING_RESPONSE);
+    EXPECT_EQ(trim.update(1.2).phase, EndpointTrimPhase::FAULT);
+}
+
+TEST(EndpointTrimPerJoint, InvalidPerAxisConfigurationFailsClosed)
+{
+    for (const auto& limits : std::vector<std::vector<double>>{
+             {0.01}, {0.,0.,0.,0.,0.,0.}, std::vector<double>(6, .03),
+             std::vector<double>(6, std::numeric_limits<double>::quiet_NaN())}) {
+        auto config = endpoint_trim_config();
+        config.max_step_rad_by_joint = limits;
+        EndpointTrimContinuity trim(config);
+        EXPECT_EQ(trim.activate(joints(), joints(), 0.0).phase, EndpointTrimPhase::FAULT);
+    }
 }
 
 int main(int argc, char** argv)

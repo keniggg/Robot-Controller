@@ -53,6 +53,9 @@ class GuiLayoutContractTest(unittest.TestCase):
                 'get_param',
                 side_effect=lambda _name, default=None: default,
             ),
+            # Constructing the direct-control checkbox persists its value.
+            # A layout test must never change the live robot's control owner.
+            mock.patch.object(rospy, 'set_param'),
             mock.patch.object(
                 rospy,
                 'Publisher',

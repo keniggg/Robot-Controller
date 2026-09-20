@@ -29,6 +29,317 @@ def _function_body(source, signature):
 
 
 class SerialDriverResilienceTest(unittest.TestCase):
+    def test_sdk_feedback_clock_and_snapshot_are_captured_under_the_same_lock(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::send_command_timer_callback')
+        lock = body.index('std::lock_guard<std::mutex> lock(data_mutex_);')
+        self.assertNotIn('ros::Time::now()', body[:lock])
+        snapshot = _function_body(body, 'ros::Time feedback_sample_time;')
+        self.assertLess(snapshot.index('lock(data_mutex_)'),
+                        snapshot.index('now = ros::Time::now();'))
+        self.assertLess(snapshot.index('now = ros::Time::now();'),
+                        snapshot.index('feedback_sample_time = last_accepted_joint_feedback_time_;'))
+        self.assertIn('feedback_age_sec = (now - feedback_sample_time).toSec();', snapshot)
+        self.assertIn('feedback_joint_angles = current_joint_positions_;', snapshot)
+
+        # Deterministic interleaving that caused the false future-stamp gate:
+        # callback enters, parser wins data_mutex and timestamps its sample,
+        # then callback acquires data_mutex. No real clock or ROS is involved.
+        callback_entry, accepted_stamp, locked_now = 100.0, 100.005, 100.006
+        self.assertLess(callback_entry - accepted_stamp, 0.0)
+        self.assertGreaterEqual(locked_now - accepted_stamp, 0.0)
+        self.assertLess(locked_now - accepted_stamp, .002)
+
+    def test_sdk_feedback_age_gate_preserves_real_future_expired_and_missing_rejection(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::send_command_timer_callback')
+        snapshot = _function_body(body, 'ros::Time feedback_sample_time;')
+        predicate = re.search(r'feedback_stale\s*=\s*(.*?);', snapshot, re.S).group(1)
+        self.assertIn('feedback_age_sec < 0.0', predicate)
+        self.assertIn('feedback_age_sec >', predicate)
+        # Evaluate the actual, restricted C++ Boolean predicate rather than
+        # a second hand-written implementation of its boundary conditions.
+        predicate = predicate.replace('feedback_sample_time.isZero()', 'stamp_is_zero')
+        predicate = predicate.replace('||', ' or ').replace('&&', ' and ')
+        predicate = re.sub(r'!(?!=)', 'not ', predicate)
+        predicate = ' '.join(predicate.split())
+        cases = [
+            (True, False, .001, False),
+            (True, False, 0.0, False),
+            (True, False, 1.0, False),
+            (True, False, 1.000001, True),
+            (True, False, -1e-9, True),
+            (False, False, .001, True),
+            (True, True, .001, True),
+        ]
+        for ready, zero, age, expected in cases:
+            with self.subTest(ready=ready, zero=zero, age=age):
+                self.assertEqual(eval(predicate, {'__builtins__': {}}, {
+                    'feedback_ready': ready,
+                    'has_real_feedback_': ready,
+                    'stamp_is_zero': zero,
+                    'feedback_age_sec': age,
+                    'feedback_stale_timeout_sec_': 1.0,
+                }), expected)
+
+    def test_sdk_feedback_pause_log_distinguishes_future_from_expired_timestamp(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::send_command_timer_callback')
+        diagnostic = body[body.index('if (pause_commands_when_feedback_stale_ &&'):]
+        diagnostic = diagnostic[:diagnostic.index('// A driver-only restart')]
+        for reason in ('not_ready', 'zero_stamp', 'future_stamp', 'expired'):
+            self.assertIn('"' + reason + '"', diagnostic)
+        self.assertIn('reason=%s age=%.6fs timeout=%.2fs', diagnostic)
+        self.assertIn('feedback_age_sec', diagnostic)
+
+    def test_heartbeat_uses_locked_accepted_arm_feedback_not_generic_traffic(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::heartbeat_publish_callback')
+        self.assertLess(body.index('lock2(data_mutex_)'), body.index('ros::Time::now()'))
+        self.assertEqual(body.count('lock2(data_mutex_)'), 1)
+        self.assertIn('feedback_sample_time = last_accepted_joint_feedback_time_;', body)
+        self.assertIn('feedback_age = (now - feedback_sample_time).toSec();', body)
+        self.assertNotIn('feedback_age = (now - last_feedback_time_).toSec();', body)
+        for reason in ('not_ready', 'zero_stamp', 'future_stamp', 'expired'):
+            self.assertIn('"' + reason + '"', body)
+        self.assertIn('reason=%s age=%.6fs timeout=%.2fs', body)
+
+    def test_heartbeat_status_only_activity_does_not_renew_arm_freshness(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::heartbeat_publish_callback')
+        self.assertIn('feedback_sample_time = last_accepted_joint_feedback_time_;', body)
+        predicate = re.search(r'const bool feedback_ready\s*=\s*(.*?);', body, re.S).group(1)
+        predicate = predicate.replace('feedback_sample_time.isZero()', 'stamp_is_zero')
+        predicate = predicate.replace('||', ' or ').replace('&&', ' and ')
+        predicate = re.sub(r'!(?!=)', 'not ', predicate)
+        predicate = ' '.join(predicate.split())
+        # Generic/status traffic can advance last_feedback_time_ indefinitely;
+        # only an accepted complete arm sample may renew this Boolean gate.
+        cases = [
+            (True, 100.0, 100.1, 100.1, True),
+            (True, 100.0, 101.0, 101.0, True),
+            (True, 100.0, 101.000001, 101.000001, False),
+            (True, 100.0, 120.0, 120.0, False),
+            (True, 100.0, 99.999999, 99.999999, False),
+            (True, 0.0, .1, .1, False),
+            (False, 100.0, 100.1, 100.1, False),
+        ]
+        for has_arm, accepted, now, generic_stamp, expected in cases:
+            with self.subTest(has_arm=has_arm, accepted=accepted, now=now):
+                self.assertEqual(eval(predicate, {'__builtins__': {}}, {
+                    'has_real_feedback_': has_arm,
+                    'stamp_is_zero': accepted == 0.0,
+                    'feedback_age': now - accepted,
+                    'feedback_stale_timeout_sec_': 1.0,
+                    'last_feedback_time_': generic_stamp,
+                }), expected)
+
+    def test_accepted_arm_diagnostic_is_a_separate_unlatched_joint_state_topic(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        header = DRIVER_HEADER.read_text()
+        setup = _function_body(source, 'void AliciaDDriverNode::setup_ros_communications')
+        self.assertIn('ros::Publisher accepted_joint_state_pub_;', header)
+        self.assertIn('void publish_joint_state(bool accepted_sdk_sample = false);', header)
+        self.assertIn('accepted_joint_state_pub_ = nh_.advertise<sensor_msgs::JointState>("/alicia_d/accepted_joint_states", 20);', setup)
+
+    def test_only_complete_accepted_sdk_frame_can_publish_arm_sample_evidence(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        parser = _function_body(source, 'void AliciaDDriverNode::parse_sdk_joint_state_frame')
+        self.assertEqual(source.count('publish_joint_state(true);'), 1)
+        self.assertIn('if (accept_joint_positions) {\n        publish_joint_state(true);', parser)
+        for prerequisite in ('current_joint_positions_ = candidate_joint_positions;',
+                             'last_accepted_joint_feedback_time_ = feedback_time;',
+                             'current_gripper_position_ =', 'last_run_status_ = data_payload[14];'):
+            self.assertLess(parser.index(prerequisite), parser.index('publish_joint_state(true);'))
+        for signature in ('void AliciaDDriverNode::heartbeat_publish_callback',
+                          'void AliciaDDriverNode::parse_servo_states_frame',
+                          'void AliciaDDriverNode::parse_gripper_state_frame',
+                          'void AliciaDDriverNode::parse_sdk_temperature_frame',
+                          'void AliciaDDriverNode::parse_sdk_self_check_frame',
+                          'void AliciaDDriverNode::parse_error_frame'):
+            self.assertNotIn('publish_joint_state(true)', _function_body(source, signature))
+
+    def test_accepted_arm_message_has_original_sample_time_and_complete_gripper(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::publish_joint_state')
+        self.assertIn('js_msg.header.stamp = now;', body)  # Existing TF compatibility unchanged.
+        self.assertIn('sensor_msgs::JointState accepted_msg = js_msg;', body)
+        self.assertLess(body.index('js_msg.position.push_back(gripper_m);'),
+                        body.index('sensor_msgs::JointState accepted_msg = js_msg;'))
+        self.assertIn('accepted_msg.header.stamp = last_accepted_joint_feedback_time_;', body)
+        self.assertIn('accepted_msg.header.frame_id = "sdk_measured";', body)
+        self.assertIn('if (accepted_sdk_sample && has_real_feedback_', body)
+        self.assertIn('!last_accepted_joint_feedback_time_.isZero()', body)
+        self.assertIn('js_msg.name.size() == 7 && js_msg.position.size() == 7', body)
+        self.assertIn('accepted_joint_state_pub_.publish(accepted_msg);', body)
+
+    def test_ownership_transition_preserves_wire_hold_without_new_motion_authority(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::gui_control_mode_callback')
+        self.assertIn('decode_retained_sdk_hold(', body)
+        self.assertIn('has_latest_command_ = retained_hold;', body)
+        self.assertIn('command_state_seeded_from_feedback_ = retained_hold;', body)
+        self.assertIn('cmd_joint_angles_ = hold;', body)
+        self.assertIn('cmd_joint_velocities_.assign(6, 0.0)', body)
+        self.assertIn('control_mode_needs_sync_ = !gui_control_mode_', body)
+        self.assertIn('control_mode_hold_only_ = true;', body)
+        self.assertIn('reset_motion_observation()', body)
+        self.assertNotIn('last_sent_sdk_command_frame_.clear()', body)
+        self.assertNotIn('reset_command_synchronization()', body)
+        self.assertNotIn('write_raw_frame(', body)
+        self.assertNotIn('request_positive_enable(', body)
+
+    def test_direct_command_accumulates_only_admitted_targets_with_accepted_feedback(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        self.assertIn('select_gui_direct_command_reference(', body)
+        self.assertNotIn('const bool continue_gesture', body)
+        self.assertNotIn('streamed_hold_max_age_sec', body)
+        self.assertIn('command_time - last_accepted_joint_feedback_time_', body)
+        self.assertNotIn('command_time - last_feedback_time_', body)
+        self.assertLess(body.index('actuation_confirmation_.admit_command('),
+                        body.index('gui_direct_hold_joint_angles_ = joint_angles;'))
+        self.assertLess(body.index('last_observation_accepted()'),
+                        body.index('gui_direct_hold_joint_angles_ = joint_angles;'))
+        self.assertLess(body.index('has_latest_command_ = true;'),
+                        body.index('control_mode_needs_sync_ = false;'))
+        self.assertIn('static_cast<int>(i) != gui_direct_edited_index', body)
+
+    def test_auto_handoff_uses_only_frozen_successfully_written_sdk_words(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        handoff = _function_body(body, 'if (automatic_command_needs_sync)')
+        self.assertIn('controller_handoff_matches_frozen_sdk_or_initial(', handoff)
+        self.assertIn('last_sent_sdk_command_frame_', handoff)
+        self.assertIn('control_mode_needs_sync_ && control_mode_hold_only_', handoff)
+        self.assertIn('retained_sdk_age_sec >= 0.0', handoff)
+        self.assertIn('retained_sdk_age_sec <= feedback_stale_timeout_sec_', handoff)
+        self.assertNotIn('latest_joint_angles_', handoff)
+        self.assertNotIn('last_streamed_joint_positions_', handoff)
+        self.assertLess(body.index('mode_lock(control_mode_mutex_)'),
+                        body.index('controller_handoff_matches_frozen_sdk_or_initial('))
+        self.assertLess(body.index('controller_handoff_matches_frozen_sdk_or_initial('),
+                        body.index('actuation_confirmation_.admit_command('))
+
+    def test_auto_handoff_samples_fresh_feedback_clock_under_its_data_lock(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        handoff = _function_body(body, 'if (automatic_command_needs_sync)')
+        self.assertLess(handoff.index('data_lock(data_mutex_)'),
+                        handoff.index('handoff_now = ros::Time::now()'))
+        self.assertIn('handoff_now - last_accepted_joint_feedback_time_', handoff)
+        self.assertIn('age >= 0.0 && age <= feedback_stale_timeout_sec_', handoff)
+        self.assertIn('frozen SDK position words', handoff)
+
+    def test_auto_handoff_invalid_or_expired_wire_never_falls_back_to_feedback(self):
+        source = (DRIVER_PACKAGE / 'include' / 'alicia_d_driver' /
+                  'gui_direct_hold.hpp').read_text()
+        body = _function_body(source, 'inline bool controller_handoff_matches_frozen_sdk_or_initial')
+        self.assertIn('if (last_written_frame.empty())', body)
+        self.assertIn('return controller_handoff_matches_feedback(', body)
+        self.assertIn('if (!retained_frozen_and_fresh)', body)
+        self.assertIn('decode_retained_sdk_hold(', body)
+        self.assertIn('sdk_joint_position_encode(command[i])', body)
+        self.assertIn('sdk_gripper_position_encode(command_gripper_rad)', body)
+        self.assertEqual(body.count('controller_handoff_matches_feedback('), 1)
+
+    def test_dedicated_reference_sync_checks_reset_epoch_under_the_mode_lock(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        reset = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state')
+        self.assertLess(reset.index('mode_lock(control_mode_mutex_)'),
+                        reset.index('control_reference_reset_time_ = ros::Time::now();'))
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        self.assertIn('"motion_gateway_reference_sync"', body)
+        self.assertLess(body.index('mode_lock(control_mode_mutex_)'),
+                        body.index('reference_sync_stamp_in_current_epoch('))
+        self.assertIn('msg->header.stamp.toNSec()', body)
+        self.assertIn('control_reference_reset_time_.toNSec()', body)
+        self.assertIn('control_mode_changed_time_.toNSec()', body)
+        self.assertIn('command_time.toNSec()', body)
+
+    def test_dedicated_reference_sync_is_arm_only_and_tracking_noop(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        self.assertIn('msg->name.size() != hardware_joint_names.size()', body)
+        self.assertIn('msg->position.size() != hardware_joint_names.size()', body)
+        self.assertIn('joint_map.size() != hardware_joint_names.size()', body)
+        self.assertIn('joint_map.count(name) != 1', body)
+        proof = body.index('reference_sync_matches_successful_sdk_or_initial(')
+        noop = body.index('if (!automatic_command_needs_sync)', proof)
+        self.assertIn('return;', _function_body(body[noop:], 'if (!automatic_command_needs_sync)'))
+        self.assertLess(noop, body.index('actuation_confirmation_.admit_command('))
+        self.assertLess(noop, body.index('latest_joint_angles_ = joint_angles;'))
+        self.assertIn('last_sent_sdk_command_frame_, sdk_is_fresh, actuation_status', body)
+        self.assertNotIn('write_raw_frame(', body)
+
+    def test_dedicated_reference_sync_samples_accepted_clock_and_status_without_widening_init(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        proof = _function_body(body, '// Dedicated reference-only admission')
+        self.assertLess(proof.index('data_lock(data_mutex_)'),
+                        proof.index('reference_now = ros::Time::now()'))
+        self.assertIn('reference_now - last_accepted_joint_feedback_time_', proof)
+        self.assertIn('feedback_age_sec >= 0.0', proof)
+        self.assertIn('feedback_age_sec <= feedback_stale_timeout_sec_', proof)
+        self.assertIn('actuation_confirmation_.status_text()', proof)
+        self.assertIn('sdk_age_sec >= 0.0', proof)
+        self.assertIn('sdk_age_sec <= feedback_stale_timeout_sec_', proof)
+        helper = (DRIVER_PACKAGE / 'include' / 'alicia_d_driver' / 'gui_direct_hold.hpp').read_text()
+        sync = _function_body(helper, 'inline bool reference_sync_matches_successful_sdk_or_initial')
+        self.assertIn('"PENDING:POSITIVE_ENABLE_REQUESTED"', sync)
+        self.assertIn('"PENDING:COMMAND_SYNCHRONIZED"', sync)
+        self.assertIn('controller_handoff_matches_frozen_sdk_or_initial(', sync)
+
+    def test_reference_epoch_is_latched_reset_only_telemetry_not_pending_heartbeat(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        setup = _function_body(source, 'void AliciaDDriverNode::setup_ros_communications')
+        self.assertIn('control_reference_epoch_pub_', DRIVER_HEADER.read_text())
+        self.assertIn('"/alicia_d/control_reference_epoch", 1, true)', setup)
+        reset = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state')
+        self.assertIn('reference_epoch_next_stamp_ns(', reset)
+        self.assertIn('epoch_msg.stamp = control_reference_reset_time_;', reset)
+        self.assertIn('epoch_msg.frame_id = "sdk_reference_epoch";', reset)
+        self.assertIn('if (control_reference_epoch_pub_)', reset)
+        self.assertIn('control_reference_epoch_pub_.publish(epoch_msg);', reset)
+        self.assertLess(reset.index('last_sent_sdk_command_frame_.clear();'),
+                        reset.index('control_reference_epoch_pub_.publish(epoch_msg);'))
+        self.assertEqual(source.count('control_reference_epoch_pub_.publish('), 1)
+        self.assertNotIn('control_reference_epoch_pub_',
+                         _function_body(source, 'void AliciaDDriverNode::publish_actuation_status'))
+
+    def test_successful_sdk_write_reports_unlatched_control_reference_state(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        setup = _function_body(source, 'void AliciaDDriverNode::setup_ros_communications')
+        self.assertIn('control_reference_pub_', DRIVER_HEADER.read_text())
+        self.assertIn('"/alicia_d/control_reference", 20)', setup)
+        body = _function_body(source, 'void AliciaDDriverNode::send_command_timer_callback')
+        written = _function_body(body, 'if (wrote)')
+        self.assertIn('control_reference_msg.header.stamp = now;', written)
+        self.assertIn('"sdk_manual"', written)
+        self.assertIn('"sdk_handoff_required"', written)
+        self.assertIn('"sdk_tracking"', written)
+        self.assertIn('"sdk_reference_unconfirmed"', written)
+        self.assertIn('control_mode_needs_sync_ && control_mode_hold_only_', written)
+        self.assertIn('control_reference_msg.name.push_back("right_finger");', written)
+        self.assertIn('static_cast<double>(gripper_hw_val) / 1000.0 * gripper_stroke_m', written)
+        self.assertIn('control_reference_pub_.publish(control_reference_msg);', written)
+        self.assertIn('wire_msg.header.frame_id = "sdk_transmitted";', written)
+        self.assertEqual(source.count('control_reference_pub_.publish('), 1)
+
+    def test_successful_sdk_write_publishes_quantized_diagnostic_and_manual_has_no_trim(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::send_command_timer_callback')
+        self.assertIn('!gui_control_mode_ && (endpoint_feedback_trim_enabled_', body)
+        self.assertIn('last_streamed_joint_positions_ = wire_joint_angles;', body)
+        self.assertIn('last_streamed_gripper_rad_ = wire_gripper_rad;', body)
+        self.assertIn('if (!control_mode_hold_only_)', body)
+        self.assertLess(body.index('if (wrote)'), body.index('sdk_command_pub_.publish(wire_msg)'))
+        self.assertIn('wire_msg.position = wire_joint_angles;', body)
+        reset = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state')
+        self.assertIn('std::lock_guard<std::mutex> mode_lock(control_mode_mutex_)', reset)
+        for cache in ('gui_direct_hold_joint_angles_', 'last_streamed_joint_positions_', 'last_sent_sdk_command_frame_'):
+            self.assertIn(cache + '.clear()', reset)
+
     def test_full_bringup_uses_one_shot_controller_loader_without_shutdown_stop(self):
         launch = (
             DRIVER_PACKAGE / 'launch' / 'alicia_d_bringup.launch'
@@ -708,7 +1019,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
         )
         self.assertIn(
             'if (accept_joint_positions) {\n'
-            '        publish_joint_state();',
+            '        publish_joint_state(true);',
             body,
         )
 

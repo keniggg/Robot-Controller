@@ -63,6 +63,7 @@ def tilted_measured_candidates():
     assert registration.ok, registration.code
     assert len(surface.view_stamps_ns) == 2
     node._active_multiview_surface = lambda: (surface, reference)
+    fixtures.bind_surface_snapshot(node, surface, reference, registration)
     geometry = fixtures.tabletop_geometry((0.040, 0.035, 0.021))
     geometry.center_base = rotation.dot(geometry.center_base)
     geometry.axes_base = rotation

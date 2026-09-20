@@ -166,3 +166,43 @@ def test_stop_clears_pending_and_submit_requires_running_generation():
     assert queue.complete(active, now_sec=10.0).next_ticket is None
     with pytest.raises(RuntimeError, match='not running'):
         queue.submit('after-stop', 10.0, target_epoch=7)
+
+
+def test_reserved_next_is_refreshed_after_slow_local_processing_without_retiming():
+    q = LatestOnlyInferenceCoordinator(result_max_age_sec=15., clock=lambda: 10.)
+    q.start()
+    first = q.submit('first', 10., 1).ticket_to_start
+    assert q.claim_for_preparation(first) == (first, None)
+    q.submit('reserved', 11., 1)
+    next_ticket = q.complete(first, now_sec=12.).next_ticket
+    q.submit('newest_after_slow_processing', 30., 1)
+    claimed, replaced = q.claim_for_preparation(next_ticket)
+    assert replaced == next_ticket.request_id
+    assert claimed.payload == 'newest_after_slow_processing'
+    assert claimed.snapshot_stamp_sec == 30.
+    assert q.pending_count == 0
+    # An in-flight request can no longer be replaced.
+    pending = q.submit('future', 31., 1)
+    assert q.claim_for_preparation(claimed) == (claimed, None)
+    assert q.complete(claimed, now_sec=32.).next_ticket.request_id == pending.pending_request_id
+
+
+@pytest.mark.parametrize('change', ['stop', 'restart', 'target'])
+def test_stale_reserved_ticket_cannot_claim_new_generation_or_target(change):
+    q = LatestOnlyInferenceCoordinator(clock=lambda: 10.)
+    q.start()
+    first = q.submit('old', 10., 1).ticket_to_start
+    if change == 'stop': q.stop()
+    elif change == 'restart':
+        q.stop(); q.start(); q.submit('new generation', 11., 1)
+    else:
+        q.reset_target_epoch(2); q.submit('new target', 11., 2)
+    assert q.claim_for_preparation(first) == (first, None)
+
+
+def test_newer_request_with_older_source_cannot_replace_reserved_frame():
+    q = LatestOnlyInferenceCoordinator(clock=lambda: 10.)
+    q.start()
+    first = q.submit('first', 10., 1).ticket_to_start
+    q.submit('out of order source', 9., 1)
+    assert q.claim_for_preparation(first) == (first, None)

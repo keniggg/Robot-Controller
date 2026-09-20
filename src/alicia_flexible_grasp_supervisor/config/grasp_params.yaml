@@ -203,6 +203,13 @@ grasp:
   clear_view_reacquisition_minimum_contact_clearance_m: 0.080
   clear_view_reacquisition_preferred_side: "negative"
   clear_view_reacquisition_inference_reserve_sec: 20.0
+  # Cover both ends of the opposite jaw hemisphere before increasing roll.
+  # Angles are relative to the measured object axes, never fixed world poses.
+  clear_view_reacquisition_bilateral_azimuth_offsets_deg: [-75.0, 75.0, -45.0, 45.0, -15.0, 15.0]
+  clear_view_reacquisition_camera_roll_offsets_deg: [0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0, 180.0]
+  clear_view_reacquisition_path_evidence_required: true
+  clear_view_reacquisition_comparison_budget_sec: 8.0
+  clear_view_reacquisition_search_budget_sec: 25.0
 
 force:
   contact_threshold_mn: 200.0
@@ -592,6 +599,18 @@ grasp_6d:
     # non-contact observation endpoint unless the fully open Link6/7/8 CAD
     # boxes clear both the live support plane and live target OBB.
     observation_envelope_gate_enabled: true
+    # Add at most three shortest optical-axis tilts toward the measured
+    # support normal, without object yaw or extra wrist roll. Each uses the
+    # existing 18--22 cm distance family and full CAD/strict MoveIt gates.
+    # Supplemental strict checks share 6 calls / 3 s start-new-check budget
+    # per request; no new tilt check starts inside the existing source-age
+    # reserve. An in-flight call keeps its native MoveIt timeout, and final
+    # source-authority validation still applies (no hard RPC interruption).
+    # [] disables only this extension; original roll fallback remains intact.
+    # Check the largest nominal support margins first across all distances;
+    # shallow near-plane views must not exhaust the tilt budget before useful
+    # alternatives. Actual admission still requires the full following proof.
+    observation_camera_tilt_offsets_deg: [10.0, 20.0, 25.0, 30.0]
     # Far-field observation is independent of object planar yaw. Keep the
     # camera optical axis target-centred and try this bounded wrist-roll
     # lattice; every surviving endpoint still requires the CAD envelope and
@@ -630,6 +649,10 @@ robot:
   # reached 0.08 rad/s on Joint3 and 0.23 rad/s on Joint4/6 after driver repair.
   # Verify following during the actual observation; contact retains its limits.
   observation_max_joint_velocity_rad_s: 0.08
+  # Search pose-independent per-goal tracking contracts. The exact selected
+  # path tolerance is sent to FollowJointTrajectory; continuous CAD includes
+  # the commanded stopping reserve. This is not a physical stopping proof.
+  observation_tracking_contract_enabled: true
   # Enforce the bound against every local trajectory segment, not only
   # endpoint displacement / total duration. Three independent observation
   # runs reached Joint3's 0.120 rad path boundary. In the latest raw trace,

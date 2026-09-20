@@ -64,6 +64,17 @@ public:
         }
     }
 
+    // A control-owner change cancels the previous motion observation, but is
+    // not a torque reset and cannot invalidate an already synchronized servo.
+    // The driver separately requires fresh measured automatic handoff.
+    void reset_motion_observation()
+    {
+        clear_probe();
+        if (state_ == ActuationState::PENDING) {
+            reason_ = synchronized_ ? "COMMAND_SYNCHRONIZED" : "POSITIVE_ENABLE_REQUESTED";
+        }
+    }
+
     void reset_for_positive_enable(double now_sec)
     {
         (void)now_sec;
@@ -243,6 +254,20 @@ public:
                 return;
             }
         }
+        // A confirmed servo can still be settling toward the preceding
+        // command while SDK keepalives remain unchanged. Until the FIRST new
+        // command displacement, use the latest encoder baseline: otherwise a
+        // reversal is tested against the old forward-motion origin and can
+        // falsely time out despite real reverse motion (September 13 Joint5).
+        // Once displacement has begun, freeze this baseline so small streamed
+        // increments still accumulate. The early probe_active_ return above
+        // also keeps an already armed probe's original response deadline.
+        if (state_ == ActuationState::CONFIRMED &&
+            stream_target_.size() == target.size() &&
+            stream_target_ == stream_command_baseline_) {
+            stream_baseline_ = latest_feedback_;
+        }
+
         // Smooth trajectories arrive as small increments. Measuring each
         // increment against the latest feedback can wait forever when the
         // servo follows well. Keep a short, continuously streamed command

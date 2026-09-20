@@ -8,6 +8,7 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include "alicia_d_driver/sdk_position_codec.hpp"
 
 enum class EndpointTrimPhase {
     IDLE,
@@ -27,6 +28,8 @@ struct EndpointTrimConfig {
     double stable_sec = 0.30;
     double response_deadline_sec = 1.0;
     double max_total_trim_rad = 0.12;
+    // Optional per-axis diagnostic tuning; empty retains the scalar limit.
+    std::vector<double> max_step_rad_by_joint;
 };
 
 struct EndpointTrimDecision {
@@ -59,6 +62,15 @@ public:
             finite_nonnegative(config_.stable_sec) &&
             finite_nonnegative(config_.response_deadline_sec) &&
             finite_nonnegative(config_.max_total_trim_rad);
+        if (!config_.max_step_rad_by_joint.empty()) {
+            valid_config_ = valid_config_ &&
+                config_.max_step_rad_by_joint.size() == config_.joint_count &&
+                std::all_of(config_.max_step_rad_by_joint.begin(),
+                            config_.max_step_rad_by_joint.end(), [this](double v) {
+                    return std::isfinite(v) && v >= config_.response_min_rad &&
+                        v <= 16.0 * config_.sdk_quantum_rad;
+                });
+        }
     }
 
     EndpointTrimDecision activate(
@@ -124,10 +136,12 @@ public:
             const double error = saturating_subtract(
                 state_.reference[i], measured[i]
             );
+            const double maximum_step = config_.max_step_rad_by_joint.empty()
+                ? config_.max_step_rad : config_.max_step_rad_by_joint[i];
             const double requested_step = clamp(
                 saturating_multiply(error, gain),
-                -config_.max_step_rad,
-                config_.max_step_rad
+                -maximum_step,
+                maximum_step
             );
             next_offsets[i] = clamp(
                 saturating_add(state_.offsets[i], requested_step),
@@ -216,12 +230,25 @@ public:
                 continue;
             }
             const double measured_delta = measured[i] - response_baseline_[i];
+            // Decoding two integer SDK counts and then subtracting their
+            // radians can put an exact minimum-sized response a few double
+            // round-off units below the independently computed threshold.
+            // Scale only by the operands involved, not by an SDK count or a
+            // physical tolerance. In the hardware range this is < 3e-15 rad;
+            // the strict direction check still rejects zero/reverse motion.
+            const double response_comparison_roundoff_rad =
+                4.0 * std::numeric_limits<double>::epsilon() * std::max({
+                    std::abs(measured[i]),
+                    std::abs(response_baseline_[i]),
+                    config_.response_min_rad
+                });
             if (static_cast<double>(response_direction_[i]) * measured_delta <= 0.0 ||
-                std::abs(measured_delta) < config_.response_min_rad) {
+                std::abs(measured_delta) + response_comparison_roundoff_rad <
+                    config_.response_min_rad) {
                 matching = false;
             }
             if (std::abs(measured[i] - response_goal_[i]) >
-                config_.settle_error_rad) {
+                config_.settle_error_rad + response_comparison_roundoff_rad) {
                 within_settle_error = false;
             }
         }
@@ -435,6 +462,9 @@ private:
 
     double sdk_quantize(double radians) const
     {
+        if (config_.sdk_quantum_rad == 2.0 * M_PI / 4096.0) {
+            return sdk_joint_position_decode(sdk_joint_position_encode(radians));
+        }
         const double ticks = saturating_add(radians, M_PI) /
             config_.sdk_quantum_rad;
         const double bounded_ticks = clamp(
@@ -443,7 +473,7 @@ private:
             static_cast<double>(std::numeric_limits<int>::max())
         );
         return saturating_subtract(
-            static_cast<double>(static_cast<int>(bounded_ticks)) *
+            std::round(bounded_ticks) *
                 config_.sdk_quantum_rad,
             M_PI
         );

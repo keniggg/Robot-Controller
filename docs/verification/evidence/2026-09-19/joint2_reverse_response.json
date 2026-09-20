@@ -1,0 +1,181 @@
+{
+  "execution_requested": true,
+  "grasp_success": false,
+  "minimum_scene_stamp_ns": 1789876348247792720,
+  "scene_plan_id": "e06a7a2a75005de7e435db41",
+  "before": {
+    "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+    "stamp_sec": 1789876412.6872194,
+    "epoch_ns": 1789875872459441743,
+    "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+    "sdk_stamp_ns": 1789876412536858891,
+    "accepted_stamp_ns": 1789876412614120915,
+    "stationary_window_start_ns": 1789876412236858891,
+    "stationary_window_end_ns": 1789876412536858891,
+    "sdk_sample_count": 4,
+    "accepted_sample_count": 4,
+    "joint_names": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "sdk_positions_rad": [
+      -1.8315730607354554,
+      0.46633015951723494,
+      -0.1932815792735908,
+      -0.047553404424454875,
+      -0.2132233295161041,
+      0.1303883669702795
+    ],
+    "accepted_positions_rad": [
+      -1.8285050991596845,
+      0.4586602555778067,
+      -0.20401944478879028,
+      -0.047553404424454875,
+      -0.2162912910918754,
+      0.13652429012182207
+    ],
+    "joint_error_sdk_counts": [
+      1.9999999999997762,
+      -5.0000000000000195,
+      -6.999999999999995,
+      0.0,
+      -2.000000000000011,
+      4.000000000000004
+    ],
+    "position_error_m": 0.006769369562321597,
+    "position_error_vector_m": [
+      0.0015762728131770432,
+      0.0027966208951314686,
+      -0.005959751660819357
+    ],
+    "orientation_error_rad": 0.023063014095439496,
+    "sdk_tool_position_m": [
+      -0.0641820490987573,
+      -0.24705418876632412,
+      0.14999661567035813
+    ],
+    "accepted_tool_position_m": [
+      -0.06260577628558026,
+      -0.24425756787119265,
+      0.14403686400953877
+    ],
+    "certifies_command_response_or_calibration": false
+  },
+  "requested_delta_counts": [
+    0,
+    -7,
+    0,
+    0,
+    0,
+    0
+  ],
+  "baseline_counts": [
+    854,
+    2352,
+    1922,
+    2017,
+    1909,
+    2133
+  ],
+  "goal_counts": [
+    854,
+    2345,
+    1922,
+    2017,
+    1909,
+    2133
+  ],
+  "planning": {
+    "success": true,
+    "message": "exact joint probe planned; no motion or reusable execution cache"
+  },
+  "submission_sec": 1789876413.0603762,
+  "execution": {
+    "success": true,
+    "message": "executed cached plan (strict pose): bounded exact joint probe; strict trajectory retimed duration=3.000s max_delta=0.011rad peak_velocity=0.004rad/s velocity_limit=0.080rad/s limiting_joint=Joint2 limiting_velocity=0.080rad/s velocity_time_scale=1.000 start_error=0.010738rad minimum_duration=3.000s time_scale=9.844; submitted trajectory duration=3.000s controller_reference_time_scale=1.000000",
+    "completed_sec": 1789876417.421589
+  },
+  "after": {
+    "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+    "stamp_sec": 1789876417.9307768,
+    "epoch_ns": 1789875872459441743,
+    "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+    "sdk_stamp_ns": 1789876417856864437,
+    "accepted_stamp_ns": 1789876417918488969,
+    "stationary_window_start_ns": 1789876417556864437,
+    "stationary_window_end_ns": 1789876417856864437,
+    "sdk_sample_count": 4,
+    "accepted_sample_count": 5,
+    "joint_names": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "sdk_positions_rad": [
+      -1.8315730607354554,
+      0.45559229400203544,
+      -0.1932815792735908,
+      -0.047553404424454875,
+      -0.2132233295161041,
+      0.1303883669702795
+    ],
+    "accepted_positions_rad": [
+      -1.8285050991596845,
+      0.44945637085049284,
+      -0.20401944478879028,
+      -0.047553404424454875,
+      -0.2162912910918754,
+      0.13652429012182207
+    ],
+    "joint_error_sdk_counts": [
+      1.9999999999997762,
+      -4.000000000000022,
+      -6.999999999999995,
+      0.0,
+      -2.000000000000011,
+      4.000000000000004
+    ],
+    "position_error_m": 0.006410631328500813,
+    "position_error_vector_m": [
+      0.0015797214954462874,
+      0.0028127746600513093,
+      -0.005539762877466353
+    ],
+    "orientation_error_rad": 0.021652783806271326,
+    "sdk_tool_position_m": [
+      -0.06411631519392513,
+      -0.24680785549723733,
+      0.14725712420360107
+    ],
+    "accepted_tool_position_m": [
+      -0.06253659369847885,
+      -0.24399508083718602,
+      0.14171736132613472
+    ],
+    "certifies_command_response_or_calibration": false
+  },
+  "measured_delta_counts": [
+    0,
+    -6,
+    0,
+    0,
+    0,
+    0
+  ],
+  "transmitted_delta_counts": [
+    0,
+    -7,
+    0,
+    0,
+    0,
+    0
+  ],
+  "response_is_grasp_or_calibration_success": false
+}

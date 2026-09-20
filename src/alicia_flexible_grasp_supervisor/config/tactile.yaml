@@ -1,7 +1,10 @@
 tactile:
   enabled: true
   simulate: false
-  sdk_path: "$(env HOME)/catkin_ws/src/Electronic-Skin-ML"
+  # sensors.launch supplies the SDK bundled alongside this ROS package.
+  # Keep standalone configuration empty to use an installed tactile_sdk;
+  # do not pass an unexpanded roslaunch expression as a Python import path.
+  sdk_path: ""
   port: "/dev/alicia_skin"
   baudrate: 4000000
   slave_address: 1

@@ -13,6 +13,7 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>sensor_msgs</depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
   <depend>geometry_msgs</depend>
   <depend>trajectory_msgs</depend>
   <depend>control_msgs</depend>
@@ -25,4 +26,6 @@
   <depend>image_transport</depend>
 
   <exec_depend>moveit_commander</exec_depend>
+  <exec_depend>actionlib</exec_depend>
+  <exec_depend>actionlib_msgs</exec_depend>
 </package>

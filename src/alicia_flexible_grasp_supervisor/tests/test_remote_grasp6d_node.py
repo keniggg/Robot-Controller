@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from copy import deepcopy
+from dataclasses import replace
 import hashlib
 import io
 import importlib.util
@@ -512,7 +513,8 @@ def attach_synthetic_bilateral_measurement(node, geometry=None, width_m=None):
     they can continue exercising later candidate lineage, depth and planning
     gates without restoring the removed OBB fallback.
     """
-    def measurement(center, rotation):
+    def measurement(center, rotation, *, surface_frame='snapshot'):
+        assert surface_frame in ('snapshot', 'reference')
         current_geometry = geometry or getattr(
             node,
             '_latest_geometry_estimate',
@@ -783,6 +785,78 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
 
         self.assertEqual(len(result), 2)
         self.assertEqual({item.track_id for item in result}, {1, 2})
+
+    def test_recorded_contact_sequences_dedupe_exact_family_not_source_ids(self):
+        fixture = json.loads((ROOT / 'tests/fixtures/contact_ik_boundary_20260912.json').read_text())
+        for changed in ('none', 'approach', 'grasp', 'lift', 'stamp', 'frame',
+                        'width', 'context', 'target', 'source', 'missing', 'gate'):
+            with self.subTest(changed=changed):
+                node = object.__new__(remote_node.RemoteGrasp6DNode)
+                # Production freezes request evidence; SimpleNamespace hid
+                # the live near-field mappingproxy failure on 2026-09-13.
+                prepared = remote_node.PreparedPrediction(
+                    ticket=object(), snapshot=object(), stamp=object(),
+                    geometry=object(), pose_estimator=object(),
+                    graspnet_input=object(), candidates=(),
+                    remote_diagnostics={}, remote_performance={})
+                candidates = []
+                node._stable_variant_runtime = {}
+                for index, evidence in enumerate(fixture['stable_evaluations']):
+                    candidate = self._scored_for_moveit_dedupe(
+                        track_id=index + 1, source_index=22,
+                        source_variant_index=index % 2,
+                        evaluation_variant_index=index % 2)
+                    candidate = replace(candidate, stable_candidate=replace(
+                        candidate.stable_candidate, center_base_xyz=(.1, 0., .2)))
+                    stages = {}
+                    for row in evidence['execution_sequence']['stages']:
+                        pose = PoseStamped()
+                        ns = row['stamp_ns']
+                        pose.header.stamp = remote_node.rospy.Time(ns // 10**9, ns % 10**9)
+                        pose.header.frame_id = row['frame_id']
+                        for field, names, values in (
+                            (pose.pose.position, 'xyz', row['position_m']),
+                            (pose.pose.orientation, 'xyzw', row['quaternion_xyzw'])):
+                            for name, value in zip(names, values):
+                                setattr(field, name, value)
+                        stages[row['stage']] = pose
+                    if index == 3:
+                        if changed in ('approach', 'grasp', 'lift'):
+                            # No near-pose rounding or grasp-only deduplication.
+                            stages[changed].pose.position.x += 1e-12
+                        elif changed == 'stamp':
+                            stages['pregrasp'].header.stamp.nsecs += 1
+                        elif changed == 'frame':
+                            stages['pregrasp'].header.frame_id = 'other_frame'
+                        elif changed == 'width':
+                            candidate = replace(candidate, stable_candidate=replace(
+                                candidate.stable_candidate, required_open_width_m=.041))
+                        elif changed == 'context':
+                            candidate = replace(candidate, evaluation_context_revision='other')
+                        elif changed in ('target', 'source'):
+                            kwargs = ({'target_epoch': 8} if changed == 'target'
+                                      else {'candidate_source': 'graspnet',
+                                            'source_lineage': ('graspnet',)})
+                            candidate = replace(candidate, stable_candidate=replace(
+                                candidate.stable_candidate, **kwargs))
+                        elif changed == 'missing':
+                            stages.pop('lift')
+                        elif changed == 'gate':
+                            candidate = replace(candidate, latest_safety=replace(
+                                candidate.latest_safety, geometry_valid=False))
+                    candidates.append(candidate)
+                    node._stable_variant_runtime[(candidate.track_id, candidate.variant_index)] = {
+                        'prepared': prepared, 'sequence': types.SimpleNamespace(**stages)}
+                diagnostics = {}
+                unique = node._dedupe_exact_contact_sequences_for_moveit(
+                    candidates, prepared, acceptance_diagnostics=diagnostics)
+                self.assertEqual(len(unique), 2 if changed == 'none' else 3)
+                self.assertEqual([item.track_id for item in unique][:2], [1, 2])
+                self.assertEqual(dict(prepared.remote_diagnostics), {})
+                audit = diagnostics['contact_sequence_deduplication']
+                self.assertEqual(audit['input_count'], 4)
+                self.assertEqual(audit['unique_count'], len(unique))
+                self.assertFalse(audit['approximate_pose_merging'])
 
     def test_far_field_observation_ranking_uses_frozen_move_distance(self):
         node = object.__new__(remote_node.RemoteGrasp6DNode)

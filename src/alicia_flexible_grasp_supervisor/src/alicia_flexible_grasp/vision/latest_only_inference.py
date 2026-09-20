@@ -44,6 +44,7 @@ class LatestOnlyInferenceCoordinator:
         self._target_epoch = None
         self._active = None
         self._pending = None
+        self._unstarted_request_id = None
 
     @property
     def pending_count(self):
@@ -91,6 +92,7 @@ class LatestOnlyInferenceCoordinator:
             self._next_request_id += 1
             if self._active is None:
                 self._active = ticket
+                self._unstarted_request_id = ticket.request_id
                 return SubmitDecision(
                     ticket_to_start=ticket,
                     pending_request_id=None,
@@ -105,6 +107,32 @@ class LatestOnlyInferenceCoordinator:
                 pending_request_id=ticket.request_id,
                 replaced_request_id=replaced_request_id,
             )
+
+    def claim_for_preparation(self, ticket):
+        """Replace a reserved, never-started ticket with the newest pending one.
+
+        Completion can reserve the next request before expensive local result
+        processing. Refresh only at worker admission; never replace a request
+        after its preparation has started or relabel its original source time.
+        """
+        with self._lock:
+            if (self._active is None
+                    or not self._tickets_correlate(ticket, self._active)
+                    or self._unstarted_request_id != ticket.request_id):
+                return ticket, None
+            replaced = None
+            pending = self._pending
+            if (self._running and ticket.generation == self._generation
+                    and ticket.target_epoch == self._target_epoch
+                    and pending is not None
+                    and pending.generation == ticket.generation
+                    and pending.target_epoch == ticket.target_epoch
+                    and pending.snapshot_stamp_sec >= ticket.snapshot_stamp_sec):
+                replaced = ticket.request_id
+                self._active, self._pending = pending, None
+                ticket = pending
+            self._unstarted_request_id = None
+            return ticket, replaced
 
     def complete(self, ticket, now_sec=None, target_epoch=None):
         now_sec = float(self._clock() if now_sec is None else now_sec)
@@ -133,6 +161,7 @@ class LatestOnlyInferenceCoordinator:
                 )
 
             self._active = None
+            self._unstarted_request_id = None
             if not self._running or ticket.generation != self._generation:
                 accepted = False
                 code = 'GENERATION_STALE'
@@ -182,6 +211,7 @@ class LatestOnlyInferenceCoordinator:
         ):
             return None
         self._active = pending
+        self._unstarted_request_id = pending.request_id
         return pending
 
     @staticmethod

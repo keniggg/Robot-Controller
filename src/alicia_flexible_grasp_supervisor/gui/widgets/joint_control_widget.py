@@ -18,7 +18,7 @@ except Exception:
 
 
 class DirectCommandGesture:
-    """Latch the unedited joints for one direct-control gesture."""
+    """Compose one channel's intent; never restrict other admitted goals."""
 
     def __init__(self):
         self._held_target = None
@@ -95,6 +95,12 @@ class DirectControlRecovery:
     def last_action_edited_index(self):
         with self._lock:
             return self._last_action_edited_index
+
+    @property
+    def pending_edit(self):
+        """Expose handshake ownership without replacing it with another axis."""
+        with self._lock:
+            return self._pending_target is not None, self._pending_edited_index
 
     @staticmethod
     def _state_name(status):
@@ -376,6 +382,7 @@ class JointControlWidget(QtWidgets.QWidget):
         self.waypoints = []
         self._syncing_sliders = False
         self._pending_direct_publish = False
+        self._pending_direct_edits = {}
         self._active_direct_slider_index = None
         self._direct_gesture = DirectCommandGesture()
         self.direct_recovery = DirectControlRecovery(
@@ -628,50 +635,26 @@ class JointControlWidget(QtWidgets.QWidget):
 
     def _begin_direct_slider_gesture(self, edited_index):
         index = int(edited_index)
-        baseline = self._current_feedback_target()
-        if baseline is None:
-            baseline = self.positions()
+        # Mode entry already synchronizes the display. A different slider must
+        # not erase targets the user has just given to other joints. Only the
+        # edited channel is admitted by the driver's one-hot intent protocol.
+        baseline = self.positions()
         if not self._direct_gesture.begin(baseline, index):
             return
-        # Refresh the visual targets once.  From this point until release,
-        # neither the visuals nor the published targets follow live feedback.
-        self._rebase_unedited_sliders_to_feedback(index)
 
     def _end_direct_slider_gesture(self):
         self._direct_gesture.clear()
         self._active_direct_slider_index = None
 
-    def _rebase_unedited_sliders_to_feedback(self, edited_index):
-        """Set unedited slider visuals from feedback once at gesture start."""
-        if self.current_state is None:
+    def _queue_direct_edit(self, edited_index):
+        if edited_index is None or self._syncing_sliders:
             return
-        name_to_pos = dict(zip(
-            self.current_state.name,
-            self.current_state.position,
-        ))
-        fallback = list(self.current_state.position)
-        self._syncing_sliders = True
-        try:
-            for index, (name, slider) in enumerate(zip(self.names, self.sliders)):
-                if index == int(edited_index):
-                    continue
-                value = name_to_pos.get(
-                    name,
-                    fallback[index] if index < len(fallback) else None,
-                )
-                if value is None or not math.isfinite(float(value)):
-                    continue
-                target = int(max(
-                    slider.minimum(),
-                    min(slider.maximum(), round(float(value) * 1000.0)),
-                ))
-                slider.blockSignals(True)
-                try:
-                    slider.setValue(target)
-                finally:
-                    slider.blockSignals(False)
-        finally:
-            self._syncing_sliders = False
+        index = int(edited_index)
+        if 0 <= index < len(self.names):
+            # Coalesce repeated samples of THIS slider, not all sliders into
+            # one global last-writer. Preserve each explicit channel's value.
+            self._pending_direct_edits[index] = (self.positions(), time.monotonic())
+            self._pending_direct_publish = True
 
     def handle_slider_changed(self, _value=None):
         sender = self.sender()
@@ -691,7 +674,7 @@ class JointControlWidget(QtWidgets.QWidget):
         if not self._syncing_sliders:
             self.pose_target_changed.emit()
         if self.realtime_direct.isChecked() and not self._syncing_sliders:
-            self._pending_direct_publish = True
+            self._queue_direct_edit(self._active_direct_slider_index)
 
     def handle_slider_pressed(self):
         sender = self.sender()
@@ -705,8 +688,10 @@ class JointControlWidget(QtWidgets.QWidget):
 
     def handle_slider_released(self):
         if self.realtime_direct.isChecked() and not self._syncing_sliders:
-            self._pending_direct_publish = False
-            self.publish_direct('已发送关节直控目标')
+            sender = self.sender()
+            index = self.sliders.index(sender) if sender in self.sliders else self._active_direct_slider_index
+            self._queue_direct_edit(index)
+            self.flush_direct_publish()
         self._end_direct_slider_gesture()
 
     def flush_direct_publish(self):
@@ -715,34 +700,46 @@ class JointControlWidget(QtWidgets.QWidget):
         self.command_conn_chip.setText('/joint_commands 连接 %d' % self.pub.get_num_connections())
         if not self.realtime_direct.isChecked():
             return
-        if self._pending_direct_publish:
-            self._pending_direct_publish = False
-            edited_index = self._direct_gesture.edited_index
-            slider_is_down = (
-                edited_index is not None and
-                self.sliders[edited_index].isSliderDown()
-            )
-            self.publish_direct('已发送关节直控目标')
-            if not slider_is_down:
-                self._end_direct_slider_gesture()
-            return
         action, target, detail = self.direct_recovery.poll(time.monotonic())
         self._apply_direct_recovery_action(action, target, detail)
-
-    def publish_direct(self, message='已显式发送到 /joint_commands'):
-        slider_pos = self.positions()
-        pos = self._direct_gesture.compose(slider_pos)
+        if action in ('clear', 'timeout'):
+            return
+        while self._pending_direct_edits:
+            pending, pending_index = self.direct_recovery.pending_edit
+            if pending:
+                # Updating the same explicit slider may replace its goal;
+                # another slider waits for the existing bounded handshake.
+                if pending_index not in self._pending_direct_edits:
+                    break
+                index = pending_index
+            else:
+                index = next(iter(self._pending_direct_edits))
+            target, queued_at = self._pending_direct_edits.pop(index)
+            if time.monotonic() - queued_at > self.direct_recovery.timeout_sec:
+                self._pending_direct_edits.clear()
+                self.status.setText('待发滑条输入已过期并清理，请重新操作目标滑条')
+                break
+            self.publish_direct(target=target, edited_index=index)
+            if self.direct_recovery.pending_edit[0]:
+                break
+        self._pending_direct_publish = bool(self._pending_direct_edits)
         edited_index = self._direct_gesture.edited_index
+        if edited_index is not None and not self.sliders[edited_index].isSliderDown():
+            self._end_direct_slider_gesture()
+
+    def publish_direct(self, message='已显式发送到 /joint_commands', target=None, edited_index=None):
+        pos = list(target) if target is not None else self._direct_gesture.compose(self.positions())
         if edited_index is None:
-            edited_index = self._active_direct_slider_index
+            edited_index = self._direct_gesture.edited_index
+            if edited_index is None:
+                edited_index = self._active_direct_slider_index
         action, target, detail = self.direct_recovery.submit(
             pos,
             time.monotonic(),
             edited_index=edited_index,
-            # The gesture already resolved stale GUI values from one fresh
-            # feedback snapshot.  Never replace its held joints with later
-            # feedback, which would ratchet physical drift into new targets.
-            rebase_unedited=not self._direct_gesture.active,
+            # Only the one-hot channel is a new target; the driver retains all
+            # other explicitly admitted manual goals for concurrent motion.
+            rebase_unedited=False,
         )
         self._apply_direct_recovery_action(action, target, detail, message)
 
@@ -793,6 +790,8 @@ class JointControlWidget(QtWidgets.QWidget):
             self.status.setText('%s；订阅连接数=%d' % (published_message, connections))
             return
         if action == 'clear':
+            self._pending_direct_edits.clear()
+            self._pending_direct_publish = False
             # The failed handshake has already issued its one explicit
             # positive-enable request.  Do not create an orphan PENDING state
             # after discarding the user target; the next slider action owns
@@ -800,6 +799,8 @@ class JointControlWidget(QtWidgets.QWidget):
             self.status.setText(detail)
             return
         if action == 'timeout':
+            self._pending_direct_edits.clear()
+            self._pending_direct_publish = False
             self.status.setText(detail)
             return
         if action == 'wait' and detail:
@@ -821,7 +822,7 @@ class JointControlWidget(QtWidgets.QWidget):
             if 0 <= index < len(msg.effort):
                 # One-hot intent metadata lets the real driver distinguish
                 # the one explicitly edited channel from the full GUI display
-                # vector. Ordinary JointState consumers ignore effort here.
+                # vector. It does NOT cancel previously edited joint goals.
                 msg.effort[index] = 1.0
         self.pub.publish(msg)
 
@@ -987,7 +988,11 @@ class JointControlWidget(QtWidgets.QWidget):
         self.realtime_direct.blockSignals(True)
         self.realtime_direct.setChecked(enabled)
         self.realtime_direct.blockSignals(False)
-        self.update_control_mode(enabled, publish_mode=False)
+        # Refresh this GUI's own latched publisher as well as the parameter:
+        # otherwise a restarted driver can receive our pre-handoff mode even
+        # though the checkbox followed the remote change. Its echo is a no-op
+        # because the equality guard above sees the already updated checkbox.
+        self.update_control_mode(enabled)
 
     def update_control_mode(self, direct_enabled, apply_controller_switch=True, publish_mode=True):
         del apply_controller_switch
@@ -1003,6 +1008,7 @@ class JointControlWidget(QtWidgets.QWidget):
             self.status.setText('关节直控：滑条拥有最高控制权，自动运动已禁止')
         else:
             self._pending_direct_publish = False
+            self._pending_direct_edits.clear()
             self.direct_recovery.cancel()
             self._end_direct_slider_gesture()
             self._refresh_sliders_from_feedback()

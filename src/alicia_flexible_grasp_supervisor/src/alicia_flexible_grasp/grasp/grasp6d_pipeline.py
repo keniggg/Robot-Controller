@@ -951,6 +951,11 @@ def _validated_moveit_result(result):
             'MOVEIT_UNREACHABLE',
             'MOVEIT_CHECK_ERROR',
             'MOVEIT_TIMEOUT',
+            # Local observation qualification can reject an otherwise
+            # planned path. These are rejection labels, never IK success or
+            # structured collision evidence.
+            'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID',
+            'OBSERVATION_FOLLOWING_SUPPORT_INVALID',
         }
         if result.reachable:
             if (

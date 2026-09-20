@@ -4,6 +4,7 @@
 
   <rosparam command="load" file="$(dirname)/../config/camera.yaml" />
   <rosparam command="load" file="$(dirname)/../config/tactile.yaml" />
+  <param name="/tactile/sdk_path" value="$(dirname)/../../Electronic-Skin-ML" />
   <rosparam command="load" file="$(dirname)/../config/handeye.yaml" />
 
   <node if="$(arg start_camera)" pkg="alicia_flexible_grasp_supervisor" type="camera_node.py" name="supervisor_camera" output="screen" />

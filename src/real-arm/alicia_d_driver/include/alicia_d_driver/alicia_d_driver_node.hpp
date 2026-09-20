@@ -5,13 +5,18 @@
 #include "alicia_d_driver/actuation_confirmation.hpp"
 #include "alicia_d_driver/endpoint_trim_continuity.hpp"
 #include "alicia_d_driver/endpoint_trim_driver_admission.hpp"
+#include "alicia_d_driver/sdk_diagnostic_evidence.hpp"
 #include "serial_communicator.hpp" // Assuming this is a non-ROS helper class
 #include "std_msgs/Bool.h"
+#include "std_msgs/Header.h"
 #include "std_msgs/Float32MultiArray.h"
 #include "std_msgs/String.h"
 #include "std_msgs/UInt8.h"
 #include "std_msgs/UInt16.h"
 #include "std_srvs/SetBool.h"
+#include "std_srvs/Trigger.h"
+#include "diagnostic_msgs/DiagnosticArray.h"
+#include <atomic>
 #include "sensor_msgs/JointState.h"
 #include <memory>
 #include <vector>
@@ -47,6 +52,13 @@ private:
        std_srvs::SetBool::Request& request,
        std_srvs::SetBool::Response& response
    );
+   bool query_device_info_callback(std_srvs::Trigger::Request& request,
+                                   std_srvs::Trigger::Response& response);
+   bool query_motion_diagnostics_callback(std_srvs::Trigger::Request& request,
+                                          std_srvs::Trigger::Response& response);
+   void publish_readonly_query_write(SdkReadonlyMotionQuery query, bool written);
+   void publish_sdk_raw_diagnostic(uint8_t command, uint8_t function,
+                                  const std::vector<uint8_t>& payload);
     
    // Callbacks for incoming commands
    void joint_command_callback(const sensor_msgs::JointState::ConstPtr& msg);
@@ -56,7 +68,9 @@ private:
    std::mutex control_mode_mutex_;
    bool gui_control_mode_ = false;
    bool control_mode_needs_sync_ = false;
+   bool control_mode_hold_only_ = false;
    ros::Time control_mode_changed_time_;
+   ros::Time control_reference_reset_time_;
    ros::Subscriber gui_control_mode_sub_;
     
     // Timer callbacks
@@ -94,9 +108,21 @@ private:
 
    // Publishers & Subscribers
 	   ros::Publisher joint_state_pub_std_;
+	   ros::Publisher accepted_joint_state_pub_;
+	   ros::Publisher sdk_command_pub_;
+	   ros::Publisher control_reference_pub_;
+	   ros::Publisher control_reference_epoch_pub_;
 	   ros::Publisher feedback_ready_pub_;
 	   ros::Publisher run_status_pub_;
 	   ros::Publisher temperature_pub_;
+   ros::Publisher sdk_diagnostic_pub_;
+   ros::Publisher device_info_pub_;
+   ros::ServiceServer query_device_info_service_;
+   std::atomic<bool> device_info_query_pending_{false};
+   ros::Time last_device_info_query_time_;
+   ros::ServiceServer query_motion_diagnostics_service_;
+   std::mutex readonly_motion_query_mutex_;
+   SdkReadonlyMotionBatch readonly_motion_query_batch_;
 	   ros::Publisher self_check_mask_pub_;
 	   ros::Publisher protection_latched_pub_;
 	   ros::Publisher motion_enabled_pub_;
@@ -189,7 +215,7 @@ private:
 	   std::vector<double> pending_joint_feedback_;
 	   int pending_joint_feedback_count_ = 0;
 
-   void publish_joint_state();
+   void publish_joint_state(bool accepted_sdk_sample = false);
    bool has_data;
 
    // Latest command (decoupled from ROS subscriber thread)
@@ -221,6 +247,7 @@ private:
 	   std::vector<uint8_t> last_sent_sdk_command_frame_;
 	   ros::Time last_sent_sdk_command_time_;
 	   std::vector<double> last_streamed_joint_positions_;
+	   double last_streamed_gripper_rad_ = 0.0;
 	   ros::Time last_streamed_joint_positions_time_;
 
    // Throttling/gripper smooth send

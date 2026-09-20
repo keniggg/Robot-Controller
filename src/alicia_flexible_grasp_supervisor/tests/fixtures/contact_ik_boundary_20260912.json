@@ -1,0 +1,1226 @@
+{
+  "evidence_only": true,
+  "execution_authorized": false,
+  "source_report_path": "/home/zhuyupei/.ros/grasp6d_gate_audit_latest.json",
+  "source_report_sha256": "b43ef4d383f405c2ca3f2e5f0e98513f6653c3c81ed9ac1dd1204efbdbbf7754",
+  "request_id": 54,
+  "remote_diagnostics": {
+    "tabletop_geometry": {
+      "adaptive_stage_profiles": [
+        {
+          "approach_offset_m": 0.0368468150880823,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.015921717931892083,
+          "execution_position_error_m": 0.012921717931892084,
+          "lateral_sweep_m": 0.0,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.04592171793189208,
+          "object_height_m": 0.02092509715619022,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.054768533019974384,
+          "tilt_deg": 0.0
+        },
+        {
+          "approach_offset_m": 0.0368468150880823,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.015921717931892083,
+          "execution_position_error_m": 0.012921717931892084,
+          "lateral_sweep_m": 0.0052671362088272215,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.04592171793189208,
+          "object_height_m": 0.02092509715619022,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.054768533019974384,
+          "tilt_deg": 8.218403933820433
+        },
+        {
+          "approach_offset_m": 0.0368468150880823,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.015921717931892083,
+          "execution_position_error_m": 0.012921717931892084,
+          "lateral_sweep_m": 0.010426089296699692,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.04592171793189208,
+          "object_height_m": 0.02092509715619022,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.054768533019974384,
+          "tilt_deg": 16.436807867640866
+        },
+        {
+          "approach_offset_m": 0.0368468150880823,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.015921717931892083,
+          "execution_position_error_m": 0.012921717931892084,
+          "lateral_sweep_m": 0.015370898144751746,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.04592171793189208,
+          "object_height_m": 0.02092509715619022,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.054768533019974384,
+          "tilt_deg": 24.6552118014613
+        },
+        {
+          "approach_offset_m": 0.0368468150880823,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.015921717931892083,
+          "execution_position_error_m": 0.012921717931892084,
+          "lateral_sweep_m": 0.02,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.04592171793189208,
+          "object_height_m": 0.02092509715619022,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.054768533019974384,
+          "tilt_deg": 32.87361573528173
+        }
+      ],
+      "bounded_proposal_count": 1,
+      "contact_boundary_profiles": [
+        {
+          "boundary_tilts_deg": [],
+          "branches": [
+            {
+              "maximum_observed_contact_patch_overlap_m": 0.0019516805195050812,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": -1.0,
+              "variant_index": 0
+            },
+            {
+              "maximum_observed_contact_patch_overlap_m": 0.0019516805195050812,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": 1.0,
+              "variant_index": 0
+            },
+            {
+              "maximum_observed_contact_patch_overlap_m": 0.0019516805195050812,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": -1.0,
+              "variant_index": 1
+            },
+            {
+              "maximum_observed_contact_patch_overlap_m": 0.0019516805195050812,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": 1.0,
+              "variant_index": 1
+            }
+          ],
+          "contact_height_bounds_m": [
+            0.00681580887532154,
+            0.008767489394826621
+          ],
+          "contact_height_bounds_source": "fused_measured_bilateral_surface",
+          "materialization_tilts_deg": [
+            8.218403933820433,
+            16.436807867640866,
+            24.6552118014613,
+            32.87361573528173
+          ],
+          "proposal_source_index": 0
+        },
+        {
+          "boundary_tilts_deg": [],
+          "branches": [
+            {
+              "maximum_observed_contact_patch_overlap_m": 0.0017042625000538254,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": -1.0,
+              "variant_index": 0
+            },
+            {
+              "maximum_observed_contact_patch_overlap_m": 0.0017042625000538254,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": 1.0,
+              "variant_index": 0
+            },
+            {
+              "maximum_observed_contact_patch_overlap_m": 0.0017042625000538254,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": -1.0,
+              "variant_index": 1
+            },
+            {
+              "maximum_observed_contact_patch_overlap_m": 0.0017042625000538254,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": 1.0,
+              "variant_index": 1
+            }
+          ],
+          "contact_height_bounds_m": [
+            0.006960148080381287,
+            0.008664410580435112
+          ],
+          "contact_height_bounds_source": "fused_measured_bilateral_surface",
+          "materialization_tilts_deg": [
+            8.218403933820433,
+            16.436807867640866,
+            24.6552118014613,
+            32.87361573528173
+          ],
+          "proposal_source_index": 1
+        },
+        {
+          "boundary_tilts_deg": [
+            24.230848414741807
+          ],
+          "branches": [
+            {
+              "contact_patch_overlap_m": 0.002000069160222497,
+              "maximum_observed_contact_patch_overlap_m": 0.002159687561336536,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": 24.230848414741807,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": -1.0,
+              "variant_index": 0
+            },
+            {
+              "contact_patch_overlap_m": 0.002000069160222522,
+              "maximum_observed_contact_patch_overlap_m": 0.002159687561336536,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": 24.230848414741807,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": 1.0,
+              "variant_index": 0
+            },
+            {
+              "contact_patch_overlap_m": 0.0020000691602224795,
+              "maximum_observed_contact_patch_overlap_m": 0.002159687561336536,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": 24.230848414741807,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": -1.0,
+              "variant_index": 1
+            },
+            {
+              "contact_patch_overlap_m": 0.0020000691602224986,
+              "maximum_observed_contact_patch_overlap_m": 0.002159687561336536,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": 24.230848414741807,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": 1.0,
+              "variant_index": 1
+            }
+          ],
+          "contact_height_bounds_m": [
+            0.006744918981719513,
+            0.008904606543056049
+          ],
+          "contact_height_bounds_source": "fused_measured_bilateral_surface",
+          "materialization_tilts_deg": [
+            8.218403933820433,
+            16.436807867640866,
+            24.230848414741807,
+            24.6552118014613,
+            32.87361573528173
+          ],
+          "proposal_source_index": 2
+        }
+      ],
+      "contact_execution_gate_deferred": false,
+      "contact_height_bounds_sources": {
+        "fused_measured_bilateral_surface": 3
+      },
+      "contact_overlap_decision_rule": "continuous_overlap_m >= live_uncertainty_m",
+      "contact_overlap_requirement_source": "live_perception_uncertainty_only",
+      "depth_repeatability_m": 0.00014825999625463736,
+      "depth_spatial_mad_m": 0.0035999999090563506,
+      "depth_uncertainty_estimator": "2x_robust_same_pixel_temporal_sigma_with_physical_clearance",
+      "enabled": true,
+      "failure_code": "",
+      "failure_reason": "",
+      "materialized_count": 2,
+      "materialized_proposal_count": 1,
+      "materialized_total_count": 2,
+      "plan_phase": "CONTACT_EXECUTION_PLAN",
+      "proposal_count": 17,
+      "proposal_reach_rejections": [
+        {
+          "angle_deg": 115.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02533129732642134,
+          "positive_reach_m": 0.02533129732642134,
+          "proposal_source_index": 3
+        },
+        {
+          "angle_deg": 119.99999999999999,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.027649337843887473,
+          "positive_reach_m": 0.027649337843887473,
+          "proposal_source_index": 4
+        },
+        {
+          "angle_deg": 125.00000000000001,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.030698215207750904,
+          "positive_reach_m": 0.030698215207750904,
+          "proposal_source_index": 5
+        },
+        {
+          "angle_deg": 130.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02942302383892222,
+          "positive_reach_m": 0.02942302383892222,
+          "proposal_source_index": 6
+        },
+        {
+          "angle_deg": 170.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.025304225350532155,
+          "positive_reach_m": 0.025304225350532155,
+          "proposal_source_index": 7
+        },
+        {
+          "angle_deg": 175.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.025713147163204577,
+          "positive_reach_m": 0.025713147163204577,
+          "proposal_source_index": 8
+        },
+        {
+          "angle_deg": 134.99999999999997,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.028034411989396893,
+          "positive_reach_m": 0.028034411989396893,
+          "proposal_source_index": 9
+        },
+        {
+          "angle_deg": 140.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02696521720443763,
+          "positive_reach_m": 0.02696521720443763,
+          "proposal_source_index": 10
+        },
+        {
+          "angle_deg": 165.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.025092533052437777,
+          "positive_reach_m": 0.025092533052437777,
+          "proposal_source_index": 11
+        },
+        {
+          "angle_deg": 145.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02616397220149348,
+          "positive_reach_m": 0.02616397220149348,
+          "proposal_source_index": 12
+        },
+        {
+          "angle_deg": 161.8940762207971,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.025056408436572242,
+          "positive_reach_m": 0.025056408436572242,
+          "proposal_source_index": 13
+        },
+        {
+          "angle_deg": 150.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02559519475933479,
+          "positive_reach_m": 0.02559519475933479,
+          "proposal_source_index": 14
+        },
+        {
+          "angle_deg": 160.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.025069832447188495,
+          "positive_reach_m": 0.025069832447188495,
+          "proposal_source_index": 15
+        },
+        {
+          "angle_deg": 155.0,
+          "failed_gate": "finger_reach",
+          "failure_code": "GRIPPER_SWEEP_COLLISION",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02523525029436797,
+          "positive_reach_m": 0.02523525029436797,
+          "proposal_source_index": 16
+        }
+      ],
+      "rejection_counts": {
+        "BILATERAL_SURFACE_EVIDENCE_MISSING": 38,
+        "GRIPPER_CONTACT_PATCH_MISS": 18,
+        "GRIPPER_SWEEP_COLLISION": 14
+      },
+      "required_contact_patch_overlap_m": 0.002,
+      "sampled_angles_deg": [
+        161.8940762207971,
+        71.89407622079709,
+        0.0,
+        5.000000000000001,
+        10.000000000000002,
+        15.000000000000005,
+        20.000000000000007,
+        25.000000000000004,
+        30.000000000000004,
+        35.0,
+        40.00000000000001,
+        45.0,
+        50.0,
+        54.99999999999999,
+        60.00000000000001,
+        65.0,
+        70.0,
+        75.00000000000001,
+        80.0,
+        85.0,
+        90.0,
+        95.0,
+        100.0,
+        105.0,
+        110.0,
+        115.0,
+        119.99999999999999,
+        125.00000000000001,
+        130.0,
+        134.99999999999997,
+        140.0,
+        145.0,
+        150.0,
+        155.0,
+        160.0,
+        165.0,
+        170.0,
+        175.0
+      ],
+      "surface_evidence_rejections": [
+        {
+          "angle_deg": 71.89407622079709,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.01862912232560661,
+          "positive_reach_m": 0.01862912232560661
+        },
+        {
+          "angle_deg": 30.000000000000004,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.024854641417588894,
+          "positive_reach_m": 0.024854641417588894
+        },
+        {
+          "angle_deg": 35.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02316857945820593,
+          "positive_reach_m": 0.02316857945820593
+        },
+        {
+          "angle_deg": 40.00000000000001,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.021852839058554493,
+          "positive_reach_m": 0.021852839058554493
+        },
+        {
+          "angle_deg": 45.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.020827676354168986,
+          "positive_reach_m": 0.020827676354168986
+        },
+        {
+          "angle_deg": 50.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.020038327899711824,
+          "positive_reach_m": 0.020038327899711824
+        },
+        {
+          "angle_deg": 54.99999999999999,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.01944679723232311,
+          "positive_reach_m": 0.01944679723232311
+        },
+        {
+          "angle_deg": 60.00000000000001,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.01902688909096871,
+          "positive_reach_m": 0.01902688909096871
+        },
+        {
+          "angle_deg": 65.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.018761154903794576,
+          "positive_reach_m": 0.018761154903794576
+        },
+        {
+          "angle_deg": 70.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.018639032794850952,
+          "positive_reach_m": 0.018639032794850952
+        },
+        {
+          "angle_deg": 75.00000000000001,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.018655791843735992,
+          "positive_reach_m": 0.018655791843735992
+        },
+        {
+          "angle_deg": 80.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.0188120767327683,
+          "positive_reach_m": 0.0188120767327683
+        },
+        {
+          "angle_deg": 85.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.019113969152528932,
+          "positive_reach_m": 0.019113969152528932
+        },
+        {
+          "angle_deg": 90.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.01957357708582748,
+          "positive_reach_m": 0.01957357708582748
+        },
+        {
+          "angle_deg": 95.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02021026116790093,
+          "positive_reach_m": 0.02021026116790093
+        }
+      ]
+    }
+  },
+  "outcome": {
+    "code": "NEAR_FIELD_NO_REACHABLE_CANDIDATE",
+    "preview_valid": false,
+    "reason": "NEAR_FIELD_NO_REACHABLE_CANDIDATE",
+    "valid_plan": false
+  },
+  "moveit_selection": {
+    "checked_count": 4,
+    "comparison_budget_after_incumbent_sec": 8.0,
+    "configured_top_n": 4,
+    "global_time_optimality_claimed": false,
+    "motion_metric": "strict_sequence_hardware_duration_lower_bound",
+    "optimality_scope": "checked_hard_safe_candidates_only",
+    "policy": "BOUNDED_APERTURE_THEN_HARDWARE_DURATION",
+    "publication_reserve_sec": 2.0,
+    "reachable_count": 0,
+    "shortlist_count": 4,
+    "terminated_early": false,
+    "termination_reason": "",
+    "unchecked_tail_is_not_rejected": true
+  },
+  "multiview_surface": {
+    "active": true,
+    "generation": 3,
+    "latest_registration": {
+      "code": "REGISTERED",
+      "inlier_count": 1016,
+      "ok": true,
+      "overlap_fraction": 0.8220064724919094,
+      "raw_translation_m": 0.00019467681798966978,
+      "rmse_m": 0.0006060129389331068,
+      "rotation_deg": 0.023062257219192656,
+      "source_clipped": false,
+      "source_stamp_ns": 1789263211769426345,
+      "support_normal_angle_deg": 0.2822586728866728,
+      "support_plane_separation_m": 0.00033060030767623726,
+      "translation_m": 6.25843231410014e-05
+    },
+    "phase_id": 1,
+    "point_count": 1464,
+    "source_stamps_ns": [
+      1789263207518249988,
+      1789263211769426345
+    ],
+    "target_epoch": 3,
+    "target_track_id": "g1-t3",
+    "view_indices": [
+      0,
+      1
+    ],
+    "view_point_counts": {
+      "0": 259,
+      "1": 1205
+    }
+  },
+  "stable_evaluations": [
+    {
+      "source_index": 22,
+      "variant_index": 0,
+      "adaptive_stage_profile": {
+        "approach_offset_m": 0.0368468150880823,
+        "contact_overlap_requirement_m": 0.002,
+        "depth_uncertainty_m": 0.015921717931892083,
+        "execution_position_error_m": 0.012921717931892084,
+        "lateral_sweep_m": 0.0,
+        "lateral_sweep_reference": "final_approach",
+        "lift_height_m": 0.04592171793189208,
+        "object_height_m": 0.02092509715619022,
+        "pregrasp_direction_mode": "support_normal",
+        "pregrasp_distance_m": 0.054768533019974384,
+        "tilt_deg": 0.0
+      },
+      "execution_sequence": {
+        "available": true,
+        "kind": "near_field_contact",
+        "reason": "",
+        "stages": [
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": false,
+            "position_m": [
+              -0.12320059710262861,
+              -0.44199788890885866,
+              0.13550205943726323
+            ],
+            "quaternion_xyzw": [
+              0.17327389207439992,
+              -0.9816017358552972,
+              0.07936730900921472,
+              0.01161984302357049
+            ],
+            "stage": "pregrasp",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12311650035691846,
+              -0.44486251435813334,
+              0.11781096499957988
+            ],
+            "quaternion_xyzw": [
+              0.17327389207439992,
+              -0.9816017358552972,
+              0.07936730900921472,
+              0.01161984302357049
+            ],
+            "stage": "approach",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12294359855975441,
+              -0.4507521464027381,
+              0.08143830876604323
+            ],
+            "quaternion_xyzw": [
+              0.17327389207439992,
+              -0.9816017358552972,
+              0.07936730900921472,
+              0.01161984302357049
+            ],
+            "stage": "grasp",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.1231590838748435,
+              -0.44341197274516597,
+              0.1267690885362162
+            ],
+            "quaternion_xyzw": [
+              0.17327389207439992,
+              -0.9816017358552972,
+              0.07936730900921472,
+              0.01161984302357049
+            ],
+            "stage": "lift",
+            "stamp_ns": 1789263211769426345
+          }
+        ]
+      },
+      "moveit": {
+        "collision_free": null,
+        "evidence_code": "",
+        "failure_code": "MOVEIT_UNREACHABLE",
+        "ik_valid": null,
+        "joint_max_delta_rad": 0.0,
+        "joint_path_cost": 0.0,
+        "planning_success": null,
+        "reachable": false,
+        "reason": "original strict sequence failed: strict sequence pregrasp unreachable: strict pose planning failed; free-space resolver failed: policy=deterministic_geodesic_collision_ik; orientation resolver approach unreachable: Cartesian planning fraction 0.265 is below 0.980; all ranked branches rejected (selected IK seed repeatability error 3.154627977rad exceeds 0.000001000rad; exhausted 85 ranked IK seeds)",
+        "within_joint_limits": null
+      },
+      "orientation_resolution": {
+        "available": false,
+        "failed_stage": "approach",
+        "failure_code": "MOVEIT_UNREACHABLE",
+        "policy": "deterministic_geodesic_collision_ik",
+        "policy_attested": true,
+        "reason": "policy=deterministic_geodesic_collision_ik; orientation resolver approach unreachable: Cartesian planning fraction 0.265 is below 0.980; all ranked branches rejected (selected IK seed repeatability error 3.154627977rad exceeds 0.000001000rad; exhausted 85 ranked IK seeds)"
+      },
+      "moveit_input_joint_state": {
+        "available": true,
+        "frame_id": "",
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position_rad": [
+          -1.902136176978195,
+          -0.13345632854605077,
+          0.1380582709097077,
+          0.030679615757712823,
+          -0.0782330201821677,
+          0.2193592526676467,
+          0.04975
+        ],
+        "reason": "",
+        "service_start_state_exact": false,
+        "source": "remote_latest_joint_state_immediately_before_strict_call",
+        "stamp_ns": 1789263245261447195
+      },
+      "request_plan_cache": {
+        "free_space_orientation_resolution": {
+          "eligible": true,
+          "hit": false,
+          "key_sha256": "87c097b5e9f9662086edb1b8770fd89d78a74f3d89c8f7ad4dcba1ab7ec068d1",
+          "reason": "deterministic resolver result cached",
+          "state_unchanged": true,
+          "stored": true
+        },
+        "original_strict_sequence": {
+          "eligible": true,
+          "hit": false,
+          "key_sha256": "87c097b5e9f9662086edb1b8770fd89d78a74f3d89c8f7ad4dcba1ab7ec068d1",
+          "reason": "strict failures are never cached",
+          "state_unchanged": true,
+          "stored": false
+        }
+      }
+    },
+    {
+      "source_index": 22,
+      "variant_index": 1,
+      "adaptive_stage_profile": {
+        "approach_offset_m": 0.0368468150880823,
+        "contact_overlap_requirement_m": 0.002,
+        "depth_uncertainty_m": 0.015921717931892083,
+        "execution_position_error_m": 0.012921717931892084,
+        "lateral_sweep_m": 0.0,
+        "lateral_sweep_reference": "final_approach",
+        "lift_height_m": 0.04592171793189208,
+        "object_height_m": 0.02092509715619022,
+        "pregrasp_direction_mode": "support_normal",
+        "pregrasp_distance_m": 0.054768533019974384,
+        "tilt_deg": 0.0
+      },
+      "execution_sequence": {
+        "available": true,
+        "kind": "near_field_contact",
+        "reason": "",
+        "stages": [
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": false,
+            "position_m": [
+              -0.12415755274943883,
+              -0.4417121384706622,
+              0.13545124037481054
+            ],
+            "quaternion_xyzw": [
+              0.9816017358552972,
+              0.17327389207439983,
+              -0.011619843023570484,
+              0.07936730900921472
+            ],
+            "stage": "pregrasp",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12407345600372868,
+              -0.4445767639199369,
+              0.1177601459371272
+            ],
+            "quaternion_xyzw": [
+              0.9816017358552972,
+              0.17327389207439983,
+              -0.011619843023570484,
+              0.07936730900921472
+            ],
+            "stage": "approach",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12390055420656464,
+              -0.45046639596454163,
+              0.08138748970359055
+            ],
+            "quaternion_xyzw": [
+              0.9816017358552972,
+              0.17327389207439983,
+              -0.011619843023570484,
+              0.07936730900921472
+            ],
+            "stage": "grasp",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12411603952165373,
+              -0.4431262223069695,
+              0.12671826947376355
+            ],
+            "quaternion_xyzw": [
+              0.9816017358552972,
+              0.17327389207439983,
+              -0.011619843023570484,
+              0.07936730900921472
+            ],
+            "stage": "lift",
+            "stamp_ns": 1789263211769426345
+          }
+        ]
+      },
+      "moveit": {
+        "collision_free": null,
+        "evidence_code": "",
+        "failure_code": "MOVEIT_UNREACHABLE",
+        "ik_valid": null,
+        "joint_max_delta_rad": 0.0,
+        "joint_path_cost": 0.0,
+        "planning_success": null,
+        "reachable": false,
+        "reason": "original strict sequence failed: strict sequence pregrasp unreachable: strict pose planning failed; free-space resolver failed: policy=deterministic_geodesic_collision_ik; orientation resolver approach unreachable: Cartesian planning fraction 0.125 is below 0.980; all ranked branches rejected (orientation resolver approach unreachable: Cartesian planning fraction 0.125 is below 0.980; exhausted 57 ranked IK seeds)",
+        "within_joint_limits": null
+      },
+      "orientation_resolution": {
+        "available": false,
+        "failed_stage": "approach",
+        "failure_code": "MOVEIT_UNREACHABLE",
+        "policy": "deterministic_geodesic_collision_ik",
+        "policy_attested": true,
+        "reason": "policy=deterministic_geodesic_collision_ik; orientation resolver approach unreachable: Cartesian planning fraction 0.125 is below 0.980; all ranked branches rejected (orientation resolver approach unreachable: Cartesian planning fraction 0.125 is below 0.980; exhausted 57 ranked IK seeds)"
+      },
+      "moveit_input_joint_state": {
+        "available": true,
+        "frame_id": "",
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position_rad": [
+          -1.9006021961903095,
+          -0.13345632854605077,
+          0.1380582709097077,
+          0.030679615757712823,
+          -0.0782330201821677,
+          0.2193592526676467,
+          0.04975
+        ],
+        "reason": "",
+        "service_start_state_exact": false,
+        "source": "remote_latest_joint_state_immediately_before_strict_call",
+        "stamp_ns": 1789263215941453004
+      },
+      "request_plan_cache": {
+        "free_space_orientation_resolution": {
+          "eligible": true,
+          "hit": false,
+          "key_sha256": "376e6c8883a740dc52a46218bd92640b563ea8d42d471ffb375ad776f8232773",
+          "reason": "transient or non-attested resolver outcomes are not cached",
+          "state_unchanged": false,
+          "stored": false
+        },
+        "original_strict_sequence": {
+          "eligible": true,
+          "hit": false,
+          "key_sha256": "376e6c8883a740dc52a46218bd92640b563ea8d42d471ffb375ad776f8232773",
+          "reason": "strict failures are never cached",
+          "state_unchanged": true,
+          "stored": false
+        }
+      }
+    },
+    {
+      "source_index": 22,
+      "variant_index": 0,
+      "adaptive_stage_profile": {
+        "approach_offset_m": 0.0368468150880823,
+        "contact_overlap_requirement_m": 0.002,
+        "depth_uncertainty_m": 0.015921717931892083,
+        "execution_position_error_m": 0.012921717931892084,
+        "lateral_sweep_m": 0.0,
+        "lateral_sweep_reference": "final_approach",
+        "lift_height_m": 0.04592171793189208,
+        "object_height_m": 0.02092509715619022,
+        "pregrasp_direction_mode": "support_normal",
+        "pregrasp_distance_m": 0.054768533019974384,
+        "tilt_deg": 0.0
+      },
+      "execution_sequence": {
+        "available": true,
+        "kind": "near_field_contact",
+        "reason": "",
+        "stages": [
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": false,
+            "position_m": [
+              -0.12415755274943883,
+              -0.4417121384706622,
+              0.13545124037481054
+            ],
+            "quaternion_xyzw": [
+              0.9816017358552972,
+              0.17327389207439983,
+              -0.011619843023570484,
+              0.07936730900921472
+            ],
+            "stage": "pregrasp",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12407345600372868,
+              -0.4445767639199369,
+              0.1177601459371272
+            ],
+            "quaternion_xyzw": [
+              0.9816017358552972,
+              0.17327389207439983,
+              -0.011619843023570484,
+              0.07936730900921472
+            ],
+            "stage": "approach",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12390055420656464,
+              -0.45046639596454163,
+              0.08138748970359055
+            ],
+            "quaternion_xyzw": [
+              0.9816017358552972,
+              0.17327389207439983,
+              -0.011619843023570484,
+              0.07936730900921472
+            ],
+            "stage": "grasp",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12411603952165373,
+              -0.4431262223069695,
+              0.12671826947376355
+            ],
+            "quaternion_xyzw": [
+              0.9816017358552972,
+              0.17327389207439983,
+              -0.011619843023570484,
+              0.07936730900921472
+            ],
+            "stage": "lift",
+            "stamp_ns": 1789263211769426345
+          }
+        ]
+      },
+      "moveit": {
+        "collision_free": null,
+        "evidence_code": "",
+        "failure_code": "MOVEIT_UNREACHABLE",
+        "ik_valid": null,
+        "joint_max_delta_rad": 0.0,
+        "joint_path_cost": 0.0,
+        "planning_success": null,
+        "reachable": false,
+        "reason": "original strict sequence failed: strict sequence pregrasp unreachable: strict pose planning failed; free-space resolver failed: policy=deterministic_geodesic_collision_ik; orientation resolver approach unreachable: Cartesian planning fraction 0.125 is below 0.980; all ranked branches rejected (orientation resolver approach unreachable: Cartesian planning fraction 0.125 is below 0.980; exhausted 57 ranked IK seeds)",
+        "within_joint_limits": null
+      },
+      "orientation_resolution": {
+        "available": false,
+        "failed_stage": "approach",
+        "failure_code": "MOVEIT_UNREACHABLE",
+        "policy": "deterministic_geodesic_collision_ik",
+        "policy_attested": true,
+        "reason": "policy=deterministic_geodesic_collision_ik; orientation resolver approach unreachable: Cartesian planning fraction 0.125 is below 0.980; all ranked branches rejected (orientation resolver approach unreachable: Cartesian planning fraction 0.125 is below 0.980; exhausted 57 ranked IK seeds)"
+      },
+      "moveit_input_joint_state": {
+        "available": true,
+        "frame_id": "",
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position_rad": [
+          -1.902136176978195,
+          -0.13345632854605077,
+          0.1380582709097077,
+          0.030679615757712823,
+          -0.0782330201821677,
+          0.2193592526676467,
+          0.04975
+        ],
+        "reason": "",
+        "service_start_state_exact": false,
+        "source": "remote_latest_joint_state_immediately_before_strict_call",
+        "stamp_ns": 1789263230521452568
+      },
+      "request_plan_cache": {
+        "free_space_orientation_resolution": {
+          "eligible": true,
+          "hit": false,
+          "key_sha256": "f2c682772becd802eaff2d8e2dd5793d0a00174e33a838fad8c85b41048882b6",
+          "reason": "deterministic resolver result cached",
+          "state_unchanged": true,
+          "stored": true
+        },
+        "original_strict_sequence": {
+          "eligible": true,
+          "hit": false,
+          "key_sha256": "f2c682772becd802eaff2d8e2dd5793d0a00174e33a838fad8c85b41048882b6",
+          "reason": "strict failures are never cached",
+          "state_unchanged": true,
+          "stored": false
+        }
+      }
+    },
+    {
+      "source_index": 22,
+      "variant_index": 1,
+      "adaptive_stage_profile": {
+        "approach_offset_m": 0.0368468150880823,
+        "contact_overlap_requirement_m": 0.002,
+        "depth_uncertainty_m": 0.015921717931892083,
+        "execution_position_error_m": 0.012921717931892084,
+        "lateral_sweep_m": 0.0,
+        "lateral_sweep_reference": "final_approach",
+        "lift_height_m": 0.04592171793189208,
+        "object_height_m": 0.02092509715619022,
+        "pregrasp_direction_mode": "support_normal",
+        "pregrasp_distance_m": 0.054768533019974384,
+        "tilt_deg": 0.0
+      },
+      "execution_sequence": {
+        "available": true,
+        "kind": "near_field_contact",
+        "reason": "",
+        "stages": [
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": false,
+            "position_m": [
+              -0.12320059710262861,
+              -0.44199788890885866,
+              0.13550205943726323
+            ],
+            "quaternion_xyzw": [
+              0.17327389207439992,
+              -0.9816017358552972,
+              0.07936730900921472,
+              0.01161984302357049
+            ],
+            "stage": "pregrasp",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12311650035691846,
+              -0.44486251435813334,
+              0.11781096499957988
+            ],
+            "quaternion_xyzw": [
+              0.17327389207439992,
+              -0.9816017358552972,
+              0.07936730900921472,
+              0.01161984302357049
+            ],
+            "stage": "approach",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.12294359855975441,
+              -0.4507521464027381,
+              0.08143830876604323
+            ],
+            "quaternion_xyzw": [
+              0.17327389207439992,
+              -0.9816017358552972,
+              0.07936730900921472,
+              0.01161984302357049
+            ],
+            "stage": "grasp",
+            "stamp_ns": 1789263211769426345
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.1231590838748435,
+              -0.44341197274516597,
+              0.1267690885362162
+            ],
+            "quaternion_xyzw": [
+              0.17327389207439992,
+              -0.9816017358552972,
+              0.07936730900921472,
+              0.01161984302357049
+            ],
+            "stage": "lift",
+            "stamp_ns": 1789263211769426345
+          }
+        ]
+      },
+      "moveit": {
+        "collision_free": null,
+        "evidence_code": "",
+        "failure_code": "MOVEIT_UNREACHABLE",
+        "ik_valid": null,
+        "joint_max_delta_rad": 0.0,
+        "joint_path_cost": 0.0,
+        "planning_success": null,
+        "reachable": false,
+        "reason": "original strict sequence failed: strict sequence pregrasp unreachable: strict pose planning failed; free-space resolver failed: policy=deterministic_geodesic_collision_ik; orientation resolver approach unreachable: Cartesian planning fraction 0.265 is below 0.980; all ranked branches rejected (selected IK seed repeatability error 3.154627977rad exceeds 0.000001000rad; exhausted 85 ranked IK seeds)",
+        "within_joint_limits": null
+      },
+      "orientation_resolution": {
+        "available": false,
+        "failed_stage": "approach",
+        "failure_code": "MOVEIT_UNREACHABLE",
+        "policy": "deterministic_geodesic_collision_ik",
+        "policy_attested": true,
+        "reason": "policy=deterministic_geodesic_collision_ik; orientation resolver approach unreachable: Cartesian planning fraction 0.265 is below 0.980; all ranked branches rejected (selected IK seed repeatability error 3.154627977rad exceeds 0.000001000rad; exhausted 85 ranked IK seeds)"
+      },
+      "moveit_input_joint_state": {
+        "available": true,
+        "frame_id": "",
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position_rad": [
+          -1.902136176978195,
+          -0.13345632854605077,
+          0.1380582709097077,
+          0.030679615757712823,
+          -0.0782330201821677,
+          0.2193592526676467,
+          0.04975
+        ],
+        "reason": "",
+        "service_start_state_exact": false,
+        "source": "remote_latest_joint_state_immediately_before_strict_call",
+        "stamp_ns": 1789263257741798276
+      },
+      "request_plan_cache": {
+        "free_space_orientation_resolution": {
+          "eligible": true,
+          "hit": true,
+          "key_sha256": "87c097b5e9f9662086edb1b8770fd89d78a74f3d89c8f7ad4dcba1ab7ec068d1",
+          "reason": "exact deterministic resolver result reused",
+          "state_unchanged": true,
+          "stored": false
+        },
+        "original_strict_sequence": {
+          "eligible": true,
+          "hit": false,
+          "key_sha256": "87c097b5e9f9662086edb1b8770fd89d78a74f3d89c8f7ad4dcba1ab7ec068d1",
+          "reason": "strict failures are never cached",
+          "state_unchanged": true,
+          "stored": false
+        }
+      }
+    }
+  ]
+}

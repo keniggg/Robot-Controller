@@ -1,0 +1,26 @@
+{
+  "backup_label": "2026.9.20",
+  "files": [
+    {
+      "file": "endpoint_count_analysis.json",
+      "source": ".ros_log/grasp_clear_view_grid_20260919/endpoint_count_analysis.json",
+      "sha256": "35f09cff602fc5f2514da34d8e1ab7a40de8e09b955cab406c9f5b64a6ba2504"
+    },
+    {
+      "file": "joint2_reverse_response.json",
+      "source": ".ros_log/joint2_reverse_response_20260919/result.json",
+      "sha256": "e40f2c8508eb577d1c6210c4eea4f35679b9a808d3357e7b03cced7906b7beba"
+    },
+    {
+      "file": "joint2_reverse_final_status.json",
+      "source": ".ros_log/joint2_reverse_response_20260919/final_status.json",
+      "sha256": "7795b415282066ccd894c84ac45edeb047c50983c4696c293834c00ecff61368"
+    },
+    {
+      "file": "experiment_source_hashes.json",
+      "source": ".ros_log/grasp_clear_view_grid_20260919/source_hashes.json",
+      "sha256": "cd4c94984c655b938b76c1868a8bd1e8c3f68799a4f7161a15ec84a9e66a201b"
+    }
+  ],
+  "scope": "Original JSON evidence; local rosbag/video recordings are not embedded; no new physical experiment."
+}

@@ -113,6 +113,9 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
         gateway.planner = FakePlanner()
         gateway._ensure_planner = lambda: gateway.planner
         gateway._log_pose_request = lambda req, *args, **kwargs: None
+        # Path-evidence construction has dedicated no-I/O tests; these cases
+        # exercise controller ownership/cache separation with a fake planner.
+        gateway._observation_preview_path_evidence = lambda planner, target: 'offline-fixture'
         gateway.controller_checks = 0
 
         def check_controllers():
@@ -586,6 +589,13 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
 
     def test_controller_sync_uses_one_cycle_feedback_bridge_until_settled(self):
         gateway = MotionGateway.__new__(MotionGateway)
+        # This case isolates the settle window after separately tested
+        # command-reference admission and a new driver acknowledgment.
+        gateway._select_controller_sync_reference = lambda: ([0.4, -0.2], 'initial_positive_enable')
+        gateway._controller_reference_admission_state = lambda *args, **kwargs: types.SimpleNamespace(mode='sdk_tracking')
+        gateway._stationary_controller_reference = lambda names: types.SimpleNamespace(positions=[0.4, -0.2])
+        gateway._validated_controller_sdk_reference = lambda names: types.SimpleNamespace(
+            positions=[0.4, -0.2], sdk_stamp_sec=1.02, controller_stamp_sec=1.02)
         gateway.joint_names = ['Joint1', 'Joint2', 'right_finger']
         gateway.joint_cmd = types.SimpleNamespace(
             last_state_time_sec=1.0,
@@ -648,6 +658,11 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
 
     def test_controller_sync_restarts_settle_window_after_error_excursion(self):
         gateway = MotionGateway.__new__(MotionGateway)
+        gateway._select_controller_sync_reference = lambda: ([0.4, -0.2], 'initial_positive_enable')
+        gateway._controller_reference_admission_state = lambda *args, **kwargs: types.SimpleNamespace(mode='sdk_tracking')
+        gateway._stationary_controller_reference = lambda names: types.SimpleNamespace(positions=[0.4, -0.2])
+        gateway._validated_controller_sdk_reference = lambda names: types.SimpleNamespace(
+            positions=[0.4, -0.2], sdk_stamp_sec=1.02, controller_stamp_sec=1.02)
         gateway.joint_names = ['Joint1', 'Joint2', 'right_finger']
         gateway.joint_cmd = types.SimpleNamespace(
             last_state_time_sec=1.0,

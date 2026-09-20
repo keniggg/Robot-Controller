@@ -536,7 +536,7 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertIsNone(seed)
         self.assertEqual(code, 'MOVEIT_RESOLVE_NONDETERMINISTIC')
         self.assertIn('repeatability error', reason)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
 
     def test_orientation_resolver_does_not_start_ik_after_shared_deadline(self):
         planner = self.make_planner(FakeManipulator())
@@ -563,6 +563,84 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn('deadline', reason)
 
+    def test_orientation_resolver_checks_next_sample_after_nonrepeatable_best(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.orientation_resolution_max_candidates = 2
+        calls = []
+
+        def ik(_state, target):
+            key = round(target.orientation.z, 3)
+            calls.append(key)
+            count = calls.count(key)
+            value = (0.1 if count == 1 else 0.11) if key == 0.0 else 0.2
+            return self.robot_state(value, -value), 'ik'
+
+        target = make_pose(x=0.1, q=(0, 0, 0, 1))
+        planner._inverse_kinematics_from_state = ik
+        planner._forward_kinematics_from_state = lambda *_: (
+            make_pose(x=0.1, q=(0, 0, 0.70710678, 0.70710678)), 'fk')
+        seed, code, reason = planner._resolve_orientation_from_state(
+            self.robot_state(0, 0), target,
+            make_pose(q=(0, 0, 0.70710678, 0.70710678)))
+        self.assertIsNotNone(seed, (code, reason))
+        self.assertEqual(seed['terminal_state'].joint_state.position, [0.2, -0.2])
+        self.assertEqual(calls, [0.0, 0.707, 0.0, 0.707])
+        self.assertEqual(planner.manipulator.executed_plans, [])
+
+    def test_free_space_resolver_backtracks_when_low_cost_pregrasp_blocks_approach(self):
+        planner = self.make_planner(FakeManipulator())
+        planner.orientation_resolution_max_candidates = 2
+        planner.robot = types.SimpleNamespace(get_current_state=lambda: self.robot_state(0, 0))
+        planner._inverse_kinematics_from_state = lambda state, target: (
+            self.robot_state(0.1 if abs(target.orientation.z) < 0.1 else 0.2, 0), 'ik')
+        planner._forward_kinematics_from_state = lambda state, header: (
+            make_pose(x=0.1, q=(0, 0, 0 if state.joint_state.position[0] == 0.1 else 0.70710678,
+                               1 if state.joint_state.position[0] == 0.1 else 0.70710678)), 'fk')
+        attempts = []
+
+        def cartesian(state, target):
+            attempts.append(state.joint_state.position[0])
+            if state.joint_state.position[0] < 0.15:
+                return None, 'Cartesian fraction 0.689 < 0.980'
+            return JointPlan([[0.2, 0], [0.3, 0]]), 'complete'
+
+        planner._plan_cartesian_from_start_state = cartesian
+        targets = [make_pose(x=0.1), make_pose(x=0.12)]
+        ok, code, stage, resolved, metrics, reason = planner.resolve_free_space_orientations(
+            targets, ['pregrasp', 'approach'], [False, True], [True, False])
+        self.assertTrue(ok, (code, stage, reason))
+        self.assertEqual(attempts, [0.1, 0.2])
+        self.assertEqual(resolved[1].orientation, targets[1].orientation)
+        self.assertEqual(resolved[0].position, targets[0].position)
+        self.assertEqual(planner.manipulator.executed_plans, [])
+
+    def test_orientation_resolver_does_not_try_next_branch_after_terminal_suffix(self):
+        for terminal in ('MOVEIT_TIMEOUT', 'MOVEIT_SEARCH_EXHAUSTED'):
+            with self.subTest(terminal=terminal):
+                planner = self.make_planner(FakeManipulator())
+                planner.orientation_resolution_max_candidates = 2
+                ik_calls, suffix_calls = [], []
+
+                def ik(state, target):
+                    ik_calls.append(True)
+                    value = 0.1 + abs(target.orientation.z)
+                    return self.robot_state(value, 0), 'repeatable'
+
+                def suffix(seed):
+                    suffix_calls.append(True)
+                    return False, terminal, 'shared bound reached'
+
+                planner._inverse_kinematics_from_state = ik
+                planner._forward_kinematics_from_state = lambda *args: (make_pose(), 'fk')
+                seed, code, reason = planner._resolve_orientation_from_state(
+                    self.robot_state(0, 0), make_pose(),
+                    make_pose(q=(0, 0, 0.70710678, 0.70710678)), accept_seed=suffix)
+                self.assertIsNone(seed)
+                self.assertEqual(code, terminal)
+                self.assertEqual(len(ik_calls), 3)  # Two proposals, one repeat.
+                self.assertEqual(suffix_calls, [True])
+                self.assertEqual(planner.manipulator.executed_plans, [])
+
     def test_free_space_lift_seed_uses_virtual_grasp_terminal_state(self):
         approach_plan = JointPlan([[0.1, 0.2], [0.2, 0.3]])
         grasp_plan = JointPlan([[0.2, 0.3], [0.3, 0.4]])
@@ -582,7 +660,7 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         )
         resolver_calls = []
 
-        def resolve_orientation(start_state, target, anchor):
+        def resolve_orientation(start_state, target, anchor, accept_seed=None):
             resolver_calls.append(
                 (
                     list(start_state.joint_state.position),
@@ -611,8 +689,7 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
                     q=(0.4, 0.3, 0.2, 0.8),
                 )
                 terminal = self.robot_state(0.6, 0.7)
-            return (
-                {
+            seed = {
                     'resolved_target': resolved,
                     'terminal_state': terminal,
                     'path_cost': 0.5,
@@ -620,10 +697,12 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
                     'position_error': 0.0,
                     'candidates_tested': 4,
                     'repeatability_error': 0.0,
-                },
-                '',
-                'resolved',
-            )
+                }
+            if accept_seed is not None:
+                accepted, code, reason = accept_seed(seed)
+                if not accepted:
+                    return None, code, reason
+            return seed, '', 'resolved'
 
         planner._resolve_orientation_from_state = resolve_orientation
         targets = [

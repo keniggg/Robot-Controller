@@ -1,6 +1,10 @@
 import sys
 import math
 import inspect
+import hashlib
+import json
+import time
+from collections import OrderedDict
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -8,6 +12,8 @@ import rospy
 from alicia_flexible_grasp.robot.actuation_bootstrap import bounded_observation_prefix
 
 class MoveItPlanner:
+    OBSERVATION_BRANCH_HINT_MAX_AGE_SEC = 120.0
+    OBSERVATION_BRANCH_HINT_CAPACITY = 128
     DEFAULT_CANDIDATE_ORIENTATIONS_XYZW = (
         (0.0, 0.0, 0.0, 1.0),
         (0.0, 0.7071, 0.0, 0.7071),
@@ -107,6 +113,17 @@ class MoveItPlanner:
             self.DEFAULT_CANDIDATE_ORIENTATIONS_XYZW,
         )
         self._last_pose_plan = None
+        # Enabled only on the gateway's separate observation planner. These
+        # are joint-goal hints, never permission to replay a checked trajectory.
+        self.observation_branch_hints_enabled = False
+        self.observation_path_guard_required = False
+        self.observation_path_validator = None
+        # The gateway supplies fresh, transmitted stationary controller state.
+        # It is a bridge reference only, never a replacement planning start.
+        self.controller_reference_guard_required = False
+        self.controller_reference_provider = None
+        self.controller_reference_completion_callback = None
+        self._observation_branch_hints = OrderedDict()
         try:
             import moveit_commander
             self.moveit_commander = moveit_commander
@@ -384,10 +401,31 @@ class MoveItPlanner:
             prefix, reason = self._retime_strict_execution_plan(prefix)
             if prefix is None:
                 return False, 'ACTUATION_PREFIX_RETIMING_FAILED: ' + reason
+            prefix, reference_evidence, reference_error = (
+                self._prepare_controller_reference_timing(prefix))
+            if reference_error:
+                return False, reference_error
+            guard_error = self._observation_path_guard_error(prefix)
+            if guard_error:
+                return False, 'ACTUATION_PREFIX_PATH_BLOCKED: ' + guard_error
+            reference_error = self._controller_reference_execution_error(
+                prefix, reference_evidence)
+            if reference_error:
+                return False, reference_error
             # execute() waits for this bounded trajectory only. No full-plan
             # continuation, go() fallback, stop(), or torque command is issued.
-            ok = bool(self.manipulator.execute(prefix, wait=True))
-            return ok, 'ACTUATION_OBSERVATION_PREFIX max_delta_rad=0.025 execution=%s; %s' % (ok, reason)
+            if getattr(self, 'observation_tracking_contract_required', False):
+                ok, contract_message = self._execute_observation_contract(prefix, reference_evidence)
+                if not ok:
+                    return False, contract_message
+            else:
+                ok = bool(self.manipulator.execute(prefix, wait=True))
+            if ok:
+                completion_error = self._controller_reference_completion_error(prefix)
+                if completion_error:
+                    return False, completion_error
+            return ok, 'ACTUATION_OBSERVATION_PREFIX max_delta_rad=0.025 execution=%s; %s%s' % (
+                ok, reason, self._observation_branch_diagnostic(cached))
         except Exception as exc:
             return False, 'ACTUATION_PREFIX_FAILED: %s' % exc
 
@@ -444,6 +482,93 @@ class MoveItPlanner:
         except Exception as exc:
             rospy.logwarn('Cartesian trajectory retiming failed; using original timing: %s', exc)
             return plan
+
+    def plan_and_execute_joint_probe(self, joints, execute=False,
+                                    start_joint_positions=None, before_execute=None):
+        """Exact joint target for a separately admitted, bounded diagnostic.
+
+        The gateway owns the diagnostic count cap, scene and control provenance.
+        Use the gateway's frozen transmitted reference for a command path;
+        accepted feedback must remain inside the original .035 rad contract.
+        With no reference argument retain fresh-feedback planning. Use
+        the same final retiming/reference/CAD/execution chain as strict poses.
+        No pose IK, generic go(), gripper command or reusable probe cache.
+        """
+        self._last_pose_plan = None
+        previous_tolerance = None
+        try:
+            if not self.ready:
+                raise ValueError(self.error or 'MoveIt not ready')
+            names = tuple(self.manipulator.get_active_joints())
+            goal = tuple(float(value) for value in joints)
+            if (len(goal) != 6 or len(names) != 6 or len(set(names)) != 6
+                    or set(names) != {'Joint%d' % i for i in range(1, 7)}
+                    or not all(math.isfinite(v) for v in goal)):
+                raise ValueError('JOINT_PROBE_TARGET_INVALID')
+            # Public probe targets use canonical arm order, independently of
+            # MoveGroup's active-joint enumeration.
+            goal_by_name = dict(zip(('Joint%d' % i for i in range(1, 7)), goal))
+            state = deepcopy(self.robot.get_current_state())
+            if start_joint_positions is not None:
+                reference = tuple(float(v) for v in start_joint_positions)
+                if len(reference) != 6 or not all(math.isfinite(v) for v in reference):
+                    raise ValueError('JOINT_PROBE_REFERENCE_INVALID')
+                reference_by_name = dict(zip(('Joint%d' % i for i in range(1, 7)), reference))
+                joint_state = state.joint_state
+                if (len(joint_state.name) != len(joint_state.position)
+                        or len(set(joint_state.name)) != len(joint_state.name)):
+                    raise ValueError('JOINT_PROBE_FEEDBACK_INVALID')
+                actual = dict(zip(joint_state.name, joint_state.position))
+                if any(n not in actual or not math.isfinite(actual[n])
+                       or abs(actual[n]-reference_by_name[n]) > .035 for n in names):
+                    raise ValueError('JOINT_PROBE_REFERENCE_FOLLOWING_EXCEEDED')
+                joint_state.position = [reference_by_name.get(n, p)
+                                        for n, p in zip(joint_state.name, joint_state.position)]
+                if len(joint_state.velocity) == len(joint_state.name):
+                    joint_state.velocity = [0. if n in reference_by_name else v
+                                            for n, v in zip(joint_state.name, joint_state.velocity)]
+            self.manipulator.set_start_state(state)
+            previous_tolerance = float(self.manipulator.get_goal_joint_tolerance())
+            if not math.isfinite(previous_tolerance) or previous_tolerance < 0:
+                previous_tolerance = None
+                raise ValueError('JOINT_PROBE_TOLERANCE_INVALID')
+            try:
+                self.manipulator.set_goal_joint_tolerance(0.)
+                self.manipulator.set_joint_value_target(goal_by_name)
+                result = self.manipulator.plan()
+                if not self._plan_success(result):
+                    raise ValueError('JOINT_PROBE_PLAN_FAILED')
+                plan = self._executable_plan(result)
+                tr = plan.joint_trajectory
+                if (len(tr.joint_names) != 6 or set(tr.joint_names) != set(names)
+                        or len(tr.points) < 2
+                        or any(len(p.positions) != 6 or not all(math.isfinite(v) for v in p.positions)
+                               for p in tr.points)):
+                    raise ValueError('JOINT_PROBE_TRAJECTORY_INVALID')
+                endpoint = dict(zip(tr.joint_names, tr.points[-1].positions))
+                if max(abs(endpoint[j]-goal_by_name[j]) for j in names) > 1e-12:
+                    raise ValueError('JOINT_PROBE_GOAL_CHANGED')
+                terminal = self._robot_state_after_plan(state, plan)
+                from std_msgs.msg import Header
+                header = Header()
+                header.frame_id = self.manipulator.get_planning_frame()
+                pose, reason = self._forward_kinematics_from_state(terminal, header)
+                if pose is None:
+                    raise ValueError('JOINT_PROBE_FK_FAILED: '+reason)
+                pose = deepcopy(getattr(pose, 'pose', pose))
+                self._remember_pose_plan(pose, plan, 'strict pose')
+            finally:
+                self.manipulator.set_goal_joint_tolerance(previous_tolerance)
+                previous_tolerance = None
+            if not execute:
+                return True, 'exact joint probe planned; no motion or reusable execution cache'
+            return self._execute_cached_pose_plan(pose, 'bounded exact joint probe',
+                required_kind='strict pose', before_execute=before_execute)
+        except Exception as exc:
+            return False, 'JOINT_PROBE_FAILED: %s' % exc
+        finally:
+            self._last_pose_plan = None
+            self._clear_targets()
 
     def move_to_joints(self, joints, execute=True):
         if not self.ready:
@@ -701,6 +826,9 @@ class MoveItPlanner:
         linear=None,
         resolve_orientation=None,
         deadline_sec=0.0,
+        _start_state=None,
+        _anchor=None,
+        _branch_budget=None,
     ):
         """Return deterministic FK-derived orientation seeds without motion.
 
@@ -708,8 +836,9 @@ class MoveItPlanner:
         deterministic quaternion geodesic between the perception-supplied
         contact orientation and a request-local reachable anchor orientation.
         Every exact sample is solved by collision-aware IK from the same
-        virtual joint seed.  The lowest measured joint-motion solution is
-        solved a second time and rejected if the repeated joint result differs.
+        virtual joint seed. In cost order, repeatable seeds must also admit
+        the exact remaining sequence. Failed suffixes backtrack to the next
+        seed within the original deadline and a shared bounded branch count.
 
         No position-only MoveGroup constraint sampler, cached trajectory, or
         execution API is used.  Unflagged stages retain their exact supplied
@@ -758,7 +887,7 @@ class MoveItPlanner:
                 empty_metrics,
                 'orientation resolver metadata length does not match targets',
             )
-        if not any(bool(value) for value in resolve_flags):
+        if not any(bool(value) for value in resolve_flags) and _start_state is None:
             return (
                 False,
                 'MOVEIT_RESOLVE_ERROR',
@@ -802,11 +931,42 @@ class MoveItPlanner:
         orientation_candidates_tested = 0
         max_repeatability_error = 0.0
         free_space_anchor = None
+        if _branch_budget is None:
+            _branch_budget = [max(1, min(256, int(getattr(
+                self, 'orientation_resolution_max_candidates', 96))))]
         self._last_pose_plan = None
         try:
-            start_state = deepcopy(self.robot.get_current_state())
+            start_state = deepcopy(self.robot.get_current_state()
+                                   if _start_state is None else _start_state)
             if getattr(start_state, 'joint_state', None) is None:
                 raise RuntimeError('current robot state has no joint_state')
+            if _start_state is None:
+                # A near-field request can expire before its final gate audit
+                # is committed. Keep the exact read-only solver inputs in
+                # rosout so a rejected/expired sequence remains reproducible.
+                try:
+                    replay_stages = []
+                    for target, name, is_linear, free_orientation in zip(
+                            poses, names, linear_flags, resolve_flags):
+                        item = getattr(target, 'pose', target)
+                        header = getattr(target, 'header', None)
+                        stamp = getattr(header, 'stamp', None)
+                        replay_stages.append(dict(stage=str(name),
+                            frame_id=str(getattr(header, 'frame_id', '')),
+                            stamp_ns=stamp.to_nsec() if stamp is not None else 0,
+                            position_m=[float(getattr(item.position, a)) for a in 'xyz'],
+                            quaternion_xyzw=[float(getattr(item.orientation, a)) for a in 'xyzw'],
+                            linear_from_prior_state=bool(is_linear),
+                            resolve_orientation=bool(free_orientation)))
+                    replay = dict(execution_sequence=dict(stages=replay_stages),
+                        moveit_input_joint_state=dict(available=True,
+                            name=list(start_state.joint_state.name),
+                            position_rad=list(start_state.joint_state.position)),
+                        deadline_sec=float(deadline_sec), planning_only=True)
+                    rospy.loginfo('Orientation resolver input: %s',
+                                  json.dumps(replay, allow_nan=False, separators=(',', ':')))
+                except (AttributeError, TypeError, ValueError) as exc:
+                    rospy.logwarn('Orientation resolver input recording unavailable: %s', exc)
             if self._planning_deadline_remaining_sec(deadline_sec) <= 0.0:
                 return (
                     False,
@@ -816,10 +976,11 @@ class MoveItPlanner:
                     empty_metrics,
                     'orientation resolver deadline consumed before initial FK',
                 )
-            initial_fk, initial_fk_reason = self._forward_kinematics_from_state(
-                start_state,
-                getattr(poses[0], 'header', None),
-            )
+            if _anchor is None:
+                initial_fk, initial_fk_reason = self._forward_kinematics_from_state(
+                    start_state, getattr(poses[0], 'header', None))
+            else:
+                initial_fk, initial_fk_reason = deepcopy(_anchor), 'branch anchor'
             if initial_fk is None:
                 return (
                     False,
@@ -831,12 +992,14 @@ class MoveItPlanner:
                     % initial_fk_reason,
                 )
             free_space_anchor = initial_fk
-            for target, stage_name, use_linear, should_resolve in zip(
+            for stage_index, (target, stage_name, use_linear, should_resolve) in enumerate(zip(
                 poses,
                 names,
                 linear_flags,
                 resolve_flags,
-            ):
+            )):
+                accepted_suffix = []
+                failed_suffix = []
                 remaining_sec = self._planning_deadline_remaining_sec(
                     deadline_sec
                 )
@@ -856,6 +1019,10 @@ class MoveItPlanner:
                     )
                 pose = getattr(target, 'pose', target)
                 if bool(should_resolve):
+                    if _branch_budget[0] <= 0:
+                        return (False, 'MOVEIT_SEARCH_EXHAUSTED', str(stage_name),
+                                tuple(resolved), empty_metrics,
+                                'bounded orientation branch budget exhausted')
                     if bool(use_linear):
                         return (
                             False,
@@ -873,6 +1040,30 @@ class MoveItPlanner:
                             )
                             % stage_name,
                         )
+                    def accept_seed(candidate_seed):
+                        if _branch_budget[0] <= 0:
+                            return False, 'MOVEIT_SEARCH_EXHAUSTED', 'bounded orientation branch budget exhausted'
+                        _branch_budget[0] -= 1
+                        if stage_index + 1 == len(poses):
+                            return True, '', ''
+                        # Only the first free-space stage establishes the
+                        # request-local anchor. Lift uses the pregrasp anchor,
+                        # never a newly measured or unrelated current pose.
+                        next_anchor = (candidate_seed['resolved_target']
+                                       if _anchor is None and free_space_anchor is initial_fk
+                                       else free_space_anchor)
+                        suffix = self.resolve_free_space_orientations(
+                            poses[stage_index + 1:], names[stage_index + 1:],
+                            linear_flags[stage_index + 1:], resolve_flags[stage_index + 1:],
+                            deadline_sec=deadline_sec,
+                            _start_state=candidate_seed['terminal_state'],
+                            _anchor=next_anchor, _branch_budget=_branch_budget)
+                        if suffix[0]:
+                            accepted_suffix.append(suffix)
+                            return True, '', ''
+                        failed_suffix[:] = [suffix]
+                        return False, suffix[1], suffix[5]
+
                     if math.isfinite(remaining_sec):
                         seed, code, reason = (
                             self._resolve_orientation_from_state(
@@ -880,6 +1071,7 @@ class MoveItPlanner:
                                 target,
                                 free_space_anchor,
                                 deadline_sec=deadline_sec,
+                                accept_seed=accept_seed,
                             )
                         )
                     else:
@@ -888,12 +1080,19 @@ class MoveItPlanner:
                                 start_state,
                                 target,
                                 free_space_anchor,
+                                accept_seed=accept_seed,
                             )
                         )
                     if seed is None:
+                        if failed_suffix and code not in ('MOVEIT_TIMEOUT', 'MOVEIT_SEARCH_EXHAUSTED'):
+                            failure = failed_suffix[-1]
+                            return (False, failure[1], failure[2], tuple(resolved),
+                                    failure[4], '%s; all ranked branches rejected (%s)'
+                                    % (failure[5], reason))
                         return (
                             False,
-                            str(code or 'MOVEIT_UNREACHABLE'),
+                            ('MOVEIT_UNREACHABLE' if code == 'MOVEIT_SEARCH_EXHAUSTED'
+                             else str(code or 'MOVEIT_UNREACHABLE')),
                             str(stage_name),
                             tuple(resolved),
                             {
@@ -1012,6 +1211,16 @@ class MoveItPlanner:
                 )
                 resolved.append(resolved_target)
                 start_state = next_state
+                if accepted_suffix:
+                    suffix = accepted_suffix[-1]
+                    resolved.extend(suffix[3])
+                    total_path_cost += suffix[4]['path_cost']
+                    max_joint_delta = max(max_joint_delta, suffix[4]['max_delta'])
+                    max_position_error = max(max_position_error, suffix[4]['max_position_error'])
+                    orientation_candidates_tested += suffix[4].get('orientation_candidates_tested', 0)
+                    max_repeatability_error = max(max_repeatability_error,
+                                                   suffix[4].get('max_repeatability_error', 0.0))
+                    break
 
             return (
                 True,
@@ -1022,6 +1231,8 @@ class MoveItPlanner:
                     'path_cost': total_path_cost,
                     'max_delta': max_joint_delta,
                     'max_position_error': max_position_error,
+                    'orientation_candidates_tested': orientation_candidates_tested,
+                    'max_repeatability_error': max_repeatability_error,
                 },
                 (
                     'free-space orientation seeds resolved stages=%s '
@@ -1068,8 +1279,9 @@ class MoveItPlanner:
         target,
         anchor_target,
         deadline_sec=0.0,
+        accept_seed=None,
     ):
-        """Return one repeatable geodesic IK seed and its measured metrics."""
+        """Return the first repeatable seed whose bounded suffix also passes."""
 
         target_pose = getattr(target, 'pose', target)
         anchor_pose = getattr(anchor_target, 'pose', anchor_target)
@@ -1175,8 +1387,33 @@ class MoveItPlanner:
                 % attempted,
             )
         successes.sort(key=lambda item: (item[0], item[1], item[2]))
+        last_code, last_reason = 'MOVEIT_UNREACHABLE', 'no accepted orientation seed'
+        for selection in successes:
+            seed, code, reason = self._validate_orientation_seed(
+                start_state, target, selection, attempted, deadline_sec)
+            if seed is None:
+                if code == 'MOVEIT_TIMEOUT':
+                    return None, code, reason
+                last_code, last_reason = code, reason
+                continue
+            if self._planning_deadline_remaining_sec(deadline_sec) <= 0.0:
+                return None, 'MOVEIT_TIMEOUT', 'orientation resolver deadline consumed during seed validation'
+            if accept_seed is not None:
+                accepted, code, reason = accept_seed(seed)
+                if not accepted:
+                    if code in ('MOVEIT_TIMEOUT', 'MOVEIT_SEARCH_EXHAUSTED'):
+                        return None, code, reason
+                    last_code, last_reason = code, reason
+                    continue
+            return seed, '', 'deterministic geodesic IK accepted repeatable full-sequence seed'
+        return None, last_code, '%s; exhausted %d ranked IK seeds' % (last_reason, len(successes))
+
+    def _validate_orientation_seed(self, start_state, target, selection,
+                                   attempted, deadline_sec):
+        """Repeat IK and measure FK; never relax either check for a fallback."""
+        target_pose = getattr(target, 'pose', target)
         path_cost, max_delta, fraction, selected_target, selected_state = (
-            successes[0]
+            selection
         )
         remaining_sec = self._planning_deadline_remaining_sec(deadline_sec)
         if remaining_sec <= 0.0:
@@ -1695,13 +1932,198 @@ class MoveItPlanner:
             if hasattr(self.manipulator, 'get_planning_time'):
                 previous_planning_time = self.manipulator.get_planning_time()
             self.manipulator.set_planning_time(max(0.05, float(planning_time)))
-        self.manipulator.set_pose_target(pose)
         try:
+            if (not execute and plan_kind == 'strict pose'
+                    and getattr(self, 'observation_branch_hints_enabled', False)):
+                return self._plan_observation_with_branch_hint(pose)
+            self.manipulator.set_pose_target(pose)
             return self._run_current_target(execute, pose, plan_kind)
         finally:
             self._clear_targets()
             if previous_planning_time is not None:
                 self.manipulator.set_planning_time(previous_planning_time)
+
+    def _observation_branch_signature(self):
+        """Invalidate hints when the model, group, frame, or tool changes."""
+        descriptions = [rospy.get_param(name, '') for name in (
+            '/robot_description', '/robot_description_semantic')]
+        if not all(isinstance(value, str) and value.strip() for value in descriptions):
+            raise ValueError('OBSERVATION_BRANCH_MODEL_UNAVAILABLE')
+        names = tuple(self.manipulator.get_active_joints())
+        if len(names) != 6 or len(set(names)) != 6:
+            raise ValueError('OBSERVATION_BRANCH_REQUIRES_SIX_ARM_JOINTS')
+        metadata = [self.manipulator_group, self.manipulator.get_planning_frame(),
+                    self.manipulator.get_end_effector_link(), names]
+        return hashlib.sha256(json.dumps(
+            [descriptions, metadata], separators=(',', ':'),
+        ).encode('utf-8')).hexdigest(), names
+
+    def _observation_branch_context(self, pose):
+        # Exact floating-point pose components, not the deliberately looser
+        # ordinary cached-trajectory matching tolerances. Quaternion signs are
+        # left distinct too: a miss may replan, but never borrows another pose.
+        xyz = self._pose_xyz_tuple(pose)
+        q = tuple(float(getattr(pose.orientation, name)) for name in ('x', 'y', 'z', 'w'))
+        if not self._finite_tuple(xyz, 3) or not self._finite_tuple(q, 4) or sum(v*v for v in q) <= 1e-18:
+            raise ValueError('OBSERVATION_BRANCH_POSE_INVALID')
+        signature, names = self._observation_branch_signature()
+        clock = getattr(self, '_observation_branch_clock', time.monotonic)
+        now = float(clock())
+        if not math.isfinite(now):
+            raise ValueError('OBSERVATION_BRANCH_CLOCK_INVALID')
+        cache = getattr(self, '_observation_branch_hints', None)
+        if cache is None:
+            cache = self._observation_branch_hints = OrderedDict()
+        for key, hint in list(cache.items()):
+            age = now - hint['created_sec']
+            if (hint['signature'] != signature or age < 0.0
+                    or age > self.OBSERVATION_BRANCH_HINT_MAX_AGE_SEC):
+                del cache[key]
+        key = (signature, tuple(xyz), q)
+        return cache, key, names, now
+
+    def _observation_branch_fk_check(self, state, pose, stage='terminal'):
+        from std_msgs.msg import Header
+        from tf.transformations import (
+            euler_from_quaternion, quaternion_inverse, quaternion_multiply,
+        )
+        header = Header()
+        header.frame_id = str(self.manipulator.get_planning_frame())
+        if not header.frame_id:
+            raise ValueError('OBSERVATION_BRANCH_FRAME_UNAVAILABLE')
+        fk, reason = self._forward_kinematics_from_state(state, header)
+        if fk is None:
+            raise ValueError('OBSERVATION_BRANCH_FK_FAILED: ' + reason)
+        if hasattr(fk, 'header') and str(fk.header.frame_id) != header.frame_id:
+            raise ValueError('OBSERVATION_BRANCH_FK_FRAME_MISMATCH')
+        measured = getattr(fk, 'pose', fk)
+        position_error = self._pose_position_distance(measured, pose)
+        actual_q = self._normalized_quaternion(measured.orientation)
+        target_q = self._normalized_quaternion(pose.orientation)
+        orientation_error = self._quaternion_angle(actual_q, target_q)
+        # MoveGroup's scalar orientation tolerance populates three separate
+        # intrinsic XYZ Euler-axis bounds, not a bound on the total SO(3) angle. Keep
+        # those semantics and the existing cache's angular match independently.
+        axis_errors = tuple(abs(float(v)) for v in euler_from_quaternion(
+            quaternion_multiply(quaternion_inverse(target_q), actual_q), axes='rxyz'))
+        # A fixed joint goal must still satisfy the original complete pose.
+        # Never substitute the FK orientation or relax current MoveIt bounds.
+        position_tolerance = min(float(self.manipulator.get_goal_position_tolerance()),
+                                 float(self.cached_plan_position_tolerance_m))
+        orientation_tolerance = float(self.manipulator.get_goal_orientation_tolerance())
+        cached_angle_tolerance = float(self.cached_plan_orientation_tolerance_rad)
+        if (not all(math.isfinite(v) and v >= 0.0 for v in (
+                position_error, orientation_error, position_tolerance,
+                orientation_tolerance, cached_angle_tolerance) + axis_errors)
+                or position_error > position_tolerance
+                or max(axis_errors) > orientation_tolerance
+                or orientation_error > cached_angle_tolerance):
+            raise ValueError('OBSERVATION_BRANCH_FK_TARGET_MISMATCH: stage=%s position=%.9fm orientation=%.9frad'
+                             % (stage, position_error, orientation_error))
+
+    def _plan_observation_with_branch_hint(self, pose):
+        """Fresh collision planning to a previously checked joint branch.
+
+        Other candidate checks and a consumed actuation prefix may discard
+        _last_pose_plan, but must not silently choose another IK branch for
+        the same exact observation target. A hint is not a trajectory cache:
+        current robot state and collision scene are used on every invocation.
+        """
+        self._last_pose_plan = None
+        cache, key, names, now = self._observation_branch_context(pose)
+        hint = cache.get(key)
+        previous_joint_tolerance = None
+        try:
+            description = rospy.get_param('/robot_description', '')
+            if self._observation_branch_signature()[0] != key[0]:
+                raise ValueError('OBSERVATION_BRANCH_MODEL_CHANGED')
+            start_state = deepcopy(self.robot.get_current_state())
+            state_names, state_positions = self._joint_state_positions(start_state)
+            start = dict(zip(state_names, state_positions))
+            if any(name not in start or not math.isfinite(start[name]) for name in names):
+                raise ValueError('OBSERVATION_BRANCH_START_STATE_INVALID')
+            self.manipulator.set_start_state(start_state)
+            if hint is None:
+                self.manipulator.set_pose_target(pose)
+            else:
+                goal_by_name = dict(zip(hint['names'], hint['goal']))
+                goal = [goal_by_name[name] for name in names]
+                seed = deepcopy(start_state)
+                seed.joint_state.position = [goal_by_name.get(name, value)
+                                            for name, value in zip(state_names, state_positions)]
+                self._observation_branch_fk_check(seed, pose, stage='hint_seed')
+                configured_joint_tolerance = float(self.manipulator.get_goal_joint_tolerance())
+                if not math.isfinite(configured_joint_tolerance) or configured_joint_tolerance < 0.0:
+                    raise ValueError('OBSERVATION_BRANCH_JOINT_TOLERANCE_INVALID')
+                previous_joint_tolerance = configured_joint_tolerance
+                # Joint-goal sampling inside the ordinary +/- tolerance can
+                # move an already near-boundary pose outside its original FK
+                # tolerance. Request the exact checked q_goal BEFORE collision
+                # planning; never repair/overwrite trajectory points afterward.
+                self.manipulator.set_goal_joint_tolerance(0.0)
+                self.manipulator.set_joint_value_target(goal_by_name)
+            result = self.manipulator.plan()
+            if not self._plan_success(result):
+                raise ValueError('OBSERVATION_BRANCH_PLAN_FAILED' if hint is not None
+                                 else 'OBSERVATION_POSE_PLAN_FAILED')
+            plan = self._executable_plan(result)
+            trajectory = plan.joint_trajectory
+            plan_names = tuple(trajectory.joint_names)
+            points = list(trajectory.points)
+            if (len(plan_names) != 6 or set(plan_names) != set(names) or len(points) < 2
+                    or getattr(getattr(plan, 'multi_dof_joint_trajectory', None), 'points', [])
+                    or any(len(p.positions) != 6 or not all(math.isfinite(v) for v in p.positions)
+                           for p in points)):
+                raise ValueError('OBSERVATION_BRANCH_TRAJECTORY_INVALID')
+            endpoint = dict(zip(plan_names, points[-1].positions))
+            if hint is not None:
+                # Only double-precision round-trip noise is admissible here,
+                # not the previous physical joint-goal sampling neighborhood.
+                if max(abs(endpoint[name] - goal_by_name[name]) for name in names) > 1e-12:
+                    raise ValueError('OBSERVATION_BRANCH_JOINT_GOAL_CHANGED')
+            terminal_state = self._robot_state_after_plan(start_state, plan)
+            if terminal_state is None:
+                raise ValueError('OBSERVATION_BRANCH_TERMINAL_STATE_INVALID')
+            self._observation_branch_fk_check(terminal_state, pose)
+            if (rospy.get_param('/robot_description', '') != description
+                    or self._observation_branch_signature()[0] != key[0]):
+                raise ValueError('OBSERVATION_BRANCH_MODEL_CHANGED')
+            self._remember_pose_plan(pose, plan, 'strict pose')
+            if hint is None:
+                goal = tuple(float(endpoint[name]) for name in names)
+                hint = {'signature': key[0], 'created_sec': now, 'names': names, 'goal': goal,
+                        'goal_sha256': hashlib.sha256(json.dumps(
+                            [key, names, goal], separators=(',', ':'),
+                        ).encode('utf-8')).hexdigest()}
+                mode = 'captured'
+            else:
+                mode = 'fresh_start_fixed_joint_goal'
+            cache[key] = hint  # Do not renew the original hint lifetime.
+            cache.move_to_end(key)
+            while len(cache) > self.OBSERVATION_BRANCH_HINT_CAPACITY:
+                cache.popitem(last=False)
+            self._last_pose_plan['observation_branch'] = {
+                'mode': mode, 'goal_sha256': hint['goal_sha256'],
+                'goal_joint_positions': list(hint['goal']),
+                'joint_names': list(names),
+                'robot_description_sha256': hashlib.sha256(
+                    description.encode('utf-8')).hexdigest(),
+            }
+            return True
+        except Exception:
+            # Failed revalidation cannot leave a predecessor executable and
+            # must not fall through to random IK in this planning invocation.
+            self._last_pose_plan = None
+            cache.pop(key, None)
+            raise
+        finally:
+            if previous_joint_tolerance is not None:
+                try:
+                    self.manipulator.set_goal_joint_tolerance(previous_joint_tolerance)
+                except Exception as exc:
+                    self._last_pose_plan = None
+                    cache.pop(key, None)
+                    raise ValueError('OBSERVATION_BRANCH_JOINT_TOLERANCE_RESTORE_FAILED: %s' % exc)
 
     def _attempt_position_target(self, pose, execute):
         if not hasattr(self.manipulator, 'set_position_target'):
@@ -1732,7 +2154,8 @@ class MoveItPlanner:
             self._remember_pose_plan(pose, self._executable_plan(plan), plan_kind)
         return ok
 
-    def _execute_cached_pose_plan(self, pose, target_text, required_kind=None):
+    def _execute_cached_pose_plan(self, pose, target_text, required_kind=None,
+                                 before_execute=None):
         cached = self._matching_cached_pose_plan(pose, required_kind=required_kind)
         if cached is None:
             return False, None
@@ -1753,12 +2176,52 @@ class MoveItPlanner:
                 )
             cached['plan'] = execution_plan
             cached['metrics'] = self._plan_joint_path_metrics(execution_plan)
+            retime_message += self._observation_branch_diagnostic(cached)
             if retime_message:
                 rospy.loginfo('%s; %s', retime_message, target_text)
+        duration_before_reference_sec = self._trajectory_duration_sec(execution_plan)
+        execution_plan, reference_evidence, reference_error = (
+            self._prepare_controller_reference_timing(execution_plan))
+        if reference_error:
+            self._last_pose_plan = None
+            return False, reference_error
+        cached['plan'] = execution_plan
+        cached['metrics'] = self._plan_joint_path_metrics(execution_plan)
+        guard_error = self._observation_path_guard_error(execution_plan)
+        if guard_error:
+            self._last_pose_plan = None
+            return False, 'strict cached execute blocked: OBSERVATION_PATH_INVALID: ' + guard_error
+        reference_error = self._controller_reference_execution_error(
+            execution_plan, reference_evidence)
+        if reference_error:
+            self._last_pose_plan = None
+            return False, reference_error
+        # The reference bridge can stretch the already-retimed trajectory.
+        # Report the trajectory actually submitted, rather than leaving the
+        # earlier duration as the apparent execution time in the service result.
+        final_duration_sec = self._trajectory_duration_sec(execution_plan)
+        submission_timing = 'submitted trajectory duration=%.3fs' % final_duration_sec
+        if duration_before_reference_sec > 0.0:
+            submission_timing += ' controller_reference_time_scale=%.6f' % (
+                final_duration_sec / duration_before_reference_sec)
+        retime_message = '; '.join(filter(None, (retime_message, submission_timing)))
         try:
-            ok = self.manipulator.execute(execution_plan, wait=True)
-            self.manipulator.stop()
+            if before_execute is not None:
+                before_execute()
+            rospy.loginfo('%s; %s', submission_timing, target_text)
+            if getattr(self, 'observation_tracking_contract_required', False):
+                ok, contract_message = self._execute_observation_contract(execution_plan, reference_evidence)
+                if not ok:
+                    # Contract failures cannot become success through an
+                    # endpoint-only check after the controller aborted.
+                    return False, contract_message
+            else:
+                ok = self.manipulator.execute(execution_plan, wait=True)
+                self.manipulator.stop()
             if ok:
+                completion_error = self._controller_reference_completion_error(execution_plan)
+                if completion_error:
+                    return False, completion_error
                 suffix = '; %s' % retime_message if retime_message else ''
                 return True, 'executed cached plan (%s): %s%s' % (
                     cached.get('kind', 'target'),
@@ -1770,8 +2233,9 @@ class MoveItPlanner:
             )
             if settled:
                 return True, (
-                    'executed cached plan (%s): %s; controller reported failure but %s'
-                    % (cached.get('kind', 'target'), target_text, settled_message)
+                    'executed cached plan (%s): %s; controller reported failure but %s; %s'
+                    % (cached.get('kind', 'target'), target_text, settled_message,
+                       retime_message)
                 )
             return False, (
                 'execute failed from cached plan (%s): %s; check trajectory controllers, hardware state, and heat protection'
@@ -1782,6 +2246,202 @@ class MoveItPlanner:
             # A trajectory is valid only from the state where it was planned.
             # Never replay it after a partial or failed hardware execution.
             self._last_pose_plan = None
+
+    def _execute_observation_contract(self, plan, reference_evidence):
+        from alicia_flexible_grasp.robot.contracted_trajectory import bound_action_goal
+        audit = getattr(self, '_last_observation_path_audit', {})
+        executor = getattr(self, 'observation_trajectory_executor', None)
+        authorized = getattr(self, 'observation_execution_authorized', None)
+        revalidate = getattr(self, 'observation_submission_revalidate', None)
+        if executor is None or not callable(authorized) or not callable(revalidate):
+            raise ValueError('bound observation executor or live authority is unavailable')
+        goal = bound_action_goal(plan, audit, audit['controller_constraints_snapshot'],
+                                 audit['execution_tracking_contract']['stop_trajectory_duration_sec'])
+        def before_send():
+            revalidate(plan, audit)
+            error = self._controller_reference_execution_error(plan, reference_evidence)
+            if error:
+                raise ValueError(error)
+        rospy.loginfo('Submitting proof-bound observation path tolerances: %s',
+                      json.dumps(audit['execution_tracking_contract'], sort_keys=True))
+        return executor.execute(goal, before_send=before_send, still_authorized=authorized)
+
+    def _controller_reference_completion_error(self, plan):
+        """Record successful wait=True execution, never infer it from feedback."""
+        callback = getattr(self, 'controller_reference_completion_callback', None)
+        if callback is None:
+            return ''
+        try:
+            if not callable(callback):
+                raise ValueError('completion provenance callback is not callable')
+            callback(deepcopy(plan))
+            return ''
+        except Exception as exc:
+            # This is post-execution, not a pre-submission reference rejection.
+            return ('EXECUTION_COMPLETED_PROVENANCE_FAILED: '
+                    'execution completed but provenance failed: %s' % exc)
+
+    def _controller_reference_velocity_limits(self, names):
+        if len(names) != 6 or set(names) != {'Joint%d' % i for i in range(1, 7)}:
+            raise ValueError('controller bridge requires exactly six named arm joints')
+        global_limit = float(getattr(
+            self, 'strict_execution_max_joint_velocity_rad_s', 0.08))
+        configured = getattr(self, 'strict_execution_joint_velocity_limits_rad_s', {})
+        if not math.isfinite(global_limit) or global_limit <= 0.0:
+            raise ValueError('invalid global joint velocity limit')
+        if not isinstance(configured, dict):
+            raise ValueError('invalid per-joint velocity limits')
+        result = {}
+        for name in names:
+            limit = float(configured.get(name, global_limit))
+            if not math.isfinite(limit) or limit <= 0.0:
+                raise ValueError('invalid velocity limit for %s' % name)
+            result[name] = min(global_limit, limit)
+        return result
+
+    def _controller_reference_snapshot(self, names):
+        provider = getattr(self, 'controller_reference_provider', None)
+        if not callable(provider):
+            raise ValueError('fresh controller reference provider unavailable')
+        reference = provider(list(names))
+        values = {}
+        for field in ('positions', 'velocities', 'accelerations'):
+            values[field] = tuple(float(v) for v in getattr(reference, field))
+            if len(values[field]) != len(names) or not all(
+                    math.isfinite(v) for v in values[field]):
+                raise ValueError('controller reference %s must be complete and finite' % field)
+        if any(v != 0.0 for field in ('velocities', 'accelerations')
+               for v in values[field]):
+            raise ValueError('controller reference must be stationary')
+        return SimpleNamespace(**values)
+
+    def _prepare_controller_reference_timing(self, plan):
+        """Prove the actual Noetic bridge; only uniformly stretch its timing.
+
+        With a stationary external reference, scaling all trajectory times,
+        velocities and accelerations preserves every normalized spline curve.
+        Neither measured planning start nor any joint position is replaced.
+        """
+        if not getattr(self, 'controller_reference_guard_required', False):
+            return plan, None, ''
+        try:
+            from alicia_flexible_grasp.robot.observation_path_guard import (
+                ObservationVelocityLimitError,
+                validate_observation_trajectory_velocity, wire_digest,
+            )
+            names = tuple(plan.joint_trajectory.joint_names)
+            limits = self._controller_reference_velocity_limits(names)
+            original_digest = wire_digest(plan)
+            original_geometry = deepcopy(plan)
+        except Exception as exc:
+            return None, None, 'CONTROLLER_BRIDGE_INVALID: %s' % exc
+        try:
+            reference = self._controller_reference_snapshot(names)
+        except Exception as exc:
+            return None, None, 'CONTROLLER_REFERENCE_INVALID: %s' % exc
+        try:
+            if wire_digest(plan) != original_digest:
+                raise ValueError('trajectory changed while acquiring controller reference')
+            time_scale = 1.0
+            execution_plan = plan
+            try:
+                audit = validate_observation_trajectory_velocity(plan, reference, limits)
+            except ObservationVelocityLimitError as exc:
+                # Only a completed speed proof is retimable. Missing data,
+                # exhausted budgets or any other failure never enter here.
+                excess_audit = exc.audit
+                if excess_audit.get('trajectory_sha256') != original_digest:
+                    raise ValueError('speed proof is not bound to this trajectory')
+                required_scale = float(excess_audit['required_time_scale'])
+                if not math.isfinite(required_scale) or required_scale <= 1.0:
+                    raise ValueError('invalid certified time scale')
+                # Time-side margin handles ROS nanosecond rounding; the speed
+                # limits themselves are unchanged and proved again below.
+                time_scale = required_scale * (1.0 + 1e-6)
+                execution_plan, error = self._stretch_trajectory_timing(plan, time_scale)
+                if execution_plan is None:
+                    raise ValueError('controller bridge time stretch failed: %s' % error)
+                if not self._same_joint_path_geometry(
+                        original_geometry, execution_plan, tolerance=0.0):
+                    raise ValueError('controller bridge time stretch changed joint positions')
+                audit = validate_observation_trajectory_velocity(
+                    execution_plan, reference, limits)
+            if getattr(self, 'observation_tracking_contract_required', False):
+                from alicia_flexible_grasp.robot.observation_tracking_contract import (
+                    required_command_time_scale, validate_command_derivatives,
+                )
+                required_scale = required_command_time_scale(execution_plan, reference)
+                if required_scale > 1.:
+                    contract_scale = required_scale * (1. + 1e-6)
+                    execution_plan, error = self._stretch_trajectory_timing(execution_plan, contract_scale)
+                    if execution_plan is None:
+                        raise ValueError('tracking contract time stretch failed: %s' % error)
+                    time_scale *= contract_scale
+                    if not self._same_joint_path_geometry(original_geometry, execution_plan, tolerance=0.):
+                        raise ValueError('tracking contract time stretch changed joint positions')
+                    audit = validate_observation_trajectory_velocity(execution_plan, reference, limits)
+                audit['stopping_contract_derivatives'] = validate_command_derivatives(execution_plan, reference)
+            if wire_digest(plan) != original_digest:
+                raise ValueError('input trajectory changed during speed proof')
+            final_digest = wire_digest(execution_plan)
+            if not isinstance(audit, dict) or audit.get('trajectory_sha256') != final_digest:
+                raise ValueError('final speed proof is not bound to execution trajectory')
+            evidence = dict(joint_names=names, reference=reference,
+                            limits=limits, trajectory_sha256=final_digest)
+            self._last_controller_reference_audit = dict(
+                audit, applied_time_scale=time_scale,
+                final_duration_sec=self._trajectory_duration_sec(execution_plan))
+            rospy.loginfo('Controller reference continuous speed audit: %s',
+                          json.dumps(self._last_controller_reference_audit,
+                                     sort_keys=True, separators=(',', ':')))
+            return execution_plan, evidence, ''
+        except Exception as exc:
+            return None, None, 'CONTROLLER_BRIDGE_INVALID: %s' % exc
+
+    def _controller_reference_execution_error(self, plan, evidence):
+        """Re-read live ownership/freshness after all proof and CAD work."""
+        if evidence is None:
+            return ('CONTROLLER_REFERENCE_INVALID: no bound controller speed proof'
+                    if getattr(self, 'controller_reference_guard_required', False) else '')
+        try:
+            reference = self._controller_reference_snapshot(evidence['joint_names'])
+            if any(getattr(reference, field) != getattr(evidence['reference'], field)
+                   for field in ('positions', 'velocities', 'accelerations')):
+                raise ValueError('controller reference changed after speed proof')
+        except Exception as exc:
+            return 'CONTROLLER_REFERENCE_INVALID: %s' % exc
+        try:
+            from alicia_flexible_grasp.robot.observation_path_guard import wire_digest
+            if tuple(plan.joint_trajectory.joint_names) != evidence['joint_names']:
+                raise ValueError('execution trajectory joint names changed')
+            if self._controller_reference_velocity_limits(evidence['joint_names']) != evidence['limits']:
+                raise ValueError('joint velocity limits changed after speed proof')
+            if wire_digest(plan) != evidence['trajectory_sha256']:
+                raise ValueError('execution trajectory changed after speed proof')
+            if getattr(self, 'observation_path_guard_required', False):
+                path_audit = getattr(self, '_last_observation_path_audit', {})
+                if path_audit.get('trajectory_sha256') != evidence['trajectory_sha256']:
+                    raise ValueError('CAD proof is not bound to the final timed trajectory')
+            return ''
+        except Exception as exc:
+            return 'CONTROLLER_BRIDGE_INVALID: %s' % exc
+
+    def _observation_path_guard_error(self, plan):
+        if not getattr(self, 'observation_path_guard_required', False):
+            return ''
+        validator = getattr(self, 'observation_path_validator', None)
+        if not callable(validator):
+            return 'frozen observation path validator is unavailable'
+        try:
+            audit = validator(plan)
+            if not isinstance(audit, dict) or not audit.get('trajectory_sha256'):
+                return 'observation path validator returned no bound evidence'
+            self._last_observation_path_audit = audit
+            rospy.loginfo('Frozen observation continuous path audit: %s',
+                          json.dumps(audit, sort_keys=True, separators=(',', ':')))
+            return ''
+        except Exception as exc:
+            return str(exc)
 
     def _retime_strict_execution_plan(self, plan):
         if not bool(getattr(self, 'strict_execution_retime_enabled', False)):
@@ -2283,7 +2943,19 @@ class MoveItPlanner:
                 duration_lower_bound,
                 limiting_joint,
             )
-        return message
+        return message + self._observation_branch_diagnostic(cached)
+
+    @staticmethod
+    def _observation_branch_diagnostic(cached):
+        branch = cached.get('observation_branch')
+        if not branch:
+            return ''
+        return (' observation_branch=%s observation_goal_sha256=%s observation_goal_joint_positions=%s'
+                ' observation_joint_names=%s observation_robot_description_sha256=%s') % (
+            branch['mode'], branch['goal_sha256'],
+            json.dumps(branch['goal_joint_positions'], separators=(',', ':')),
+            json.dumps(branch.get('joint_names', []), separators=(',', ':')),
+            branch.get('robot_description_sha256', ''))
 
     def _plan_joint_path_metrics(self, plan):
         trajectory = getattr(plan, 'joint_trajectory', None)

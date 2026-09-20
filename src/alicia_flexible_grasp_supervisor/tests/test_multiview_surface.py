@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import dataclasses
+import json
 import pathlib
 import subprocess
 import sys
@@ -300,6 +301,58 @@ def test_partial_stationary_footprint_does_not_inherit_spurious_pca_yaw(noise_m)
     assert result.rmse_m < .0005
     assert result.maximum_point_displacement_m < .0001
     assert abs(multiview_surface._yaw_degrees(result.transform_base[:3, :3], basis)) < .1
+
+
+def recorded_observation_recovery_pair():
+    fixture = json.loads((ROOT / 'tests/fixtures/grasp_registration_recovery_20260911.json').read_text())
+    views = []
+    for name in ('reference', 'moving'):
+        data = dict(fixture[name])
+        data['identity'] = TargetTrackIdentity(**data['identity'])
+        views.append(SurfaceView(**data))
+    return views[0], views[1], RegistrationConfig(**fixture['config'])
+
+
+def test_recorded_coarse_overshoot_is_refined_before_final_motion_bounds():
+    reference, moving, config = recorded_observation_recovery_pair()
+    basis = multiview_surface._support_basis(reference.support_normal_base)
+    coarse = multiview_surface._initial_support_transform(
+        reference.points_base, moving.points_base, basis)
+    assert abs(multiview_surface._yaw_degrees(coarse[:3, :3], basis)) > 11.8
+
+    result = register_surface_view(reference, moving, config)
+
+    assert result.ok, result.code
+    assert abs(multiview_surface._yaw_degrees(result.transform_base[:3, :3], basis)) == pytest.approx(8.0392835125, abs=1e-6)
+    assert result.maximum_point_displacement_m < config.maximum_translation_m
+    assert result.inlier_count >= config.minimum_inliers
+    assert result.overlap_fraction >= config.minimum_overlap_fraction
+    assert result.rmse_m <= config.maximum_rmse_m
+    assert result.support_plane_separation_m < config.maximum_support_offset_delta_m
+
+
+def test_recorded_recovery_still_rejects_final_out_of_bound_correction():
+    reference, moving, config = recorded_observation_recovery_pair()
+    # Five updates are deliberately insufficient: final yaw remains > 10 deg.
+    result = register_surface_view(
+        reference, moving, dataclasses.replace(config, maximum_iterations=5))
+    assert not result.ok
+    assert result.code == 'YAW_BOUND_EXCEEDED'
+    basis = multiview_surface._support_basis(reference.support_normal_base)
+    assert abs(multiview_surface._yaw_degrees(result.transform_base[:3, :3], basis)) > 10.
+    # Final measured-point displacement retains the same hard bound too.
+    result = register_surface_view(
+        reference, moving, dataclasses.replace(config, maximum_translation_m=.010))
+    assert not result.ok
+    assert result.code == 'TRANSLATION_BOUND_EXCEEDED'
+
+
+def test_recorded_overshoot_never_bypasses_support_plane_consistency():
+    reference, moving, config = recorded_observation_recovery_pair()
+    moving = dataclasses.replace(moving, support_offset_m=moving.support_offset_m + .010)
+    result = register_surface_view(reference, moving, config)
+    assert not result.ok
+    assert result.code == 'SUPPORT_OFFSET_MISMATCH'
 
 
 @pytest.mark.parametrize('shift', [(0., 0., 0.), (-.126, -.402, .047), (.5, .5, .047)])

@@ -1,5 +1,749 @@
 # 2026-07-23 ROS latest-node launch log
 
+## 2026-09-17 - 最新诊断版完整启动；操作者对准交权后发起新鲜抓取
+
+19:26 PDT 按操作者要求恢复 ROS，未做额外运动探测或启动前几何验收。
+宿主无旧 ROS/相关用户服务运行；将 09-16 已离线验证的驱动安装到当前
+worktree 的 devel 路径，旧二进制备份到根工作区
+`.ros_log/ros_resume_20260917_sFwP7H/alicia_d_driver_node_previous`。
+运行 PID7403 的 `/proc/7403/exe` SHA256 与隔离构建一致：
+`0c0653bd1cde7a5a429f63fb6fe3e641f3a6fd545b02d79af331a8574e4df5f5`。
+只读 `query_motion_diagnostics`、`query_device_info` 服务已注册，尚未调用；
+加载新诊断能力不等于微步跟随或抓取缺陷已解决。
+
+主服务 `alicia-ros-resume-20260917.service`，launch PID7329；参数沿
+09-13 完整启动，区别是修复后的 `start_tactile:=true` 直接纳入主 launch。
+其余：`start_real_arm:=true driver_port:=/dev/alicia_arm driver_baudrate:=1000000
+auto_torque_on_startup:=true self_check_poll_rate_hz:=0.0 start_camera:=true
+start_gui:=true use_remote_grasp6d:=true
+remote_grasp6d_url:=http://172.23.132.97:8000`。环境和工作树沿前述记录。
+run ID `52183584-b308-11f1-b125-4b5524bfcaa7`。相机、双触觉、GUI、网关、
+MoveIt、任务、夹爪及监测等全部注册（含 rosout 共16个常驻节点）；控制器
+一次性加载正常退出，未安装停止/卸载钩子。WSL报告 protocol3、模型loaded。
+1789698375.402843173 驱动请求 startup 正向 torque_on；初始PENDING，
+不将请求当作实物动作确认。操作者手动后1789698535.308839实际反馈确认，
+1789698567.020086直控false。助手没有发布归零、失能或额外运动探测。
+
+启动期收到E1/E2及孤立温度跳变，保留原始证据，不据此宣称持续过热或
+完全健康。操作者随后要求先不管温度：不额外展开排查，但没有关闭过热
+保护、屏蔽状态或放宽碰撞/实际到位门限。原始诊断与双触觉已实际收到，
+左右各60点 valid=true；初始空载零值不构成压力标定验收。
+只读快照首次误用String订阅DiagnosticArray话题，无数据；已纠正类型并
+取得3秒33条SDK诊断，不把首次缺消息归为驱动故障。只读rosbag首次触觉
+话题名有误，仅向该录制进程发SIGINT关闭文件，另起v2使用真实话题名；
+驱动/控制器/使能未受影响，旧记录保留。
+
+后台 `alicia-watch-resume-20260917.service` 及
+`alicia-telemetry-resume-20260917-v2.service` 仅订阅，均限时1800秒，
+记录在本次resume目录；不承诺回合结束后无限主动监督。
+操作者明确“已对准、交回控制、双手已离开”后，启动一次原路线的
+`run_fresh_grasp6d_after_alignment.py`，服务
+`alicia-grasp-handoff-20260917.service`；同源关键帧录制先启动，目录
+`.ros_log/grasp_handoff_20260917_TcYxpH/`。保留300秒新鲜预览等待、原
+120秒计划有效期、严格计划审计绑定和所有物理门限。此处仅记录发起，
+不能当作观察到位、闭爪或抓取成功；结果另追加。
+
+## 2026-09-17 - 轨迹/跟随误差修复继续离线处理
+
+对本轮 plan `2ea71422bc895aaa4d354ea1` 的关闭 bag 与审计做独立只读重算：
+成功写入保持位的误差包络最低净距 `2.477044 mm`，因此失败发生在起始
+保持位；没有观察 trajectory action goal/result。对比 09-13 能进入后续阶段
+的 plan `8335d11806e7ec4e9fca5e28`，相同误差合同下起始包络最低净距
+`3.041982 mm`，刚好通过。详细报告见
+[观察轨迹与跟随误差前置修复](../../../docs/superpowers/verification/2026-09-17-observation-path-following-repair.md)。
+
+离线新增候选完整路径证据和起始/bridge/整段筛选，修复候选先按名义终点
+排序、执行时才被跟随包络拒绝的时序缺口。此次尚未部署或重启运行节点，
+未发运动、停止、归零或失能命令；3 mm、速度、模型、夹爪 CAD 和多轴权限
+均未改。65 项新专项和 672 项远端/观察回归通过；完整测试另有 3 项仅因
+受限沙箱禁止绑定本地 HTTP socket 失败，1469 项通过。不能把离线回归或
+这次代码修复写成现场抓取成功。
+
+本轮结果（19:32 PDT）：新源窗口1789698687272484302；最终plan
+`2ea71422bc895aaa4d354ea1`，源1789698707238812685，预览年龄58.098秒。
+候选接触区域/宽度拒绝和部分IK规划超时不是最终阻塞；后续仍选出并绑定
+有效观察计划，1789698765.955进入PLAN_PREGRASP。固定分支关节终点
+Joint4约3.070rad，相对起点最大变化3.067rad，定时61.339秒；该轨迹只
+完成计算，不能说机械臂实际走了这条长路径。
+1789698767.289执行前拒绝：`OBSERVATION_FOLLOWING_SUPPORT_INVALID`，
+关节跟随误差盒内找到模型净距2.477044mm，小于原3mm。它是误差范围
+中的反例，不是实物碰桌证据，更不是温度门限导致。任务FAILED/inactive，
+runner退出6，仅关闭候选计算，没有调用失能或停止机械臂服务。
+42组同源关键帧正常关闭；bag独立读取751条accepted反馈，六轴及夹爪
+各自min=max，无trajectory action goal/result，存在1条controller command
+及2条joint_commands，因此不写成“完全没有命令”，但没有观察轨迹执行
+或实测运动、闭爪、抬升。watch按任务终态正常结束；另一路有界只读
+telemetry_v2录制仍保留。完整ROS、驱动、GUI及使能配置未停用。
+
+操作者另要求“关闭过热保护”，本轮未执行该危险修改：实机持续过热
+可能损坏舵机或导致失控，而且关闭它不能解决上述桌面净距阻塞。后续
+应先核对规划与执行的跟随误差包络验收是否一致，以及能否生成保留
+3mm净距的替代观察路径；不能以调小误差盒或物理门限冒充修复。J3微步
+响应和跨姿态几何误差仍未完成实机验收，不宣称本次抓取成功。
+
+## 2026-09-16 - 离线续处理：新版模型合同、历史误差复算、只读诊断待部署
+
+按用户要求只做离线；没有 ROS/串口连接、重载、运动、归零或失能。
+09-14 中断留下三个空报告，本日另建
+`.ros_log/model_diagnostic_offline_20260916_5jqzqc/` 重算，原空文件未覆盖。
+官方 ROS1 v6.1.0 对当前模型同名 q 的 TCP 样本差最大 0.640664 mm；tool0
+约差 180°，统一端坐标后最大 0.282241 mm，不支持“换新版模型就修好
+13～15 mm”的解释。实际数字孪生默认 MJCF 按 world/两指中点计算差最大
+0.504610 mm；不能拿同目录另一个不等价 URDF 的分米差归罪于仿真运行模型。
+J2 +3/J3 0 的实测部分响应复算不变；跨姿态法向 4.060148° 不变。新版
+模型敏感性后约4.060080°，未放宽4°门、改ROI、TF或关节符号。
+新增按需速度/自检查询白名单、5秒过期/限频、断链丢弃，以及原始十通道
+和自检mask/主机写入证据。隔离编译成功，未部署或调用；C++15+93通过。
+首次全量22项暴露旧测试读实时参数的隔离缺口，已改测试替身而非生产门限，
+相关102通过；最终完全离线全量2809通过/3跳过/7既有警告，41.49秒，
+结果 `full_tests_offline.xml/log`，保留首次失败报告。py_compile和diff检查通过。
+隔离二进制0c0653bd…留在本日结果目录，未覆盖生产路径、未执行。详见
+[离线模型与诊断核对](../../../docs/superpowers/verification/2026-09-16-offline-model-and-diagnostics.md)。
+
+## 2026-09-14 - 官方 Follower 文档参数复核（仅资料与历史证据）
+
+按用户提供的 ROS1 入口核对 Follower 五页、系列规格/模型、通信协议及
+官方 SDK/ROS1 v6.1.0 源码。找到位置精度 ±5～8 mm（概述另写 ±5 mm）、
+重复 ±2 mm，固件 v6.1.x→结构 v5.6.x，50 mm 模型、速度范围、软件容差
+和速度/自检接口。不能再把这些统称为“公开资料缺失”；此前旧 ROS1 v5.5
+模型对照需补充新版坐标合同核对，尚未认定模型错误或替换 URDF。
+SDK 默认 0.1 rad（约 5.73°）是软件到位判据，不是实物精度，也不是当前
+ROS 控制器参数。它可能接受未发生的小步运动，不能解释或修复 J3 无响应。
+固件小步死区/内部更新规则/目标 ACK/PID 及通道映射仍缺明确说明。
+文档还存在波特率及夹爪方向冲突，不照抄改参数；标定采样 offset 不是
+关节零偏，2 cm 稳定性告警不是抓取放宽依据。无 ROS/串口调用、重启、运动、
+失能或控制配置变更，不把历史在线状态当本日现场确认。
+完整对照和下一步见
+[官方 Follower 参数复核](../../../docs/superpowers/verification/2026-09-14-official-follower-parameters.md)。
+
+## 2026-09-13 04:01 - 再交权后完成一次有界多轴微调，J2 响应、J3 未响应
+
+操作者已结束手动、再次交权并确认双手离开。仅 gateway 51651→79747
+加载计划重发摘要修复，driver33553/GUI6842/其余节点不重启，姿态保持。
+新鲜场景 bfee4380f0576e67dcb66ef8 下 false 预演通过，再执行一次 3 秒
+固定原目标诊断：SDK J2/J3 均 +4 count，真实 J2 +3、J3 0，其他轴 0。
+原始串口与 accepted 在动作期 41 帧、随后 48.730 秒 441 帧计数序列一致，
+J3 始终 1909。不能归为反馈过滤、单轴锁或短时延迟；也尚不能唯一判定
+固件/伺服死区、负载或硬件损坏。动作期原始 status 全 00，后续 E1 保留。
+原目标模型残差 6.411880→5.372112 mm，但当前 SDK 跟随差 9.242724 mm；
+逐轴响应门失败，因此没有第二步、回退、闭爪、抬升、/grasp/start 或失能。
+诊断 opt-in 恢复原值（不存在），已消费 epoch 保留，不能重载后盲加补偿。
+
+新增发现：失败报告外层沿用动作前误差/计数，内层已有最新样本。源码已
+修复为最新有效样本及逐轴响应，保留所有响应/到位门；专项36通过，全量
+2784通过/3skip/7原有warnings，188.52秒。本次原始输出不覆盖，由闭合 bag 独立重算更正。材料根目录
+`.ros_log/endpoint_handoff_20260913_tGkcFV/`，212组同源关键帧已正常关闭。
+[本次部分响应与后续工作](../../../docs/superpowers/verification/2026-09-13-endpoint-partial-response.md)。
+当前不将局部误差降到6mm内或模型修复当作完整抓取成功。
+04:11:45仅gateway再次重载为87448，加载报告修复；35秒只读监测实测角/
+SDK保持值未变，无新joint_commands，消费标记保留，driver/GUI未重启。
+限时watch已结束，长期被动遥测继续；未把后台录制承诺为无限期主动监督。
+
+## 2026-09-13 03:21 后 - 微调只规划误拒绝：同计划重发序号冲突；源码已修复
+
+为J2/J3实验单独生成新场景，未再次启动6D抓取，也未执行微调。
+plan `f352117de6083e298d801b52`源1789294900873984575已提交，但网关
+只规划报“probe requires fresh committed scene geometry”。闭合
+`grasp_following_live_20260913_K32I5F/endpoint_probe.bag`精确复现：同一
+计划发布两次，仅外层header.seq=5→6，其余完全相同；原始wire hash
+不同被误判同源冲突，entries变None。不是失败状态心跳或陈旧平面导致。
+现在只规范化计划副本的外层seq，源戳/目标/几何/姿态/内层头仍严格，
+轨迹wire hash不改。真实双消息回放两次available=true；全量2776通过/
+3skip，追加封装与序号专项12通过。源码已修复，尚未重载运行节点。
+
+1789294975.524 GUI直控重新true，随后手动运动；5026.548回到false。
+助手没有抢占或执行补偿，诊断bag无action goal/result，不能把人工移动
+当成实验响应。已结束本轮候选计算及纯订阅记录，未发失能/归零/控制器
+停止卸载命令。限时watch在5457.351正常结束，长期被动遥测继续；不是
+助手回合结束后的无限期主动监督。下一次运动需新的交权/清场确认。
+实验路径、平面敏感性、残差和修复验收见
+[本轮实机与序号问题报告](../../../docs/superpowers/verification/2026-09-13-following-live-support-and-sequence.md)。
+
+## 2026-09-13 03:09–03:13 - 第一观察通过，近场远近桌面一致性拒绝
+
+操作者新近确认双手已离开机械臂和夹爪运动范围。只读状态显示直控false、
+actuation CONFIRMED、上一任务FAILED/inactive，未重启驱动或切换使能。
+启动纯订阅终端监测、精确同源关键帧/连续运动遥测及fresh runner，诊断目录
+为根`.ros_log/grasp_following_live_20260913_K32I5F/`。
+新源窗口1789294157527387380，保持原300秒候选等待/120秒计划有效期，
+不重放旧路径；runner只在新预览、绑定审计和当前执行计划ID一致后调用
+start。此处仅记录已开始计算/监督，不提前认定已运动或抓取成功。
+
+结果：新plan `00c6a257349a7bac21a72200`、源1789294204404227495，选择
+roll180°/tilt0°分支。主段62.439秒，1789294334.758返回SUCCEEDED；实测
+观察CAD最小净距78.441mm，原3mm门通过，已越过上次低净距失败点。
+请求TCP实测误差13.431mm；静止SDK—accepted为13.714mm，J2/J3码差
+分别-10/-12，故余量修复不代表跟随残差已消失。未闭爪、未抬升。
+1789294339.590进入近场，preview `9caf3b321552b1d98665c2c1` 在4385.514
+到达；4385.610 task报 `FINAL_REFINE_3D_INVALID`：远近支撑法向
+4.060148° > 原4°。失败后未重试抓取、未自动回退、未发送失能命令。
+129组同源RGB/D/mask/检测及实际动作已正常关闭保存为`attempt.bag`。
+
+精确5帧远场、1帧到位参考、3帧近场重建与原平面逐值一致：到位参考和
+近场仅差0.285267°、配准RMSE0.682630mm；它们并非远近场一致性证据。
+远场到到位参考已差4.021600°，并非最后一帧突然偏离。目标局部面距差
+约1.927mm，不能把基座原点d系数变化29.537mm当成桌面实际平移。
+固定ROI敏感性实验(.15/.30/.60/1.0)跨姿态法向差约4.436/4.060/3.781/
+3.836°；不能挑刚过门的ROI宣称标定修复。生产参数和保护门限未变。
+`support_consistency.json`、只读重建工具保留完整窗口、模型/TF及各分支。
+
+## 2026-09-13 02:09–02:49 - 确认没有触桌；观察跟随余量修复验证并加载
+
+本轮操作者明确“前夹指与桌面仍有间隙、没有接触”，随后再次取消直控。
+只读监测期间曾见 GUI_DIRECT true 及姿态改变，未抢占；继续离线修复。
+本次重点是名义路径/最低时间排名没有纳入跟随误差，而不是降低3mm门限。
+新增严格IK的关节名/URDF绑定、运动中关节误差盒候选过滤和最终定时整段
+支撑面检查（含desired桥接）；各候选先满足余量再沿原时间排序。
+不改18–22cm、接触6mm/5°、控制器容差或温度保护，不发运动/失能命令。
+全量2769通过/3skip，最终预算及合成整段存在性专项120通过，diff检查通过。
+最终回放保留原确认前段通过、主观察段提前拒绝，11个旧严格可达终点中
+22cm/roll180分支通过条件余量；不宣称该分支已获新场景完整实机验收。
+六维证明预算独立为32768盒/25秒，属于计算预算，不改任何物理门限。
+02:46:45附近仅gateway33395→51651、remote18063→51639，driver33553及
+GUI/task/控制器不变。45秒监测直控false、使能CONFIRMED、SDK/accepted
+目标和姿态未变；重载后strict execute=false规划成功，返回正确具名解和
+URDF hash。本轮未调用抓取start，无运动/失能。被动遥测仍运行，不能将
+日志录制视为助手无限期主动监督。残差本身及完整持物仍无本轮实机验收。
+新参数/回放/XML仍在根`.ros_log/grasp_rehandoff_20260913_Jew54l/`。
+详见 [前置余量修复记录](../../../docs/superpowers/verification/2026-09-13-prospective-observation-following.md)。
+
+## 2026-09-13 01:53–02:09 - 反向响应误报修复重载；新抓取因实测桌面净距不足失败
+
+已确认GUI直控false，但驱动保持01:29手动Joint5反向运动后的
+UNCONFIRMED:ENCODER_RESPONSE_LOST。闭合bag显示Joint5实际反向28count，
+旧检测器却复用前段正向运动较早的测量基准。真实计数约化回归旧代码失败，
+修复后通过：仅在新命令位移尚未累计时更新实测基准；累计/已激活probe
+仍冻结，真实无响应、错误方向及非命令轴运动不能补确认，不延长期限。
+
+C++93通过、Python相关176通过。02:03 driver旧6794→新33553（用户服务
+alicia-driver-reversal-20260913.service），gateway旧6813由launch重启为
+33395。驱动SHA66550cc4…，析构不失能，启动只正向使能；实测位置未变，
+GUI、相机、推理、task及控制器未重启。端点实验API已加载但执行仍默认关。
+02:04:32 fresh runner新窗口1789290272117150545开始，原300秒等待/
+120秒计划时效不改。结果后续追加，不能提前称已执行或抓取成功。
+
+材料：根`.ros_log/grasp_rehandoff_20260913_Jew54l/`中的闭合历史卷副本、
+C++结果、重载参数、watch/runner、同源关键帧与审计。细节见
+[本轮交权与反向误报记录](../../../docs/superpowers/verification/2026-09-13-rehandoff-reversal-and-grasp.md)。
+
+结果追记：新plan8335d118…绑定源1789290290676292419。02:05:42–46执行
+3秒受限确认前段，02:05:44.888重新CONFIRMED；随后主观察最终定时
+12.615674秒，两次action均SUCCEEDED。02:06:00.922实测CAD报左指净距
+1.797mm<原3mm，task FAILED/inactive，未进入近场/闭爪/抬升。
+请求TCP残差12.276mm（Z低9.835mm），同模型SDK—accepted为12.188mm；
+码差[+5,-9,-11,+2,-2,-4]，J2/J3约占总误差投影90.5%。左指SDK名义
+净距9.721mm，被实测偏差损失约7.924mm。名义路径认证不包含实测跟随
+误差；不能降低3mm或称已实体碰桌。应在运动前的选路/验轨补跟随余量。
+失败后无校正、回退、重试、失能；已询问操作者当前夹指实体间隙，待现场
+信息决定后续。136组同源关键帧bag已正常关闭；被动遥测与ROS仍在线。
+
+## 2026-09-13 01:30–01:49 - 优先前两项：固定目标校正实现、离线验证，未加载
+
+操作者要求先处理近场 mappingproxy 与约 11.83 mm 残差，不优先排温度。
+近场修复已于 01:25 加载；本轮新增固定原始 SDK 目标的有界反馈校正核心
+与独立 `/supervisor/refine_endpoint_feedback` 实验入口，默认禁止执行，
+未接入主抓取任务。每轴每步≤4 count、总偏移≤12 count、最多6步/30秒，
+允许多关节同时动；下一步须各命令轴有新鲜同向响应，防无响应盲积分。
+保持原6mm/5°实测到位门、严格参考/全路径/速度/净距校验，不改温度保护。
+原始目标不跟随补偿 SDK 漂移，已消费 epoch 跨网关重载保存以防重复叠加。
+
+闭合 bag 的真实起点为11.833428mm；仅在“各轴响应且偏差恒定”模拟中得到
+11.833→6.263→1.257mm。无响应模拟一步后退出；这不是实机校正成功。
+完整回归2748 passed/3 skipped；随后失败诊断字段完善及8项边界补测，
+最终专项61 passed。报告在根`.ros_log/grasp_attempt_20260913_aligned_xYlUCg/`
+的`endpoint_correction_hypotheses.json`、`pytest_endpoint_correction_*.xml`。
+
+01:48新实时订阅：GUI_DIRECT=true、task IDLE/inactive，姿态与历史观察位
+不同，actuation为UNCONFIRMED:ENCODER_RESPONSE_LOST。未抢占直控；本轮
+没有重载gateway、设置校正执行开关或发送任何新位置/失能命令。主ROS、
+修复remote/task及被动遥测服务仍active。需要操作者结束手动并再次交权
+才能进入实机验证，不能复用历史模拟动作。实现、因果边界与下一验收见
+[固定目标校正专项](../../../docs/superpowers/verification/2026-09-13-fixed-goal-endpoint-correction.md)。
+
+## 2026-09-13 01:08–01:25 - 已交权实机第一观察，近场mappingproxy故障修复并加载
+
+操作者本轮“已对准、交回控制”，GUI direct=false。fresh runner窗口300秒，
+新plan `bf5197e90f016b773f521982` 严格审计绑定后调用/grasp/start。
+唯一真实六轴动作01:10:33–44，含参考桥接11.140秒，控制器SUCCEEDED。
+实测请求端点11.791mm/2.20°，实际观察CAD净距16.546mm、新相机目标距离
+0.2100m通过无接触观察判据。没有进入闭爪、抬升，不能报抓取成功。
+
+01:10:49进入90秒近场；01:11:29 request47 ACCEPT_FAILED：
+`'mappingproxy' object does not support item assignment`。direct近场单请求
+随后不重发，01:12:19仅以旧Preview源戳不新鲜为last错误，等满90秒失败。
+本次直接原因是代码把不可变PreparedPrediction.remote_diagnostics当dict
+写入，不是证明门限太严或所有接近路径不可达。源码把精确序列去重、补拍
+诊断写入独立acceptance_diagnostics，原证据仍冻结；增加当前ticket绑定的
+无效NEAR_FIELD_ACCEPT_FAILED terminal与异常类型/栈，旧阶段不得覆盖新阶段。
+
+跟随问题未解决：已关闭bag回放显示SDK—accepted **11.833428mm**，约97秒
+最终目标/实测各保持不变。accepted−SDK六轴码差[-3,-7,-10,-1,-8,+4]，
+主贡献J3/J2/J5约6.151/3.244/2.250mm；编码量化相对IK仅0.196mm。
+94组温度中第8通道raw最高71°C被标unknown_rejected/NaN；运动起至bag结束
+26次E1、6次E2。不能据此确认实际过热，也不能凭其余37°C判健康。
+
+专项5通过，全量 **2722 passed/3 skipped/7原有warnings，169.00s**。
+01:25仅换remote/task：新PID18063/18069，用户服务
+`alicia-remote-repair-20260913.service`、`alicia-task-repair-20260913.service`。
+remote SHA2fa9dcc9…、task SHA84ecb659…；driver6794/gateway6813/GUI6842/
+控制器不动。30秒部署监测SDK/accepted/epoch不变，motion_enabled全true，
+无新joint_commands；task IDLE inactive、remote auto_request=false。
+未再次试抓、未发/grasp/stop/失能/控制器停止或归零；告警及跟随证据未查清前
+不追加物理实验。根目录`.ros_log/grasp_attempt_20260913_aligned_xYlUCg/`
+保存runner、冻结参数、全量测试；`runtime_resume_20260913_dSFcRQ/`保存已
+关闭关键帧bag与持续遥测。完整原因、误差分解、温度及后续工作见
+[本轮近场故障专项](../../../docs/superpowers/verification/2026-09-13-aligned-attempt-near-field-repair.md)。
+
+## 2026-09-13 00:58–01:03 - 完整最新ROS启动、正向使能，触觉路径修复，等待交权
+
+操作者明确恢复：WSL已启动，先启动ROS及正向使能，由操作者手动对准后
+交权；无启动前额外运动/温度/几何检查，不绕过节点内部合同，不发失能。
+启动时旧ROS节点/用户服务已不在运行，因此不是覆盖昨日保持目标的热切换。
+照片提供：强力版、50mm夹爪、固件6.1.3、硬件1.1.0；截图不能单独证明
+结构URDF版本、当前温度或持续自检健康。50mm与现`/gripper/open_position_m`
+0.05一致，未因此更改模型/TF/夹爪行程。
+
+运行目录仍为 `.worktrees/protocol-v3-upgrade`，用户服务
+`alicia-ros-resume-20260913.service`：
+
+```bash
+roslaunch alicia_flexible_grasp_supervisor full_system.launch \
+  start_real_arm:=true driver_port:=/dev/alicia_arm driver_baudrate:=1000000 \
+  auto_torque_on_startup:=true self_check_poll_rate_hz:=0.0 \
+  start_camera:=true start_tactile:=false start_gui:=true \
+  use_remote_grasp6d:=true remote_grasp6d_url:=http://172.23.132.97:8000
+```
+
+source ROS Noetic和该worktree devel；DISPLAY=:0、
+XAUTHORITY=/run/user/1000/gdm/Xauthority、ROS_MASTER_URI=http://localhost:11311、
+ROS_LOG_DIR为根工作区`.ros_log`。ROS run ID
+`f0e99d88-af48-11f1-8feb-3db53bbffd36`，主启动输出在上述service journal。
+driver6794实际二进制SHA `46a034b8d4195bcc8b115aa56b87f0e30d0a0696e636c9975902fd7edbf95ea4`，
+与新编译产物完全一致；gateway6813/camera6815/remote6823/task6831/GUI6842
+均从最新工作树加载。包含硬件接口、MoveIt、感知/手眼、夹爪、监测/日志等
+15个核心长期节点；controller one-shot正常退出，未安装停止/卸载钩子。
+
+1789286325.037862已发送startup正向SDK torque_on，随后真实关节反馈；
+手动GUI输入在1789286396.844触发MEASURED_DIRECTIONAL_RESPONSE确认。
+该确认来自操作者运动，不是助手另发探测。日志motion_enabled=false的
+PENDING状态不等于发送物理torque_off，随后确认true；未发送停止/失能命令。
+
+触觉另外通过`alicia-tactile-resume-20260913.service`启动` tactile_skin_node.py`
+（/tactile_skin），不重复加载camera/perception。第一次报缺` tactile_sdk`：
+config使用未展开且指向旧catkin_ws的sdk_path。源码已改为sensors.launch
+按`$(dirname)/../../Electronic-Skin-ML`提供路径，YAML不再残留环境替换表达式；
+2个新路径回归连同双地址/滑移共7项通过。运行参数仅改为当前工作树SDK路径，
+只重启触觉service，未重启机械臂/控制器。新触觉PID8926、/dev/alicia_skin，
+真实双地址左右各60点消息valid=true；此空载零值不等于压力标定已复验。
+触觉本身沿用既有启动软件去零，未对机械臂归零。至此16个核心长期节点。
+
+调用新驱动一次固定只读query_device_info（排队成功并非硬件ACK），实际
+回包源戳1789286395.643508134，24byte：
+`41 44 46 58 32 36 30 36 30 34 49 54 4B 54 58 43 6E 00 00 00 65 02 00 00`。
+序列号去显示分隔符后与截图一致，硬件raw110、固件raw613，确认照片信息。
+新原始诊断话题已经实机上线；1789286506–6509的4帧温度均10通道accepted，
+raw最高35°C。手动移动期间仍见零星E1，不能据短窗口35°C宣称历史告警消失。
+
+纯订阅watch会话、128MB×最多8卷的`alicia-resume-telemetry-20260913.service`
+和最长1800秒的`alicia-resume-keyframes-20260913.service`已启动，目录
+`.ros_log/runtime_resume_20260913_dSFcRQ/`。记录SDK/accepted/raw诊断、
+controller/GUI/task/TF、两路触觉及精确同源RGB-D关键帧；没有控制发布权限。
+01:03时目标已检出约0.295m、置信度约0.91，GUI direct仍true，task IDLE。
+**尚未收到本轮“已对准、交回控制”，未调用/grasp/start或发送助手位置目标。**
+后续沿用6D原路线与硬门限；昨日跟随误差、手册外环PID及跨姿态问题未被
+“启动成功”自动验收。助手回合结束后的后台记录不冒充持续人工判断。
+
+## 2026-09-13 - 官方协议对照与原始诊断源码完成，未重载/未新抓取
+
+固定官方SDK cb6c456a… / ROS1 e6f9f30c…核对。现驱动与SDK的5组完整命令帧
+逐字节一致；单轴与J2/3/5同时组帧、4096位置码往返通过，未发现此层单轴锁。
+旧官方ROS1协议不能直接覆盖。现场六轴模型与官方v5.5一致，但实物结构/固件
+尚待确认，不能直接改成v5.6或归因于型号不匹配。
+
+新增原始CRC回包、E1/E2及raw/filtered/quality诊断，避免NaN通道被当作健康；
+新增现驱动单串口所有者的固定只读版本排队入口，无归零/任意协议发送。
+54项专项、9项组帧、8项新C++及91项原C++通过，驱动编译成功；全量Python
+2715 passed/3 skipped/7原有warnings（216.04s），报告见专项。
+新binary46a034b8…尚未加载，driver8366仍为30edad32…；GUI/task/gateway未重启。
+当前保持参考与实测不等，未把重启重新播种当成无位移切换。无失能、无新
+运动、无抓取成功声明；原7.797mm跟随差和间歇E1仍在。源码与实机状态分开。
+官方来源、具体协议差异、版本问题和下一步实验见
+[官方SDK对照专项记录](../../../docs/superpowers/verification/2026-09-13-official-sdk-protocol-review.md)。
+
+## 2026-09-12 22:57 - 单次J2/3/5小步实机完成，真实跟随仍失败，保留使能
+
+gateway133480已加载交权浮点修复82a8f264…，driver8366/GUI8405/task103977/
+remote40831未重启。新零位移action真实确认后，3秒strict诊断将J2/3/5 SDK
+各增加4 count，accepted仅+3/+1/0；J1/J4/J6不动，支持正常多轴协同，不是
+驱动单轴锁。controller SUCCEEDED但FK跟随差4.425→7.797mm。后续30秒
+270accepted/269SDK均不再变化，覆盖到完成后约92秒，不能归为等待不足。
+
+另有间歇E1及第8温度通道突跳后NaN，不能凭其余33–38°C排除硬件异常，
+也不能唯一认定Joint5过热。未屏蔽告警、增加补偿、重标定、闭爪或发失能。
+ROS/task/遥测服务active，自动6D不再推进；需要设备固件与厂家伺服参数/
+告警说明继续定位底层跟随，不能在反馈不合格时用宽容差强行抓取。跨姿态
+几何及生产误差感知选路未解决。完整原始计数/时间、bag、待办及部署在
+[观察跟随证据专项记录](../../../docs/superpowers/verification/2026-09-12-observation-following-repair.md)。
+
+## 2026-09-12 22:55 - 实机复现交权浮点误超时，修复整套2702项通过
+
+精确关节诊断入口已由gateway129206加载，第一实验规划得到J2/3/5各+4
+count、其余0，但在参考准入超时，SDK与accepted均未变化，没有执行步进。
+bag证明controller v/a已严格归零、sdk_tracking确认已到；原始q的约1e−16rad
+舍入却使progress略小于1，被误认成尚在过渡。三个回归先失败后通过，修复
+只纠正分类，不放宽零v/a、编码目标、源时间或epoch检查。专项184通过，
+整套2702 passed/3 skipped/7 warnings。准备仅再次重载gateway；不会扩大
+微调步长或绕过确认。最新细节见
+[观察跟随证据专项记录](../../../docs/superpowers/verification/2026-09-12-observation-following-repair.md)。
+
+## 2026-09-12 22:49 - task已加载；严格关节诊断测试通过，准备单独加载gateway
+
+操作者已确认直控取消、夹指与桌面有间隙。22:07仅替换task为PID103977，
+用户服务`alicia-task-following-20260912.service`；driver8366/GUI8405未动。
+观察复用的SDK跟随证据修复已加载。只规划新观察候选的名义净距约5.1mm，
+不足以覆盖当前宽关节成功容差下的误差盒，因此未执行该候选。
+
+小步Pose预规划出现IK自行改变J4/J6，4-count边界拒绝，均无实验运动。
+新增精确关节目标诊断入口，支持J2/3/5协同而不经Pose IK，仍走完整严格
+执行与现场几何验证链；原6D路线/硬门限/全局trim不改。全量2681 passed、
+3 skipped、7 warnings，补充专项42 passed。准备仅重载gateway，结果续记；
+仍未开始新6D抓取或闭爪。详见
+[观察跟随证据专项记录](../../../docs/superpowers/verification/2026-09-12-observation-following-repair.md)。
+
+## 2026-09-12 22:00 - 修复观察复用伪零残差，量化Joint3/2/5影响
+
+确认复用当前观察位且不运动时，旧task仍用当前Pose作目标记录到位误差，
+可能覆盖真实跟随差。现已在源码接入独立SDK/accepted静止窗口FK证据，明确
+不是执行端点，缺证据失败而不写0；原接触合同、多轴协同和硬门限不变。
+新回归先失败后通过，全量2649 passed/3 skipped/7 warnings；新增离线归因
+工具后相关34 passed。未改变驱动trim、TF或冻结桌面。
+
+闭合20:28 bag重放：SDK→accepted 11.855768mm，六轴误差[-2,-8,-9,+2,-9,+2]
+count；按64种反事实FK的可加向量分解，沿总误差方向Joint3/2/5分别贡献
+5.498333/4.019618/2.363140mm。只修Joint2不足以解释当前姿态；这不是可直接
+下发的补偿值，也未唯一定位死区、负载/回差或反馈硬件因素。
+
+本轮4秒纯订阅读到不同epoch/姿态，GUI起初direct=true，跟随差4.424995mm；
+不能当作失败姿态已修好，也不能沿用旧姿态碰撞状态。操作者随后取消直控，
+已读到false。准备只加载task记录修复；无运动/使能/停止/失能指令，当前桌面
+接触状态仍待回复。源码、测试、复现命令及部署结果见
+[观察跟随证据专项记录](../../../docs/superpowers/verification/2026-09-12-observation-following-repair.md)。
+
+## 2026-09-12 20:28 - 新网关交权实机通过，观察后实测净距失败；继续精度/几何排查
+
+全量2606 passed/3 skipped/7 warnings后仅重载gateway为PID63399，driver/
+控制器不重启。新plan dc27d562a56b7455d3a29b66真实零位移action确认交权恢复，
+随后观察主轨迹执行成功。0.90s稳定后在21.2cm附近因左指冻结CAD净距
+−4.435539mm失败（计划仅3.698568mm）。新实测残差11.981005mm/2.28829°，
+成功SDK→accepted FK差11.855768mm，仍没到接触精调；无闭爪、抬升和持物。
+
+同次前后精确RGB-D/TF的离线单帧重建，局部支撑面分离8.025764mm、法向
+0.629357°，仍超过4mm；不能把新近场平面替换冻结平面以放行。相机看不到
+夹指接触区域，已询问操作者是否实际碰桌，未明前没有进一步推进、自动回退
+或盲目重试；无任何停止/失能命令，ROS/使能保留。
+
+新增纯离线终点误差盒净距下界工具与13测试，含原路径测试83 passed；目前
+不接入生产执行。原宽关节容差下9个候选可有保守净距，但最快下界27.804s且
+需大roll，不把这个结果当作速度/标定已解决。证据、模型条件、相机截图及
+129帧bag见[交权修复和后续实机记录](../../../docs/superpowers/verification/2026-09-12-handoff-timing-repair.md)。
+
+## 2026-09-12 20:21 - 按持续执行指令修交权时序及迟到确认来源，准备加载
+
+新增异步回归先复现60/120ms下的提前拒绝，修复后135项reference/handoff/
+controller时序测试通过，正在隔离跑全量。冻结参考桥只等待属于本事务的合法
+插值帧，原超时和最终严格零v/a不变。无完成来源的tracking状态通过新发出的
+原始controller q零位移action及真实成功回执重新取得来源；不从actual重设，
+不把旧任务迟到ACK或静止遥测当新完成。正常连续自动阶段仍不重复发保持。
+未改driver/GUI/参数/硬门限，加载与新抓取结果后续补记；没有停止/失能命令。
+详见[交权时序修复记录](../../../docs/superpowers/verification/2026-09-12-handoff-timing-repair.md)。
+
+## 2026-09-12 19:37 - 同步实验已调用新6D任务，交权同步竞态在主运动前失败
+
+按用户“先设计排查、再执行6D”执行一次。先将方案落盘，再只重载remote规划
+节点，driver/gateway/task/GUI/控制器保持原进程；前轮补拍恢复和精确序列去重
+SHA ea39a2be...已由PID40831加载，不再是未部署状态。没有停止/失能命令。
+
+新plan811e4194ddca6b2c2fa71a7e、request95、整数源戳1789267030266447544
+通过精确审计并实际调用/grasp/start；19:37:42.6949897返回
+CONTROLLER_REFERENCE_INVALID: controller reference is not stationary。
+本次controller交权桥首帧时间1789267062.6757088仍非零v/a，下一帧
+1789267062.6957028已经同SDK目标且v/a全零；两个状态帧相隔20ms，报错到
+静止帧仅0.713ms。代码把publish_time+20ms当同步完成，未考虑接收/回调异步。
+1557帧accepted及1545帧成功SDK位置均完全不变，证明不是实体仍在运动；唯一
+joint_commands是正常交权到已有SDK字的同值六轴命令，并非抓取主轨迹。
+
+本轮没有观察实体运动、没有近场/精调/闭爪/抬升；12.9mm参数仍来自旧计划，
+不能当成本次残差测量。原Joint2响应和跨姿态问题仍未实机检验。新发现还包括
+失败早退后ACK才到达、gateway未记录完成来源的恢复风险；本轮未改gateway，
+未自动第二次重试。需要修同步事务完成/迟到ACK逻辑，而不是放宽6mm或零速要求。
+
+证据根目录`.ros_log/grasp_residual_experiment_20260912_rOzvYw/`，已闭合
+171.934秒bag、146套精确同源图像、44份完整SHA归档、runner/watch及前后参数。
+ROS/替换remote/原旋转记录继续运行，单次runner/采集/watch已自然结束。
+详细实验、因果证据、远场146秒候选等待问题、采集边界与下一步见
+[残差实验记录](../../../docs/superpowers/verification/2026-09-12-grasp-residual-experiment.md)。
+
+## 2026-09-12 19:20 - 12.9mm残差产生环节与为何未修正的只读核查
+
+回答用户“算法不对还是门限太高，不解决怎么抓取”：本次残差不是6mm接触
+门限拦截修正。源码及当前参数表明观察阶段只记录残差，不申请contact-only
+终点精调；普通driver trim关闭，观察按实际相机距离/净距验收。controller
+六轴goal容差0.035rad约2°，本次最大0.015812rad仍符合其成功合同，不能当作
+6mm到位证明。接触阶段仍须任务级精调后实测6mm/5°通过，本次尚未执行到该阶段。
+
+取原成功SDK遥测（7位小数，唯一最近count重建，非原始串口帧重新解码），
+与冻结规划终点及原accepted源戳1789263207109177929做同模型只读FK：规划
+关节终点→SDK约0.181542mm，SDK→反馈约12.798037mm。说明主要差异位于
+发送后的执行/反馈链；不是上层坐标量化/插值偏了12.9mm，亦不能唯一确定为
+内部伺服死区、负载、机械回差或编码反馈哪一种。长时间目标不变/反馈不动，
+不支持仅延长等待。上次补拍/去重修复没有解决这一执行精度问题。
+
+下一优先是独立验证任务级终点闭环与真实SDK小步响应，再做抓取联调；不能
+单纯缩小controller容差（只会更早报错）、放大6mm（隐藏误差）或全局开启
+trim（可能破坏手动控制）。另发现HWI未更新实测速度，需单独完善，不把它
+作为本次已证明的12.9mm来源。完整参数、源码关系、分项证据与待办见
+[专项记录末节](../../../docs/superpowers/verification/2026-09-12-contact-path-recovery-repair.md)。
+本轮仅诊断与文档补记：未改生产源码/参数、未重启、未发运动、使能、停止或失能。
+
+## 2026-09-12 19:05 - 修复本次遗漏的补拍机会与重复序列检查，未加载/未运动
+
+针对用户“解决这次抓取失败的问题，并且分析出具体的原因”，确认直接阻断是
+固定接触姿态的 approach/pregrasp 不可达：grasp 有解但 Joint5 贴限位，原
+Cartesian fraction 仅0.125/0.265；不是略微收紧门限或90秒超时。其他可容纳
+方向缺实测双侧表面，不能通过放松2mm接触要求、3mm CAD、.98 Cartesian、
+关节限位或清空实际跟随误差来制造可执行候选。
+
+本轮在实际部署工作树 `protocol-v3-upgrade` 中只改 remote 生产逻辑、对应
+测试/fixture和文档。两个已复现修复：
+
+1. 过去只在“零几何候选”时考虑注册补拍；有几何候选但全部运动学失败时，
+   直接结束，漏掉其他方向的表面观测机会。现在完整非空shortlist均明确
+   MOVEIT_UNREACHABLE、同源身份/注册有效、原deadline未到且其他方向缺表面
+   时，允许请求既有一次注册补拍。服务错误、未检查尾部、过期/错目标、
+   远端故障、超时不触发；不生成接触执行权限。原90秒/20秒预留不变。
+2. 夹爪对称二次展开产生4条记录但只有2套精确完整Pose。direct分支改用
+   同请求、目标、几何上下文、中心、开口及四阶段坐标/四元数/frame/整数纳秒
+   去重，保留审计映射；不合并近似Pose、不同方向或历史请求。减少重复搜索
+   不等于变为可达，也没有宣称实机节省固定时长。
+
+新增真实request54诊断测试在修改前1 fail/13 pass，修改后通过；去重回归
+真实4→2，微小坐标差/1ns差/不同stage、frame、宽度、上下文、目标及缺证据
+都保留。隔离master的完整Python回归结果见下方最终验证补记。未改driver、
+gateway、GUI、URDF、TF/TCP或硬门限；没增加单轴独动或自动全局一次锁。
+remote源码SHA256：`ea39a2be0bb65f8669b576129c6e1dbade8feab8fedbdceab22fe2b6ed378f79`。
+**运行中的节点尚未加载本次新代码；本次没有重启、使能操作、位置发布、新
+抓取、停止或失能命令。** 不把源码修改或回归通过写成完整抓取成功。
+
+另从keyframes.bag源戳1789263207109177929复算当时观察反馈，实际末端误差
+向量(+4.316845,+6.318195,−10.412303)mm复现。模型内逐轴替换分析：Joint3、
+Joint2、Joint5分别造成约6.480、4.170、2.666mm单轴末端位移（不是可相加
+占比），不能只盯Joint2，也不能仅据FK断言死区/背隙/负载/固件的硬件根因。
+历史跨姿态约15mm失配与此跟随残差仍需分别实机验证。本次失败后只读记录
+显示关节姿态和目标距离已有变化，旧对准快照不能授权下一次自动执行。
+
+完整因果关系、源证据、实施和待验证项见
+[接触路径恢复修复专项记录](../../../docs/superpowers/verification/2026-09-12-contact-path-recovery-repair.md)。
+主技术路线同步明确新恢复分支及精确去重，并更正遗留的“首个立即发布”文字
+为已存在的8秒有界硬件时间比较/2秒发布预留；不是此次擅改排序策略。
+
+最终验证补记：完整Python回归 **2584 passed / 3 skipped / 7 warnings，75.77s**；
+使用 `ROS_MASTER_URI=http://127.0.0.1:11319 python3 -m pytest -q
+src/alicia_flexible_grasp_supervisor/tests`（已source Noetic和本工作树setup）。
+7项为既有rospy.warn弃用警告。`git diff --check`通过；fixture新增诊断与
+全部既存stable字段逐值对源JSON一致，源SHA与整数纳秒验证通过。本轮未改
+C++源文件，未重建/重新加载驱动；不把此前C++测试数量冒充本轮重跑结果。
+
+## 2026-09-12 18:34 - 对准交权后第一观察成功，近场候选IK边界失败
+
+用户已明确“已对准、交回控制”，实际执行新计划
+`951031cbfec381799b626e75`，没有沿用昨日计划。先做execute=False的双planner
+预热，原fresh runner完成同源审计/ID绑定后启动。观察roll−15°/tilt0°主轨迹
+11.296秒执行成功；实测距目标约21cm、冻结CAD净距7.246mm通过原3mm。
+实际末端误差仍12.922mm/2.44°，不能宣称Joint2/几何问题已修好。
+
+近场request54的4个候选条目（2套不同接触序列）均hard-recheck通过，但
+strict MoveIt可达为0，最终18:34:18.763报NEAR_FIELD_NO_REACHABLE_CANDIDATE；
+没有补拍、接近、闭爪、抬升。不是90秒超时，也未出现CONTROLLER_REFERENCE/
+BRIDGE拒绝。观察后416帧accepted中Joint2–6不再二次下沉，Joint1有1count
+变化；415帧成功SDK位置全轴不变，没有将actual重写为下一保持目标。
+
+只读IK对照：两套grasp各13/13可解，pregrasp和approach各0/13，关闭碰撞仅
+做诊断仍相同。Joint5抓取解−1.566704rad贴近原−1.57下限，沿原退让方向2mm
+即无解；固定姿态下0–60mm/2mm扫描仅0mm可解。有限搜索不证明整个目标不可抓。
+当前候选的运动学余量是新增强阻断，不能靠降低Cartesian .98或缩小实际误差
+余量强行继续。源码行为本轮未再修改，未发停止/失能或自动回退/重试命令。
+
+159帧keyframe bag及runner已正常结束；旋转bag继续，另起纯订阅
+alicia-post-attempt-watch-20260912.service（1800秒）观察当前状态。完整证据、
+精确回放fixture与下一步边界见
+[本轮启动与IK边界专项记录](../../../docs/superpowers/verification/2026-09-12-startup-grasp-ik-boundary.md)。
+本次已执行但未成功抓取，后续候选改造与实体跟随验证仍未完成。
+
+## 2026-09-12 18:27 - 按最新指令启动完整ROS与正向使能，等待手动对准
+
+用户明确恢复工作：WSL已启动，要求先启动完整最新ROS和关节正向使能，随后
+由用户手动识别、对准并明确告知后再自动抓取；禁止停止/失能命令。该指令
+取代前一天“修复后暂停”。本轮按日志使用原完整launch，没有启动前运动验证、
+候选计算或温度/几何等专项检查，也未绕过节点内部的真实反馈和执行门控。
+
+唯一部署目录 `/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade`。
+用户级 `alicia-ros-resume-20260912.service` 执行（先source `/opt/ros/noetic/setup.bash`
+及该worktree `devel/setup.bash`）：
+
+```bash
+roslaunch alicia_flexible_grasp_supervisor full_system.launch \
+  start_real_arm:=true driver_port:=/dev/alicia_arm driver_baudrate:=1000000 \
+  auto_torque_on_startup:=true self_check_poll_rate_hz:=0.0 \
+  start_camera:=true start_tactile:=false start_gui:=true \
+  use_remote_grasp6d:=true remote_grasp6d_url:=http://172.23.132.97:8000
+```
+
+服务环境：DISPLAY=:0，XAUTHORITY=/run/user/1000/gdm/Xauthority，
+ROS_MASTER_URI=http://localhost:11311，ROS_LOG_DIR为根工作树 `.ros_log`。
+总启动日志 `.ros_log/ros_resume_20260912.log`，ROS run ID
+`40fd1fc0-af12-11f1-a5e2-a907c482c226`。
+
+最初USB尚未接入虚拟机，driver及camera保持原自动重连/重试；未用错误设备
+或重启控制器代替。18:27:40相机真实RGB-D启动；18:27:42.011机械臂串口接通，
+driver按既有auto_torque_on_startup发送serial_reconnect正向SDK torque_on。
+18:27:42.205已有完整SDK关节/夹爪反馈。未发送demonstration=true、torque_off、
+controller-stop、/grasp/stop或其他停止/失能命令，也没有额外位置探测。
+状态PENDING:POSITIVE_ENABLE_REQUESTED只证明正向请求已发，尚非运动已确认。
+
+新driver PID8366正在执行SHA256
+`30edad32f5c2384cfc2928550eca8aaef5c2d6cf87b2ee93848ecb73b934c940`，与昨日
+最终构建一致，已不是旧进程二进制。新gateway8389、task8398、camera8391、
+GUI8405均从同一worktree加载；硬件接口、MoveIt、感知、手眼TF、remote、夹爪、
+安全监测和数据日志共15个长期ROS节点上线，controller_loader_once正常退出且
+不安装stop/unload钩子。remote报告backend=graspnet_baseline、loaded=True、
+protocol=3。新只读reset epoch已收到，stamp=1789262862.011835926、
+frame=sdk_reference_epoch；没有把PENDING心跳当作重置，也未发布同步位置目标。
+
+启动后零星E1/E2 SDK状态事件已记录；所配套温度约28–32°C，驱动未把单个
+事件判作持续过温，也未发送失能。当前task IDLE/ready、GUI direct参数false，
+已告知操作者勾选直控自行对准，未代替用户声明目标已对准或已交权。
+
+只读监督 `alicia-resume-watch-20260912.service` 使用现成watch脚本（本次1800秒
+有界会话）；只读 `alicia-resume-telemetry-20260912.service` 记录128MB分卷、最多
+8卷，覆盖accepted、SDK、control_reference及reset epoch、controller、task、
+GUI、目标几何与rosout/TF。证据目录根工作树
+`.ros_log/runtime_resume_20260912_cIaAKg/`。两者都没有控制发布器。
+尚未请求抓取候选、尚未调用/grasp/start。加载修复不等于Joint2/跨姿态误差或
+完整持物已实机验收；待本轮用户明确对准并交回控制后才进入后续任务。
+
+## 2026-09-11 23:54 - 自动参考连续性源码修复，未部署，按要求暂停
+
+最新指令为“修复完不启动6D抓取，直接暂停”（两次明确）。本轮仅源码修复、
+离线构建/回归与文档更新；没有新抓取、节点重载、控制权切换、运动/使能/
+停止/失能命令。运行目录仍为 `.worktrees/protocol-v3-upgrade`，根IDE旧cpp
+未修改。此前“并退回原安全位”的消息保留为操作者请求，本轮没有自主执行
+回退轨迹，不能把软件修改记成已执行返回。
+
+已修复22:16失败中证实的自动阶段actual→desired重基准：连续自动运动保留
+成功SDK/真实controller参考，不再每阶段发feedback hold；手动交权保持
+SDK全部位置word，只有真正空初始周期使用原freshactual准入。补充完成证据
+与同帧q/v/a/header、callback短有界等帧，strict/Cartesian/prefix都检查真实
+接续连续名义速度，完整超速证明才允许原统一伸时后重验CAD/hash。
+
+HW仅变化发布会吞同值初始命令，采用最多一次六臂专用reference_sync，driver
+接收时同锁复核当前epoch/成功字，即便已tracking也不修改在途目标；不靠
+微动、假ACK或夹爪补值解锁。独立latched只读reset epoch区分真实重置和重复
+PENDING心跳，等待ACK沿用原deadline并持续验manual/epoch/反馈。原多轴联动、
+18–22cm、一次补拍、近场90秒/20秒余量、4°/4mm、CAD3mm、Cartesian .98及
+预抓取6mm/5°等不变；不是调松安全门限或新增全局一次运动限制。
+
+证据目录（根工作树）：`.ros_log/reference_continuity_repair_20260911_W1V558/`。
+最终源码网关101项定向、驱动91项C++均通过，driver和gtest目标均重新构建。
+最终Python全量 **2571 passed /3 skipped /7 warnings，113.40秒**，见
+`pytest_full_verified.xml/log`；C++91例195ms，均为最终冻结源码结果。
+原 `driver_cpp.log` 81例来自旧测试binary；早期catkin将test target误当package
+而跳过，不能作为本轮新源码验证，已用显式CMake目标纠正并保留全部历史日志。
+
+离线命令均在上述worktree，source `/opt/ros/noetic/setup.bash` 和该worktree
+`devel/setup.bash` 后执行，隔离 `ROS_MASTER_URI=http://127.0.0.1:11319`：
+
+```bash
+ROS_MASTER_URI=http://127.0.0.1:11319 nice -n 10 catkin_make --pkg alicia_d_driver -j2
+ROS_MASTER_URI=http://127.0.0.1:11319 nice -n 10 cmake --build build --target actuation_confirmation_test -- -j1
+ROS_MASTER_URI=http://127.0.0.1:11319 nice -n 10 devel/lib/alicia_d_driver/actuation_confirmation_test
+ROS_MASTER_URI=http://127.0.0.1:11319 nice -n 10 /usr/bin/python3 -m pytest -q src/alicia_flexible_grasp_supervisor/tests
+```
+
+最终driver源码SHA `1e5549f684a7d66eae7c523aa905b32c92c0e6b4628a4650a3d32221294a5c2b`；
+新磁盘二进制SHA `30edad32f5c2384cfc2928550eca8aaef5c2d6cf87b2ee93848ecb73b934c940`。
+23:54只读核实运行driver PID89835仍映射旧SHA
+`d03d82c27a9ff6908783abc3e65bef2b96993a7294ef601849151cdb4f9dd5a4`；
+gateway106028、task102630、GUI89144、remote71319启动时间也未变。编译成功
+不等于已加载修复，运行旧gateway仍不包含本轮改动。
+
+详细代码、全部hash、回归和未验证边界见
+[命令参考连续性专项记录](../../../docs/superpowers/verification/2026-09-11-command-reference-continuity-repair.md)。
+文档已同步主技术路线及Joint2/跨姿态专项记录。Joint2微调、实际跟随、跨姿态
+约15mm与完整持物终态仍须以后明确恢复工作后实机验证，不把本轮离线通过
+记成抓取成功；源码、构建、回归和文档均已收尾，现在暂停，不部署、不新抓取。
+
+## 2026-09-11 22:16 - 新实机失败已定位：补拍前同步重发反馈造成二次下沉
+
+操作者已再次确认双手离开。最终全量2419 passed/3 skipped后，gateway在
+22:11加载PID106028，其余本轮driver89835/GUI89144/task102630保持不变。
+新计划 `df945be9d4d112da2c8b958d` 的prefix确认与12.437秒小倾转主观察成功，
+实际到位模型净距5.964mm，相机目标距191.6mm。近场缺双侧表面证据，进入
+原允许的一次补拍；补拍轨迹提交前被3mm原门控拒绝，没有闭爪/抬升成功。
+
+失败的准确原因不是静置漂移或CAD计算不一致：136个accepted帧证明到位后
+约14.9秒六轴完全不变；随后gateway把actual当新desired发出同步hold，Joint2
+再降10count、Joint3降8count、Joint5降2count，tool0再降8.585mm，模型净距
+降到−1.309mm。两份独立离线复现与实测包、SDK写入、门控值精确吻合。
+**补拍轨迹未执行，但前置同步本身确实引起了运动；该同步缺陷尚未修复。**
+当前模型净距不足，未自动逃逸、重建几何参考或发起下一轮试验，也没有发送
+任何失能命令。应由操作者先通过GUI恢复原安全对准位，继续时保留这次故障
+证据；不得把本次保护拒绝和全量单测写成全流程已解决。
+
+电脑仅2逻辑CPU且曾接近满载，能解释视觉延迟因素；感知源龄曾8–13秒。
+但这与已定位的同步二次下沉是不同问题。新候选距20cm而旧预览21cm，MoveIt
+冷启动吃掉原3秒倾转检查预算，21cm候选是未检查，不是不可达。后续应在新鲜
+计划取源前用纯规划预热，不扩大预算/门限。
+
+完整时序、源码/二进制哈希、计算分解和未完成项见
+[`专项记录`](../../../docs/superpowers/verification/2026-09-11-joint2-cross-pose-repair.md)。
+本轮闭合214帧bag及runner/watch：根目录
+`.ros_log/grasp_attempt_20260911_hands_clear_Ghhuv8/`。
+
+## 2026-09-11 22:03 - 本轮软件修复与任务节点加载
+
+保持 `.worktrees/protocol-v3-upgrade` 唯一部署源。GUI21:30 PID89144、driver
+21:32 PID89835 已加载远端交权 latch 与同锁反馈时间快照修复；新增独立
+accepted SDK 遥测，不把 heartbeat 当新硬件采样。driver只发送既有正向
+enable，位置写入仍为0；GUI direct topic/param均False。84项Python及81项
+C++通过，15秒135接受帧，最大间隔0.209秒。
+
+22:03只结束旧inactive task PID6644，独立
+`alicia-task-observation-20260911.service` 加载新PID102630。新task通过227项
+专测，强制实际观察端点的冻结几何CAD验收，派生观察Pose只绑定原header、
+坐标不改；IDLE ready及accepted订阅已核实。原launch不respawn task，独立
+systemd-run完整命令、源码/二进制哈希和证据在
+[`Joint2/跨姿态专项记录`](../../../docs/superpowers/verification/2026-09-11-joint2-cross-pose-repair.md)。
+
+连续名义观察路径门控初轮全量2410 passed/3 skipped；独立复审发现其未部署
+版本的生命周期竞态，修复与最终全量完成后再加载gateway。两层CAD不构成
+SDK量化/实体跟随或全臂环境的完备证明。新倾转轨迹只读规划重定时12.340秒，
+不是实机耗时；跨姿态约15mm与Joint2零响应仍待真实运动验证。
+
+用户交权后图像左侧仍可见手指，已请求“双手已离开”确认；收到前未发起
+`/grasp/start`或位置运动，未发任何失能命令。后台纯订阅记录继续，旧预览
+已经过期，之后必须重新获取新鲜计划，不能把节点上线记为抓取成功。
+
+## 2026-09-11 21:16 起 - 重新对准交权后的限定修复（进行中）
+
+最新部署目录仍为 `.worktrees/protocol-v3-upgrade`。用户明确交回控制后，
+本轮证据保存在根目录 `.ros_log/grasp_attempt_20260911_realigned_Swve2U/`。
+已执行纯订阅记录、GUI direct false交权、仅候选计算；尚未发起新抓取运动，
+未发失能/停止命令。driver的pre-lock时钟可使新反馈误判为future/stale，
+GUI远端模式更新未刷新自身latched publisher也已由RED测试复现并限定修复。
+新倾转候选真实通过严格检查：roll0/tilt15/21cm，名义净距25.211mm，
+时长下界7.697s；仅规划，不宣称实机耗时或成功。具体测试、部署及真实结果
+继续追加至 `docs/superpowers/verification/2026-09-11-joint2-cross-pose-repair.md`。
+
 ## Logging rule
 
 - Any later code change, launch-path correction, ROS parameter change, or node restart that affects the 6D grasp workflow must be recorded in this logs directory.
@@ -17528,3 +18272,345 @@ Implemented and verified offline:
 4 个原始候选、8 项检查、两类失败各 4 项已对照原始 JSON。`git diff --check`
 通过。本次未修改生产代码，未重复运行机械臂或软件全量回归；表中测试是已有
 实现提交的历史验证结果。
+
+## 2026-09-11 06:08 PDT：完整抓取失败链与要求符合性分析
+
+操作者要求分析失败环节、历史成功与当前失败的差异、影响最大的因素和不偏离
+要求的改进工作。本轮只读检查源码、日志、进程路径及少量 ROS 参数，未发布
+机械臂、夹爪、使能、停止或失能命令，未修改生产代码、运行参数或目标位置。
+
+完整报告：[6D 抓取可靠性分析](../../../docs/superpowers/verification/2026-09-11-grasp-reliability-analysis.md)。
+报告是诊断和待验证建议，不表示修复已实现或部署。补齐此前摘要未覆盖的原始记录：
+
+- 05:45:35，计划 `665929a457b37e5b9c5511e8` 完成观察，相机距目标 212.0 mm。
+  request 527 在 20.153 s 内返回 PREVIEW_READY，严格检查 5 项有 1 项可达；
+  任务比较支撑面法向得到 4.6598° > 4°，没有接触重绑，05:47:26 才以 90 秒
+  NEAR_FIELD_DIRECT_TIMEOUT 结束。并非 WSL 无返回或本次所有候选不可达。
+- 05:51:19，计划 `b82ceba195c6f3d24148353b` 完成有界确认并复用观察位；
+  request 585 因缺少双侧实测表面触发补拍。05:51:38.254 编码器响应丢失，
+  39.224 Joint4 路径误差 -0.120496 rad，39.252 CLEAR_VIEW_REACQUISITION_FAILED。
+  补拍有部分实际运动。两次均未闭爪/抬升，不能记为完整抓取成功。
+- 原始依据：根目录本日 UUID 下 `task_control.log`、
+  `remote_grasp6d_repaired.log`、`rosout.log`。硬件无响应的触发原因仍未查明；
+  motion_enabled=false 只表示实测确认失效，不证明发送了 torque-off。
+
+源码复核确认两个待修合同缺口：新鲜三维无效结果未进入直接近场终态集合，
+单快照提交后仍继续等待；抬升后 POST_LIFT_VISUAL_UNAVAILABLE 返回 ok=true，
+调用方告警后仍可发 SUCCESS。后者与“必须真实离桌并持有”的成功证据标准不等价。
+
+文档差异：实际近场 learned 上限为 12（运行参数/YAML/代码/测试一致），路线
+正文仍写 1；正文仍有五个中心样本平移精修描述，现实现是三维注册且中心 fallback
+关闭。本轮记录差异，未擅自改变路线。当前工作树 HEAD 8b25b91 不代表所有
+节点同版热加载；根目录 IDE 同名 driver 也不是实际运行源码。
+
+结论：优先建立可重复实机响应基线，同时闭合跨视角几何/接触证据，再完善原位置
+完整路径分支搜索、精确终态和真实持物核验。保留批准的类别无关主路线、真实
+CAD/碰撞/路径硬门控及禁止自动失能要求，不用挪目标、固定偏移、放宽门限或
+回滚类别特例制造成功。详细工作包、验收条件与证据等级见报告；没有新的实机成功证据。
+
+## 2026-09-11 06:35 PDT：有界流程修复，尚未实机加载
+
+用户要求继续优化并以真实完整抓取为最终目标。本轮在实际工作树实现：
+本次新鲜无效三维 Preview 立即精确终止而非空等；重复 IK 失败后尝试其他原位
+种子，后续接近/抓取/抬升失败时有界回溯；抬升后缺少关联视觉证据不再发布 SUCCESS。
+保持原目标位置、4° 支撑法向、1e-6 rad IK 重复性、0.98 Cartesian 完整度、
+碰撞和最终完整严格复核，不通过放宽门限制造成功。
+
+[详细实现/验证/边界](../../../docs/superpowers/verification/2026-09-11-bounded-flow-repair.md)。
+修改前针对性基线 247 项通过，新增五项先复现失败；最终完整 supervisor
+2237 passed、3 skipped、7 warnings。第一次全量的唯一失败揭示旧 GUI 布局测试
+尝试写控制权参数；本轮测试始终指向隔离的未运行 ROS master，该写入被拒绝，
+未影响现场。已仅修复测试隔离，未修改运行 GUI。
+
+新增纯 FK/IK/Cartesian 服务回放工具，对 request 347 的原位置四个代表变体检查。
+索引 0/4/5 仍未找到完整接近分支；索引 1 四阶段姿态解析通过，最大重复 IK 差
+3.585e-7 rad、最大 FK 位置误差 1.299e-7 m。该计算使用审计的近似历史起点与
+当前碰撞场景，尚未做最终接触几何/严格自由空间轨迹/实体运动验收，绝非成功抓取。
+
+现场只读检查时直控仍 true，任务 inactive，执行确认未重建；SDK 随后有连续
+有效格式反馈。已请求操作者确认实际运动、重新对准原目标并取消直控；在此前
+不接管自动运动。新实现未替换现场 task/gateway，driver/controller/使能未改变。
+本轮没有发布机械臂、夹爪、使能、停止或失能命令，也没有修改 ROS 参数。
+正文同时纠正此前已运行的 learned 上限 12 与三维注册精修的过时文档描述。
+最终完整物理抓取目标尚未达到，剩余硬件响应、支撑面连续性与持物证据继续保留。
+
+### 06:41 后续条件变化及应用节点加载
+
+只读复查时直控已 false、执行确认已 CONFIRMED；任务 inactive 且轨迹 action
+没有活动目标。只退出 task/gateway 两个应用节点，gateway 按原 launch 的
+respawn 配置自动重建为 PID 198955；task 在新独立用户服务
+alicia-task-flow-20260911.service 中运行，PID 198825，版本标记明确为工作树。
+driver PID 134701 未变，控制器/GUI/使能未重启，任务加载后 IDLE/ready。
+源码哈希与实际服务归属见上述详细记录。
+
+新鲜图像显示原小纸盒，同时桌边可见双手，已要求自动运动前确认双手离开
+机械臂/夹爪运动范围。本轮仅继续候选计算，未调用 /grasp/start；未发布机械臂、
+夹爪、使能、停止或失能指令，尚无新的物理抓取结果。上节“尚未加载”是早期状态，
+以本追加记录为准，不能把节点就绪写成完整抓取成功。
+
+### 06:49–06:50 清场确认后实机执行：观察成功，近场平面失配
+
+用户明确确认双手离开机械臂和夹爪运动范围后，运行新鲜精确计划绑定执行器及
+独立只读数据记录。计划 871fbf1b1d4190494e5ea6e6 在 06:50:06 开始执行，
+第一观察运动完成，实测末端误差 11.1 mm / 2.19°，相机距目标 211.2 mm。
+夹爪保持原 49.75 mm；没有接近、闭爪、抬升。
+
+近场 request 953 取得 3 帧、生成通过 MoveIt 的接触预览
+5c15a18820ac46cd3ff15d55，注册 RMSE 0.699352 mm；该注册参考为到达后的
+实测视角。任务与运动前绑定计划比较的目标局部支撑面偏差却为 7.813551 mm，
+超过 4 mm（法向差 2.430669° 未超 4°）。06:50:39.950 直接返回
+FINAL_REFINE_3D_INVALID，39.955 FAILED/inactive；新逻辑未再空等到 90 s。
+不是本轮没有近场可达候选，也不能把小配准残差当作跨视角矛盾已解决。
+
+motion_enabled 采样均 true，未复现 ENCODER_RESPONSE_LOST，随后只读仍
+CONFIRMED、直控 false。未发布停止或失能命令；结束的 request_plan(false)
+仅关闭候选计算。未改门限、目标、TF 或 TCP，没有声称完整抓取成功。
+
+证据目录为根工作区 .ros_log/grasp_attempt_20260911_clearance_z6S4JY/。
+近场 953 无已提交 audit_reference（最新审计仍为 951），另只读保存保留富计划
+完整消息，不能将该补充误称为完整近场原始点云审计。详细时序、平面参数、
+记录数量和后续工作见 docs/superpowers/verification/
+2026-09-11-clearance-confirmed-attempt.md。下一步要闭合跨视角几何与证据谱系，
+不是放宽 4 mm 门限或盲目重复接近。
+
+### 18:28 按操作者要求直接恢复完整 ROS，等待本轮对准
+
+操作者报告 WSL 已启动，要求先按日志直接启动 ROS 和正向关节使能，不进行
+启动前多项安全检查；随后由操作者手动识别、对准并明确告知后才自动抓取。
+本轮先读取既有启动文档及启动服务归属，随后直接运行完整 launch，没有启动前
+相机、WSL、运动验证、温度/保护门限等检查流程，也没有预先执行机械臂运动。
+
+从 protocol-v3 worktree 的 devel/setup.bash 启动：
+
+```bash
+roslaunch alicia_flexible_grasp_supervisor full_system.launch \
+  start_real_arm:=true driver_port:=/dev/alicia_arm driver_baudrate:=1000000 \
+  auto_torque_on_startup:=true self_check_poll_rate_hz:=0 \
+  start_camera:=true start_tactile:=false start_gui:=true \
+  use_remote_grasp6d:=true remote_grasp6d_url:=http://172.23.132.97:8000
+```
+
+由 systemd 用户服务 `alicia-ros-resume-20260911.service` 保持运行，工作目录为
+`/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade`，环境版本标记
+`8b25b91-bounded-flow-worktree`。DISPLAY=:0，XAUTHORITY 使用日志中的
+/run/user/1000/gdm/Xauthority；ROS_MASTER_URI=http://localhost:11311。
+输出为根工作区 `.ros_log/ros_resume_20260911.log`；本轮 run id 为
+`3308d82e-ae49-11f1-9701-516764d618aa`。
+
+驱动 18:28:04.826 打开 /dev/alicia_arm，启动请求正向 torque_on；随后按明确
+要求只发布一次 `/demonstration std_msgs/Bool data:false`，驱动 18:28:16.275
+记录 demonstration_false 正向请求。未发布 demonstration=true、torque_off、
+controller-stop、/grasp/stop 或其他停止/失能命令。one-shot controller loader
+加载控制器后正常退出，不安装 shutdown stop/unload hook。
+
+启动后的日志/数据监督看到 driver、hw interface、MoveIt、gateway、相机、
+perception、手眼 TF、夹爪、task、remote、GUI、日志和监控节点已在线。
+相机输出 RGB-D，task IDLE/ready。remote 记录服务 online、protocol=3，启动时
+loaded=False；尚未调用推理，不把此日志写成模型推理成功。18:29 反馈已为
+CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE、motion_enabled=true，关节位置
+已随操作者调节变化，GUI 直控 true；检测节点报告 carton，但不代替本轮对准确认。
+
+新增只读后台 rosbag 服务 `alicia-resume-telemetry-20260911.service`，保存
+关节命令/实测、控制器状态、驱动状态、任务、近场阶段、富计划/预览/几何、TF、
+管线指标和 rosout，128 MB 分卷最多 8 卷。目录为根工作区
+`.ros_log/runtime_resume_20260911_QlfmB3/`。终端另持续订阅反馈及警告。
+此轮未请求候选推理、未调用 /grasp/start，保持操作者直控权，等待明确“已对准”。
+06:50 跨视角支撑面 7.81 mm 失配尚未修复，不能将本次节点启动写成问题已解决。
+
+## 2026-09-11 晚间抓取、视频复核和有界路径比较
+
+18:31 用户确认对准后两次新鲜计划验证均未完整抓取成功：第一次完成第一观察
+和唯一补拍后，PCA 初值 11.804° 在 ICP 迭代前触发偏航拒绝。精确 bag 点云
+回放证明保持原 12 次迭代最终 8.039°/RMSE 1.293 mm/位移 12.943 mm 可通过
+原物理门限。仅修复优化中间态提前退出，最终所有门限保留；2240 项回归通过，
+18:49:13 仅加载 remote 节点，driver/controller 未重启。
+
+第二次近场注册/支撑连续性通过，但 request 51 只查 12 个候选中的一个就选定。
+预抓取 Joint6 约 145°，硬件限速 .020 rad/s，重定时 126.965 s。
+18:53:27 末端精度租约申请成功，驱动小幅修正后 Joint2 没有测得响应；
+18:53:28 ENDPOINT_TRIM_RESPONSE_TIMEOUT，18:53:33 位置差 18.3 mm > 6 mm，
+任务 FAILED。不是租约申请通信失败；无 approach/闭爪/lift。视频大幅转向与
+日志相符，但手机视频没有共同时钟，不能把片长直接等同轨迹时长。
+
+用户先手动接管并表示关闭电源，此期间仅离线修改、解码视频和回归，不发运动、
+使能/失能/停止命令。已提醒既有 auto_torque_on_startup 在串口重连时自动正向
+使能。随后用户明确“已经重新上电并对准”，当前反馈 CONFIRMED、motion_enabled
+true、GUI 直控 false，旧任务 FAILED/inactive。按这次授权开始新鲜计划验证。
+
+新 direct 近场策略不再首个可达即结束；保留开口余量优先，同宽度档比较完整
+strict 路径的硬件时长下界，已获可用结果后额外比较不超过 8 s，并在原阶段
+截止前预留 2 s 发布复核，不延长 90 s 阶段预算。缺失时长不是零成本，未检查
+尾部不是不可达，审计明确不宣称全局最优。速度、TF/TCP、CAD、6 mm/5°、三维
+配准及 1e-6 rad 重复性等不改。没有修改驱动去掩盖 Joint2 的实测问题。
+
+验证：2257 passed / 3 skipped / 7 个既有警告，76.61 s；Python 编译、
+git diff --check 通过。仅结束旧 remote 规划进程，启动
+`alicia-remote-path-20260911.service`，同一最新 worktree，版本标记
+`8b25b91-bounded-contact-duration-worktree`；remote 源文件 SHA256
+`61ebaf7a0fe1314509be4a9968de81f06c5a4da62ab901d1336b3a4199f061cc`。
+新节点日志本轮 UUID 下 `remote_path.log`；启动 stdout `.ros_log/remote_path_20260911.log`。
+未重启 driver/controller，未发布 /demonstration、torque_off、/grasp/stop 等。
+
+新尝试证据 `.ros_log/grasp_attempt_20260911_path_compared_J74Eov/`：持续实测/
+命令日志、同源 RGB-D/mask/object 关键帧 bag、哈希一致 audit。新 runner 只接纳
+重新对准后生成的源戳、精确 plan_id 和已提交审计，不使用旧计划。最终物理结果
+另行追加；当前不能宣称新的路径已更短或 Joint2/完整抓取已修复。
+
+详见 [晚间配准、视频与路径证据](../../../docs/superpowers/verification/2026-09-11-evening-registration-repair.md)。
+
+### 19:16 本轮结果追加：第一观察成功，跨姿态几何失配阻断近场
+
+19:13:32 新 remote 上线；19:15:12 执行新鲜远场计划
+`d594299cda3d7b871c4d1016`。19:15:45 观察完成，11.7 mm/1.94°，相机距离
+202.5 mm；phase 4 到达参考源戳 1789179345381506919，565 点。
+近场 request 57 **8 个分支全部检查，4 个严格可达**，新搜索确实运行；严格
+序列日志存在 131.957、234.499、76.780、76.835 s 时长下界，但不是已执行时长。
+
+近场预览 `66d4ddfe810ca8dfdf6f328d` 局部配准 VALID_3D、469 inliers、
+RMSE .433 mm；19:16:21.752 task 对远/近场绑定支撑面比较报
+FINAL_REFINE_3D_INVALID，4.294946° > 4°，21.756 FAILED/inactive。
+离线重算同目标处面距 **15.152990 mm > 4 mm**，并非仅略超角度门限。
+未执行近场运动/补拍/接近/闭爪/lift，未检验前轮 Joint2 微调故障是否消失。
+
+两个精确单源回放进一步区分：远场 → 到达参考 4.160979° / 15.662667 mm
+失败；到达参考 → 近场最后一帧 .178872° / .390887 mm 正常，RMSE .467 mm。
+现有证据指向跨观察姿态的几何一致性，仍需区分手眼、运动学和深度视角偏差，
+不能改写参考或扩大门限。原 camera/remote 参数只读比对无变化。
+
+本次目录有已关闭的 107 关键帧 bag、实测日志、远场 audit 和 near rich plan；
+近场 gate audit 没有落盘，request 57 统计由 remote 完成日志保留。详细文档
+明确此证据缺口，不宣称某个短时长分支已经成为可执行轨迹。失败后未追加运动、
+未发布停止/失能，ROS 保持运行；完整抓取目标仍未达成。
+
+### 直控问题追加：模式切换改变伺服目标，多滑条输入存在丢失（修复中）
+
+用户补充要求：快速操作多根关节滑条，应允许这些关节共同完成目标，不能因
+修正“未编辑通道跟动”而限制成全臂单关节运动。只读回放已证实 19:10:20.980
+取消直控时，没有新 joint_commands，驱动却将 SDK 目标重置成实测角度；
+随后 Joint2/3 额外移动约 -.2637/-.5273°。换滑条又会以最后已发送位置重建
+其他通道目标，截断尚未完成的用户目标；GUI 的 50 ms 全局合并只保留最后
+滑条，需一并改成按通道缓存。
+
+目前只改实际运行工作树并做离线验证，**未重载 driver/GUI**；不追加抓取或
+替用户切模式，不发送停止/失能。过去的 Joint2 端点无响应、跨姿态面距约
+15 mm、近场审计落盘缺口均保留为未完成项，不被本次直控修复掩盖。
+详见[直控连续性专项验证](../../../docs/superpowers/verification/2026-09-11-direct-control-continuity.md)。
+
+### 19:47 直控离线修复完成，driver/GUI 仍未加载
+
+GUI 50 ms 按通道缓存与驱动手动目标累积均已实现，支持多关节共同执行而不
+重写未编辑通道；切模式保留最后实际 SDK 帧位置，重置未来插补，不把实测
+偏差重新写成伺服目标。切换仅清理旧响应观察，保持已有同步/真实确认，原
+SDK 保持帧不冒充新运动探测；自动仍需 .003 rad 新鲜实测交接。
+
+全量 Python 2265 passed / 3 skipped；最终相关补充回归 69 passed。C++ 首轮
+揭示端点微调还在使用旧截断公式，统一与驱动 codec 后 **77 passed**。枚举
+4096 关节计数/1001 夹爪计数可精确往返；并不据此宣称 Joint2 大误差已修复。
+driver 构建、Python 编译及 diff 检查通过，详细报告/哈希见专项文档。
+
+运行中仍是 driver PID 6603、GUI PID 6658；新二进制仅在磁盘，未替用户
+切模式或重启驱动、未追加运动/使能/停止/失能。原遥测保持 active，19:47:51
+新增纯订阅 `alicia-direct-trace-20260911.service`（PID 42042），保存输入、
+实测以及新驱动加载后每次成功发送的量化目标。需要用户结束手动操作并交回
+控制后再加载和现场验收。此前 Joint2 零响应、跨姿态支撑面约 15 mm 失配、
+近场审计落盘缺口及完整抓取终态继续保持未完成，未删除或放宽门限。
+
+最终完整源码全量复核再次通过：2265 passed / 3 skipped / 7 原有警告，
+89.16 s；JUnit 报告 `.ros_log/direct_control_review_20260911_VwcwmM/pytest_full.xml`，
+C++ 最终报告同目录 `gtest_final.xml`（77/77）。driver 源码/二进制/GUI 哈希
+再次核对与专项文档一致，未部署状态不变。
+
+### 19:54–19:57 用户交回控制，已加载新 driver/GUI
+
+用户明确允许结束手动操作、交回控制并加载新驱动和 GUI。旧 GUI PID 6658
+准确 SIGTERM 退出，旧 driver PID 6603 通过 rosnode kill 退出；只替换这两
+个进程，无机械臂停止/失能指令、无 controller switch、无全系统重启。
+
+- 新 driver：`alicia-driver-continuity-20260911.service`，PID 45000，
+  19:54:30；运行中 `/proc/45000/exe` 哈希
+  `dbd9c2472b7450e91fb98096b544db7722500aada67f5fc033cc03d53121c62a`。
+- 新 GUI：`alicia-gui-continuity-20260911.service`，PID 45301，19:55:03，
+  rospy 19:55:06 init；1320×860 主窗口可见。两者版本标识
+  `8b25b91-direct-control-continuity-worktree`，实际路径仍为 protocol-v3-upgrade。
+- driver 参数前后 YAML diff 为空，保持原自动正向使能配置；19:54:31.058
+  启动发送一次 torque_on。新鲜反馈正常，但未主动制造运动，所以真实响应
+  状态仍 `PENDING:POSITIVE_ENABLE_REQUESTED`；这不是发送失能指令。
+- GUI 参数/latched 模式均 false，alicia_controller/hand_controller 均 running；
+  原相机、推理、task/gateway、ROS 主服务与两个遥测 recorder 均保持。
+- 重载前后六关节读数一致；后续 5 s 被动窗口 295 条 joint_states 消息，
+  各轴跨度 0，joint_commands/SDK 目标帧计数均 0，没有重放旧任务。
+  grasp/state 仍是上一轮 latched FAILED/inactive，未开始新的抓取。
+
+driver 日志用对应 systemd journal 和持续遥测；请求的 driver_continuity.log
+独立文件未生成，不能当作证据引用。GUI 的 UUID/gui_continuity.log 已存在。
+启动参数、哈希、验收边界及下一步清单已同步
+[直控专项验证](../../../docs/superpowers/verification/2026-09-11-direct-control-continuity.md)。
+现在可以确认“新版本已加载、保持期间未出现新目标”，不能宣称多轴动态验收
+或完整抓取已完成；Joint2 小步无响应与跨姿态几何失配继续处理，原门限不变。
+
+### 20 时后：Joint2 响应边界修复与跨姿态候选族定位
+
+用户明确要求继续直到真实抓取。新独立核对确认旧 Joint2 +4 count 指令可
+量化而编码器至少 6 s 零响应，换向/负载假设仍待实测，不能用延时或浮点
+修复替代硬件响应。另修复恰好 2 count 被双精度舍入误拒绝的独立边界问题，
+物理门限不变，C++ RED 后全量 81/81 通过，驱动重新构建中、尚未重载。
+
+背景纹理跨姿态 RGBD 对应同样有 18.072 mm 中位残差，否证仅 OBB 中心
+变化解释。现场 D405 color 内参与配置完全匹配，静止源戳 FK/TF 一致。
+旧 75°roll 观察距任何标定姿态至少 56.42°；并非现有时长排序错误，而是
+原候选固定光轴导致 roll0 与桌面相交。支撑法向方向 5/10/15°小倾转在旧
+几何上出现完整端点 CAD 合格解（尚无 IK/轨迹检查）；正在有界扩展候选族，
+不限制物体 yaw、不改 TF/目标或门限。详细证据、速度含义和部署未完成项见
+[Joint2 与跨姿态专项](../../../docs/superpowers/verification/2026-09-11-joint2-cross-pose-repair.md)。
+本段现场只读，727 帧静止关键帧 bag 已关闭，未执行新运动或发送停止/失能。
+
+20:18:58：C++ 修复构建完成后，只重载 driver service，新 PID 56172，实际
+二进制与构建哈希同为 `760ac06f909d19127e9ce344bb4e748e4e0103750416896dddec863c0d1fb934`。
+GUI/task 交回状态未变，六轴实测与重载前相同；原正向使能配置不变、状态
+PENDING，尚未新运动确认。控制器、GUI 和其他节点未重启，无停止/失能命令。
+
+20:27:55：倾转模块 389 passed、完整 supervisor 2292 passed /3 skipped /
+7 原有警告（86.16 s）并通过独立终审后，仅 remote service 重载为 PID60688；
+源码哈希 `2c981fb34cfbc5093475ca5945dd15177f6721cae8412a003fb20ee05536bba3`。
+参数 diff 只有新倾转 [5,10,15]。20:28 新尝试目录
+`.ros_log/grasp_attempt_20260911_support_tilt_KewwBe/`，watch 与同源 keyframes
+已记录，FreshPreviewRunner 新鲜窗口1789183722248704910开始；保留原精确
+审计/计划绑定、物理门限及使能状态。结果待追加，不宣称推理开始就是成功。
+
+20:31:41：新尝试再次在跨姿态几何处FAILED/inactive，法向4.340014°、面距
+14.697758 mm；局部near VALID_3D（605inliers/.499706mm），没有接触/闭爪。
+181帧bag已关闭。far plan a7382a1b28ff3b5d92658a58仍选roll75：新增10个
+CAD通过tilt被本轮错误预算接线全部跳过，错误使用WSL MuJoCo2s寿命减30s
+reserve，而不是远场本地120s授权。承认测试覆盖缺口，已补真实组合回归；
+限定修复模块393pass尚未二次加载，不改任何时限值。另证实pose-only绑定
+不能保留已优选IK分支：检查maxdelta1.878→执行2.773rad，起点只移.016874rad。
+观察专用固定终点分支提示修复正在离线实现，完整证据与未完成项见专项。
+
+20:49：预算接线+branch hint全量2314 passed /3 skipped /7既有警告90.45 s，
+仅remote重载PID71319、gateway由原launch恢复PID71381。driver/GUI/controller/
+task不重载；两次真实严格观察检查均execute=False，第一capture成功，第二
+因FK位置.000113091 m超过原.0001 m失败。正在固定joint-goal邻域采样问题，
+未降低门限，未冒称生产接口通过；无新运动命令。
+
+实际恢复条件也已复核：最新q对原far固定plane/OBB的模型右指净距1.595 mm，
+不足3 mm（仍为正，不是已确认真实碰撞）；原对准终点71.258 mm。回退直线
+前1%也未通过原门限，因此没有自动回退/逃逸豁免。需用户用GUI退回原对准
+并交回控制。观察验收只记录FK而主要检查range的合同缺口已同步技术路线；
+当前不能宣称Joint2正向trim、跨姿态一致性或完整抓取已解决。持续遥测保持。
+
+20:57:42：固定分支的精确joint-goal采样修复全量2319 passed /3 skipped /
+7既有警告78.27 s后，仅gateway加载为PID75211，最终planner哈希
+`744b9a69eca839fc450fbf73f6b2564ef83816e0aec5acaf06be9bab0ca2d6b0`。
+20:58真实接口连续三次execute=False均通过，capture与两次fixed-goal的关节
+目标/哈希一致；日志 support_tilt_KewwBe/exact_branch_readonly.log。
+
+用户确认刚关闭并重启机械臂电源，与20:57:28反馈中断、45秒全零、随后近
+零位/目标丢失的遥测吻合。该事件早于本次gateway重载，期间无新关节目标，
+不得误记为只读规划执行了归零。驱动未重载或发torque_off；UNCONFIRMED与
+暂停旧位置流不是失能命令。上述三次只读验证实际在重启后近零位，不能当作
+原失败姿态完全同条件回放。此前1.595mm净距已是历史，当前需重新对准和
+交回控制，绑定新鲜计划；完整抓取与Joint2正向小步、跨姿态一致性仍未完成。
+
+## 2026.9.20 上传前归档
+
+最新代码为 `.worktrees/protocol-v3-upgrade`，不是根目录旧 master。已将 2026-09-19 预抓取 15.744665 mm 残差、Joint2 +7/0 响应、75 帧原始反馈保持、后来不同姿态 −7/−6 响应固化为版本化 JSON 与文档。未确认硬件损坏，未完成抓取。本次仅整理和备份；未重启实机节点或发出动作。[完整基线记录](../../../docs/verification/2026-09-20-pregrasp-baseline.md)。下一步按用户要求开发第二阶段预抓取有界补偿。

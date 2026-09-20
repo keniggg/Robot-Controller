@@ -1,0 +1,359 @@
+{
+  "read_only": true,
+  "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+  "endpoint_failure": {
+    "stamp_sec": 1789875350.8690696,
+    "position_error_m": 0.015744664985884924,
+    "position_error_vector_m": [
+      0.0004295894832702929,
+      0.0028822012469879588,
+      -0.01547264826606859
+    ],
+    "orientation_error_rad": 0.03974353198947247,
+    "requested_position_m": [
+      -0.128676288348165,
+      -0.413491501511057,
+      0.14271407729498317
+    ],
+    "actual_position_m": [
+      -0.1282466988648947,
+      -0.41060930026406905,
+      0.12724142902891458
+    ],
+    "requested_quaternion_xyzw": [
+      0.9778575536561513,
+      -0.15048615266545007,
+      -0.12530423917224218,
+      0.07380630229881076
+    ],
+    "actual_quaternion_xyzw": [
+      -0.979532167837137,
+      0.1478228634714277,
+      0.12541544066877594,
+      -0.054185795640954805
+    ],
+    "stage_label": "6D near-field pregrasp",
+    "plan_id": "56ffe494e18741626de2da6d",
+    "plan_phase": "CONTACT_EXECUTION_PLAN"
+  },
+  "original_reference_counts": [
+    896,
+    1525,
+    3121,
+    2208,
+    1090,
+    950
+  ],
+  "reference_vs_requested_mm": 0.07360307042292809,
+  "windows": [
+    {
+      "label": "before_trim",
+      "sdk_sec": 1789875344.861174,
+      "accepted_sec": 1789875344.9202185,
+      "sdk_counts": [
+        896,
+        1525,
+        3121,
+        2208,
+        1090,
+        950
+      ],
+      "accepted_counts": [
+        901,
+        1506,
+        3105,
+        2202,
+        1092,
+        956
+      ],
+      "sdk_delta_counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "accepted_delta_counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "position_error_mm": 20.43907473389735
+    },
+    {
+      "label": "before_joint2_trim",
+      "sdk_sec": 1789875345.2614586,
+      "accepted_sec": 1789875345.217632,
+      "sdk_counts": [
+        892,
+        1526,
+        3125,
+        2212,
+        1088,
+        947
+      ],
+      "accepted_counts": [
+        896,
+        1506,
+        3110,
+        2205,
+        1090,
+        950
+      ],
+      "sdk_delta_counts": [
+        -4,
+        1,
+        4,
+        4,
+        -2,
+        -3
+      ],
+      "accepted_delta_counts": [
+        -5,
+        0,
+        5,
+        3,
+        -2,
+        -6
+      ],
+      "position_error_mm": 17.748338245514823
+    },
+    {
+      "label": "after_timeout",
+      "sdk_sec": 1789875346.4013438,
+      "accepted_sec": 1789875346.4172835,
+      "sdk_counts": [
+        892,
+        1533,
+        3129,
+        2214,
+        1088,
+        947
+      ],
+      "accepted_counts": [
+        896,
+        1506,
+        3114,
+        2209,
+        1090,
+        950
+      ],
+      "sdk_delta_counts": [
+        -4,
+        8,
+        8,
+        6,
+        -2,
+        -3
+      ],
+      "accepted_delta_counts": [
+        -5,
+        0,
+        9,
+        7,
+        -2,
+        -6
+      ],
+      "position_error_mm": 15.744664985884873
+    },
+    {
+      "label": "last_recorded",
+      "sdk_sec": 1789875353.842304,
+      "accepted_sec": 1789875353.8188844,
+      "sdk_counts": [
+        892,
+        1533,
+        3129,
+        2214,
+        1088,
+        947
+      ],
+      "accepted_counts": [
+        896,
+        1506,
+        3114,
+        2209,
+        1090,
+        950
+      ],
+      "sdk_delta_counts": [
+        -4,
+        8,
+        8,
+        6,
+        -2,
+        -3
+      ],
+      "accepted_delta_counts": [
+        -5,
+        0,
+        9,
+        7,
+        -2,
+        -6
+      ],
+      "position_error_mm": 15.744664985884873
+    }
+  ],
+  "raw_after_timeout": {
+    "sample_count": 75,
+    "first_sec": 1789875346.515392,
+    "last_sec": 1789875353.9152088,
+    "first_counts": [
+      896,
+      1506,
+      3114,
+      2209,
+      1090,
+      950
+    ],
+    "last_counts": [
+      896,
+      1506,
+      3114,
+      2209,
+      1090,
+      950
+    ],
+    "minimum_counts": [
+      896,
+      1506,
+      3114,
+      2209,
+      1090,
+      950
+    ],
+    "maximum_counts": [
+      896,
+      1506,
+      3114,
+      2209,
+      1090,
+      950
+    ]
+  },
+  "raw_status_histogram": {
+    "00": 72,
+    "e1": 3
+  },
+  "measured_error_attribution": {
+    "method": "exact six-joint Shapley FK displacement, not commanded compensation",
+    "joint_displacement_contributions_mm": {
+      "Joint1": [
+        0.18490328373545747,
+        -0.05763319613754,
+        0.0
+      ],
+      "Joint2": [
+        0.21793220595199464,
+        1.0943719969657273,
+        -12.79684954850437
+      ],
+      "Joint3": [
+        0.37060197331576233,
+        1.8610109030878579,
+        -2.733208526723457
+      ],
+      "Joint4": [
+        -0.3745174886654221,
+        0.07834535844997252,
+        0.09521833556337678
+      ],
+      "Joint5": [
+        -0.008790401200077515,
+        -0.05211274927126494,
+        0.008254735521818584
+      ],
+      "Joint6": [
+        8.69748176595316e-05,
+        2.5407463033477743e-05,
+        -2.629082617352137e-05
+      ]
+    },
+    "projection_along_total_error_mm": {
+      "Joint1": -0.006135668533909619,
+      "Joint2": 12.77826267270171,
+      "Joint3": 3.040238419236926,
+      "Joint4": -0.08824306190906987,
+      "Joint5": -0.01802804962630432,
+      "Joint6": 3.271392026402517e-05
+    },
+    "sum_vector_mm": [
+      0.3902165479553743,
+      2.9240077205577863,
+      -15.426611294968808
+    ],
+    "total_vector_mm": [
+      0.3902165479553743,
+      2.9240077205577863,
+      -15.426611294968806
+    ]
+  },
+  "late_passive_feedback": [
+    {
+      "topic": "/alicia_d/sdk_command",
+      "first_sec": 1789875516.5823998,
+      "last_sec": 1789875524.805381,
+      "minimum_counts": [
+        892,
+        1533,
+        3129,
+        2214,
+        1088,
+        947
+      ],
+      "maximum_counts": [
+        892,
+        1533,
+        3129,
+        2214,
+        1088,
+        947
+      ],
+      "last_counts": [
+        892,
+        1533,
+        3129,
+        2214,
+        1088,
+        947
+      ]
+    },
+    {
+      "topic": "/alicia_d/accepted_joint_states",
+      "first_sec": 1789875516.6163502,
+      "last_sec": 1789875524.8185108,
+      "minimum_counts": [
+        896,
+        1506,
+        3114,
+        2209,
+        1090,
+        950
+      ],
+      "maximum_counts": [
+        896,
+        1506,
+        3114,
+        2209,
+        1090,
+        950
+      ],
+      "last_counts": [
+        896,
+        1506,
+        3114,
+        2209,
+        1090,
+        950
+      ]
+    }
+  ],
+  "late_sdk_matches_failed_hold": true,
+  "diagnostic_query_device_response_captured": false,
+  "hardware_damage_or_absolute_calibration_proven": false
+}

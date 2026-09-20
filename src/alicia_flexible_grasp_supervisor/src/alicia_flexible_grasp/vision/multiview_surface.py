@@ -536,7 +536,12 @@ def _has_planar_support(points, basis):
 
 
 def register_surface_view(reference, moving, config=None):
-    """Register ``moving`` to ``reference`` using bounded support-yaw ICP."""
+    """Refine support-yaw ICP privately, then bound its returned correction.
+
+    Coarse/PCA guesses and intermediate iterates are optimization state, not
+    executable target corrections. Only the final result may authorize fusion
+    and it must satisfy every configured physical/evidence limit below.
+    """
 
     if not isinstance(reference, SurfaceView) or not isinstance(moving, SurfaceView):
         raise ValueError('reference and moving must be SurfaceView instances')
@@ -614,8 +619,9 @@ def register_surface_view(reference, moving, config=None):
         # measured correspondences before allowing PCA to replace identity.
         # Unmatched/duplicate correspondences receive the full distance cost,
         # so collapsing onto a small matching subset cannot improve the score.
-        # Selection never depends on the motion bounds; a better-fitting
-        # out-of-bounds correction is still rejected below.
+        # Selection never depends on the motion bounds. Refine the chosen
+        # guess for the fixed iteration budget before checking the resulting
+        # correction; newly visible faces can make PCA temporarily overshoot.
         unmatched_cost = config.correspondence_max_m ** 2
         initial_cost = float(np.mean(np.where(
             initial_inliers, initial_distances ** 2, unmatched_cost)))
@@ -623,16 +629,6 @@ def register_surface_view(reference, moving, config=None):
             coarse_inliers, coarse_distances ** 2, unmatched_cost)))
         if coarse_cost <= initial_cost:
             transform = coarse_transform
-        yaw_deg = abs(_yaw_degrees(transform[:3, :3], basis))
-        translation_m = maximum_point_displacement_m(moving.points_base, transform)
-        if yaw_deg > config.maximum_yaw_deg:
-            return reject(
-                'YAW_BOUND_EXCEEDED', transform=transform,
-                support_normal_angle_deg=normal_angle)
-        if translation_m > config.maximum_translation_m:
-            return reject(
-                'TRANSLATION_BOUND_EXCEEDED', transform=transform,
-                support_normal_angle_deg=normal_angle)
 
     for _iteration in range(config.maximum_iterations):
         transformed, indices, distances, inliers = _registration_correspondences(
@@ -661,17 +657,10 @@ def register_surface_view(reference, moving, config=None):
         updated[:3, 3] = (
             update_rotation.dot(transform[:3, 3]) + update_translation
         )
-        yaw_deg = abs(_yaw_degrees(updated[:3, :3], basis))
-        translation_m = maximum_point_displacement_m(moving.points_base, updated)
         transform = updated
-        if yaw_deg > config.maximum_yaw_deg:
-            return reject(
-                'YAW_BOUND_EXCEEDED', transform=transform,
-                support_normal_angle_deg=normal_angle)
-        if translation_m > config.maximum_translation_m:
-            return reject(
-                'TRANSLATION_BOUND_EXCEEDED', transform=transform,
-                support_normal_angle_deg=normal_angle)
+        # No intermediate iterate escapes this function or updates a plan.
+        # Reject a still-out-of-bounds final correction after the unchanged
+        # finite iteration budget, rather than rejecting an unrefined guess.
         if (
             abs(_yaw_degrees(update_rotation, basis)) <= 1e-7
             and np.linalg.norm(update_translation) <= 1e-9

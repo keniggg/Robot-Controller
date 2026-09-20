@@ -68,13 +68,16 @@ class FakeGripper:
 
 
 class MotionGatewayGripperHoldTest(unittest.TestCase):
-    def test_gripper_command_burst_reuses_initial_arm_snapshot(self):
+    def test_gripper_burst_preserves_successful_wire_reference_not_feedback(self):
         node = motion_gateway_node.MotionGateway.__new__(motion_gateway_node.MotionGateway)
         node.joint_names = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6', 'right_finger']
         node.joint_cmd = types.SimpleNamespace(last_positions=[1, 2, 3, 4, 5, 6, 0.0])
         node.gripper = FakeGripper()
         node._gripper_arm_hold_positions = None
         node._last_gripper_command_time = 0.0
+        node._fresh_accepted_reference = lambda: node.joint_cmd.last_positions
+        node._command_reference_snapshot = lambda: types.SimpleNamespace(
+            mode='sdk_tracking', positions=[1, 2, 3, 4, 5, 6])
 
         times = iter([1.0, 1.2, 2.0])
         original_get_time = motion_gateway_node.rospy.get_time
@@ -97,7 +100,7 @@ class MotionGatewayGripperHoldTest(unittest.TestCase):
 
         self.assertEqual(node.gripper.calls[0], (0.01, [1, 2, 3, 4, 5, 6]))
         self.assertEqual(node.gripper.calls[1], (0.02, [1, 2, 3, 4, 5, 6]))
-        self.assertEqual(node.gripper.calls[2], (0.03, [10, 20, 30, 40, 50, 60]))
+        self.assertEqual(node.gripper.calls[2], (0.03, [1, 2, 3, 4, 5, 6]))
 
 
 if __name__ == '__main__':
