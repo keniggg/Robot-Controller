@@ -1,0 +1,2479 @@
+{
+  "scope": "recorded_initial_encoders_plus_explicit_response_hypotheses",
+  "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+  "synthetic_clock": true,
+  "grasp_success": false,
+  "physical_motion_executed": false,
+  "results": [
+    {
+      "hypothesis": "other_five_axes_repeatable",
+      "terminal": "PREGRASP_MEASURED_CONVERGED",
+      "steps": 8,
+      "trace": [
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "measured_counts": [
+            901,
+            1506,
+            3105,
+            2202,
+            1092,
+            956
+          ],
+          "position_error_m": 0.020439074733897222,
+          "orientation_error_rad": 0.05629393650702273,
+          "sdk_stamp_ns": 9950000000,
+          "accepted_stamp_ns": 9950000000,
+          "steps_completed": 0,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "proposed_delta_counts": [
+            -4,
+            0,
+            4,
+            4,
+            4,
+            -4
+          ],
+          "predicted_position_error_m": 0.01757839569016831,
+          "predicted_orientation_error_rad": 0.039945319980308966,
+          "code": "PREGRASP_STEP_PROPOSED",
+          "conditional_path": {
+            "ok": true,
+            "scope": "candidate_path_only_not_execution_authority",
+            "trajectory_sha256": "ae793c6939980a52d9a8a7d4c46b46a6274af8d627c2a99cbfffdce739fe2654",
+            "failure_location": "",
+            "certifies_hardware_tracking": false,
+            "start_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.0030210032279792687,
+              "box_checks": 42,
+              "elapsed_sec": 0.007717774002230726,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7671458676442586,
+                -0.8022719520641903,
+                1.6459613854012929,
+                0.2454369260617026,
+                -1.4695535947944443,
+                -1.684310905098434
+              ],
+              "nominal_minimum_support_clearance_m": 0.05583147317401427,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "goal_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.0032257821961213505,
+              "box_checks": 22,
+              "elapsed_sec": 0.008200192998629063,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7732817907958012,
+                -0.8022719520641903,
+                1.6520973085528354,
+                0.25157284921324513,
+                -1.4634176716429017,
+                -1.6904468282499765
+              ],
+              "nominal_minimum_support_clearance_m": 0.056944465466103655,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "continuous_path": {
+              "scope": "continuous_commanded_Link6_Link7_Link8_only",
+              "plan_id": "56ffe494e18741626de2da6d",
+              "scene_sha256": "91124dcd49062cd4a97efaf71677666e576a141b6fafdfb7a08d34acfd0c855f",
+              "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "trajectory_sha256": "ae793c6939980a52d9a8a7d4c46b46a6274af8d627c2a99cbfffdce739fe2654",
+              "segments": 1,
+              "interval_checks": 3,
+              "fk_checks": 6,
+              "minimum_sampled_clearance_m": 0.05583147317401428,
+              "certified_minimum_clearance_m": 0.0485121462742817,
+              "bridge": "stationary_desired_to_first_positive_time_waypoint",
+              "bridge_start_joint_positions_rad": [
+                -1.7671458676442586,
+                -0.8022719520641903,
+                1.6459613854012929,
+                0.2454369260617026,
+                -1.4695535947944443,
+                -1.684310905098434
+              ],
+              "opening_width_m": 0.04975,
+              "following_support": {
+                "scope": "conditional_continuous_Link6_Link7_Link8_support_only",
+                "joint_error_bounds_rad": [
+                  0.062034854810911755,
+                  0.062034854810911755,
+                  0.062034854810911755,
+                  0.062034854810911755,
+                  0.062034854810911755,
+                  0.062034854810911755
+                ],
+                "minimum_support_clearance_lower_bound_m": 0.0030210032279792687,
+                "box_checks": 146,
+                "includes_controller_bridge": true,
+                "certifies_hardware_tracking_stopping_or_calibration": false,
+                "target_obb_tracking_uncertainty_checked": false
+              },
+              "elapsed_sec": 0.07177770999987843
+            },
+            "reason": "",
+            "execution_tracking_contract": {
+              "policy": "per_goal_tracking_with_trajectory_stop_reserve_v1",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "path_position_tolerance_rad": [
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755,
+                0.062034854810911755
+              ],
+              "commanded_stop_reserve_rad": 0.0012678644169689375,
+              "stop_trajectory_duration_sec": 0.5,
+              "maximum_command_velocity_rad_s": 0.003834951969742567,
+              "maximum_command_acceleration_rad_s2": 0.003968110024250584,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "command_derivative_bounds": {
+              "maximum_velocity_rad_s": [
+                0.0038349519697420138,
+                2.842170943040401e-14,
+                0.003834951969742567,
+                0.0038349519697424782,
+                0.003834951969742567,
+                0.0038349519697418507
+              ],
+              "maximum_acceleration_rad_s2": [
+                0.0039681100242486295,
+                2.842170943040401e-14,
+                0.0039681100242464585,
+                0.003968110024246658,
+                0.0039681100242464585,
+                0.003968110024250584
+              ]
+            },
+            "tracking_contract_search": [
+              {
+                "path_position_tolerance_rad": [
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09
+                ],
+                "ok": false,
+                "failure_location": "start",
+                "reason": "joint error box contains insufficient support clearance"
+              },
+              {
+                "path_position_tolerance_rad": [
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06
+                ],
+                "ok": true,
+                "failure_location": "",
+                "reason": ""
+              }
+            ],
+            "synthetic_path_not_execution_authority": true
+          }
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            892,
+            1525,
+            3125,
+            2212,
+            1094,
+            946
+          ],
+          "measured_counts": [
+            897,
+            1506,
+            3109,
+            2206,
+            1096,
+            952
+          ],
+          "position_error_m": 0.01757839569016831,
+          "orientation_error_rad": 0.039945319980308966,
+          "sdk_stamp_ns": 12950000000,
+          "accepted_stamp_ns": 12950000000,
+          "steps_completed": 1,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              -4,
+              0,
+              4,
+              4,
+              4,
+              -4
+            ],
+            "measured_delta_counts": [
+              -4,
+              0,
+              4,
+              4,
+              4,
+              -4
+            ],
+            "bounded_directional_response": true
+          },
+          "proposed_delta_counts": [
+            0,
+            0,
+            4,
+            4,
+            4,
+            -4
+          ],
+          "predicted_position_error_m": 0.01538273646675714,
+          "predicted_orientation_error_rad": 0.025989036849433038,
+          "code": "PREGRASP_STEP_PROPOSED",
+          "conditional_path": {
+            "ok": true,
+            "scope": "candidate_path_only_not_execution_authority",
+            "trajectory_sha256": "28db27c1712b03c7dc505140715ca93f381dccd883c15108306af6aa0811fae1",
+            "failure_location": "",
+            "certifies_hardware_tracking": false,
+            "start_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.0032257821961213487,
+              "box_checks": 22,
+              "elapsed_sec": 0.003032888998859562,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7732817907958012,
+                -0.8022719520641903,
+                1.6520973085528354,
+                0.25157284921324513,
+                -1.4634176716429017,
+                -1.6904468282499765
+              ],
+              "nominal_minimum_support_clearance_m": 0.056944465466103655,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "goal_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.0032521976586930624,
+              "box_checks": 16,
+              "elapsed_sec": 0.0021058960010122973,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7732817907958012,
+                -0.8022719520641903,
+                1.6582332317043782,
+                0.25770877236478773,
+                -1.4572817484913592,
+                -1.696582751401519
+              ],
+              "nominal_minimum_support_clearance_m": 0.057786310159169144,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "continuous_path": {
+              "scope": "continuous_commanded_Link6_Link7_Link8_only",
+              "plan_id": "56ffe494e18741626de2da6d",
+              "scene_sha256": "91124dcd49062cd4a97efaf71677666e576a141b6fafdfb7a08d34acfd0c855f",
+              "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "trajectory_sha256": "28db27c1712b03c7dc505140715ca93f381dccd883c15108306af6aa0811fae1",
+              "segments": 1,
+              "interval_checks": 1,
+              "fk_checks": 4,
+              "minimum_sampled_clearance_m": 0.056944465466103655,
+              "certified_minimum_clearance_m": 0.03022184622000216,
+              "bridge": "stationary_desired_to_first_positive_time_waypoint",
+              "bridge_start_joint_positions_rad": [
+                -1.7732817907958012,
+                -0.8022719520641903,
+                1.6520973085528354,
+                0.25157284921324513,
+                -1.4634176716429017,
+                -1.6904468282499765
+              ],
+              "opening_width_m": 0.04975,
+              "following_support": {
+                "scope": "conditional_continuous_Link6_Link7_Link8_support_only",
+                "joint_error_bounds_rad": [
+                  0.06203485481091178,
+                  0.06203485481091178,
+                  0.06203485481091178,
+                  0.06203485481091178,
+                  0.06203485481091178,
+                  0.06203485481091178
+                ],
+                "minimum_support_clearance_lower_bound_m": 0.003054194493629187,
+                "box_checks": 64,
+                "includes_controller_bridge": true,
+                "certifies_hardware_tracking_stopping_or_calibration": false,
+                "target_obb_tracking_uncertainty_checked": false
+              },
+              "elapsed_sec": 0.016198392000660533
+            },
+            "reason": "",
+            "execution_tracking_contract": {
+              "policy": "per_goal_tracking_with_trajectory_stop_reserve_v1",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "path_position_tolerance_rad": [
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06
+              ],
+              "joint_error_bounds_rad": [
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178,
+                0.06203485481091178
+              ],
+              "commanded_stop_reserve_rad": 0.0012678644169689633,
+              "stop_trajectory_duration_sec": 0.5,
+              "maximum_command_velocity_rad_s": 0.0038349519697428638,
+              "maximum_command_acceleration_rad_s2": 0.003968110024246755,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "command_derivative_bounds": {
+              "maximum_velocity_rad_s": [
+                2.842170943040401e-14,
+                2.842170943040401e-14,
+                0.0038349519697428638,
+                0.00383495196974256,
+                0.003834951969742567,
+                0.003834951969742567
+              ],
+              "maximum_acceleration_rad_s2": [
+                2.842170943040401e-14,
+                2.842170943040401e-14,
+                0.003968110024246755,
+                0.003968110024246505,
+                0.0039681100242464585,
+                0.0039681100242464585
+              ]
+            },
+            "tracking_contract_search": [
+              {
+                "path_position_tolerance_rad": [
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09
+                ],
+                "ok": false,
+                "failure_location": "start",
+                "reason": "joint error box contains insufficient support clearance"
+              },
+              {
+                "path_position_tolerance_rad": [
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06
+                ],
+                "ok": true,
+                "failure_location": "",
+                "reason": ""
+              }
+            ],
+            "synthetic_path_not_execution_authority": true
+          }
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            892,
+            1525,
+            3129,
+            2216,
+            1098,
+            942
+          ],
+          "measured_counts": [
+            897,
+            1506,
+            3113,
+            2210,
+            1100,
+            948
+          ],
+          "position_error_m": 0.01538273646675714,
+          "orientation_error_rad": 0.025989036849433038,
+          "sdk_stamp_ns": 15950000000,
+          "accepted_stamp_ns": 15950000000,
+          "steps_completed": 2,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              0,
+              0,
+              4,
+              4,
+              4,
+              -4
+            ],
+            "measured_delta_counts": [
+              0,
+              0,
+              4,
+              4,
+              4,
+              -4
+            ],
+            "bounded_directional_response": true
+          },
+          "proposed_delta_counts": [
+            0,
+            0,
+            4,
+            4,
+            4,
+            -4
+          ],
+          "predicted_position_error_m": 0.013542115388040078,
+          "predicted_orientation_error_rad": 0.014833207818240414,
+          "code": "PREGRASP_STEP_PROPOSED",
+          "conditional_path": {
+            "ok": true,
+            "scope": "candidate_path_only_not_execution_authority",
+            "trajectory_sha256": "b404ff932476f30fe220764ff6bb9038ffa4a714b3da53ff08b9e5b4d7e913ce",
+            "failure_location": "",
+            "certifies_hardware_tracking": false,
+            "start_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.0032521976586928794,
+              "box_checks": 16,
+              "elapsed_sec": 0.029173363000154495,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7732817907958012,
+                -0.8022719520641903,
+                1.6582332317043782,
+                0.25770877236478773,
+                -1.4572817484913592,
+                -1.696582751401519
+              ],
+              "nominal_minimum_support_clearance_m": 0.057786310159169144,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "goal_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.0032396635640086365,
+              "box_checks": 14,
+              "elapsed_sec": 0.002088565997837577,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7732817907958012,
+                -0.8022719520641903,
+                1.6643691548559207,
+                0.2638446955163303,
+                -1.4511458253398166,
+                -1.7027186745530618
+              ],
+              "nominal_minimum_support_clearance_m": 0.05866603383641944,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "continuous_path": {
+              "scope": "continuous_commanded_Link6_Link7_Link8_only",
+              "plan_id": "56ffe494e18741626de2da6d",
+              "scene_sha256": "91124dcd49062cd4a97efaf71677666e576a141b6fafdfb7a08d34acfd0c855f",
+              "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "trajectory_sha256": "b404ff932476f30fe220764ff6bb9038ffa4a714b3da53ff08b9e5b4d7e913ce",
+              "segments": 1,
+              "interval_checks": 1,
+              "fk_checks": 4,
+              "minimum_sampled_clearance_m": 0.05778631015916916,
+              "certified_minimum_clearance_m": 0.031082618500727265,
+              "bridge": "stationary_desired_to_first_positive_time_waypoint",
+              "bridge_start_joint_positions_rad": [
+                -1.7732817907958012,
+                -0.8022719520641903,
+                1.6582332317043782,
+                0.25770877236478773,
+                -1.4572817484913592,
+                -1.696582751401519
+              ],
+              "opening_width_m": 0.04975,
+              "following_support": {
+                "scope": "conditional_continuous_Link6_Link7_Link8_support_only",
+                "joint_error_bounds_rad": [
+                  0.062034854810911894,
+                  0.062034854810911894,
+                  0.062034854810911894,
+                  0.062034854810911894,
+                  0.062034854810911894,
+                  0.062034854810911894
+                ],
+                "minimum_support_clearance_lower_bound_m": 0.0030234737641974623,
+                "box_checks": 48,
+                "includes_controller_bridge": true,
+                "certifies_hardware_tracking_stopping_or_calibration": false,
+                "target_obb_tracking_uncertainty_checked": false
+              },
+              "elapsed_sec": 0.03361891000167816
+            },
+            "reason": "",
+            "execution_tracking_contract": {
+              "policy": "per_goal_tracking_with_trajectory_stop_reserve_v1",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "path_position_tolerance_rad": [
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894,
+                0.062034854810911894
+              ],
+              "commanded_stop_reserve_rad": 0.001267864416969079,
+              "stop_trajectory_duration_sec": 0.5,
+              "maximum_command_velocity_rad_s": 0.003834951969743072,
+              "maximum_command_acceleration_rad_s2": 0.003968110024249646,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "command_derivative_bounds": {
+              "maximum_velocity_rad_s": [
+                2.842170943040401e-14,
+                2.842170943040401e-14,
+                0.0038349519697420138,
+                0.0038349519697425515,
+                0.003834951969742267,
+                0.003834951969743072
+              ],
+              "maximum_acceleration_rad_s2": [
+                2.842170943040401e-14,
+                2.842170943040401e-14,
+                0.0039681100242486295,
+                0.003968110024246485,
+                0.003968110024249646,
+                0.003968110024246783
+              ]
+            },
+            "tracking_contract_search": [
+              {
+                "path_position_tolerance_rad": [
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09
+                ],
+                "ok": false,
+                "failure_location": "start",
+                "reason": "joint error box contains insufficient support clearance"
+              },
+              {
+                "path_position_tolerance_rad": [
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06
+                ],
+                "ok": true,
+                "failure_location": "",
+                "reason": ""
+              }
+            ],
+            "synthetic_path_not_execution_authority": true
+          }
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            892,
+            1525,
+            3133,
+            2220,
+            1102,
+            938
+          ],
+          "measured_counts": [
+            897,
+            1506,
+            3117,
+            2214,
+            1104,
+            944
+          ],
+          "position_error_m": 0.013542115388040078,
+          "orientation_error_rad": 0.014833207818240414,
+          "sdk_stamp_ns": 18950000000,
+          "accepted_stamp_ns": 18950000000,
+          "steps_completed": 3,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              0,
+              0,
+              4,
+              4,
+              4,
+              -4
+            ],
+            "measured_delta_counts": [
+              0,
+              0,
+              4,
+              4,
+              4,
+              -4
+            ],
+            "bounded_directional_response": true
+          },
+          "proposed_delta_counts": [
+            2,
+            0,
+            4,
+            4,
+            -4,
+            -4
+          ],
+          "predicted_position_error_m": 0.011916646174269992,
+          "predicted_orientation_error_rad": 0.018196127443780588,
+          "code": "PREGRASP_STEP_PROPOSED",
+          "conditional_path": {
+            "ok": true,
+            "scope": "candidate_path_only_not_execution_authority",
+            "trajectory_sha256": "5d5e5bab36793603857d2b8310867f295eb43da36556e261dd2a0a32f77f7f2a",
+            "failure_location": "",
+            "certifies_hardware_tracking": false,
+            "start_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.0032396635640088967,
+              "box_checks": 14,
+              "elapsed_sec": 0.010980609000398545,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7732817907958012,
+                -0.8022719520641903,
+                1.6643691548559207,
+                0.2638446955163303,
+                -1.4511458253398166,
+                -1.7027186745530618
+              ],
+              "nominal_minimum_support_clearance_m": 0.05866603383641944,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "goal_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.004720902805605072,
+              "box_checks": 14,
+              "elapsed_sec": 0.002157888997317059,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.77021382922003,
+                -0.8022719520641903,
+                1.6705050780074633,
+                0.2699806186678728,
+                -1.4572817484913592,
+                -1.7088545977046044
+              ],
+              "nominal_minimum_support_clearance_m": 0.06002435624043076,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "continuous_path": {
+              "scope": "continuous_commanded_Link6_Link7_Link8_only",
+              "plan_id": "56ffe494e18741626de2da6d",
+              "scene_sha256": "91124dcd49062cd4a97efaf71677666e576a141b6fafdfb7a08d34acfd0c855f",
+              "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "trajectory_sha256": "5d5e5bab36793603857d2b8310867f295eb43da36556e261dd2a0a32f77f7f2a",
+              "segments": 1,
+              "interval_checks": 3,
+              "fk_checks": 6,
+              "minimum_sampled_clearance_m": 0.05866603383641941,
+              "certified_minimum_clearance_m": 0.05248163716156807,
+              "bridge": "stationary_desired_to_first_positive_time_waypoint",
+              "bridge_start_joint_positions_rad": [
+                -1.7732817907958012,
+                -0.8022719520641903,
+                1.6643691548559207,
+                0.2638446955163303,
+                -1.4511458253398166,
+                -1.7027186745530618
+              ],
+              "opening_width_m": 0.04975,
+              "following_support": {
+                "scope": "conditional_continuous_Link6_Link7_Link8_support_only",
+                "joint_error_bounds_rad": [
+                  0.062034854810911734,
+                  0.062034854810911734,
+                  0.062034854810911734,
+                  0.062034854810911734,
+                  0.062034854810911734,
+                  0.062034854810911734
+                ],
+                "minimum_support_clearance_lower_bound_m": 0.0032396635640088967,
+                "box_checks": 58,
+                "includes_controller_bridge": true,
+                "certifies_hardware_tracking_stopping_or_calibration": false,
+                "target_obb_tracking_uncertainty_checked": false
+              },
+              "elapsed_sec": 0.06657185000221943
+            },
+            "reason": "",
+            "execution_tracking_contract": {
+              "policy": "per_goal_tracking_with_trajectory_stop_reserve_v1",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "path_position_tolerance_rad": [
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734,
+                0.062034854810911734
+              ],
+              "commanded_stop_reserve_rad": 0.001267864416968921,
+              "stop_trajectory_duration_sec": 0.5,
+              "maximum_command_velocity_rad_s": 0.003834951969742567,
+              "maximum_command_acceleration_rad_s2": 0.003968110024249646,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "command_derivative_bounds": {
+              "maximum_velocity_rad_s": [
+                0.0019174759848853231,
+                2.842170943040401e-14,
+                0.003834951969742567,
+                0.0038349519697424782,
+                0.003834951969742267,
+                0.0038349519697423863
+              ],
+              "maximum_acceleration_rad_s2": [
+                0.0019840550121389966,
+                2.842170943040401e-14,
+                0.0039681100242464585,
+                0.003968110024246658,
+                0.003968110024249646,
+                0.003968110024247617
+              ]
+            },
+            "tracking_contract_search": [
+              {
+                "path_position_tolerance_rad": [
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09
+                ],
+                "ok": false,
+                "failure_location": "start",
+                "reason": "joint error box contains insufficient support clearance"
+              },
+              {
+                "path_position_tolerance_rad": [
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06
+                ],
+                "ok": true,
+                "failure_location": "",
+                "reason": ""
+              }
+            ],
+            "synthetic_path_not_execution_authority": true
+          }
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            894,
+            1525,
+            3137,
+            2224,
+            1098,
+            934
+          ],
+          "measured_counts": [
+            899,
+            1506,
+            3121,
+            2218,
+            1100,
+            940
+          ],
+          "position_error_m": 0.011916646174269992,
+          "orientation_error_rad": 0.018196127443780588,
+          "sdk_stamp_ns": 21950000000,
+          "accepted_stamp_ns": 21950000000,
+          "steps_completed": 4,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              2,
+              0,
+              4,
+              4,
+              -4,
+              -4
+            ],
+            "measured_delta_counts": [
+              2,
+              0,
+              4,
+              4,
+              -4,
+              -4
+            ],
+            "bounded_directional_response": true
+          },
+          "proposed_delta_counts": [
+            2,
+            0,
+            4,
+            4,
+            -4,
+            0
+          ],
+          "predicted_position_error_m": 0.010294485724797787,
+          "predicted_orientation_error_rad": 0.022724267331416137,
+          "code": "PREGRASP_STEP_PROPOSED",
+          "conditional_path": {
+            "ok": true,
+            "scope": "candidate_path_only_not_execution_authority",
+            "trajectory_sha256": "a4684865e033ce3639610bc4d9e7ed08267be7145e6d00830b76c1decdbc702e",
+            "failure_location": "",
+            "certifies_hardware_tracking": false,
+            "start_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.004720902805605137,
+              "box_checks": 14,
+              "elapsed_sec": 0.0018619119982759003,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.77021382922003,
+                -0.8022719520641903,
+                1.6705050780074633,
+                0.2699806186678728,
+                -1.4572817484913592,
+                -1.7088545977046044
+              ],
+              "nominal_minimum_support_clearance_m": 0.06002435624043076,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "goal_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.003269136947830487,
+              "box_checks": 12,
+              "elapsed_sec": 0.001626771998417098,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7671458676442586,
+                -0.8022719520641903,
+                1.6766410011590058,
+                0.2761165418194154,
+                -1.4634176716429017,
+                -1.7088545977046044
+              ],
+              "nominal_minimum_support_clearance_m": 0.06148821091643791,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "continuous_path": {
+              "scope": "continuous_commanded_Link6_Link7_Link8_only",
+              "plan_id": "56ffe494e18741626de2da6d",
+              "scene_sha256": "91124dcd49062cd4a97efaf71677666e576a141b6fafdfb7a08d34acfd0c855f",
+              "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "trajectory_sha256": "a4684865e033ce3639610bc4d9e7ed08267be7145e6d00830b76c1decdbc702e",
+              "segments": 1,
+              "interval_checks": 1,
+              "fk_checks": 4,
+              "minimum_sampled_clearance_m": 0.06002435624043076,
+              "certified_minimum_clearance_m": 0.031827312412758366,
+              "bridge": "stationary_desired_to_first_positive_time_waypoint",
+              "bridge_start_joint_positions_rad": [
+                -1.77021382922003,
+                -0.8022719520641903,
+                1.6705050780074633,
+                0.2699806186678728,
+                -1.4572817484913592,
+                -1.7088545977046044
+              ],
+              "opening_width_m": 0.04975,
+              "following_support": {
+                "scope": "conditional_continuous_Link6_Link7_Link8_support_only",
+                "joint_error_bounds_rad": [
+                  0.062034854810911685,
+                  0.062034854810911685,
+                  0.062034854810911685,
+                  0.062034854810911685,
+                  0.062034854810911685,
+                  0.062034854810911685
+                ],
+                "minimum_support_clearance_lower_bound_m": 0.0032009704182426727,
+                "box_checks": 38,
+                "includes_controller_bridge": true,
+                "certifies_hardware_tracking_stopping_or_calibration": false,
+                "target_obb_tracking_uncertainty_checked": false
+              },
+              "elapsed_sec": 0.024974175001261756
+            },
+            "reason": "",
+            "execution_tracking_contract": {
+              "policy": "per_goal_tracking_with_trajectory_stop_reserve_v1",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "path_position_tolerance_rad": [
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685,
+                0.062034854810911685
+              ],
+              "commanded_stop_reserve_rad": 0.001267864416968869,
+              "stop_trajectory_duration_sec": 0.5,
+              "maximum_command_velocity_rad_s": 0.003834951969742567,
+              "maximum_command_acceleration_rad_s2": 0.003968110024246677,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "command_derivative_bounds": {
+              "maximum_velocity_rad_s": [
+                0.00191747598488511,
+                2.842170943040401e-14,
+                0.003834951969742567,
+                0.0038349519697424878,
+                0.003834951969742567,
+                2.842170943040401e-14
+              ],
+              "maximum_acceleration_rad_s2": [
+                0.001984055012138054,
+                2.842170943040401e-14,
+                0.0039681100242464585,
+                0.003968110024246677,
+                0.0039681100242464585,
+                2.842170943040401e-14
+              ]
+            },
+            "tracking_contract_search": [
+              {
+                "path_position_tolerance_rad": [
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09
+                ],
+                "ok": false,
+                "failure_location": "start",
+                "reason": "joint error box contains insufficient support clearance"
+              },
+              {
+                "path_position_tolerance_rad": [
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06
+                ],
+                "ok": true,
+                "failure_location": "",
+                "reason": ""
+              }
+            ],
+            "synthetic_path_not_execution_authority": true
+          }
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            896,
+            1525,
+            3141,
+            2228,
+            1094,
+            934
+          ],
+          "measured_counts": [
+            901,
+            1506,
+            3125,
+            2222,
+            1096,
+            940
+          ],
+          "position_error_m": 0.010294485724797787,
+          "orientation_error_rad": 0.022724267331416137,
+          "sdk_stamp_ns": 24950000000,
+          "accepted_stamp_ns": 24950000000,
+          "steps_completed": 5,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              2,
+              0,
+              4,
+              4,
+              -4,
+              0
+            ],
+            "measured_delta_counts": [
+              2,
+              0,
+              4,
+              4,
+              -4,
+              0
+            ],
+            "bounded_directional_response": true
+          },
+          "proposed_delta_counts": [
+            2,
+            0,
+            4,
+            4,
+            -4,
+            -2
+          ],
+          "predicted_position_error_m": 0.008681996710126707,
+          "predicted_orientation_error_rad": 0.02774914720510003,
+          "code": "PREGRASP_STEP_PROPOSED",
+          "conditional_path": {
+            "ok": true,
+            "scope": "candidate_path_only_not_execution_authority",
+            "trajectory_sha256": "d155b8f6e8ba44e1c0d85f33c22f93af9f31c528365f7396efb578c1710619fc",
+            "failure_location": "",
+            "certifies_hardware_tracking": false,
+            "start_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.003269136947830376,
+              "box_checks": 12,
+              "elapsed_sec": 0.004144299000472529,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7671458676442586,
+                -0.8022719520641903,
+                1.6766410011590058,
+                0.2761165418194154,
+                -1.4634176716429017,
+                -1.7088545977046044
+              ],
+              "nominal_minimum_support_clearance_m": 0.06148821091643791,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "goal_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.003851049587800084,
+              "box_checks": 10,
+              "elapsed_sec": 0.003024834000825649,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7640779060684872,
+                -0.8022719520641903,
+                1.6827769243105484,
+                0.28225246497095796,
+                -1.4695535947944443,
+                -1.7119225592803755
+              ],
+              "nominal_minimum_support_clearance_m": 0.06290697580143761,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "continuous_path": {
+              "scope": "continuous_commanded_Link6_Link7_Link8_only",
+              "plan_id": "56ffe494e18741626de2da6d",
+              "scene_sha256": "91124dcd49062cd4a97efaf71677666e576a141b6fafdfb7a08d34acfd0c855f",
+              "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "trajectory_sha256": "d155b8f6e8ba44e1c0d85f33c22f93af9f31c528365f7396efb578c1710619fc",
+              "segments": 1,
+              "interval_checks": 1,
+              "fk_checks": 4,
+              "minimum_sampled_clearance_m": 0.0614882109164379,
+              "certified_minimum_clearance_m": 0.030866692107276508,
+              "bridge": "stationary_desired_to_first_positive_time_waypoint",
+              "bridge_start_joint_positions_rad": [
+                -1.7671458676442586,
+                -0.8022719520641903,
+                1.6766410011590058,
+                0.2761165418194154,
+                -1.4634176716429017,
+                -1.7088545977046044
+              ],
+              "opening_width_m": 0.04975,
+              "following_support": {
+                "scope": "conditional_continuous_Link6_Link7_Link8_support_only",
+                "joint_error_bounds_rad": [
+                  0.06203485481091172,
+                  0.06203485481091172,
+                  0.06203485481091172,
+                  0.06203485481091172,
+                  0.06203485481091172,
+                  0.06203485481091172
+                ],
+                "minimum_support_clearance_lower_bound_m": 0.003269136947830376,
+                "box_checks": 34,
+                "includes_controller_bridge": true,
+                "certifies_hardware_tracking_stopping_or_calibration": false,
+                "target_obb_tracking_uncertainty_checked": false
+              },
+              "elapsed_sec": 0.021478875998582225
+            },
+            "reason": "",
+            "execution_tracking_contract": {
+              "policy": "per_goal_tracking_with_trajectory_stop_reserve_v1",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "path_position_tolerance_rad": [
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06
+              ],
+              "joint_error_bounds_rad": [
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172,
+                0.06203485481091172
+              ],
+              "commanded_stop_reserve_rad": 0.001267864416968906,
+              "stop_trajectory_duration_sec": 0.5,
+              "maximum_command_velocity_rad_s": 0.003834951969742633,
+              "maximum_command_acceleration_rad_s2": 0.003968110024247617,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "command_derivative_bounds": {
+              "maximum_velocity_rad_s": [
+                0.0019174759848864381,
+                2.842170943040401e-14,
+                0.0038349519697423863,
+                0.003834951969742633,
+                0.003834951969742567,
+                0.0019174759848854944
+              ],
+              "maximum_acceleration_rad_s2": [
+                0.001984055012137933,
+                2.842170943040401e-14,
+                0.003968110024247617,
+                0.0039681100242465114,
+                0.0039681100242464585,
+                0.00198405501213744
+              ]
+            },
+            "tracking_contract_search": [
+              {
+                "path_position_tolerance_rad": [
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09
+                ],
+                "ok": false,
+                "failure_location": "start",
+                "reason": "joint error box contains insufficient support clearance"
+              },
+              {
+                "path_position_tolerance_rad": [
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06
+                ],
+                "ok": true,
+                "failure_location": "",
+                "reason": ""
+              }
+            ],
+            "synthetic_path_not_execution_authority": true
+          }
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            898,
+            1525,
+            3145,
+            2232,
+            1090,
+            932
+          ],
+          "measured_counts": [
+            903,
+            1506,
+            3129,
+            2226,
+            1092,
+            938
+          ],
+          "position_error_m": 0.008681996710126707,
+          "orientation_error_rad": 0.02774914720510003,
+          "sdk_stamp_ns": 27950000000,
+          "accepted_stamp_ns": 27950000000,
+          "steps_completed": 6,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              2,
+              0,
+              4,
+              4,
+              -4,
+              -2
+            ],
+            "measured_delta_counts": [
+              2,
+              0,
+              4,
+              4,
+              -4,
+              -2
+            ],
+            "bounded_directional_response": true
+          },
+          "proposed_delta_counts": [
+            2,
+            0,
+            4,
+            4,
+            -4,
+            -2
+          ],
+          "predicted_position_error_m": 0.007089959381808206,
+          "predicted_orientation_error_rad": 0.033083582273004196,
+          "code": "PREGRASP_STEP_PROPOSED",
+          "conditional_path": {
+            "ok": true,
+            "scope": "candidate_path_only_not_execution_authority",
+            "trajectory_sha256": "4af0fc03fb2b6a28815a4dc05f3746acf04ff63e978207a9ee2bf5aba2e42ca3",
+            "failure_location": "",
+            "certifies_hardware_tracking": false,
+            "start_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.003851049587799881,
+              "box_checks": 10,
+              "elapsed_sec": 0.0012961159991391469,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.7640779060684872,
+                -0.8022719520641903,
+                1.6827769243105484,
+                0.28225246497095796,
+                -1.4695535947944443,
+                -1.7119225592803755
+              ],
+              "nominal_minimum_support_clearance_m": 0.06290697580143761,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "goal_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.0036734221526603735,
+              "box_checks": 8,
+              "elapsed_sec": 0.005285717001243029,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.761009944492716,
+                -0.8022719520641903,
+                1.688912847462091,
+                0.28838838812250056,
+                -1.4756895179459868,
+                -1.714990520856147
+              ],
+              "nominal_minimum_support_clearance_m": 0.06433073292949959,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "continuous_path": {
+              "scope": "continuous_commanded_Link6_Link7_Link8_only",
+              "plan_id": "56ffe494e18741626de2da6d",
+              "scene_sha256": "91124dcd49062cd4a97efaf71677666e576a141b6fafdfb7a08d34acfd0c855f",
+              "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "trajectory_sha256": "4af0fc03fb2b6a28815a4dc05f3746acf04ff63e978207a9ee2bf5aba2e42ca3",
+              "segments": 1,
+              "interval_checks": 1,
+              "fk_checks": 4,
+              "minimum_sampled_clearance_m": 0.06290697580143761,
+              "certified_minimum_clearance_m": 0.03228796506637539,
+              "bridge": "stationary_desired_to_first_positive_time_waypoint",
+              "bridge_start_joint_positions_rad": [
+                -1.7640779060684872,
+                -0.8022719520641903,
+                1.6827769243105484,
+                0.28225246497095796,
+                -1.4695535947944443,
+                -1.7119225592803755
+              ],
+              "opening_width_m": 0.04975,
+              "following_support": {
+                "scope": "conditional_continuous_Link6_Link7_Link8_support_only",
+                "joint_error_bounds_rad": [
+                  0.062034854810911984,
+                  0.062034854810911984,
+                  0.062034854810911984,
+                  0.062034854810911984,
+                  0.062034854810911984,
+                  0.062034854810911984
+                ],
+                "minimum_support_clearance_lower_bound_m": 0.0036734221526603735,
+                "box_checks": 30,
+                "includes_controller_bridge": true,
+                "certifies_hardware_tracking_stopping_or_calibration": false,
+                "target_obb_tracking_uncertainty_checked": false
+              },
+              "elapsed_sec": 0.018555528000433696
+            },
+            "reason": "",
+            "execution_tracking_contract": {
+              "policy": "per_goal_tracking_with_trajectory_stop_reserve_v1",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "path_position_tolerance_rad": [
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06
+              ],
+              "joint_error_bounds_rad": [
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984,
+                0.062034854810911984
+              ],
+              "commanded_stop_reserve_rad": 0.0012678644169691689,
+              "stop_trajectory_duration_sec": 0.5,
+              "maximum_command_velocity_rad_s": 0.003834951969743511,
+              "maximum_command_acceleration_rad_s2": 0.003968110024246952,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "command_derivative_bounds": {
+              "maximum_velocity_rad_s": [
+                0.0019174759848846529,
+                2.842170943040401e-14,
+                0.003834951969743511,
+                0.003834951969742571,
+                0.003834951969742567,
+                0.0019174759848864381
+              ],
+              "maximum_acceleration_rad_s2": [
+                0.0019840550121389177,
+                2.842170943040401e-14,
+                0.003968110024246952,
+                0.0039681100242466875,
+                0.0039681100242464585,
+                0.001984055012137933
+              ]
+            },
+            "tracking_contract_search": [
+              {
+                "path_position_tolerance_rad": [
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09
+                ],
+                "ok": false,
+                "failure_location": "start",
+                "reason": "joint error box contains insufficient support clearance"
+              },
+              {
+                "path_position_tolerance_rad": [
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06
+                ],
+                "ok": true,
+                "failure_location": "",
+                "reason": ""
+              }
+            ],
+            "synthetic_path_not_execution_authority": true
+          }
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            900,
+            1525,
+            3149,
+            2236,
+            1086,
+            930
+          ],
+          "measured_counts": [
+            905,
+            1506,
+            3133,
+            2230,
+            1088,
+            936
+          ],
+          "position_error_m": 0.007089959381808206,
+          "orientation_error_rad": 0.033083582273004196,
+          "sdk_stamp_ns": 30950000000,
+          "accepted_stamp_ns": 30950000000,
+          "steps_completed": 7,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              2,
+              0,
+              4,
+              4,
+              -4,
+              -2
+            ],
+            "measured_delta_counts": [
+              2,
+              0,
+              4,
+              4,
+              -4,
+              -2
+            ],
+            "bounded_directional_response": true
+          },
+          "proposed_delta_counts": [
+            0,
+            0,
+            4,
+            2,
+            -4,
+            2
+          ],
+          "predicted_position_error_m": 0.005661699672483871,
+          "predicted_orientation_error_rad": 0.0362082327019786,
+          "code": "PREGRASP_STEP_PROPOSED",
+          "conditional_path": {
+            "ok": true,
+            "scope": "candidate_path_only_not_execution_authority",
+            "trajectory_sha256": "c83220f1b63f6c81e7dd7764dfbdbd922a94ea0899bed2a233c9b774ad66ca66",
+            "failure_location": "",
+            "certifies_hardware_tracking": false,
+            "start_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.003673422152660833,
+              "box_checks": 8,
+              "elapsed_sec": 0.0028342479999992065,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.761009944492716,
+                -0.8022719520641903,
+                1.688912847462091,
+                0.28838838812250056,
+                -1.4756895179459868,
+                -1.714990520856147
+              ],
+              "nominal_minimum_support_clearance_m": 0.06433073292949959,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "goal_support": {
+              "ok": true,
+              "minimum_support_clearance_lower_bound_m": 0.0030080663917076166,
+              "box_checks": 6,
+              "elapsed_sec": 0.0010993839969160035,
+              "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "joint_error_bounds_rad": [
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168
+              ],
+              "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "goal_joint_positions_rad": [
+                -1.761009944492716,
+                -0.8022719520641903,
+                1.6950487706136335,
+                0.29145634969827183,
+                -1.4818254410975293,
+                -1.7119225592803755
+              ],
+              "nominal_minimum_support_clearance_m": 0.06583629255007278,
+              "required_support_clearance_m": 0.003,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "continuous_path": {
+              "scope": "continuous_commanded_Link6_Link7_Link8_only",
+              "plan_id": "56ffe494e18741626de2da6d",
+              "scene_sha256": "91124dcd49062cd4a97efaf71677666e576a141b6fafdfb7a08d34acfd0c855f",
+              "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+              "trajectory_sha256": "c83220f1b63f6c81e7dd7764dfbdbd922a94ea0899bed2a233c9b774ad66ca66",
+              "segments": 1,
+              "interval_checks": 1,
+              "fk_checks": 4,
+              "minimum_sampled_clearance_m": 0.06433073292949958,
+              "certified_minimum_clearance_m": 0.044130587414377934,
+              "bridge": "stationary_desired_to_first_positive_time_waypoint",
+              "bridge_start_joint_positions_rad": [
+                -1.761009944492716,
+                -0.8022719520641903,
+                1.688912847462091,
+                0.28838838812250056,
+                -1.4756895179459868,
+                -1.714990520856147
+              ],
+              "opening_width_m": 0.04975,
+              "following_support": {
+                "scope": "conditional_continuous_Link6_Link7_Link8_support_only",
+                "joint_error_bounds_rad": [
+                  0.06203485481091168,
+                  0.06203485481091168,
+                  0.06203485481091168,
+                  0.06203485481091168,
+                  0.06203485481091168,
+                  0.06203485481091168
+                ],
+                "minimum_support_clearance_lower_bound_m": 0.0030080663917076166,
+                "box_checks": 24,
+                "includes_controller_bridge": true,
+                "certifies_hardware_tracking_stopping_or_calibration": false,
+                "target_obb_tracking_uncertainty_checked": false
+              },
+              "elapsed_sec": 0.018154037999920547
+            },
+            "reason": "",
+            "execution_tracking_contract": {
+              "policy": "per_goal_tracking_with_trajectory_stop_reserve_v1",
+              "joint_names": [
+                "Joint1",
+                "Joint2",
+                "Joint3",
+                "Joint4",
+                "Joint5",
+                "Joint6"
+              ],
+              "path_position_tolerance_rad": [
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06,
+                0.06
+              ],
+              "joint_error_bounds_rad": [
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168,
+                0.06203485481091168
+              ],
+              "commanded_stop_reserve_rad": 0.0012678644169688653,
+              "stop_trajectory_duration_sec": 0.5,
+              "maximum_command_velocity_rad_s": 0.003834951969742567,
+              "maximum_command_acceleration_rad_s2": 0.0039681100242464585,
+              "certifies_hardware_tracking_stopping_or_calibration": false
+            },
+            "command_derivative_bounds": {
+              "maximum_velocity_rad_s": [
+                2.842170943040401e-14,
+                2.842170943040401e-14,
+                0.003834951969742567,
+                0.0019174759848854684,
+                0.003834951969742567,
+                0.0019174759848864381
+              ],
+              "maximum_acceleration_rad_s2": [
+                2.842170943040401e-14,
+                2.842170943040401e-14,
+                0.0039681100242464585,
+                0.0019840550121374358,
+                0.0039681100242464585,
+                0.001984055012137933
+              ]
+            },
+            "tracking_contract_search": [
+              {
+                "path_position_tolerance_rad": [
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09,
+                  0.09
+                ],
+                "ok": false,
+                "failure_location": "start",
+                "reason": "joint error box contains insufficient support clearance"
+              },
+              {
+                "path_position_tolerance_rad": [
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06,
+                  0.06
+                ],
+                "ok": true,
+                "failure_location": "",
+                "reason": ""
+              }
+            ],
+            "synthetic_path_not_execution_authority": true
+          }
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            900,
+            1525,
+            3153,
+            2238,
+            1082,
+            932
+          ],
+          "measured_counts": [
+            905,
+            1506,
+            3137,
+            2232,
+            1084,
+            938
+          ],
+          "position_error_m": 0.005661699672483871,
+          "orientation_error_rad": 0.0362082327019786,
+          "sdk_stamp_ns": 33950000000,
+          "accepted_stamp_ns": 33950000000,
+          "steps_completed": 8,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              0,
+              0,
+              4,
+              2,
+              -4,
+              2
+            ],
+            "measured_delta_counts": [
+              0,
+              0,
+              4,
+              2,
+              -4,
+              2
+            ],
+            "bounded_directional_response": true
+          },
+          "code": "PREGRASP_MEASURED_CONVERGED"
+        }
+      ],
+      "physical_convergence_proven": false,
+      "motion_executed": false
+    },
+    {
+      "hypothesis": "all_axes_stalled",
+      "terminal": "PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE",
+      "steps": 1,
+      "trace": [
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "measured_counts": [
+            901,
+            1506,
+            3105,
+            2202,
+            1092,
+            956
+          ],
+          "position_error_m": 0.020439074733897222,
+          "orientation_error_rad": 0.05629393650702273,
+          "sdk_stamp_ns": 9950000000,
+          "accepted_stamp_ns": 9950000000,
+          "steps_completed": 0,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "proposed_delta_counts": [
+            -4,
+            0,
+            4,
+            4,
+            4,
+            -4
+          ],
+          "predicted_position_error_m": 0.01757839569016831,
+          "predicted_orientation_error_rad": 0.039945319980308966,
+          "code": "PREGRASP_STEP_PROPOSED"
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            892,
+            1525,
+            3125,
+            2212,
+            1094,
+            946
+          ],
+          "measured_counts": [
+            901,
+            1506,
+            3105,
+            2202,
+            1092,
+            956
+          ],
+          "position_error_m": 0.020439074733897222,
+          "orientation_error_rad": 0.05629393650702273,
+          "sdk_stamp_ns": 12950000000,
+          "accepted_stamp_ns": 12950000000,
+          "steps_completed": 1,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              -4,
+              0,
+              4,
+              4,
+              4,
+              -4
+            ],
+            "measured_delta_counts": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "bounded_directional_response": false
+          },
+          "code": "PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE"
+        }
+      ],
+      "physical_convergence_proven": false,
+      "motion_executed": false
+    },
+    {
+      "hypothesis": "joint3_stalled",
+      "terminal": "PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE",
+      "steps": 1,
+      "trace": [
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "measured_counts": [
+            901,
+            1506,
+            3105,
+            2202,
+            1092,
+            956
+          ],
+          "position_error_m": 0.020439074733897222,
+          "orientation_error_rad": 0.05629393650702273,
+          "sdk_stamp_ns": 9950000000,
+          "accepted_stamp_ns": 9950000000,
+          "steps_completed": 0,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "proposed_delta_counts": [
+            -4,
+            0,
+            4,
+            4,
+            4,
+            -4
+          ],
+          "predicted_position_error_m": 0.01757839569016831,
+          "predicted_orientation_error_rad": 0.039945319980308966,
+          "code": "PREGRASP_STEP_PROPOSED"
+        },
+        {
+          "fixed_goal_pose": [
+            -0.128676288348165,
+            -0.413491501511057,
+            0.14271407729498317,
+            0.9778575536561513,
+            -0.15048615266545007,
+            -0.12530423917224218,
+            0.07380630229881076
+          ],
+          "initial_sdk_counts": [
+            896,
+            1525,
+            3121,
+            2208,
+            1090,
+            950
+          ],
+          "sdk_counts": [
+            892,
+            1525,
+            3125,
+            2212,
+            1094,
+            946
+          ],
+          "measured_counts": [
+            897,
+            1506,
+            3105,
+            2206,
+            1096,
+            952
+          ],
+          "position_error_m": 0.019253402680476293,
+          "orientation_error_rad": 0.04597555063440388,
+          "sdk_stamp_ns": 12950000000,
+          "accepted_stamp_ns": 12950000000,
+          "steps_completed": 1,
+          "held_joints": [
+            "Joint2"
+          ],
+          "real_grasp_success": false,
+          "last_step_response": {
+            "command_delta_counts": [
+              -4,
+              0,
+              4,
+              4,
+              4,
+              -4
+            ],
+            "measured_delta_counts": [
+              -4,
+              0,
+              0,
+              4,
+              4,
+              -4
+            ],
+            "bounded_directional_response": false
+          },
+          "code": "PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE"
+        }
+      ],
+      "physical_convergence_proven": false,
+      "motion_executed": false
+    }
+  ]
+}

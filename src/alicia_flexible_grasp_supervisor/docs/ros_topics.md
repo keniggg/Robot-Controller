@@ -41,3 +41,11 @@
 |---|---|---|---|---|
 | `/grasp/state` | `GraspState` | `grasp_task_node.py` | GUI / logger | 自主抓取状态机状态 |
 | `/safety/status` | `SafetyState` | `safety_monitor_node.py` | GUI / 抓取节点 | 安全状态 |
+
+## 2026.9.20 预抓取补偿服务
+
+| 服务 | 类型 | 调用者 | 约束 |
+| --- | --- | --- | --- |
+| `/supervisor/compensate_pregrasp` | `CompensatePregrasp` | `grasp_task_node` | 完整冻结 CONTACT 计划、活动 MOVE_PREGRASP、同 epoch；只补偿 poses[0]，保留物理目标。execute=false 只规划首步，不能当作轨迹已获执行许可。 |
+
+JSON 返回与 ROS 日志含 plan_id、固定目标、模型哈希、SDK/实测计数、源戳、每步响应及残差；`PREGRASP_MEASURED_CONVERGED` 只表示模型内到位，不是持物成功。[边界和验证](../../../docs/verification/2026-09-20-pregrasp-compensation.md)。

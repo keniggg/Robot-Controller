@@ -29,6 +29,7 @@ from alicia_flexible_grasp_supervisor.msg import (
 )
 from alicia_flexible_grasp_supervisor.srv import (
     CheckPoseSequence,
+    CompensatePregrasp,
     SetFloat,
     SetTargetPose,
     SetTargetPoseResponse,
@@ -57,6 +58,7 @@ from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     compute_plan_id,
     float32_wire_value,
     plan_id_matches_content,
+    pose_values,
     required_open_width_is_valid,
     stamp_nanoseconds as _stamp_nanoseconds,
     stamp_seconds as _stamp_seconds,
@@ -3482,6 +3484,8 @@ class GraspTaskNode:
                     GraspStages.PLAN_PREGRASP,
                     'near-field plan reuses reached pregrasp',
                 )
+                if not self._validate_reused_contact_pregrasp(plan, pregrasp, gcfg):
+                    return False
             else:
                 if not self._plan_and_execute_pose(
                     GraspStages.MOVE_PREGRASP,
@@ -3527,6 +3531,8 @@ class GraspTaskNode:
                     GraspStages.PLAN_PREGRASP,
                     'final visual correction keeps reached pregrasp',
                 )
+                if not self._validate_reused_contact_pregrasp(plan, pregrasp, gcfg):
+                    return False
             elif not self._plan_and_execute_pose(
                 GraspStages.MOVE_PREGRASP,
                 'bounded final visual correction',
@@ -5382,6 +5388,52 @@ class GraspTaskNode:
                     'driver watchdog remains the fail-safe release authority'
                 )
 
+    def _validate_reused_contact_pregrasp(self, plan, pose, gcfg):
+        """Reusing a nominal waypoint does not waive measured pregrasp arrival."""
+        if not (_plan_phase(plan) == _CONTACT_EXECUTION_PLAN
+                and all(self._cfg_bool(gcfg, key, False) for key in (
+                    'pregrasp_cartesian_compensation_enabled',
+                    'contact_endpoint_precision_enabled', 'measured_endpoint_check_enabled'))):
+            return True
+        label = 'reused contact pregrasp'
+        self.set_state(GraspStages.MOVE_PREGRASP, label)
+        if self._wait_for_motion_settle(label) is False:
+            self.set_state(GraspStages.FAILED, 'PREGRASP_FEEDBACK_NOT_SETTLED')
+            return False
+        if not self._compensate_pregrasp_endpoint(plan, gcfg):
+            return False
+        stable, _, _ = self._wait_for_measured_endpoint_contract(pose,
+            self._cfg_float(gcfg, 'measured_endpoint_position_tolerance_m', .006),
+            self._cfg_float(gcfg, 'measured_endpoint_orientation_tolerance_deg', 5.), label)
+        recorded = self._record_and_validate_measured_endpoint(pose, plan, gcfg, label, required=True)
+        if not stable:
+            self.set_state(GraspStages.FAILED, 'PREGRASP_MEASURED_ARRIVAL_NOT_STABLE')
+        return bool(stable and recorded)
+
+    def _compensate_pregrasp_endpoint(self, plan, gcfg):
+        """The gateway adjusts commands; the frozen visual plan stays unchanged."""
+        try:
+            name = '/supervisor/compensate_pregrasp'
+            rospy.wait_for_service(name, timeout=2.)
+            proxy = rospy.ServiceProxy(name, CompensatePregrasp)
+            validation, response = self._invoke_plan_bound_action(
+                plan, gcfg, 'pregrasp Cartesian compensation',
+                lambda: proxy(deepcopy(plan), True))
+            if not validation.ok:
+                raise ValueError('%s: %s' % (validation.code, validation.reason))
+            if not response.success:
+                raise ValueError(response.message)
+            report = json.loads(response.message)
+            if (report.get('code') != 'PREGRASP_MEASURED_CONVERGED'
+                    or report.get('plan_id') != plan.plan_id
+                    or report.get('fixed_goal_pose') != list(pose_values(plan.poses[0]))):
+                raise ValueError('gateway did not certify the same frozen pregrasp goal')
+            rospy.loginfo('Measured pregrasp compensation completed: %s', response.message)
+            return True
+        except Exception as exc:
+            self.set_state(GraspStages.FAILED, 'PREGRASP_COMPENSATION_FAILED: %s' % exc)
+            return False
+
     def _plan_and_execute_pose(
         self,
         stage,
@@ -5504,6 +5556,13 @@ class GraspTaskNode:
                 False,
             )
         )
+        software_pregrasp = (
+            precision_requested and stage == GraspStages.MOVE_PREGRASP
+            and self._cfg_bool(gcfg or {}, 'pregrasp_cartesian_compensation_enabled', False)
+        )
+        if software_pregrasp and pose_values(pose.pose) != pose_values(bound_plan.poses[0]):
+            self.set_state(GraspStages.FAILED, 'PREGRASP_COMPENSATION_GOAL_MISMATCH')
+            return False
         self.set_state(stage, 'moving ' + label)
         if bound_plan is not None:
             validation, resp = self._invoke_plan_bound_action(
@@ -5561,7 +5620,7 @@ class GraspTaskNode:
             if recoverable_contact_execution:
                 rospy.logwarn(
                     '%s controller reported failure after cached contact '
-                    'submission; acquiring the task-scoped endpoint lease '
+                    'submission; using the configured endpoint correction '
                     'and requiring the unchanged measured FK contract: %s',
                     label,
                     response_message,
@@ -5576,7 +5635,7 @@ class GraspTaskNode:
         # following intermediate trajectory setpoints or ordinary GUI motion.
         with self._contact_endpoint_precision_scope(
             gcfg or {},
-            precision_requested,
+            precision_requested and not software_pregrasp,
         ) as precision_ready:
             if not precision_ready:
                 self.set_state(
@@ -5599,6 +5658,8 @@ class GraspTaskNode:
                     GraspStages.FAILED,
                     '%s feedback did not settle; refusing to overlap the next motion' % label,
                 )
+                return False
+            if software_pregrasp and not self._compensate_pregrasp_endpoint(bound_plan, gcfg or {}):
                 return False
             if (
                 strict_rich_plan

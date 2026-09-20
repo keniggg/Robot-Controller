@@ -129,3 +129,7 @@
 ### Conclusion
 
 By following these steps, you should be able to create a more efficient and streamlined `alicia_d_driver` package. Make sure to test thoroughly and iterate on your design based on performance and functionality.
+
+## 2026.9.20 预抓取跟随误差与任务级补偿
+
+预抓取 Joint2 +7 count、实测不动的现象已记录；75 帧原始反馈排除了仅由上位机过滤造成的假象，但不证明硬件损坏。软件补偿位于 supervisor 任务/网关层，保持原视觉目标与 Joint2 指令，使用其他轴有界校正；该阶段不获取驱动端点 trim 租约，不修改编码器映射、零点、温度保护或硬件参数。[实验与实现记录](../../../docs/verification/2026-09-20-pregrasp-compensation.md)。

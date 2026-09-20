@@ -485,9 +485,9 @@ class MoveItPlanner:
 
     def plan_and_execute_joint_probe(self, joints, execute=False,
                                     start_joint_positions=None, before_execute=None):
-        """Exact joint target for a separately admitted, bounded diagnostic.
+        """Exact joint target for an admitted diagnostic or pregrasp correction.
 
-        The gateway owns the diagnostic count cap, scene and control provenance.
+        The gateway owns the count cap, scene, stage and control provenance.
         Use the gateway's frozen transmitted reference for a command path;
         accepted feedback must remain inside the original .035 rad contract.
         With no reference argument retain fresh-feedback planning. Use
@@ -2256,7 +2256,8 @@ class MoveItPlanner:
         if executor is None or not callable(authorized) or not callable(revalidate):
             raise ValueError('bound observation executor or live authority is unavailable')
         goal = bound_action_goal(plan, audit, audit['controller_constraints_snapshot'],
-                                 audit['execution_tracking_contract']['stop_trajectory_duration_sec'])
+                                 audit['execution_tracking_contract']['stop_trajectory_duration_sec'],
+                                 reference=(reference_evidence or {}).get('reference'))
         def before_send():
             revalidate(plan, audit)
             error = self._controller_reference_execution_error(plan, reference_evidence)

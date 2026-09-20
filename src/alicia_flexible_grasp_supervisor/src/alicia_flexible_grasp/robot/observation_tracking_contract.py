@@ -17,13 +17,15 @@ from .observation_path_guard import (
 )
 
 POLICY = 'per_goal_tracking_with_commanded_stop_reserve_v1'
+TRAJECTORY_STOP_POLICY = 'per_goal_tracking_with_trajectory_stop_reserve_v1'
 MAX_VELOCITY_RAD_S = .08
 MAX_ACCELERATION_RAD_S2 = .30
 MAX_STOP_DURATION_SEC = .5
 SDK_HALF_COUNT_RAD = math.pi / 4096.
 
 
-def commanded_stop_reserve(stop_duration_sec):
+def commanded_stop_reserve(stop_duration_sec, *, velocity=MAX_VELOCITY_RAD_S,
+                           acceleration=MAX_ACCELERATION_RAD_S2):
     """Bound Noetic StopTrajectoryBuilder's commanded position excursion.
 
     Its symmetric quintic on [0, 2*T] has, for s in [0, 1/2], position
@@ -37,11 +39,15 @@ def commanded_stop_reserve(stop_duration_sec):
             or not 0. < stop_duration_sec <= MAX_STOP_DURATION_SEC):
         raise ObservationPathError('unsupported controller stop duration')
     t = float(stop_duration_sec)
-    return (.625 * MAX_VELOCITY_RAD_S * t
-            + .07 * MAX_ACCELERATION_RAD_S2 * t*t + 1e-12)
+    for value, limit in ((velocity, MAX_VELOCITY_RAD_S),
+                         (acceleration, MAX_ACCELERATION_RAD_S2)):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or not 0. <= value <= limit):
+            raise ObservationPathError('unsupported stopping derivative bound')
+    return .625 * velocity * t + .07 * acceleration * t*t + 1e-12
 
 
-def tracking_contract_candidates(constraints, names, stop_duration_sec):
+def tracking_contract_candidates(constraints, names, stop_duration_sec, *, command_bounds=None):
     """Finite generic search; never enlarge the configured path tolerance.
 
     The smallest ordinary candidate is the existing 0.035-rad endpoint
@@ -56,20 +62,30 @@ def tracking_contract_candidates(constraints, names, stop_duration_sec):
     if not isinstance(constraints, Mapping):
         raise ObservationPathError('controller constraints unavailable')
     caps = np.array([constraints[name]['trajectory'] for name in names], dtype=float)
-    reserve = commanded_stop_reserve(stop_duration_sec)
+    velocity, acceleration = MAX_VELOCITY_RAD_S, MAX_ACCELERATION_RAD_S2
+    policy = POLICY
+    if command_bounds is not None:
+        bounds = [np.asarray(command_bounds.get(key, []), dtype=float) for key in
+                  ('maximum_velocity_rad_s', 'maximum_acceleration_rad_s2')]
+        if any(v.shape != (len(names),) or not np.all(np.isfinite(v)) or np.any(v < 0.)
+               for v in bounds):
+            raise ObservationPathError('invalid trajectory stopping bounds')
+        velocity, acceleration = (float(np.max(v)) for v in bounds)
+        policy = TRAJECTORY_STOP_POLICY
+    reserve = commanded_stop_reserve(stop_duration_sec, velocity=velocity, acceleration=acceleration)
     seen, result = set(), []
     for maximum in (.09, .06, .05, .035):
         values = tuple(np.minimum(caps, maximum).tolist())
         if values in seen:
             continue
         seen.add(values)
-        result.append(dict(policy=POLICY, joint_names=list(names),
+        result.append(dict(policy=policy, joint_names=list(names),
             path_position_tolerance_rad=list(values),
             joint_error_bounds_rad=(np.array(values)+reserve+SDK_HALF_COUNT_RAD).tolist(),
             commanded_stop_reserve_rad=reserve,
             stop_trajectory_duration_sec=float(stop_duration_sec),
-            maximum_command_velocity_rad_s=MAX_VELOCITY_RAD_S,
-            maximum_command_acceleration_rad_s2=MAX_ACCELERATION_RAD_S2,
+            maximum_command_velocity_rad_s=velocity,
+            maximum_command_acceleration_rad_s2=acceleration,
             certifies_hardware_tracking_stopping_or_calibration=False))
     return tuple(result)
 
@@ -127,7 +143,8 @@ def required_command_time_scale(plan, hold):
                math.sqrt(max(report['maximum_acceleration_rad_s2']) / MAX_ACCELERATION_RAD_S2))
 
 
-def qualify_contract_path(plan, hold, scene, fk, gripper, opening, constraints, stop_duration):
+def qualify_contract_path(plan, hold, scene, fk, gripper, opening, constraints, stop_duration,
+                          *, trajectory_stop_reserve=False):
     """Search the same finite tracking contracts for every pose/target.
 
     A returned candidate is still only a conditional geometric certificate.
@@ -137,7 +154,12 @@ def qualify_contract_path(plan, hold, scene, fk, gripper, opening, constraints, 
     from .observation_preview import qualify_candidate_path
     derivatives = validate_command_derivatives(plan, hold)
     attempts = []
-    for contract in tracking_contract_candidates(constraints, fk.names, stop_duration):
+    # Tiny pregrasp motions may use the certified derivatives of THIS final
+    # curve and controller bridge. The executor must independently recompute
+    # these bounds from the same reference before accepting the contract.
+    bounds = derivatives if trajectory_stop_reserve else None
+    for contract in tracking_contract_candidates(constraints, fk.names, stop_duration,
+                                                 command_bounds=bounds):
         report = qualify_candidate_path(plan, hold, scene, fk, gripper, opening,
                                         contract['joint_error_bounds_rad'])
         attempts.append(dict(path_position_tolerance_rad=contract['path_position_tolerance_rad'],

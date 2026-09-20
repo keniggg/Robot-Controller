@@ -38,6 +38,7 @@ add_service_files(
   StopGrasp.srv
   SetForceParams.srv
   SetTargetPose.srv
+  CompensatePregrasp.srv
   CheckPoseSequence.srv
   ResolveFreeSpaceOrientations.srv
   SetJointCommand.srv

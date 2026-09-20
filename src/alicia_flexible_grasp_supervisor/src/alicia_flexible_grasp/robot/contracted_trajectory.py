@@ -16,10 +16,12 @@ from control_msgs.msg import FollowJointTrajectoryGoal, JointTolerance
 from trajectory_msgs.msg import JointTrajectory
 
 from .observation_path_guard import ObservationPathError, wire_digest
-from .observation_tracking_contract import tracking_contract_candidates
+from .observation_tracking_contract import (
+    tracking_contract_candidates, validate_command_derivatives, TRAJECTORY_STOP_POLICY,
+)
 
 
-def bound_action_goal(plan, audit, constraints, stop_duration):
+def bound_action_goal(plan, audit, constraints, stop_duration, *, reference=None):
     """Reject altered/missing proof or mismatched execution tolerances."""
     names = list(plan.joint_trajectory.joint_names)
     if len(names) != 6 or set(names) != {'Joint%d' % i for i in range(1, 7)}:
@@ -27,7 +29,14 @@ def bound_action_goal(plan, audit, constraints, stop_duration):
     if audit.get('trajectory_sha256') != wire_digest(plan):
         raise ObservationPathError('observation action/proof trajectory mismatch')
     contract = audit.get('execution_tracking_contract')
-    choices = tracking_contract_candidates(constraints, names, stop_duration)
+    bounds = None
+    if isinstance(contract, dict) and contract.get('policy') == TRAJECTORY_STOP_POLICY:
+        if reference is None:
+            raise ObservationPathError('trajectory stopping proof needs the bound controller reference')
+        bounds = validate_command_derivatives(plan, reference)
+        if audit.get('command_derivative_bounds') != bounds:
+            raise ObservationPathError('trajectory stopping derivative proof changed')
+    choices = tracking_contract_candidates(constraints, names, stop_duration, command_bounds=bounds)
     if not isinstance(contract, dict) or contract not in choices:
         raise ObservationPathError('observation action has no exact tracking contract')
     following = audit.get('following_support') or {}

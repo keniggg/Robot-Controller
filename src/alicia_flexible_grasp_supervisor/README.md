@@ -1,5 +1,7 @@
 # alicia_flexible_grasp_supervisor v2
 
+2026.9.20：修改前最新代码已备份；新增第二阶段预抓取有界软件补偿，实机效果尚待验证。详见[实验、版本与补偿说明](../../docs/verification/2026-09-20-pregrasp-compensation.md)。
+
 面向玄雅 Alicia-D 操作臂的 ROS1 上位机与自主柔顺抓取工作包。
 
 本版本已根据当前 GitHub `real-arm` 仓库更新：

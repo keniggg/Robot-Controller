@@ -90,10 +90,19 @@ class FrozenObservationScene:
 
     @classmethod
     def from_plan(cls, plan):
+        return cls._from_plan_phase(plan, 'FAR_FIELD_OBSERVATION_PLAN')
+
+    @classmethod
+    def from_contact_plan(cls, plan):
+        """Contact geometry for separately authorized no-contact pregrasp steps."""
+        return cls._from_plan_phase(plan, 'CONTACT_EXECUTION_PLAN')
+
+    @classmethod
+    def _from_plan_phase(cls, plan, phase):
         if (getattr(plan, 'valid', False) is not True
-                or str(plan.diagnostic) != 'FAR_FIELD_OBSERVATION_PLAN'
+                or str(plan.diagnostic) != phase
                 or len(plan.poses) != 4 or not plan_id_matches_content(plan)):
-            raise ObservationPathError('invalid committed far-field plan')
+            raise ObservationPathError('invalid committed %s plan' % phase)
         stamp = validate_plan_header_binding(plan)
         pose, size, support = validate_rich_geometry(plan.object_geometry)
         normal = _array(support[:3], 3, 'support normal')

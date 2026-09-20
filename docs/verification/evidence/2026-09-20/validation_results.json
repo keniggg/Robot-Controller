@@ -1,0 +1,80 @@
+{
+  "record_label": "2026.9.20",
+  "backup_commit": "9a1ee9790d4e0b9875a8a864d03a99b44cad106f",
+  "development_branch": "codex/pregrasp-compensation-20260920",
+  "physical_execution_performed": false,
+  "live_nodes_reloaded": false,
+  "real_grasp_success": false,
+  "environment": "ROS Noetic, Python 3.8; source /opt/ros/noetic/setup.bash and devel/setup.bash; PYTHONPATH includes supervisor/src and supervisor/tests",
+  "tests": {
+    "catkin_build": {
+      "local_log": "/tmp/alicia_pregrasp_build_20260920.log",
+      "log_sha256": "ac92dd0c337037e62f9b34cffd8510dce6a2a1c3b5dffe91d50ff9a31179c123",
+      "command": "catkin_make --pkg alicia_flexible_grasp_supervisor -j2 -l2",
+      "result": "exit 0; service generated",
+      "log_tail": [
+        "#### Running command: \"make -j2 -l2\" in \"/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/build/alicia_flexible_grasp_supervisor\"",
+        "####"
+      ]
+    },
+    "focused": {
+      "local_log": "/tmp/alicia_pregrasp_focused_final_20260920.log",
+      "log_sha256": "fa76177b951c28d5e40e767e7c31284e9f8300a4d174da4f85f5fa5b6494a3e5",
+      "command": "pytest -q: pregrasp_compensation, pregrasp_gateway, pregrasp_task_compensation, pregrasp_stopping_bounds, contracted_trajectory, observation_tracking_contract, controller_reference_timing",
+      "result": "230 passed",
+      "log_tail": [
+        "..............                                                           [100%]",
+        "230 passed in 41.07 seconds"
+      ]
+    },
+    "full_supervisor": {
+      "local_log": "/tmp/alicia_pregrasp_full_final_20260920.log",
+      "log_sha256": "44d85f77713b7a094c08cfd75b96a73098e2af6f9abd9e7a23b571845d36157e",
+      "command": "python3 -m pytest -q src/alicia_flexible_grasp_supervisor/tests",
+      "result": "3080 passed, 16 local socket permission failures, 3 skipped; before reused-pregrasp follow-up",
+      "log_tail": [
+        "-- Docs: https://docs.pytest.org/en/latest/warnings.html",
+        "16 failed, 3080 passed, 3 skipped, 7 warnings in 282.39 seconds"
+      ]
+    },
+    "loopback_retry": {
+      "local_log": "/tmp/alicia_pregrasp_loopback_final_20260920.log",
+      "log_sha256": "df1055ef1d4ed0701c7d16aacf422349b6f2424a9c686c5c7a1318ae6adfbf14",
+      "command": "pytest -q test_graspnet_baseline_server_protocol.py test_mujoco_digital_twin_server_protocol.py -k <16 previously blocked local HTTP cases>",
+      "result": "16 passed, 120 deselected; allowed loopback sockets, no robot/ROS master connection",
+      "log_tail": [
+        "................                                                         [100%]",
+        "16 passed, 120 deselected in 5.57 seconds"
+      ]
+    },
+    "final_task_followup": {
+      "local_log": "/tmp/alicia_pregrasp_task_final_20260920.log",
+      "log_sha256": "299e08044ef32f7bfd9e098126ee00bb954b639374589f08d9ca58407094120e",
+      "command": "python3 -m pytest -q src/alicia_flexible_grasp_supervisor/tests/test_pregrasp_task_compensation.py src/alicia_flexible_grasp_supervisor/tests/test_grasp_task_sequence.py",
+      "result": "243 passed; includes two reused-pregrasp tests added after full run",
+      "log_tail": [
+        "-- Docs: https://docs.pytest.org/en/latest/warnings.html",
+        "243 passed, 7 warnings in 9.01 seconds"
+      ]
+    }
+  },
+  "source_sha256": {
+    "src/alicia_flexible_grasp_supervisor/config/grasp_params.yaml": "636b2ce8d7128d2070bd8d88d1e55983c39b2462017e7d2648db506886305ac8",
+    "src/alicia_flexible_grasp_supervisor/scripts/grasp_task_node.py": "bb7f463d11044f7371bf5cf43d2478f5372689384152d452db8d00c0d3e0c2c2",
+    "src/alicia_flexible_grasp_supervisor/scripts/motion_gateway_node.py": "d0b0e4fdccecceeca3b82a766648a05818da8bb8393859ee55d3755e7881eddc",
+    "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/contracted_trajectory.py": "e4c995b0795ee80c14e30ab7c55d29965612027139c9307245f56eaf1023ace2",
+    "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/moveit_planner.py": "3540ba01a3ee1347c57bccd9cac172ab7d38e082a7ae1814a7a72c4d5fc6ca68",
+    "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/observation_path_guard.py": "3725d5924f9fd5be144ebc8d3dbfad3235e8338bf069c4a1fb052954ffdd779b",
+    "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/observation_tracking_contract.py": "75e4723337d173cecc632b47069f798e6acec987b1975205a4b33e561bd93623",
+    "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "dda0f1c9c8bf8d77b89285316ea5e397695a667ad8295726facd84b5a5dad2a7",
+    "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_gateway.py": "51c00949e4c7bedbcc85f58a06b569314e39f4452d8f09c37465eb6ee22e3b85",
+    "src/alicia_flexible_grasp_supervisor/srv/CompensatePregrasp.srv": "9dbabf44749bef0adb5f7258b6010f5a2c91d41edb0e8244e51cf9b0d45f6d78",
+    "src/alicia_flexible_grasp_supervisor/tests/fixtures/pregrasp_following_20260919.json": "d962d62b66cd08035e2272a18eb96677ce277fdf574076d2d6c8a39042b780ba",
+    "src/alicia_flexible_grasp_supervisor/tests/test_pregrasp_async.py": "60e890fc54688f4e49169385c997a09e4c8e1ed32aedd25ac0c99aa73b0da17c",
+    "src/alicia_flexible_grasp_supervisor/tests/test_pregrasp_compensation.py": "59ed9ef8d8d27efc2f40e90076ec6c4c4bfc91d02526630c87490f97ca1b4fc4",
+    "src/alicia_flexible_grasp_supervisor/tests/test_pregrasp_gateway.py": "1c774f13afd0b5559283b59ee6589d542b06d8ead8b761fe43d5147d1c9ca098",
+    "src/alicia_flexible_grasp_supervisor/tests/test_pregrasp_stopping_bounds.py": "4a8f543944f436981a5281c048e935aa58d9f45bb2b874ee5512238dd8750296",
+    "src/alicia_flexible_grasp_supervisor/tests/test_pregrasp_task_compensation.py": "87bc8a563453f3cda36d4ad1a06dd28229eccc2b84c0fe2745a065989271133e",
+    "tools/replay_pregrasp_compensation_readonly.py": "c23be5d75886025cf67e0b43972edf724b74d45ebe52aff53d25b4fc1f92d830"
+  }
+}

@@ -36,6 +36,7 @@ from alicia_flexible_grasp.robot.actuation_bootstrap import PENDING_BOOTSTRAP_ST
 from alicia_flexible_grasp.robot.stationary_following import stationary_following_error, ARM_NAMES
 from alicia_flexible_grasp.robot.observation_preview import encode_path_evidence
 from alicia_flexible_grasp.robot.endpoint_correction import EndpointCorrection
+from alicia_flexible_grasp.robot.pregrasp_gateway import PregraspCompensationGateway
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from alicia_flexible_grasp.robot.joint_commander import JointCommander
 from alicia_flexible_grasp.robot.gripper_commander import GripperCommander
@@ -44,6 +45,7 @@ from alicia_flexible_grasp.robot.cartesian_controller import CartesianJogger
 from alicia_flexible_grasp_supervisor.srv import (
     CartesianJog,
     CartesianJogResponse,
+    CompensatePregrasp,
     CheckPoseSequence,
     CheckPoseSequenceResponse,
     ResolveFreeSpaceOrientations,
@@ -65,7 +67,7 @@ except Exception:
     SwitchControllerRequest = None
     ListControllers = None
 
-class MotionGateway:
+class MotionGateway(PregraspCompensationGateway):
     def __init__(self):
         cfg = rospy.get_param('/robot', {})
         self.joint_names = cfg.get('joint_names', ['Joint1','Joint2','Joint3','Joint4','Joint5','Joint6','right_finger'])
@@ -149,6 +151,8 @@ class MotionGateway:
         # requires an opt-in and the existing idle-task/free-space probe gates.
         rospy.Service('/supervisor/refine_endpoint_feedback', TriggerZero,
                       self.handle_endpoint_feedback_correction)
+        rospy.Service('/supervisor/compensate_pregrasp', CompensatePregrasp,
+                      self.handle_compensate_pregrasp)
         rospy.Service('/supervisor/set_gripper', SetFloat, self.handle_gripper)
         rospy.Service('/supervisor/move_to_pose', SetTargetPose, self.handle_pose)
         rospy.Service('/supervisor/move_to_pose_linear', SetTargetPose, self.handle_pose_linear)
@@ -333,6 +337,7 @@ class MotionGateway:
             if stamp_ns <= self._observation_task_state_stamp_ns:
                 return
             self._observation_task_state_stamp_ns = stamp_ns
+            self._pregrasp_task_stage = int(msg.stage)
             terminal_stages = (GraspStages.SUCCESS, GraspStages.FAILED,
                                GraspStages.EMERGENCY_STOP)
             terminal = (msg.stage in terminal_stages or
@@ -658,11 +663,15 @@ class MotionGateway:
             raise ObservationPathError('measured gripper gap is outside the physical 50 mm range')
         return opening
 
-    def _validate_frozen_observation_path(self, context, trajectory, planner):
+    def _validate_frozen_observation_path(self, context, trajectory, planner,
+                                        context_validator=None):
         scene, revocation = context
         with self._observation_context_lock:
             self._require_live_observation_task()
-            self._observation_contexts.validate_capture(scene, revocation)
+            if context_validator is None:
+                self._observation_contexts.validate_capture(scene, revocation)
+            else:
+                context_validator()
         if self._manual_control_active():
             raise ObservationPathError('manual control owns motion')
         names = tuple(trajectory.joint_trajectory.joint_names)
@@ -702,7 +711,8 @@ class MotionGateway:
         if contracted:
             from alicia_flexible_grasp.robot.observation_tracking_contract import qualify_contract_path
             result = qualify_contract_path(trajectory, desired, scene, model, gripper,
-                                           opening, constraints, stop_duration)
+                                           opening, constraints, stop_duration,
+                                           trajectory_stop_reserve=context_validator is not None)
             if not result['ok']:
                 raise ObservationPathError(str(result))
             audit = result['continuous_path']
@@ -717,7 +727,10 @@ class MotionGateway:
         # geometry, a changed hold, a different model or a mutated trajectory.
         with self._observation_context_lock:
             self._require_live_observation_task()
-            self._observation_contexts.validate_capture(scene, revocation)
+            if context_validator is None:
+                self._observation_contexts.validate_capture(scene, revocation)
+            else:
+                context_validator()
         after = self._observation_controller_hold(names)
         if (after.positions != desired.positions
                 or self._observation_measured_opening() != opening
@@ -746,11 +759,15 @@ class MotionGateway:
         except Exception:
             return False
 
-    def _revalidate_observation_contract_submission(self, context, trajectory, audit):
+    def _revalidate_observation_contract_submission(self, context, trajectory, audit,
+                                                  context_validator=None):
         scene, revocation = context
         with self._observation_context_lock:
             self._require_live_observation_task()
-            self._observation_contexts.validate_capture(scene, revocation)
+            if context_validator is None:
+                self._observation_contexts.validate_capture(scene, revocation)
+            else:
+                context_validator()
         contract = audit['execution_tracking_contract']
         if (not self._observation_execution_authorized()
                 or rospy.get_param('/robot/observation_tracking_contract_enabled', False) is not True
@@ -1065,11 +1082,15 @@ class MotionGateway:
             ok,msg = planner.move_to_joints(req.positions, execute=req.execute)
         return SetJointCommandResponse(ok, msg)
 
-    def _endpoint_following_snapshot(self, fk, epoch, context, *, after_ns=0):
+    def _endpoint_following_snapshot(self, fk, epoch, context, *, after_ns=0,
+                                     context_validator=None):
         deadline = time.monotonic() + 2.
         last = 'no stationary post-command samples'
         while not rospy.is_shutdown() and time.monotonic() < deadline:
-            self._validate_tracking_probe_context(context)
+            if context_validator is None:
+                self._validate_tracking_probe_context(context)
+            else:
+                context_validator()
             with self._endpoint_feedback_lock:
                 sdk = deepcopy(list(self._endpoint_feedback_history['sdk']))
                 accepted = deepcopy(list(self._endpoint_feedback_history['accepted']))

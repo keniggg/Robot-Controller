@@ -75,6 +75,13 @@ grasp:
   # The ordinary driver trim remains disabled, so GUI/manual commands never
   # inherit the task's encoder-derived endpoint compensation.
   contact_endpoint_precision_enabled: true
+  # Second-stage no-contact pregrasp only: keep the visual pose fixed and
+  # correct measured Cartesian residual using the other five axes while
+  # holding Joint2's SDK target. Replaces the driver trim at this stage.
+  # Every <=4-count step needs the existing continuous collision/tracking
+  # proof plus new directional encoder response. <=32 counts total per axis,
+  # <=12 steps, <=60 seconds. No response/authority loss ends the episode.
+  pregrasp_cartesian_compensation_enabled: true
   contact_endpoint_precision_service: "/alicia_d_driver_node/set_task_endpoint_precision"
   contact_endpoint_precision_service_timeout_sec: 2.0
   # The observation stage records tool0 execution error for the fresh
