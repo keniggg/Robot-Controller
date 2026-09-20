@@ -4289,11 +4289,13 @@ class GraspTaskNode:
         )
         reachable = []
         failures = []
+        rejected_for_phase_budget = False
         comparison_seconds = self._cfg_float(
             config, 'clear_view_reacquisition_comparison_budget_sec', 8.0)
         search_seconds = self._cfg_float(
             config, 'clear_view_reacquisition_search_budget_sec', 25.0)
-        if (not all(math.isfinite(v) and v > 0. for v in (comparison_seconds, search_seconds))
+        if (not all(math.isfinite(v) for v in (comparison_seconds, search_seconds))
+                or comparison_seconds < 0.0 or search_seconds <= 0.0
                 or comparison_seconds > search_seconds):
             return PlanValidationResult(False, 'CLEAR_VIEW_REACQUISITION_FAILED',
                                         'invalid clear-view search budget')
@@ -4340,15 +4342,30 @@ class GraspTaskNode:
             except Exception as exc:
                 failures.append('candidate_%d: %s' % (index, exc))
                 continue
+            if self._cfg_bool(config, 'clear_view_observation_range_required', False):
+                duration = float(metrics.get('timed_execution_duration_sec',
+                                             metrics['joint_duration_lower_bound_sec']))
+                # Qualification can itself take seconds. A path that no longer
+                # fits the original phase deadline is not an incumbent; allow
+                # the bounded search to find a shorter path instead.
+                if _stamp_seconds(rospy.Time.now()) + duration + .9 + reserve >= deadline:
+                    rejected_for_phase_budget = True
+                    failures.append('candidate_%d exceeds remaining near-field budget' % index)
+                    continue
             reachable.append((metrics, index, candidate))
             if first_qualified_at is None:
                 first_qualified_at = time.monotonic()
+            # Zero comparison time uses the first fully qualified, time-feasible
+            # path. Do not begin another non-preemptible planning/proof call or
+            # invalidate the cached trajectory while an executable path exists.
+            if comparison_seconds == 0.0:
+                break
         rospy.loginfo('Clear-view bounded search: generated=%d checked=%d qualified=%d unchecked=%d',
                       len(candidates), last_preflight_index + 1, len(reachable),
                       len(candidates) - last_preflight_index - 1)
         if not reachable:
             if self._cfg_bool(config, 'clear_view_observation_range_required', False):
-                if (_stamp_seconds(rospy.Time.now()) + .9 + self._cfg_float(
+                if (rejected_for_phase_budget or _stamp_seconds(rospy.Time.now()) + .9 + self._cfg_float(
                         config, 'clear_view_reacquisition_inference_reserve_sec', 20.0)
                         >= float(getattr(self, '_near_field_phase_deadline_sec', 0.0))):
                     return PlanValidationResult(False, 'NEAR_FIELD_DIRECT_TIMEOUT',

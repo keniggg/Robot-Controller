@@ -1,0 +1,22 @@
+{
+  ".ros_log/grasp_wrist_held_20260920_014002/result.json": {
+    "sha256": "31b11c45f271187b7395eeb0c092a7a814a5c109c8575eabfc5492f1ffead2c3",
+    "bytes": 6041
+  },
+  ".ros_log/grasp_wrist_held_20260920_014002/keyframes.bag": {
+    "sha256": "6583d7bab426476601dbc385ee06ae7373b2e3b65dd39bc20015e93f123d418a",
+    "bytes": 121710833
+  },
+  ".ros_log/grasp_wrist_held_20260920_014002/deployment.json": {
+    "sha256": "d29f6e18bc99688e182028cd5fcb9d7a9bb77c05d4a9b9fbc8b0c7acbfc35ce3",
+    "bytes": 825
+  },
+  ".ros_log/grasp_wrist_held_20260920_014002/run.log": {
+    "sha256": "1d42019f8419bb48113f41d24b871eb0e825b43f20356041b74343aff5a2b0a0",
+    "bytes": 1141
+  },
+  ".ros_log/grasp_wrist_held_20260920_014002/watch.log": {
+    "sha256": "102586b28560ef4c56f86ff00e30eeec821f744b2a71a88d0b083532d92637a7",
+    "bytes": 183133
+  }
+}

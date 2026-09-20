@@ -218,7 +218,9 @@ grasp:
   clear_view_reacquisition_bilateral_azimuth_offsets_deg: [-75.0, 75.0, -45.0, 45.0, -15.0, 15.0]
   clear_view_reacquisition_camera_roll_offsets_deg: [0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0, 180.0]
   clear_view_reacquisition_path_evidence_required: true
-  clear_view_reacquisition_comparison_budget_sec: 8.0
+  # Execute the first fully qualified path that fits the unchanged phase budget.
+  # Additional planning/proof calls can overrun a between-candidate time limit.
+  clear_view_reacquisition_comparison_budget_sec: 0.0
   clear_view_reacquisition_search_budget_sec: 25.0
 
 force:

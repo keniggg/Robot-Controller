@@ -74,6 +74,64 @@ def test_required_path_evidence_cannot_fall_back_to_scalar_metrics():
             dict(clear_view_reacquisition_path_evidence_required=True), None)
 
 
+@pytest.mark.parametrize('case', ['first_fits', 'first_too_long', 'proof_exhausts_deadline'])
+def test_zero_comparison_keeps_first_time_feasible_proven_path_and_original_deadline(case):
+    node, plan, poses = setup_node()
+    helper = sequence.GraspTaskSequenceTest()
+    center = node._plan_geometry_center_xyz(plan)
+    node._current_camera_pose_base = lambda: helper._pose(
+        center[0], center[1], center[2] + .200)
+    node._near_field_phase_deadline_sec = 100.
+    clock = [10.]
+    preflights, qualified, executed = [], [], []
+    def planner(pose, execute):
+        assert not execute
+        preflights.append(pose)
+        return FakeServiceResponse(True, 'joint_duration_lower_bound_sec=1.0 '
+            'joint_path_cost=0.2 joint_max_delta=0.1')
+    def qualify(response, pose, *args):
+        qualified.append(pose)
+        clock[0] += 81. if case == 'proof_exhausts_deadline' else 13.
+        duration = 80. if case == 'first_too_long' and len(qualified) == 1 else 10.4
+        return dict(joint_duration_lower_bound_sec=1., timed_execution_duration_sec=duration,
+                    joint_path_cost=.2, joint_max_delta=.1)
+    node._qualify_clear_view_candidate = qualify
+    cfg = dict(clear_view_reacquisition_camera_body_radius_m=.025,
+               clear_view_reacquisition_comparison_budget_sec=0.,
+               clear_view_observation_range_required=True,
+               clear_view_reacquisition_inference_reserve_sec=20.)
+    with patch.object(task, 'make_clear_view_reacquisition_poses', return_value=poses), \
+            patch.object(task.time, 'monotonic', side_effect=lambda: clock[0]), \
+            patch.object(task.rospy.Time, 'now', side_effect=lambda: task.rospy.Time.from_sec(clock[0])):
+        result = node._execute_clear_view_reacquisition(plan, cfg, planner,
+            lambda pose, execute: executed.append(pose) or FakeServiceResponse(True))
+    expected_count = 2 if case == 'first_too_long' else 1
+    assert len(preflights) == len(qualified) == expected_count
+    assert node._near_field_phase_deadline_sec == 100.
+    assert node._clear_view_reacquisition_attempts == 1
+    if case == 'proof_exhausts_deadline':
+        assert not result.ok and result.code == 'NEAR_FIELD_DIRECT_TIMEOUT'
+        assert executed == []
+    else:
+        assert result.ok, result.reason
+        assert len(executed) == 1 and executed[0] is preflights[-1]
+
+
+@pytest.mark.parametrize('comparison,search', [(-1., 25.), (float('nan'), 25.),
+                                            (float('inf'), 25.), (0., 0.), (26., 25.)])
+def test_invalid_search_budgets_never_plan_or_execute(comparison, search):
+    node, plan, poses = setup_node()
+    calls = []
+    with patch.object(task, 'make_clear_view_reacquisition_poses', return_value=poses):
+        result = node._execute_clear_view_reacquisition(plan,
+            dict(clear_view_reacquisition_camera_body_radius_m=.025,
+                 clear_view_reacquisition_comparison_budget_sec=comparison,
+                 clear_view_reacquisition_search_budget_sec=search),
+            lambda *args: calls.append(args), lambda *args: calls.append(args))
+    assert not result.ok and 'invalid clear-view search budget' in result.reason
+    assert calls == []
+
+
 def test_path_evidence_uses_frozen_wire_header_without_mutating_measured_pose():
     node, plan, poses = setup_node()
     pose = poses[0]
