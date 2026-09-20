@@ -21,27 +21,27 @@ def recorded_fixture(day='20260919'):
     return fk,sdk,actual,goal
 
 
-def test_recorded_pretrim_pose_converges_under_explicit_other_axes_response_hypothesis():
-    fk,sdk,actual,goal = recorded_fixture()
+def test_recorded_wrist_pose_converges_under_explicit_four_axes_response_hypothesis():
+    fk,sdk,actual,goal = recorded_fixture('20260920_wrist')
     initial = sample(fk,sdk,actual)
     correction = PregraspCompensation(fk,initial,goal)
     original_goal = correction.goal.copy()
-    held = sdk[1]
+    held = sdk[[1,4]].copy()
     for i in range(13):
         code,step,evidence = correction.evaluate(sample(fk,sdk,actual,10+i*3))
         if step is None:
             break
         delta = np.array(step.target_counts)-step.baseline_counts
-        assert delta[1] == 0 and max(abs(delta)) <= 4
+        assert delta[1] == delta[4] == 0 and max(abs(delta)) <= 4
         assert max(abs(np.array(step.target_counts)-correction.initial_counts)) <= 32
         correction.committed(step,11+i*3)
         sdk = np.array(step.positions)
         actual += delta*Q  # hypothetical responsive plant, not a physical replay
-        assert sdk[1] == held
+        assert np.array_equal(sdk[[1,4]],held)
     assert code == 'PREGRASP_MEASURED_CONVERGED'
     assert evidence['position_error_m'] <= .006
     assert evidence['orientation_error_rad'] < math.radians(5)
-    assert correction.steps == 8
+    assert correction.steps == 6
     assert evidence['real_grasp_success'] is False
     assert np.array_equal(original_goal,correction.goal)
     assert not np.array_equal(sdk,actual)  # never pretend the encoder equals the command
@@ -147,7 +147,7 @@ def test_partial_progress_holds_weak_axis_without_aborting_responsive_axes(respo
     assert second is not None
     assert report['last_step_response']['partial_bounded_response']
     assert report['last_step_response']['newly_held_joints']==['Joint3']
-    assert c.held_axes=={1,2}
+    assert c.held_axes=={1,2,4}
     assert second.target_counts[2]==first.target_counts[2]
     assert report['position_error_m']<c.residual(actual)[0]
     # A late movement of the held axis is still monitored, not masked.
@@ -202,3 +202,30 @@ def test_live_pose_hypothesis_converges_with_stalled_joint5_and_partial_joint3(j
     assert e['position_error_m']<=.006 and e['orientation_error_rad']<=math.radians(5)
     assert np.array_equal(c.goal,immutable) and 4 in c.held_axes
     assert c.steps<=12
+
+
+def test_older_pose_with_two_held_joints_stops_at_bound_without_relaxing_tolerance():
+    fk,sdk,actual,goal=recorded_fixture('20260919')
+    c=PregraspCompensation(fk,sample(fk,sdk,actual),goal)
+    with pytest.raises(ValueError,match='NO_BOUNDED_IMPROVING_STEP'):
+        for i in range(c.MAX_STEPS+1):
+            _,step,_=c.evaluate(sample(fk,sdk,actual,10+i*3))
+            assert step is not None
+            delta=np.asarray(step.target_counts)-step.baseline_counts
+            assert delta[1]==delta[4]==0
+            c.committed(step,11+i*3);sdk=np.asarray(step.positions);actual+=delta*Q
+    assert c.steps==8
+    assert .006 < c.last_evidence['position_error_m'] < .0066
+    assert c.tolerances[0]==.006
+
+
+def test_held_wrist_movement_is_not_hidden_by_omitting_it_from_commands():
+    fk,sdk,actual,goal=recorded_fixture('20260920_wrist')
+    c=PregraspCompensation(fk,sample(fk,sdk,actual),goal)
+    _,step,_=c.evaluate(sample(fk,sdk,actual))
+    response=np.asarray(step.target_counts)-step.baseline_counts
+    assert response[4]==0
+    response[4]=3
+    c.committed(step,11.)
+    with pytest.raises(ValueError,match='NO_BOUNDED_DIRECTIONAL_RESPONSE'):
+        c.evaluate(sample(fk,step.positions,actual+response*Q,13.))

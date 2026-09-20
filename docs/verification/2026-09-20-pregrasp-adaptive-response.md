@@ -1,5 +1,7 @@
 # 2026.9.20 预抓取部分响应补偿修复
 
+后续实机实际执行一步后发生J5振荡，用户现场确认；最新证据、从开始保持J5的修复及未实机验证边界见[腕部振荡记录](2026-09-20-wrist-oscillation.md)。本页保留此前阶段的设计与试验结果。
+
 针对[首次实机补偿失败](2026-09-20-pregrasp-compensation-live.md)，修复了“预测每个轴都按 SDK 指令增量运动”和“只要一个轴响应不足就停止整个补偿”的问题。原视觉目标、6 mm / 5° 门、每步4计数、每轴累计32计数、12步/60秒预算、0.035 rad 跟随限制及所有路径检查保持。
 
 ## 实测原因与修复范围
@@ -57,3 +59,5 @@ PYTHONPATH=src/alicia_flexible_grasp_supervisor/src:$PYTHONPATH python3 tools/re
 占位写入移入提交锁内，在唤醒worker之前完成，避免快速完成后被poller写回旧占位；采样与提交均重查原deadline。新增真实worker/采样集成回归覆盖过期后新帧成功、重复源拒绝、到期停止、参考与期限保持；负例覆盖几何淘汰、接受异常、停止、换代、换目标与旧阶段帧。两个既有时序测试的模拟时钟同步推进到其新阶段时间，避免测试在“当前时刻10.0 s却已有10.5 s阶段及11.0 s帧”的非物理条件下运行。
 
 `test_remote_grasp6d_streaming.py`、`test_grasp_task_sequence.py`、`test_multiview_surface.py` 合跑 **742 passed / 7条既有弃用警告，111.64 s**。diff检查通过。此状态修复不改变预抓取补偿算法；加载后实机结果另行补记。
+
+已提交并核验 GitHub 开发分支为 `6cce389183f2a0a56fd1c44e401f488c605ebf2f`。再次确认直控关闭后，只重载remote：PID `45418 → 184698`；task/gateway/driver均保持。已采样的 `/grasp`、`/robot`、完整 `/grasp_6d` 参数及重载前后关节位置一致。新实机记录目录 `.ros_log/grasp_expiry_recovery_20260920_011633/`，`deployment.json` 保存PID、提交及源文件哈希。

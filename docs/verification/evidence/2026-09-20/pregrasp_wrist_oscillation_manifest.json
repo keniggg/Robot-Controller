@@ -1,0 +1,118 @@
+{
+  "directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_expiry_recovery_20260920_011633",
+  "files": {
+    "after_reload.json": {
+      "bytes": 34150,
+      "sha256": "cb2020ccfa1d2dbf90e8ca4adb0a2b3e6ec926e3edfd5d89b16f07b5e64e66dd"
+    },
+    "after_reload.log": {
+      "bytes": 4330,
+      "sha256": "00a71300b499b2e73d87a6d1b3852ad2a99d4d50933539d9aadedb211fce9cb6"
+    },
+    "after_reload_camera.jpg": {
+      "bytes": 118278,
+      "sha256": "2a5c3e2fccd2560a847fef897be356b117542728f62e75b77fd9a80a11ee31b7"
+    },
+    "analyze_readonly.py": {
+      "bytes": 3061,
+      "sha256": "938ca1f75a08aff5b29c322976022941463581c1020be9a5685f0c288de0e4f8"
+    },
+    "before_reload.json": {
+      "bytes": 34127,
+      "sha256": "38c3fb9b1fef88c3c172b2550cfd963a9f3870f5c818f15a722f76dd22cd3294"
+    },
+    "before_reload.log": {
+      "bytes": 4309,
+      "sha256": "1877e5ce72d7d9b1d44905b3601c6764e8b303d9edd6f76007b1b81cce7c1b9a"
+    },
+    "before_reload_camera.jpg": {
+      "bytes": 124927,
+      "sha256": "77ced339d8dc4d2085cf035265652907f3b41c3cf13425a928eda4c5efd05993"
+    },
+    "capture_hold_readonly.py": {
+      "bytes": 1650,
+      "sha256": "a83d14ae6331b7ccc164361fc91cc3d96f6d583123252240f732d747d7b038d9"
+    },
+    "deployment.json": {
+      "bytes": 764,
+      "sha256": "09c866d4713b5588be71114ff801e4d80692ea70a1fbfdcc2b3adf2017b5cf49"
+    },
+    "final.json": {
+      "bytes": 34110,
+      "sha256": "b7cecc78eced85a656aeeb06e5b5a4e581e71f1b32d9114cf1092ae5e787d228"
+    },
+    "final.log": {
+      "bytes": 4300,
+      "sha256": "9851fcd4207dc38716cacd3d3651c0f6372e9395c6b9521d234525e604524555"
+    },
+    "final_camera.jpg": {
+      "bytes": 109268,
+      "sha256": "f8d75b40e03e8fafa794d47a87d709ecd480376232a03a6ee89493a481788dbe"
+    },
+    "keyframes.bag": {
+      "bytes": 143854900,
+      "sha256": "16e7e54c25a0c773e68ca98bb8119e26b8fdd17156559c4fa2fb97c182cd81f4"
+    },
+    "keyframes_audits/012a3137497e25c7b69a635278118c333f9e0255c5a5640e877d23afd3feb9f4.json": {
+      "bytes": 620552,
+      "sha256": "012a3137497e25c7b69a635278118c333f9e0255c5a5640e877d23afd3feb9f4"
+    },
+    "keyframes_audits/3910960bcb264a957550a9640661664fc54db9a47434042043c0cce23929d86f.json": {
+      "bytes": 338316,
+      "sha256": "3910960bcb264a957550a9640661664fc54db9a47434042043c0cce23929d86f"
+    },
+    "keyframes_audits/3a597d8d2e59d0e7c5d48c2e50855bab3d7f5fef3b5034252bff926b2f6a315c.json": {
+      "bytes": 1340906,
+      "sha256": "3a597d8d2e59d0e7c5d48c2e50855bab3d7f5fef3b5034252bff926b2f6a315c"
+    },
+    "keyframes_audits/bea54241fa7a66f21ed5c65fb31d7ac15027d6b0421bff5021e6daef4758814e.json": {
+      "bytes": 1669248,
+      "sha256": "bea54241fa7a66f21ed5c65fb31d7ac15027d6b0421bff5021e6daef4758814e"
+    },
+    "keyframes_audits/d6c1e88909bb7dd36d55045cea07bdf733a5c75042f88eed8f426c25c18d3e6e.json": {
+      "bytes": 332341,
+      "sha256": "d6c1e88909bb7dd36d55045cea07bdf733a5c75042f88eed8f426c25c18d3e6e"
+    },
+    "late_hold_readonly.json": {
+      "bytes": 60062,
+      "sha256": "026cf022edd9e78229b0aa8a5f357bc5c81759495f282a3096b65319a4f35f9f"
+    },
+    "record.log": {
+      "bytes": 7666,
+      "sha256": "65d12cadf6c066a332d4e97e57a0a364ace6f320a81565e1373ce5afc32d3716"
+    },
+    "remote_parameters_after.json": {
+      "bytes": 9620,
+      "sha256": "a94ceef73045620d69f3130c0d5ec7b4762e73593446ee91b49838fc08d2689f"
+    },
+    "remote_parameters_before.json": {
+      "bytes": 9620,
+      "sha256": "a94ceef73045620d69f3130c0d5ec7b4762e73593446ee91b49838fc08d2689f"
+    },
+    "result.json": {
+      "bytes": 17332,
+      "sha256": "d399974937eeb3be1d93fcdd2ff2b23f085c38f6bd2f57f15d540b2f1d888b92"
+    },
+    "run.log": {
+      "bytes": 1066,
+      "sha256": "932a3c06c4fa4e1c06efad44fb810c7c988c5f9ae4df735a09cfa49b82b30b0d"
+    },
+    "snapshot_readonly.py": {
+      "bytes": 2403,
+      "sha256": "8a7f1263aa4ad48be0b92e718175268fc9a04fb6db7d1409cf685e418f811e38"
+    },
+    "step_feedback.json": {
+      "bytes": 61045,
+      "sha256": "4207f0672b6e6094a9c78f475e3f27851e4209ccabc011636793e94760921289"
+    },
+    "verified_result.json": {
+      "bytes": 19756,
+      "sha256": "43466ac751fddfc2f465c9734cd78da7513ff2e55527afc166b1e256be61c673"
+    },
+    "watch.log": {
+      "bytes": 214792,
+      "sha256": "51f68399ed22e1f4244096d922430120fe1159feec1eb002f52a0320254f1df2"
+    }
+  },
+  "rosbag_and_images_remain_local": true
+}

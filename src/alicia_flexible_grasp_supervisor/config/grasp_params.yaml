@@ -76,8 +76,9 @@ grasp:
   # inherit the task's encoder-derived endpoint compensation.
   contact_endpoint_precision_enabled: true
   # Second-stage no-contact pregrasp only: keep the visual pose fixed and
-  # correct measured Cartesian residual using the other five axes while
-  # holding Joint2's SDK target. Replaces the driver trim at this stage.
+  # correct measured Cartesian residual using Joint1/3/4/6 while holding
+  # Joint2/5 SDK targets. J5 oscillated after a recorded four-count step.
+  # Replaces the driver trim at this stage; never accepts moving feedback.
   # Every <=4-count step needs the existing continuous collision/tracking
   # proof and measured Cartesian progress. Weakly responding axes retain their
   # last SDK targets while responsive axes continue within the SAME budget:

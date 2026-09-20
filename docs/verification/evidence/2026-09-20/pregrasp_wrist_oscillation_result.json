@@ -1,0 +1,971 @@
+{
+  "directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_expiry_recovery_20260920_011633",
+  "deployment": {
+    "commit": "6cce389183f2a0a56fd1c44e401f488c605ebf2f",
+    "nodes": {
+      "/grasp_task_node": 173083,
+      "/motion_gateway": 173275,
+      "/alicia_d_driver_node": 7197,
+      "/remote_grasp6d_node": 184698
+    },
+    "parameters_unchanged": true,
+    "positions_unchanged": true,
+    "source_sha256": {
+      "scripts/remote_grasp6d_node.py": "13dc1f6003960ba8704144c22373cb50dd9f3a6ccedda75d65850698986a7352",
+      "scripts/grasp_task_node.py": "bb7f463d11044f7371bf5cf43d2478f5372689384152d452db8d00c0d3e0c2c2",
+      "src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "07d1e62bf65cfc2347cac3340a00471249a82e218f9c0f0b00426f2c4db39b64",
+      "src/alicia_flexible_grasp/robot/pregrasp_gateway.py": "c7bee98350bf5d55c147d78cd6467c2ae3020d3c0346ea4f28ff8e253e5c69b0"
+    }
+  },
+  "bag_start_sec": 1789892352.3614378,
+  "bag_end_sec": 1789892629.1145523,
+  "topic_counts": {
+    "/joint_states": 16576,
+    "/tf": 9119,
+    "/tf_static": 2,
+    "/alicia_d/control_reference_epoch": 1,
+    "/alicia_controller/follow_joint_trajectory/status": 1387,
+    "/gui/joint_direct_mode": 1,
+    "/grasp_6d/status": 4,
+    "/alicia_controller/state": 13815,
+    "/grasp/near_field_phase": 3,
+    "/grasp/state": 10,
+    "/grasp_6d/plan_enriched": 2,
+    "/alicia_d/sdk_diagnostics": 2763,
+    "/experiment/runtime_execution_error_snapshot": 2,
+    "/alicia_d/run_status": 2763,
+    "/alicia_d/actuation_status": 6171,
+    "/alicia_d/sdk_command": 3409,
+    "/alicia_d/control_reference": 3409,
+    "/alicia_d/temperatures_c": 1,
+    "/alicia_d/motion_enabled": 6170,
+    "/alicia_d/accepted_joint_states": 2760,
+    "/rosout_agg": 2392,
+    "/supervisor/camera/color/image_raw": 140,
+    "/supervisor/camera/depth/image_raw": 140,
+    "/perception/object_mask": 140,
+    "/perception/object": 140,
+    "/grasp_6d/object_geometry": 4,
+    "/grasp_6d/gate_audit": 5,
+    "/grasp_6d/preview_plan_enriched": 2,
+    "/alicia_controller/follow_joint_trajectory/goal": 2,
+    "/joint_commands": 5333,
+    "/alicia_controller/follow_joint_trajectory/result": 2
+  },
+  "compensation_events": [
+    {
+      "stamp_sec": 1789892618.702213,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.10687862764575436,
+          -0.42421629770883207,
+          0.14700339767770718,
+          0.9569895264216944,
+          -0.1988231744972275,
+          0.17119181970054925,
+          0.1238295298773302
+        ],
+        "initial_sdk_counts": [
+          757,
+          1533,
+          3094,
+          1794,
+          1118,
+          1038
+        ],
+        "sdk_counts": [
+          757,
+          1533,
+          3094,
+          1794,
+          1118,
+          1038
+        ],
+        "measured_counts": [
+          760,
+          1516,
+          3079,
+          1798,
+          1118,
+          1044
+        ],
+        "position_error_m": 0.018120761089985657,
+        "orientation_error_rad": 0.04699780860250822,
+        "sdk_stamp_ns": 1789892618132005347,
+        "accepted_stamp_ns": 1789892618075711299,
+        "steps_completed": 0,
+        "held_joints": [
+          "Joint2"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "proposed_delta_counts": [
+          -4,
+          0,
+          4,
+          -4,
+          4,
+          -4
+        ],
+        "predicted_position_error_m": 0.01546234441882884,
+        "predicted_orientation_error_rad": 0.03536191000370813,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "4906c7a196d7b702f52bfaa2",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789892625.8667293,
+      "kind": "Pregrasp compensation stopped",
+      "report": {
+        "fixed_goal_pose": [
+          -0.10687862764575436,
+          -0.42421629770883207,
+          0.14700339767770718,
+          0.9569895264216944,
+          -0.1988231744972275,
+          0.17119181970054925,
+          0.1238295298773302
+        ],
+        "initial_sdk_counts": [
+          757,
+          1533,
+          3094,
+          1794,
+          1118,
+          1038
+        ],
+        "sdk_counts": [
+          757,
+          1533,
+          3094,
+          1794,
+          1118,
+          1038
+        ],
+        "measured_counts": [
+          760,
+          1516,
+          3079,
+          1798,
+          1118,
+          1044
+        ],
+        "position_error_m": 0.018120761089985657,
+        "orientation_error_rad": 0.04699780860250822,
+        "sdk_stamp_ns": 1789892618132005347,
+        "accepted_stamp_ns": 1789892618075711299,
+        "steps_completed": 0,
+        "held_joints": [
+          "Joint2"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "proposed_delta_counts": [
+          -4,
+          0,
+          4,
+          -4,
+          4,
+          -4
+        ],
+        "predicted_position_error_m": 0.01546234441882884,
+        "predicted_orientation_error_rad": 0.03536191000370813,
+        "plan_id": "4906c7a196d7b702f52bfaa2",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+        "code": "ENDPOINT_CORRECTION_FEEDBACK_UNAVAILABLE: accepted feedback is not stationary",
+        "success": false,
+        "no_implicit_rollback_or_torque_disable": true
+      }
+    }
+  ],
+  "action_goals": [
+    {
+      "stamp_sec": 1789892512.6581545,
+      "id": "/move_group-4-1789892512.657747691",
+      "duration_sec": 104.244270602,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.9799158575123557,
+        -0.7905481315155612,
+        1.6046993488480694,
+        -0.39016280051729957,
+        -1.4265284818590678,
+        -1.5493891686495058
+      ],
+      "final_counts": [
+        757,
+        1533,
+        3094,
+        1794,
+        1118,
+        1038
+      ],
+      "path_tolerance": {}
+    },
+    {
+      "stamp_sec": 1789892620.767062,
+      "id": "/motion_gateway-3-1789892620.765",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.9865051203119053,
+        -0.7900001057611052,
+        1.6106798272799232,
+        -0.3957670432744954,
+        -1.4204662095821037,
+        -1.55545651891604
+      ],
+      "final_counts": [
+        753,
+        1533,
+        3098,
+        1790,
+        1122,
+        1034
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    }
+  ],
+  "action_results": [
+    {
+      "stamp_sec": 1789892616.9589682,
+      "id": "/move_group-4-1789892512.657747691",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789892623.8164566,
+      "id": "/motion_gateway-3-1789892620.765",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    }
+  ],
+  "stage_transitions": [
+    {
+      "stamp_sec": 1789891854.2373264,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    {
+      "stamp_sec": 1789892457.4847157,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "far-field observation plan; contact simulation deferred until near-field replan"
+    },
+    {
+      "stamp_sec": 1789892457.507541,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "using 6D grasp plan"
+    },
+    {
+      "stamp_sec": 1789892457.5187955,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "already inside 6D observation region; preserving reached camera view"
+    },
+    {
+      "stamp_sec": 1789892462.750018,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "waiting for near-field 6D preview"
+    },
+    {
+      "stamp_sec": 1789892512.32218,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "near-field 6D plan rebound: 4906c7a196d7b702f52bfaa2"
+    },
+    {
+      "stamp_sec": 1789892512.370454,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "planning 6D near-field pregrasp"
+    },
+    {
+      "stamp_sec": 1789892512.4185684,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "moving 6D near-field pregrasp"
+    },
+    {
+      "stamp_sec": 1789892625.8674529,
+      "stage": 7,
+      "state": "FAILED",
+      "active": true,
+      "success": false,
+      "message": "PREGRASP_COMPENSATION_FAILED: {\"fixed_goal_pose\": [-0.10687862764575436, -0.42421629770883207, 0.14700339767770718, 0.9569895264216944, -0.1988231744972275, 0.17119181970054925, 0.1238295298773302], \"initial_sdk_counts\": [757, 1533, 3094, 1794, 1118, 1038], \"sdk_counts\": [757, 1533, 3094, 1794, 1118, 1038], \"measured_counts\": [760, 1516, 3079, 1798, 1118, 1044], \"position_error_m\": 0.018120761089985657, \"orientation_error_rad\": 0.04699780860250822, \"sdk_stamp_ns\": 1789892618132005347, \"accepted_stamp_ns\": 1789892618075711299, \"steps_completed\": 0, \"held_joints\": [\"Joint2\"], \"response_gains\": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0], \"real_grasp_success\": false, \"proposed_delta_counts\": [-4, 0, 4, -4, 4, -4], \"predicted_position_error_m\": 0.01546234441882884, \"predicted_orientation_error_rad\": 0.03536191000370813, \"plan_id\": \"4906c7a196d7b702f52bfaa2\", \"epoch_ns\": 1789875872459441743, \"execution_requested\": true, \"model_sha256\": \"890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7\", \"code\": \"ENDPOINT_CORRECTION_FEEDBACK_UNAVAILABLE: accepted feedback is not stationary\", \"success\": false, \"no_implicit_rollback_or_torque_disable\": true}"
+    },
+    {
+      "stamp_sec": 1789892625.8789413,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    }
+  ],
+  "outcome": {
+    "physical_grasp_success": false,
+    "terminal_state": {
+      "stamp_sec": 1789892625.8789413,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    "compensation_steps": 0,
+    "compensation_code": "ENDPOINT_CORRECTION_FEEDBACK_UNAVAILABLE: accepted feedback is not stationary",
+    "position_error_m": 0.018120761089985657,
+    "held_joints": [
+      "Joint2"
+    ],
+    "approach_started": false,
+    "close_started": false,
+    "lift_started": false,
+    "endpoint_measurement": "encoder FK, not external absolute measurement",
+    "compensation_steps_logged": 0,
+    "compensation_actions_completed": 1,
+    "post_command_stationary_measurement_available": false,
+    "logged_position_error_is_pre_command": true
+  },
+  "gripper_opening_range_m": [
+    0.04975,
+    0.04975
+  ],
+  "post_compensation_feedback": {
+    "count": 110,
+    "span_sec": 10.903458595275879,
+    "unique_counts": [
+      [
+        758,
+        1515,
+        3083,
+        1794,
+        1118,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3083,
+        1794,
+        1120,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3083,
+        1794,
+        1121,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3083,
+        1794,
+        1123,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3083,
+        1794,
+        1124,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3083,
+        1794,
+        1125,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1116,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1117,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1118,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1119,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1121,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1122,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1123,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1124,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1125,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1126,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3084,
+        1794,
+        1128,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3085,
+        1794,
+        1115,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3085,
+        1794,
+        1116,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3085,
+        1794,
+        1118,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3085,
+        1794,
+        1127,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3086,
+        1794,
+        1114,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3086,
+        1794,
+        1115,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3086,
+        1794,
+        1117,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3086,
+        1794,
+        1119,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3086,
+        1794,
+        1123,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3086,
+        1794,
+        1126,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3086,
+        1794,
+        1128,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3086,
+        1794,
+        1129,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1793,
+        1127,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1793,
+        1128,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1793,
+        1129,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1114,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1115,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1115,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1116,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1117,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1118,
+        1040
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1119,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1120,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1122,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1123,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1124,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1125,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1126,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1127,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1128,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1129,
+        1039
+      ],
+      [
+        758,
+        1515,
+        3087,
+        1794,
+        1129,
+        1040
+      ],
+      [
+        760,
+        1515,
+        3079,
+        1798,
+        1118,
+        1044
+      ],
+      [
+        760,
+        1515,
+        3080,
+        1796,
+        1118,
+        1040
+      ],
+      [
+        760,
+        1515,
+        3080,
+        1798,
+        1118,
+        1040
+      ],
+      [
+        760,
+        1515,
+        3080,
+        1798,
+        1118,
+        1043
+      ],
+      [
+        760,
+        1515,
+        3081,
+        1794,
+        1118,
+        1040
+      ],
+      [
+        760,
+        1515,
+        3082,
+        1794,
+        1118,
+        1040
+      ],
+      [
+        760,
+        1515,
+        3083,
+        1794,
+        1123,
+        1040
+      ],
+      [
+        760,
+        1516,
+        3079,
+        1798,
+        1118,
+        1044
+      ]
+    ]
+  },
+  "step_feedback_summary": {
+    "sdk": {
+      "sample_count": 47,
+      "first_stamp_ns": 1789892623866802063,
+      "last_stamp_ns": 1789892629026960699,
+      "minimum_counts": [
+        753,
+        1533,
+        3098,
+        1790,
+        1122,
+        1034
+      ],
+      "maximum_counts": [
+        753,
+        1533,
+        3098,
+        1790,
+        1122,
+        1034
+      ]
+    },
+    "accepted": {
+      "sample_count": 52,
+      "first_stamp_ns": 1789892623876416021,
+      "last_stamp_ns": 1789892628979169875,
+      "minimum_counts": [
+        758,
+        1515,
+        3083,
+        1793,
+        1114,
+        1039
+      ],
+      "maximum_counts": [
+        758,
+        1515,
+        3087,
+        1794,
+        1129,
+        1040
+      ],
+      "nonstationary_fk_error_range_m": [
+        0.013944327074307636,
+        0.016306739410371793
+      ]
+    },
+    "raw": {
+      "sample_count": 53,
+      "first_stamp_ns": 1789892623876381772,
+      "last_stamp_ns": 1789892629076406627,
+      "minimum_counts": [
+        758,
+        1515,
+        3083,
+        1793,
+        1114,
+        1039
+      ],
+      "maximum_counts": [
+        758,
+        1515,
+        3087,
+        1794,
+        1129,
+        1040
+      ]
+    },
+    "raw_counts_all_valid": true,
+    "accepted_matching_nearest_raw_within_20ms": {
+      "matches": 109,
+      "total": 111
+    }
+  },
+  "user_visual_observation": "用户报告：到位后补偿时，夹爪关节部分一直来回摆动。",
+  "late_manual_hold": {
+    "manual": [
+      true
+    ],
+    "different_pose_from_failed_pregrasp": true,
+    "stable_new_pose_does_not_validate_previous_pose": true
+  },
+  "final_snapshot_before_manual": {
+    "header": {
+      "seq": 227101,
+      "stamp": {
+        "secs": 1789892681,
+        "nsecs": 572184340
+      },
+      "frame_id": "sdk_measured"
+    },
+    "name": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6",
+      "right_finger"
+    ],
+    "position": [
+      -1.9819031779482483,
+      -0.8176117599430468,
+      1.5938060386131812,
+      -0.3896311201229528,
+      -1.423534171157875,
+      -1.547786614976612,
+      0.04975
+    ],
+    "velocity": [],
+    "effort": []
+  }
+}

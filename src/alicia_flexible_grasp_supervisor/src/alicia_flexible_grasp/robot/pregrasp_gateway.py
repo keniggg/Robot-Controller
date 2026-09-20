@@ -211,6 +211,16 @@ class PregraspCompensationGateway:
                     metadata = {k:evidence[k] for k in ('plan_id','epoch_ns','execution_requested',
                                 'model_sha256') if k in evidence}
                     evidence = dict(deepcopy(correction.last_evidence), **metadata)
+                    if correction.pending is not None and evidence.get('steps_completed', -1) < correction.steps:
+                        # A completed action is not a validated response. When
+                        # stationary acquisition fails, keep the old sample
+                        # labelled as old; never report it as the final pose.
+                        evidence = dict(metadata,
+                            fixed_goal_pose=list(correction.goal_values),
+                            steps_completed=correction.steps,
+                            completed_command_target_counts=list(correction.expected),
+                            post_command_feedback_valid=False,
+                            last_validated_evidence=deepcopy(correction.last_evidence))
                 evidence.update(code=str(exc),success=False,real_grasp_success=False,
                                 no_implicit_rollback_or_torque_disable=True)
                 rospy.logwarn('Pregrasp compensation stopped: %s',json.dumps(evidence))

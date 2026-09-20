@@ -81,13 +81,15 @@ def replay(record, response, *, check_paths=False):
                 if response=='joint3_partial_joint5_stalled' and abs(delta[2])==4:
                     delta[2]=int(np.sign(delta[2])*3)
             elif response=='all_axes_stalled':delta[:]=0
-            elif response!='other_five_axes_repeatable':raise ValueError('unknown response hypothesis')
+            elif response not in ('commanded_axes_repeatable','other_five_axes_repeatable'):
+                raise ValueError('unknown response hypothesis')
             actual+=delta*Q
         terminal=code
     except ValueError as exc:
         terminal=str(exc)
         if c.last_evidence is not None:rows.append(dict(c.last_evidence,code=terminal))
     return dict(hypothesis=response,terminal=terminal,steps=c.steps,trace=rows,
+                initially_held_joints=[ARM_NAMES[i] for i in c.HELD_AXES],
                 physical_convergence_proven=False,motion_executed=False)
 
 
@@ -98,11 +100,11 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--check-paths',action='store_true')
     parser.add_argument('--response',action='append',choices=(
-        'other_five_axes_repeatable','all_axes_stalled','joint3_stalled',
+        'commanded_axes_repeatable','other_five_axes_repeatable','all_axes_stalled','joint3_stalled',
         'joint5_stalled','joint3_partial_joint5_stalled'))
     args=parser.parse_args()
     record=json.loads(args.fixture.read_text())
-    responses=args.response or ('other_five_axes_repeatable','all_axes_stalled','joint3_stalled')
+    responses=args.response or ('commanded_axes_repeatable','all_axes_stalled','joint3_stalled')
     results=[replay(record,response,check_paths=args.check_paths and response!='all_axes_stalled')
              for response in responses]
     report=dict(scope='recorded_initial_encoders_plus_explicit_response_hypotheses',

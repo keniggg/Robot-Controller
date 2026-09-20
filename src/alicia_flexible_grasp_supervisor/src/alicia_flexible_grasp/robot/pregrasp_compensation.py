@@ -1,8 +1,9 @@
 """Quantized Cartesian pregrasp correction; no ROS, planning or motion authority.
 
 The frozen visual pose is the goal. SDK targets are separate command variables.
-Joint2 is held at its initial command: this strategy does not integrate into the
-axis which failed to respond in the recorded pregrasp. Weakly responding axes
+Joint2 and Joint5 retain their initial SDK commands: the recorded pregrasps
+showed absent Joint2 response and Joint5 oscillation after a small step. This
+does not stabilize an already oscillating actuator. Weakly responding axes
 are held for the rest of the episode; only bounded directional responses and
 measured Cartesian progress can authorize another step. FK convergence is not
 absolute accuracy.
@@ -32,7 +33,7 @@ class PregraspCompensation:
     MAX_SECONDS = 60.
     MAX_STEP_COUNTS = 4
     MAX_TOTAL_COUNTS = 32
-    HELD_AXES = (1,)
+    HELD_AXES = (1, 4)
 
     def __init__(self, fk, initial, goal_values, *, position_tolerance_m=.006,
                  orientation_tolerance_rad=math.radians(5)):
@@ -192,13 +193,15 @@ class PregraspCompensation:
                     delta[axis], changed = chosen, True
             if not changed:
                 break
-        if not np.any(delta) or best >= initial_cost-1e-4:
+        predicted_position, predicted_angle = self.residual(measured+delta*self.response_gains*Q)
+        if (not np.any(delta) or best >= initial_cost-1e-4
+                or predicted_position >= position-1e-6):
             self._fail('PREGRASP_NO_BOUNDED_IMPROVING_STEP')
         self.proposed = CorrectionStep(self.expected, tuple((np.asarray(self.expected)+delta).tolist()),
             tuple(actual.tolist()), sample['sdk_stamp_ns'], sample['accepted_stamp_ns'])
         evidence['proposed_delta_counts'] = delta.tolist()
-        evidence['predicted_position_error_m'], evidence['predicted_orientation_error_rad'] = (
-            self.residual(measured+delta*self.response_gains*Q))
+        evidence['predicted_position_error_m'] = predicted_position
+        evidence['predicted_orientation_error_rad'] = predicted_angle
         self.last_evidence = deepcopy(evidence)
         self.proposed_cost = initial_cost
         self.proposed_position = position

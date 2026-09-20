@@ -77,20 +77,21 @@ def make_gateway(monkeypatch, response=True, day='20260919'):
 
 
 def test_gateway_converges_only_on_new_measured_response_and_restores_planner(monkeypatch):
-    node,planner,plan,state,calls,parameters=make_gateway(monkeypatch)
+    node,planner,plan,state,calls,parameters=make_gateway(monkeypatch,day='20260920_wrist')
     original=committed_plan_digest(plan)
     result=node.handle_compensate_pregrasp(NS(plan=plan,execute=True))
     report=json.loads(result.message)
     assert result.success,report
     assert report['code']=='PREGRASP_MEASURED_CONVERGED' and report['position_error_m']<=.006
-    assert len(calls)==8 and state['moves']==8
+    assert len(calls)==6 and state['moves']==6
+    assert all(sdk_counts(goal)[4]==1118 for goal,_ in calls)
     assert original==committed_plan_digest(plan)
     assert planner.observation_path_guard_required is False
     assert planner.observation_tracking_contract_required is False
     assert planner.strict_execution_max_joint_velocity_rad_s==.12
     assert not hasattr(planner,'observation_execution_authorized')
     result=node.handle_compensate_pregrasp(NS(plan=plan,execute=True))
-    assert not result.success and 'ALREADY_CONSUMED' in result.message and len(calls)==8
+    assert not result.success and 'ALREADY_CONSUMED' in result.message and len(calls)==6
 
 
 def test_no_response_leaves_original_goal_and_stops_after_one_step(monkeypatch):
@@ -99,6 +100,25 @@ def test_no_response_leaves_original_goal_and_stops_after_one_step(monkeypatch):
     assert not result.success and 'NO_BOUNDED_DIRECTIONAL_RESPONSE' in result.message
     assert len(calls)==1 and state['moves']==1
     assert json.loads(result.message)['no_implicit_rollback_or_torque_disable']
+
+
+def test_unsettled_response_reports_completed_command_without_reusing_old_measurement(monkeypatch):
+    node,_,plan,state,calls,parameters=make_gateway(monkeypatch)
+    snapshot=node._endpoint_following_snapshot
+    def unsettled(*args,**kwargs):
+        if kwargs.get('after_ns'):
+            raise ValueError('ENDPOINT_CORRECTION_FEEDBACK_UNAVAILABLE: accepted feedback is not stationary')
+        return snapshot(*args,**kwargs)
+    node._endpoint_following_snapshot=unsettled
+    result=node.handle_compensate_pregrasp(NS(plan=plan,execute=True))
+    report=json.loads(result.message)
+    assert not result.success and state['moves']==1 and len(calls)==1
+    assert report['steps_completed']==1 and report['post_command_feedback_valid'] is False
+    assert report['completed_command_target_counts']==sdk_counts(state['sdk']).tolist()
+    assert report['last_validated_evidence']['steps_completed']==0
+    assert 'position_error_m' not in report and 'measured_counts' not in report
+    assert not node.handle_compensate_pregrasp(NS(plan=plan,execute=True)).success
+    assert len(calls)==1
 
 
 def test_dry_run_never_connects_controller_or_consumes_episode(monkeypatch):
