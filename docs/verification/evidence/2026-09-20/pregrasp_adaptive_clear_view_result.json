@@ -1,0 +1,890 @@
+{
+  "directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_adaptive_clear_view_20260920_010632",
+  "deployment": {
+    "commit": "ae4b5c81a999089112f463d891a0d232f52fa1d8",
+    "nodes": {
+      "/grasp_task_node": 173083,
+      "/motion_gateway": 173275,
+      "/alicia_d_driver_node": 7197
+    },
+    "parameters_unchanged": true,
+    "positions_unchanged": true,
+    "source_sha256": {
+      "src/alicia_flexible_grasp_supervisor/scripts/grasp_task_node.py": "bb7f463d11044f7371bf5cf43d2478f5372689384152d452db8d00c0d3e0c2c2",
+      "src/alicia_flexible_grasp_supervisor/scripts/motion_gateway_node.py": "d0b0e4fdccecceeca3b82a766648a05818da8bb8393859ee55d3755e7881eddc",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "07d1e62bf65cfc2347cac3340a00471249a82e218f9c0f0b00426f2c4db39b64",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_gateway.py": "c7bee98350bf5d55c147d78cd6467c2ae3020d3c0346ea4f28ff8e253e5c69b0"
+    }
+  },
+  "bag_start_sec": 1789891650.8228245,
+  "bag_end_sec": 1789891857.4887187,
+  "topic_counts": {
+    "/alicia_d/sdk_command": 1856,
+    "/alicia_d/control_reference": 1856,
+    "/alicia_d/accepted_joint_states": 2066,
+    "/alicia_d/actuation_status": 3922,
+    "/alicia_d/motion_enabled": 3920,
+    "/alicia_d/sdk_diagnostics": 2065,
+    "/alicia_controller/follow_joint_trajectory/status": 1033,
+    "/grasp_6d/status": 5,
+    "/experiment/runtime_execution_error_snapshot": 2,
+    "/gui/joint_direct_mode": 1,
+    "/grasp_6d/object_geometry": 5,
+    "/grasp/near_field_phase": 3,
+    "/grasp_6d/preview_plan_enriched": 2,
+    "/rosout_agg": 822,
+    "/grasp_6d/plan_enriched": 2,
+    "/grasp/state": 7,
+    "/grasp_6d/gate_audit": 5,
+    "/alicia_d/temperatures_c": 1,
+    "/alicia_controller/state": 10306,
+    "/alicia_d/run_status": 2062,
+    "/alicia_d/control_reference_epoch": 1,
+    "/tf_static": 2,
+    "/joint_states": 12360,
+    "/tf": 6778,
+    "/supervisor/camera/color/image_raw": 112,
+    "/supervisor/camera/depth/image_raw": 112,
+    "/perception/object_mask": 112,
+    "/perception/object": 112
+  },
+  "compensation_events": [],
+  "action_goals": [],
+  "action_results": [],
+  "stage_transitions": [
+    {
+      "stamp_sec": 1789891092.5848985,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    {
+      "stamp_sec": 1789891759.4255154,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "far-field observation plan; contact simulation deferred until near-field replan"
+    },
+    {
+      "stamp_sec": 1789891759.4636042,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "using 6D grasp plan"
+    },
+    {
+      "stamp_sec": 1789891759.5205195,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "already inside 6D observation region; preserving reached camera view"
+    },
+    {
+      "stamp_sec": 1789891764.2038193,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "waiting for near-field 6D preview"
+    },
+    {
+      "stamp_sec": 1789891854.2305148,
+      "stage": 7,
+      "state": "FAILED",
+      "active": true,
+      "success": false,
+      "message": "NEAR_FIELD_DIRECT_TIMEOUT: no fresh near-field 6D preview after 90.0s; last=FINAL_REFINE_3D_INVALID: Preview source timestamp is older than the near-field request window"
+    },
+    {
+      "stamp_sec": 1789891854.2373264,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    }
+  ],
+  "outcome": {
+    "physical_grasp_success": false,
+    "terminal_state": {
+      "stamp_sec": 1789891854.2373264,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    "compensation_steps": null,
+    "compensation_code": null,
+    "position_error_m": null,
+    "held_joints": null,
+    "approach_started": false,
+    "close_started": false,
+    "lift_started": false,
+    "endpoint_measurement": "encoder FK, not external absolute measurement"
+  },
+  "gripper_opening_range_m": [
+    0.04975,
+    0.04975
+  ],
+  "compensation_reached": false,
+  "pipeline_metrics": [
+    {
+      "accepted": 21,
+      "audit_reference": {
+        "atomic_committed": true,
+        "report_path": "/home/zhuyupei/.ros/grasp6d_gate_audit_latest.json",
+        "report_sha256": "07073b672fe420e89a01f048ed137a76d5cd5e99dc2adb2a25fd85636089ada0",
+        "row_count": 56
+      },
+      "busy": 213,
+      "completed": 226,
+      "decode_ms": 9.543233998556389,
+      "drop_reason": "",
+      "encode_ms": 21.652515002642758,
+      "end_to_end_ms": 21472.570657730103,
+      "event": "request_completed",
+      "expired": 1,
+      "failed": 0,
+      "generation": 39,
+      "gpu_allocated_mb": 19.52783203125,
+      "gpu_peak_allocated_mb": 662.27978515625,
+      "gpu_reserved_mb": 1028.0,
+      "latency_p50_ms": 2311.9384050369263,
+      "latency_p95_ms": 29587.179267406445,
+      "pending_replacements": 190,
+      "primary_failure": "GRIPPER_CONTACT_PATCH_MISS",
+      "rejection_counts": {
+        "GRASPNET_STAGE_PROFILE_UNAVAILABLE": 3,
+        "GRIPPER_CONTACT_PATCH_MISS": 12,
+        "GRIPPER_SWEEP_COLLISION": 8,
+        "GRIPPER_TOO_NARROW": 1
+      },
+      "rejection_ratios": {
+        "GRASPNET_STAGE_PROFILE_UNAVAILABLE": 0.0625,
+        "GRIPPER_CONTACT_PATCH_MISS": 0.25,
+        "GRIPPER_SWEEP_COLLISION": 0.16666666666666666,
+        "GRIPPER_TOO_NARROW": 0.020833333333333332
+      },
+      "replaced": 175,
+      "request_id": 222,
+      "result_age_ms": 23153.136014938354,
+      "ros_prepare_ms": 6183.055667999724,
+      "ros_prepare_stages_ms": {
+        "geometry_registration": 1478.2231460012554,
+        "parameters": 263.5236479982268,
+        "remote_input": 23.875355000200216,
+        "tabletop_candidates": 4417.433519000042
+      },
+      "snapshot_evidence": {
+        "disjoint_window_required": false,
+        "near_field": false,
+        "source_span_ms": 11347.140789,
+        "source_stamp_ns": [
+          1789891664590688228,
+          1789891668061169624,
+          1789891671383653879,
+          1789891673116976976,
+          1789891675937829017
+        ],
+        "unique_source_frames": 5
+      },
+      "snapshot_stamp_sec": 1789891675.937829,
+      "stage_counts": {
+        "locally_valid": {
+          "entered": 48,
+          "passed": 24,
+          "rejected": 24
+        },
+        "nms": {
+          "entered": 204,
+          "passed": 25,
+          "rejected": 179
+        },
+        "preview": {
+          "entered": 0,
+          "passed": 0,
+          "rejected": 0
+        },
+        "promoted": {
+          "entered": 0,
+          "passed": 0,
+          "rejected": 0
+        },
+        "raw": {
+          "entered": 204,
+          "passed": 204,
+          "rejected": 0
+        },
+        "remote_collision": {
+          "entered": 25,
+          "passed": 16,
+          "rejected": 9
+        },
+        "returned": {
+          "entered": 16,
+          "passed": 16,
+          "rejected": 0
+        },
+        "stable": {
+          "entered": 24,
+          "passed": 0,
+          "rejected": 24
+        },
+        "tabletop_materialized": {
+          "entered": 32,
+          "passed": 32,
+          "rejected": 0
+        }
+      },
+      "stale": 204,
+      "started": 29,
+      "status": "STABILITY_PENDING",
+      "submitted": 228,
+      "target_epoch": 27,
+      "tracking_evidence": {
+        "max_hit_count": 1,
+        "required_hits": 3,
+        "track_count": 24,
+        "tracks": [
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 1,
+            "hit_request_ids": [
+              222
+            ],
+            "latest_request_id": 222,
+            "track_id": 1
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 1,
+            "hit_request_ids": [
+              222
+            ],
+            "latest_request_id": 222,
+            "track_id": 2
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 1,
+            "hit_request_ids": [
+              222
+            ],
+            "latest_request_id": 222,
+            "track_id": 3
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 1,
+            "hit_request_ids": [
+              222
+            ],
+            "latest_request_id": 222,
+            "track_id": 4
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 1,
+            "hit_request_ids": [
+              222
+            ],
+            "latest_request_id": 222,
+            "track_id": 5
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 1,
+            "hit_request_ids": [
+              222
+            ],
+            "latest_request_id": 222,
+            "track_id": 6
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 1,
+            "hit_request_ids": [
+              222
+            ],
+            "latest_request_id": 222,
+            "track_id": 7
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 1,
+            "hit_request_ids": [
+              222
+            ],
+            "latest_request_id": 222,
+            "track_id": 8
+          }
+        ],
+        "window_request_ids": [
+          222
+        ]
+      },
+      "transport_ms": 598.0224159975478,
+      "wsl_inference_ms": 427.0600010022463,
+      "wsl_postprocess_ms": 14.249157000449486,
+      "wsl_preprocess_ms": 125.61843699950259,
+      "wsl_total_ms": 567.5675579987001
+    },
+    {
+      "accepted": 22,
+      "audit_reference": {
+        "atomic_committed": true,
+        "report_path": "/home/zhuyupei/.ros/grasp6d_gate_audit_latest.json",
+        "report_sha256": "6982f3ecdf280c0935d9934153a85b14a7d39dcdff47ebcbea7b501083ac844c",
+        "row_count": 66
+      },
+      "busy": 220,
+      "completed": 233,
+      "decode_ms": 6.431817000702722,
+      "drop_reason": "",
+      "encode_ms": 25.43926900034421,
+      "end_to_end_ms": 13927.779912948608,
+      "event": "request_completed",
+      "expired": 1,
+      "failed": 0,
+      "generation": 39,
+      "gpu_allocated_mb": 19.5322265625,
+      "gpu_peak_allocated_mb": 662.27978515625,
+      "gpu_reserved_mb": 1028.0,
+      "latency_p50_ms": 2415.2148962020874,
+      "latency_p95_ms": 29587.179267406445,
+      "pending_replacements": 196,
+      "primary_failure": "GRIPPER_CONTACT_PATCH_MISS",
+      "rejection_counts": {
+        "GRASPNET_STAGE_PROFILE_UNAVAILABLE": 6,
+        "GRIPPER_CONTACT_PATCH_MISS": 14,
+        "GRIPPER_SWEEP_COLLISION": 8,
+        "GRIPPER_TOO_NARROW": 1
+      },
+      "rejection_ratios": {
+        "GRASPNET_STAGE_PROFILE_UNAVAILABLE": 0.11320754716981132,
+        "GRIPPER_CONTACT_PATCH_MISS": 0.2641509433962264,
+        "GRIPPER_SWEEP_COLLISION": 0.1509433962264151,
+        "GRIPPER_TOO_NARROW": 0.018867924528301886
+      },
+      "replaced": 180,
+      "request_id": 228,
+      "result_age_ms": 15820.877313613892,
+      "ros_prepare_ms": 1994.9882249966322,
+      "ros_prepare_stages_ms": {
+        "geometry_registration": 441.9462400001066,
+        "parameters": 127.3716349969618,
+        "remote_input": 33.18523299822118,
+        "tabletop_candidates": 1392.4851170013426
+      },
+      "snapshot_evidence": {
+        "disjoint_window_required": false,
+        "near_field": false,
+        "source_span_ms": 8812.163353,
+        "source_stamp_ns": [
+          1789891688103272676,
+          1789891691704422712,
+          1789891694632629156,
+          1789891695585355520,
+          1789891696915436029
+        ],
+        "unique_source_frames": 5
+      },
+      "snapshot_stamp_sec": 1789891696.915436,
+      "stage_counts": {
+        "locally_valid": {
+          "entered": 53,
+          "passed": 24,
+          "rejected": 29
+        },
+        "nms": {
+          "entered": 278,
+          "passed": 36,
+          "rejected": 242
+        },
+        "preview": {
+          "entered": 0,
+          "passed": 0,
+          "rejected": 0
+        },
+        "promoted": {
+          "entered": 0,
+          "passed": 0,
+          "rejected": 0
+        },
+        "raw": {
+          "entered": 278,
+          "passed": 278,
+          "rejected": 0
+        },
+        "remote_collision": {
+          "entered": 36,
+          "passed": 21,
+          "rejected": 15
+        },
+        "returned": {
+          "entered": 21,
+          "passed": 21,
+          "rejected": 0
+        },
+        "stable": {
+          "entered": 24,
+          "passed": 0,
+          "rejected": 24
+        },
+        "tabletop_materialized": {
+          "entered": 32,
+          "passed": 32,
+          "rejected": 0
+        }
+      },
+      "stale": 210,
+      "started": 30,
+      "status": "STABILITY_PENDING",
+      "submitted": 235,
+      "target_epoch": 27,
+      "tracking_evidence": {
+        "max_hit_count": 2,
+        "required_hits": 3,
+        "track_count": 28,
+        "tracks": [
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 2,
+            "hit_request_ids": [
+              222,
+              228
+            ],
+            "latest_request_id": 228,
+            "track_id": 1
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 2,
+            "hit_request_ids": [
+              222,
+              228
+            ],
+            "latest_request_id": 228,
+            "track_id": 2
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 2,
+            "hit_request_ids": [
+              222,
+              228
+            ],
+            "latest_request_id": 228,
+            "track_id": 3
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 2,
+            "hit_request_ids": [
+              222,
+              228
+            ],
+            "latest_request_id": 228,
+            "track_id": 4
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 2,
+            "hit_request_ids": [
+              222,
+              228
+            ],
+            "latest_request_id": 228,
+            "track_id": 5
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 2,
+            "hit_request_ids": [
+              222,
+              228
+            ],
+            "latest_request_id": 228,
+            "track_id": 6
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 2,
+            "hit_request_ids": [
+              222,
+              228
+            ],
+            "latest_request_id": 228,
+            "track_id": 7
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 2,
+            "hit_request_ids": [
+              222,
+              228
+            ],
+            "latest_request_id": 228,
+            "track_id": 8
+          }
+        ],
+        "window_request_ids": [
+          222,
+          228
+        ]
+      },
+      "transport_ms": 455.4210290007177,
+      "wsl_inference_ms": 406.55924000020605,
+      "wsl_postprocess_ms": 12.014439998893067,
+      "wsl_preprocess_ms": 26.561112001218135,
+      "wsl_total_ms": 445.5887410003925
+    },
+    {
+      "accepted": 23,
+      "audit_reference": {
+        "atomic_committed": true,
+        "report_path": "/home/zhuyupei/.ros/grasp6d_gate_audit_latest.json",
+        "report_sha256": "b8892d83c0a7aac0e1e481cbd64f3e1b031b89a59e49470ae51b0b6817ff9c5b",
+        "row_count": 65
+      },
+      "busy": 243,
+      "completed": 256,
+      "decode_ms": 5.078622001747135,
+      "drop_reason": "",
+      "encode_ms": 24.559733999922173,
+      "end_to_end_ms": 47805.567026138306,
+      "event": "request_completed",
+      "expired": 1,
+      "failed": 0,
+      "generation": 39,
+      "gpu_allocated_mb": 19.5322265625,
+      "gpu_peak_allocated_mb": 662.27978515625,
+      "gpu_reserved_mb": 1028.0,
+      "latency_p50_ms": 2483.860492706299,
+      "latency_p95_ms": 36640.030372142755,
+      "pending_replacements": 218,
+      "primary_failure": "GRIPPER_CONTACT_PATCH_MISS",
+      "rejection_counts": {
+        "COLLISION": 3,
+        "GRASPNET_STAGE_PROFILE_UNAVAILABLE": 8,
+        "GRIPPER_CONTACT_PATCH_MISS": 13,
+        "GRIPPER_SWEEP_COLLISION": 9
+      },
+      "rejection_ratios": {
+        "COLLISION": 0.05660377358490566,
+        "GRASPNET_STAGE_PROFILE_UNAVAILABLE": 0.1509433962264151,
+        "GRIPPER_CONTACT_PATCH_MISS": 0.24528301886792453,
+        "GRIPPER_SWEEP_COLLISION": 0.16981132075471697
+      },
+      "replaced": 201,
+      "request_id": 235,
+      "result_age_ms": 51271.703243255615,
+      "ros_prepare_ms": 4328.852056998585,
+      "ros_prepare_stages_ms": {
+        "geometry_registration": 1680.0223370009917,
+        "parameters": 374.1052719997242,
+        "remote_input": 34.2654579981172,
+        "tabletop_candidates": 2240.458989999752
+      },
+      "snapshot_evidence": {
+        "disjoint_window_required": false,
+        "near_field": false,
+        "source_span_ms": 5544.287205,
+        "source_stamp_ns": [
+          1789891702654285430,
+          1789891703617153167,
+          1789891704556979179,
+          1789891705432446002,
+          1789891708198572635
+        ],
+        "unique_source_frames": 5
+      },
+      "snapshot_stamp_sec": 1789891708.1985726,
+      "stage_counts": {
+        "hard_recheck": {
+          "entered": 34,
+          "passed": 31,
+          "rejected": 3
+        },
+        "locally_valid": {
+          "entered": 53,
+          "passed": 23,
+          "rejected": 30
+        },
+        "moveit_checked": {
+          "entered": 1,
+          "passed": 1,
+          "rejected": 0
+        },
+        "moveit_reachable": {
+          "entered": 1,
+          "passed": 1,
+          "rejected": 0
+        },
+        "moveit_shortlist": {
+          "entered": 31,
+          "passed": 24,
+          "rejected": 7
+        },
+        "nms": {
+          "entered": 275,
+          "passed": 40,
+          "rejected": 235
+        },
+        "preview": {
+          "entered": 1,
+          "passed": 1,
+          "rejected": 0
+        },
+        "promoted": {
+          "entered": 1,
+          "passed": 1,
+          "rejected": 0
+        },
+        "raw": {
+          "entered": 275,
+          "passed": 275,
+          "rejected": 0
+        },
+        "remote_collision": {
+          "entered": 40,
+          "passed": 21,
+          "rejected": 19
+        },
+        "returned": {
+          "entered": 21,
+          "passed": 21,
+          "rejected": 0
+        },
+        "selected": {
+          "entered": 1,
+          "passed": 1,
+          "rejected": 0
+        },
+        "soft_ranked": {
+          "entered": 31,
+          "passed": 31,
+          "rejected": 0
+        },
+        "stable": {
+          "entered": 23,
+          "passed": 17,
+          "rejected": 6
+        },
+        "tabletop_materialized": {
+          "entered": 32,
+          "passed": 32,
+          "rejected": 0
+        }
+      },
+      "stale": 232,
+      "started": 31,
+      "status": "PREVIEW_READY",
+      "submitted": 258,
+      "target_epoch": 27,
+      "tracking_evidence": {
+        "max_hit_count": 3,
+        "required_hits": 3,
+        "track_count": 28,
+        "tracks": [
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 3,
+            "hit_request_ids": [
+              222,
+              228,
+              235
+            ],
+            "latest_request_id": 235,
+            "track_id": 1
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 3,
+            "hit_request_ids": [
+              222,
+              228,
+              235
+            ],
+            "latest_request_id": 235,
+            "track_id": 2
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 3,
+            "hit_request_ids": [
+              222,
+              228,
+              235
+            ],
+            "latest_request_id": 235,
+            "track_id": 3
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 3,
+            "hit_request_ids": [
+              222,
+              228,
+              235
+            ],
+            "latest_request_id": 235,
+            "track_id": 4
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 3,
+            "hit_request_ids": [
+              222,
+              228,
+              235
+            ],
+            "latest_request_id": 235,
+            "track_id": 5
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 3,
+            "hit_request_ids": [
+              222,
+              228,
+              235
+            ],
+            "latest_request_id": 235,
+            "track_id": 6
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 3,
+            "hit_request_ids": [
+              222,
+              228,
+              235
+            ],
+            "latest_request_id": 235,
+            "track_id": 7
+          },
+          {
+            "candidate_source": "tabletop_geometry",
+            "hit_count": 3,
+            "hit_request_ids": [
+              222,
+              228,
+              235
+            ],
+            "latest_request_id": 235,
+            "track_id": 8
+          }
+        ],
+        "window_request_ids": [
+          222,
+          228,
+          235
+        ]
+      },
+      "transport_ms": 457.96131400129525,
+      "wsl_inference_ms": 407.39554800165934,
+      "wsl_postprocess_ms": 13.243825000245124,
+      "wsl_preprocess_ms": 25.481414999376284,
+      "wsl_total_ms": 446.5820990008069
+    },
+    {
+      "accepted": 23,
+      "busy": 243,
+      "completed": 258,
+      "decode_ms": 1.404357000865275,
+      "drop_reason": "GENERATION_STALE",
+      "encode_ms": 17.564469002536498,
+      "end_to_end_ms": 12239.41421508789,
+      "event": "request_completed",
+      "expired": 1,
+      "failed": 0,
+      "generation": 39,
+      "gpu_allocated_mb": 0.0,
+      "gpu_peak_allocated_mb": 0.0,
+      "gpu_reserved_mb": 0.0,
+      "latency_p50_ms": 2547.6529598236084,
+      "latency_p95_ms": 43154.162132740006,
+      "pending_replacements": 219,
+      "primary_failure": null,
+      "rejection_counts": {},
+      "rejection_ratios": {},
+      "replaced": 201,
+      "request_id": 258,
+      "result_age_ms": 15386.569499969482,
+      "ros_prepare_ms": 2725.499612999556,
+      "ros_prepare_stages_ms": {
+        "geometry_registration": 420.96002199832583,
+        "parameters": 158.74699499909184,
+        "remote_input": 40.4326640018553,
+        "tabletop_candidates": 2105.359932000283
+      },
+      "snapshot_evidence": {},
+      "snapshot_stamp_sec": 1789891751.644956,
+      "stage_counts": {},
+      "stale": 234,
+      "started": 32,
+      "status": "GENERATION_STALE",
+      "submitted": 258,
+      "target_epoch": 27,
+      "tracking_evidence": {},
+      "transport_ms": 297.43329900156823,
+      "wsl_inference_ms": 0.0,
+      "wsl_postprocess_ms": 0.0,
+      "wsl_preprocess_ms": 0.0,
+      "wsl_total_ms": 0.0
+    },
+    {
+      "accepted": 23,
+      "busy": 243,
+      "completed": 259,
+      "decode_ms": 2.0735149992106017,
+      "drop_reason": "RESULT_EXPIRED",
+      "encode_ms": 75.13232999917818,
+      "end_to_end_ms": 15281.612396240234,
+      "event": "request_completed",
+      "expired": 2,
+      "failed": 0,
+      "generation": 41,
+      "gpu_allocated_mb": 0.0,
+      "gpu_peak_allocated_mb": 0.0,
+      "gpu_reserved_mb": 0.0,
+      "latency_p50_ms": 2581.859588623047,
+      "latency_p95_ms": 43154.162132740006,
+      "pending_replacements": 219,
+      "primary_failure": null,
+      "rejection_counts": {},
+      "rejection_ratios": {},
+      "replaced": 201,
+      "request_id": 259,
+      "result_age_ms": 16393.095016479492,
+      "ros_prepare_ms": 14809.856190000573,
+      "ros_prepare_stages_ms": {
+        "geometry_registration": 2570.5661329993745,
+        "parameters": 129.94592099857982,
+        "remote_input": 80.28115699926275,
+        "tabletop_candidates": 12029.062979003356
+      },
+      "snapshot_evidence": {},
+      "snapshot_stamp_sec": 1789891767.1487854,
+      "stage_counts": {},
+      "stale": 234,
+      "started": 33,
+      "status": "RESULT_EXPIRED",
+      "submitted": 259,
+      "target_epoch": 27,
+      "tracking_evidence": {},
+      "transport_ms": 390.02455700028804,
+      "wsl_inference_ms": 0.0,
+      "wsl_postprocess_ms": 0.0,
+      "wsl_preprocess_ms": 0.0,
+      "wsl_total_ms": 0.0
+    }
+  ]
+}

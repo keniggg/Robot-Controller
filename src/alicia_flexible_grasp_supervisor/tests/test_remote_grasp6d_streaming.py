@@ -5430,6 +5430,7 @@ def test_direct_near_field_poll_submits_once_per_phase_preserving_target(
         stale = node.inference_coordinator.complete(original_ticket, now_sec=10.6)
         assert stale.accepted is False
         assert stale.code == 'GENERATION_STALE'
+        node._stream_source_clock.value = 10.6
         assert node._poll_stream_snapshot() is True
         assert node._poll_stream_snapshot() is False
         assert len(node.frames.calls) == 2
@@ -5440,6 +5441,120 @@ def test_direct_near_field_poll_submits_once_per_phase_preserving_target(
         assert node._stream_worker_ticket.generation == node._stream_generation
         assert node._stream_worker_ticket.snapshot_stamp_sec == 10.6
         assert node.inference_coordinator.pending_count == 0
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('expires_after_deadline', [False, True])
+def test_direct_expired_worker_recollects_only_new_frames_in_same_phase(
+    monkeypatch, expires_after_deadline,
+):
+    clock = MutableClock(10.0)
+    node = streaming_node(clock=clock)
+    frame_calls = []
+    try:
+        node.near_field_strategy = 'single_snapshot_direct'
+        node.rate_hz = 2.0
+        node.planning_snapshot_timeout_sec = 1.0
+        node.planning_snapshot_frames = 3
+        node.near_field_planning_snapshot_frames = 3
+        node.planning_snapshot_max_age_sec = .35
+        node.planning_snapshot_max_span_sec = 3.
+        node.planning_snapshot_max_inference_latency_sec = 1.2
+        node.planning_mask_min_iou = .85
+        node.planning_mask_max_centroid_shift_px = 5.
+        node.planning_max_joint_delta_rad = .01
+        node.mask_erosion_px = 2
+        node.mask_internal_hole_max_area_px = 25
+        node.depth_mad_scale = 3.5
+        node.depth_mad_absolute_floor_m = .002
+        node._snapshot_depth_config = lambda: (.001, .03, 2.)
+        node._freeze_graspnet_input_config = lambda: types.SimpleNamespace(
+            requires_instance_mask=False)
+        node._active_profile_requires_mask = lambda: False
+        def collect(*args, **kwargs):
+            frame_calls.append(kwargs)
+            return [object()] * 3
+        node.frames = types.SimpleNamespace(wait_for_samples=collect)
+        batches = [snapshot(9.9), snapshot(12.1)]
+        for batch in batches:
+            batch.ok = True
+        monkeypatch.setattr(remote_node, 'fuse_stable_samples',
+                            lambda *_a, **_k: batches.pop(0))
+        prepare = node._prepare_and_predict
+        def delayed(ticket):
+            if ticket.request_id == 1:
+                clock.value = 40. if expires_after_deadline else 12.
+            return prepare(ticket)
+        node._prepare_and_predict = delayed
+        node.start_streaming()
+        node.near_field_state_cb(near_field_phase(
+            True, start_sec=9.8, deadline_sec=39.8))
+        identity = node._current_stream_target_identity()
+        generation = node._stream_generation
+        deadline = node._near_field_phase_deadline_sec
+        reference = node._near_field_reference_view = object()
+        surface = node._near_field_fused_surface = object()
+
+        assert node._poll_stream_snapshot() is True
+        wait_until(lambda: bool(node.pipeline_metrics) and not node._stream_worker_busy)
+        assert node.pipeline_metrics[-1]['status'] == 'RESULT_EXPIRED'
+        assert node._accept_prediction_calls == []
+        assert node._near_field_phase_deadline_sec == deadline
+        assert node._current_stream_target_identity() == identity
+        assert node._stream_generation == generation
+        assert node._near_field_reference_view is reference
+        assert node._near_field_fused_surface is surface
+        assert node.last_submitted_stamp_ns == 9_900_000_000
+        if expires_after_deadline:
+            assert node._poll_stream_snapshot() is False
+            assert len(frame_calls) == 1
+            return
+
+        assert node._direct_near_field_submission_generation is None
+        # The same source can never be retried, even after expiry released it.
+        assert node.submit_stream_snapshot(snapshot(9.9), require_idle_worker=True) is False
+        clock.value = 12.2
+        assert node._poll_stream_snapshot() is True
+        wait_until(lambda: len(node._accept_prediction_calls) == 1 and not node._stream_worker_busy)
+        assert node._accept_prediction_calls[0].ticket.snapshot_stamp_sec == 12.1
+        assert frame_calls[1]['newest_after_ns'] == 9_900_000_000
+        assert frame_calls[1]['require_all_after_ns'] is True
+        assert frame_calls[1]['target_identity'] == identity
+        assert node._poll_stream_snapshot() is False
+        assert node._near_field_phase_deadline_sec == deadline
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('case', ['geometry_rejected', 'accept_failed', 'stopped',
+                                  'new_generation', 'new_target', 'old_source'])
+def test_direct_expiry_release_cannot_reopen_rejection_or_other_phase(case):
+    node = streaming_node(start_worker=False)
+    try:
+        node.start_streaming()
+        node.near_field_strategy = 'single_snapshot_direct'
+        node.near_field_state_cb(near_field_phase(True, start_sec=9.8, deadline_sec=39.8))
+        assert node.submit_stream_snapshot(snapshot(9.9), require_idle_worker=True)
+        ticket = node._stream_worker_ticket
+        status = 'RESULT_EXPIRED'
+        if case == 'geometry_rejected':
+            status = 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE'
+        elif case == 'accept_failed':
+            status = 'ACCEPT_FAILED'
+        elif case == 'stopped':
+            node.stop_streaming()
+        elif case == 'new_generation':
+            node._stream_generation += 1
+            node._direct_near_field_submission_generation = node._stream_generation
+        elif case == 'new_target':
+            node.target_instance_epoch += 1
+        else:
+            node._near_field_phase_started_sec = 10.
+        marker = node._direct_near_field_submission_generation
+        with node._stream_condition:
+            assert node._release_expired_direct_snapshot_locked(ticket, status) is False
+        assert node._direct_near_field_submission_generation == marker
     finally:
         node.shutdown_streaming_worker()
 
@@ -5514,6 +5629,7 @@ def test_far_field_poll_crossing_phase_cannot_consume_near_field_submission(
         assert node._poll_stream_snapshot() is False
         assert node.last_submitted_stamp_ns == 0
         assert node._stream_worker_ticket is None
+        node._stream_source_clock.value = 11.0
         assert node._poll_stream_snapshot() is True
         assert [item[0] for item in calls] == [5, 3]
         assert calls[1][1]['require_all_after_ns'] is True

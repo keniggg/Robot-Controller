@@ -1,0 +1,452 @@
+{
+  "directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_adaptive_compensation_20260920_004916",
+  "deployment": {
+    "commit": "ae4b5c81a999089112f463d891a0d232f52fa1d8",
+    "nodes": {
+      "/grasp_task_node": 173083,
+      "/motion_gateway": 173275,
+      "/alicia_d_driver_node": 7197
+    },
+    "parameters_unchanged": true,
+    "positions_unchanged": true,
+    "source_sha256": {
+      "src/alicia_flexible_grasp_supervisor/scripts/grasp_task_node.py": "bb7f463d11044f7371bf5cf43d2478f5372689384152d452db8d00c0d3e0c2c2",
+      "src/alicia_flexible_grasp_supervisor/scripts/motion_gateway_node.py": "d0b0e4fdccecceeca3b82a766648a05818da8bb8393859ee55d3755e7881eddc",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "07d1e62bf65cfc2347cac3340a00471249a82e218f9c0f0b00426f2c4db39b64",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_gateway.py": "c7bee98350bf5d55c147d78cd6467c2ae3020d3c0346ea4f28ff8e253e5c69b0"
+    }
+  },
+  "bag_start_sec": 1789890849.4196339,
+  "bag_end_sec": 1789891095.6884181,
+  "topic_counts": {
+    "/joint_states": 14583,
+    "/alicia_d/accepted_joint_states": 2301,
+    "/grasp_6d/status": 8,
+    "/experiment/runtime_execution_error_snapshot": 2,
+    "/grasp/near_field_phase": 5,
+    "/grasp_6d/object_geometry": 7,
+    "/grasp_6d/preview_plan_enriched": 4,
+    "/grasp_6d/plan_enriched": 2,
+    "/grasp/state": 12,
+    "/grasp_6d/gate_audit": 7,
+    "/gui/joint_direct_mode": 1,
+    "/alicia_controller/follow_joint_trajectory/status": 1235,
+    "/alicia_controller/state": 12286,
+    "/alicia_d/temperatures_c": 159,
+    "/alicia_d/run_status": 2298,
+    "/alicia_d/motion_enabled": 5548,
+    "/alicia_d/actuation_status": 5548,
+    "/alicia_d/control_reference_epoch": 1,
+    "/alicia_d/sdk_diagnostics": 2614,
+    "/rosout_agg": 1804,
+    "/tf_static": 2,
+    "/alicia_d/sdk_command": 3250,
+    "/alicia_d/control_reference": 3250,
+    "/tf": 7962,
+    "/supervisor/camera/color/image_raw": 129,
+    "/supervisor/camera/depth/image_raw": 129,
+    "/perception/object_mask": 129,
+    "/perception/object": 129,
+    "/alicia_controller/command": 1,
+    "/joint_commands": 1407,
+    "/alicia_controller/follow_joint_trajectory/goal": 2,
+    "/alicia_controller/follow_joint_trajectory/result": 2
+  },
+  "compensation_events": [],
+  "action_goals": [
+    {
+      "stamp_sec": 1789891016.6844916,
+      "id": "/motion_gateway-1-1789891016.683",
+      "duration_sec": 18.336129552,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.880538620647236,
+        -0.1282689804339827,
+        0.6759714939259848,
+        -0.013843458961986004,
+        -1.052021124995036,
+        0.05657570661753627
+      ],
+      "final_counts": [
+        822,
+        1964,
+        2489,
+        2039,
+        1362,
+        2085
+      ],
+      "path_tolerance": {
+        "Joint1": 0.09,
+        "Joint2": 0.09,
+        "Joint3": 0.09,
+        "Joint4": 0.09,
+        "Joint5": 0.09,
+        "Joint6": 0.09
+      }
+    },
+    {
+      "stamp_sec": 1789891074.1045215,
+      "id": "/motion_gateway-2-1789891074.103",
+      "duration_sec": 9.808353385,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.75526018137248,
+        -0.3753985186183261,
+        1.1224839421778456,
+        0.14630665027717152,
+        -1.484189333539506,
+        -0.08359753237011089
+      ],
+      "final_counts": [
+        904,
+        1803,
+        2780,
+        2143,
+        1080,
+        1994
+      ],
+      "path_tolerance": {
+        "Joint1": 0.09,
+        "Joint2": 0.09,
+        "Joint3": 0.09,
+        "Joint4": 0.09,
+        "Joint5": 0.09,
+        "Joint6": 0.09
+      }
+    }
+  ],
+  "action_results": [
+    {
+      "stamp_sec": 1789891035.0367646,
+      "id": "/motion_gateway-1-1789891016.683",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789891083.9558222,
+      "id": "/motion_gateway-2-1789891074.103",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    }
+  ],
+  "stage_transitions": [
+    {
+      "stamp_sec": 1789889562.554052,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    {
+      "stamp_sec": 1789890898.9413128,
+      "stage": 0,
+      "state": "IDLE",
+      "active": false,
+      "success": false,
+      "message": "ready"
+    },
+    {
+      "stamp_sec": 1789891003.167486,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "far-field observation plan; contact simulation deferred until near-field replan"
+    },
+    {
+      "stamp_sec": 1789891003.2055907,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "using 6D grasp plan"
+    },
+    {
+      "stamp_sec": 1789891003.2285419,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "preflight planning 6D observation pregrasp"
+    },
+    {
+      "stamp_sec": 1789891004.7222788,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "planning 6D pregrasp"
+    },
+    {
+      "stamp_sec": 1789891006.247005,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "moving 6D pregrasp"
+    },
+    {
+      "stamp_sec": 1789891038.9440155,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "waiting for near-field 6D preview"
+    },
+    {
+      "stamp_sec": 1789891050.1660655,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "strictly preflighting clear-view reacquisition candidates"
+    },
+    {
+      "stamp_sec": 1789891084.8975613,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "clear-view candidate 1 executed; awaiting fresh registered observation (duration_lb=5.843s path_cost=0.722)"
+    },
+    {
+      "stamp_sec": 1789891092.5818062,
+      "stage": 7,
+      "state": "FAILED",
+      "active": true,
+      "success": false,
+      "message": "NEAR_FIELD_NO_HARD_SAFE_CANDIDATE: current fused snapshot has no hard-safe candidate"
+    },
+    {
+      "stamp_sec": 1789891092.5848985,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    }
+  ],
+  "outcome": {
+    "physical_grasp_success": false,
+    "terminal_state": {
+      "stamp_sec": 1789891092.5848985,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    "compensation_steps": null,
+    "compensation_code": null,
+    "position_error_m": null,
+    "held_joints": null,
+    "approach_started": false,
+    "close_started": false,
+    "lift_started": false,
+    "endpoint_measurement": "encoder FK, not external absolute measurement",
+    "compensation_reached": false
+  },
+  "gripper_opening_range_m": [
+    0.04975,
+    0.04975
+  ],
+  "registration_replay": {
+    "config": {
+      "correspondence_max_m": 0.008,
+      "minimum_inliers": 80,
+      "minimum_overlap_fraction": 0.3,
+      "maximum_rmse_m": 0.004,
+      "maximum_translation_m": 0.025,
+      "maximum_yaw_deg": 10.0,
+      "maximum_support_normal_angle_deg": 4.0,
+      "maximum_support_offset_delta_m": 0.004,
+      "maximum_iterations": 12
+    },
+    "result": {
+      "ok": false,
+      "code": "YAW_BOUND_EXCEEDED",
+      "transform_base": [
+        [
+          0.9688845592358487,
+          0.24374414488080084,
+          -0.043029091446260645,
+          0.10376511107651702
+        ],
+        [
+          -0.2438499389673121,
+          0.9698087783157703,
+          0.0028532029915586633,
+          -0.03573679166005804
+        ],
+        [
+          0.042425442130884096,
+          0.007728217000103625,
+          0.999069745574353,
+          0.008214159710685268
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "inlier_count": 720,
+      "overlap_fraction": 0.6929740134744947,
+      "rmse_m": 0.0009090474419955546,
+      "support_normal_angle_deg": 1.44505726784615,
+      "support_plane_separation_m": 0.0003608129558071681,
+      "maximum_point_displacement_m": 0.012958809332275511
+    },
+    "seed_diagnostics": {
+      "identity": {
+        "yaw_deg": 0.0,
+        "inliers": 680,
+        "cost_m2": 2.3420087567656796e-05
+      },
+      "coarse": {
+        "yaw_deg": -14.091332577172123,
+        "inliers": 721,
+        "cost_m2": 2.0188979716710103e-05
+      }
+    },
+    "source_details": [
+      {
+        "quality": {
+          "fused_frames": 1,
+          "mask_area": 9026,
+          "valid_depth_points": 7896,
+          "valid_depth_ratio": 0.8748061156658542,
+          "depth_median_m": 0.201899994899577,
+          "depth_mad_m": 0.0004999999873689376,
+          "depth_repeatability_m": 0.0
+        },
+        "T_base_optical": [
+          [
+            -0.9597836934197312,
+            0.2754314739369811,
+            -0.05433935047902205,
+            -0.10334774168896071
+          ],
+          [
+            0.2799094257247713,
+            0.9239626796745863,
+            -0.26066008508973365,
+            -0.3509259344671313
+          ],
+          [
+            -0.02158645955243066,
+            -0.2653873955813657,
+            -0.9639001789762939,
+            0.29083791556843375
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "joint_stamp_ns": 1789891037434460595,
+        "joint_positions": [
+          -1.885262388311453,
+          -0.1457281748491359,
+          0.6534758156392831,
+          -0.01227184630308513,
+          -1.0523108204895497,
+          0.06442719309119692,
+          0.04975
+        ],
+        "bbox": [
+          256,
+          153,
+          115,
+          87
+        ],
+        "support_inlier_ratio": 0.7621437533608173,
+        "source_stamps_ns": [
+          1789891037440298318
+        ],
+        "previous_obb_axes_reconstructed": false
+      },
+      {
+        "quality": {
+          "fused_frames": 1,
+          "mask_area": 9781,
+          "valid_depth_points": 9781,
+          "valid_depth_ratio": 1.0,
+          "depth_median_m": 0.19169999515725067,
+          "depth_mad_m": 0.0027999999292660505,
+          "depth_repeatability_m": 0.0
+        },
+        "T_base_optical": [
+          [
+            -0.9518968037084341,
+            0.2788744538224434,
+            -0.12697052451218926,
+            -0.08597292952064772
+          ],
+          [
+            0.2826839757283174,
+            0.9591293578415756,
+            -0.01267457268858646,
+            -0.4064979741582423
+          ],
+          [
+            0.11824654310422184,
+            -0.04795741790005137,
+            -0.9918255094079103,
+            0.2921274135536748
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "joint_stamp_ns": 1789891085114438348,
+        "joint_positions": [
+          -1.7579419829169447,
+          -0.3957670432744954,
+          1.1013982057018905,
+          0.1380582709097077,
+          -1.4848934026733007,
+          -0.0782330201821677,
+          0.04975
+        ],
+        "bbox": [
+          246,
+          149,
+          126,
+          90
+        ],
+        "support_inlier_ratio": 0.7778966513319782,
+        "source_stamps_ns": [
+          1789891085128008127
+        ],
+        "previous_obb_axes_reconstructed": false
+      }
+    ],
+    "yaw_deg": -14.331094601808516,
+    "reference_stamp_ns": 1789891037440298318,
+    "moving_stamp_ns": 1789891085128008127
+  }
+}

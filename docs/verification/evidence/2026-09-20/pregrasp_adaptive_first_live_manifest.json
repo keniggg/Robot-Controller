@@ -1,0 +1,118 @@
+{
+  "directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_adaptive_compensation_20260920_004916",
+  "files": {
+    "after_reload.json": {
+      "bytes": 32833,
+      "sha256": "651e1b21c2d230445cc5d1c27b58b9c1fbbf181ce963573b490049dcbd699010"
+    },
+    "after_reload.log": {
+      "bytes": 4288,
+      "sha256": "8fa00170c924dbeead24b40b7f5fb26f913b7e414e599bd4d0b21b067a640a30"
+    },
+    "after_reload_camera.jpg": {
+      "bytes": 116969,
+      "sha256": "667d9ce968fc86006fd4f284baadf2bf071e9260229cf7ca3c69b6380e480c75"
+    },
+    "analyze_readonly.py": {
+      "bytes": 3061,
+      "sha256": "938ca1f75a08aff5b29c322976022941463581c1020be9a5685f0c288de0e4f8"
+    },
+    "before_reload.json": {
+      "bytes": 33080,
+      "sha256": "364982b2985e1cc2ba951b842f08791ef41c6c4c9b24e7f75160168fc4906cbb"
+    },
+    "before_reload.log": {
+      "bytes": 4302,
+      "sha256": "6abc55b513693ac3d04d362375aaa8e01565fba550c3490833e4956df312b40f"
+    },
+    "before_reload_camera.jpg": {
+      "bytes": 117114,
+      "sha256": "cb1a8e14515c252a99e1c3d7a5afbfa5317c12960669032637590b8febc98f87"
+    },
+    "deployment.json": {
+      "bytes": 876,
+      "sha256": "ed720d512ed0558fa511e49f645b3d0f1b5b55afb1cf58757c8b66a5e1191912"
+    },
+    "final.json": {
+      "bytes": 33109,
+      "sha256": "c943addf0859c13b019e67e76859a59ab09ae06407a5d75e4320a0ac857994ff"
+    },
+    "final.log": {
+      "bytes": 4313,
+      "sha256": "827c8ee5b7121119b403716dc648820fe49274c3335a3f227377e10461a59f62"
+    },
+    "final_camera.jpg": {
+      "bytes": 117689,
+      "sha256": "703e12ee21cff417d6051a2eec134f87301f4a391faf55695306deb8c3f4dafa"
+    },
+    "handed_back.json": {
+      "bytes": 33089,
+      "sha256": "4eee7ddc7ffebff6a6235b3074e51310047df5e59718847a288fff64bd2986d1"
+    },
+    "handed_back.log": {
+      "bytes": 4312,
+      "sha256": "892d1c1d2e9663e59312baf33deca45fd8bd18cbabb5653a7abf21b8a21c631b"
+    },
+    "handed_back_camera.jpg": {
+      "bytes": 117575,
+      "sha256": "c9c6025c59bf2ea1593fa34ef4d934a4c79f6f800ea1648ffe03fa490107accb"
+    },
+    "keyframes.bag": {
+      "bytes": 151823122,
+      "sha256": "6004c2109fc769383bafb4dab91a7e2d764f130627ff922140162da7f1569444"
+    },
+    "keyframes_audits/045bb510859e8c365700fa55fbc756996c7afa1b9cd00b21ade7dca39674d759.json": {
+      "bytes": 726849,
+      "sha256": "045bb510859e8c365700fa55fbc756996c7afa1b9cd00b21ade7dca39674d759"
+    },
+    "keyframes_audits/187addd315a37b4ced451341094aa74921fedc72687f899501dafba207f8da8f.json": {
+      "bytes": 201217,
+      "sha256": "187addd315a37b4ced451341094aa74921fedc72687f899501dafba207f8da8f"
+    },
+    "keyframes_audits/3970c2999cfee7b0445f950656041818ece6bb67fa2170c4fd03d3656e5c9794.json": {
+      "bytes": 182709,
+      "sha256": "3970c2999cfee7b0445f950656041818ece6bb67fa2170c4fd03d3656e5c9794"
+    },
+    "keyframes_audits/3e60d898e9e4cfe91198d0bb91618edc85ca0987ecac19227b1935ef43f7ab2c.json": {
+      "bytes": 1365399,
+      "sha256": "3e60d898e9e4cfe91198d0bb91618edc85ca0987ecac19227b1935ef43f7ab2c"
+    },
+    "keyframes_audits/58db7a080ab08c483cfd639b6d3c2883b91edb93885c425d63c1b0464ec22c69.json": {
+      "bytes": 359483,
+      "sha256": "58db7a080ab08c483cfd639b6d3c2883b91edb93885c425d63c1b0464ec22c69"
+    },
+    "keyframes_audits/c25e06f76c067d0543d42be72a5d3f0013124bfc29a4231eddc9e7c6889648c0.json": {
+      "bytes": 368119,
+      "sha256": "c25e06f76c067d0543d42be72a5d3f0013124bfc29a4231eddc9e7c6889648c0"
+    },
+    "record.log": {
+      "bytes": 7434,
+      "sha256": "0119d45de83682661bbdd61b5849d6fc754f8df956ed0ea1e28fe3dab2a29492"
+    },
+    "registration_parameters.json": {
+      "bytes": 10103,
+      "sha256": "09d8728cf57acac89dbbbaa4f046ae02ff8e41e11ad7d259f9e0b41b032b2eca"
+    },
+    "registration_replay.json": {
+      "bytes": 214497,
+      "sha256": "ac274d51917109ec0f4fe6e83a64a394ff6b106377619fb10b8a9715a5fc7f11"
+    },
+    "result.json": {
+      "bytes": 7433,
+      "sha256": "c61055111312129b8a292e71bf621105db1148f4ebcb8f568291111264926fbf"
+    },
+    "run.log": {
+      "bytes": 1129,
+      "sha256": "2ba75734c8ba7a645299a55b748f2afabb20ff70df6cdccd3067893760fcf2d6"
+    },
+    "snapshot_readonly.py": {
+      "bytes": 2403,
+      "sha256": "8a7f1263aa4ad48be0b92e718175268fc9a04fb6db7d1409cf685e418f811e38"
+    },
+    "watch.log": {
+      "bytes": 187919,
+      "sha256": "92f2bb055749764816a49c3ae1bc6a687d1e9ea70a38667d56ee027895ebe225"
+    }
+  },
+  "rosbag_and_images_remain_local": true
+}

@@ -6275,6 +6275,17 @@ class RemoteGrasp6DNode:
                 return False
             if require_idle_worker and self._stream_worker_busy:
                 return False
+            direct_snapshot = bool(
+                require_idle_worker
+                and getattr(self, 'near_field_planning_active', False)
+                and self._configured_near_field_strategy() == 'single_snapshot_direct'
+            )
+            if direct_snapshot and (
+                self._direct_near_field_submission_generation == self._stream_generation
+                or not self._near_field_phase_started_sec
+                <= float(self._stream_source_clock()) < self._near_field_phase_deadline_sec
+            ):
+                return False
             # Collection/fusion can overlap a planning-phase callback. Bind
             # the admission atomically to the generation that requested the
             # frames, so a far-field batch cannot consume the near-field slot.
@@ -6312,6 +6323,11 @@ class RemoteGrasp6DNode:
                 self._stream_condition.notify_all()
                 return False
             self.last_submitted_stamp_ns = stamp_ns
+            if direct_snapshot:
+                # Publish admission before waking the worker. Otherwise a fast
+                # expired completion can release the slot before the poller
+                # writes it back, stranding the phase until its deadline.
+                self._direct_near_field_submission_generation = self._stream_generation
             self._pipeline_counters['submitted'] += 1
             if decision.ticket_to_start is None:
                 self._pipeline_counters['busy'] += 1
@@ -6348,6 +6364,35 @@ class RemoteGrasp6DNode:
                 'PENDING_REPLACED',
                 terminal_claimed=replaced_terminal_claimed,
             )
+        return True
+
+    def _release_expired_direct_snapshot_locked(self, ticket, status):
+        """Allow fresh input after expiry, within the same measured phase.
+
+        An expired prediction has not undergone candidate acceptance and owns
+        no executable plan. Retain target, reference surface, source watermark
+        and absolute deadline; geometry rejection never authorizes resampling.
+        Caller holds the stream lock after the physical worker finishes.
+        """
+        if (
+            status != 'RESULT_EXPIRED'
+            or not self.streaming_enabled
+            or not getattr(self, 'near_field_planning_active', False)
+            or self._configured_near_field_strategy() != 'single_snapshot_direct'
+            or ticket.generation != self._stream_generation
+            or ticket.target_epoch != self.target_instance_epoch
+            or self._direct_near_field_submission_generation != ticket.generation
+            or not self._near_field_phase_started_sec <= ticket.snapshot_stamp_sec
+            or not self._near_field_phase_started_sec
+            <= float(self._stream_source_clock()) < self._near_field_phase_deadline_sec
+        ):
+            return False
+        self._direct_near_field_submission_generation = None
+        rospy.logwarn(
+            'Near-field snapshot expired before candidate acceptance; '
+            'collecting newer input within unchanged phase deadline: request=%d',
+            ticket.request_id,
+        )
         return True
 
     def _claim_terminal_request_locked(
@@ -9961,6 +10006,11 @@ class RemoteGrasp6DNode:
                 == submission_generation
             ):
                 return False
+            if direct_single_snapshot and not (
+                self._near_field_phase_started_sec
+                <= float(self._stream_source_clock()) < self._near_field_phase_deadline_sec
+            ):
+                return False
             # A direct phase has one measured snapshot. Collect it when the
             # physical worker can start, so old-phase cleanup cannot consume
             # its source-age budget while it sits in the pending queue.
@@ -10034,25 +10084,6 @@ class RemoteGrasp6DNode:
             expected_generation=submission_generation,
             require_idle_worker=direct_single_snapshot,
         )
-        if submitted and direct_single_snapshot:
-            with self._stream_condition:
-                if (
-                    self.streaming_enabled
-                    and int(self._stream_generation)
-                    == submission_generation
-                    and bool(
-                        getattr(
-                            self,
-                            'near_field_planning_active',
-                            False,
-                        )
-                    )
-                    and self._configured_near_field_strategy()
-                    == 'single_snapshot_direct'
-                ):
-                    self._direct_near_field_submission_generation = (
-                        submission_generation
-                    )
         return submitted
 
     def _promotion_controller(self):
@@ -16298,6 +16329,7 @@ class RemoteGrasp6DNode:
 
             with self._stream_condition:
                 self._stream_worker_busy = False
+                self._release_expired_direct_snapshot_locked(ticket, status)
                 cancelled_tickets = []
                 next_ticket = completion.next_ticket
                 while next_ticket is not None:

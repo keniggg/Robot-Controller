@@ -38,6 +38,22 @@ PYTHONPATH=src/alicia_flexible_grasp_supervisor/src:$PYTHONPATH python3 tools/re
 
 ## 实机验证状态
 
-修复后只读采样显示纸盒完整可见、任务空闲、驱动已确认，但 `/gui/joint_direct_mode=true`。已请求用户结束手动操作并关闭直控后交回自动控制；不覆盖运行中的手动控制。最新采样和后续试验目录为 `.ros_log/grasp_adaptive_compensation_20260920_004916/`。
+用户明确回复“已结束手动操作并关闭直控，继续实机验证”后，重新采样确认直控关闭。已加载提交 `ae4b5c81a999089112f463d891a0d232f52fa1d8`：task PID `173083`、gateway PID `173275`，driver 仍为 `7197`。重载前后已采样参数一致、六轴实测位置一致；未修改标定、限额或到位门。
 
-本节截至修复离线验证完成，**尚未加载本版或执行第二次实机抓取**。首次失败后的物理状态没有通过软件清零、改反馈或放宽验收来隐藏。
+修复版首轮实机目录：`.ros_log/grasp_adaptive_compensation_20260920_004916/`。远场计划 `569cf53dd62349b9f131b7fa` 已执行，观察及一次双侧表面补拍动作均得到控制器成功；补拍后的实测 CAD 支撑面净空约79.805 mm。但 **尚未进入接触预抓取与补偿**，近场规划因融合表面配准失败而停止，最终 `NEAR_FIELD_NO_HARD_SAFE_CANDIDATE`。没有接近、闭合、提起，夹爪保持49.75 mm。
+
+录包定位到具体原因：旧参考帧 `1789891037440298318` 与补拍参考帧 `1789891085128008127` 的配准返回 `YAW_BOUND_EXCEEDED`。原始同时间戳 RGB-D、检测及 TF 离线复现的最终支撑面 yaw 修正为 `−14.3310946°`，超过原10°上限；重叠率约69.30%、RMSE约0.909 mm、最大测量点位移约12.959 mm。`multiview_surface.active=false` 后，接触候选因缺少当前绑定的融合表面无法产生。这是补偿之前的观测阻塞，不能记为新版补偿失败或收敛成功。
+
+仅离线比较了不采用PCA初始化及增加迭代次数：前者给出另一局部解，但原实现选择的解具有更低的含未匹配惩罚的几何代价；后者仍超10°。没有因另一个解能过门就修改在线选择、放宽角度或换掉失败阶段的参考。随后从补拍后的清晰视角开始新的完整视觉任务，另存 `.ros_log/grasp_adaptive_clear_view_20260920_010632/`，不复用旧计划或补偿额度。
+
+首轮[结果与配准摘要](evidence/2026-09-20/pregrasp_adaptive_first_live_result.json)、[本机证据校验清单](evidence/2026-09-20/pregrasp_adaptive_first_live_manifest.json)。图像与录包保留本机。
+
+第二轮远场计划 `1d01faf79f9a7880b2a669af` 有效，任务按既有规则复用当前观察位，没有新关节轨迹。近场 phase 3 以 `1789891762820106744` 建立新参考，request 259 / generation 41 在准备14.810 s（其中几何2.571 s、桌面候选12.029 s）后，结果年龄16.393 s超过原15 s输入有效期，被 `RESULT_EXPIRED` 丢弃。此后本阶段没有第二个请求，90 s截止时任务终止 `NEAR_FIELD_DIRECT_TIMEOUT`。仍未进入补偿或闭爪。[第二轮结果](evidence/2026-09-20/pregrasp_adaptive_clear_view_result.json)、[校验清单](evidence/2026-09-20/pregrasp_adaptive_clear_view_manifest.json)。
+
+## 近场过期请求占位修复
+
+上述第二轮揭示独立的软件状态问题：`single_snapshot_direct` 提交后保留 generation 占位，worker 因源时间过期在候选接受之前丢弃结果，却未释放占位，因此采样循环永远返回，直到任务超时。修复仅允许 `RESULT_EXPIRED` 在同一目标/同一generation、仍活动且原绝对截止时间内释放占位，重新采集比原请求更新的帧；参考表面、目标身份、源时间水位及截止时间均保持。不接受过期结果，不增加图像有效期，不对几何淘汰或候选接受异常重试。
+
+占位写入移入提交锁内，在唤醒worker之前完成，避免快速完成后被poller写回旧占位；采样与提交均重查原deadline。新增真实worker/采样集成回归覆盖过期后新帧成功、重复源拒绝、到期停止、参考与期限保持；负例覆盖几何淘汰、接受异常、停止、换代、换目标与旧阶段帧。两个既有时序测试的模拟时钟同步推进到其新阶段时间，避免测试在“当前时刻10.0 s却已有10.5 s阶段及11.0 s帧”的非物理条件下运行。
+
+`test_remote_grasp6d_streaming.py`、`test_grasp_task_sequence.py`、`test_multiview_surface.py` 合跑 **742 passed / 7条既有弃用警告，111.64 s**。diff检查通过。此状态修复不改变预抓取补偿算法；加载后实机结果另行补记。
