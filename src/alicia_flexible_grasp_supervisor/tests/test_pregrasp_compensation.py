@@ -229,3 +229,33 @@ def test_held_wrist_movement_is_not_hidden_by_omitting_it_from_commands():
     c.committed(step,11.)
     with pytest.raises(ValueError,match='NO_BOUNDED_DIRECTIONAL_RESPONSE'):
         c.evaluate(sample(fk,step.positions,actual+response*Q,13.))
+
+
+def test_recorded_eight_step_actual_response_preserves_failure_at_7_303_mm():
+    # Actual post-command encoder samples, including delayed J1 response and
+    # two counts of uncommanded J2 drift; no repeatable-plant assumption.
+    record = json.loads((Path(__file__).parent /
+        'fixtures/pregrasp_following_20260920_held_actual.json').read_text())
+    fk, sdk, actual, goal = recorded_fixture('20260920_held_actual')
+    c = PregraspCompensation(fk, sample(fk, sdk, actual), goal)
+    rows = record['actual_stationary_steps']
+    for i, row in enumerate(rows[:-1]):
+        sdk = (np.array(row['sdk_counts']) - 2048) * Q
+        actual = (np.array(row['measured_counts']) - 2048) * Q
+        _, step, evidence = c.evaluate(sample(fk, sdk, actual, 10. + 4*i))
+        assert list(step.target_counts) == rows[i+1]['sdk_counts']
+        assert evidence['position_error_m'] == pytest.approx(row['position_error_m'])
+        assert step.target_counts[1] == c.initial_counts[1]
+        assert step.target_counts[4] == c.initial_counts[4]
+        c.committed(step, 12. + 4*i)
+    last = rows[-1]
+    sdk = (np.array(last['sdk_counts']) - 2048) * Q
+    actual = (np.array(last['measured_counts']) - 2048) * Q
+    for _ in range(2):
+        with pytest.raises(ValueError, match='NO_BOUNDED_IMPROVING_STEP'):
+            c.evaluate(sample(fk, sdk, actual, 42.))
+    assert c.steps == 8
+    assert c.last_evidence['position_error_m'] == pytest.approx(.007303032813870364)
+    assert c.last_evidence['held_joints'] == ['Joint1', 'Joint2', 'Joint5', 'Joint6']
+    assert c.expected[2] - c.initial_counts[2] == 32
+    assert c.tolerances[0] == .006 and c.last_evidence['real_grasp_success'] is False

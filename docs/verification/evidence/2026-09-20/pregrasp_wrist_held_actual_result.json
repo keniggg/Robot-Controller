@@ -1,0 +1,1469 @@
+{
+  "directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_first_qualified_20260920_015411",
+  "deployment": {
+    "commit": "ed787d2b133ce16264f2c2f64e364bf50a73d78a",
+    "nodes": {
+      "/grasp_task_node": 203332,
+      "/motion_gateway": 196624,
+      "/remote_grasp6d_node": 184698,
+      "/alicia_d_driver_node": 7197
+    },
+    "parameter_changes": [
+      [
+        "/grasp/clear_view_reacquisition_comparison_budget_sec",
+        8.0,
+        0.0
+      ]
+    ],
+    "positions_unchanged": true,
+    "initially_held_joints": [
+      "Joint2",
+      "Joint5"
+    ],
+    "source_sha256": {
+      "scripts/grasp_task_node.py": "56e68b05b842d7967d5d70f14e0090bb86ea2a1bb22d6fe274be1ac53e28aff3",
+      "scripts/remote_grasp6d_node.py": "13dc1f6003960ba8704144c22373cb50dd9f3a6ccedda75d65850698986a7352",
+      "src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "490211f0495d25afe27a9dcb23fda01cf29e75effa9a766ed5d45c3db46e939e",
+      "src/alicia_flexible_grasp/robot/pregrasp_gateway.py": "97437d3e60944a109c2ff07deefa7518ff80b3c6b20622862a9f834ed5afd853"
+    }
+  },
+  "bag_start_sec": 1789894570.3833287,
+  "bag_end_sec": 1789894870.018002,
+  "topic_counts": {
+    "/joint_states": 17913,
+    "/tf": 9744,
+    "/tf_static": 2,
+    "/alicia_d/actuation_status": 7128,
+    "/alicia_d/control_reference_epoch": 1,
+    "/alicia_d/control_reference": 4133,
+    "/alicia_d/run_status": 2994,
+    "/alicia_controller/state": 14908,
+    "/grasp_6d/status": 4,
+    "/grasp_6d/preview_plan_enriched": 3,
+    "/experiment/runtime_execution_error_snapshot": 2,
+    "/grasp_6d/object_geometry": 6,
+    "/grasp_6d/plan_enriched": 2,
+    "/grasp/near_field_phase": 3,
+    "/grasp/state": 12,
+    "/grasp_6d/gate_audit": 6,
+    "/alicia_controller/follow_joint_trajectory/status": 1517,
+    "/gui/joint_direct_mode": 1,
+    "/alicia_d/temperatures_c": 1,
+    "/alicia_d/motion_enabled": 7120,
+    "/alicia_d/sdk_diagnostics": 2990,
+    "/alicia_d/sdk_command": 4129,
+    "/alicia_d/accepted_joint_states": 2989,
+    "/rosout_agg": 2763,
+    "/supervisor/camera/color/image_raw": 204,
+    "/supervisor/camera/depth/image_raw": 204,
+    "/perception/object_mask": 204,
+    "/perception/object": 204,
+    "/alicia_controller/follow_joint_trajectory/goal": 10,
+    "/joint_commands": 5803,
+    "/alicia_controller/follow_joint_trajectory/result": 10
+  },
+  "compensation_events": [
+    {
+      "stamp_sec": 1789894832.7900264,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.1295551785193663,
+          -0.41418106988050957,
+          0.14517765620381484,
+          -0.1805563252401852,
+          -0.973764052870202,
+          0.061258533774073455,
+          0.12421905970264634
+        ],
+        "initial_sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "measured_counts": [
+          893,
+          1473,
+          3177,
+          2206,
+          1034,
+          2964
+        ],
+        "position_error_m": 0.018784803771710316,
+        "orientation_error_rad": 0.048393452855088476,
+        "sdk_stamp_ns": 1789894832493175053,
+        "accepted_stamp_ns": 1789894832571196686,
+        "steps_completed": 0,
+        "held_joints": [
+          "Joint2",
+          "Joint5"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "proposed_delta_counts": [
+          4,
+          0,
+          4,
+          4,
+          0,
+          -4
+        ],
+        "predicted_position_error_m": 0.016797869906816375,
+        "predicted_orientation_error_rad": 0.040783736838858185,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "445fb9ab339b5e839f433157",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789894837.2400284,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.1295551785193663,
+          -0.41418106988050957,
+          0.14517765620381484,
+          -0.1805563252401852,
+          -0.973764052870202,
+          0.061258533774073455,
+          0.12421905970264634
+        ],
+        "initial_sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "sdk_counts": [
+          899,
+          1490,
+          3199,
+          2214,
+          1031,
+          2966
+        ],
+        "measured_counts": [
+          896,
+          1472,
+          3180,
+          2210,
+          1034,
+          2964
+        ],
+        "position_error_m": 0.017860021021305992,
+        "orientation_error_rad": 0.044254612270790084,
+        "sdk_stamp_ns": 1789894836933270713,
+        "accepted_stamp_ns": 1789894836971201135,
+        "steps_completed": 1,
+        "held_joints": [
+          "Joint2",
+          "Joint5",
+          "Joint6"
+        ],
+        "response_gains": [
+          0.75,
+          1.0,
+          0.75,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "last_step_response": {
+          "command_delta_counts": [
+            4,
+            0,
+            4,
+            4,
+            0,
+            -4
+          ],
+          "measured_delta_counts": [
+            3,
+            -1,
+            3,
+            4,
+            0,
+            0
+          ],
+          "bounded_directional_response": false,
+          "partial_bounded_response": true,
+          "newly_held_joints": [
+            "Joint6"
+          ]
+        },
+        "proposed_delta_counts": [
+          2,
+          0,
+          4,
+          4,
+          0,
+          0
+        ],
+        "predicted_position_error_m": 0.016321357830825025,
+        "predicted_orientation_error_rad": 0.040000943803119283,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "445fb9ab339b5e839f433157",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789894841.5527496,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.1295551785193663,
+          -0.41418106988050957,
+          0.14517765620381484,
+          -0.1805563252401852,
+          -0.973764052870202,
+          0.061258533774073455,
+          0.12421905970264634
+        ],
+        "initial_sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "sdk_counts": [
+          901,
+          1490,
+          3203,
+          2218,
+          1031,
+          2966
+        ],
+        "measured_counts": [
+          899,
+          1472,
+          3184,
+          2214,
+          1034,
+          2964
+        ],
+        "position_error_m": 0.01593433473175695,
+        "orientation_error_rad": 0.03823866621463147,
+        "sdk_stamp_ns": 1789894841454533352,
+        "accepted_stamp_ns": 1789894841472518179,
+        "steps_completed": 2,
+        "held_joints": [
+          "Joint2",
+          "Joint5",
+          "Joint6"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "last_step_response": {
+          "command_delta_counts": [
+            2,
+            0,
+            4,
+            4,
+            0,
+            0
+          ],
+          "measured_delta_counts": [
+            3,
+            0,
+            4,
+            4,
+            0,
+            0
+          ],
+          "bounded_directional_response": true,
+          "partial_bounded_response": false,
+          "newly_held_joints": []
+        },
+        "proposed_delta_counts": [
+          0,
+          0,
+          4,
+          4,
+          0,
+          0
+        ],
+        "predicted_position_error_m": 0.013991497609780426,
+        "predicted_orientation_error_rad": 0.034104710227253594,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "445fb9ab339b5e839f433157",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789894845.6877599,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.1295551785193663,
+          -0.41418106988050957,
+          0.14517765620381484,
+          -0.1805563252401852,
+          -0.973764052870202,
+          0.061258533774073455,
+          0.12421905970264634
+        ],
+        "initial_sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "sdk_counts": [
+          901,
+          1490,
+          3207,
+          2222,
+          1031,
+          2966
+        ],
+        "measured_counts": [
+          899,
+          1472,
+          3188,
+          2218,
+          1034,
+          2964
+        ],
+        "position_error_m": 0.013991497609780487,
+        "orientation_error_rad": 0.034104710227253594,
+        "sdk_stamp_ns": 1789894845493176680,
+        "accepted_stamp_ns": 1789894845571441336,
+        "steps_completed": 3,
+        "held_joints": [
+          "Joint2",
+          "Joint5",
+          "Joint6"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "last_step_response": {
+          "command_delta_counts": [
+            0,
+            0,
+            4,
+            4,
+            0,
+            0
+          ],
+          "measured_delta_counts": [
+            0,
+            0,
+            4,
+            4,
+            0,
+            0
+          ],
+          "bounded_directional_response": true,
+          "partial_bounded_response": false,
+          "newly_held_joints": []
+        },
+        "proposed_delta_counts": [
+          2,
+          0,
+          4,
+          4,
+          0,
+          0
+        ],
+        "predicted_position_error_m": 0.012119006916417704,
+        "predicted_orientation_error_rad": 0.03156440284220276,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "445fb9ab339b5e839f433157",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789894849.9257762,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.1295551785193663,
+          -0.41418106988050957,
+          0.14517765620381484,
+          -0.1805563252401852,
+          -0.973764052870202,
+          0.061258533774073455,
+          0.12421905970264634
+        ],
+        "initial_sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "sdk_counts": [
+          903,
+          1490,
+          3211,
+          2226,
+          1031,
+          2966
+        ],
+        "measured_counts": [
+          899,
+          1472,
+          3192,
+          2221,
+          1034,
+          2964
+        ],
+        "position_error_m": 0.012223325434586667,
+        "orientation_error_rad": 0.030953445625330377,
+        "sdk_stamp_ns": 1789894849754123270,
+        "accepted_stamp_ns": 1789894849772577922,
+        "steps_completed": 4,
+        "held_joints": [
+          "Joint1",
+          "Joint2",
+          "Joint5",
+          "Joint6"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          1.0,
+          0.75,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "last_step_response": {
+          "command_delta_counts": [
+            2,
+            0,
+            4,
+            4,
+            0,
+            0
+          ],
+          "measured_delta_counts": [
+            0,
+            0,
+            4,
+            3,
+            0,
+            0
+          ],
+          "bounded_directional_response": false,
+          "partial_bounded_response": true,
+          "newly_held_joints": [
+            "Joint1"
+          ]
+        },
+        "proposed_delta_counts": [
+          0,
+          0,
+          4,
+          4,
+          0,
+          0
+        ],
+        "predicted_position_error_m": 0.010586621905751645,
+        "predicted_orientation_error_rad": 0.029511193888093132,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "445fb9ab339b5e839f433157",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789894854.2138896,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.1295551785193663,
+          -0.41418106988050957,
+          0.14517765620381484,
+          -0.1805563252401852,
+          -0.973764052870202,
+          0.061258533774073455,
+          0.12421905970264634
+        ],
+        "initial_sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "sdk_counts": [
+          903,
+          1490,
+          3215,
+          2230,
+          1031,
+          2966
+        ],
+        "measured_counts": [
+          901,
+          1472,
+          3197,
+          2226,
+          1034,
+          2964
+        ],
+        "position_error_m": 0.009990232018079354,
+        "orientation_error_rad": 0.03063407024660178,
+        "sdk_stamp_ns": 1789894853994652387,
+        "accepted_stamp_ns": 1789894854072135378,
+        "steps_completed": 5,
+        "held_joints": [
+          "Joint1",
+          "Joint2",
+          "Joint5",
+          "Joint6"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "last_step_response": {
+          "command_delta_counts": [
+            0,
+            0,
+            4,
+            4,
+            0,
+            0
+          ],
+          "measured_delta_counts": [
+            2,
+            0,
+            5,
+            5,
+            0,
+            0
+          ],
+          "bounded_directional_response": true,
+          "partial_bounded_response": false,
+          "newly_held_joints": []
+        },
+        "proposed_delta_counts": [
+          0,
+          0,
+          4,
+          4,
+          0,
+          0
+        ],
+        "predicted_position_error_m": 0.008511467637145696,
+        "predicted_orientation_error_rad": 0.03325979575184649,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "445fb9ab339b5e839f433157",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789894858.621808,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.1295551785193663,
+          -0.41418106988050957,
+          0.14517765620381484,
+          -0.1805563252401852,
+          -0.973764052870202,
+          0.061258533774073455,
+          0.12421905970264634
+        ],
+        "initial_sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "sdk_counts": [
+          903,
+          1490,
+          3219,
+          2234,
+          1031,
+          2966
+        ],
+        "measured_counts": [
+          901,
+          1472,
+          3201,
+          2229,
+          1034,
+          2964
+        ],
+        "position_error_m": 0.008527956870221254,
+        "orientation_error_rad": 0.03182360921078333,
+        "sdk_stamp_ns": 1789894858393220561,
+        "accepted_stamp_ns": 1789894858472511179,
+        "steps_completed": 6,
+        "held_joints": [
+          "Joint1",
+          "Joint2",
+          "Joint5",
+          "Joint6"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          1.0,
+          0.75,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "last_step_response": {
+          "command_delta_counts": [
+            0,
+            0,
+            4,
+            4,
+            0,
+            0
+          ],
+          "measured_delta_counts": [
+            0,
+            0,
+            4,
+            3,
+            0,
+            0
+          ],
+          "bounded_directional_response": true,
+          "partial_bounded_response": false,
+          "newly_held_joints": []
+        },
+        "proposed_delta_counts": [
+          0,
+          0,
+          4,
+          2,
+          0,
+          0
+        ],
+        "predicted_position_error_m": 0.0073756574098457805,
+        "predicted_orientation_error_rad": 0.03243631679034848,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "445fb9ab339b5e839f433157",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789894862.7878773,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.1295551785193663,
+          -0.41418106988050957,
+          0.14517765620381484,
+          -0.1805563252401852,
+          -0.973764052870202,
+          0.061258533774073455,
+          0.12421905970264634
+        ],
+        "initial_sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "sdk_counts": [
+          903,
+          1490,
+          3223,
+          2236,
+          1031,
+          2966
+        ],
+        "measured_counts": [
+          901,
+          1472,
+          3204,
+          2233,
+          1034,
+          2964
+        ],
+        "position_error_m": 0.007675140791194604,
+        "orientation_error_rad": 0.03648085981108195,
+        "sdk_stamp_ns": 1789894862693277713,
+        "accepted_stamp_ns": 1789894862672146284,
+        "steps_completed": 7,
+        "held_joints": [
+          "Joint1",
+          "Joint2",
+          "Joint5",
+          "Joint6"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          0.75,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "last_step_response": {
+          "command_delta_counts": [
+            0,
+            0,
+            4,
+            2,
+            0,
+            0
+          ],
+          "measured_delta_counts": [
+            0,
+            0,
+            3,
+            4,
+            0,
+            0
+          ],
+          "bounded_directional_response": true,
+          "partial_bounded_response": false,
+          "newly_held_joints": []
+        },
+        "proposed_delta_counts": [
+          0,
+          0,
+          4,
+          0,
+          0,
+          0
+        ],
+        "predicted_position_error_m": 0.006986927155292925,
+        "predicted_orientation_error_rad": 0.035905304310833476,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "445fb9ab339b5e839f433157",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789894866.7151985,
+      "kind": "Pregrasp compensation stopped",
+      "report": {
+        "fixed_goal_pose": [
+          -0.1295551785193663,
+          -0.41418106988050957,
+          0.14517765620381484,
+          -0.1805563252401852,
+          -0.973764052870202,
+          0.061258533774073455,
+          0.12421905970264634
+        ],
+        "initial_sdk_counts": [
+          895,
+          1490,
+          3195,
+          2210,
+          1031,
+          2970
+        ],
+        "sdk_counts": [
+          903,
+          1490,
+          3227,
+          2236,
+          1031,
+          2966
+        ],
+        "measured_counts": [
+          901,
+          1471,
+          3208,
+          2233,
+          1034,
+          2964
+        ],
+        "position_error_m": 0.007303032813870364,
+        "orientation_error_rad": 0.035905304310833476,
+        "sdk_stamp_ns": 1789894866593171458,
+        "accepted_stamp_ns": 1789894866572150407,
+        "steps_completed": 8,
+        "held_joints": [
+          "Joint1",
+          "Joint2",
+          "Joint5",
+          "Joint6"
+        ],
+        "response_gains": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "real_grasp_success": false,
+        "last_step_response": {
+          "command_delta_counts": [
+            0,
+            0,
+            4,
+            0,
+            0,
+            0
+          ],
+          "measured_delta_counts": [
+            0,
+            -1,
+            4,
+            0,
+            0,
+            0
+          ],
+          "bounded_directional_response": true,
+          "partial_bounded_response": false,
+          "newly_held_joints": []
+        },
+        "plan_id": "445fb9ab339b5e839f433157",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+        "code": "PREGRASP_NO_BOUNDED_IMPROVING_STEP",
+        "success": false,
+        "no_implicit_rollback_or_torque_disable": true
+      }
+    }
+  ],
+  "action_goals": [
+    {
+      "stamp_sec": 1789894673.134033,
+      "id": "/motion_gateway-2-1789894673.131",
+      "duration_sec": 3.499165296,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.9110697419772966,
+        -0.20323954247111228,
+        0.6568544609303024,
+        -0.06218765367440052,
+        -0.9415674396007616,
+        0.12313283187393947
+      ],
+      "final_counts": [
+        802,
+        1916,
+        2476,
+        2007,
+        1434,
+        2128
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    },
+    {
+      "stamp_sec": 1789894739.5684667,
+      "id": "/move_group-5-1789894739.567825547",
+      "duration_sec": 91.937879148,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.768197759173866,
+        -0.8558880264937132,
+        1.7595183083319876,
+        0.2478610893296924,
+        -1.560107136503315,
+        1.4140636927628751
+      ],
+      "final_counts": [
+        895,
+        1490,
+        3195,
+        2210,
+        1031,
+        2970
+      ],
+      "path_tolerance": {}
+    },
+    {
+      "stamp_sec": 1789894833.5337076,
+      "id": "/motion_gateway-3-1789894833.531",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.7625439252806017,
+        -0.8559612796401878,
+        1.765611886856373,
+        0.25464081078901646,
+        -1.560058461279697,
+        1.4081943632790186
+      ],
+      "final_counts": [
+        899,
+        1490,
+        3199,
+        2214,
+        1031,
+        2966
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    },
+    {
+      "stamp_sec": 1789894838.020081,
+      "id": "/motion_gateway-4-1789894838.020",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.7594759637048305,
+        -0.8559612796401878,
+        1.7717478100079156,
+        0.260776733940559,
+        -1.560058461279697,
+        1.4081943632790186
+      ],
+      "final_counts": [
+        901,
+        1490,
+        3203,
+        2218,
+        1031,
+        2966
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    },
+    {
+      "stamp_sec": 1789894842.085857,
+      "id": "/motion_gateway-5-1789894842.083",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.7594759637048305,
+        -0.8559612796401878,
+        1.7778837331594581,
+        0.26691265709210155,
+        -1.560058461279697,
+        1.4081943632790186
+      ],
+      "final_counts": [
+        901,
+        1490,
+        3207,
+        2222,
+        1031,
+        2966
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    },
+    {
+      "stamp_sec": 1789894846.226381,
+      "id": "/motion_gateway-6-1789894846.226",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.7564080021290591,
+        -0.8559612796401878,
+        1.7840196563110007,
+        0.27304858024364415,
+        -1.560058461279697,
+        1.4081943632790186
+      ],
+      "final_counts": [
+        903,
+        1490,
+        3211,
+        2226,
+        1031,
+        2966
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    },
+    {
+      "stamp_sec": 1789894850.5939753,
+      "id": "/motion_gateway-7-1789894850.591",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.7564080021290591,
+        -0.8559612796401878,
+        1.7901555794625432,
+        0.2791845033951867,
+        -1.560058461279697,
+        1.4081943632790186
+      ],
+      "final_counts": [
+        903,
+        1490,
+        3215,
+        2230,
+        1031,
+        2966
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    },
+    {
+      "stamp_sec": 1789894855.0335763,
+      "id": "/motion_gateway-8-1789894855.032",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.7564080021290591,
+        -0.8559612796401878,
+        1.7962915026140858,
+        0.28532042654672923,
+        -1.560058461279697,
+        1.4081943632790186
+      ],
+      "final_counts": [
+        903,
+        1490,
+        3219,
+        2234,
+        1031,
+        2966
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    },
+    {
+      "stamp_sec": 1789894859.284119,
+      "id": "/motion_gateway-9-1789894859.284",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.7564080021290591,
+        -0.8559612796401878,
+        1.8024274257656283,
+        0.28838838812250056,
+        -1.560058461279697,
+        1.4081943632790186
+      ],
+      "final_counts": [
+        903,
+        1490,
+        3223,
+        2236,
+        1031,
+        2966
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    },
+    {
+      "stamp_sec": 1789894863.1767068,
+      "id": "/motion_gateway-10-1789894863.175",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.7564080021290591,
+        -0.8559612796401878,
+        1.8085633489171709,
+        0.28838838812250056,
+        -1.560058461279697,
+        1.4081943632790186
+      ],
+      "final_counts": [
+        903,
+        1490,
+        3227,
+        2236,
+        1031,
+        2966
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    }
+  ],
+  "action_results": [
+    {
+      "stamp_sec": 1789894676.6834497,
+      "id": "/motion_gateway-2-1789894673.131",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789894831.569899,
+      "id": "/move_group-5-1789894739.567825547",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789894836.583901,
+      "id": "/motion_gateway-3-1789894833.531",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789894841.0733755,
+      "id": "/motion_gateway-4-1789894838.020",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789894845.1339035,
+      "id": "/motion_gateway-5-1789894842.083",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789894849.27769,
+      "id": "/motion_gateway-6-1789894846.226",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789894853.6423907,
+      "id": "/motion_gateway-7-1789894850.591",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789894858.0832496,
+      "id": "/motion_gateway-8-1789894855.032",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789894862.3348355,
+      "id": "/motion_gateway-9-1789894859.284",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789894866.2267914,
+      "id": "/motion_gateway-10-1789894863.175",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    }
+  ],
+  "stage_transitions": [
+    {
+      "stamp_sec": 1789894500.1011589,
+      "stage": 0,
+      "state": "IDLE",
+      "active": false,
+      "success": false,
+      "message": "ready"
+    },
+    {
+      "stamp_sec": 1789894671.906899,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "far-field observation plan; contact simulation deferred until near-field replan"
+    },
+    {
+      "stamp_sec": 1789894671.916381,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "using 6D grasp plan"
+    },
+    {
+      "stamp_sec": 1789894671.9250522,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "preflight planning 6D observation pregrasp"
+    },
+    {
+      "stamp_sec": 1789894672.1497533,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "planning 6D pregrasp"
+    },
+    {
+      "stamp_sec": 1789894672.3418193,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "moving 6D pregrasp"
+    },
+    {
+      "stamp_sec": 1789894681.332655,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "waiting for near-field 6D preview"
+    },
+    {
+      "stamp_sec": 1789894739.084219,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "near-field 6D plan rebound: 445fb9ab339b5e839f433157"
+    },
+    {
+      "stamp_sec": 1789894739.1078668,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "planning 6D near-field pregrasp"
+    },
+    {
+      "stamp_sec": 1789894739.1473053,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "moving 6D near-field pregrasp"
+    },
+    {
+      "stamp_sec": 1789894866.7169726,
+      "stage": 7,
+      "state": "FAILED",
+      "active": true,
+      "success": false,
+      "message": "PREGRASP_COMPENSATION_FAILED: {\"fixed_goal_pose\": [-0.1295551785193663, -0.41418106988050957, 0.14517765620381484, -0.1805563252401852, -0.973764052870202, 0.061258533774073455, 0.12421905970264634], \"initial_sdk_counts\": [895, 1490, 3195, 2210, 1031, 2970], \"sdk_counts\": [903, 1490, 3227, 2236, 1031, 2966], \"measured_counts\": [901, 1471, 3208, 2233, 1034, 2964], \"position_error_m\": 0.007303032813870364, \"orientation_error_rad\": 0.035905304310833476, \"sdk_stamp_ns\": 1789894866593171458, \"accepted_stamp_ns\": 1789894866572150407, \"steps_completed\": 8, \"held_joints\": [\"Joint1\", \"Joint2\", \"Joint5\", \"Joint6\"], \"response_gains\": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0], \"real_grasp_success\": false, \"last_step_response\": {\"command_delta_counts\": [0, 0, 4, 0, 0, 0], \"measured_delta_counts\": [0, -1, 4, 0, 0, 0], \"bounded_directional_response\": true, \"partial_bounded_response\": false, \"newly_held_joints\": []}, \"plan_id\": \"445fb9ab339b5e839f433157\", \"epoch_ns\": 1789875872459441743, \"execution_requested\": true, \"model_sha256\": \"890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7\", \"code\": \"PREGRASP_NO_BOUNDED_IMPROVING_STEP\", \"success\": false, \"no_implicit_rollback_or_torque_disable\": true}"
+    },
+    {
+      "stamp_sec": 1789894866.731053,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    }
+  ],
+  "outcome": {
+    "physical_grasp_success": false,
+    "terminal_state": {
+      "stamp_sec": 1789894866.731053,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    "compensation_steps": 8,
+    "compensation_code": "PREGRASP_NO_BOUNDED_IMPROVING_STEP",
+    "position_error_m": 0.007303032813870364,
+    "held_joints": [
+      "Joint1",
+      "Joint2",
+      "Joint5",
+      "Joint6"
+    ],
+    "approach_started": false,
+    "close_started": false,
+    "lift_started": false,
+    "endpoint_measurement": "encoder FK, not external absolute measurement"
+  },
+  "gripper_opening_range_m": [
+    0.04975,
+    0.04975
+  ],
+  "post_compensation_feedback": {
+    "count": 33,
+    "span_sec": 3.2008895874023438,
+    "unique_counts": [
+      [
+        901,
+        1471,
+        3208,
+        2233,
+        1034,
+        2964
+      ]
+    ]
+  }
+}

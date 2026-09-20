@@ -1,0 +1,26 @@
+{
+  ".ros_log/grasp_first_qualified_20260920_015411/result.json": {
+    "sha256": "a228b794dc2c0e061ecfe16555a90784b9336fc58cbfdea9d485b0cc5c1d290d",
+    "bytes": 35714
+  },
+  ".ros_log/grasp_first_qualified_20260920_015411/wrist_held_analysis.json": {
+    "sha256": "f4cee8aead00ba71cad462633b45d8ae0d873896628f10316b4f121666d83192",
+    "bytes": 190988
+  },
+  ".ros_log/grasp_first_qualified_20260920_015411/keyframes.bag": {
+    "sha256": "31fae246db5e86040766346e30263ae2d0f34ba1c1704742e266562e48e5690b",
+    "bytes": 220964880
+  },
+  ".ros_log/grasp_first_qualified_20260920_015411/deployment.json": {
+    "sha256": "7b7297cdf19f3704728da5f65220997f040a67bda16ce0df688881cdae3729b2",
+    "bytes": 920
+  },
+  ".ros_log/grasp_first_qualified_20260920_015411/run.log": {
+    "sha256": "8bfc038adba7836bd1756a6deeda6fa1daa79bf24325832f9cb7d241b9cceac7",
+    "bytes": 1066
+  },
+  ".ros_log/grasp_first_qualified_20260920_015411/watch.log": {
+    "sha256": "57e5836196434f77241194fa5dc0c8d3763d9650d7e89ff7d48058360bd5a58f",
+    "bytes": 205300
+  }
+}
