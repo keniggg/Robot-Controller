@@ -25,8 +25,8 @@ def _task_fixture():
     return task_fixture.GraspTaskSequenceTest()
 
 
-def make_gateway(monkeypatch, response=True):
-    fk,sdk,actual,goal=recorded_fixture()
+def make_gateway(monkeypatch, response=True, day='20260919'):
+    fk,sdk,actual,goal=recorded_fixture(day)
     fixture=_task_fixture(); plan=fixture._rich_plan()
     plan.diagnostic='CONTACT_EXECUTION_PLAN'
     p=plan.poses[0]
@@ -68,7 +68,8 @@ def make_gateway(monkeypatch, response=True):
             state['moves']+=1;state['now']+=2.
             delta=np.asarray(goal)-state['sdk']
             state['sdk']=np.asarray(goal)
-            if response:state['actual']+=delta
+            if callable(response):state['actual']+=response(delta.copy())
+            elif response:state['actual']+=delta
         return True,'controller result'
     planner.plan_and_execute_joint_probe=execute
     node._ensure_planner=lambda:planner
@@ -166,7 +167,7 @@ def test_real_context_gate_rejects_authority_configuration_and_geometry_changes(
         with pytest.raises(ValueError):node._validate_pregrasp_context(context)
 
 
-@pytest.mark.parametrize('fault',['none','joint2','endpoint','excursion','reference','collision','time'])
+@pytest.mark.parametrize('fault',['none','joint2','held_axis_excursion','endpoint','excursion','reference','collision','time'])
 def test_step_path_checks_exact_goal_held_axis_and_continuous_local_box(monkeypatch,fault):
     node,planner,scene,trajectory=path_fixture(monkeypatch)
     target=np.array([4,0,4,0,0,0]);positions=target*Q
@@ -180,6 +181,7 @@ def test_step_path_checks_exact_goal_held_axis_and_continuous_local_box(monkeypa
         node._observation_controller_hold=lambda _:NS(positions=(0,Q,0,0,0,0),velocities=(0,)*6,accelerations=(0,)*6)
     if fault=='endpoint':trajectory.joint_trajectory.points[-1].positions[0]+=Q
     if fault=='excursion':trajectory.joint_trajectory.points[-1].velocities[0]=.1
+    if fault=='held_axis_excursion':trajectory.joint_trajectory.points[-1].velocities[4]=.01
     if fault=='reference':node._pregrasp_reference=lambda:(2049,)*6
     if fault=='collision':node._validate_frozen_observation_path.side_effect=ValueError('collision')
     if fault=='time':context['deadline']=time.monotonic()+1.
@@ -196,3 +198,20 @@ def test_contact_scene_constructor_does_not_admit_contact_to_observation_route()
     with pytest.raises(ValueError):FrozenObservationScene.from_plan(plan)
     plan.poses[0].position.x+=.001
     with pytest.raises(ValueError):FrozenObservationScene.from_contact_plan(plan)
+
+
+def test_gateway_retains_one_episode_budget_while_holding_unresponsive_axis(monkeypatch):
+    def partial_response(delta):
+        counts=np.rint(delta/Q).astype(int);counts[4]=0
+        if abs(counts[2])==4:counts[2]=int(np.sign(counts[2])*3)
+        return counts*Q
+    node,planner,plan,state,calls,parameters=make_gateway(monkeypatch,partial_response,'20260920')
+    result=node.handle_compensate_pregrasp(NS(plan=plan,execute=True))
+    evidence=json.loads(result.message)
+    assert result.success,evidence
+    assert evidence['held_joints']==['Joint2','Joint5']
+    assert 1<len(calls)<=12 and len(parameters)==1
+    assert evidence['position_error_m']<=.006
+    n=len(calls)
+    assert not node.handle_compensate_pregrasp(NS(plan=plan,execute=True)).success
+    assert len(calls)==n

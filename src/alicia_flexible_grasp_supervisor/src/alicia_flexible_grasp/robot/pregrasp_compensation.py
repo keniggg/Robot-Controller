@@ -2,8 +2,10 @@
 
 The frozen visual pose is the goal. SDK targets are separate command variables.
 Joint2 is held at its initial command: this strategy does not integrate into the
-axis which failed to respond in the recorded pregrasp. Every other commanded
-axis must respond before another step. FK convergence is not absolute accuracy.
+axis which failed to respond in the recorded pregrasp. Weakly responding axes
+are held for the rest of the episode; only bounded directional responses and
+measured Cartesian progress can authorize another step. FK convergence is not
+absolute accuracy.
 """
 from copy import deepcopy
 import math
@@ -49,6 +51,8 @@ class PregraspCompensation:
         self.expected = self.initial_counts
         self.steps, self.pending, self.proposed = 0, None, None
         self.error, self.last_evidence = '', None
+        self.held_axes = set(self.HELD_AXES)
+        self.response_gains = np.ones(6)
         self._validate(initial)
 
     def _fail(self, code):
@@ -85,8 +89,10 @@ class PregraspCompensation:
         return position, orientation
 
     def _cost(self, measured):
-        position, angle = self.residual(measured)
-        return (position/self.tolerances[0])**2 + (angle/self.tolerances[1])**2
+        position, _ = self.residual(measured)
+        # Orientation is a hard admissibility constraint. Do not sacrifice
+        # required position accuracy to improve an already admissible angle.
+        return (position/self.tolerances[0])**2
 
     def evaluate(self, sample):
         actual = self._validate(sample)
@@ -96,10 +102,11 @@ class PregraspCompensation:
             sdk_counts=list(self.expected), measured_counts=actual.tolist(),
             position_error_m=position, orientation_error_rad=angle,
             sdk_stamp_ns=sample['sdk_stamp_ns'], accepted_stamp_ns=sample['accepted_stamp_ns'],
-            steps_completed=self.steps, held_joints=['Joint2'], real_grasp_success=False)
+            steps_completed=self.steps, held_joints=[ARM_NAMES[i] for i in sorted(self.held_axes)],
+            response_gains=self.response_gains.tolist(), real_grasp_success=False)
         self.last_evidence = deepcopy(evidence)
         if self.pending is not None:
-            step, completed_ns, previous_cost = self.pending
+            step, completed_ns, previous_cost, previous_position = self.pending
             if (sample['stationary_window_start_ns'] <= completed_ns
                     or sample['sdk_stamp_ns'] <= step.sdk_stamp_ns
                     or sample['accepted_stamp_ns'] <= step.accepted_stamp_ns):
@@ -107,16 +114,30 @@ class PregraspCompensation:
             delta = np.asarray(step.target_counts)-step.baseline_counts
             response = actual-step.measured_counts
             changed = delta != 0
-            ok = not (np.any(response[changed]*np.sign(delta[changed]) < 2)
+            directional = response*np.sign(delta)
+            bounded = not (np.any(directional[changed] < 0)
                       or np.any(abs(response[changed]) > abs(delta[changed])+2)
                       or np.any(abs(response[~changed]) > 2))
+            strong = changed & (directional >= 2)
+            weak = changed & (directional < 2)
             evidence['last_step_response'] = dict(command_delta_counts=delta.tolist(),
-                measured_delta_counts=response.tolist(), bounded_directional_response=bool(ok))
+                measured_delta_counts=response.tolist(),
+                bounded_directional_response=bool(bounded and not np.any(weak)),
+                partial_bounded_response=bool(bounded and np.any(strong) and np.any(weak)),
+                newly_held_joints=[ARM_NAMES[i] for i in np.flatnonzero(weak)])
             self.last_evidence = deepcopy(evidence)
-            if not ok:
+            if not bounded or not np.any(strong):
                 self._fail('PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE')
-            if self._cost(measured) >= previous_cost-1e-4:
+            if self._cost(measured) >= previous_cost-1e-4 or position >= previous_position-1e-6:
                 self._fail('PREGRASP_NO_CARTESIAN_PROGRESS')
+            # Do not integrate another command into an axis with <2 counts
+            # of directional response. Keep its last SDK word, not its measured
+            # angle, and monitor it as an uncommanded axis on later steps.
+            self.held_axes.update(int(i) for i in np.flatnonzero(weak))
+            self.response_gains[strong] = np.minimum(1., directional[strong]/abs(delta[strong]))
+            evidence['held_joints'] = [ARM_NAMES[i] for i in sorted(self.held_axes)]
+            evidence['response_gains'] = self.response_gains.tolist()
+            self.last_evidence = deepcopy(evidence)
             self.pending = None
         self.proposed = None
         if position <= self.tolerances[0] and angle <= self.tolerances[1]:
@@ -134,7 +155,7 @@ class PregraspCompensation:
         for _ in range(3):
             changed = False
             for axis in range(6):
-                if axis in self.HELD_AXES:
+                if axis in self.held_axes:
                     continue
                 chosen = delta[axis]
                 for value in (-4, -2, 0, 2, 4):
@@ -144,9 +165,23 @@ class PregraspCompensation:
                     if (np.any(target < 0) or np.any(target > 4095)
                             or max(abs(target-np.asarray(self.initial_counts))) > self.MAX_TOTAL_COUNTS):
                         continue
+                    active = trial != 0
+                    # A change of SDK word is not a change of measured angle.
+                    # Do not credit a command that ends inside the two-count
+                    # response band around the measurement. A static following
+                    # offset can lie on either side of the command, so its sign
+                    # alone does not establish the next physical response.
+                    if np.any(abs(target-actual)[active] < 2):
+                        continue
+                    # Preserve the .035-rad following bound even for a response
+                    # of only the admitted two-count minimum; prefer smaller
+                    # steps before an underresponding axis exhausts this margin.
+                    minimum_response = actual+2*np.sign(trial)
+                    if np.any(abs(target-minimum_response)*Q > .035):
+                        continue
                     try:
                         self.fk((target-2048)*Q)  # command as well as measured limits
-                        predicted = measured+trial*Q
+                        predicted = measured+trial*self.response_gains*Q
                         p, a = self.residual(predicted)
                         score = self._cost(predicted)
                     except ValueError:
@@ -163,9 +198,10 @@ class PregraspCompensation:
             tuple(actual.tolist()), sample['sdk_stamp_ns'], sample['accepted_stamp_ns'])
         evidence['proposed_delta_counts'] = delta.tolist()
         evidence['predicted_position_error_m'], evidence['predicted_orientation_error_rad'] = (
-            self.residual(measured+delta*Q))
+            self.residual(measured+delta*self.response_gains*Q))
         self.last_evidence = deepcopy(evidence)
         self.proposed_cost = initial_cost
+        self.proposed_position = position
         return 'PREGRASP_STEP_PROPOSED', self.proposed, evidence
 
     def committed(self, step, completed_sec):
@@ -174,6 +210,6 @@ class PregraspCompensation:
                 or not self.started <= completed_sec <= self.started+self.MAX_SECONDS):
             self._fail('PREGRASP_COMMIT_INVALID')
         self.expected = step.target_counts
-        self.pending = step, int(completed_sec*1e9), self.proposed_cost
+        self.pending = step, int(completed_sec*1e9), self.proposed_cost, self.proposed_position
         self.proposed = None
         self.steps += 1

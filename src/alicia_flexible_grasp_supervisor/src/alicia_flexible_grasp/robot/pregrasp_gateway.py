@@ -99,11 +99,15 @@ class PregraspCompensationGateway:
                 raise ObservationPathError('PREGRASP_PATH_LEAVES_FOUR_COUNT_BOX')
             if np.any(low < origin-32*Q-1e-9) or np.any(high > origin+32*Q+1e-9):
                 raise ObservationPathError('PREGRASP_PATH_LEAVES_TOTAL_COUNT_BOX')
-            j2 = names.index('Joint2')
             # The controller reference can be fractional while the wire SDK
-            # target is quantized. Stay inside the SAME encoder command cell.
-            if low[j2] < b[j2]-Q/2 or high[j2] >= b[j2]+Q/2:
-                raise ObservationPathError('PREGRASP_PATH_MOVES_HELD_JOINT2')
+            # target is quantized. Every uncommanded axis, including one retired
+            # after weak response, must stay in the SAME encoder command cell.
+            for axis, name in enumerate(ARM_NAMES):
+                if step.target_counts[axis] != step.baseline_counts[axis]:
+                    continue
+                j = names.index(name)
+                if low[j] < b[j]-Q/2 or high[j] >= b[j]+Q/2:
+                    raise ObservationPathError('PREGRASP_PATH_MOVES_HELD_AXIS: '+name)
         audit = self._validate_frozen_observation_path(
             (context['scene'], context['revocation']), trajectory, planner,
             context_validator=lambda:self._validate_pregrasp_context(context))
@@ -202,7 +206,11 @@ class PregraspCompensationGateway:
                 raise ObservationPathError('PREGRASP_STEP_BUDGET')
             except Exception as exc:
                 if correction is not None and correction.last_evidence is not None:
-                    evidence.update(deepcopy(correction.last_evidence))
+                    # Do not mix a previous proposal's prediction with the
+                    # current failed feedback snapshot.
+                    metadata = {k:evidence[k] for k in ('plan_id','epoch_ns','execution_requested',
+                                'model_sha256') if k in evidence}
+                    evidence = dict(deepcopy(correction.last_evidence), **metadata)
                 evidence.update(code=str(exc),success=False,real_grasp_success=False,
                                 no_implicit_rollback_or_torque_disable=True)
                 rospy.logwarn('Pregrasp compensation stopped: %s',json.dumps(evidence))

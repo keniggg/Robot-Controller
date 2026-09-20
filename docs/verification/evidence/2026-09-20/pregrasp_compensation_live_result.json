@@ -1,0 +1,604 @@
+{
+  "label": "2026.9.20 physical pregrasp compensation attempt",
+  "directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_pregrasp_compensation_20260920_002450",
+  "deployment": {
+    "commit": "c7abe056d476ccab16b70e481b17c0c89cc40fc3",
+    "task_pid": 159839,
+    "gateway_pid": 160019,
+    "driver_pid": 7197,
+    "only_parameter_added": "/grasp/pregrasp_cartesian_compensation_enabled",
+    "measured_positions_unchanged": true,
+    "safety_ok": true,
+    "source_sha256": {
+      "src/alicia_flexible_grasp_supervisor/scripts/grasp_task_node.py": "bb7f463d11044f7371bf5cf43d2478f5372689384152d452db8d00c0d3e0c2c2",
+      "src/alicia_flexible_grasp_supervisor/scripts/motion_gateway_node.py": "d0b0e4fdccecceeca3b82a766648a05818da8bb8393859ee55d3755e7881eddc",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "dda0f1c9c8bf8d77b89285316ea5e397695a667ad8295726facd84b5a5dad2a7",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_gateway.py": "51c00949e4c7bedbcc85f58a06b569314e39f4452d8f09c37465eb6ee22e3b85"
+    }
+  },
+  "bag_start_sec": 1789889206.8415747,
+  "bag_end_sec": 1789889565.8255582,
+  "topic_counts": {
+    "/tf_static": 2,
+    "/grasp/near_field_phase": 4,
+    "/grasp_6d/plan_enriched": 2,
+    "/experiment/runtime_execution_error_snapshot": 2,
+    "/grasp_6d/object_geometry": 6,
+    "/grasp_6d/preview_plan_enriched": 3,
+    "/grasp/state": 13,
+    "/gui/joint_direct_mode": 1,
+    "/grasp_6d/gate_audit": 6,
+    "/alicia_controller/follow_joint_trajectory/status": 1803,
+    "/grasp_6d/status": 4,
+    "/alicia_controller/state": 17923,
+    "/alicia_d/sdk_diagnostics": 3780,
+    "/alicia_d/temperatures_c": 194,
+    "/alicia_d/run_status": 3394,
+    "/alicia_d/motion_enabled": 8379,
+    "/alicia_d/actuation_status": 8378,
+    "/alicia_d/control_reference_epoch": 1,
+    "/rosout_agg": 2747,
+    "/joint_states": 21284,
+    "/tf": 11779,
+    "/alicia_d/sdk_command": 4984,
+    "/alicia_d/control_reference": 4984,
+    "/alicia_d/accepted_joint_states": 3392,
+    "/supervisor/camera/color/image_raw": 204,
+    "/supervisor/camera/depth/image_raw": 204,
+    "/perception/object_mask": 204,
+    "/perception/object": 204,
+    "/alicia_controller/follow_joint_trajectory/goal": 4,
+    "/alicia_controller/follow_joint_trajectory/result": 4,
+    "/joint_commands": 5507
+  },
+  "compensation_events": [
+    {
+      "stamp_sec": 1789889558.0497305,
+      "kind": "Pregrasp Cartesian compensation",
+      "report": {
+        "fixed_goal_pose": [
+          -0.11509377726563619,
+          -0.4209914612301669,
+          0.1439575421862514,
+          0.24262209107794291,
+          0.9482222874943677,
+          -0.1205856637712407,
+          0.1657350660324014
+        ],
+        "initial_sdk_counts": [
+          748,
+          1544,
+          3067,
+          1804,
+          1137,
+          3042
+        ],
+        "sdk_counts": [
+          748,
+          1544,
+          3067,
+          1804,
+          1137,
+          3042
+        ],
+        "measured_counts": [
+          752,
+          1527,
+          3052,
+          1811,
+          1140,
+          3037
+        ],
+        "position_error_m": 0.018330023503379027,
+        "orientation_error_rad": 0.0487477623005303,
+        "sdk_stamp_ns": 1789889557901591770,
+        "accepted_stamp_ns": 1789889557913880778,
+        "steps_completed": 0,
+        "held_joints": [
+          "Joint2"
+        ],
+        "real_grasp_success": false,
+        "proposed_delta_counts": [
+          -2,
+          0,
+          4,
+          -4,
+          4,
+          4
+        ],
+        "predicted_position_error_m": 0.015741969494409317,
+        "predicted_orientation_error_rad": 0.03408303302381823,
+        "code": "PREGRASP_STEP_PROPOSED",
+        "plan_id": "39cd0f09257e7c1039fff1eb",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7"
+      }
+    },
+    {
+      "stamp_sec": 1789889562.5317738,
+      "kind": "Pregrasp compensation stopped",
+      "report": {
+        "fixed_goal_pose": [
+          -0.11509377726563619,
+          -0.4209914612301669,
+          0.1439575421862514,
+          0.24262209107794291,
+          0.9482222874943677,
+          -0.1205856637712407,
+          0.1657350660324014
+        ],
+        "initial_sdk_counts": [
+          748,
+          1544,
+          3067,
+          1804,
+          1137,
+          3042
+        ],
+        "sdk_counts": [
+          746,
+          1544,
+          3071,
+          1800,
+          1141,
+          3046
+        ],
+        "measured_counts": [
+          750,
+          1527,
+          3055,
+          1807,
+          1140,
+          3041
+        ],
+        "position_error_m": 0.016547458311070688,
+        "orientation_error_rad": 0.04118411752762701,
+        "sdk_stamp_ns": 1789889562359687099,
+        "accepted_stamp_ns": 1789889562313845308,
+        "steps_completed": 1,
+        "held_joints": [
+          "Joint2"
+        ],
+        "real_grasp_success": false,
+        "proposed_delta_counts": [
+          -2,
+          0,
+          4,
+          -4,
+          4,
+          4
+        ],
+        "predicted_position_error_m": 0.015741969494409317,
+        "predicted_orientation_error_rad": 0.03408303302381823,
+        "code": "PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE",
+        "plan_id": "39cd0f09257e7c1039fff1eb",
+        "epoch_ns": 1789875872459441743,
+        "execution_requested": true,
+        "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+        "last_step_response": {
+          "command_delta_counts": [
+            -2,
+            0,
+            4,
+            -4,
+            4,
+            4
+          ],
+          "measured_delta_counts": [
+            -2,
+            0,
+            3,
+            -4,
+            0,
+            4
+          ],
+          "bounded_directional_response": false
+        },
+        "success": false,
+        "no_implicit_rollback_or_torque_disable": true
+      }
+    }
+  ],
+  "action_goals": [
+    {
+      "stamp_sec": 1789889397.3039732,
+      "id": "/motion_gateway-1-1789889397.303",
+      "duration_sec": 0.3,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.8315730607354532,
+        0.4555922940020359,
+        -0.1932815792735907,
+        -0.04755340442445488,
+        -0.21322332951610434,
+        0.13038836697027933
+      ],
+      "final_counts": [
+        854,
+        2345,
+        1922,
+        2017,
+        1909,
+        2133
+      ],
+      "path_tolerance": {}
+    },
+    {
+      "stamp_sec": 1789889411.3556416,
+      "id": "/motion_gateway-2-1789889411.355",
+      "duration_sec": 17.484864881,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.931931491639914,
+        -0.12950737392480177,
+        0.6640251141022729,
+        -0.0742991552293299,
+        -1.0350025825551914,
+        0.25337358565323803
+      ],
+      "final_counts": [
+        789,
+        1964,
+        2481,
+        2000,
+        1373,
+        2213
+      ],
+      "path_tolerance": {
+        "Joint1": 0.09,
+        "Joint2": 0.09,
+        "Joint3": 0.09,
+        "Joint4": 0.09,
+        "Joint5": 0.09,
+        "Joint6": 0.09
+      }
+    },
+    {
+      "stamp_sec": 1789889466.2053032,
+      "id": "/move_group-3-1789889466.201744484",
+      "duration_sec": 90.627566584,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.9941412367925615,
+        -0.7729298379443916,
+        1.5632362655258194,
+        -0.3747447910900288,
+        -1.3976871246969846,
+        1.524426181165296
+      ],
+      "final_counts": [
+        748,
+        1544,
+        3067,
+        1804,
+        1137,
+        3042
+      ],
+      "path_tolerance": {}
+    },
+    {
+      "stamp_sec": 1789889558.8680098,
+      "id": "/motion_gateway-3-1789889558.867",
+      "duration_sec": 3.0,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.9972429858271048,
+        -0.7731263170943632,
+        1.569262346007011,
+        -0.380427235395639,
+        -1.3913205746122765,
+        1.53091282630987
+      ],
+      "final_counts": [
+        746,
+        1544,
+        3071,
+        1800,
+        1141,
+        3046
+      ],
+      "path_tolerance": {
+        "Joint1": 0.06,
+        "Joint2": 0.06,
+        "Joint3": 0.06,
+        "Joint4": 0.06,
+        "Joint5": 0.06,
+        "Joint6": 0.06
+      }
+    }
+  ],
+  "action_results": [
+    {
+      "stamp_sec": 1789889397.6807344,
+      "id": "/motion_gateway-1-1789889397.303",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789889428.9065418,
+      "id": "/motion_gateway-2-1789889411.355",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789889556.9061387,
+      "id": "/move_group-3-1789889466.201744484",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    },
+    {
+      "stamp_sec": 1789889561.9192615,
+      "id": "/motion_gateway-3-1789889558.867",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    }
+  ],
+  "stage_transitions": [
+    {
+      "stamp_sec": 1789875350.8895802,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    {
+      "stamp_sec": 1789889245.566827,
+      "stage": 0,
+      "state": "IDLE",
+      "active": false,
+      "success": false,
+      "message": "ready"
+    },
+    {
+      "stamp_sec": 1789889394.5982633,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "far-field observation plan; contact simulation deferred until near-field replan"
+    },
+    {
+      "stamp_sec": 1789889394.6477005,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "using 6D grasp plan"
+    },
+    {
+      "stamp_sec": 1789889394.6728363,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "preflight planning 6D observation pregrasp"
+    },
+    {
+      "stamp_sec": 1789889395.8661675,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "planning 6D pregrasp"
+    },
+    {
+      "stamp_sec": 1789889397.0112157,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "moving 6D pregrasp"
+    },
+    {
+      "stamp_sec": 1789889432.4031372,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "waiting for near-field 6D preview"
+    },
+    {
+      "stamp_sec": 1789889465.7231944,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "near-field 6D plan rebound: 39cd0f09257e7c1039fff1eb"
+    },
+    {
+      "stamp_sec": 1789889465.7518451,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "planning 6D near-field pregrasp"
+    },
+    {
+      "stamp_sec": 1789889465.7982552,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "moving 6D near-field pregrasp"
+    },
+    {
+      "stamp_sec": 1789889562.5462403,
+      "stage": 7,
+      "state": "FAILED",
+      "active": true,
+      "success": false,
+      "message": "PREGRASP_COMPENSATION_FAILED: {\"fixed_goal_pose\": [-0.11509377726563619, -0.4209914612301669, 0.1439575421862514, 0.24262209107794291, 0.9482222874943677, -0.1205856637712407, 0.1657350660324014], \"initial_sdk_counts\": [748, 1544, 3067, 1804, 1137, 3042], \"sdk_counts\": [746, 1544, 3071, 1800, 1141, 3046], \"measured_counts\": [750, 1527, 3055, 1807, 1140, 3041], \"position_error_m\": 0.016547458311070688, \"orientation_error_rad\": 0.04118411752762701, \"sdk_stamp_ns\": 1789889562359687099, \"accepted_stamp_ns\": 1789889562313845308, \"steps_completed\": 1, \"held_joints\": [\"Joint2\"], \"real_grasp_success\": false, \"proposed_delta_counts\": [-2, 0, 4, -4, 4, 4], \"predicted_position_error_m\": 0.015741969494409317, \"predicted_orientation_error_rad\": 0.03408303302381823, \"code\": \"PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE\", \"plan_id\": \"39cd0f09257e7c1039fff1eb\", \"epoch_ns\": 1789875872459441743, \"execution_requested\": true, \"model_sha256\": \"890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7\", \"last_step_response\": {\"command_delta_counts\": [-2, 0, 4, -4, 4, 4], \"measured_delta_counts\": [-2, 0, 3, -4, 0, 4], \"bounded_directional_response\": false}, \"success\": false, \"no_implicit_rollback_or_torque_disable\": true}"
+    },
+    {
+      "stamp_sec": 1789889562.554052,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    }
+  ],
+  "post_step_accepted_window": {
+    "frame_count": 38,
+    "first_stamp_sec": 1789889562.013836,
+    "last_stamp_sec": 1789889565.7138271,
+    "span_sec": 3.699991226196289,
+    "unique_joint_counts": [
+      [
+        750,
+        1527,
+        3055,
+        1807,
+        1140,
+        3041
+      ]
+    ],
+    "unique_gripper_openings": [
+      0.04975
+    ]
+  },
+  "gripper_opening_range_m": [
+    0.04975,
+    0.04975
+  ],
+  "outcome": {
+    "success": false,
+    "terminal_stage": "FAILED",
+    "failure_code": "PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE",
+    "compensation_steps": 1,
+    "position_before_mm": 18.330023503379028,
+    "position_after_mm": 16.547458311070688,
+    "orientation_before_deg": 2.793041040527331,
+    "orientation_after_deg": 2.359676117303786,
+    "compensation_command_delta_counts": [
+      -2,
+      0,
+      4,
+      -4,
+      4,
+      4
+    ],
+    "compensation_measured_delta_counts": [
+      -2,
+      0,
+      3,
+      -4,
+      0,
+      4
+    ],
+    "nonresponding_commanded_joints": [
+      "Joint5"
+    ],
+    "joint2_held_by_policy": true,
+    "approach_close_lift_executed": false,
+    "physical_grasp_success": false,
+    "endpoint_measurement": "encoder FK, not external absolute measurement",
+    "raw_serial_packets_recorded": false
+  },
+  "independent_fk_recompute": {
+    "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+    "matches_live_logs": true,
+    "checks": [
+      {
+        "position_error_m": 0.01833002350337891,
+        "orientation_error_rad": 0.04874776230053486,
+        "actual_xyz": [
+          -0.11255945039429632,
+          -0.4170286980348688,
+          0.12624135024775573
+        ],
+        "measured_counts": [
+          752,
+          1527,
+          3052,
+          1811,
+          1140,
+          3037
+        ]
+      },
+      {
+        "position_error_m": 0.016547458311070594,
+        "orientation_error_rad": 0.04118411752762701,
+        "actual_xyz": [
+          -0.11322599282944398,
+          -0.41790593814486193,
+          0.12780795070081166
+        ],
+        "measured_counts": [
+          750,
+          1527,
+          3055,
+          1807,
+          1140,
+          3041
+        ]
+      }
+    ]
+  },
+  "late_readonly_confirmation": {
+    "accepted_stamp_sec": 1789889609.1141424,
+    "seconds_after_compensation_result": 47.194880962371826,
+    "measured_counts": [
+      750,
+      1527,
+      3055,
+      1807,
+      1140,
+      3041
+    ],
+    "state": {
+      "header": {
+        "seq": 18,
+        "stamp": {
+          "secs": 1789889562,
+          "nsecs": 554052114
+        },
+        "frame_id": ""
+      },
+      "state": "FAILED",
+      "stage": 7,
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    "inference_status": {
+      "data": "continuous remote 6D inference stopped"
+    },
+    "manual_mode": false,
+    "motion_enabled": true
+  }
+}

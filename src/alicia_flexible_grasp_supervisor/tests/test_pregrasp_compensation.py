@@ -11,8 +11,8 @@ from alicia_flexible_grasp.robot.pregrasp_compensation import PregraspCompensati
 from alicia_flexible_grasp.robot.stationary_following import ARM_NAMES, SerialUrdfFk, SDK_QUANTUM_RAD as Q
 
 
-def recorded_fixture():
-    record = json.loads((Path(__file__).parent/'fixtures/pregrasp_following_20260919.json').read_text())
+def recorded_fixture(day='20260919'):
+    record = json.loads((Path(__file__).parent/('fixtures/pregrasp_following_'+day+'.json')).read_text())
     fk = SerialUrdfFk(record['robot_description'], ARM_NAMES)
     assert fk.model_sha256 == record['model_sha256']
     sdk = (np.array(record['initial_sdk_counts'])-2048)*Q
@@ -39,7 +39,7 @@ def test_recorded_pretrim_pose_converges_under_explicit_other_axes_response_hypo
         actual += delta*Q  # hypothetical responsive plant, not a physical replay
         assert sdk[1] == held
     assert code == 'PREGRASP_MEASURED_CONVERGED'
-    assert evidence['position_error_m'] == pytest.approx(.00566169967,abs=1e-8)
+    assert evidence['position_error_m'] <= .006
     assert evidence['orientation_error_rad'] < math.radians(5)
     assert correction.steps == 8
     assert evidence['real_grasp_success'] is False
@@ -47,7 +47,7 @@ def test_recorded_pretrim_pose_converges_under_explicit_other_axes_response_hypo
     assert not np.array_equal(sdk,actual)  # never pretend the encoder equals the command
 
 
-@pytest.mark.parametrize('kind',['stalled','partial','reverse','overshoot','held_joint_moves'])
+@pytest.mark.parametrize('kind',['stalled','reverse','overshoot','held_joint_moves'])
 def test_response_failure_stops_without_another_step_or_rollback(kind):
     fk,sdk,actual,goal = recorded_fixture()
     c = PregraspCompensation(fk,sample(fk,sdk,actual),goal)
@@ -55,7 +55,6 @@ def test_response_failure_stops_without_another_step_or_rollback(kind):
     delta = np.array(step.target_counts)-step.baseline_counts
     response = delta.copy()
     if kind == 'stalled': response[:] = 0
-    if kind == 'partial': response[2] = 0
     if kind == 'reverse': response = -response
     if kind == 'overshoot': response = response*2
     if kind == 'held_joint_moves': response[1] = 3
@@ -123,3 +122,83 @@ def test_goal_outside_local_capture_range_is_rejected():
 @pytest.mark.parametrize('goal',[[0.]*7,[0.]*6,[0.,0.,0.,0.,0.,0.,float('nan')]])
 def test_invalid_visual_pose_is_rejected(goal):
     with pytest.raises(ValueError):pose_matrix(goal)
+
+
+def test_live_joint5_target_inside_response_band_is_not_credited_as_four_counts():
+    fk,sdk,actual,goal=recorded_fixture('20260920')
+    c=PregraspCompensation(fk,sample(fk,sdk,actual),goal)
+    _,step,_=c.evaluate(sample(fk,sdk,actual))
+    delta=np.asarray(step.target_counts)-step.baseline_counts
+    assert step.baseline_counts[4]==1137 and step.measured_counts[4]==1140
+    assert delta[4]==0  # 1137+4=1141 is only one count from 1140
+    assert max(abs(delta))<=4 and delta[1]==0
+
+
+@pytest.mark.parametrize('response_counts',[0,1])
+def test_partial_progress_holds_weak_axis_without_aborting_responsive_axes(response_counts):
+    fk,sdk,actual,goal=recorded_fixture()
+    c=PregraspCompensation(fk,sample(fk,sdk,actual),goal)
+    _,first,_=c.evaluate(sample(fk,sdk,actual));delta=np.array(first.target_counts)-first.baseline_counts
+    assert delta[2]==4
+    delta[2]=response_counts
+    c.committed(first,11.)
+    after=actual+delta*Q
+    _,second,report=c.evaluate(sample(fk,first.positions,after,13.))
+    assert second is not None
+    assert report['last_step_response']['partial_bounded_response']
+    assert report['last_step_response']['newly_held_joints']==['Joint3']
+    assert c.held_axes=={1,2}
+    assert second.target_counts[2]==first.target_counts[2]
+    assert report['position_error_m']<c.residual(actual)[0]
+    # A late movement of the held axis is still monitored, not masked.
+    second_delta=np.array(second.target_counts)-second.baseline_counts
+    second_delta[2]=3
+    c.committed(second,14.)
+    with pytest.raises(ValueError,match='NO_BOUNDED_DIRECTIONAL_RESPONSE'):
+        c.evaluate(sample(fk,second.positions,after+second_delta*Q,16.))
+
+
+def test_exact_recorded_partial_response_can_continue_without_commanding_joint5_again():
+    from alicia_flexible_grasp.robot.endpoint_correction import CorrectionStep
+    fk,sdk,actual,goal=recorded_fixture('20260920')
+    record=json.loads((Path(__file__).parent/'fixtures/pregrasp_following_20260920.json').read_text())
+    c=PregraspCompensation(fk,sample(fk,sdk,actual),goal)
+    _,proposal,_=c.evaluate(sample(fk,sdk,actual))
+    target=tuple((np.array(proposal.baseline_counts)+record['recorded_command_delta_counts']).tolist())
+    # Seed the exact previously admitted historical command, not a claim that
+    # the revised search would issue the old ineffective Joint5 command.
+    issued=CorrectionStep(proposal.baseline_counts,target,proposal.measured_counts,
+                          proposal.sdk_stamp_ns,proposal.accepted_stamp_ns)
+    c.proposed=issued;c.committed(issued,11.)
+    after=actual+np.array(record['recorded_measured_delta_counts'])*Q
+    code,step,report=c.evaluate(sample(fk,issued.positions,after,13.))
+    assert code=='PREGRASP_STEP_PROPOSED'
+    assert report['position_error_m']==pytest.approx(.016547458311,abs=1e-10)
+    assert report['held_joints']==['Joint2','Joint5']
+    assert step.target_counts[4]==1141
+    assert c.response_gains[2]==.75
+
+
+@pytest.mark.parametrize('joint3_loses_one_count',[False,True])
+def test_live_pose_hypothesis_converges_with_stalled_joint5_and_partial_joint3(joint3_loses_one_count):
+    fk,sdk,actual,goal=recorded_fixture('20260920')
+    c=PregraspCompensation(fk,sample(fk,sdk,actual),goal)
+    immutable=c.goal.copy();initial_sdk=sdk.copy();held5=None
+    for i in range(c.MAX_STEPS+1):
+        code,step,e=c.evaluate(sample(fk,sdk,actual,10+i*3))
+        if step is None:break
+        delta=np.asarray(step.target_counts)-step.baseline_counts
+        if 4 in c.held_axes:
+            assert delta[4]==0
+            held5=step.target_counts[4] if held5 is None else held5
+            assert step.target_counts[4]==held5
+        c.committed(step,11+i*3);sdk=np.array(step.positions)
+        delta[4]=0
+        if joint3_loses_one_count and abs(delta[2])==4:delta[2]=int(np.sign(delta[2])*3)
+        actual+=delta*Q
+        assert max(abs(sdk-initial_sdk))<=32*Q+1e-12
+        assert max(abs(sdk-actual))<=.035
+    assert code=='PREGRASP_MEASURED_CONVERGED'
+    assert e['position_error_m']<=.006 and e['orientation_error_rad']<=math.radians(5)
+    assert np.array_equal(c.goal,immutable) and 4 in c.held_axes
+    assert c.steps<=12

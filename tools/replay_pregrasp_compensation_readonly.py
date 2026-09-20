@@ -75,9 +75,14 @@ def replay(record, response, *, check_paths=False):
             delta=np.array(step.target_counts)-step.baseline_counts
             c.committed(step,11.+3*index)
             sdk=np.array(step.positions)
-            if response=='other_five_axes_repeatable':actual+=delta*Q
-            elif response=='joint3_stalled':
-                delta[2]=0;actual+=delta*Q
+            if response=='joint3_stalled':delta[2]=0
+            elif response in ('joint5_stalled','joint3_partial_joint5_stalled'):
+                delta[4]=0
+                if response=='joint3_partial_joint5_stalled' and abs(delta[2])==4:
+                    delta[2]=int(np.sign(delta[2])*3)
+            elif response=='all_axes_stalled':delta[:]=0
+            elif response!='other_five_axes_repeatable':raise ValueError('unknown response hypothesis')
+            actual+=delta*Q
         terminal=code
     except ValueError as exc:
         terminal=str(exc)
@@ -92,10 +97,14 @@ def main():
         'src/alicia_flexible_grasp_supervisor/tests/fixtures/pregrasp_following_20260919.json')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--check-paths',action='store_true')
+    parser.add_argument('--response',action='append',choices=(
+        'other_five_axes_repeatable','all_axes_stalled','joint3_stalled',
+        'joint5_stalled','joint3_partial_joint5_stalled'))
     args=parser.parse_args()
     record=json.loads(args.fixture.read_text())
-    results=[replay(record,response,check_paths=args.check_paths and response=='other_five_axes_repeatable')
-             for response in ('other_five_axes_repeatable','all_axes_stalled','joint3_stalled')]
+    responses=args.response or ('other_five_axes_repeatable','all_axes_stalled','joint3_stalled')
+    results=[replay(record,response,check_paths=args.check_paths and response!='all_axes_stalled')
+             for response in responses]
     report=dict(scope='recorded_initial_encoders_plus_explicit_response_hypotheses',
         model_sha256=record['model_sha256'],synthetic_clock=True,grasp_success=False,
         physical_motion_executed=False,results=results)
