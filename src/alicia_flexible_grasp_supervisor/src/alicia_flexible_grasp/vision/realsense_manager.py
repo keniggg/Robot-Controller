@@ -16,6 +16,7 @@ class RealSenseManager:
         simulate=False,
         depth_filter_cfg=None,
         color_projection_cfg=None,
+        mode_depth_preset_cfg=None,
     ):
         self.width = int(width)
         self.height = int(height)
@@ -25,6 +26,8 @@ class RealSenseManager:
         self.depth_filter_cfg = dict(depth_filter_cfg or {})
         self.color_projection_cfg = dict(color_projection_cfg or {})
         self.color_projection_correction = None
+        self.mode_depth_preset_cfg = dict(mode_depth_preset_cfg or {})
+        self.mode_depth_preset = None
         self.pipeline = None
         self.align = None
         self.rs = None
@@ -56,11 +59,30 @@ class RealSenseManager:
             self._configure_color_projection(profile)
             self._configure_depth_filters()
             self.runtime_profile = self._read_runtime_profile(profile)
+            if self.mode_depth_preset_cfg.get("enabled", False):
+                from .depth_preset import ModeDepthPreset
+                self.mode_depth_preset = ModeDepthPreset(
+                    rs, profile.get_device(), self.mode_depth_preset_cfg, self.depth_scale)
             return True
         except Exception as exc:
             raise RuntimeError('Failed to start RealSense: %s' % exc)
 
+    def set_depth_preset_mode(self, mode):
+        if self.mode_depth_preset is None:
+            return False
+        changed = self.mode_depth_preset.apply(mode)
+        if changed:
+            self.runtime_profile['mode_depth_preset'] = self.mode_depth_preset.evidence()
+        return changed
+
     def stop(self):
+        try:
+            if self.mode_depth_preset is not None:
+                self.mode_depth_preset.close()
+        finally:
+            self._stop_pipeline()
+
+    def _stop_pipeline(self):
         if self.pipeline is not None:
             try:
                 self.pipeline.stop()

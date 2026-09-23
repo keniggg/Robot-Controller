@@ -67,11 +67,17 @@ class CameraNode:
                 if not np.isclose(float(self.cfg[key]), float(target[key]), rtol=0, atol=1e-6):
                     raise ValueError('camera/%s must match the corrected RGB-D SDK projection' % key)
             camera_args['color_projection_cfg'] = projection_cfg
+        preset_cfg = dict(self.cfg.get('mode_depth_preset', {}) or {})
+        if preset_cfg.get('enabled', False):
+            if simulate:
+                raise ValueError('mode depth preset requires a real camera')
+            camera_args['mode_depth_preset_cfg'] = preset_cfg
         return RealSenseManager(**camera_args)
 
     def _start_camera(self, simulate):
         self.cam = self._make_camera(simulate)
         self.cam.start()
+        self._sync_depth_preset(publish=False)
         self._publish_runtime_camera_params()
         self._camera_started = True
         mode = 'simulated' if simulate else 'real'
@@ -206,6 +212,14 @@ class CameraNode:
                       current['intrinsics_source'], float(current.get('fx', 0.)),
                       float(current.get('fy', 0.)), float(current.get('depth_scale', 0.)))
 
+    def _sync_depth_preset(self, publish=True):
+        if not self.cfg.get('mode_depth_preset', {}).get('enabled', False):
+            return
+        selection = rospy.get_param('/grasp_mode/selection', {'mode': 'carton'})
+        mode = selection.get('mode')
+        if self.cam.set_depth_preset_mode(mode) and publish:
+            self._publish_runtime_camera_params()
+
     def _publication_is_due(self):
         now = self._monotonic()
         previous = self._last_publish_monotonic
@@ -242,6 +256,7 @@ class CameraNode:
                     self.rate.sleep()
                     continue
             try:
+                self._sync_depth_preset()
                 color, depth = self.cam.read()
                 self._read_failures = 0
             except Exception as exc:
