@@ -661,6 +661,13 @@ robot:
   # reached 0.08 rad/s on Joint3 and 0.23 rad/s on Joint4/6 after driver repair.
   # Verify following during the actual observation; contact retains its limits.
   observation_max_joint_velocity_rad_s: 0.08
+  # Unknown-object observations only. Contact/carton keep their existing
+  # timing. Collinear paths retain every point and use C2 acceleration ramps;
+  # all controller-reference speed, acceleration and CAD proofs still apply.
+  unknown_observation_timing:
+    enabled: true
+    velocity_scaling: 0.30
+    acceleration_scaling: 0.20
   # Search pose-independent per-goal tracking contracts. The exact selected
   # path tolerance is sent to FollowJointTrajectory; continuous CAD includes
   # the commanded stopping reserve. This is not a physical stopping proof.

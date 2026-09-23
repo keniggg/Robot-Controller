@@ -2485,6 +2485,16 @@ class MoveItPlanner:
             return None, 'strict execution retiming returned an empty trajectory'
         if not self._same_joint_path_geometry(plan, retimed):
             return None, 'strict execution retiming changed the planned joint path'
+        if getattr(self, 'observation_smooth_timing_enabled', False) is True:
+            from .observation_timing import smooth_collinear_observation
+            names = list(retimed.joint_trajectory.joint_names)
+            limits = self._controller_reference_velocity_limits(names)
+            smooth = smooth_collinear_observation(
+                retimed, limits, minimum_duration=self.strict_execution_min_duration_sec)
+            if smooth is not None:
+                if not self._same_joint_path_geometry(plan, smooth, tolerance=0.):
+                    return None, 'smooth observation timing changed the planned joint path'
+                retimed = smooth
 
         trajectory = getattr(retimed, 'joint_trajectory', None)
         points = list(getattr(trajectory, 'points', []) or [])

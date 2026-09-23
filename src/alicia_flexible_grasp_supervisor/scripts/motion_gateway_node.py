@@ -35,6 +35,7 @@ from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages, STATE_N
 from alicia_flexible_grasp.robot.actuation_bootstrap import PENDING_BOOTSTRAP_STATES
 from alicia_flexible_grasp.robot.stationary_following import stationary_following_error, ARM_NAMES
 from alicia_flexible_grasp.robot.observation_preview import encode_path_evidence
+from alicia_flexible_grasp.robot.observation_timing import observation_timing
 from alicia_flexible_grasp.robot.endpoint_correction import EndpointCorrection
 from alicia_flexible_grasp.robot.pregrasp_gateway import PregraspCompensationGateway
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -225,6 +226,11 @@ class MotionGateway(PregraspCompensationGateway):
                 planner.strict_execution_joint_velocity_limits_rad_s = {}
                 planner.observation_branch_hints_enabled = True
                 self._observation_planner = planner
+            try:
+                timing_key = self._configure_observation_timing(planner)
+            except ValueError as exc:
+                planner._last_pose_plan = None
+                return SetTargetPoseResponse(False, 'OBSERVATION_TIMING_INVALID: ' + str(exc))
             planner.observation_path_guard_required = True
             self._configure_controller_reference_guard(planner)
             planner.observation_tracking_contract_required = (
@@ -250,7 +256,9 @@ class MotionGateway(PregraspCompensationGateway):
                     return SetTargetPoseResponse(False, 'OBSERVATION_PATH_CONTEXT_INVALID: ' + str(exc))
                 planner.observation_path_validator = lambda trajectory: (
                     self._validate_frozen_observation_path(context, trajectory, planner))
-                planner.observation_execution_authorized = self._observation_execution_authorized
+                planner.observation_execution_authorized = lambda: (
+                    self._observation_execution_authorized()
+                    and self._observation_timing_current(planner, timing_key))
                 planner.observation_submission_revalidate = lambda trajectory, audit: (
                     self._revalidate_observation_contract_submission(context, trajectory, audit))
             try:
@@ -266,10 +274,41 @@ class MotionGateway(PregraspCompensationGateway):
                             'OBSERVATION_PREVIEW_PATH_UNAVAILABLE: ' + str(exc))
                 result.message += ' speed_profile=observation joint_limit_rad_s=%.3f' % (
                     planner.strict_execution_max_joint_velocity_rad_s)
+                result.message += ' observation_velocity_scaling=%.3f observation_acceleration_scaling=%.3f' % (
+                    planner.strict_execution_velocity_scaling,
+                    planner.strict_execution_acceleration_scaling)
                 return result
             finally:
                 planner.observation_path_validator = previous_validator
                 self.planner = original
+
+    def _observation_timing_values(self, planner):
+        return observation_timing(
+            rospy.get_param('/grasp_mode/selection', None),
+            rospy.get_param('/robot/unknown_observation_timing', {}),
+            planner._observation_timing_baseline)
+
+    def _configure_observation_timing(self, planner):
+        if not hasattr(planner, '_observation_timing_baseline'):
+            planner._observation_timing_baseline = (
+                float(getattr(planner, 'strict_execution_velocity_scaling', .20)),
+                float(getattr(planner, 'strict_execution_acceleration_scaling', .30)))
+        key, values = self._observation_timing_values(planner)
+        previous = getattr(planner, '_observation_timing_key', None)
+        if previous is not None and previous != key:
+            # Changed mode/generation/timing requires a new checked candidate.
+            planner._last_pose_plan = None
+        planner._observation_timing_key = key
+        planner.observation_smooth_timing_enabled = key[0] == 'unknown'
+        (planner.strict_execution_velocity_scaling,
+         planner.strict_execution_acceleration_scaling) = values
+        return key
+
+    def _observation_timing_current(self, planner, expected):
+        try:
+            return self._observation_timing_values(planner)[0] == expected
+        except (ValueError, TypeError):
+            return False
 
     def _observation_preview_path_evidence(self, planner, target):
         """Export a timed candidate with the same prospective handoff baseline.

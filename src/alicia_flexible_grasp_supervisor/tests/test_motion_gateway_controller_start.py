@@ -191,6 +191,53 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
         self.assertEqual(observation.strict_execution_joint_velocity_limits_rad_s, {})
         self.assertEqual(contact.strict_execution_joint_velocity_limits_rad_s, {'Joint6': 0.02})
 
+    def test_unknown_timing_is_separate_and_carton_restores_configured_baseline(self):
+        gateway = self.make_gateway()
+        observation = FakePlanner()
+        observation.strict_execution_velocity_scaling = .18
+        observation.strict_execution_acceleration_scaling = .25
+        selection = dict(mode='unknown', strategy='two_stage', generation=12, stamp_ns='12000')
+        config = dict(enabled=True, velocity_scaling=.30, acceleration_scaling=.20)
+        def param(name, default=None):
+            return {'/grasp_mode/selection': selection,
+                    '/robot/unknown_observation_timing': config}.get(name, default)
+        with mock.patch.object(motion_gateway_node.rospy, 'get_param', side_effect=param):
+            first = gateway._configure_observation_timing(observation)
+            self.assertEqual((observation.strict_execution_velocity_scaling,
+                              observation.strict_execution_acceleration_scaling), (.30, .20))
+            observation._last_pose_plan = object()
+            cached = observation._last_pose_plan
+            self.assertEqual(gateway._configure_observation_timing(observation), first)
+            self.assertIs(observation._last_pose_plan, cached)
+            selection['generation'] = 13
+            self.assertFalse(gateway._observation_timing_current(observation, first))
+            gateway._configure_observation_timing(observation)
+            self.assertIsNone(observation._last_pose_plan)
+            selection['mode'] = 'carton'
+            gateway._configure_observation_timing(observation)
+            self.assertEqual((observation.strict_execution_velocity_scaling,
+                              observation.strict_execution_acceleration_scaling), (.18, .25))
+            self.assertFalse(hasattr(gateway.planner, '_observation_timing_key'))
+
+    def test_invalid_unknown_timing_cannot_call_the_handler(self):
+        gateway = self.make_gateway()
+        observation = FakePlanner()
+        observation.ready = True
+        observation.strict_execution_max_joint_velocity_rad_s = .08
+        observation._last_pose_plan = object()
+        gateway._observation_planner = observation
+        params = {'/grasp_mode/selection': dict(mode='unknown', generation=1, stamp_ns='1'),
+                  '/robot/unknown_observation_timing': dict(enabled=True, velocity_scaling=1.)}
+        handler = mock.Mock()
+        with mock.patch.object(motion_gateway_node.rospy, 'get_param',
+                               side_effect=lambda name, default=None: params.get(name, default)):
+            result = gateway._with_observation_planner(
+                types.SimpleNamespace(target='pose', execute=False), handler)
+        self.assertFalse(result.success)
+        self.assertIn('OBSERVATION_TIMING_INVALID', result.message)
+        self.assertIsNone(observation._last_pose_plan)
+        handler.assert_not_called()
+
     def test_observation_execution_never_initializes_when_manual_control_owns_arm(self):
         gateway = self.make_gateway()
         gateway._gui_direct_mode = True
