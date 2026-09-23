@@ -1,0 +1,83 @@
+{
+  "mode": "offline_conditional_comparison",
+  "source_directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_reference_latency_20260920",
+  "source_windows": {
+    "reached": [
+      1789906306597972631
+    ],
+    "near": [
+      1789906310413064718,
+      1789906314323191404,
+      1789906316248606920
+    ]
+  },
+  "exact_failed_request_replay": false,
+  "window_selection": "last three complete recorded frames ending at expired request 89 source stamp; coordinator admission window and previous OBB axes not proven",
+  "physical_execution": false,
+  "baseline_source_hashes": {
+    "time": 1789921395.345922,
+    "files": {
+      "scripts/remote_grasp6d_node.py": "218a99a53f6638d82cf6e063733be6f742321f2ecb10bcbacc94050c59969d02",
+      "src/alicia_flexible_grasp/grasp/gripper_geometry.py": "5fcf80d8061712153978b40ab39d74d554a63302e201e9a3c6b38840ebdfb616",
+      "src/alicia_flexible_grasp/grasp/tabletop_geometry_candidates.py": "cf47d49a79404de488690df8a1e8eab0419bb8f671213d5e72e8023305351419"
+    },
+    "provenance": "remote source frozen from last live local version; pure geometry from HEAD (unchanged during live trials)"
+  },
+  "runs": [
+    {
+      "implementation": "before",
+      "elapsed_sec": 0.711209682000117,
+      "candidate_count": 32,
+      "all_fields_and_audits_equal": true
+    },
+    {
+      "implementation": "after",
+      "elapsed_sec": 0.5743330039999819,
+      "candidate_count": 32,
+      "all_fields_and_audits_equal": true
+    },
+    {
+      "implementation": "after",
+      "elapsed_sec": 0.5866424830001051,
+      "candidate_count": 32,
+      "all_fields_and_audits_equal": true
+    },
+    {
+      "implementation": "before",
+      "elapsed_sec": 0.6785542369998439,
+      "candidate_count": 32,
+      "all_fields_and_audits_equal": true
+    },
+    {
+      "implementation": "before",
+      "elapsed_sec": 0.6614123290000862,
+      "candidate_count": 32,
+      "all_fields_and_audits_equal": true
+    },
+    {
+      "implementation": "after",
+      "elapsed_sec": 0.5767536889998155,
+      "candidate_count": 32,
+      "all_fields_and_audits_equal": true
+    }
+  ],
+  "profile_calls": {
+    "before": {
+      "materialize_tabletop_candidates": 243,
+      "solve_tool0_translation_for_support_clearance": 582,
+      "_bilateral_surface_measurement": 644
+    },
+    "after": {
+      "materialize_tabletop_candidates": 243,
+      "solve_tool0_translation_for_support_clearance": 518,
+      "_bilateral_surface_measurement": 358
+    }
+  },
+  "same_candidate_count": 32,
+  "all_candidate_fields_and_audits_equal": true,
+  "medians_sec": {
+    "before": 0.6785542369998439,
+    "after": 0.5767536889998155
+  },
+  "note": "Interleaved in one process with hardware and WSL off. Host scheduling still varies; not a live latency or convergence guarantee."
+}

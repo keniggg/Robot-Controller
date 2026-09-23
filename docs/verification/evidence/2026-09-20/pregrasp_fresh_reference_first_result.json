@@ -1,0 +1,211 @@
+{
+  "directory": ".",
+  "deployment": {
+    "base_commit": "b8d2573dd1950994e54c925f45faffe68e97dae0",
+    "local_uncommitted_patch": true,
+    "nodes_before": {
+      "/grasp_task_node": 203332,
+      "/motion_gateway": 241680,
+      "/remote_grasp6d_node": 184698,
+      "/alicia_d_driver_node": 7197,
+      "/bessica_d_hw_interface": 7198
+    },
+    "nodes": {
+      "/grasp_task_node": 271814,
+      "/motion_gateway": 241680,
+      "/remote_grasp6d_node": 184698,
+      "/alicia_d_driver_node": 7197,
+      "/bessica_d_hw_interface": 7198
+    },
+    "parameter_changes": [],
+    "no_disable_command_sent": true,
+    "source_sha256": {
+      "src/alicia_flexible_grasp_supervisor/scripts/grasp_task_node.py": "830e7bf8600387843c417d012abe9128d27009a3534d3106e397a197983c6b77",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "0f4779882985b50b0afc890b76c046040b281e20cc0b5df3a5c768917f65b386",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_gateway.py": "97437d3e60944a109c2ff07deefa7518ff80b3c6b20622862a9f834ed5afd853"
+    }
+  },
+  "bag_start_sec": 1789902231.992178,
+  "bag_end_sec": 1789902417.6310165,
+  "topic_counts": {
+    "/tf": 6013,
+    "/tf_static": 2,
+    "/joint_states": 10887,
+    "/alicia_d/control_reference_epoch": 1,
+    "/alicia_d/actuation_status": 3864,
+    "/alicia_d/run_status": 1698,
+    "/alicia_controller/state": 9203,
+    "/alicia_controller/follow_joint_trajectory/status": 930,
+    "/grasp_6d/gate_audit": 5,
+    "/gui/joint_direct_mode": 1,
+    "/experiment/runtime_execution_error_snapshot": 2,
+    "/rosout_agg": 1923,
+    "/grasp_6d/plan_enriched": 3,
+    "/grasp_6d/object_geometry": 6,
+    "/grasp_6d/status": 5,
+    "/grasp_6d/preview_plan_enriched": 3,
+    "/grasp/near_field_phase": 3,
+    "/alicia_d/temperatures_c": 160,
+    "/alicia_d/protection_latched": 1692,
+    "/alicia_d/motion_enabled": 3851,
+    "/alicia_d/accepted_joint_states": 1689,
+    "/alicia_d/sdk_command": 2162,
+    "/alicia_d/control_reference": 2162,
+    "/grasp/state": 9,
+    "/alicia_d/sdk_diagnostics": 2007,
+    "/supervisor/camera/color/image_raw": 81,
+    "/supervisor/camera/depth/image_raw": 81,
+    "/perception/object_mask": 81,
+    "/perception/object": 81,
+    "/alicia_controller/command": 1,
+    "/joint_commands": 816,
+    "/alicia_controller/follow_joint_trajectory/goal": 1,
+    "/alicia_controller/follow_joint_trajectory/result": 1
+  },
+  "compensation_events": [],
+  "action_goals": [
+    {
+      "stamp_sec": 1789902356.1838372,
+      "id": "/motion_gateway-9-1789902356.180",
+      "duration_sec": 16.309767068,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "final_positions": [
+        -1.8835578396183428,
+        -0.18121198696708996,
+        0.7970805839559939,
+        -0.012192380272551,
+        -1.166447325555343,
+        0.0895589115239051
+      ],
+      "final_counts": [
+        820,
+        1930,
+        2568,
+        2040,
+        1288,
+        2106
+      ],
+      "path_tolerance": {
+        "Joint1": 0.09,
+        "Joint2": 0.09,
+        "Joint3": 0.09,
+        "Joint4": 0.09,
+        "Joint5": 0.09,
+        "Joint6": 0.09
+      }
+    }
+  ],
+  "action_results": [
+    {
+      "stamp_sec": 1789902372.534031,
+      "id": "/motion_gateway-9-1789902356.180",
+      "status": 3,
+      "error_code": 0,
+      "reason": ""
+    }
+  ],
+  "stage_transitions": [
+    {
+      "stamp_sec": 1789900593.585909,
+      "stage": 0,
+      "state": "IDLE",
+      "active": false,
+      "success": false,
+      "message": "ready"
+    },
+    {
+      "stamp_sec": 1789902348.817845,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "far-field observation plan; contact simulation deferred until near-field replan"
+    },
+    {
+      "stamp_sec": 1789902348.8284836,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "using 6D grasp plan"
+    },
+    {
+      "stamp_sec": 1789902348.8333054,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "preflight planning 6D observation pregrasp"
+    },
+    {
+      "stamp_sec": 1789902350.4149954,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "planning 6D pregrasp"
+    },
+    {
+      "stamp_sec": 1789902352.0813396,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "moving 6D pregrasp"
+    },
+    {
+      "stamp_sec": 1789902375.9004502,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "waiting for near-field 6D preview"
+    },
+    {
+      "stamp_sec": 1789902414.4521234,
+      "stage": 7,
+      "state": "FAILED",
+      "active": true,
+      "success": false,
+      "message": "FINAL_REFINE_3D_INVALID: support normal changed 6.5841deg (limit 4.0000deg)"
+    },
+    {
+      "stamp_sec": 1789902414.471804,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    }
+  ],
+  "outcome": {
+    "physical_grasp_success": false,
+    "terminal_state": {
+      "stamp_sec": 1789902414.471804,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    "compensation_steps": null,
+    "compensation_code": null,
+    "position_error_m": null,
+    "held_joints": null,
+    "approach_started": false,
+    "close_started": false,
+    "lift_started": false,
+    "endpoint_measurement": "encoder FK, not external absolute measurement"
+  },
+  "gripper_opening_range_m": [
+    0.04975,
+    0.04975
+  ]
+}

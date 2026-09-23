@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
+import copy
 import importlib.util
 import pathlib
 import sys
 import unittest
+from unittest.mock import Mock
 
 import numpy as np
 
@@ -93,7 +95,9 @@ class FakeRospy:
         }.get(name, default)
 
     def set_param(self, name, value):
-        self.params[name] = value
+        self.params[name] = copy.deepcopy(value)
+        if name == '/camera':
+            self.camera_cfg = copy.deepcopy(value)
 
     def Publisher(self, *args, **kwargs):
         pub = FakePublisher()
@@ -119,6 +123,13 @@ class FakeRospy:
         self.errors.append(args)
 
 
+def fake_runtime_profile(width, height, fx=4., fy=4.):
+    return dict(source='realsense_active_profile', schema_version=1,
+                geometry_intrinsics=dict(width=width, height=height, fx=fx, fy=fy, cx=1.5, cy=1.),
+                geometry_intrinsics_source='sdk_active_color_profile',
+                device=dict(serial_number='test-runtime-device', firmware_version='test-firmware'))
+
+
 class FailingThenSimulatedCamera:
     created = []
 
@@ -134,6 +145,8 @@ class FailingThenSimulatedCamera:
         self.width = int(width)
         self.height = int(height)
         self.simulate = bool(simulate)
+        self.runtime_profile = fake_runtime_profile(self.width, self.height)
+        self.depth_scale = 0.0001
         self.depth_filter_cfg = dict(depth_filter_cfg or {})
         self.started = False
         self.stopped = False
@@ -169,6 +182,8 @@ class FailingThenRestartedCamera:
         self.width = int(width)
         self.height = int(height)
         self.simulate = bool(simulate)
+        self.runtime_profile = fake_runtime_profile(self.width, self.height)
+        self.depth_scale = 0.0001
         self.depth_filter_cfg = dict(depth_filter_cfg or {})
         self.index = len(FailingThenRestartedCamera.created)
         self.started = False
@@ -207,6 +222,8 @@ class StartupFailThenRestartedCamera:
         self.width = int(width)
         self.height = int(height)
         self.simulate = bool(simulate)
+        self.runtime_profile = fake_runtime_profile(self.width, self.height)
+        self.depth_scale = 0.0001
         self.depth_filter_cfg = dict(depth_filter_cfg or {})
         self.index = len(StartupFailThenRestartedCamera.created)
         self.started = False
@@ -243,6 +260,8 @@ class CameraWithDepthScale:
         self.width = int(width)
         self.height = int(height)
         self.simulate = bool(simulate)
+        self.runtime_profile = fake_runtime_profile(self.width, self.height)
+        self.depth_scale = 0.0001
         self.depth_filter_cfg = dict(depth_filter_cfg or {})
         self.depth_scale = 0.0001
         self.started = False
@@ -270,6 +289,44 @@ class SinglePairCamera(CameraWithDepthScale):
 
 
 class CameraNodeRecoveryTest(unittest.TestCase):
+    def projection_node(self):
+        module = load_camera_node()
+        target = {'fx': 438.6, 'fy': 438.4, 'cx': 317.8, 'cy': 245.4}
+        correction = {
+            'enabled': True,
+            'device_serial': 'test-device',
+            'sdk_intrinsics': target,
+            'measured_intrinsics': dict(target, fx=398.4, fy=399.0),
+        }
+        fake_rospy = FakeRospy(dict(target, color_projection_correction=correction))
+        module.rospy = fake_rospy
+        module.RealSenseManager = Mock()
+        node = module.CameraNode.__new__(module.CameraNode)
+        node.cfg = fake_rospy.camera_cfg
+        node.width, node.height, node.fps = 640, 480, 30
+        node.align_depth_to_color = True
+        return module, node, correction
+
+    def test_projection_configuration_reaches_camera_manager(self):
+        module, node, correction = self.projection_node()
+
+        camera = node._make_camera(False)
+
+        self.assertIs(camera, module.RealSenseManager.return_value)
+        arguments = module.RealSenseManager.call_args.kwargs
+        self.assertEqual(arguments['color_projection_cfg'], correction)
+        self.assertTrue(arguments['align_depth_to_color'])
+        self.assertFalse(arguments['simulate'])
+
+    def test_projection_rejects_downstream_intrinsics_mismatch_before_opening_device(self):
+        module, node, _ = self.projection_node()
+        node.cfg['fx'] = 398.4
+
+        with self.assertRaisesRegex(ValueError, 'camera/fx must match'):
+            node._make_camera(False)
+
+        module.RealSenseManager.assert_not_called()
+
     def test_camera_node_publishes_runtime_depth_scale_param(self):
         module = load_camera_node()
         fake_rospy = FakeRospy({'fallback_to_simulation': False})
@@ -280,7 +337,76 @@ class CameraNodeRecoveryTest(unittest.TestCase):
 
         module.CameraNode()
 
-        self.assertEqual(fake_rospy.params['/camera/depth_scale'], 0.0001)
+        self.assertEqual(fake_rospy.params['/camera']['depth_scale'], 0.0001)
+
+    def test_active_sdk_intrinsics_replace_stale_yaml_before_first_frame_and_preserve_other_config(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(dict(fx=99., fy=98., cx=97., cy=96., depth_scale=.001,
+                                  fallback_to_simulation=False, frame_id='camera_link',
+                                  color_topic='/unchanged/rgb', custom_setting={'keep': True}))
+        module.rospy, module.CvBridge = fake_rospy, FakeBridge
+        module.RealSenseManager = SinglePairCamera
+        node = module.CameraNode()
+        runtime = fake_rospy.params['/camera']
+        self.assertEqual([runtime[k] for k in ('fx', 'fy', 'cx', 'cy')], [4., 4., 1.5, 1.])
+        self.assertEqual(runtime['depth_scale'], .0001)
+        self.assertEqual(runtime['intrinsics_source'], 'sdk_active_color_profile')
+        self.assertEqual(runtime['runtime_profile']['device']['serial_number'], 'test-runtime-device')
+        self.assertEqual(runtime['custom_setting'], {'keep': True})
+        self.assertEqual(runtime['color_topic'], '/unchanged/rgb')
+        self.assertEqual(runtime['frame_id'], 'camera_link')
+        self.assertFalse(any(pub.messages for pub in fake_rospy.publishers))
+        self.assertEqual(len(fake_rospy.params), 1)
+        fake_rospy.shutdown_after_stamp = True
+        node.spin()
+        self.assertEqual(node.pub_color.messages[0].header.frame_id, 'camera_link')
+
+    def test_recovery_refreshes_runtime_geometry_before_next_frame(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(dict(fallback_to_simulation=False))
+        module.rospy, module.CvBridge = fake_rospy, FakeBridge
+
+        class ChangedCamera(SinglePairCamera):
+            next_fx = 4.
+
+            def start(self):
+                self.runtime_profile = fake_runtime_profile(self.width, self.height, fx=self.next_fx)
+                return super().start()
+
+        module.RealSenseManager = ChangedCamera
+        node = module.CameraNode()
+        ChangedCamera.next_fx = 4.25
+        self.assertTrue(node._recover_from_read_error(RuntimeError('temporary disconnect')))
+        self.assertEqual(fake_rospy.params['/camera']['fx'], 4.25)
+        self.assertFalse(any(pub.messages for pub in fake_rospy.publishers))
+
+    def test_simulation_preserves_configured_intrinsics_and_identifies_its_source(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(dict(simulate=True, fx=99., fy=98., cx=97., cy=96.))
+        module.rospy, module.CvBridge = fake_rospy, FakeBridge
+        module.RealSenseManager = SinglePairCamera
+        module.CameraNode()
+        runtime = fake_rospy.params['/camera']
+        self.assertEqual([runtime[k] for k in ('fx', 'fy', 'cx', 'cy')], [99., 98., 97., 96.])
+        self.assertEqual(runtime['intrinsics_source'], 'configured_simulation')
+        self.assertEqual(runtime['runtime_profile']['source'], 'simulation')
+
+    def test_missing_real_geometry_does_not_publish_frames_using_unverified_yaml(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(dict(fallback_to_simulation=False))
+        module.rospy, module.CvBridge = fake_rospy, FakeBridge
+
+        class NoProfileCamera(SinglePairCamera):
+            def start(self):
+                self.runtime_profile = {}
+                return super().start()
+
+        module.RealSenseManager = NoProfileCamera
+        node = module.CameraNode()
+        self.assertFalse(node._camera_started)
+        self.assertFalse(fake_rospy.params)
+        self.assertFalse(any(pub.messages for pub in fake_rospy.publishers))
+        self.assertTrue(any('no active SDK geometry profile' in str(item) for item in fake_rospy.errors))
 
     def test_camera_node_passes_filter_and_perception_depth_limits(self):
         module = load_camera_node()

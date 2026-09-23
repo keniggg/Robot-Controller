@@ -1,0 +1,11 @@
+{
+  "path": "/home/zhuyupei/Videos/c861f5002a2ebab2c63e255bfb656151.mp4",
+  "duration_sec": 226.4,
+  "width": 544,
+  "height": 960,
+  "bytes": 11233469,
+  "sha256": "5e204347f29ce02f7f139aad80502b5f495f4f2e2e6d24f5a3f44e77eac4ca5f",
+  "operator_description": "second-stage motion; pose and precision look good after compensation, no final grasp",
+  "review": "late sampled frames show gripper open; no metric accuracy or ROS/video clock synchronization inferred",
+  "kept_local": true
+}

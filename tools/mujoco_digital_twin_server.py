@@ -1691,6 +1691,16 @@ class MujocoDigitalTwinBackend:
         ik_results = []
         trajectory = []
         current_data = self._copy_data(model, data)
+        # Millimetre-scale unknown objects need the same pose accuracy before
+        # contact as during lift. A 5 mm IK residual can move a fingertip from
+        # a side face to the top of a 14 mm object. Keep the carton contract.
+        initial_ik_options = {}
+        if payload.get('model_choice') == 'unknown_tabletop':
+            initial_ik_options = {
+                'position_tolerance_m': CARTESIAN_LIFT_POSITION_TOLERANCE_M,
+                'orientation_tolerance_rad': CARTESIAN_LIFT_ORIENTATION_TOLERANCE_RAD,
+                'max_iterations': 400,
+            }
         for target in sequence:
             result = self._solve_ik(
                 model,
@@ -1698,6 +1708,7 @@ class MujocoDigitalTwinBackend:
                 target['position'],
                 target['rotation_matrix'],
                 meta,
+                **initial_ik_options,
             )
             ik_results.append((target['name'], result))
             if not result['success']:
@@ -2213,7 +2224,7 @@ class MujocoDigitalTwinBackend:
             pass
         return result
 
-    def _copy_data(self, model, data):
+    def _copy_data(self, model, data, *, kinematics_only=False):
         copied = self._mujoco.MjData(model)
         copy_data = getattr(self._mujoco, 'mj_copyData', None)
         if callable(copy_data):
@@ -2240,8 +2251,18 @@ class MujocoDigitalTwinBackend:
                 destination[...] = source
         if hasattr(data, 'time') and hasattr(copied, 'time'):
             copied.time = data.time
-        self._mujoco.mj_forward(model, copied)
+        if kinematics_only:
+            self._forward_kinematics(model, copied)
+        else:
+            self._mujoco.mj_forward(model, copied)
         return copied
+
+    def _forward_kinematics(self, model, data):
+        # Jacobians require body transforms and COM-based motion axes, but
+        # not collision detection or a contact-force solve. These remain in
+        # the independent full trajectory and dynamic contact/lift checks.
+        self._mujoco.mj_kinematics(model, data)
+        self._mujoco.mj_comPos(model, data)
 
     def _solve_ik(
         self,
@@ -2254,7 +2275,7 @@ class MujocoDigitalTwinBackend:
         orientation_tolerance_rad=0.16,
         max_iterations=240,
     ):
-        data = self._copy_data(model, seed_data)
+        data = self._copy_data(model, seed_data, kinematics_only=True)
         arm_joints = meta['arm_joints']
         dofs = [model.jnt_dofadr[joint] for joint in arm_joints]
         lower = np.asarray([model.jnt_range[joint][0] for joint in arm_joints], dtype=float)
@@ -2278,7 +2299,7 @@ class MujocoDigitalTwinBackend:
         )
         iteration_limit = max(1, int(max_iterations))
         for iterations in range(1, iteration_limit + 1):
-            self._mujoco.mj_forward(model, data)
+            self._forward_kinematics(model, data)
             center = self._gripper_center(data, meta)
             pos_err = target_pos - center
             rot_err = _orientation_error(data.xmat[meta['orientation_body']].reshape(3, 3), target_rot)
@@ -2301,10 +2322,11 @@ class MujocoDigitalTwinBackend:
                 dq = np.linalg.solve(lhs, rhs)
             except np.linalg.LinAlgError:
                 dq = np.linalg.lstsq(lhs, rhs, rcond=None)[0]
-            dq = np.clip(dq, -0.08, 0.08)
+            dq = np.minimum(np.maximum(dq, -0.08), 0.08)
             q = np.asarray([data.qpos[model.jnt_qposadr[joint]] for joint in arm_joints], dtype=float)
-            q = np.clip(q + 0.45 * dq, lower, upper)
-            self._set_arm_qpos(model, data, arm_joints, q)
+            q = np.minimum(np.maximum(q + 0.45 * dq, lower), upper)
+            for joint, value in zip(arm_joints, q):
+                data.qpos[model.jnt_qposadr[joint]] = value
         success = bool(
             final_pos_err <= position_tolerance
             and final_rot_err <= orientation_tolerance
@@ -2318,7 +2340,8 @@ class MujocoDigitalTwinBackend:
             'iterations': iterations,
         }
 
-    def _set_arm_qpos(self, model, data, joints, values, actuator_ids=None):
+    def _set_arm_qpos(self, model, data, joints, values, actuator_ids=None,
+                      *, kinematics_only=False):
         if actuator_ids is None:
             actuator_ids = [None] * len(joints)
         for joint_id, value, actuator_id in zip(joints, values, actuator_ids):
@@ -2326,7 +2349,10 @@ class MujocoDigitalTwinBackend:
             data.qvel[model.jnt_dofadr[joint_id]] = 0.0
             if actuator_id is not None:
                 data.ctrl[int(actuator_id)] = float(value)
-        self._mujoco.mj_forward(model, data)
+        if kinematics_only:
+            self._forward_kinematics(model, data)
+        else:
+            self._mujoco.mj_forward(model, data)
 
     def _command_arm_joint_positions(
         self,
@@ -2426,6 +2452,7 @@ class MujocoDigitalTwinBackend:
                 meta['arm_joints'],
                 q,
                 actuator_ids=meta['arm_actuators'],
+                kinematics_only=True,
             )
             actual_position = self._gripper_center(
                 validation_data,
@@ -2835,6 +2862,7 @@ class MujocoDigitalTwinBackend:
                 meta['arm_joints'],
                 q,
                 actuator_ids=meta['arm_actuators'],
+                kinematics_only=True,
             )
             base_joint_positions.append(q.copy())
         base_joint_positions = np.asarray(
@@ -3279,11 +3307,20 @@ def _parse_grasp_sequence(payload):
 
 
 def _orientation_error(current, target):
-    return 0.5 * (
-        np.cross(current[:, 0], target[:, 0])
-        + np.cross(current[:, 1], target[:, 1])
-        + np.cross(current[:, 2], target[:, 2])
-    )
+    # The same three-column cross sum, with the same operation order. Avoid
+    # NumPy's general axis/broadcast dispatch in every small 3D IK iteration.
+    c, t = current, target
+    return 0.5 * np.asarray([
+        (c[1, 0]*t[2, 0] - c[2, 0]*t[1, 0])
+        + (c[1, 1]*t[2, 1] - c[2, 1]*t[1, 1])
+        + (c[1, 2]*t[2, 2] - c[2, 2]*t[1, 2]),
+        (c[2, 0]*t[0, 0] - c[0, 0]*t[2, 0])
+        + (c[2, 1]*t[0, 1] - c[0, 1]*t[2, 1])
+        + (c[2, 2]*t[0, 2] - c[0, 2]*t[2, 2]),
+        (c[0, 0]*t[1, 0] - c[1, 0]*t[0, 0])
+        + (c[0, 1]*t[1, 1] - c[1, 1]*t[0, 1])
+        + (c[0, 2]*t[1, 2] - c[1, 2]*t[0, 2]),
+    ])
 
 
 def _quat_xyzw_to_matrix(quat):

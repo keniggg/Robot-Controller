@@ -2261,6 +2261,13 @@ class GraspTaskNode:
         # Live authority updates share the plan RLock with physical commits so
         # a drift-changing observation cannot cross the action boundary.
         with self._grasp6d_plan_guard():
+            # Repeated delivery of one source frame must not renew freshness.
+            source_ns = _stamp_nanoseconds(source_stamp)
+            previous_receipt_ns = getattr(self, '_latest_obj_received_source_ns',
+                _stamp_nanoseconds(getattr(self, 'latest_obj_time', None)))
+            if source_ns > previous_receipt_ns:
+                self._latest_obj_received_monotonic = time.monotonic()
+                self._latest_obj_received_source_ns = source_ns
             self.latest_obj = msg
             self.latest_obj_time = source_stamp
 
@@ -2668,6 +2675,7 @@ class GraspTaskNode:
         budget_sec=None,
         reference_plan=None,
         absolute_deadline_sec=None,
+        reference_object=None,
     ):
         """Publish the explicit near-field planning phase without moving hardware."""
 
@@ -2729,9 +2737,8 @@ class GraspTaskNode:
         phase.reference_source_stamp = rospy.Time(0)
         if active and reference_plan is not None:
             with self._grasp6d_plan_guard():
-                reference_object = deepcopy(
-                    getattr(self, 'latest_obj', None)
-                )
+                reference_object = deepcopy(reference_object if reference_object is not None
+                                            else getattr(self, 'latest_obj', None))
             reference_label = str(
                 getattr(reference_object, 'label', '') or ''
             ).strip().lower()
@@ -4541,24 +4548,41 @@ class GraspTaskNode:
                 3.0,
             ),
         )
+        deadline_sec = 0.0
+        if self._direct_near_field_enabled(gcfg):
+            deadline_sec = float(getattr(self, '_near_field_phase_deadline_sec', 0.0))
+            remaining = deadline_sec - _stamp_seconds(rospy.Time.now())
+            if not math.isfinite(deadline_sec) or remaining <= 0.0:
+                return PlanValidationResult(False, 'FINAL_REFINE_TIMEOUT',
+                    'original final refinement deadline expired before sequence check')
+            timeout = min(timeout, remaining)
         try:
             pregrasp, approach, grasp, lift = split_rich_plan_poses(plan)
             service_name = '/supervisor/check_pose_sequence_strict'
             rospy.wait_for_service(service_name, timeout=timeout)
-            response = rospy.ServiceProxy(
-                service_name,
-                CheckPoseSequence,
-            )(
+            if deadline_sec > 0.0 and _stamp_seconds(rospy.Time.now()) >= deadline_sec:
+                return PlanValidationResult(False, 'FINAL_REFINE_TIMEOUT',
+                    'original final refinement deadline expired waiting for sequence service')
+            request_args = [
                 [pregrasp, approach, grasp, lift],
                 ['pregrasp', 'approach', 'grasp', 'lift'],
                 [False, True, True, True],
-            )
+            ]
+            if deadline_sec > 0.0:
+                request_args.append(rospy.Time.from_sec(deadline_sec))
+            response = rospy.ServiceProxy(
+                service_name,
+                CheckPoseSequence,
+            )(*request_args)
         except Exception as exc:
             return PlanValidationResult(
                 False,
                 'MOVEIT_CHECK_ERROR',
                 str(exc),
             )
+        if deadline_sec > 0.0 and _stamp_seconds(rospy.Time.now()) >= deadline_sec:
+            return PlanValidationResult(False, 'FINAL_REFINE_TIMEOUT',
+                'original final refinement deadline expired during sequence check')
         if not bool(getattr(response, 'success', False)):
             failed_stage = str(
                 getattr(response, 'failed_stage', '') or ''
@@ -4579,6 +4603,43 @@ class GraspTaskNode:
             True,
             reason=str(getattr(response, 'message', '') or ''),
         )
+
+    def _wait_for_final_refine_reference(self, plan, minimum_stamp_ns, deadline, poll_sec):
+        """Wait for a newly received observation acquired after arrival.
+
+        The RGB-D receiver still verifies exact components and their original
+        admission gates. This only prevents choosing an already stale anchor
+        from before the final compensation step.
+        """
+        # Use the receiver's deployed latency contract. Its default (1.2 s)
+        # differs from installations configured for slower image processing;
+        # hard-coding that default would reject otherwise admissible new frames.
+        try:
+            maximum_source_age = float(rospy.get_param(
+                '/grasp_6d/remote/planning_snapshot_max_inference_latency_sec', 1.2))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(maximum_source_age) or maximum_source_age <= 0.:
+            return None
+        while self.active and not rospy.is_shutdown() and time.monotonic() < deadline:
+            with self._grasp6d_plan_guard():
+                obj = deepcopy(getattr(self, 'latest_obj', None))
+                received = getattr(self, '_latest_obj_received_monotonic', float('-inf'))
+                received_source_ns = getattr(self, '_latest_obj_received_source_ns', 0)
+            stamp = _stamp_nanoseconds(self._object_source_stamp(obj))
+            source_age = (_stamp_nanoseconds(rospy.Time.now())-stamp)*1e-9
+            age = time.monotonic()-received
+            if (obj is not None and bool(getattr(obj, 'detected', False))
+                    and stamp == received_source_ns
+                    and stamp > minimum_stamp_ns and 0. <= source_age <= maximum_source_age
+                    and 0. <= age <= .2
+                    and self._observed_target_matches_plan(plan, obj, {})):
+                return obj
+            remaining = deadline-time.monotonic()
+            if remaining <= 0.:
+                break
+            rospy.sleep(min(poll_sec, remaining))
+        return None
 
     def _maybe_final_refine_grasp6d_plan(
         self,
@@ -4633,7 +4694,12 @@ class GraspTaskNode:
                 0.20,
             ),
         )
+        start = time.monotonic()
         now = rospy.Time.now()
+        def within_deadline():
+            return (time.monotonic() < start + timeout
+                    and _stamp_seconds(rospy.Time.now()) < _stamp_seconds(now) + timeout)
+
         minimum_stamp_ns = max(
             _stamp_nanoseconds(
                 getattr(getattr(current_plan, 'header', None), 'stamp', None)
@@ -4645,11 +4711,21 @@ class GraspTaskNode:
             'waiting for bounded final visual refinement',
         )
         if self._direct_near_field_enabled(gcfg) and timeout > 0.0:
+            # Acquisition, phase handoff and inference share the original
+            # final-refinement deadline; waiting does not grant another 20 s.
+            reference = self._wait_for_final_refine_reference(
+                current_plan, _stamp_nanoseconds(now), start+timeout, poll_sec)
+            if reference is None or not within_deadline():
+                self.set_state(GraspStages.FAILED,
+                    'FINAL_REFINE_REFERENCE_UNAVAILABLE: no fresh post-arrival observation within original deadline')
+                return None
             self._set_near_field_active(
                 True,
                 force=True,
                 budget_sec=timeout,
                 reference_plan=current_plan,
+                reference_object=reference,
+                absolute_deadline_sec=_stamp_seconds(now)+timeout,
             )
             minimum_stamp_ns = max(
                 minimum_stamp_ns,
@@ -4689,7 +4765,6 @@ class GraspTaskNode:
                 ),
             )
         )
-        start = time.monotonic()
         last_result = PlanValidationResult(
             False,
             'FINAL_REFINE_WAITING',
@@ -4700,7 +4775,7 @@ class GraspTaskNode:
         while (
             self.active
             and not rospy.is_shutdown()
-            and time.monotonic() - start <= timeout
+            and within_deadline()
         ):
             if clear_view_pending:
                 observation_ready = self._clear_view_observation_ready(
@@ -4821,18 +4896,31 @@ class GraspTaskNode:
                             'bound plan changed before final refinement sequence',
                         )
                         break
+                    if not within_deadline():
+                        last_result = PlanValidationResult(False, 'FINAL_REFINE_TIMEOUT',
+                            'original final refinement deadline expired before sequence check')
+                        break
                     sequence_result = self._check_final_refine_sequence(
                         candidate,
                         gcfg,
                     )
                     last_result = sequence_result
                     if sequence_result.ok:
+                        if not within_deadline():
+                            last_result = PlanValidationResult(False, 'FINAL_REFINE_TIMEOUT',
+                                'original final refinement deadline expired during sequence check')
+                            break
                         rebind_validation, frozen = self._invoke_plan_bound_action(
                             current_plan,
                             gcfg,
                             'final visual refinement rebind',
-                            lambda: self._freeze_execution_plan(candidate),
+                            lambda: (self._freeze_execution_plan(candidate)
+                                     if within_deadline() else None),
                         )
+                        if not within_deadline():
+                            last_result = PlanValidationResult(False, 'FINAL_REFINE_TIMEOUT',
+                                'original final refinement deadline expired during rebind')
+                            break
                         if not rebind_validation.ok or frozen is None:
                             last_result = PlanValidationResult(
                                 False,
@@ -4873,6 +4961,10 @@ class GraspTaskNode:
                             frozen,
                         ):
                             return None
+                        if not within_deadline():
+                            last_result = PlanValidationResult(False, 'FINAL_REFINE_TIMEOUT',
+                                'original final refinement deadline expired before completion')
+                            break
                         return frozen
             else:
                 last_result = preview_result
@@ -6583,6 +6675,9 @@ class GraspTaskNode:
             return False
         return True
 
+    def _mujoco_config_for_plan(self, plan, config):
+        return config
+
     def _simulate_grasp6d_plan_if_required(self, gcfg, gripper_cfg, plan):
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
         if not isinstance(twin_cfg, dict):
@@ -6706,7 +6801,7 @@ class GraspTaskNode:
                 plan,
                 joint_names,
                 joint_positions,
-                twin_cfg,
+                self._mujoco_config_for_plan(plan, twin_cfg),
             )
             _record_mujoco_payload(audit, payload)
         except Exception as exc:

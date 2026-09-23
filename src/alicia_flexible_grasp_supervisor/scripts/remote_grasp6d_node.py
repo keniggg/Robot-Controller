@@ -61,12 +61,11 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (
     GripperGeometry,
     ObservationEnvelopeResult,
     bilateral_contact_height_bounds_m,
-    bilateral_surface_contact_bounds_m,
     candidate_rank_key,
     candidate_with_motion_cost,
     contact_height_axis_base,
     evaluate_candidate,
-    evaluate_bilateral_surface_evidence,
+    evaluate_bilateral_surface_evidence_and_bounds,
     evaluate_explicit_candidate,
     evaluate_open_gripper_observation_envelope,
     finger_contact_patch_overlap_m,
@@ -548,6 +547,33 @@ def _thaw_request_evidence(value):
     if isinstance(value, frozenset):
         return [_thaw_request_evidence(item) for item in value]
     return deepcopy(value)
+
+
+def _snapshot_input_evidence(snapshot):
+    """Copy input source facts without inferring phase or prediction results."""
+
+    if snapshot is None:
+        return {}
+    try:
+        stamps = tuple(
+            int(value)
+            for value in (getattr(snapshot, 'sample_stamp_ns', ()) or ())
+        )
+        stamp_ns = int(getattr(snapshot, 'stamp_ns', 0) or 0)
+        span_ms = (
+            float(max(stamps) - min(stamps)) / 1e6
+            if len(stamps) >= 2 else 0.0
+        )
+    except (TypeError, ValueError, OverflowError):
+        return {}
+    if not math.isfinite(span_ms):
+        return {}
+    return {
+        'snapshot_stamp_ns': stamp_ns,
+        'source_stamp_ns': list(stamps),
+        'unique_source_frames': len(set(stamps)),
+        'source_span_ms': span_ms,
+    }
 
 
 @dataclass(frozen=True)
@@ -6352,6 +6378,9 @@ class RemoteGrasp6DNode:
                 'target_epoch': int(self.target_instance_epoch),
                 'snapshot_stamp_sec': float(stamp_sec),
                 'submitted_sec': float(self._stream_source_clock()),
+                'snapshot_evidence': _freeze_request_evidence(
+                    _snapshot_input_evidence(snapshot)
+                ),
             }
             if decision.ticket_to_start is not None:
                 self._stream_worker_ticket = decision.ticket_to_start
@@ -6508,7 +6537,11 @@ class RemoteGrasp6DNode:
             end_to_end_ms=end_to_end_ms,
             result_age_ms=result_age_ms,
             latency_history_ms=snapshot['latency_history_ms'],
-            funnel={},
+            funnel={
+                'snapshot_evidence': _thaw_request_evidence(
+                    metadata.get('snapshot_evidence', {})
+                ),
+            },
         )
         with self._stream_condition:
             self.pipeline_metrics.append(metrics)
@@ -7518,14 +7551,20 @@ class RemoteGrasp6DNode:
         R_base_tool,
         *,
         surface_frame='snapshot',
+        surface_snapshot=None,
     ):
         """Measure the current phase-bound surface in fixed Alicia tool axes."""
 
         if surface_frame not in ('snapshot', 'reference'):
             raise ValueError('unknown contact surface coordinate frame')
-        surface, reference = (self._active_multiview_surface()
-                              if surface_frame == 'reference'
-                              else self._snapshot_multiview_surface())
+        if surface_snapshot is not None:
+            if surface_frame != 'snapshot':
+                raise ValueError('captured surface must use snapshot coordinates')
+            surface, reference = surface_snapshot
+        else:
+            surface, reference = (self._active_multiview_surface()
+                                  if surface_frame == 'reference'
+                                  else self._snapshot_multiview_surface())
         if not isinstance(surface, FusedTargetSurface) or not isinstance(reference, SurfaceView):
             return None, None, None, None
         rotation = np.asarray(R_base_tool, dtype=float)
@@ -7552,16 +7591,7 @@ class RemoteGrasp6DNode:
             )
         jaw_axis = rotation.dot(jaw_local)
         insertion_axis = rotation.dot(insertion_local)
-        evidence = evaluate_bilateral_surface_evidence(
-            surface,
-            contact_center_base,
-            jaw_axis,
-            insertion_axis,
-            self.gripper_geometry,
-            minimum_points_per_side=12,
-            support_normal_base=reference.support_normal_base,
-        )
-        bounds = bilateral_surface_contact_bounds_m(
+        evidence, bounds = evaluate_bilateral_surface_evidence_and_bounds(
             surface,
             contact_center_base,
             jaw_axis,
@@ -8031,6 +8061,52 @@ class RemoteGrasp6DNode:
         # stratum.
         return (1, rotated_branch, -tilt)
 
+    def _materialize_tabletop_union(self, proposal, support_point, support_normal,
+                                   probe_variants, probe_tilts, union_tilts):
+        """Extend one proposal's frozen probe grid, preserving full-grid IDs.
+
+        Existing CAD results belong only to this local generation call. New
+        angles still run the complete materializer; numbering is then rebuilt
+        in precisely the order of a single full-union materialization.
+        """
+        if union_tilts == probe_tilts:
+            return probe_variants
+        arguments = dict(
+            proposal=proposal, support_point_base=support_point,
+            support_normal_base=support_normal, gripper=self.gripper_geometry,
+            tool_jaw_axis=self.gripper_tool_jaw_axis,
+            tool_finger_length_axis=self.gripper_tool_finger_length_axis,
+        )
+        # Preserve the materializer's bounded-grid validation if the caller's
+        # four adaptive plus four boundary angle invariant ever changes.
+        if len(union_tilts) > 8:
+            return materialize_tabletop_candidates(
+                **arguments, approach_tilt_degrees=union_tilts)
+        additional = tuple(tilt for tilt in union_tilts if tilt not in probe_tilts)
+        variants = tuple(probe_variants)
+        if additional:
+            variants += materialize_tabletop_candidates(
+                **arguments, approach_tilt_degrees=additional)
+        by_branch = {
+            (int(item.variant_index), float(item.audit['approach_tilt_deg']),
+             float(item.audit['approach_tilt_polarity'])): item
+            for item in variants
+        }
+        approaches = ((0., 0.),) + tuple(
+            (float(tilt), polarity) for tilt in union_tilts for polarity in (-1., 1.))
+        return tuple(
+            replace(
+                by_branch[(jaw, tilt, polarity)],
+                source_index=int(proposal.source_index) * len(approaches) + index,
+                audit=MappingProxyType({
+                    **dict(by_branch[(jaw, tilt, polarity)].audit),
+                    'approach_variant_index': index,
+                }),
+            )
+            for jaw in (0, 1)
+            for index, (tilt, polarity) in enumerate(approaches)
+        )
+
     def _generate_tabletop_candidates(
         self,
         geometry,
@@ -8268,17 +8344,9 @@ class RemoteGrasp6DNode:
                 materialization_tilts = tuple(
                     sorted(materialization_tilts)
                 )
-                variants = materialize_tabletop_candidates(
-                    proposal=proposal,
-                    support_point_base=support_point,
-                    support_normal_base=support_normal,
-                    gripper=self.gripper_geometry,
-                    tool_jaw_axis=self.gripper_tool_jaw_axis,
-                    tool_finger_length_axis=(
-                        self.gripper_tool_finger_length_axis
-                    ),
-                    approach_tilt_degrees=materialization_tilts,
-                )
+                variants = self._materialize_tabletop_union(
+                    proposal, support_point, support_normal,
+                    probe_variants, tilt_degrees, materialization_tilts)
                 contact_boundary_profiles[-1][
                     'materialization_tilts_deg'
                 ] = tuple(materialization_tilts)
@@ -8316,6 +8384,11 @@ class RemoteGrasp6DNode:
                         ) = self._current_bilateral_surface_measurement(
                             item.contact_center_base,
                             np.asarray(item.T_base_tool0, dtype=float)[:3, :3],
+                            # One generation call uses one immutable registered
+                            # surface, captured above for these same proposals.
+                            # Ticket checks still guard request acceptance and
+                            # publication; no cache survives this call.
+                            surface_snapshot=(fused_surface, reference),
                         )
                         if (
                             not isinstance(
@@ -16124,7 +16197,9 @@ class RemoteGrasp6DNode:
                 )
                 if completion.next_ticket is not None:
                     self._pending_request_id = None
-                self._request_telemetry.pop(int(ticket.request_id), None)
+                request_metadata = self._request_telemetry.pop(
+                    int(ticket.request_id), {}
+                )
             funnel = {}
             status = completion.code
             final_accepted = bool(completion.accepted)
@@ -16198,6 +16273,22 @@ class RemoteGrasp6DNode:
                 if final_accepted and prepared is not None
                 else {}
             )
+            input_evidence = request_metadata.get('snapshot_evidence')
+            if input_evidence is None:
+                # A locally frozen input may outlive its telemetry entry. Do
+                # not reconstruct historical phase from current node state or
+                # copy source claims out of a rejected prediction.
+                try:
+                    input_snapshot, _input_config = ticket.payload
+                except (AttributeError, TypeError, ValueError):
+                    input_snapshot = None
+                input_evidence = _snapshot_input_evidence(
+                    input_snapshot
+                    if isinstance(input_snapshot, SnapshotResult) else None
+                )
+            snapshot_evidence = dict(funnel.get('snapshot_evidence', {}) or {})
+            snapshot_evidence.update(_thaw_request_evidence(input_evidence))
+            funnel['snapshot_evidence'] = snapshot_evidence
             metrics = (
                 None
                 if terminal_snapshot is None

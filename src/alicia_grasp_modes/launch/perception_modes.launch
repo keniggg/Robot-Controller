@@ -1,0 +1,24 @@
+<launch>
+  <!-- Hot-deployment entry: no driver, controller, camera or gripper restart. -->
+  <arg name="initial_mode" default="carton"/>
+  <arg name="initial_strategy" default="two_stage"/>
+  <arg name="start_carton" default="true"/>
+  <node if="$(arg start_carton)" pkg="alicia_flexible_grasp_supervisor" type="perception_node.py" name="perception_carton" output="screen">
+    <remap from="/perception/object" to="/perception/carton/object"/>
+    <remap from="/perception/object_mask" to="/perception/carton/object_mask"/>
+    <remap from="/perception/object_pose_camera" to="/perception/carton/object_pose_camera"/>
+    <remap from="/perception/object_pose_base" to="/perception/carton/object_pose_base"/>
+    <remap from="/perception/object_detected" to="/perception/carton/object_detected"/>
+    <remap from="/perception/raw_object_detected" to="/perception/carton/raw_object_detected"/>
+    <remap from="/perception/detector_status" to="/perception/carton/detector_status"/>
+  </node>
+  <node pkg="alicia_grasp_modes" type="unknown_tabletop_perception.py" name="unknown_tabletop_perception" output="screen"/>
+  <node pkg="alicia_grasp_modes" type="mode_aware_remote_grasp6d.py" name="remote_grasp6d_node" output="screen"/>
+  <node pkg="alicia_grasp_modes" type="mode_aware_grasp_task.py" name="grasp_task_node" output="screen">
+    <remap from="/grasp/start" to="/grasp/internal_start"/>
+  </node>
+  <node pkg="alicia_grasp_modes" type="mode_router.py" name="grasp_mode_router" output="screen">
+    <param name="initial_mode" value="$(arg initial_mode)"/>
+    <param name="initial_strategy" value="$(arg initial_strategy)"/>
+  </node>
+</launch>

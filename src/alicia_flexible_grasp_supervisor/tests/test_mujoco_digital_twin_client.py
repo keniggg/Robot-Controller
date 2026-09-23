@@ -687,3 +687,47 @@ def test_http_client_rejects_nonstandard_json_constants(monkeypatch, constant):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def _operator_mass_case():
+    plan = _rich_plan()
+    plan.model_choice = 'unknown_tabletop'
+    plan.target_track_id = 'g4-t18'
+    evidence = dict(source='operator_estimate', operator_statement='重量为10g左右',
+        evidence_sha256='a'*64, plan_id=plan.plan_id, target_track_id=plan.target_track_id,
+        snapshot_stamp_ns=str(plan.header.stamp.to_nsec()), estimated_mass_kg=.01)
+    return plan, dict(target_mass_evidence=evidence)
+
+
+def test_target_mass_uses_twice_operator_estimate_without_altering_other_contracts():
+    plan, config = _operator_mass_case()
+    default = client_module.build_mujoco_payload(plan, ['j'], [0.])
+    actual = client_module.build_mujoco_payload(plan, ['j'], [0.], config)
+    assert actual['object_model']['mass_kg'] == pytest.approx(.02)
+    assert actual['object_model']['friction'] == default['object_model']['friction']
+    assumptions = actual['object_model']['dynamics_assumptions']
+    assert assumptions['source'] == 'plan_bound_operator_mass_estimate'
+    assert not assumptions['measured_upper_bound']
+    assert assumptions['estimate_uncertainty_multiplier'] == 2.
+    assert actual['gripper'] == default['gripper']
+    assert actual['trajectory'] == default['trajectory']
+    assert actual['object_model']['size_xyz_m'] == default['object_model']['size_xyz_m']
+    assert 'mass_kg' not in config
+
+
+@pytest.mark.parametrize('field,value', [('plan_id','other'),('target_track_id','g4-t19'),
+    ('snapshot_stamp_ns','123'),('source','default'),('evidence_sha256',''),
+    ('estimated_mass_kg',float('nan')),('estimated_mass_kg',0),('estimated_mass_kg',True),
+    ('estimated_mass_kg',.26)])
+def test_operator_mass_cannot_cross_plan_or_exceed_operating_range(field,value):
+    plan,config = _operator_mass_case()
+    config['target_mass_evidence'][field] = value
+    with pytest.raises((ValueError,TypeError)):
+        client_module.build_mujoco_payload(plan,['j'],[0.],config)
+
+
+def test_carton_does_not_accept_unknown_operator_mass_override():
+    plan, config = _operator_mass_case()
+    plan.model_choice = 'carton_segment'
+    with pytest.raises(ValueError):
+        client_module.build_mujoco_payload(plan,['j'],[0.],config)

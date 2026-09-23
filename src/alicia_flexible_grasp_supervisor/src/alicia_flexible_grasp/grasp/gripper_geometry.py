@@ -362,7 +362,7 @@ def _bilateral_surface_measurement(
     )
 
 
-def evaluate_bilateral_surface_evidence(
+def evaluate_bilateral_surface_evidence_and_bounds(
     fused_surface,
     contact_center_base,
     jaw_axis_base,
@@ -372,11 +372,13 @@ def evaluate_bilateral_surface_evidence(
     *,
     support_normal_base=None,
 ):
-    """Measure jaw bands; a bound unit support normal is required to pass.
+    """Return evidence and tool-Z bounds from one measured surface evaluation.
 
     Contact height is relative to the contact center along insertion, matching
     the tool-Z CAD overlap contract. Support-normal extent is independently
     required and filters which measured points may contribute to that height.
+    A bound unit support normal is required to pass; missing support yields
+    unsuccessful evidence and None bounds. Results are local to this call.
     """
     measurement = _bilateral_surface_measurement(
         fused_surface,
@@ -392,7 +394,7 @@ def evaluate_bilateral_surface_evidence(
         counts = (0, 0, 0, 0, 0.0)
     negative, positive, negative_views, positive_views, width = counts
     ok = lower is not None and upper is not None
-    return BilateralSurfaceEvidence(
+    evidence = BilateralSurfaceEvidence(
         ok=bool(ok),
         code=(
             'BILATERAL_SURFACE_EVIDENCE_OK'
@@ -408,6 +410,32 @@ def evaluate_bilateral_surface_evidence(
             0.5 * (float(lower) + float(upper)) if ok else 0.0
         ),
     )
+    bounds = (float(lower), float(upper)) if ok else None
+    return evidence, bounds
+
+
+def evaluate_bilateral_surface_evidence(
+    fused_surface,
+    contact_center_base,
+    jaw_axis_base,
+    insertion_axis_base,
+    finger_geometry,
+    minimum_points_per_side=12,
+    *,
+    support_normal_base=None,
+):
+    """Measure jaw bands; a bound unit support normal is required to pass."""
+
+    evidence, _bounds = evaluate_bilateral_surface_evidence_and_bounds(
+        fused_surface,
+        contact_center_base,
+        jaw_axis_base,
+        insertion_axis_base,
+        finger_geometry,
+        minimum_points_per_side,
+        support_normal_base=support_normal_base,
+    )
+    return evidence
 
 
 def bilateral_surface_contact_bounds_m(

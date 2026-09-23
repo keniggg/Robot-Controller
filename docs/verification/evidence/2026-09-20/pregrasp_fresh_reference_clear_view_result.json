@@ -1,0 +1,148 @@
+{
+  "directory": ".",
+  "deployment": {
+    "base_commit": "b8d2573dd1950994e54c925f45faffe68e97dae0",
+    "local_uncommitted_patch": true,
+    "nodes_before": {
+      "/grasp_task_node": 203332,
+      "/motion_gateway": 241680,
+      "/remote_grasp6d_node": 184698,
+      "/alicia_d_driver_node": 7197,
+      "/bessica_d_hw_interface": 7198
+    },
+    "nodes": {
+      "/grasp_task_node": 271814,
+      "/motion_gateway": 241680,
+      "/remote_grasp6d_node": 184698,
+      "/alicia_d_driver_node": 7197,
+      "/bessica_d_hw_interface": 7198
+    },
+    "parameter_changes": [],
+    "no_disable_command_sent": true,
+    "source_sha256": {
+      "src/alicia_flexible_grasp_supervisor/scripts/grasp_task_node.py": "830e7bf8600387843c417d012abe9128d27009a3534d3106e397a197983c6b77",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "0f4779882985b50b0afc890b76c046040b281e20cc0b5df3a5c768917f65b386",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_gateway.py": "97437d3e60944a109c2ff07deefa7518ff80b3c6b20622862a9f834ed5afd853"
+    },
+    "reused_loaded_nodes": true,
+    "new_attempt_started_from_reached_observation_pose": true,
+    "previous_failed_attempt": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_fresh_reference_20260920"
+  },
+  "bag_start_sec": 1789902815.951194,
+  "bag_end_sec": 1789902993.525835,
+  "topic_counts": {
+    "/joint_states": 10363,
+    "/experiment/runtime_execution_error_snapshot": 2,
+    "/grasp/near_field_phase": 3,
+    "/alicia_d/accepted_joint_states": 1598,
+    "/grasp_6d/plan_enriched": 2,
+    "/grasp/state": 7,
+    "/grasp_6d/gate_audit": 5,
+    "/grasp_6d/object_geometry": 6,
+    "/gui/joint_direct_mode": 1,
+    "/alicia_controller/follow_joint_trajectory/status": 888,
+    "/grasp_6d/preview_plan_enriched": 2,
+    "/grasp_6d/status": 5,
+    "/alicia_controller/state": 8802,
+    "/rosout_agg": 721,
+    "/alicia_d/sdk_diagnostics": 1930,
+    "/alicia_d/temperatures_c": 168,
+    "/alicia_d/run_status": 1590,
+    "/alicia_d/protection_latched": 1590,
+    "/alicia_d/motion_enabled": 3166,
+    "/alicia_d/actuation_status": 3166,
+    "/alicia_d/control_reference_epoch": 1,
+    "/tf_static": 2,
+    "/tf": 5766,
+    "/alicia_d/sdk_command": 1580,
+    "/alicia_d/control_reference": 1580,
+    "/supervisor/camera/color/image_raw": 79,
+    "/supervisor/camera/depth/image_raw": 79,
+    "/perception/object_mask": 79,
+    "/perception/object": 79
+  },
+  "compensation_events": [],
+  "action_goals": [],
+  "action_results": [],
+  "stage_transitions": [
+    {
+      "stamp_sec": 1789902414.471804,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    {
+      "stamp_sec": 1789902892.4875498,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "far-field observation plan; contact simulation deferred until near-field replan"
+    },
+    {
+      "stamp_sec": 1789902892.5199983,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "using 6D grasp plan"
+    },
+    {
+      "stamp_sec": 1789902892.5657616,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "already inside 6D observation region; preserving reached camera view"
+    },
+    {
+      "stamp_sec": 1789902900.2457705,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "waiting for near-field 6D preview"
+    },
+    {
+      "stamp_sec": 1789902990.2806048,
+      "stage": 7,
+      "state": "FAILED",
+      "active": true,
+      "success": false,
+      "message": "NEAR_FIELD_DIRECT_TIMEOUT: no fresh near-field 6D preview after 90.0s; last=FINAL_REFINE_3D_INVALID: Preview source timestamp is older than the near-field request window"
+    },
+    {
+      "stamp_sec": 1789902990.290715,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    }
+  ],
+  "outcome": {
+    "physical_grasp_success": false,
+    "terminal_state": {
+      "stamp_sec": 1789902990.290715,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    "compensation_steps": null,
+    "compensation_code": null,
+    "position_error_m": null,
+    "held_joints": null,
+    "approach_started": false,
+    "close_started": false,
+    "lift_started": false,
+    "endpoint_measurement": "encoder FK, not external absolute measurement"
+  },
+  "gripper_opening_range_m": [
+    0.04975,
+    0.04975
+  ]
+}

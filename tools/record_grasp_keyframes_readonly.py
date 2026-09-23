@@ -11,9 +11,14 @@ import argparse
 from collections import OrderedDict
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
+import signal
 import threading
 import time
+
+from run_recorded_grasp import atomic_json, classify_result, observe_task_state, utc_now
 
 import rosbag
 import rospy
@@ -58,22 +63,70 @@ def archive_gate_audit(message_data, directory):
 
 
 def main():
+    from grasp_archive import begin_record, finalize_record, load_config, load_manifest
+
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', required=True)
+    parser.add_argument('--output', required=True,
+                        help='bag filename/root hint; standalone recordings get a unique child directory')
     parser.add_argument('--duration', type=float, default=600.)
+    parser.add_argument('--record-dir', help='existing managed directory allocated by the wrapper')
+    parser.add_argument('--archive-root', help='standalone record root (default: output parent)')
+    parser.add_argument('--config', help='archive config (default: record root/archive_config.json)')
+    parser.add_argument('--min-free-bytes', type=int, help='override startup free-space reserve')
+    parser.add_argument('--defer-finalize', action='store_true',
+                        help='wrapper seals all logs and finalizes after this process closes its bag')
     args = parser.parse_args()
-    output = Path(args.output)
-    if output.exists():
-        raise FileExistsError(output)
     if not 0 < args.duration <= 1800:
         raise ValueError('duration must be in (0, 1800] seconds')
+    if args.defer_finalize and not args.record_dir:
+        parser.error('--defer-finalize requires --record-dir')
+    requested_output = Path(args.output).expanduser().resolve()
+    if requested_output.suffix != '.bag':
+        parser.error('--output must name an original .bag recording')
+    root = (Path(args.record_dir).expanduser().resolve().parent if args.record_dir else
+            Path(args.archive_root).expanduser().resolve() if args.archive_root else requested_output.parent)
+    config = load_config(args.config or root / 'archive_config.json')
+    if args.min_free_bytes is not None:
+        if args.min_free_bytes < 0:
+            parser.error('--min-free-bytes must be nonnegative')
+        config['min_free_bytes'] = args.min_free_bytes
+    if args.record_dir:
+        record_dir = Path(args.record_dir).expanduser().resolve()
+        manifest = load_manifest(record_dir)
+        if manifest.get('state') != 'recording':
+            parser.error('--record-dir must be an active managed recording')
+        if requested_output.parent != record_dir:
+            parser.error('--output must be directly inside --record-dir')
+    else:
+        record_dir = begin_record(root, metadata={
+            'owner_pid': os.getpid(), 'recorder': Path(__file__).name,
+            'recording_duration_seconds': args.duration,
+        }, config=config)
+    output = record_dir / requested_output.name
+    if output.exists():
+        raise FileExistsError(output)
     audit_directory = output.parent / (output.stem + '_audits')
     audit_directory.mkdir(exist_ok=True)
-    rospy.init_node('grasp_keyframe_recorder_readonly', anonymous=True)
+    rospy.init_node('grasp_keyframe_recorder_readonly', anonymous=True, disable_signals=True)
     bag = rosbag.Bag(str(output), 'w', compression=rosbag.Compression.LZ4)
     lock = threading.Lock()
+    callbacks_done = threading.Condition(lock)
     pending, written = OrderedDict(), OrderedDict()
-    state = {'active_seen': False, 'terminal_at': None, 'count': 0, 'closed': False}
+    state = {'active_seen': False, 'terminal_at': None, 'count': 0, 'closed': False,
+             'audit_callbacks': 0, 'audit_files': set()}
+    outcome = {'started_at': utc_now(), 'active_seen': False,
+               'minimum_stamp_ns': rospy.Time.now().to_nsec(), 'interrupted': False,
+               'bag_closed': False, 'stop_reason': 'duration_elapsed'}
+    signal_event = threading.Event()
+    previous_handlers = {}
+
+    def stop_recording(signum, _frame):
+        outcome['interrupted'] = True
+        outcome['stop_reason'] = 'signal_%s' % signal.Signals(signum).name
+        signal_event.set()
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.signal(signum, stop_recording)
 
     def source(topic, message):
         stamp = message.header.stamp.to_nsec()
@@ -109,17 +162,30 @@ def main():
                 return
             bag.write(topic, message, rospy.Time.now())
             if isinstance(message, GraspState):
+                observe_task_state(outcome, {
+                    'stamp_ns': message.header.stamp.to_nsec(),
+                    'state': message.state, 'active': bool(message.active),
+                    'success': bool(message.success), 'message': message.message,
+                }, outcome['minimum_stamp_ns'])
                 if message.active:
                     state['active_seen'] = True
                 elif state['active_seen'] and state['terminal_at'] is None:
                     state['terminal_at'] = time.monotonic()
+            if topic == '/grasp_6d/gate_audit':
+                state['audit_callbacks'] += 1
         # Outside the bag lock: disk copying must not block joint telemetry.
         if topic == '/grasp_6d/gate_audit':
             try:
                 path = archive_gate_audit(message.data, audit_directory)
+                with lock:
+                    state['audit_files'].add(str(path.relative_to(record_dir)))
                 print('AUDIT_ARCHIVED path=%s' % path, flush=True)
             except (OSError, KeyError, TypeError, ValueError) as exc:
                 print('AUDIT_ARCHIVE_FAILED error=%s' % exc, flush=True)
+            finally:
+                with callbacks_done:
+                    state['audit_callbacks'] -= 1
+                    callbacks_done.notify_all()
 
     subscribers = []
     for topic, msg_type in SOURCES.items():
@@ -140,6 +206,10 @@ def main():
         ('/alicia_d/control_reference_epoch', Header),
         ('/alicia_d/actuation_status', String),
         ('/alicia_d/motion_enabled', Bool),
+        # Driver maps demonstration=true to torque-off. Record this input
+        # passively so the experiment can audit the no-disable requirement.
+        ('/demonstration', Bool),
+        ('/alicia_d/protection_latched', Bool),
         ('/alicia_d/run_status', UInt8),
         ('/alicia_d/temperatures_c', Float32MultiArray),
         ('/alicia_d/sdk_diagnostics', DiagnosticArray),
@@ -165,11 +235,19 @@ def main():
     started = time.monotonic()
     last_parameter_sample = float('-inf')
     last_endpoint_payload = None
+    last_space_warning = float('-inf')
+    atomic_json(record_dir / 'recorder_ready.json', {
+        'pid': os.getpid(), 'record_dir': str(record_dir), 'bag_path': str(output),
+        'started_at': outcome['started_at'],
+    })
+    print('KEYFRAME_RECORDING_READY path=%s' % output, flush=True)
     try:
-        while not rospy.is_shutdown() and time.monotonic() - started < args.duration:
+        while (not rospy.is_shutdown() and not signal_event.is_set()
+               and time.monotonic() - started < args.duration):
             with lock:
                 terminal_at = state['terminal_at']
             if terminal_at is not None and time.monotonic() - terminal_at >= 3.:
+                outcome['stop_reason'] = 'observed_task_became_inactive'
                 break
             if time.monotonic() - last_parameter_sample >= 1.:
                 last_parameter_sample = time.monotonic()
@@ -184,15 +262,43 @@ def main():
                         last_endpoint_payload = payload
                 except (rospy.ROSException, OSError, ValueError) as exc:
                     print('ENDPOINT_SNAPSHOT_FAILED error=%s' % exc, flush=True)
+                free = shutil.disk_usage(record_dir).free
+                reserve = int(config.get('min_free_bytes', 2 * 1024 ** 3))
+                if free < reserve and time.monotonic() - last_space_warning >= 30.:
+                    last_space_warning = time.monotonic()
+                    print('RECORDING_DISK_SPACE_LOW free_bytes=%d reserve_bytes=%d; '
+                          'next recording will be blocked; no arm command sent' % (free, reserve),
+                          flush=True)
             rospy.sleep(.2)
+        if rospy.is_shutdown() and not signal_event.is_set():
+            outcome['interrupted'] = True
+            outcome['stop_reason'] = 'ros_shutdown'
+    except BaseException as exc:
+        outcome['interrupted'] = True
+        outcome['stop_reason'] = 'recorder_exception: %s: %s' % (type(exc).__name__, exc)
+        raise
     finally:
         for subscriber in subscribers:
             subscriber.unregister()
-        with lock:
+        with callbacks_done:
             state['closed'] = True
+            while state['audit_callbacks']:
+                callbacks_done.wait()
             bag.close()
+            outcome['bag_closed'] = True
+            outcome['closed_files'] = [output.name] + sorted(state['audit_files'])
+        outcome['finished_at'] = utc_now()
+        outcome['keyframe_count'] = state['count']
+        atomic_json(record_dir / 'recorder_outcome.json', outcome)
         print('KEYFRAME_RECORDING_FINISHED count=%d path=%s' % (
             state['count'], output), flush=True)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        if not args.defer_finalize:
+            result, reason, evidence = classify_result(outcome, '')
+            finalize_record(record_dir, result=result, failure_reason=reason, evidence=evidence,
+                            closed_files=outcome['closed_files'] + [
+                                'recorder_ready.json', 'recorder_outcome.json'])
 
 
 if __name__ == '__main__':

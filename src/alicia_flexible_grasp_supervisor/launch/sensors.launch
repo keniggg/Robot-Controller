@@ -7,7 +7,8 @@
   <param name="/tactile/sdk_path" value="$(dirname)/../../Electronic-Skin-ML" />
   <rosparam command="load" file="$(dirname)/../config/handeye.yaml" />
 
-  <node if="$(arg start_camera)" pkg="alicia_flexible_grasp_supervisor" type="camera_node.py" name="supervisor_camera" output="screen" />
+  <node if="$(arg start_camera)" pkg="alicia_flexible_grasp_supervisor" type="camera_node.py" name="supervisor_camera" output="screen"
+        launch-prefix="$(dirname)/../../../tools/with_local_realsense_sdk.sh" />
   <node if="$(arg start_tactile)" pkg="alicia_flexible_grasp_supervisor" type="tactile_skin_node.py" name="tactile_skin" output="screen" />
   <node pkg="alicia_flexible_grasp_supervisor" type="perception_node.py" name="perception_node" output="screen" />
   <node pkg="alicia_flexible_grasp_supervisor" type="handeye_transform_node.py" name="handeye_transform" output="screen" />

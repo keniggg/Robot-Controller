@@ -83,7 +83,7 @@ def test_gateway_converges_only_on_new_measured_response_and_restores_planner(mo
     report=json.loads(result.message)
     assert result.success,report
     assert report['code']=='PREGRASP_MEASURED_CONVERGED' and report['position_error_m']<=.006
-    assert len(calls)==6 and state['moves']==6
+    assert len(calls)==7 and state['moves']==7
     assert all(sdk_counts(goal)[4]==1118 for goal,_ in calls)
     assert original==committed_plan_digest(plan)
     assert planner.observation_path_guard_required is False
@@ -91,7 +91,7 @@ def test_gateway_converges_only_on_new_measured_response_and_restores_planner(mo
     assert planner.strict_execution_max_joint_velocity_rad_s==.12
     assert not hasattr(planner,'observation_execution_authorized')
     result=node.handle_compensate_pregrasp(NS(plan=plan,execute=True))
-    assert not result.success and 'ALREADY_CONSUMED' in result.message and len(calls)==6
+    assert not result.success and 'ALREADY_CONSUMED' in result.message and len(calls)==7
 
 
 def test_no_response_leaves_original_goal_and_stops_after_one_step(monkeypatch):

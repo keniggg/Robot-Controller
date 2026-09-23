@@ -1,5 +1,7 @@
+import copy
 import time
 import warnings
+from importlib import metadata
 
 import numpy as np
 
@@ -13,6 +15,7 @@ class RealSenseManager:
         align_depth_to_color=True,
         simulate=False,
         depth_filter_cfg=None,
+        color_projection_cfg=None,
     ):
         self.width = int(width)
         self.height = int(height)
@@ -20,17 +23,24 @@ class RealSenseManager:
         self.align_depth_to_color = bool(align_depth_to_color)
         self.simulate = bool(simulate)
         self.depth_filter_cfg = dict(depth_filter_cfg or {})
+        self.color_projection_cfg = dict(color_projection_cfg or {})
+        self.color_projection_correction = None
         self.pipeline = None
         self.align = None
         self.rs = None
         self.depth_filters = []
+        self.applied_depth_filters = []
+        self.runtime_profile = {}
         self.depth_scale = 0.0001
+        self.depth_scale_source = 'simulation_constant' if self.simulate else 'default'
         self.depth_min_m = float(self.depth_filter_cfg.get('depth_min_m', 0.03))
         self.depth_max_m = float(self.depth_filter_cfg.get('depth_max_m', 2.0))
         self.t = 0
 
     def start(self):
         if self.simulate:
+            if self.color_projection_cfg.get('enabled', False):
+                raise RuntimeError('calibrated color projection requires the recorded real camera')
             return True
         try:
             import pyrealsense2 as rs
@@ -43,7 +53,9 @@ class RealSenseManager:
             self.depth_scale = self._read_depth_scale(profile)
             if self.align_depth_to_color:
                 self.align = rs.align(rs.stream.color)
+            self._configure_color_projection(profile)
             self._configure_depth_filters()
+            self.runtime_profile = self._read_runtime_profile(profile)
             return True
         except Exception as exc:
             raise RuntimeError('Failed to start RealSense: %s' % exc)
@@ -69,7 +81,94 @@ class RealSenseManager:
         for depth_filter in self.depth_filters:
             depth_frame = depth_filter.process(depth_frame)
         color = np.asanyarray(color_frame.get_data())
+        if self.color_projection_correction is not None:
+            color = self.color_projection_correction.apply(color)
         return color, self._clip_depth_range(depth_frame.get_data())
+
+    def _configure_color_projection(self, profile):
+        self.color_projection_correction = None
+        cfg = self.color_projection_cfg
+        if not cfg.get('enabled', False):
+            return
+        if not self.align_depth_to_color:
+            raise ValueError('calibrated color projection requires SDK depth-to-color alignment')
+        from .color_projection import ColorProjectionCorrection
+
+        serial = profile.get_device().get_info(self.rs.camera_info.serial_number)
+        if not cfg.get('device_serial') or str(cfg['device_serial']) != str(serial):
+            raise ValueError('color projection calibration does not match camera serial')
+        intrinsic = profile.get_stream(self.rs.stream.color).as_video_stream_profile().get_intrinsics()
+        actual = dict(width=intrinsic.width, height=intrinsic.height,
+                      fx=intrinsic.fx, fy=intrinsic.fy, cx=intrinsic.ppx, cy=intrinsic.ppy,
+                      model=str(intrinsic.model).split('.')[-1], coeffs=list(intrinsic.coeffs))
+        expected = cfg['sdk_intrinsics']
+        for key in ('width', 'height', 'fx', 'fy', 'cx', 'cy'):
+            if not np.isclose(float(expected[key]), float(actual[key]), rtol=0, atol=1e-6):
+                raise ValueError('color projection SDK profile changed: ' + key)
+        if (str(expected['model']).split('.')[-1] != actual['model'] or
+                not np.allclose(expected['coeffs'], actual['coeffs'], rtol=0, atol=1e-9)):
+            raise ValueError('color projection SDK distortion profile changed')
+        self.color_projection_correction = ColorProjectionCorrection(cfg['measured_intrinsics'], actual)
+
+    @staticmethod
+    def _intrinsics_dict(stream_profile):
+        intrinsic = stream_profile.as_video_stream_profile().get_intrinsics()
+        result = dict(width=int(intrinsic.width), height=int(intrinsic.height),
+                      fx=float(intrinsic.fx), fy=float(intrinsic.fy),
+                      cx=float(intrinsic.ppx), cy=float(intrinsic.ppy),
+                      model=str(intrinsic.model).split('.')[-1],
+                      coeffs=[float(value) for value in intrinsic.coeffs])
+        numeric = [result[key] for key in ('width', 'height', 'fx', 'fy', 'cx', 'cy')]
+        if (not np.all(np.isfinite(numeric + result['coeffs']))
+                or min(numeric[:4]) <= 0 or len(result['coeffs']) != 5):
+            raise ValueError('invalid active RealSense stream intrinsics')
+        return result
+
+    def _read_runtime_profile(self, profile):
+        """Describe the active SDK geometry; never write calibration to the device."""
+        color_stream = profile.get_stream(self.rs.stream.color)
+        depth_stream = profile.get_stream(self.rs.stream.depth)
+        color = self._intrinsics_dict(color_stream)
+        depth = self._intrinsics_dict(depth_stream)
+        extrinsic = depth_stream.get_extrinsics_to(color_stream)
+        rotation = [float(value) for value in extrinsic.rotation]
+        translation = [float(value) for value in extrinsic.translation]
+        if (len(rotation) != 9 or len(translation) != 3
+                or not np.all(np.isfinite(rotation + translation))):
+            raise ValueError('invalid active RealSense depth-to-color extrinsics')
+        device = profile.get_device()
+        info = {}
+        for key in ('serial_number', 'firmware_version'):
+            try:
+                info[key] = str(device.get_info(getattr(self.rs.camera_info, key)))
+            except Exception:
+                info[key] = 'unavailable'
+        sdk_version = getattr(self.rs, '__version__', '')
+        if not sdk_version:
+            try:
+                sdk_version = metadata.version('pyrealsense2')
+            except metadata.PackageNotFoundError:
+                sdk_version = 'unavailable'
+        source = ('sdk_active_color_profile' if self.align_depth_to_color
+                  else 'sdk_active_native_depth_profile')
+        correction = {'enabled': self.color_projection_correction is not None}
+        if correction['enabled']:
+            correction.update(measured_intrinsics=copy.deepcopy(self.color_projection_cfg['measured_intrinsics']),
+                              sdk_intrinsics=copy.deepcopy(self.color_projection_cfg['sdk_intrinsics']))
+        return dict(
+            schema_version=1, source='realsense_active_profile', sdk_version=str(sdk_version),
+            device=info, color_intrinsics=color, native_depth_intrinsics=depth,
+            depth_to_color_extrinsics=dict(rotation_column_major=rotation, translation_m=translation),
+            alignment=dict(enabled=self.align_depth_to_color,
+                           target_stream='color' if self.align_depth_to_color else 'depth'),
+            geometry_intrinsics=copy.deepcopy(color if self.align_depth_to_color else depth),
+            geometry_intrinsics_source=source, depth_scale_m_per_unit=float(self.depth_scale),
+            depth_scale_source=self.depth_scale_source,
+            depth_filters=dict(requested=copy.deepcopy(self.depth_filter_cfg),
+                               applied=copy.deepcopy(self.applied_depth_filters),
+                               range_m=[self.depth_min_m, self.depth_max_m]),
+            color_projection_correction=correction,
+        )
 
     def _clip_depth_range(self, depth):
         clipped = np.asanyarray(depth).copy()
@@ -87,6 +186,7 @@ class RealSenseManager:
 
     def _configure_depth_filters(self):
         self.depth_filters = []
+        self.applied_depth_filters = []
         cfg = dict(self.depth_filter_cfg or {})
         if bool(cfg.get('spatial_enabled', True)):
             spatial = None
@@ -104,6 +204,7 @@ class RealSenseManager:
                 self._warn_filter_disabled('spatial', option_name, exc)
             else:
                 self.depth_filters.append(spatial)
+                self.applied_depth_filters.append(dict(name='spatial', options=dict(values)))
         if bool(cfg.get('temporal_enabled', False)):
             self._append_simple_filter('temporal', 'temporal_filter')
         if bool(cfg.get('hole_filling_enabled', False)):
@@ -117,6 +218,7 @@ class RealSenseManager:
             self._warn_filter_disabled(filter_name, 'constructor', exc)
         else:
             self.depth_filters.append(depth_filter)
+            self.applied_depth_filters.append(dict(name=filter_name, options={}))
 
     @staticmethod
     def _warn_filter_disabled(filter_name, option_name, exc):
@@ -128,8 +230,13 @@ class RealSenseManager:
     def _read_depth_scale(self, profile):
         try:
             sensor = profile.get_device().first_depth_sensor()
-            return float(sensor.get_depth_scale())
+            scale = float(sensor.get_depth_scale())
+            self.depth_scale_source = 'sdk_depth_sensor'
+            return scale
         except Exception:
+            # Preserve the existing recovery behavior, but do not label this
+            # fallback as a fresh hardware measurement in the runtime record.
+            self.depth_scale_source = 'previous_value_fallback'
             return float(self.depth_scale)
 
     def _simulate(self):

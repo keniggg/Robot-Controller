@@ -1,0 +1,65 @@
+{
+  "date": "2026.9.20",
+  "mode": "offline_only_hardware_and_wsl_off_per_operator",
+  "base_commit": "b8d2573dd1950994e54c925f45faffe68e97dae0",
+  "local_uncommitted_changes": true,
+  "deployed_after_shutdown": false,
+  "test_environment": "source /opt/ros/noetic/setup.bash; source devel/setup.bash; PYTHONNOUSERSITE=1 PYTHONPATH=src/alicia_flexible_grasp_supervisor/src:tools:$PYTHONPATH",
+  "test_groups": [
+    {
+      "log": "handoff_final_regression.log",
+      "passed": 302,
+      "skipped": 0,
+      "seconds": 3.56,
+      "warnings": 7,
+      "files": [
+        "test_final_refine_reference.py",
+        "test_grasp_task_sequence.py",
+        "test_gateway_feedback_sampling.py",
+        "test_gateway_endpoint_correction.py",
+        "test_pregrasp_gateway.py"
+      ],
+      "sha256": "bcec62b30a1b26ac1267814be84a325c5819cf1cbc56ea6469e790a9665795c5",
+      "command": "python3 -m pytest -q src/alicia_flexible_grasp_supervisor/tests/test_final_refine_reference.py src/alicia_flexible_grasp_supervisor/tests/test_grasp_task_sequence.py src/alicia_flexible_grasp_supervisor/tests/test_gateway_feedback_sampling.py src/alicia_flexible_grasp_supervisor/tests/test_gateway_endpoint_correction.py src/alicia_flexible_grasp_supervisor/tests/test_pregrasp_gateway.py"
+    },
+    {
+      "log": "affected_regression.log",
+      "passed": 930,
+      "skipped": 2,
+      "seconds": 17.33,
+      "warnings": 1,
+      "files": [
+        "test_remote_grasp6d_streaming.py",
+        "test_remote_request_input_evidence.py",
+        "test_tabletop_materialization_reuse.py",
+        "test_gripper_geometry.py",
+        "test_tabletop_geometry_candidates.py",
+        "test_tabletop_geometry_realsense_fixture.py",
+        "test_multiview_surface.py",
+        "test_rgbd_snapshot.py",
+        "test_pregrasp_gateway.py",
+        "test_gateway_command_reference.py",
+        "test_gateway_reference_handoff.py"
+      ],
+      "sha256": "552324c0504fade4a99302ae42ffbfe2aa9fe1c24a744319309009ee6ba3eb3b",
+      "command": "python3 -m pytest -q src/alicia_flexible_grasp_supervisor/tests/test_remote_grasp6d_streaming.py src/alicia_flexible_grasp_supervisor/tests/test_remote_request_input_evidence.py src/alicia_flexible_grasp_supervisor/tests/test_tabletop_materialization_reuse.py src/alicia_flexible_grasp_supervisor/tests/test_gripper_geometry.py src/alicia_flexible_grasp_supervisor/tests/test_tabletop_geometry_candidates.py src/alicia_flexible_grasp_supervisor/tests/test_tabletop_geometry_realsense_fixture.py src/alicia_flexible_grasp_supervisor/tests/test_multiview_surface.py src/alicia_flexible_grasp_supervisor/tests/test_rgbd_snapshot.py src/alicia_flexible_grasp_supervisor/tests/test_pregrasp_gateway.py src/alicia_flexible_grasp_supervisor/tests/test_gateway_command_reference.py src/alicia_flexible_grasp_supervisor/tests/test_gateway_reference_handoff.py"
+    }
+  ],
+  "groups_overlap": [
+    "test_pregrasp_gateway.py"
+  ],
+  "skips": "Two tests require the genuine RealSense fixture absent from this checkout; no synthetic replacement used.",
+  "warnings": [
+    "existing rospy.warn deprecation",
+    "invalid float32 depth greater-than comparison in fixture encoding test"
+  ],
+  "source_sha256": {
+    "scripts/grasp_task_node.py": "2e41841b3f80e85f80932ed2e4db8f27909ea61eb916c40e26a25fba336bb07e",
+    "scripts/motion_gateway_node.py": "44d0f33e0b2890431621569a41c87c35eabb5cc23801f6e7c40ddcda87a79c3a",
+    "scripts/remote_grasp6d_node.py": "ac40733f8c10c21772b6cd12da333dde86c267dff2987b95c0cd7f9e827a9270",
+    "src/alicia_flexible_grasp/grasp/gripper_geometry.py": "d6195307eb47b01b310ef47b388b00c0969500a6d31d77bc04b2157fbebc3fef",
+    "src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "0f4779882985b50b0afc890b76c046040b281e20cc0b5df3a5c768917f65b386"
+  },
+  "physical_grasp_verified": false,
+  "raw_images_bags_pickle_kept_local": true
+}

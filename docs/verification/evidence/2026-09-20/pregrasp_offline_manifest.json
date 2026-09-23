@@ -1,0 +1,72 @@
+{
+  "local_directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_offline_20260920",
+  "snapshot_time_unix_sec": 1789922165.1637356,
+  "files": {
+    "affected_regression.log": {
+      "bytes": 1614,
+      "sha256": "552324c0504fade4a99302ae42ffbfe2aa9fe1c24a744319309009ee6ba3eb3b"
+    },
+    "baseline_gripper_geometry.py": {
+      "bytes": 92164,
+      "sha256": "5fcf80d8061712153978b40ab39d74d554a63302e201e9a3c6b38840ebdfb616"
+    },
+    "baseline_remote_grasp6d_node.py": {
+      "bytes": 897137,
+      "sha256": "218a99a53f6638d82cf6e063733be6f742321f2ecb10bcbacc94050c59969d02"
+    },
+    "baseline_sources.json": {
+      "bytes": 546,
+      "sha256": "54a1413296d3a9bda10def0ba75e264463f97bfd0a7e1cc01596bc09d6cb8107"
+    },
+    "baseline_tabletop_geometry_candidates.py": {
+      "bytes": 38036,
+      "sha256": "cf47d49a79404de488690df8a1e8eab0419bb8f671213d5e72e8023305351419"
+    },
+    "candidate_after.pstats": {
+      "bytes": 48996,
+      "sha256": "588de2ae44f59b40226aea0c86d577058c47d859754f19993dab96da156b2b59"
+    },
+    "candidate_before.pstats": {
+      "bytes": 48703,
+      "sha256": "d1bc5b3305ea710e78a6cd48e7f3f935ac5addb16b66ca4df7f6e1937f1612a1"
+    },
+    "candidate_generation_comparison.json": {
+      "bytes": 2796,
+      "sha256": "618d43023be59c2d4f5c8303c23f5cf2c298b71c86d027749f411f0b61b6f131"
+    },
+    "candidate_generation_comparison.log": {
+      "bytes": 1033,
+      "sha256": "ef915e1b1e81a0f414f721bac94a5360041aadcfcb1c4eda1d4424e0ea3c4f35"
+    },
+    "compare_candidate_generation.py": {
+      "bytes": 4068,
+      "sha256": "824c4ec57999cbf4c177195489ac1072de1c3147157d844bd2bfcb9f474792b7"
+    },
+    "handoff_final_regression.log": {
+      "bytes": 1604,
+      "sha256": "bcec62b30a1b26ac1267814be84a325c5819cf1cbc56ea6469e790a9665795c5"
+    },
+    "handoff_gateway_regression.log": {
+      "bytes": 106,
+      "sha256": "c1de49501f695cc61e63524a6af9ab54c175c87ed3ea7a3921fc5cf626ef0d97"
+    },
+    "handoff_task_regression.log": {
+      "bytes": 1524,
+      "sha256": "453b95fd3609490a3351b4714af1ec973cd582edb0e2ab4671745aeca348d8e3"
+    },
+    "materialization_regression.log": {
+      "bytes": 105,
+      "sha256": "8feedff71b64a9dfc6584ca883f6b67b68f540f7361bee881c15c26148728d88"
+    },
+    "validation.json": {
+      "bytes": 3877,
+      "sha256": "f1920fb5d4ef9accbac1d4f7197f0eac1f506fae0220c3c158f44d523a66a76f"
+    }
+  },
+  "excluded_live_logs": [],
+  "live_logs_frozen_with_prefix": null,
+  "node_log_snapshot_note": "Exclusion identifies original node logs; it does not assert that nodes are currently running.",
+  "raw_images_and_bag_kept_local": true,
+  "raw_video_and_pickle_kept_local": true,
+  "publication_scope": "File names, sizes and hashes only; no raw evidence content is copied to the versioned evidence directory."
+}

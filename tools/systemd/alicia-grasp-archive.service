@@ -1,0 +1,18 @@
+[Unit]
+Description=Alicia closed grasp recording archive queue
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/alicia_wa_full/.worktrees/protocol-v3-upgrade
+ExecStart=/usr/bin/python3 -u %h/alicia_wa_full/.worktrees/protocol-v3-upgrade/tools/grasp_archive.py --root %h/alicia_wa_full/.worktrees/protocol-v3-upgrade/.grasp_records worker
+Restart=on-failure
+RestartSec=15
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

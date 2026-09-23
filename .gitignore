@@ -18,3 +18,12 @@ __pycache__/
 # Captured ROS console streams are local runtime artifacts. Curated Markdown
 # runbooks and evidence summaries under logs/ remain versioned.
 src/alicia_flexible_grasp_supervisor/logs/*.log
+
+# Grasp bags, archive queue and local download validation (never Git history)
+.grasp_records/
+.grasp_archive_validation_*/
+*.bag
+*.bag.active
+
+# Isolated native SDK runtime; binaries never enter Git history
+.runtime/

@@ -41,7 +41,7 @@ def test_recorded_wrist_pose_converges_under_explicit_four_axes_response_hypothe
     assert code == 'PREGRASP_MEASURED_CONVERGED'
     assert evidence['position_error_m'] <= .006
     assert evidence['orientation_error_rad'] < math.radians(5)
-    assert correction.steps == 6
+    assert correction.steps <= correction.MAX_STEPS
     assert evidence['real_grasp_success'] is False
     assert np.array_equal(original_goal,correction.goal)
     assert not np.array_equal(sdk,actual)  # never pretend the encoder equals the command
@@ -234,6 +234,7 @@ def test_held_wrist_movement_is_not_hidden_by_omitting_it_from_commands():
 def test_recorded_eight_step_actual_response_preserves_failure_at_7_303_mm():
     # Actual post-command encoder samples, including delayed J1 response and
     # two counts of uncommanded J2 drift; no repeatable-plant assumption.
+    from alicia_flexible_grasp.robot.endpoint_correction import CorrectionStep
     record = json.loads((Path(__file__).parent /
         'fixtures/pregrasp_following_20260920_held_actual.json').read_text())
     fk, sdk, actual, goal = recorded_fixture('20260920_held_actual')
@@ -243,11 +244,15 @@ def test_recorded_eight_step_actual_response_preserves_failure_at_7_303_mm():
         sdk = (np.array(row['sdk_counts']) - 2048) * Q
         actual = (np.array(row['measured_counts']) - 2048) * Q
         _, step, evidence = c.evaluate(sample(fk, sdk, actual, 10. + 4*i))
-        assert list(step.target_counts) == rows[i+1]['sdk_counts']
         assert evidence['position_error_m'] == pytest.approx(row['position_error_m'])
-        assert step.target_counts[1] == c.initial_counts[1]
-        assert step.target_counts[4] == c.initial_counts[4]
-        c.committed(step, 12. + 4*i)
+        # Replay the historical commands explicitly: the new search must not
+        # claim these measured responses belong to its different J6 commands.
+        issued = CorrectionStep(step.baseline_counts, tuple(rows[i+1]['sdk_counts']),
+            step.measured_counts, step.sdk_stamp_ns, step.accepted_stamp_ns)
+        assert issued.target_counts[1] == c.initial_counts[1]
+        assert issued.target_counts[4] == c.initial_counts[4]
+        c.proposed = issued
+        c.committed(issued, 12. + 4*i)
     last = rows[-1]
     sdk = (np.array(last['sdk_counts']) - 2048) * Q
     actual = (np.array(last['measured_counts']) - 2048) * Q
@@ -259,3 +264,79 @@ def test_recorded_eight_step_actual_response_preserves_failure_at_7_303_mm():
     assert c.last_evidence['held_joints'] == ['Joint1', 'Joint2', 'Joint5', 'Joint6']
     assert c.expected[2] - c.initial_counts[2] == 32
     assert c.tolerances[0] == .006 and c.last_evidence['real_grasp_success'] is False
+
+
+def test_budget_guide_avoids_spending_joint6_in_wrong_direction():
+    fk, sdk, actual, goal = recorded_fixture('20260920_held_actual')
+    c = PregraspCompensation(fk, sample(fk, sdk, actual), goal)
+    _, step, report = c.evaluate(sample(fk, sdk, actual))
+    delta = np.asarray(step.target_counts)-step.baseline_counts
+    # Historical myopic first step was [4,0,4,4,0,-4], then J6 did not move.
+    assert delta.tolist() == [4, 0, 4, 4, 0, 4]
+    assert report['predicted_position_error_m'] < report['position_error_m']
+    guide = report['conditional_budget_guide']
+    assert guide['delta_counts'][5] > 0
+    assert guide['predicted_position_error_m'] < .006
+    assert not guide['physical_convergence_proven'] and not guide['path_authorized']
+    assert not guide['globally_optimal']
+
+
+def test_held_actual_start_converges_only_under_explicit_repeatable_response_hypothesis():
+    fk, sdk, actual, goal = recorded_fixture('20260920_held_actual')
+    c = PregraspCompensation(fk, sample(fk, sdk, actual), goal)
+    original = c.goal.copy()
+    errors = []
+    for i in range(c.MAX_STEPS+1):
+        code, step, report = c.evaluate(sample(fk, sdk, actual, 10.+4*i))
+        errors.append(report['position_error_m'])
+        if step is None:
+            break
+        delta = np.asarray(step.target_counts)-step.baseline_counts
+        assert delta[1] == delta[4] == 0
+        assert max(abs(delta)) <= 4
+        assert max(abs(np.asarray(step.target_counts)-c.initial_counts)) <= 32
+        c.committed(step, 12.+4*i)
+        sdk = np.asarray(step.positions)
+        actual += delta*Q  # hypothetical; NOT the archived measured responses
+    assert code == 'PREGRASP_MEASURED_CONVERGED'
+    assert errors[-1] <= .006 and all(a > b for a, b in zip(errors, errors[1:]))
+    assert report['orientation_error_rad'] <= math.radians(5)
+    assert np.array_equal(c.goal, original) and not report['real_grasp_success']
+
+
+def test_guide_uses_remaining_original_box_steps_gains_and_held_axes():
+    fk, sdk, actual, goal = recorded_fixture('20260920_held_actual')
+    c = PregraspCompensation(fk, sample(fk, sdk, actual), goal)
+    c.steps = 11
+    c.expected = tuple(np.asarray(c.initial_counts)+[28, 0, 32, 30, 0, 0])
+    c.held_axes.add(5)
+    c.response_gains[2] = .5
+    guide, error = c._remaining_budget_guide(actual)
+    assert max(abs(guide)) <= 4
+    assert guide[1] == guide[4] == guide[5] == 0
+    assert guide[2] <= 0 and guide[3] <= 2
+    assert max(abs(np.asarray(c.expected)+guide-c.initial_counts)) <= 32
+    assert error <= c.residual(actual)[0]
+
+
+def test_recorded_budget_guided_seven_steps_reach_original_gate_with_actual_encoders():
+    record = json.loads((Path(__file__).parent /
+        'fixtures/pregrasp_following_20260920_budget_actual.json').read_text())
+    fk, sdk, actual, goal = recorded_fixture('20260920_budget_actual')
+    c = PregraspCompensation(fk, sample(fk, sdk, actual), goal)
+    rows = record['actual_stationary_steps']
+    for i, row in enumerate(rows):
+        sdk = (np.array(row['sdk_counts'])-2048)*Q
+        actual = (np.array(row['measured_counts'])-2048)*Q
+        code, step, report = c.evaluate(sample(fk, sdk, actual, 10.+5*i))
+        assert report['position_error_m'] == pytest.approx(row['position_error_m'])
+        assert report['held_joints'] == row['held_joints']
+        if i == len(rows)-1:
+            assert step is None and code == 'PREGRASP_MEASURED_CONVERGED'
+        else:
+            assert list(step.target_counts) == rows[i+1]['sdk_counts']
+            c.committed(step, 13.+5*i)
+    assert c.steps == 7
+    assert report['position_error_m'] == pytest.approx(.005903179294131822)
+    assert report['orientation_error_rad'] == pytest.approx(.06341813378899798)
+    assert not report['real_grasp_success']  # subsequent vision stage failed

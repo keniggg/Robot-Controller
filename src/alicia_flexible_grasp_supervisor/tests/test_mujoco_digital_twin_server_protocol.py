@@ -2076,3 +2076,68 @@ def _assert_complete_failure(response, plan_id):
     ):
         assert type(response[key]) is bool
         assert response[key] is False
+
+
+@pytest.mark.parametrize('choice,expected_position_tolerance', [
+    ('unknown_tabletop', 0.0002), ('carton_seg', None),
+])
+def test_initial_contact_ik_precision_is_scoped_to_unknown_objects(
+    monkeypatch, choice, expected_position_tolerance,
+):
+    backend = server_module.MujocoDigitalTwinBackend()
+    backend._mujoco = types.SimpleNamespace(mj_forward=lambda *args: None)
+    payload = valid_payload()
+    payload['model_choice'] = choice
+    monkeypatch.setattr(backend, '_import_mujoco', lambda: None)
+    monkeypatch.setattr(backend, '_model_for_payload', lambda p: (
+        object(), object(), {'arm_joints': [], 'arm_actuators': []},
+    ))
+    for method in ('_apply_joint_state', '_apply_gripper_inner_gap', '_set_arm_qpos'):
+        monkeypatch.setattr(backend, method, lambda *a, **kw: None)
+    monkeypatch.setattr(server_module, '_apply_dynamic_scene_state', lambda *a: None)
+    monkeypatch.setattr(backend, '_copy_data', lambda m, d: d)
+    calls = []
+    def solve(*args, **kwargs):
+        calls.append(kwargs)
+        return dict(success=True, joint_positions=[], position_error_m=0.,
+                    orientation_error=0., iterations=1)
+    monkeypatch.setattr(backend, '_solve_ik', solve)
+    # End before dynamics; this test does not synthesize a successful gate.
+    monkeypatch.setattr(backend, '_check_trajectory_collisions',
+                        lambda *a: (False, ['test collision']))
+    out = backend._simulate_validated_grasp(payload, payload['plan_id'])
+    assert out['simulation_ok'] is False
+    assert len(calls) == 4
+    for options in calls:
+        assert options.get('position_tolerance_m') == expected_position_tolerance
+        if choice == 'unknown_tabletop':
+            assert options['orientation_tolerance_rad'] == 0.005
+        else:
+            assert options == {}
+
+
+def test_real_unknown_fixture_ik_residual_is_below_contact_tolerance():
+    mujoco = pytest.importorskip('mujoco')
+    import numpy as np
+    fixture = json.loads((pathlib.Path(__file__).parent / 'fixtures' /
+                          'unknown_contact_20260923.json').read_text())
+    payload = fixture['payload']
+    backend = server_module.MujocoDigitalTwinBackend()
+    backend._mujoco = mujoco
+    model, data, meta = backend._model_for_payload(payload)
+    backend._apply_joint_state(model, data, payload, meta)
+    backend._apply_gripper_inner_gap(model, data, .05, meta)
+    # This historical scene is used only for FK/IK verification, never HTTP.
+    for stage in server_module._parse_grasp_sequence(payload):
+        result = backend._solve_ik(
+            model, data, stage['position'], stage['rotation_matrix'], meta,
+            position_tolerance_m=.0002, orientation_tolerance_rad=.005,
+            max_iterations=400,
+        )
+        assert result['success']
+        backend._set_arm_qpos(model, data, meta['arm_joints'], result['joint_positions'])
+        assert np.linalg.norm(backend._gripper_center(data, meta) - stage['position']) <= .0002
+        rotation = data.xmat[meta['orientation_body']].reshape(3, 3)
+        angle = np.arccos(np.clip((np.trace(stage['rotation_matrix'] @ rotation.T)-1)/2, -1, 1))
+        assert angle <= .005
+    assert fixture['recorded_ik_results'][2]['position_error_m'] > .004

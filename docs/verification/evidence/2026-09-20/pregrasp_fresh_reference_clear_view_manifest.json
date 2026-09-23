@@ -1,0 +1,100 @@
+{
+  "local_directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_fresh_reference_clear_view_20260920",
+  "snapshot_time_unix_sec": 1789922163.773399,
+  "files": {
+    "analyze_readonly.py": {
+      "bytes": 3061,
+      "sha256": "938ca1f75a08aff5b29c322976022941463581c1020be9a5685f0c288de0e4f8"
+    },
+    "budget_guide_experiment_start_301239_1789902812864.log": {
+      "bytes": 2806,
+      "sha256": "524dee58cca2159a6e073e5c5d0af838e4e0b0be9677c96de4efcf6c7c32f478"
+    },
+    "deployment.json": {
+      "bytes": 1235,
+      "sha256": "12e256f497d62102067fede2af4b0bef3536efebca76b89a97ab52c8fca15b5c"
+    },
+    "evidence_analysis.json": {
+      "bytes": 381210,
+      "sha256": "8a4fae0463e66f40af37c1f59ebb567a4da00e85e3ea6b116e5148afe982ca85"
+    },
+    "fresh_grasp6d_execution_runner_301577_1789902818363.log": {
+      "bytes": 1957,
+      "sha256": "4179683bad9f1b517ec3db94226a74ae9157b1e0c71f15da264f28ab94a6aa4b"
+    },
+    "grasp_attempt_watch_readonly_301344_1789902815100.log": {
+      "bytes": 7391,
+      "sha256": "80c00fa7d1b1f50c2fff3922f22fabe0a585dce774a9a768da0aef2e8a419fb0"
+    },
+    "grasp_keyframe_recorder_readonly_301343_1789902815618.log": {
+      "bytes": 18342,
+      "sha256": "ba8796cded351890ee5b36512874916337bbb36016148804b296a5fe9de9a443"
+    },
+    "keyframes.bag": {
+      "bytes": 92488772,
+      "sha256": "868cb0a07e9e9c84b58f96bc95acd33b1603c88b7f67875d372977be783dd19d"
+    },
+    "keyframes_audits/2803a0ce1f01fd07544d8b5a5902dd1d65e093b897e61fad74c21aaea8d82c31.json": {
+      "bytes": 1309904,
+      "sha256": "2803a0ce1f01fd07544d8b5a5902dd1d65e093b897e61fad74c21aaea8d82c31"
+    },
+    "keyframes_audits/5c2d6189d4b42af6b28e80fcff44ef20ff7a87867f8ed2a568e771985e917e8e.json": {
+      "bytes": 363886,
+      "sha256": "5c2d6189d4b42af6b28e80fcff44ef20ff7a87867f8ed2a568e771985e917e8e"
+    },
+    "keyframes_audits/7b03b30c248b19ea3ab05fe82d82f4d9e0e1eee0a3ceb2472b9054483c4940c7.json": {
+      "bytes": 360936,
+      "sha256": "7b03b30c248b19ea3ab05fe82d82f4d9e0e1eee0a3ceb2472b9054483c4940c7"
+    },
+    "keyframes_audits/c682fa26b81e4dd83d013301efbf65666c663c888eb68ca7a8b7a1b2a3bfa097.json": {
+      "bytes": 628995,
+      "sha256": "c682fa26b81e4dd83d013301efbf65666c663c888eb68ca7a8b7a1b2a3bfa097"
+    },
+    "processes.json": {
+      "bytes": 59,
+      "sha256": "77e4ead883d374b6281a2ff2a7847950f00d68c1d8b5aeeb49f7c0cfbe3f596d"
+    },
+    "record.log": {
+      "bytes": 4663,
+      "sha256": "132b257706785e2bf33a560a2ac3a5ed1896de656ac7aee77da4136f64a868b0"
+    },
+    "result.json": {
+      "bytes": 4781,
+      "sha256": "ec30d0db3de5bd8075b9fc79a354e0fae8649fc35df1284144437e4abe8cf52a"
+    },
+    "run.log": {
+      "bytes": 991,
+      "sha256": "19720c9c63fd1390a5b8aa3ef7bb0cff9fe8af0036165b63cdd19c8ddab892a1"
+    },
+    "snapshot_readonly.py": {
+      "bytes": 2403,
+      "sha256": "8a7f1263aa4ad48be0b92e718175268fc9a04fb6db7d1409cf685e418f811e38"
+    },
+    "tabletop_profile.log": {
+      "bytes": 105,
+      "sha256": "90b122f220bd4e80745ffe05787716d44f15f294d5ffe58149c82ab96258e766"
+    },
+    "tabletop_profile.pstats": {
+      "bytes": 808802,
+      "sha256": "e56ae505a12979dbf95b033fdbcddf666c81059edd80401fa8c657dcc11fa261"
+    },
+    "tabletop_reuse_regression.log": {
+      "bytes": 748,
+      "sha256": "c96f88be52baca0cf3c0a5440ef7b71f196c63e4a8f0d801ed517a2f566f39f7"
+    },
+    "verify_evidence.py": {
+      "bytes": 3203,
+      "sha256": "b1c2118d38a98bcbb4646cc6145d8adb0bc4d926cfce1ad3e0b5852824ec552f"
+    },
+    "watch.log": {
+      "bytes": 130009,
+      "sha256": "cc5a1327124de8b8e247ac7bc71addc973096505395d1a54ab5fab0708a52bd4"
+    }
+  },
+  "excluded_live_logs": [],
+  "live_logs_frozen_with_prefix": null,
+  "node_log_snapshot_note": "Exclusion identifies original node logs; it does not assert that nodes are currently running.",
+  "raw_images_and_bag_kept_local": true,
+  "raw_video_and_pickle_kept_local": true,
+  "publication_scope": "File names, sizes and hashes only; no raw evidence content is copied to the versioned evidence directory."
+}

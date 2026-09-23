@@ -198,6 +198,36 @@ def _conservative_object_dynamics(object_size_xyz_m, object_config):
     }
 
 
+def _apply_target_mass_estimate(plan, object_config, evidence, mass, assumptions):
+    """Use explicit plan-bound operator evidence, with an auditable 2x margin.
+
+    This is an estimate-based simulation assumption, not a measured upper
+    bound. Friction and every simulation acceptance requirement stay unchanged.
+    """
+    if evidence is None:
+        return mass, assumptions
+    if (not isinstance(evidence, dict) or plan.model_choice != 'unknown_tabletop'
+            or evidence.get('source') != 'operator_estimate'
+            or not evidence.get('operator_statement')
+            or not evidence.get('evidence_sha256')
+            or evidence.get('plan_id') != plan.plan_id
+            or not getattr(plan, 'target_track_id', '')
+            or evidence.get('target_track_id') != plan.target_track_id
+            or str(evidence.get('snapshot_stamp_ns')) != str(plan.header.stamp.to_nsec())):
+        raise ValueError('operator mass evidence is not bound to this exact target plan')
+    estimate = _finite_float(evidence.get('estimated_mass_kg'), 'operator estimated_mass_kg')
+    floor = assumptions['mass_floor_kg']
+    ceiling = assumptions['operational_mass_ceiling_kg']
+    if estimate <= 0.0 or 2.0*estimate > ceiling:
+        raise ValueError('operator mass with uncertainty margin exceeds the operating range')
+    simulation_mass = max(floor, 2.0*estimate)
+    updated = dict(assumptions, source='plan_bound_operator_mass_estimate',
+        default_density_envelope_mass_kg=mass, estimated_mass_kg=estimate,
+        estimate_uncertainty_multiplier=2.0, simulation_mass_kg=simulation_mass,
+        measured_upper_bound=False, operator_evidence=dict(evidence))
+    return simulation_mass, updated
+
+
 def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None):
     """Build the finite, JSON-only schema-v3 request for one immutable plan."""
     if plan is None:
@@ -347,6 +377,9 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
         object_size,
         object_config,
     )
+
+    mass, dynamics_assumptions = _apply_target_mass_estimate(
+        plan, object_config, root_config.get('target_mass_evidence'), mass, dynamics_assumptions)
 
     payload = {
         'schema_version': 3,

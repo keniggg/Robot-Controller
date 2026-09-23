@@ -1,0 +1,15 @@
+{
+  "parameters_unchanged": true,
+  "control_reference_unchanged": true,
+  "control_reference_epoch_unchanged": true,
+  "accepted_delta_counts": [
+    0,
+    1,
+    0,
+    0,
+    0,
+    0
+  ],
+  "elapsed_sec": 1544.0749521255493,
+  "note": "User paused after task reload, before attempt; resumed with current measured state. One encoder count difference recorded, not identical feedback."
+}

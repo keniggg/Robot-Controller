@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import copy
 import time
 
 import numpy as np
@@ -12,7 +13,7 @@ from alicia_flexible_grasp.vision.realsense_manager import RealSenseManager
 
 class CameraNode:
     def __init__(self):
-        self.cfg = rospy.get_param('/camera', {})
+        self.cfg = copy.deepcopy(rospy.get_param('/camera', {}))
         self.color_topic = self.cfg.get('color_topic', '/supervisor/camera/color/image_raw')
         self.depth_topic = self.cfg.get('depth_topic', '/supervisor/camera/depth/image_raw')
         self.depth_preview_topic = str(self.cfg.get('depth_preview_topic', '') or '')
@@ -51,7 +52,7 @@ class CameraNode:
         perception_cfg = rospy.get_param('/perception', {})
         depth_filter_cfg.setdefault('depth_min_m', perception_cfg.get('depth_min_m', 0.03))
         depth_filter_cfg.setdefault('depth_max_m', perception_cfg.get('depth_max_m', 2.0))
-        return RealSenseManager(
+        camera_args = dict(
             width=self.width,
             height=self.height,
             fps=self.fps,
@@ -59,12 +60,20 @@ class CameraNode:
             simulate=simulate,
             depth_filter_cfg=depth_filter_cfg,
         )
+        projection_cfg = dict(self.cfg.get('color_projection_correction', {}) or {})
+        if projection_cfg.get('enabled', False):
+            target = projection_cfg['sdk_intrinsics']
+            for key in ('fx', 'fy', 'cx', 'cy'):
+                if not np.isclose(float(self.cfg[key]), float(target[key]), rtol=0, atol=1e-6):
+                    raise ValueError('camera/%s must match the corrected RGB-D SDK projection' % key)
+            camera_args['color_projection_cfg'] = projection_cfg
+        return RealSenseManager(**camera_args)
 
     def _start_camera(self, simulate):
         self.cam = self._make_camera(simulate)
         self.cam.start()
-        self._camera_started = True
         self._publish_runtime_camera_params()
+        self._camera_started = True
         mode = 'simulated' if simulate else 'real'
         rospy.loginfo('Camera started (%s): color=%s depth=%s', mode, self.color_topic, self.depth_topic)
         return True
@@ -171,10 +180,31 @@ class CameraNode:
         self.publish_image(pub, preview, '16UC1', stamp)
 
     def _publish_runtime_camera_params(self):
+        # One namespace replacement publishes K and scale together before the
+        # first image, including after a stream recovery. Keep unrelated config.
+        current = copy.deepcopy(rospy.get_param('/camera', self.cfg))
         if hasattr(self.cam, 'depth_scale'):
-            depth_scale = float(self.cam.depth_scale)
-            rospy.set_param('/camera/depth_scale', depth_scale)
-            rospy.loginfo('Camera depth scale set to %.7f m/unit', depth_scale)
+            current['depth_scale'] = float(self.cam.depth_scale)
+        if bool(getattr(self.cam, 'simulate', False)):
+            current['runtime_profile'] = {'source': 'simulation', 'schema_version': 1}
+            current['intrinsics_source'] = 'configured_simulation'
+        else:
+            profile = copy.deepcopy(self.cam.runtime_profile)
+            if profile.get('source') != 'realsense_active_profile':
+                raise ValueError('real camera has no active SDK geometry profile')
+            intrinsic = profile['geometry_intrinsics']
+            for key in ('fx', 'fy', 'cx', 'cy'):
+                current[key] = float(intrinsic[key])
+            if (int(intrinsic['width']) != int(self.width)
+                    or int(intrinsic['height']) != int(self.height)):
+                raise ValueError('active SDK geometry dimensions differ from requested images')
+            current['runtime_profile'] = profile
+            current['intrinsics_source'] = profile['geometry_intrinsics_source']
+        rospy.set_param('/camera', current)
+        self.cfg = copy.deepcopy(current)
+        rospy.loginfo('Camera runtime geometry: source=%s fx=%.6f fy=%.6f depth_scale=%.7f m/unit',
+                      current['intrinsics_source'], float(current.get('fx', 0.)),
+                      float(current.get('fy', 0.)), float(current.get('depth_scale', 0.)))
 
     def _publication_is_due(self):
         now = self._monotonic()

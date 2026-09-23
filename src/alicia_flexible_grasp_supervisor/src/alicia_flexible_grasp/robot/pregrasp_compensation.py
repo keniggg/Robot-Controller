@@ -9,6 +9,7 @@ measured Cartesian progress can authorize another step. FK convergence is not
 absolute accuracy.
 """
 from copy import deepcopy
+from itertools import product
 import math
 
 import numpy as np
@@ -95,6 +96,89 @@ class PregraspCompensation:
         # required position accuracy to improve an already admissible angle.
         return (position/self.tolerances[0])**2
 
+    def _remaining_budget_guide(self, measured):
+        """Conditional endpoint heuristic, never a path or response proof.
+
+        Looking only four counts ahead can spend an axis in the wrong
+        direction and strand the later steps at another axis's total bound.
+        Search the remaining ORIGINAL box, then execute only a small improving
+        step toward that guide. Recompute after every actual response.
+        """
+        sdk = np.asarray(self.expected)
+        origin = np.asarray(self.initial_counts)
+        reach = (self.MAX_STEPS-self.steps)*self.MAX_STEP_COUNTS
+        low = np.maximum(origin-self.MAX_TOTAL_COUNTS-sdk, -reach)
+        high = np.minimum(origin+self.MAX_TOTAL_COUNTS-sdk, reach)
+        delta = np.zeros(6, dtype=int)
+        best = self.residual(measured)[0]
+        # Fixed work bound; coordinate search is not a global reachability test.
+        for _ in range(8):
+            changed = False
+            for axis in range(6):
+                if axis in self.held_axes:
+                    continue
+                chosen = delta[axis]
+                for value in range(int(low[axis]), int(high[axis])+1, 2):
+                    trial = delta.copy()
+                    trial[axis] = value
+                    target = sdk+trial
+                    if np.any(target < 0) or np.any(target > 4095):
+                        continue
+                    try:
+                        command = (target-2048)*Q
+                        self.fk(command)
+                        predicted = measured+trial*self.response_gains*Q
+                        if np.any(abs(command-predicted) > .035):
+                            continue
+                        position, angle = self.residual(predicted)
+                    except ValueError:
+                        continue
+                    if angle <= self.tolerances[1] and position < best-1e-9:
+                        chosen, best = value, position
+                if chosen != delta[axis]:
+                    delta[axis], changed = chosen, True
+            if not changed:
+                break
+        return delta, best
+
+    def _guided_step(self, measured, actual, guide, position):
+        choices = []
+        for axis, distance in enumerate(guide):
+            if axis in self.held_axes or distance == 0:
+                choices.append((0,))
+            else:
+                sign = int(np.sign(distance))
+                choices.append(tuple(sign*v for v in (0, 2, 4) if v <= abs(distance)))
+        best_key, selected = None, np.zeros(6, dtype=int)
+        initial_cost = (position/self.tolerances[0])**2
+        for values in product(*choices):
+            trial = np.asarray(values, dtype=int)
+            if not np.any(trial):
+                continue
+            target = np.asarray(self.expected)+trial
+            active = trial != 0
+            if (np.any(target < 0) or np.any(target > 4095)
+                    or max(abs(target-np.asarray(self.initial_counts))) > self.MAX_TOTAL_COUNTS
+                    or np.any(abs(target-actual)[active] < 2)):
+                continue
+            minimum_response = actual+2*np.sign(trial)
+            if np.any(abs(target-minimum_response)*Q > .035):
+                continue
+            try:
+                self.fk((target-2048)*Q)
+                p, a = self.residual(measured+trial*self.response_gains*Q)
+            except ValueError:
+                continue
+            if (a > self.tolerances[1] or p >= position-1e-6
+                    or (p/self.tolerances[0])**2 >= initial_cost-1e-4):
+                continue
+            # Prefer progress toward the whole-budget solution; immediate FK
+            # error only breaks ties. Every step must still improve measured FK.
+            key = (int(np.sum((guide-trial)**2)), p)
+            if best_key is None or key < best_key:
+                best_key, selected = key, trial
+        return selected
+
     def evaluate(self, sample):
         actual = self._validate(sample)
         measured = np.asarray(sample['accepted_positions_rad'], dtype=float)
@@ -147,54 +231,11 @@ class PregraspCompensation:
             self._fail('PREGRASP_OUTSIDE_LOCAL_CAPTURE_RANGE')
         if self.steps >= self.MAX_STEPS:
             self._fail('PREGRASP_STEP_BUDGET')
-        # Finite coordinate search directly on the SDK grid. The selected
-        # increment is applied to the SDK baseline, while predictions use the
-        # measured pose. Never replace the SDK baseline with encoder feedback.
-        delta = np.zeros(6, dtype=int)
-        best = self._cost(measured)
-        initial_cost = best
-        for _ in range(3):
-            changed = False
-            for axis in range(6):
-                if axis in self.held_axes:
-                    continue
-                chosen = delta[axis]
-                for value in (-4, -2, 0, 2, 4):
-                    trial = delta.copy()
-                    trial[axis] = value
-                    target = np.asarray(self.expected)+trial
-                    if (np.any(target < 0) or np.any(target > 4095)
-                            or max(abs(target-np.asarray(self.initial_counts))) > self.MAX_TOTAL_COUNTS):
-                        continue
-                    active = trial != 0
-                    # A change of SDK word is not a change of measured angle.
-                    # Do not credit a command that ends inside the two-count
-                    # response band around the measurement. A static following
-                    # offset can lie on either side of the command, so its sign
-                    # alone does not establish the next physical response.
-                    if np.any(abs(target-actual)[active] < 2):
-                        continue
-                    # Preserve the .035-rad following bound even for a response
-                    # of only the admitted two-count minimum; prefer smaller
-                    # steps before an underresponding axis exhausts this margin.
-                    minimum_response = actual+2*np.sign(trial)
-                    if np.any(abs(target-minimum_response)*Q > .035):
-                        continue
-                    try:
-                        self.fk((target-2048)*Q)  # command as well as measured limits
-                        predicted = measured+trial*self.response_gains*Q
-                        p, a = self.residual(predicted)
-                        score = self._cost(predicted)
-                    except ValueError:
-                        continue
-                    if a <= self.tolerances[1] and score < best-1e-9:
-                        chosen, best = value, score
-                if chosen != delta[axis]:
-                    delta[axis], changed = chosen, True
-            if not changed:
-                break
+        guide, guide_error = self._remaining_budget_guide(measured)
+        delta = self._guided_step(measured, actual, guide, position)
+        initial_cost = self._cost(measured)
         predicted_position, predicted_angle = self.residual(measured+delta*self.response_gains*Q)
-        if (not np.any(delta) or best >= initial_cost-1e-4
+        if (not np.any(delta) or (predicted_position/self.tolerances[0])**2 >= initial_cost-1e-4
                 or predicted_position >= position-1e-6):
             self._fail('PREGRASP_NO_BOUNDED_IMPROVING_STEP')
         self.proposed = CorrectionStep(self.expected, tuple((np.asarray(self.expected)+delta).tolist()),
@@ -202,6 +243,9 @@ class PregraspCompensation:
         evidence['proposed_delta_counts'] = delta.tolist()
         evidence['predicted_position_error_m'] = predicted_position
         evidence['predicted_orientation_error_rad'] = predicted_angle
+        evidence['conditional_budget_guide'] = dict(delta_counts=guide.tolist(),
+            predicted_position_error_m=guide_error, physical_convergence_proven=False,
+            path_authorized=False, globally_optimal=False)
         self.last_evidence = deepcopy(evidence)
         self.proposed_cost = initial_cost
         self.proposed_position = position

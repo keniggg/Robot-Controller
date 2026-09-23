@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+import json
 import pathlib
 import sys
 import types
 import unittest
 import warnings
+from unittest.mock import patch
 
 import numpy as np
 
@@ -21,13 +23,37 @@ class FakeDepthSensor:
 
 
 class FakeDevice:
+    def get_info(self, key):
+        return {'serial_number': 'runtime-test-camera', 'firmware_version': '5.test'}[key]
+
     def first_depth_sensor(self):
         return FakeDepthSensor()
+
+
+class FakeVideoStream:
+    def __init__(self, stream):
+        self.stream = stream
+
+    def as_video_stream_profile(self):
+        return self
+
+    def get_intrinsics(self):
+        return types.SimpleNamespace(width=4, height=2,
+                                     fx=4. if self.stream == 'color' else 3.5,
+                                     fy=4. if self.stream == 'color' else 3.6,
+                                     ppx=1.5, ppy=.5, model='brown_conrady', coeffs=[0.] * 5)
+
+    def get_extrinsics_to(self, target):
+        return types.SimpleNamespace(rotation=[1., 0., 0., 0., 1., 0., 0., 0., 1.],
+                                     translation=[.0001, .0002, .0003])
 
 
 class FakeProfile:
     def get_device(self):
         return FakeDevice()
+
+    def get_stream(self, stream):
+        return FakeVideoStream(stream)
 
 
 class FakeFrame:
@@ -105,6 +131,8 @@ def make_fake_rs(depth=None, spatial=None, events=None):
     if spatial is None:
         spatial = FakeDepthFilter(events=events)
     return types.SimpleNamespace(
+        __version__='2.test',
+        camera_info=types.SimpleNamespace(serial_number='serial_number', firmware_version='firmware_version'),
         pipeline=lambda: pipeline,
         config=lambda: FakeConfig(),
         stream=types.SimpleNamespace(color='color', depth='depth'),
@@ -125,6 +153,107 @@ def make_fake_rs(depth=None, spatial=None, events=None):
 
 
 class RealSenseDepthScaleTest(unittest.TestCase):
+    @staticmethod
+    def _projection_setup():
+        sdk = dict(width=4, height=2, fx=4., fy=4., cx=1.5, cy=.5,
+                   model='brown_conrady', coeffs=[0., 0., 0., 0., 0.])
+        cfg = dict(enabled=True, device_serial='projection-test-camera',
+                   sdk_intrinsics=sdk, measured_intrinsics=dict(sdk, fx=3., fy=3.))
+        fake_rs, _ = make_fake_rs()
+        intrinsic = types.SimpleNamespace(width=4, height=2, fx=4., fy=4., ppx=1.5, ppy=.5,
+                                          model='brown_conrady', coeffs=[0.]*5)
+        video = types.SimpleNamespace(get_intrinsics=lambda: intrinsic)
+        profile = types.SimpleNamespace(
+            get_stream=lambda _: types.SimpleNamespace(as_video_stream_profile=lambda: video,
+                get_extrinsics_to=lambda _: types.SimpleNamespace(rotation=[1.,0.,0.,0.,1.,0.,0.,0.,1.],
+                                                                  translation=[0.,0.,0.])),
+            get_device=lambda: types.SimpleNamespace(
+                get_info=lambda _: 'projection-test-camera', first_depth_sensor=lambda: FakeDepthSensor()))
+        fake_rs.pipeline().start = lambda _: profile
+        fake_rs.camera_info = types.SimpleNamespace(serial_number='serial_number', firmware_version='firmware_version')
+        fake_rs.pipeline().frames.color.data = np.arange(24,dtype=np.uint8).reshape(2,4,3)*10
+        return fake_rs, cfg
+
+    def test_opt_in_projection_corrects_rgb_and_keeps_matching_aligned_depth(self):
+        fake_rs, cfg = self._projection_setup()
+        raw = fake_rs.pipeline().frames.color.data.copy()
+        raw_depth = fake_rs.pipeline().frames.depth.data.copy()
+        with patch.dict(sys.modules, {'pyrealsense2': fake_rs}):
+            manager = RealSenseManager(width=4,height=2,color_projection_cfg=cfg)
+            manager.start()
+            color,depth = manager.read()
+        self.assertFalse(np.array_equal(color,raw))
+        np.testing.assert_array_equal(depth,raw_depth)
+        np.testing.assert_array_equal(fake_rs.pipeline().frames.color.data,raw)
+
+    def test_projection_profile_mismatch_does_not_activate_a_partial_mapping(self):
+        fake_rs, cfg = self._projection_setup()
+        cfg['sdk_intrinsics'] = dict(cfg['sdk_intrinsics'],fx=4.5)
+        with patch.dict(sys.modules, {'pyrealsense2': fake_rs}):
+            manager = RealSenseManager(width=4,height=2,color_projection_cfg=cfg)
+            with self.assertRaisesRegex(RuntimeError,'SDK profile changed: fx'):
+                manager.start()
+        self.assertIsNone(manager.color_projection_correction)
+
+    def test_projection_cannot_be_applied_to_unaligned_depth(self):
+        fake_rs, cfg = self._projection_setup()
+        with patch.dict(sys.modules, {'pyrealsense2': fake_rs}):
+            manager = RealSenseManager(width=4,height=2,align_depth_to_color=False,color_projection_cfg=cfg)
+            with self.assertRaisesRegex(RuntimeError,'requires SDK depth-to-color alignment'):
+                manager.start()
+
+    def test_runtime_profile_describes_active_alignment_and_json_safe_device_geometry(self):
+        fake_rs, _ = make_fake_rs()
+        with patch.dict(sys.modules, {'pyrealsense2': fake_rs}):
+            manager = RealSenseManager()
+            manager.start()
+        profile = json.loads(json.dumps(manager.runtime_profile, allow_nan=False))
+        self.assertEqual(profile['device'], dict(serial_number='runtime-test-camera', firmware_version='5.test'))
+        self.assertEqual(profile['sdk_version'], '2.test')
+        self.assertEqual(profile['depth_scale_source'], 'sdk_depth_sensor')
+        self.assertEqual(profile['geometry_intrinsics']['fx'], 4.)
+        self.assertEqual(profile['native_depth_intrinsics']['fx'], 3.5)
+        self.assertEqual(profile['geometry_intrinsics_source'], 'sdk_active_color_profile')
+        self.assertEqual(profile['depth_to_color_extrinsics']['translation_m'], [.0001, .0002, .0003])
+        self.assertEqual(profile['depth_filters']['applied'][0]['name'], 'spatial')
+        self.assertFalse(profile['color_projection_correction']['enabled'])
+
+    def test_unaligned_profile_explicitly_uses_native_depth_geometry(self):
+        fake_rs, _ = make_fake_rs()
+        with patch.dict(sys.modules, {'pyrealsense2': fake_rs}):
+            manager = RealSenseManager(align_depth_to_color=False)
+            manager.start()
+        self.assertEqual(manager.runtime_profile['geometry_intrinsics']['fx'], 3.5)
+        self.assertEqual(manager.runtime_profile['geometry_intrinsics_source'], 'sdk_active_native_depth_profile')
+        self.assertFalse(manager.runtime_profile['alignment']['enabled'])
+
+    def test_failed_filter_is_not_reported_as_applied(self):
+        fake_rs, _ = make_fake_rs(spatial=FakeDepthFilter(fail_option='filter_smooth_delta'))
+        with patch.dict(sys.modules, {'pyrealsense2': fake_rs}), warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            manager = RealSenseManager()
+            manager.start()
+        self.assertEqual(manager.runtime_profile['depth_filters']['applied'], [])
+
+    def test_corrected_rgb_still_reports_sdk_geometry_and_keeps_measured_candidate_separate(self):
+        fake_rs, cfg = self._projection_setup()
+        with patch.dict(sys.modules, {'pyrealsense2': fake_rs}):
+            manager = RealSenseManager(width=4, height=2, color_projection_cfg=cfg)
+            manager.start()
+        self.assertEqual(manager.runtime_profile['geometry_intrinsics']['fx'], 4.)
+        self.assertEqual(manager.runtime_profile['color_projection_correction']['measured_intrinsics']['fx'], 3.)
+        cfg['measured_intrinsics']['fx'] = 99.
+        self.assertEqual(manager.runtime_profile['color_projection_correction']['measured_intrinsics']['fx'], 3.)
+
+    def test_depth_scale_read_failure_is_identified_as_fallback_in_runtime_record(self):
+        fake_rs, _ = make_fake_rs()
+        with patch.dict(sys.modules, {'pyrealsense2': fake_rs}), patch.object(
+                FakeDepthSensor, 'get_depth_scale', side_effect=RuntimeError('sensor unavailable')):
+            manager = RealSenseManager()
+            manager.start()
+        self.assertEqual(manager.depth_scale, .0001)
+        self.assertEqual(manager.runtime_profile['depth_scale_source'], 'previous_value_fallback')
+
     def test_start_reads_hardware_depth_scale(self):
         fake_rs, _ = make_fake_rs()
         original = sys.modules.get('pyrealsense2')

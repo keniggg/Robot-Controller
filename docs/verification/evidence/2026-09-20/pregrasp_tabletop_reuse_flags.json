@@ -1,0 +1,143 @@
+{
+  "disable_input_observed": false,
+  "motion_disabled_observed": false,
+  "protection_latched_observed": false,
+  "window_start_sec": 1789904373.0890203,
+  "window_end_sec": 1789904377.0890203,
+  "raw": {
+    "sample_count": 40,
+    "first_sec": 1789904373.093284,
+    "last_sec": 1789904376.992829,
+    "first_counts": [
+      832,
+      1581,
+      2986,
+      2054,
+      1205,
+      2007
+    ],
+    "last_counts": [
+      832,
+      1580,
+      2986,
+      2054,
+      1205,
+      2006
+    ],
+    "minimum_counts": [
+      832,
+      1580,
+      2986,
+      2054,
+      1205,
+      2006
+    ],
+    "maximum_counts": [
+      832,
+      1581,
+      2986,
+      2054,
+      1205,
+      2007
+    ]
+  },
+  "accepted": {
+    "sample_count": 40,
+    "first_sec": 1789904373.1011958,
+    "last_sec": 1789904376.993831,
+    "first_counts": [
+      832,
+      1581,
+      2986,
+      2054,
+      1205,
+      2007
+    ],
+    "last_counts": [
+      832,
+      1580,
+      2986,
+      2054,
+      1205,
+      2006
+    ],
+    "minimum_counts": [
+      832,
+      1580,
+      2986,
+      2054,
+      1205,
+      2006
+    ],
+    "maximum_counts": [
+      832,
+      1581,
+      2986,
+      2054,
+      1205,
+      2007
+    ]
+  },
+  "sdk": {
+    "sample_count": 37,
+    "first_sec": 1789904373.0918684,
+    "last_sec": 1789904377.0525331,
+    "first_counts": [
+      833,
+      1597,
+      3001,
+      2058,
+      1205,
+      2002
+    ],
+    "last_counts": [
+      833,
+      1597,
+      3001,
+      2058,
+      1205,
+      2002
+    ],
+    "minimum_counts": [
+      833,
+      1597,
+      3001,
+      2058,
+      1205,
+      2002
+    ],
+    "maximum_counts": [
+      833,
+      1597,
+      3001,
+      2058,
+      1205,
+      2002
+    ]
+  },
+  "raw_accepted_count_sequences_match": true,
+  "flag_summary": {
+    "/alicia_d/motion_enabled": {
+      "count": 5421,
+      "unique_values": [
+        true
+      ]
+    },
+    "/alicia_d/protection_latched": {
+      "count": 2193,
+      "unique_values": [
+        false
+      ]
+    },
+    "/demonstration": {
+      "count": 0,
+      "unique_values": []
+    },
+    "/gui/joint_direct_mode": {
+      "count": 1,
+      "unique_values": [
+        false
+      ]
+    }
+  }
+}

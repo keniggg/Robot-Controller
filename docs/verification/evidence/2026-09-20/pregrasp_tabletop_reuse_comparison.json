@@ -1,0 +1,88 @@
+{
+  "read_only": true,
+  "execution_authority": false,
+  "source_experiment": ".",
+  "source_windows": {
+    "far": [
+      1789902284821131467,
+      1789902287727864027,
+      1789902290092266321,
+      1789902291522086620,
+      1789902292811090946
+    ],
+    "reached": [
+      1789902373998697042
+    ],
+    "near": [
+      1789902378951802015,
+      1789902380821567773,
+      1789902381993247032
+    ]
+  },
+  "runtime_endpoint_error": {
+    "stamp_sec": 1789902373.461251,
+    "position_error_m": 0.011046121463420258,
+    "position_error_vector_m": [
+      0.00010531589397817787,
+      0.004703236158313029,
+      -0.009994262233213924
+    ],
+    "orientation_error_rad": 0.03332064615275862,
+    "requested_position_m": [
+      -0.09898817702431482,
+      -0.3129805760244714,
+      0.1665536465455808
+    ],
+    "actual_position_m": [
+      -0.09888286113033665,
+      -0.30827733986615835,
+      0.15655938431236688
+    ],
+    "requested_quaternion_xyzw": [
+      0.7769371356352951,
+      0.618627590844836,
+      -0.0943641630413895,
+      0.06902170564275688
+    ],
+    "actual_quaternion_xyzw": [
+      0.7773171022072219,
+      0.6210404695842,
+      -0.08114591634295018,
+      0.05917937153828615
+    ],
+    "stage_label": "6D far-field observation",
+    "plan_id": "0a9ba8832c73cda9f350c675",
+    "plan_phase": "FAR_FIELD_OBSERVATION_PLAN"
+  },
+  "runs": [
+    {
+      "implementation": "baseline",
+      "elapsed_sec": 2.5210182669979986,
+      "candidate_count": 32,
+      "proposal_count": 31,
+      "all_candidate_fields_and_diagnostics_equal": true
+    },
+    {
+      "implementation": "optimized",
+      "elapsed_sec": 1.9769562349974876,
+      "candidate_count": 32,
+      "proposal_count": 31,
+      "all_candidate_fields_and_diagnostics_equal": true
+    },
+    {
+      "implementation": "optimized",
+      "elapsed_sec": 4.815547450001759,
+      "candidate_count": 32,
+      "proposal_count": 31,
+      "all_candidate_fields_and_diagnostics_equal": true
+    },
+    {
+      "implementation": "baseline",
+      "elapsed_sec": 2.863190525000391,
+      "candidate_count": 32,
+      "proposal_count": 31,
+      "all_candidate_fields_and_diagnostics_equal": true
+    }
+  ],
+  "note": "Same process interleaved timings; operating-system load still varies. No freshness or phase deadlines changed."
+}

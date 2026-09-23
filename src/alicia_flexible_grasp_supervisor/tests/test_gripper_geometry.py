@@ -15,6 +15,7 @@ for path in (ROOT, ROOT / 'src'):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from alicia_flexible_grasp.grasp import gripper_geometry  # noqa: E402
 from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
     ANALYTICAL_FINGER_BOX_PADDING_XYZ_M,
     ANALYTICAL_FINGER_CONTACT_PATCH_TOOL_XZ_M,
@@ -30,9 +31,11 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
     _linear_quantiles,
     candidate_rank_key,
     bilateral_contact_height_bounds_m,
+    bilateral_surface_contact_bounds_m,
     contact_height_axis_base,
     evaluate_candidate,
     evaluate_bilateral_surface_evidence,
+    evaluate_bilateral_surface_evidence_and_bounds,
     evaluate_explicit_candidate,
     evaluate_open_gripper_observation_envelope,
     finger_contact_patch_height_intervals_m,
@@ -184,6 +187,64 @@ def test_bilateral_authorization_requires_support_normal():
     )
     assert not evidence.ok
     assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+@pytest.mark.parametrize('case,expected_ok', [
+    ('bilateral', True),
+    ('tilted', True),
+    ('reversed_jaw', True),
+    ('top_only', False),
+    ('one_sided', False),
+    ('insufficient_points', False),
+    ('outside_footprint', False),
+    ('missing_normal', False),
+    ('invalid_normal', False),
+])
+def test_combined_bilateral_result_matches_existing_contract_with_one_measurement(
+    case, expected_ok, monkeypatch,
+):
+    fused, reference = measured_surface_fixture(
+        include_negative=case != 'top_only',
+        include_positive=case not in ('top_only', 'one_sided'),
+    )
+    tilt = np.deg2rad(35.0 if case == 'tilted' else 0.0)
+    values = dict(
+        fused_surface=fused,
+        contact_center_base=[0.1 if case == 'outside_footprint' else 0., 0., 0.0105],
+        jaw_axis_base=[0., -1. if case == 'reversed_jaw' else 1., 0.],
+        insertion_axis_base=[np.sin(tilt), 0., -np.cos(tilt)],
+        finger_geometry=GRIPPER,
+        minimum_points_per_side=10_000 if case == 'insufficient_points' else 12,
+        support_normal_base=(
+            None if case == 'missing_normal'
+            else [0., 0., 2.] if case == 'invalid_normal'
+            else reference.support_normal_base
+        ),
+    )
+    expected_evidence = evaluate_bilateral_surface_evidence(**values)
+    expected_bounds = bilateral_surface_contact_bounds_m(**values)
+    calls = []
+
+    def measure_once(*args, **kwargs):
+        calls.append(1)
+        return _bilateral_surface_measurement(*args, **kwargs)
+
+    monkeypatch.setattr(gripper_geometry, '_bilateral_surface_measurement', measure_once)
+    evidence, bounds = evaluate_bilateral_surface_evidence_and_bounds(**values)
+
+    assert len(calls) == 1
+    assert evidence == expected_evidence
+    assert bounds == expected_bounds
+    assert evidence.ok is expected_ok
+    if expected_ok:
+        assert isinstance(bounds, tuple)
+        assert bounds[0] < bounds[1]
+        assert evidence.contact_height_m == 0.5 * (bounds[0] + bounds[1])
+        assert evidence.measured_width_m == pytest.approx(0.035, abs=0.0025)
+    else:
+        assert bounds is None
+        assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+        assert evidence.contact_height_m == 0.0
 
 
 def test_points_beyond_robust_jaw_band_cannot_count_as_contact_support():
@@ -353,7 +414,12 @@ def test_sparse_or_outside_physical_finger_footprint_does_not_count():
         {'minimum_points_per_side': 0},
     ],
 )
-def test_bilateral_surface_evidence_strictly_validates_contract(override):
+@pytest.mark.parametrize('evaluate', [
+    evaluate_bilateral_surface_evidence,
+    bilateral_surface_contact_bounds_m,
+    evaluate_bilateral_surface_evidence_and_bounds,
+])
+def test_bilateral_surface_evidence_strictly_validates_contract(override, evaluate):
     fused, _reference = measured_surface_fixture()
     values = {
         'fused_surface': fused,
@@ -367,7 +433,7 @@ def test_bilateral_surface_evidence_strictly_validates_contract(override):
     values.update(override)
 
     with pytest.raises(ValueError):
-        evaluate_bilateral_surface_evidence(**values)
+        evaluate(**values)
 
 
 CONSERVATIVE_CONTRACT_FIELDS = (

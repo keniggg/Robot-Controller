@@ -1,0 +1,156 @@
+{
+  "local_directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_budget_guide_20260920",
+  "snapshot_time_unix_sec": 1789922162.8634157,
+  "files": {
+    "after_reload.json": {
+      "bytes": 33108,
+      "sha256": "c4480fe537599c2a768e93b1e71ad29b55dca7725f6a3caaf85968c5a486af3f"
+    },
+    "after_reload.log": {
+      "bytes": 4310,
+      "sha256": "f6ce305936bc8b84395c0243ce8f25c6abcc7e741b1421754f801e9866365202"
+    },
+    "after_reload_camera.jpg": {
+      "bytes": 143039,
+      "sha256": "5ca6b4da410f296a7fbd68e2e5ef814519c32b69157f97ae2577c5daab38058b"
+    },
+    "analyze_readonly.py": {
+      "bytes": 3061,
+      "sha256": "938ca1f75a08aff5b29c322976022941463581c1020be9a5685f0c288de0e4f8"
+    },
+    "before_reload.json": {
+      "bytes": 33108,
+      "sha256": "e0bbfa0d89cafe68cc8d32968d73ed907ddd08f1250c2740a6e501b1f0365e7c"
+    },
+    "before_reload.log": {
+      "bytes": 4310,
+      "sha256": "a3eb0d47b552173212e8c0cf00cdcad2359514f07e29c3860a585f063308c5cc"
+    },
+    "before_reload_camera.jpg": {
+      "bytes": 134979,
+      "sha256": "9aee241d7e3680f5da251f3eaf25a5d10d166ac9c1c2a71ccb4a58ef125abff9"
+    },
+    "budget_guide_experiment_start_242767_1789898586223.log": {
+      "bytes": 2414,
+      "sha256": "547fa189d52ac3d87f26e24cb9e1332e122416515fc69b61574b7e1e0b8c89c5"
+    },
+    "budget_guide_gateway_reload_240412_1789898430958.log": {
+      "bytes": 2412,
+      "sha256": "d2284e2c4d7d1ce6ef0bd32631ca11477f516a488e887328a159a6c5ed0605db"
+    },
+    "budget_guide_gateway_reload_241447_1789898499799.log": {
+      "bytes": 2792,
+      "sha256": "9987677692549836169e8bf0f2955133368aa2ab1e5b630d850471ce0f02d99a"
+    },
+    "conditional_replay.json": {
+      "bytes": 209973,
+      "sha256": "972324ed6d910bae23d5fe22f59d246a0b7dd9aa1e71065d2809f1c4f572318b"
+    },
+    "deployment.json": {
+      "bytes": 1236,
+      "sha256": "b53b3a6e741395e1d153ac6b3b643835f402c1bca90157cbd1a00f8c644893d3"
+    },
+    "evidence_analysis.json": {
+      "bytes": 658773,
+      "sha256": "5f1c3da9209852d06e75b29c067b67bfdec9c6b2ad08425ebf9c25d53594d5e7"
+    },
+    "fresh_grasp6d_execution_runner_243035_1789898590776.log": {
+      "bytes": 1837,
+      "sha256": "2109b7386b18520a588f403574b517af27023d794d00cba39f37184b15d99350"
+    },
+    "grasp_attempt_watch_readonly_242823_1789898587762.log": {
+      "bytes": 6656,
+      "sha256": "1e539c12e37a97788c15ed171f739ab9c974bedc39018f5aa48d7942367352d6"
+    },
+    "grasp_keyframe_recorder_readonly_242822_1789898587918.log": {
+      "bytes": 19841,
+      "sha256": "aefdeb5ad9c1176e5c3046ffe44d5f5b056efde8911a8759b2527c0092d73fae"
+    },
+    "keyframes.bag": {
+      "bytes": 154663475,
+      "sha256": "c37acf0614bcdb37c5f52b7d24c1eba971f0f047c990837e3b7e486355920056"
+    },
+    "keyframes_audits/1eb900119528097ade91288725259c158a8a9a01b1e32ec31c9765aa0e680f1d.json": {
+      "bytes": 349726,
+      "sha256": "1eb900119528097ade91288725259c158a8a9a01b1e32ec31c9765aa0e680f1d"
+    },
+    "keyframes_audits/1edb2de3ae7747a6b5305fe5c37af057a6c9d602283492b5e2013c60004fba93.json": {
+      "bytes": 633808,
+      "sha256": "1edb2de3ae7747a6b5305fe5c37af057a6c9d602283492b5e2013c60004fba93"
+    },
+    "keyframes_audits/67401cafa0222a12bbdb549be74d46220d8e29bf2d13332f5d76a100b61f50af.json": {
+      "bytes": 403176,
+      "sha256": "67401cafa0222a12bbdb549be74d46220d8e29bf2d13332f5d76a100b61f50af"
+    },
+    "keyframes_audits/7a8d3e7326ba6a4f872afc6c9fd14d36be3fa7816ecf71514205cb1d21f132f3.json": {
+      "bytes": 664112,
+      "sha256": "7a8d3e7326ba6a4f872afc6c9fd14d36be3fa7816ecf71514205cb1d21f132f3"
+    },
+    "keyframes_audits/b7c1793ee9ee9d1cdec481b0d494c8008a4b1eef1e657aef8bdee0d0bc0f7db0.json": {
+      "bytes": 1302143,
+      "sha256": "b7c1793ee9ee9d1cdec481b0d494c8008a4b1eef1e657aef8bdee0d0bc0f7db0"
+    },
+    "pregrasp_experiment_snapshot_236806_1789898163274.log": {
+      "bytes": 6391,
+      "sha256": "bb2c730cd52fe17b2ad23a62f2b419fc233ce2cde3744b232dd8fa129543f852"
+    },
+    "pregrasp_experiment_snapshot_240476_1789898436538.log": {
+      "bytes": 6514,
+      "sha256": "efce493b1a65abf268325c9c18b729687c811d7eb4677446ad8eb06299e8825e"
+    },
+    "pregrasp_experiment_snapshot_241773_1789898517669.log": {
+      "bytes": 6516,
+      "sha256": "667eead200ea79139dfaeab02ec243752f994a5a6d2141a66fb0a4c08e1c89bb"
+    },
+    "processes.json": {
+      "bytes": 59,
+      "sha256": "cbe239e62bc69a06d54a9f0bef04e5920fd52e9a96dcde6e927b708e7746a8bc"
+    },
+    "record.log": {
+      "bytes": 6550,
+      "sha256": "9fde887eab75511af9e4b7280dc107bbd43fae8cce64c8084db0eebbc8b19a35"
+    },
+    "regression.log": {
+      "bytes": 4462,
+      "sha256": "b1cdbffffb243cde7a36abc7c62386aa44f271d6e871cff9f551072bab5d91a1"
+    },
+    "regression_gateway_final.log": {
+      "bytes": 105,
+      "sha256": "5d70744c1b895040f01377dff1b3ade448132afa8daa0a004534d95f80d92dc2"
+    },
+    "reload_gateway.py": {
+      "bytes": 2518,
+      "sha256": "88315255efe76c274a62b3515577f4e6deba83fbb1bbabb7725423fbc4758fd0"
+    },
+    "result.json": {
+      "bytes": 6234,
+      "sha256": "c22369fce4dbb74952ed5b17d8adf2adcbd72c307d24d1e6307eb701f857dcb6"
+    },
+    "run.log": {
+      "bytes": 1072,
+      "sha256": "ee58beee494b420005f47835b0db178d3b75ee288703bdb649e96dd3cb46d733"
+    },
+    "snapshot_readonly.py": {
+      "bytes": 2403,
+      "sha256": "8a7f1263aa4ad48be0b92e718175268fc9a04fb6db7d1409cf685e418f811e38"
+    },
+    "start_attempt.py": {
+      "bytes": 1583,
+      "sha256": "92b6b853554a90ff4f9dca2b6e037d0bd1352d07e984871b78b319e831800ed7"
+    },
+    "verify_evidence.py": {
+      "bytes": 3203,
+      "sha256": "b1c2118d38a98bcbb4646cc6145d8adb0bc4d926cfce1ad3e0b5852824ec552f"
+    },
+    "watch.log": {
+      "bytes": 182660,
+      "sha256": "2e9544c91c7a5ff6cfaef29159c661574f1ec42a2cdad04b8a91a2f2112193ec"
+    }
+  },
+  "excluded_live_logs": [],
+  "live_logs_frozen_with_prefix": null,
+  "node_log_snapshot_note": "Exclusion identifies original node logs; it does not assert that nodes are currently running.",
+  "raw_images_and_bag_kept_local": true,
+  "raw_video_and_pickle_kept_local": true,
+  "publication_scope": "File names, sizes and hashes only; no raw evidence content is copied to the versioned evidence directory."
+}

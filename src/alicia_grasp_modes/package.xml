@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>alicia_grasp_modes</name>
+  <version>0.1.0</version>
+  <description>Independent carton and unknown tabletop grasp mode adapters.</description>
+  <maintainer email="user@example.com">user</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>message_generation</build_depend>
+  <exec_depend>message_runtime</exec_depend>
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>message_filters</depend>
+  <depend>tf2_ros</depend>
+  <depend>cv_bridge</depend>
+  <depend>alicia_flexible_grasp_supervisor</depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+</package>

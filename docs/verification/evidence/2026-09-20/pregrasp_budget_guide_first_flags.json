@@ -1,0 +1,29 @@
+{
+  "disable_input_observed": false,
+  "motion_disabled_observed": false,
+  "protection_latched_observed": false,
+  "flag_summary": {
+    "/alicia_d/motion_enabled": {
+      "sample_count": 5623,
+      "values": [
+        true
+      ]
+    },
+    "/alicia_d/protection_latched": {
+      "sample_count": 2602,
+      "values": [
+        false
+      ]
+    },
+    "/demonstration": {
+      "sample_count": 0,
+      "values": []
+    },
+    "/gui/joint_direct_mode": {
+      "sample_count": 1,
+      "values": [
+        false
+      ]
+    }
+  }
+}

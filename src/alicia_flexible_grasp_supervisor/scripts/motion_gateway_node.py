@@ -1086,23 +1086,63 @@ class MotionGateway(PregraspCompensationGateway):
                                      context_validator=None):
         deadline = time.monotonic() + 2.
         last = 'no stationary post-command samples'
+        sampling = {}
         while not rospy.is_shutdown() and time.monotonic() < deadline:
             if context_validator is None:
                 self._validate_tracking_probe_context(context)
             else:
                 context_validator()
+            if time.monotonic() >= deadline:
+                last = 'sampling deadline expired during context validation'
+                break
+            capture_started = time.monotonic()
             with self._endpoint_feedback_lock:
-                sdk = deepcopy(list(self._endpoint_feedback_history['sdk']))
-                accepted = deepcopy(list(self._endpoint_feedback_history['accepted']))
+                # The callback already owns a deep copy of each message and
+                # only appends/replaces deque entries. Readers never mutate
+                # those messages. Freeze their references without blocking
+                # incoming SDK samples while cloning the full history again.
+                sdk = tuple(self._endpoint_feedback_history['sdk'])
+                accepted = tuple(self._endpoint_feedback_history['accepted'])
+            now_sec = rospy.get_time()
+            sampling = {
+                'now_sec': now_sec, 'epoch_ns': epoch,
+                'capture_sec': time.monotonic() - capture_started,
+                'sdk_count': len(sdk), 'accepted_count': len(accepted),
+                'sdk_latest_stamp_ns': sdk[-1].header.stamp.to_nsec() if sdk else None,
+                'accepted_latest_stamp_ns': accepted[-1].header.stamp.to_nsec() if accepted else None,
+            }
             try:
                 report = stationary_following_error(fk, sdk, accepted,
-                    now_sec=rospy.get_time(), epoch_ns=epoch)
-                if report['stationary_window_start_ns'] > after_ns:
-                    return report
+                    now_sec=now_sec, epoch_ns=epoch)
             except ValueError as exc:
                 last = str(exc)
-            rospy.sleep(.05)
-        raise ObservationPathError('ENDPOINT_CORRECTION_FEEDBACK_UNAVAILABLE: '+last)
+            else:
+                if report['stationary_window_start_ns'] > after_ns:
+                    # Validation/FK can run across a callback or scheduler
+                    # delay. A sample fresh at capture is not automatically
+                    # fresh when handed to the correction planner.
+                    if context_validator is None:
+                        self._validate_tracking_probe_context(context)
+                    else:
+                        context_validator()
+                    completed_sec = rospy.get_time()
+                    sampling['completed_sec'] = completed_sec
+                    sampling['validation_sec'] = time.monotonic() - capture_started
+                    if time.monotonic() >= deadline:
+                        last = 'sampling deadline expired during evidence validation'
+                        break
+                    if (math.isfinite(completed_sec)
+                            and all(0. <= completed_sec - report[key] * 1e-9 <= .5
+                                    for key in ('sdk_stamp_ns', 'accepted_stamp_ns'))):
+                        return report
+                    last = 'SDK or accepted evidence expired during validation'
+                else:
+                    last = 'stationary window does not follow the required command boundary'
+            remaining = deadline - time.monotonic()
+            if remaining > 0.:
+                rospy.sleep(min(.05, remaining))
+        raise ObservationPathError('ENDPOINT_CORRECTION_FEEDBACK_UNAVAILABLE: '+last
+                                   + '; snapshot=' + json.dumps(sampling, sort_keys=True))
 
     def handle_endpoint_feedback_correction(self, req):
         """Bounded opt-in free-space experiment; no automatic grasp authority.

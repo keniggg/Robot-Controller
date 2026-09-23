@@ -3648,7 +3648,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         old_preview.plan_id = compute_plan_id(old_preview)
         fresh_preview = grasp_task_node.deepcopy(current)
         fresh_preview.header.stamp = fresh_preview.object_geometry.header.stamp = (
-            grasp_task_node.rospy.Time(11, 10_000_000)
+            grasp_task_node.rospy.Time(11, 30_000_000)
         )
         fresh_preview.plan_id = compute_plan_id(fresh_preview)
         self._mark_valid_3d(fresh_preview)
@@ -3675,10 +3675,17 @@ class GraspTaskSequenceTest(unittest.TestCase):
         clock = [11.0]
 
         def publish_fresh_preview(_duration):
-            clock[0] = 11.02
-            node.latest_grasp6d_preview_plan = fresh_preview
-            node.latest_obj = self._object(stamp_sec=11.01)
+            # First deliver the post-arrival reference; only a later frame
+            # can supply a preview for the newly started phase.
+            if clock[0] == 11.0:
+                clock[0] = 11.02
+            else:
+                clock[0] = 11.04
+                node.latest_grasp6d_preview_plan = fresh_preview
+            node.latest_obj = self._object(stamp_sec=clock[0]-.01)
             node.latest_obj_time = node.latest_obj.header.stamp
+            node._latest_obj_received_monotonic = grasp_task_node.time.monotonic()
+            node._latest_obj_received_source_ns = node.latest_obj.header.stamp.to_nsec()
 
         with mock.patch.object(
             grasp_task_node.rospy.Time, 'now',
@@ -3694,13 +3701,14 @@ class GraspTaskSequenceTest(unittest.TestCase):
             )
 
         self.assertIsNotNone(refined)
-        self.assertEqual(refined.header.stamp.to_nsec(), 11_010_000_000)
+        self.assertEqual(refined.header.stamp.to_nsec(), 11_030_000_000)
         self.assertEqual(refined.target_track_id, current.target_track_id)
         self.assertEqual(stream_calls, [True])
         self.assertEqual(len(phases), 1)
         self.assertTrue(phases[0].active)
         self.assertEqual(phases[0].phase_id, 2)
-        self.assertEqual(phases[0].header.stamp.to_nsec(), 11_000_000_000)
+        self.assertEqual(phases[0].header.stamp.to_nsec(),
+                         grasp_task_node.rospy.Time.from_sec(11.02).to_nsec())
         self.assertEqual(phases[0].deadline.to_nsec(), 12_000_000_000)
         self.assertEqual(phases[0].reference_target_track_id, current.target_track_id)
 

@@ -1,0 +1,167 @@
+{
+  "local_directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_tabletop_reuse_20260920",
+  "snapshot_time_unix_sec": 1789922164.3333445,
+  "files": {
+    "actual_progress.png": {
+      "bytes": 91634,
+      "sha256": "9b9b585bed5baf65ada66ae9797b592ef49293cfdb0108b3ed8ee91359ec2448"
+    },
+    "analyze_readonly.py": {
+      "bytes": 3061,
+      "sha256": "938ca1f75a08aff5b29c322976022941463581c1020be9a5685f0c288de0e4f8"
+    },
+    "before_attempt.json": {
+      "bytes": 34135,
+      "sha256": "64250b98401d84ba8fc2db660af62e9c52894cbc875ff694ee2fd7a67746e725"
+    },
+    "before_attempt.log": {
+      "bytes": 4276,
+      "sha256": "0a0bcca3ed8638d6b5c82b9a17bdb55ff0b8894c67937d945086949bad506feb"
+    },
+    "before_attempt_camera.jpg": {
+      "bytes": 158595,
+      "sha256": "9be5c105085618083c9d475f9610c4098903be3894298a7162aad001a0035c8c"
+    },
+    "budget_guide_experiment_start_319020_1789904140113.log": {
+      "bytes": 3058,
+      "sha256": "b1612d3e90fb8d7f0f28ebd757ed36f7eaeb3b36ba51fd23e1d2b81709542466"
+    },
+    "deployment.json": {
+      "bytes": 1184,
+      "sha256": "9c3ac44044091eaf3e5f1cd037b57722e27db30d7e892a7c6564736253a3461f"
+    },
+    "endpoint_evidence_tail.json": {
+      "bytes": 79709,
+      "sha256": "1cbcc153a3eb3cbf67c4549a3dc97772a3e7e5b42fe5d4bab1e07f9f2d913d5f"
+    },
+    "evidence_analysis.json": {
+      "bytes": 627396,
+      "sha256": "afc396f341804758e84f37fd57038a49246978c386c05b9202b7673a15a55956"
+    },
+    "feedback_sampling_final_test.log": {
+      "bytes": 105,
+      "sha256": "acfc430c325bcbf7a0368eff6ffb66130342b26a9a749c497a21e44b2c26ec70"
+    },
+    "feedback_sampling_regression.log": {
+      "bytes": 2441,
+      "sha256": "38ba4266ebd712daad625aa16149d042d81616ae49b3e6c6f192a5b48987e1cf"
+    },
+    "feedback_sampling_replay.json": {
+      "bytes": 2418,
+      "sha256": "92adea51174db49291c82b54d0b0e55ac9b3ab7b0df53a3eefea7a51d0e75894"
+    },
+    "fresh_grasp6d_execution_runner_319469_1789904145690.log": {
+      "bytes": 1957,
+      "sha256": "427f09ff625a586d9899dac7c4c8005dcc37a79a4d5b08baea7121c3673a8d34"
+    },
+    "frozen_remote_grasp6d_node.log": {
+      "bytes": 342843,
+      "sha256": "8545df011f3b4db0a9dbef1602b1ee2673a56d9cdb0cf8bc4c6516e0cbc0d12e"
+    },
+    "frozen_remote_node.log": {
+      "bytes": 323443,
+      "sha256": "8ff0f9410550b5c56bfbd33b77108a9bbcc95609222ad79259b3ffff6b3f5a4d"
+    },
+    "grasp_attempt_watch_readonly_319236_1789904141496.log": {
+      "bytes": 7432,
+      "sha256": "bab899b19a38788ba58abeff7a532751dfcd02c772c09427a6def9f8bdb14d68"
+    },
+    "grasp_keyframe_recorder_readonly_319235_1789904142570.log": {
+      "bytes": 17447,
+      "sha256": "445ef1725572ff454e0042488f15339332417d73685a767f47beada180d843f6"
+    },
+    "keyframes.bag": {
+      "bytes": 146487245,
+      "sha256": "d8ecede9ae7e4b120854aba4dc74d1019fbd3e19d6c4bb6c9053026f3b8cd273"
+    },
+    "keyframes_audits/2715eae0f4f1b6c7184d1ac56c0c6562dba1a32b5417851f8ea5aa143243d2cf.json": {
+      "bytes": 730512,
+      "sha256": "2715eae0f4f1b6c7184d1ac56c0c6562dba1a32b5417851f8ea5aa143243d2cf"
+    },
+    "keyframes_audits/36b3ee817595be5f9c42738047c5fdf4027ad89a27acb5342a130dd3c4ab2360.json": {
+      "bytes": 380597,
+      "sha256": "36b3ee817595be5f9c42738047c5fdf4027ad89a27acb5342a130dd3c4ab2360"
+    },
+    "keyframes_audits/40954025dfe0607fa507c21fc472815a50d8d28677b2f6c3d0fb53115716ed64.json": {
+      "bytes": 1361253,
+      "sha256": "40954025dfe0607fa507c21fc472815a50d8d28677b2f6c3d0fb53115716ed64"
+    },
+    "keyframes_audits/434d3eccdc5c0d07c0b01e94a5db08b0ecb0093c4bf087d6eb39f39463b57940.json": {
+      "bytes": 684070,
+      "sha256": "434d3eccdc5c0d07c0b01e94a5db08b0ecb0093c4bf087d6eb39f39463b57940"
+    },
+    "keyframes_audits/8c7f91e0c83877dd9272648d9ebe7afdb78499149fd603b86afa2f35c3370b3e.json": {
+      "bytes": 363131,
+      "sha256": "8c7f91e0c83877dd9272648d9ebe7afdb78499149fd603b86afa2f35c3370b3e"
+    },
+    "manual_control.json": {
+      "bytes": 34102,
+      "sha256": "ca4b005eedc5e8d366d9c62beca4ebdf0d6747eeb1c60c22abc2e54ae602a849"
+    },
+    "manual_control_camera.jpg": {
+      "bytes": 160777,
+      "sha256": "259a075c030c571cb85aabd3f50ee51bbd9a16d3b3b7948ffb2c4f88aedf80d5"
+    },
+    "manual_control_snapshot.log": {
+      "bytes": 4242,
+      "sha256": "9cb69759114bcbb79c2e7ebff97d161e78e5b2618f12f3f3602e03d5c7d4e9c7"
+    },
+    "pregrasp_experiment_snapshot_317008_1789903990270.log": {
+      "bytes": 6765,
+      "sha256": "bf26875033a1f2718bfa604a870458f7459dd1277529c26ce91eb62c1b61867f"
+    },
+    "pregrasp_experiment_snapshot_319072_1789904136135.log": {
+      "bytes": 6635,
+      "sha256": "1bbfb92cd8305bcf482c3c60c9ab87a946d52884e8b2145f20efe25e094071fe"
+    },
+    "processes.json": {
+      "bytes": 59,
+      "sha256": "09d38416790e4e3cc0101f043a463488060c466776df89ba95e2a10b5db6fd04"
+    },
+    "record.log": {
+      "bytes": 6514,
+      "sha256": "64f62984ab5e20238692c410f3e8b2c05e0cd369d7e2cc2d47d4cd02e6c78417"
+    },
+    "reload_remote.py": {
+      "bytes": 3158,
+      "sha256": "d090b30a4736f11fc7eee376b8ebc2ebf46a465bc3dd035c2ac987bb0c3eeed7"
+    },
+    "result.json": {
+      "bytes": 74483,
+      "sha256": "a3a65944cf5ba3909f08eb92493e030c09b24f8eb2544d9880ee5f3aa8bc102f"
+    },
+    "run.log": {
+      "bytes": 1066,
+      "sha256": "02648515beb3b2f20c66fcaf364d3bda68b5c37f1cf4b0756c522bd992f02c53"
+    },
+    "snapshot_readonly.py": {
+      "bytes": 2403,
+      "sha256": "8a7f1263aa4ad48be0b92e718175268fc9a04fb6db7d1409cf685e418f811e38"
+    },
+    "tabletop_reuse_remote_reload_315369_1789903868760.log": {
+      "bytes": 1689,
+      "sha256": "c21b9ad1bf375b19cca1733bc18411c7aa14f06ab84e6000030094d289bee473"
+    },
+    "tabletop_reuse_remote_reload_318136_1789904079403.log": {
+      "bytes": 3813,
+      "sha256": "2092847b4fc756815e612864a5de1c7ef90d45d31f7905d739e645941ef8b6ea"
+    },
+    "verify_evidence.py": {
+      "bytes": 3203,
+      "sha256": "b1c2118d38a98bcbb4646cc6145d8adb0bc4d926cfce1ad3e0b5852824ec552f"
+    },
+    "watch.log": {
+      "bytes": 167947,
+      "sha256": "b171a003ecfb579f74587d97a2c0e4c230049fac353117cdede167b241fb8721"
+    }
+  },
+  "excluded_live_logs": [
+    "remote_grasp6d_node.log",
+    "remote_node.log"
+  ],
+  "live_logs_frozen_with_prefix": "frozen_",
+  "node_log_snapshot_note": "Exclusion identifies original node logs; it does not assert that nodes are currently running.",
+  "raw_images_and_bag_kept_local": true,
+  "raw_video_and_pickle_kept_local": true,
+  "publication_scope": "File names, sizes and hashes only; no raw evidence content is copied to the versioned evidence directory."
+}

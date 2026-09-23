@@ -1,0 +1,132 @@
+{
+  "sources": [
+    {
+      "file": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/recorded_grasp_diagnosis/native_comparison_new_sdk/frame_00.npz",
+      "sha256": "13759c760a9dbcf3b34df41fda40c5675055d5a391b95acebde56ef7c0647e8a"
+    },
+    {
+      "file": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/recorded_grasp_diagnosis/native_comparison_new_sdk/frame_01.npz",
+      "sha256": "4de91bfee4792d711b47c4bb045de295a20808563cb1270e9d6af7c08fcaa926"
+    },
+    {
+      "file": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/recorded_grasp_diagnosis/native_comparison_new_sdk/frame_02.npz",
+      "sha256": "87077aebf6e02706ac82d09ab2b714aea1bace3ecd17e73f4f8ec3cedb33ebbc"
+    }
+  ],
+  "runtime_profile": {
+    "schema_version": 1,
+    "source": "realsense_active_profile",
+    "sdk_version": "2.56.5",
+    "device": {
+      "serial_number": "260522277974",
+      "firmware_version": "5.17.0.10"
+    },
+    "color_intrinsics": {
+      "width": 640,
+      "height": 480,
+      "fx": 395.7682800292969,
+      "fy": 395.6027526855469,
+      "cx": 317.9961242675781,
+      "cy": 244.833984375,
+      "model": "inverse_brown_conrady",
+      "coeffs": [
+        -0.05372992530465126,
+        0.05834611505270004,
+        0.002122000325471163,
+        0.0007625872385688126,
+        -0.019704923033714294
+      ]
+    },
+    "native_depth_intrinsics": {
+      "width": 640,
+      "height": 480,
+      "fx": 389.4533996582031,
+      "fy": 389.4533996582031,
+      "cx": 321.01190185546875,
+      "cy": 245.62918090820312,
+      "model": "brown_conrady",
+      "coeffs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "depth_to_color_extrinsics": {
+      "rotation_column_major": [
+        0.9999755024909973,
+        -0.0032465485855937004,
+        -0.006196357309818268,
+        0.0032532282639294863,
+        0.999994158744812,
+        0.0010682024294510484,
+        0.006192853208631277,
+        -0.0010883343638852239,
+        0.9999802112579346
+      ],
+      "translation_m": [
+        -5.0697817641776055e-05,
+        2.1683623344870284e-05,
+        9.552900883136317e-05
+      ]
+    },
+    "alignment": {
+      "enabled": true,
+      "target_stream": "color"
+    },
+    "geometry_intrinsics": {
+      "width": 640,
+      "height": 480,
+      "fx": 395.7682800292969,
+      "fy": 395.6027526855469,
+      "cx": 317.9961242675781,
+      "cy": 244.833984375,
+      "model": "inverse_brown_conrady",
+      "coeffs": [
+        -0.05372992530465126,
+        0.05834611505270004,
+        0.002122000325471163,
+        0.0007625872385688126,
+        -0.019704923033714294
+      ]
+    },
+    "geometry_intrinsics_source": "sdk_active_color_profile",
+    "depth_scale_m_per_unit": 9.999999747378752e-05,
+    "depth_scale_source": "sdk_depth_sensor",
+    "depth_filters": {
+      "requested": {
+        "spatial_enabled": true,
+        "spatial_magnitude": 2,
+        "spatial_smooth_alpha": 0.5,
+        "spatial_smooth_delta": 20,
+        "temporal_enabled": false,
+        "hole_filling_enabled": false
+      },
+      "applied": [
+        {
+          "name": "spatial",
+          "options": {
+            "filter_magnitude": 2,
+            "filter_smooth_alpha": 0.5,
+            "filter_smooth_delta": 20.0
+          }
+        }
+      ],
+      "range_m": [
+        0.03,
+        2.0
+      ]
+    },
+    "color_projection_correction": {
+      "enabled": false
+    }
+  },
+  "unavailable_outside_roi_xyxy": [
+    220,
+    155,
+    430,
+    350
+  ],
+  "note": "Three measured static-object frames. Frame 1 includes the independently measured local depth jump. ROI evaluation references are test-only, never segmentation seeds."
+}

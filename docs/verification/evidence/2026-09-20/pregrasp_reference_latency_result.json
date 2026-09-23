@@ -1,0 +1,147 @@
+{
+  "directory": "/home/zhuyupei/alicia_wa_full/.ros_log/grasp_reference_latency_20260920",
+  "deployment": {
+    "base_commit": "b8d2573dd1950994e54c925f45faffe68e97dae0",
+    "local_uncommitted_patch": true,
+    "nodes_before": {
+      "/grasp_task_node": 271814,
+      "/motion_gateway": 338668,
+      "/remote_grasp6d_node": 318261,
+      "/alicia_d_driver_node": 7197,
+      "/bessica_d_hw_interface": 7198
+    },
+    "nodes": {
+      "/grasp_task_node": 348477,
+      "/motion_gateway": 338668,
+      "/remote_grasp6d_node": 318261,
+      "/alicia_d_driver_node": 7197,
+      "/bessica_d_hw_interface": 7198
+    },
+    "parameter_changes": [],
+    "no_disable_command_sent": true,
+    "source_sha256": {
+      "src/alicia_flexible_grasp_supervisor/scripts/motion_gateway_node.py": "6688c93fed781ef06b4676edf4bee7bd9b3dc2afdf7a2df8a1861fd554182ca9",
+      "src/alicia_flexible_grasp_supervisor/scripts/remote_grasp6d_node.py": "218a99a53f6638d82cf6e063733be6f742321f2ecb10bcbacc94050c59969d02",
+      "src/alicia_flexible_grasp_supervisor/scripts/grasp_task_node.py": "8e594d48c69b0598751b4aa6b467e6786e82493638172aa1a128bdfae92e1a68",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_compensation.py": "0f4779882985b50b0afc890b76c046040b281e20cc0b5df3a5c768917f65b386",
+      "src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/pregrasp_gateway.py": "97437d3e60944a109c2ff07deefa7518ff80b3c6b20622862a9f834ed5afd853"
+    }
+  },
+  "bag_start_sec": 1789906195.7603514,
+  "bag_end_sec": 1789906403.4270165,
+  "topic_counts": {
+    "/tf": 6768,
+    "/alicia_d/run_status": 1880,
+    "/alicia_controller/state": 10342,
+    "/experiment/runtime_execution_error_snapshot": 2,
+    "/grasp_6d/status": 5,
+    "/grasp/state": 7,
+    "/grasp/near_field_phase": 3,
+    "/grasp_6d/object_geometry": 6,
+    "/grasp_6d/preview_plan_enriched": 2,
+    "/grasp_6d/plan_enriched": 2,
+    "/grasp_6d/gate_audit": 5,
+    "/gui/joint_direct_mode": 1,
+    "/alicia_controller/follow_joint_trajectory/status": 1037,
+    "/alicia_d/temperatures_c": 198,
+    "/alicia_d/protection_latched": 1875,
+    "/alicia_d/motion_enabled": 3723,
+    "/alicia_d/actuation_status": 3723,
+    "/alicia_d/control_reference_epoch": 1,
+    "/alicia_d/sdk_diagnostics": 2268,
+    "/tf_static": 2,
+    "/joint_states": 12168,
+    "/alicia_d/sdk_command": 1849,
+    "/alicia_d/control_reference": 1849,
+    "/alicia_d/accepted_joint_states": 1872,
+    "/rosout_agg": 962,
+    "/supervisor/camera/color/image_raw": 86,
+    "/supervisor/camera/depth/image_raw": 86,
+    "/perception/object_mask": 86,
+    "/perception/object": 86
+  },
+  "compensation_events": [],
+  "action_goals": [],
+  "action_results": [],
+  "stage_transitions": [
+    {
+      "stamp_sec": 1789906183.509003,
+      "stage": 0,
+      "state": "IDLE",
+      "active": false,
+      "success": false,
+      "message": "ready"
+    },
+    {
+      "stamp_sec": 1789906302.7622027,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "far-field observation plan; contact simulation deferred until near-field replan"
+    },
+    {
+      "stamp_sec": 1789906302.8266065,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "using 6D grasp plan"
+    },
+    {
+      "stamp_sec": 1789906302.893525,
+      "stage": 3,
+      "state": "MOVE_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "already inside 6D observation region; preserving reached camera view"
+    },
+    {
+      "stamp_sec": 1789906310.1586668,
+      "stage": 2,
+      "state": "PLAN_PREGRASP",
+      "active": true,
+      "success": false,
+      "message": "waiting for near-field 6D preview"
+    },
+    {
+      "stamp_sec": 1789906400.2448888,
+      "stage": 7,
+      "state": "FAILED",
+      "active": true,
+      "success": false,
+      "message": "NEAR_FIELD_DIRECT_TIMEOUT: no fresh near-field 6D preview after 90.0s; last=FINAL_REFINE_3D_INVALID: Preview source timestamp is older than the near-field request window"
+    },
+    {
+      "stamp_sec": 1789906400.2528532,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    }
+  ],
+  "outcome": {
+    "physical_grasp_success": false,
+    "terminal_state": {
+      "stamp_sec": 1789906400.2528532,
+      "stage": 7,
+      "state": "FAILED",
+      "active": false,
+      "success": false,
+      "message": "execution slot released: failed"
+    },
+    "compensation_steps": null,
+    "compensation_code": null,
+    "position_error_m": null,
+    "held_joints": null,
+    "approach_started": false,
+    "close_started": false,
+    "lift_started": false,
+    "endpoint_measurement": "encoder FK, not external absolute measurement"
+  },
+  "gripper_opening_range_m": [
+    0.04975,
+    0.04975
+  ]
+}

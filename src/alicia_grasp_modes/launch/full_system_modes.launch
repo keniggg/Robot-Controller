@@ -1,0 +1,49 @@
+<launch>
+  <arg name="initial_mode" default="carton"/>
+  <arg name="initial_strategy" default="two_stage"/>
+  <arg name="start_real_arm" default="false"/>
+  <arg name="driver_port" default="/dev/alicia_arm"/>
+  <arg name="driver_baudrate" default="1000000"/>
+  <arg name="auto_torque_on_startup" default="false"/>
+  <arg name="self_check_poll_rate_hz" default="0.5"/>
+  <arg name="start_camera" default="true"/>
+  <arg name="start_tactile" default="true"/>
+  <arg name="start_gui" default="true"/>
+  <arg name="remote_grasp6d_url" default="$(optenv GRASP6D_URL http://172.23.132.97:8000)"/>
+  <include file="$(find alicia_flexible_grasp_supervisor)/launch/bringup.launch">
+    <arg name="start_real_arm" value="$(arg start_real_arm)"/>
+    <arg name="driver_port" value="$(arg driver_port)"/>
+    <arg name="driver_baudrate" value="$(arg driver_baudrate)"/>
+    <arg name="auto_torque_on_startup" value="$(arg auto_torque_on_startup)"/>
+    <arg name="self_check_poll_rate_hz" value="$(arg self_check_poll_rate_hz)"/>
+  </include>
+  <group>
+    <remap from="/perception/object" to="/perception/carton/object"/>
+    <remap from="/perception/object_mask" to="/perception/carton/object_mask"/>
+    <remap from="/perception/object_pose_camera" to="/perception/carton/object_pose_camera"/>
+    <remap from="/perception/object_pose_base" to="/perception/carton/object_pose_base"/>
+    <remap from="/perception/object_detected" to="/perception/carton/object_detected"/>
+    <remap from="/perception/raw_object_detected" to="/perception/carton/raw_object_detected"/>
+    <remap from="/perception/detector_status" to="/perception/carton/detector_status"/>
+    <include file="$(find alicia_flexible_grasp_supervisor)/launch/sensors.launch">
+      <arg name="start_camera" value="$(arg start_camera)"/>
+      <arg name="start_tactile" value="$(arg start_tactile)"/>
+    </include>
+  </group>
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/grasp_params.yaml"/>
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/safety_limits.yaml"/>
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/joint_limits.yaml"/>
+  <param name="/grasp_6d/remote/server_url" value="$(arg remote_grasp6d_url)"/>
+  <param name="/mujoco_digital_twin/server_url" value="$(arg remote_grasp6d_url)"/>
+  <include file="$(dirname)/perception_modes.launch">
+    <arg name="initial_mode" value="$(arg initial_mode)"/>
+    <arg name="initial_strategy" value="$(arg initial_strategy)"/>
+    <arg name="start_carton" value="false"/>
+  </include>
+  <node pkg="alicia_flexible_grasp_supervisor" type="compliant_gripper_controller.py" name="compliant_gripper_controller" output="screen"/>
+  <node pkg="alicia_flexible_grasp_supervisor" type="safety_monitor_node.py" name="safety_monitor_node" output="screen"/>
+  <node pkg="alicia_flexible_grasp_supervisor" type="data_logger_node.py" name="data_logger_node" output="screen"/>
+  <group if="$(arg start_gui)">
+    <include file="$(dirname)/gui_modes.launch"/>
+  </group>
+</launch>

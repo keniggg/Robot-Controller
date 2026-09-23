@@ -11955,3 +11955,33 @@ def test_worker_uses_newest_pending_after_slow_candidate_processing():
     finally:
         prepare_release.set(); accept_release.set()
         node.shutdown_streaming_worker()
+
+
+def test_tabletop_surface_snapshot_is_local_to_one_generation(monkeypatch):
+    """Reuse cannot carry contact evidence into a later invalidated phase."""
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.tabletop_geometry_enabled = True
+    node.tabletop_geometry_config = TabletopGeometryConfig(max_candidates=32)
+    node.gripper_geometry = tabletop_gripper()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    node.candidate_min_downward_approach_cos = .65
+    node.candidate_max_final_approach_lateral_m = .010
+    attach_bilateral_surface(node, height_m=.021)
+    snapshot_calls = []
+    capture = node._snapshot_multiview_surface
+    def counted_capture():
+        snapshot_calls.append(True)
+        return capture()
+    monkeypatch.setattr(node, '_snapshot_multiview_surface', counted_capture)
+    geometry = tabletop_geometry((.040, .035, .021))
+    candidates, _ = node._generate_tabletop_candidates(geometry)
+    assert candidates
+    assert len(snapshot_calls) == 1
+    # A subsequent request has no valid phase surface. The previous captured
+    # pair must not make any new contact candidate valid.
+    node._active_multiview_surface = lambda: (None, None)
+    candidates, diagnostics = node._generate_tabletop_candidates(geometry)
+    assert not candidates
+    assert diagnostics['failure_code'] == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+    assert len(snapshot_calls) == 2
