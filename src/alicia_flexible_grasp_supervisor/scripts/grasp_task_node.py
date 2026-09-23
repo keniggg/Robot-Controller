@@ -7629,10 +7629,6 @@ class GraspTaskNode:
             if (_plan_phase(plan) != _FAR_FIELD_OBSERVATION_PLAN
                     or str(plan.header.frame_id) != 'base_link'):
                 raise ValueError('following evidence requires a base_link observation plan')
-            with self._following_evidence_lock:
-                sdk = deepcopy(list(self._following_sdk_history))
-                accepted = deepcopy(list(self._following_accepted_history))
-                epoch = self._following_epoch_ns
             description = rospy.get_param('/robot_description', '')
             cache = self._following_fk_cache
             if cache is None or cache[0] != description:
@@ -7640,12 +7636,44 @@ class GraspTaskNode:
                 self._following_fk_cache = cache
             maximum_age = rospy.get_param(
                 '/robot/strict_execution_controller_sync_max_feedback_age_sec', .5)
-            sample = stationary_following_error(
-                cache[1], sdk, accepted, now_sec=_stamp_seconds(rospy.Time.now()),
-                epoch_ns=epoch, maximum_age_sec=maximum_age)
-            with self._following_evidence_lock:
-                if epoch != self._following_epoch_ns:
-                    raise ValueError('positive-enable epoch changed during evidence collection')
+            # Resolve potentially slow XML-RPC/model setup BEFORE capturing
+            # evidence. Callbacks already deep-copy messages and never mutate
+            # stored entries; copying the entire history under this lock can
+            # itself starve new encoder callbacks.
+            deadline = time.monotonic() + 2.0
+            last = 'no fresh stationary following sample'
+            while time.monotonic() < deadline:
+                with self._following_evidence_lock:
+                    sdk = tuple(self._following_sdk_history)
+                    accepted = tuple(self._following_accepted_history)
+                    epoch = self._following_epoch_ns
+                try:
+                    sample = stationary_following_error(
+                        cache[1], sdk, accepted,
+                        now_sec=_stamp_seconds(rospy.Time.now()),
+                        epoch_ns=epoch, maximum_age_sec=maximum_age)
+                except ValueError as exc:
+                    last = str(exc)
+                    if not last.startswith((
+                            'missing, stale or future ', 'insufficient stationary ',
+                            'missing independent ', 'accepted feedback is not stationary',
+                            'SDK target changed in reused observation window')):
+                        raise
+                else:
+                    with self._following_evidence_lock:
+                        if epoch != self._following_epoch_ns:
+                            raise ValueError('positive-enable epoch changed during evidence collection')
+                    completed = _stamp_seconds(rospy.Time.now())
+                    if (time.monotonic() < deadline and math.isfinite(completed)
+                            and all(0. <= completed - sample[key] * 1e-9 <= maximum_age
+                                    for key in ('sdk_stamp_ns', 'accepted_stamp_ns'))):
+                        break
+                    last = 'following evidence expired during computation'
+                remaining = deadline - time.monotonic()
+                if remaining > 0.:
+                    time.sleep(min(.05, remaining))
+            else:
+                raise ValueError('stationary sampling deadline: ' + last)
             sample.update(stage_label='reused 6D observation SDK following',
                           plan_id=str(plan.plan_id), plan_phase=_plan_phase(plan))
             # XML-RPC integers are signed 32 bit. Preserve nanosecond evidence

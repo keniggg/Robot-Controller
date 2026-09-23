@@ -115,3 +115,57 @@ def test_epoch_change_during_calculation_rejects_publish(monkeypatch):
     monkeypatch.setattr(task, 'stationary_following_error', compute)
     ok, writes = run(node, plan, monkeypatch)
     assert not ok and not writes
+
+
+def test_model_setup_precedes_feedback_capture(monkeypatch):
+    node, plan = node_and_plan()
+    writes = []
+    original_sdk = tuple(node._following_sdk_history)
+    original_accepted = tuple(node._following_accepted_history)
+    node._following_sdk_history.clear()
+    node._following_accepted_history.clear()
+    def parameter(name, default=None):
+        if name == '/robot_description':
+            # Fresh callbacks arrive during a delayed model/parameter lookup.
+            node._following_sdk_history.extend(original_sdk)
+            node._following_accepted_history.extend(original_accepted)
+            return XML
+        return default
+    monkeypatch.setattr(task.rospy, 'get_param', parameter)
+    monkeypatch.setattr(task.rospy, 'set_param', lambda *args: writes.append(args))
+    monkeypatch.setattr(task.rospy.Time, 'now', lambda: task.rospy.Time.from_sec(10.05))
+    monkeypatch.setattr(task, 'deepcopy', lambda *_: (_ for _ in ()).throw(
+        AssertionError('must not clone callback-owned history while holding its lock')))
+    assert node._record_reused_observation_following(plan)
+    assert len(writes) == 1
+
+
+def test_transient_stale_capture_retries_without_relaxing_freshness(monkeypatch):
+    node, plan = node_and_plan()
+    original = task.stationary_following_error
+    calls = []
+    def sample(*args, **kwargs):
+        calls.append(kwargs['maximum_age_sec'])
+        if len(calls) == 1:
+            raise ValueError('missing, stale or future sdk_measured evidence')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(task, 'stationary_following_error', sample)
+    ok, writes = run(node, plan, monkeypatch)
+    assert ok and len(writes) == 1
+    assert calls == [.5, .5]
+
+
+def test_sample_that_expires_during_computation_is_never_published(monkeypatch):
+    node, plan = node_and_plan()
+    clock = [0.]
+    monkeypatch.setattr(task, 'time', SimpleNamespace(
+        monotonic=lambda: clock[0], sleep=lambda sec: clock.__setitem__(0, clock[0]+sec)))
+    original = task.stationary_following_error
+    def compute(*args, **kwargs):
+        sample = original(*args, **kwargs)
+        sample['accepted_stamp_ns'] -= 1_000_000_000
+        return sample
+    monkeypatch.setattr(task, 'stationary_following_error', compute)
+    ok, writes = run(node, plan, monkeypatch)
+    assert not ok and not writes
+    assert clock[0] == pytest.approx(2.)
