@@ -247,7 +247,7 @@ class TabletopTests(unittest.TestCase):
                     tracker.config, anchor, anchor, tracker.plane_base)
         self.assertIs(tracker.last, anchor)
 
-    def test_actual_reference_plane_texture_overflow_can_refit_before_loss(self):
+    def test_remote_table_texture_does_not_exhaust_locked_component_budget(self):
         depth, transform = self.scene([(0.288, 0, 0)])
         tracker = TargetTracker()
         anchor, _ = tracker.choose(segment(depth, self.intrinsics, transform), depth.shape)
@@ -262,14 +262,14 @@ class TabletopTests(unittest.TestCase):
         for y in (20,50,80,155,185,215):
             for x in (15,60,105,200,245,290):
                 depth[y:y+8,x:x+8] = .2955
-        with self.assertRaisesRegex(ValueError, 'too_many_foreground_instances'):
-            segment(depth, self.intrinsics, transform, tracker.config,
-                    target_position_base=anchor.position_base, plane_base=tracker.plane_base,
-                    fit_current_support=False)
+        reference = segment(depth, self.intrinsics, transform, tracker.config,
+                            target_position_base=anchor.position_base,
+                            plane_base=tracker.plane_base, fit_current_support=False)
+        self.assertEqual(len(_matching_candidates(
+            reference.candidates, anchor, anchor, tracker.config)), 1)
         result = segment_with_support_fallback(depth, self.intrinsics, transform,
             tracker.config, anchor, anchor, tracker.plane_base)
-        self.assertEqual(result.metrics['support_reference_segmentation_error'], 'too_many_foreground_instances')
-        self.assertLess(result.metrics['support_reference_max_distance_m'], .004)
+        self.assertEqual(result.metrics['support_source'], 'locked_base_plane')
         selected, _ = tracker.choose(result, depth.shape)
         self.assertIsNotNone(selected)
         self.assertLess(np.linalg.norm(selected.position_base-anchor.position_base), .004)

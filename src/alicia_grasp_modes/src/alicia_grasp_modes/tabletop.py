@@ -182,13 +182,37 @@ def _validate_support_plane_update(reference_plane_base, current_plane_base,
                          support_reference_footprint_vertices=int(len(footprint)))
 
 
-def _depth_components(foreground, depth, minimum, edge):
+def _depth_components(foreground, depth, minimum, edge,
+                      points_camera=None, target_camera=None, association_distance=None):
     """4-connected measured pixels with bounded local depth discontinuity."""
     # First discard speckles in C++; floodFill then splits depth-discontinuous
     # touching regions without bridging missing depth or inventing mask pixels.
     count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, connectivity=4)
     eligible = [index for index in range(1, count)
                 if stats[index, cv2.CC_STAT_AREA] >= minimum]
+    if target_camera is not None:
+        target = np.asarray(target_camera, dtype=float)
+        radius = float(association_distance)
+        if (target.shape != (3,) or not np.all(np.isfinite(target))
+                or not np.isfinite(radius) or radius <= 0
+                or points_camera is None or points_camera.shape != depth.shape + (3,)):
+            raise ValueError('invalid_locked_component_region')
+        nearby = []
+        for index in eligible:
+            left, top, width, height = [int(v) for v in stats[index, :4]]
+            region = np.s_[top:top+height, left:left+width]
+            xyz = points_camera[region][labels[region] == index]
+            # Every split child's coordinate-wise median is inside its parent
+            # component's measured camera-space AABB. A rigid transform keeps
+            # distances, so a box farther than the original association radius
+            # cannot contain any eligible target. Keep intersecting parents
+            # whole: cropping or testing their centroid could hide a valid
+            # child or an ambiguous second instance.
+            lower, upper = np.min(xyz, axis=0), np.max(xyz, axis=0)
+            distance = np.linalg.norm(target - np.clip(target, lower, upper))
+            if distance <= radius + 1e-9:
+                nearby.append(index)
+        eligible = nearby
     if len(eligible) > 32:
         raise ValueError('too_many_foreground_instances')
     components = []
@@ -288,7 +312,12 @@ def segment(depth_m, intrinsics, transform_base_camera, config=None,
     # Morphology must never restore a depth hole or non-foreground pixel.
     foreground &= (valid & (above >= config.foreground_min_m)).astype(np.uint8)
     candidates = []
-    for binary in _depth_components(foreground, depth, config.min_object_points, config.depth_edge_m):
+    target_camera = (None if target_position_base is None else
+                     np.linalg.solve(transform, np.r_[target_position_base, 1.])[:3])
+    for binary in _depth_components(
+            foreground, depth, config.min_object_points, config.depth_edge_m,
+            points_camera=points, target_camera=target_camera,
+            association_distance=config.association_distance_m):
         xyz = points[binary].astype(float)
         points_base = xyz @ transform[:3, :3].T + transform[:3, 3]
         p_camera = np.median(xyz, axis=0)
