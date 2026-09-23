@@ -295,6 +295,20 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                      contact_phase_seed_limit=self.tabletop_geometry_config.max_candidates)
         return candidates, audit
 
+    def _contact_boundary_tilts(self, proposal, support_point, support_normal,
+                                probe_variants, maximum_tilt_deg, required_overlap_m,
+                                contact_height_bounds_m=None):
+        probe = None
+        if ((self._mode_selection or {}).get('mode') == 'unknown'
+                and getattr(self, 'near_field_planning_active', False)):
+            from alicia_grasp_modes.contact_probe import contact_tilt_probe
+            probe = contact_tilt_probe(proposal, support_point, support_normal,
+                self.gripper_geometry, self.gripper_tool_jaw_axis,
+                self.gripper_tool_finger_length_axis)
+        return super()._contact_boundary_tilts(proposal, support_point, support_normal,
+            probe_variants, maximum_tilt_deg, required_overlap_m,
+            contact_height_bounds_m=contact_height_bounds_m, contact_probe=probe)
+
     def _bound_unknown_contact_turn(self):
         limit = float(getattr(self, 'candidate_max_joint_delta_rad', 0.0) or 0.0)
         self.candidate_max_joint_delta_rad = (
@@ -390,6 +404,21 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
             delta = float(result.joint_max_delta_rad)
             if (not math.isfinite(delta) or delta < 0.0
                     or delta > self.candidate_max_joint_delta_rad):
+                # Preserve exact rejected poses and metrics even if the phase
+                # deadline expires before its aggregate audit is published.
+                # Diagnostic only; the rejection below remains unconditional.
+                try:
+                    evidence = dict(plan_id=str(plan.plan_id),
+                        joint_max_delta_rad=delta,
+                        joint_limit_rad=self.candidate_max_joint_delta_rad,
+                        input_joint_state=runtime.get('moveit_input_joint_state'),
+                        strict_metrics=metrics,
+                        stages={name: original.pose_matrix(getattr(sequence, name)).tolist()
+                                for name in ('pregrasp', 'approach', 'grasp', 'lift')})
+                    rospy.loginfo('UNKNOWN_CONTACT_TURN_REJECTION %s',
+                                  json.dumps(evidence, sort_keys=True, allow_nan=False))
+                except Exception as exc:
+                    rospy.logwarn('Unable to serialize contact-turn diagnostic: %s', exc)
                 raise original.CandidateContractError('UNKNOWN_CONTACT_TURN_LIMIT',
                     'final near-field joint turn %.6f rad exceeds %.6f rad' %
                     (delta, self.candidate_max_joint_delta_rad))

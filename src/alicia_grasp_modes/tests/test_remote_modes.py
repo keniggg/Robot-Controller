@@ -1054,3 +1054,28 @@ def test_final_actual_large_wrist_turn_is_rejected_before_publication(configured
     else:
         with pytest.raises(base.CandidateContractError, match='joint turn'):
             node._strict_check_final_near_field_plan(None, None, {})
+
+
+@pytest.mark.parametrize('mode,near_field,expected_probe', [
+    ('carton', False, False), ('carton', True, False),
+    ('unknown', False, False), ('unknown', True, True)])
+def test_contact_probe_is_only_used_for_unknown_near_field(configured, monkeypatch, mode, near_field, expected_probe):
+    from alicia_grasp_modes import contact_probe
+    node, _ = configured
+    node._mode_selection = {'mode': mode}
+    node.near_field_planning_active = near_field
+    node.gripper_geometry = object()
+    node.gripper_tool_jaw_axis = 'y'
+    node.gripper_tool_finger_length_axis = 'z'
+    probe = object()
+    constructed = []
+    def make_probe(*args):
+        constructed.append(args)
+        return probe
+    monkeypatch.setattr(contact_probe, 'contact_tilt_probe', make_probe)
+    def original(self, *args, **kwargs):
+        assert kwargs['contact_probe'] is (probe if expected_probe else None)
+        return 'original-boundaries'
+    monkeypatch.setattr(base.RemoteGrasp6DNode, '_contact_boundary_tilts', original)
+    assert node._contact_boundary_tilts(None, None, None, (), 45., .003) == 'original-boundaries'
+    assert bool(constructed) is expected_probe

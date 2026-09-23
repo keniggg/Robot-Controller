@@ -7868,6 +7868,7 @@ class RemoteGrasp6DNode:
         maximum_tilt_deg,
         required_overlap_m,
         contact_height_bounds_m=None,
+        contact_probe=None,
     ):
         """Derive the largest CAD/contact-safe tilt for each wrist branch."""
 
@@ -7908,6 +7909,11 @@ class RemoteGrasp6DNode:
                 ).append((0.0, float(overlap)))
 
         def overlap_at(angle_deg, branch_key):
+            if contact_probe is not None:
+                item = contact_probe(angle_deg, branch_key)
+                return self._tabletop_candidate_contact_overlap_m(
+                    proposal, item, support_normal,
+                    contact_height_bounds_m=contact_height_bounds_m)
             variants = materialize_tabletop_candidates(
                 proposal=proposal,
                 support_point_base=support_point,
