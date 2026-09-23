@@ -28,6 +28,8 @@ class RealSenseManager:
         self.color_projection_correction = None
         self.mode_depth_preset_cfg = dict(mode_depth_preset_cfg or {})
         self.mode_depth_preset = None
+        self.stationary_depth_provider = None
+        self._stationary_temporal = None
         self.pipeline = None
         self.align = None
         self.rs = None
@@ -73,6 +75,7 @@ class RealSenseManager:
         changed = self.mode_depth_preset.apply(mode)
         if changed:
             self.runtime_profile['mode_depth_preset'] = self.mode_depth_preset.evidence()
+            self._stationary_temporal = None
         return changed
 
     def stop(self):
@@ -102,10 +105,39 @@ class RealSenseManager:
             return None, None
         for depth_filter in self.depth_filters:
             depth_frame = depth_filter.process(depth_frame)
+        depth_frame = self._filter_stationary_depth(depth_frame)
         color = np.asanyarray(color_frame.get_data())
         if self.color_projection_correction is not None:
             color = self.color_projection_correction.apply(color)
         return color, self._clip_depth_range(depth_frame.get_data())
+
+    def _filter_stationary_depth(self, frame):
+        enabled = bool(self.mode_depth_preset_cfg.get('stationary_temporal_enabled', False))
+        active = bool(enabled and self.mode_depth_preset is not None
+                      and self.mode_depth_preset.mode == 'unknown'
+                      and self.stationary_depth_provider is not None
+                      and self.stationary_depth_provider())
+        if enabled:
+            self.runtime_profile['stationary_temporal'] = dict(
+                enabled=True, active=active, alpha=.4, delta_depth_units=100,
+                persistence=0, stationary_window_sec=.35, evidence_max_age_sec=.25,
+                scope='unknown_only; reset on motion or missing current evidence')
+        if not active:
+            self._stationary_temporal = None
+            return frame
+        if self._stationary_temporal is None:
+            temporal = self.rs.temporal_filter()
+            temporal.set_option(self.rs.option.filter_smooth_alpha, .4)
+            temporal.set_option(self.rs.option.filter_smooth_delta, 100.)
+            temporal.set_option(self.rs.option.holes_fill, 0.)
+            self._stationary_temporal = temporal
+        result = self._stationary_temporal.process(frame)
+        # Persistence=0 must never reconstruct a depth hole from history.
+        invalid = np.asanyarray(frame.get_data()) == 0
+        if np.any(np.asanyarray(result.get_data())[invalid] != 0):
+            self._stationary_temporal = None
+            raise ValueError('stationary temporal filter filled current depth holes')
+        return result
 
     def _configure_color_projection(self, profile):
         self.color_projection_correction = None

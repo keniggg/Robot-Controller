@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 import rospy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, JointState
 try:
     from cv_bridge import CvBridge
 except Exception:
@@ -43,6 +43,17 @@ class CameraNode:
         )
         simulate = bool(self.cfg.get('simulate', False))
         self.cam = None
+        self._stationary_window = None
+        self._last_temporal_status = None
+        if self.cfg.get('mode_depth_preset', {}).get('stationary_temporal_enabled', False):
+            from alicia_flexible_grasp.vision.stationary_depth import StationaryDepthWindow
+            self._stationary_window = StationaryDepthWindow()
+            self._stationary_sdk_sub = rospy.Subscriber(
+                '/alicia_d/sdk_command', JointState,
+                lambda msg: self._stationary_window.observe('sdk', msg), queue_size=10)
+            self._stationary_encoder_sub = rospy.Subscriber(
+                '/alicia_d/accepted_joint_states', JointState,
+                lambda msg: self._stationary_window.observe('accepted', msg), queue_size=10)
         self._camera_started = False
         self._start_camera_or_defer(simulate)
         self.rate = rospy.Rate(float(self.fps))
@@ -77,6 +88,8 @@ class CameraNode:
     def _start_camera(self, simulate):
         self.cam = self._make_camera(simulate)
         self.cam.start()
+        if getattr(self, '_stationary_window', None) is not None:
+            self.cam.stationary_depth_provider = lambda: self._stationary_window.stationary(rospy.get_time())
         self._sync_depth_preset(publish=False)
         self._publish_runtime_camera_params()
         self._camera_started = True
@@ -258,6 +271,10 @@ class CameraNode:
             try:
                 self._sync_depth_preset()
                 color, depth = self.cam.read()
+                temporal_status = getattr(self.cam, 'runtime_profile', {}).get('stationary_temporal')
+                if temporal_status != getattr(self, '_last_temporal_status', None):
+                    self._publish_runtime_camera_params()
+                    self._last_temporal_status = copy.deepcopy(temporal_status)
                 self._read_failures = 0
             except Exception as exc:
                 recovered = self._recover_from_read_error(exc)
