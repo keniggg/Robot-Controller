@@ -11,7 +11,7 @@ import subprocess
 import sys
 import uuid
 
-from grasp_archive import (atomic_json, begin_record, config_for, finalize_record,
+from grasp_archive import (RETAIN, atomic_json, begin_record, config_for, finalize_record,
     load_manifest, make_store, preview, process_queue, restore_manifest, root_path, utc_now)
 
 
@@ -45,7 +45,7 @@ def main():
     recovery=restore_manifest(record/'manifest.json',base/'restored',validation_cfg)
     # All synthetic data also remains local; deletion is still disabled.
     if not all((record/f['path']).exists() for f in m['files']):raise RuntimeError('local retention violated')
-    proof={'repo':cfg['repo'],'retain_count':5,'upload_verified':True,'restore_verified':recovery['verified'],
+    proof={'repo':cfg['repo'],'retain_count':RETAIN,'upload_verified':True,'restore_verified':recovery['verified'],
            'retention_verified':test.returncode==0,'at':utc_now(),
            'validation_record_manifest':str(record/'manifest.json'),
            'retention_test_log':str(base/'retention_tests.log'),

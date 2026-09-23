@@ -199,7 +199,7 @@ def test_closed_files_upload_and_retry_survive_new_worker(tmp_path, config):
 
 
 def test_remote_verification_failure_keeps_local_record(tmp_path, config):
-    records = [completed(tmp_path, config, index=i) for i in range(6)]
+    records = [completed(tmp_path, config, index=i) for i in range(archive.RETAIN + 1)]
     store = MemoryStore()
     store.fail_verification = True
     archive.process_queue(tmp_path, config=config, store_factory=store.factory)
@@ -210,7 +210,7 @@ def test_remote_verification_failure_keeps_local_record(tmp_path, config):
 
 
 def test_default_cleanup_is_preview_and_keeps_every_record(tmp_path, config):
-    records = [completed(tmp_path, config, index=i) for i in range(7)]
+    records = [completed(tmp_path, config, index=i) for i in range(archive.RETAIN + 2)]
     store = MemoryStore()
     archive.process_queue(tmp_path, config=config, store_factory=store.factory)
     archive.cleanup(tmp_path, config=config, store_factory=store.factory)
@@ -235,7 +235,7 @@ def test_low_space_blocks_new_record_without_touching_existing_files(tmp_path, c
 
 def test_preview_has_no_remote_or_deletion_side_effects(tmp_path, config):
     records = [completed(tmp_path, config, index=i, result="success" if i % 2 else "failure")
-               for i in range(7)]
+               for i in range(archive.RETAIN + 2)]
     before = {record.name: (record / "manifest.json").read_bytes() for record in records}
     report = archive.preview(tmp_path, config=config)
     assert {"records", "upload", "cleanup", "protected"}.issubset(report)
@@ -247,19 +247,20 @@ def test_preview_has_no_remote_or_deletion_side_effects(tmp_path, config):
 def deletion_config(config):
     """Proof is test-local; production validation must perform a real round trip."""
     return dict(config, delete_enabled=True, deletion_validation={
-        "repo": config["repo"], "retain_count": 5, "upload_verified": True,
+        "repo": config["repo"], "retain_count": archive.RETAIN, "upload_verified": True,
         "restore_verified": True, "retention_verified": True})
 
 
-def test_all_results_share_one_latest_five_completed_retention_set(tmp_path, config):
-    outcomes = ["success", "failure", "unknown", "interrupted", "success", "failure", "unknown"]
+def test_all_results_share_one_latest_ten_completed_retention_set(tmp_path, config):
+    outcomes = ["success", "failure", "unknown", "interrupted"] * 3
+    assert archive.RETAIN == 10
     records = [completed(tmp_path, config, index=i, result=result)
                for i, result in enumerate(outcomes)]
     (records[0] / "unregistered.log").write_text("newer modification on older record")
     store = MemoryStore()
     archive.process_queue(tmp_path, config=config, store_factory=store.factory)
     preview = archive.preview(tmp_path, config=config)
-    assert set(preview["protected"]) == {p.name for p in records[-5:]}
+    assert set(preview["protected"]) == {p.name for p in records[-archive.RETAIN:]}
     assert {item["record_id"] for item in preview["cleanup"]} == {p.name for p in records[:2]}
     assert all(archive.load_manifest(p)["upload"]["status"] == "verified" for p in records)
     result = archive.cleanup(tmp_path, config=deletion_config(config),
@@ -272,11 +273,11 @@ def test_all_results_share_one_latest_five_completed_retention_set(tmp_path, con
         assert (p / "result_summary.json").exists()
         assert archive.load_manifest(p)["files"][0]["upload"]["entry"]["download_url"]
     assert (records[0] / "unregistered.log").exists()
-    assert all((p / "capture.bag").exists() for p in records[-5:])
+    assert all((p / "capture.bag").exists() for p in records[-archive.RETAIN:])
 
 
 def test_completion_time_takes_precedence_over_creation_time(tmp_path, config):
-    records = [completed(tmp_path, config, index=i) for i in range(6)]
+    records = [completed(tmp_path, config, index=i) for i in range(archive.RETAIN + 1)]
     first = archive.load_manifest(records[0])
     first["completed_at"] = "2026-09-22T01:00:00+00:00"
     save_manifest(records[0], first)
@@ -287,7 +288,7 @@ def test_completion_time_takes_precedence_over_creation_time(tmp_path, config):
 
 @pytest.mark.parametrize("missing_proof", ["upload_verified", "restore_verified", "retention_verified"])
 def test_deletion_needs_all_validation_evidence(tmp_path, config, missing_proof):
-    records = [completed(tmp_path, config, index=i) for i in range(6)]
+    records = [completed(tmp_path, config, index=i) for i in range(archive.RETAIN + 1)]
     store = MemoryStore()
     archive.process_queue(tmp_path, config=config, store_factory=store.factory)
     validated = deletion_config(config)
@@ -303,14 +304,14 @@ def test_old_incomplete_and_upload_pending_records_survive(tmp_path, config):
     state.update(state="incomplete", result="interrupted", completed_at="2026-01-01T00:00:00+00:00")
     save_manifest(incomplete, state)
     pending = completed(tmp_path, config, index=0)
-    newer = [completed(tmp_path, config, index=i) for i in range(1, 6)]
+    newer = [completed(tmp_path, config, index=i) for i in range(1, archive.RETAIN + 1)]
     archive.cleanup(tmp_path, config=deletion_config(config), store_factory=MemoryStore().factory, dry_run=False)
     assert all((p / "capture.bag").exists() for p in [incomplete, pending] + newer)
 
 
 @pytest.mark.parametrize("mutation", ["rewrite", "symlink", "hardlink", "manifest_escape"])
 def test_changes_after_upload_block_deletion(tmp_path, config, mutation):
-    records = [completed(tmp_path / "records", config, index=i) for i in range(6)]
+    records = [completed(tmp_path / "records", config, index=i) for i in range(archive.RETAIN + 1)]
     store = MemoryStore()
     archive.process_queue(tmp_path / "records", config=config, store_factory=store.factory)
     oldest = records[0]
@@ -338,7 +339,7 @@ def test_changes_after_upload_block_deletion(tmp_path, config, mutation):
 
 
 def test_unrelated_scripts_source_calibration_and_git_survive_cleanup(tmp_path, config):
-    records = [completed(tmp_path, config, index=i) for i in range(6)]
+    records = [completed(tmp_path, config, index=i) for i in range(archive.RETAIN + 1)]
     oldest = records[0]
     keep = ["start.sh", "calibration.yaml", "src/controller.cpp", ".git/config", "auxiliary.json"]
     for relative in keep:
@@ -353,7 +354,7 @@ def test_unrelated_scripts_source_calibration_and_git_survive_cleanup(tmp_path, 
 
 
 def test_local_data_is_kept_if_remote_corrupts_after_upload(tmp_path, config):
-    records = [completed(tmp_path, config, index=i) for i in range(6)]
+    records = [completed(tmp_path, config, index=i) for i in range(archive.RETAIN + 1)]
     store = MemoryStore()
     archive.process_queue(tmp_path, config=config, store_factory=store.factory)
     entry = archive.load_manifest(records[0])["files"][0]["upload"]["entry"]
@@ -415,7 +416,7 @@ def test_low_space_attempts_archive_before_blocking(tmp_path, config, monkeypatc
 
 
 def test_same_size_mutation_during_remote_verification_blocks_unlink(tmp_path, config):
-    records = [completed(tmp_path, config, index=i) for i in range(6)]
+    records = [completed(tmp_path, config, index=i) for i in range(archive.RETAIN + 1)]
     store = MemoryStore()
     archive.process_queue(tmp_path, config=config, store_factory=store.factory)
     target = records[0] / "capture.bag"
@@ -473,7 +474,7 @@ def test_local_mutation_before_upload_never_reaches_remote(tmp_path, config):
 
 
 def test_manual_result_correction_after_local_deletion_republishes_summary(tmp_path, config):
-    records = [completed(tmp_path, config, index=i) for i in range(6)]
+    records = [completed(tmp_path, config, index=i) for i in range(archive.RETAIN + 1)]
     store = MemoryStore()
     archive.process_queue(tmp_path, config=config, store_factory=store.factory)
     archive.cleanup(tmp_path, config=deletion_config(config), store_factory=store.factory, dry_run=False)
@@ -629,14 +630,14 @@ def test_bounded_worker_uploads_by_completion_then_reclaims_before_next(tmp_path
     # Create in a different order, with mixed results: completion is authority.
     records = [completed(tmp_path, config, index=i,
                          result='success' if i % 2 else 'failure')
-               for i in (5, 2, 6, 0, 4, 1, 3)]
+               for i in (5, 2, 6, 0, 4, 1, 3, 10, 8, 11, 7, 9)]
     by_index = {archive.load_manifest(p)['metadata']['test_index']: p for p in records}
     first = archive.process_queue(tmp_path, config, store.factory, max_records=1)
     assert first['uploaded'] == [by_index[0].name]
     cleaned = archive.cleanup(tmp_path, deletion_config(config), store.factory, dry_run=False)
     assert cleaned['deleted'] == [by_index[0].name]
     assert not (by_index[0] / 'capture.bag').exists()
-    assert all((by_index[i] / 'capture.bag').exists() for i in range(1, 7))
+    assert all((by_index[i] / 'capture.bag').exists() for i in range(1, archive.RETAIN + 2))
     second = archive.process_queue(tmp_path, config, store.factory, max_records=1)
     assert second['uploaded'] == [by_index[1].name]
 
@@ -658,3 +659,21 @@ def test_bounded_worker_skips_retry_backoff_without_starving_next(tmp_path, conf
 def test_invalid_queue_batch_limit_fails_before_upload(tmp_path, config, limit):
     with pytest.raises(ValueError):
         archive.process_queue(tmp_path, config, max_records=limit)
+
+
+def test_old_five_record_validation_cannot_authorize_ten_record_deletion(tmp_path, config):
+    previous = deletion_config(config)
+    previous['deletion_validation']['retain_count'] = 5
+    assert not archive.deletion_authorized(tmp_path, previous)
+
+
+def test_existing_five_and_next_five_stay_local_after_migration(tmp_path, config):
+    first = [completed(tmp_path, config, index=i) for i in range(5)]
+    store = MemoryStore()
+    archive.process_queue(tmp_path, config, store.factory)
+    newer = [completed(tmp_path, config, index=i, result='failure') for i in range(5, 10)]
+    archive.process_queue(tmp_path, config, store.factory)
+    report = archive.cleanup(tmp_path, deletion_config(config), store.factory, dry_run=False)
+    assert report['deleted'] == []
+    assert len(archive.preview(tmp_path, config)['protected']) == 10
+    assert all((p / 'capture.bag').exists() for p in first + newer)

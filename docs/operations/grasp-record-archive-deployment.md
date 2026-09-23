@@ -4,7 +4,7 @@
 
 ## 数据流程
 
-每次时间戳+UUID独立目录；原始bag、日志、实际结果证据、文件大小/SHA-256及上传状态写入manifest。bag和日志正常关闭后由独立持久后台服务上传GitHub Releases，约1GiB原字节分块，支持断点复用与分卷。全部结果合计保留按完成时间最新5次；其他记录仅全部上传和再次验证后逐文件清理，摘要/清单/下载位置永久保留。异常、不完整、未上传或校验失败数据保留。录制开始余量默认2GiB，空间不足先尝试归档清理，仍不足阻止新录制；不终止控制。
+每次时间戳+UUID独立目录；原始bag、日志、实际结果证据、文件大小/SHA-256及上传状态写入manifest。bag和日志正常关闭后由独立持久后台服务上传GitHub Releases，约1GiB原字节分块，支持断点复用与分卷。全部结果合计保留按完成时间最新10次；其他记录仅全部上传和再次验证后逐文件清理，摘要/清单/下载位置永久保留。异常、不完整、未上传或校验失败数据保留。录制开始余量默认2GiB，空间不足先尝试归档清理，仍不足阻止新录制；不终止控制。
 
 ## 验证
 
@@ -35,3 +35,7 @@ Validation after these changes: 89 archive and transport tests passed; backgroun
 ### Completion-ordered bounded queue, 2026-09-23
 
 The live queue exposed a capacity starvation problem: filesystem iteration could upload newer multi-GiB records before older eligible records, and a whole queue pass held the cleanup lock. `process_queue` now orders by completion time and supports a positive `max_records` bound. The persistent worker processes one eligible record per cycle, releases the lock, and runs the unchanged verified-data cleanup before the next record. Failures retain normal backoff, allowing other records to advance. No deletion predicate, latest-five rule, recording settings, data format or robot control changed. Regression: 95 archive/transport tests passed, including deliberately scrambled creation/completion order, mixed outcomes, cleanup between records and retry backoff. Deployed by restarting only `alicia-grasp-archive.service`.
+
+## Local retention expansion
+
+The current aggregate retention is ten complete records, ordered by completion time across all outcomes. Existing local recordings remain protected while the queue is paused for migration and a new preview is validated. Prior five-record deployment notes above are historical. Upload, SHA-256 verification, restart recovery, file-scoped deletion and recording settings are unchanged. A five-record validation proof cannot enable cleanup under the ten-record policy; capacity admission remains independent.

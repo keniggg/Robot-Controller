@@ -15,7 +15,7 @@ import time
 import uuid
 
 GIB = 1 << 30
-RETAIN = 5
+RETAIN = 10
 RESULTS = {'success', 'failure', 'unknown', 'interrupted'}
 ALLOWED = {'.bag', '.log', '.jsonl', '.json', '.jpg', '.jpeg', '.png', '.txt'}
 PERSISTENT = {'manifest.json', 'result_summary.json', 'archive_manifest.json', '.lock'}
@@ -54,7 +54,7 @@ def load_config(config_path=None):
     p = Path(config_path) if config_path else root_path() / 'archive_config.json'
     value = dict(DEFAULTS)
     if p.exists(): value.update(json.loads(p.read_text()))
-    if value['retain_count'] != RETAIN: raise ArchiveError('retain_count must be exactly 5 total records')
+    if value['retain_count'] != RETAIN: raise ArchiveError('retain_count must be exactly %d total records' % RETAIN)
     for key in ('chunk_size', 'min_free_bytes'):
         if type(value[key]) is not int or value[key] < 0: raise ArchiveError('invalid ' + key)
     if not 0 < value['chunk_size'] < 2*GIB: raise ArchiveError('invalid chunk size')
