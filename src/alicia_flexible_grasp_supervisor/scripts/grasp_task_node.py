@@ -26,6 +26,7 @@ from alicia_flexible_grasp_supervisor.msg import (
     NearFieldPlanningPhase,
     ObjectGeometry,
     ObjectPose,
+    TactileState,
 )
 from alicia_flexible_grasp_supervisor.srv import (
     CheckPoseSequence,
@@ -84,6 +85,7 @@ from alicia_flexible_grasp.vision.mujoco_digital_twin_client import (
     MujocoDigitalTwinClient,
     build_mujoco_payload,
     validate_mujoco_gate_response,
+    mujoco_lift_gate_enabled,
 )
 try:
     import tf2_ros
@@ -2658,6 +2660,7 @@ class GraspTaskNode:
 
     def set_state(self, stage, message='', success=False):
         self.stage = stage
+        self._last_state_message = message
         msg = GraspState()
         msg.header.stamp = rospy.Time.now()
         msg.stage = int(stage)
@@ -2910,6 +2913,7 @@ class GraspTaskNode:
                 self._clear_view_reacquisition_minimum_stamp_ns = 0
                 self._start_inflight = True
                 self.active = True
+                self._last_state_message = ''
         self._set_near_field_active(False)
         try:
             if bootstrap_actuation and not self._bootstrap_bound_actuation(bound_plan, gcfg):
@@ -2917,6 +2921,9 @@ class GraspTaskNode:
                 return StartGraspResponse(False, response_message)
             result = self.execute(grasp6d_plan=bound_plan)
             response_message = 'success' if result else 'failed'
+            if (not result and getattr(self, 'stage', None) in
+                    (GraspStages.HOLDING, GraspStages.FAILED)):
+                response_message = getattr(self, '_last_state_message', '') or 'failed'
             return StartGraspResponse(result, response_message)
         except Exception as exc:
             response_message = str(exc)
@@ -3170,6 +3177,15 @@ class GraspTaskNode:
             )
             return False
 
+        # Snapshot this policy for the entire attempt, including a near-field
+        # rebind. Changing a ROS parameter mid-motion cannot add a lift.
+        lift_after_close = True
+        if getattr(plan, 'model_choice', '') == 'unknown_tabletop':
+            lift_after_close = gcfg.get('unknown_lift_after_close_enabled', True)
+            if not isinstance(lift_after_close, bool):
+                self.set_state(GraspStages.FAILED,
+                    'GRASP_LIFT_CONFIG_INVALID: unknown_lift_after_close_enabled must be boolean')
+                return False
         pregrasp, approach, grasp, lift = split_rich_plan_poses(plan)
         direct_near_field = self._direct_near_field_enabled(gcfg)
         if not self._execution_checkpoint(
@@ -3227,6 +3243,20 @@ class GraspTaskNode:
             return False
         if not self._execution_checkpoint(plan, gcfg, 'gripper open'):
             return False
+        if (plan_phase == _CONTACT_EXECUTION_PLAN
+                and getattr(plan, 'model_choice', '') == 'unknown_tabletop'
+                and not direct_near_field):
+            # Direct mode enters with an already checked contact plan. Unlike
+            # the two-stage rebind path it used to leave this flag false until
+            # approach, so expected loss of view during pregrasp revoked it.
+            # Only enable after the fresh execution simulation/checkpoint;
+            # confirmed target changes and non-visual failures still revoke.
+            with self._grasp6d_plan_guard():
+                if not self._validate_bound_plan_locked(plan, gcfg).ok:
+                    return False
+                self._bound_target_occlusion_allowed = True
+            rospy.loginfo('Frozen unknown contact plan permits expected loss of '
+                          'view from pregrasp through closure and optional lift')
 
         self.set_state(GraspStages.PLAN_PREGRASP, 'using 6D grasp plan')
         if defer_contact_gate:
@@ -3608,6 +3638,9 @@ class GraspTaskNode:
             self.set_state(GraspStages.FAILED, message)
             return False
 
+        if not lift_after_close:
+            return self._finish_grasp_without_lift(plan, gcfg)
+
         if not self._execution_checkpoint(plan, gcfg, 'lift'):
             return False
         if not self._plan_and_execute_pose(
@@ -3642,6 +3675,72 @@ class GraspTaskNode:
             return False
         self.set_state(GraspStages.SUCCESS, '6D grasp done', True)
         return True
+
+    @staticmethod
+    def _fresh_bilateral_hold_sample(sample, after_ns, now_ns):
+        """Closure commands and old/simulated tactile values prove no grasp."""
+        try:
+            stamps = [_stamp_nanoseconds(item.header.stamp)
+                      for item in (sample, sample.left, sample.right)]
+            forces = [float(item.total_force_mn)
+                      for item in (sample.left, sample.right)]
+            flags = (sample.valid, sample.left.valid, sample.right.valid,
+                     sample.left_contact, sample.right_contact,
+                     sample.left.contact, sample.right.contact, sample.object_grasped)
+            return (all(value is True for value in flags)
+                    and sample.slip_detected is False
+                    and all(after_ns < stamp <= now_ns
+                            and now_ns - stamp <= 500000000 for stamp in stamps)
+                    and all(math.isfinite(force) and force > 0.0 for force in forces)
+                    and math.isfinite(float(sample.total_grip_force_mn))
+                    and sample.total_grip_force_mn > 0.0)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+
+    def _finish_grasp_without_lift(self, plan, gcfg):
+        """Leave the accepted closure in place; never reopen, retreat or lift."""
+        if not self._execution_checkpoint(plan, gcfg, 'hold after closure'):
+            return False
+        after_ns = _stamp_nanoseconds(rospy.Time.now())
+        verified = False
+        # A short observation window only. Never move to obtain verification.
+        # A missing/disconnected sensor leaves the result explicitly unknown.
+        if rospy.get_param('/tactile/simulate', None) is False:
+            deadline = time.monotonic() + 2.0
+            consecutive = 0
+            first_ns = last_ns = 0
+            while time.monotonic() < deadline and self.active and not rospy.is_shutdown():
+                try:
+                    sample = rospy.wait_for_message('/tactile/state', TactileState,
+                        timeout=min(0.4, max(0.001, deadline - time.monotonic())))
+                except rospy.ROSException:
+                    consecutive = 0
+                    first_ns = last_ns = 0
+                    continue
+                stamp_ns = _stamp_nanoseconds(sample.header.stamp)
+                now_ns = _stamp_nanoseconds(rospy.Time.now())
+                if (not self._fresh_bilateral_hold_sample(sample, after_ns, now_ns)
+                        or stamp_ns <= last_ns
+                        or (last_ns and stamp_ns - last_ns > 500000000)):
+                    consecutive = 0
+                    first_ns = last_ns = 0
+                    continue
+                first_ns = first_ns or stamp_ns
+                last_ns = stamp_ns
+                consecutive += 1
+                if consecutive >= 3 and last_ns - first_ns >= 200000000:
+                    verified = True
+                    break
+        if not self._execution_checkpoint(plan, gcfg, 'hold result acknowledgement'):
+            return False
+        if verified:
+            self.set_state(GraspStages.SUCCESS,
+                'GRASP_HOLD_CONFIRMED: fresh bilateral tactile contact; no lift executed', True)
+            return True
+        self.set_state(GraspStages.HOLDING,
+            'GRASP_HOLD_UNVERIFIED: close command accepted; holding without lift; '
+            'physical grip is not confirmed', False)
+        return False
 
     @staticmethod
     def _near_field_strategy(gcfg):
@@ -6727,6 +6826,8 @@ class GraspTaskNode:
             )
             return False
         audit = _new_mujoco_execution_audit(plan)
+        require_lift = mujoco_lift_gate_enabled(plan, twin_cfg)
+        audit['lift_gate_enabled'] = require_lift
 
         def finish(ok, code, reason, score=None, stage=GraspStages.FAILED):
             try:
@@ -6758,11 +6859,12 @@ class GraspTaskNode:
 
             reference_text = _mujoco_audit_reference_text(reference)
             if ok:
-                self.set_state(
-                    GraspStages.PLAN_PREGRASP,
-                    'MuJoCo simulation passed score=%.3f; %s'
-                    % (float(score), reference_text),
-                )
+                message = ('MuJoCo simulation passed score=%.3f; %s'
+                           % (float(score), reference_text))
+                if code == 'MUJOCO_LIFT_DIAGNOSTIC_ONLY':
+                    message = '%s: %s; raw_score=%.3f; %s' % (
+                        code, reason, float(score), reference_text)
+                self.set_state(GraspStages.PLAN_PREGRASP, message)
                 return True
             self.set_state(
                 stage,
@@ -6879,6 +6981,7 @@ class GraspTaskNode:
                 expected_candidate_source_lineage=(
                     plan.candidate_source_lineage
                 ),
+                require_lift_success=require_lift,
             )
         except Exception as exc:
             gate = PlanValidationResult(
@@ -6896,8 +6999,8 @@ class GraspTaskNode:
             )
         return finish(
             True,
-            'MUJOCO_GATE_PASSED',
-            'MuJoCo response exactly matched the bound rich plan and all gates passed',
+            gate.code or 'MUJOCO_GATE_PASSED',
+            gate.reason or 'MuJoCo response exactly matched the bound rich plan and all gates passed',
             score=gate.score,
         )
 

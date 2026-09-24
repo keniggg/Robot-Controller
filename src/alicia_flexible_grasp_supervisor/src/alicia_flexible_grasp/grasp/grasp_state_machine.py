@@ -9,6 +9,7 @@ class GraspStages:
     SUCCESS = 6
     FAILED = 7
     EMERGENCY_STOP = 8
+    HOLDING = 10
 
 STATE_NAMES = {
     GraspStages.IDLE: 'IDLE',
@@ -19,6 +20,7 @@ STATE_NAMES = {
     GraspStages.COMPLIANT_CLOSE: 'COMPLIANT_CLOSE',
     GraspStages.LIFT_OBJECT: 'LIFT_OBJECT',
     GraspStages.SUCCESS: 'SUCCESS',
+    GraspStages.HOLDING: 'HOLDING',
     GraspStages.FAILED: 'FAILED',
     GraspStages.EMERGENCY_STOP: 'EMERGENCY_STOP',
 }

@@ -22,8 +22,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger, TriggerResponse
 from alicia_grasp_modes.selection import SELECTION_PARAM, parse_selection
 from alicia_grasp_modes.target_mass import mass_config_from_ros
-from alicia_grasp_modes.observation_policy import (
-    observation_config, UNKNOWN_OBSERVATION_MAX_JOINT_DELTA_RAD)
+from alicia_grasp_modes.observation_policy import observation_config
 
 
 def _load_original():
@@ -151,7 +150,7 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                         0.070, self.camera_visibility_min_depth_m)
                     self.camera_visibility_max_depth_m = min(
                         0.500, self.camera_visibility_max_depth_m)
-                    self._bound_unknown_contact_turn()
+                    self._use_unknown_motion_ranking()
                 self.frames = original.SynchronizedRgbdBuffer(
                     source_clock_ns=self._ros_source_clock_ns)
                 self.frames.configure_retention(
@@ -295,6 +294,27 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                      contact_phase_seed_limit=self.tabletop_geometry_config.max_candidates)
         return candidates, audit
 
+    def _tabletop_candidate_contact_overlap_m(self, proposal, candidate, support_normal,
+            contact_height_bounds_m=None, contact_height_axis_base_override=None):
+        if ((self._mode_selection or {}).get('mode') != 'unknown'
+                or not getattr(self, 'near_field_planning_active', False)):
+            return super()._tabletop_candidate_contact_overlap_m(
+                proposal, candidate, support_normal, contact_height_bounds_m,
+                contact_height_axis_base_override)
+        from alicia_grasp_modes.contact_intervals import finger_contact_patch_overlap_m
+        lower, upper = (self._proposal_contact_height_bounds(proposal)
+                        if contact_height_bounds_m is None else
+                        tuple(float(value) for value in contact_height_bounds_m))
+        transform = original.np.asarray(candidate.T_base_tool0, dtype=float)
+        if contact_height_axis_base_override is None:
+            axis = original.contact_height_axis_base(
+                transform[:3, :3].dot(original.parse_tool_axis(self.gripper_tool_jaw_axis)[0]),
+                support_normal)
+        else:
+            axis = original.np.asarray(contact_height_axis_base_override, dtype=float).reshape(3)
+        return finger_contact_patch_overlap_m(candidate.contact_center_base,
+            transform[:3, 3], transform[:3, :3], axis, lower, upper)
+
     def _contact_boundary_tilts(self, proposal, support_point, support_normal,
                                 probe_variants, maximum_tilt_deg, required_overlap_m,
                                 contact_height_bounds_m=None):
@@ -309,12 +329,10 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
             probe_variants, maximum_tilt_deg, required_overlap_m,
             contact_height_bounds_m=contact_height_bounds_m, contact_probe=probe)
 
-    def _bound_unknown_contact_turn(self):
-        limit = float(getattr(self, 'candidate_max_joint_delta_rad', 0.0) or 0.0)
-        self.candidate_max_joint_delta_rad = (
-            min(limit, UNKNOWN_OBSERVATION_MAX_JOINT_DELTA_RAD)
-            if math.isfinite(limit) and limit > 0.0
-            else UNKNOWN_OBSERVATION_MAX_JOINT_DELTA_RAD)
+    def _use_unknown_motion_ranking(self):
+        # Operator preference: compare real motion cost instead of imposing
+        # an extra 90-degree turn veto. URDF limits/collision checks remain.
+        self.candidate_max_joint_delta_rad = 0.0
 
     def _visible_unknown_pregrasp(self, sequence, geometry):
         """Bounded table-parallel view offset; all contact poses stay exact.
@@ -396,32 +414,86 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
             grasp_pose, geometry, insertion_axis_base, snapshot)
         return self._visible_unknown_pregrasp(sequence, geometry), profile
 
+    def _dedupe_exact_contact_sequences_for_moveit(self, candidates, prepared,
+            *, acceptance_diagnostics=None):
+        batch = super()._dedupe_exact_contact_sequences_for_moveit(
+            candidates, prepared, acceptance_diagnostics=acceptance_diagnostics)
+        if ((self._mode_selection or {}).get('mode') != 'unknown'
+                or not getattr(self, 'near_field_planning_active', False)):
+            return batch
+        # A jaw flip expanded twice can differ only in float64 roundoff. Drop
+        # redundant *proposals*, never transfer a cached IK result or authority.
+        # Every retained original pose still receives every downstream check.
+        tolerance = 8. * original.np.finfo(float).eps
+        unique, seen, duplicates = [], [], []
+        for candidate in batch:
+            if not isinstance(candidate, original.ScoredStableCandidate):
+                unique.append(candidate)
+                continue
+            key, matrices = None, None
+            runtime = self._stable_variant_runtime.get(
+                (candidate.track_id, candidate.variant_index), {})
+            stable = candidate.stable_candidate
+            if (stable.candidate_source == 'tabletop_geometry'
+                    and runtime.get('prepared') is prepared
+                    and original.mandatory_safety_gate(candidate.latest_safety).ok):
+                try:
+                    sequence = runtime['sequence']
+                    audit = self._execution_sequence_audit(sequence, True)
+                    rows = audit['stages']
+                    if (not audit['available'] or len(rows) != 4 or any(
+                            not row['frame_id'] or row['stamp_ns'] <= 0 for row in rows)):
+                        raise ValueError('incomplete sequence')
+                    matrices = original.np.stack([original.pose_matrix(getattr(sequence, name))
+                        for name in ('pregrasp', 'approach', 'grasp', 'lift')])
+                    if not original.np.all(original.np.isfinite(matrices)):
+                        raise ValueError('nonfinite sequence')
+                    for row in rows:
+                        orientation = getattr(sequence, row['stage']).pose.orientation
+                        q = original.np.asarray([getattr(orientation, axis) for axis in 'xyzw'], dtype=float)
+                        if q.shape != (4,) or abs(float(original.np.linalg.norm(q)) - 1.) > 1e-6:
+                            raise ValueError('invalid orientation')
+                    key = (candidate.evaluation_request_id,
+                        candidate.evaluation_snapshot_stamp_sec,
+                        candidate.evaluation_context_revision, stable.target_epoch,
+                        stable.target_track_id, tuple(stable.center_base_xyz),
+                        float(stable.required_open_width_m),
+                        tuple((row['stage'], row['frame_id'], row['stamp_ns'],
+                               row['linear_from_prior_state']) for row in rows))
+                except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+                    key = None
+            match = next(((prior, poses) for identity, poses, prior in seen
+                          if key is not None and identity == key and
+                          float(original.np.max(original.np.abs(poses - matrices))) <= tolerance), None)
+            if match is not None:
+                prior, poses = match
+                duplicates.append(dict(track_id=candidate.track_id,
+                    variant_index=candidate.variant_index,
+                    representative_track_id=prior.track_id,
+                    representative_variant_index=prior.variant_index,
+                    maximum_transform_difference=float(original.np.max(original.np.abs(poses - matrices)))))
+                continue
+            unique.append(candidate)
+            if key is not None:
+                seen.append((key, matrices, candidate))
+        report = dict(policy='same_request_float64_roundoff_four_stage_proposals',
+            input_count=len(batch), unique_count=len(unique),
+            maximum_transform_difference_allowed=tolerance,
+            motion_result_reuse=False, duplicates=duplicates)
+        if acceptance_diagnostics is not None:
+            acceptance_diagnostics['unknown_roundoff_proposal_deduplication'] = report
+        if duplicates:
+            rospy.loginfo('UNKNOWN_CONTACT_PROPOSAL_DEDUPLICATION %s', json.dumps(report, sort_keys=True))
+        return tuple(unique)
+
     def _strict_check_final_near_field_plan(self, plan, prepared, runtime):
         sequence, result, metrics = super()._strict_check_final_near_field_plan(
             plan, prepared, runtime)
         if (self._mode_selection or {}).get('mode') == 'unknown':
-            self._bound_unknown_contact_turn()
             delta = float(result.joint_max_delta_rad)
-            if (not math.isfinite(delta) or delta < 0.0
-                    or delta > self.candidate_max_joint_delta_rad):
-                # Preserve exact rejected poses and metrics even if the phase
-                # deadline expires before its aggregate audit is published.
-                # Diagnostic only; the rejection below remains unconditional.
-                try:
-                    evidence = dict(plan_id=str(plan.plan_id),
-                        joint_max_delta_rad=delta,
-                        joint_limit_rad=self.candidate_max_joint_delta_rad,
-                        input_joint_state=runtime.get('moveit_input_joint_state'),
-                        strict_metrics=metrics,
-                        stages={name: original.pose_matrix(getattr(sequence, name)).tolist()
-                                for name in ('pregrasp', 'approach', 'grasp', 'lift')})
-                    rospy.loginfo('UNKNOWN_CONTACT_TURN_REJECTION %s',
-                                  json.dumps(evidence, sort_keys=True, allow_nan=False))
-                except Exception as exc:
-                    rospy.logwarn('Unable to serialize contact-turn diagnostic: %s', exc)
-                raise original.CandidateContractError('UNKNOWN_CONTACT_TURN_LIMIT',
-                    'final near-field joint turn %.6f rad exceeds %.6f rad' %
-                    (delta, self.candidate_max_joint_delta_rad))
+            if not math.isfinite(delta) or delta < 0.0:
+                raise original.CandidateContractError('UNKNOWN_CONTACT_MOTION_INVALID',
+                    'final near-field joint turn must be finite and non-negative')
         return sequence, result, metrics
 
     def _resolved_sequence_geometry_gate(self, runtime, sequence):
@@ -459,7 +531,7 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 0.070, getattr(staged, 'camera_visibility_min_depth_m', 0.070))
             staged.camera_visibility_max_depth_m = min(
                 0.500, getattr(staged, 'camera_visibility_max_depth_m', 0.500))
-            ModeAwareRemoteGrasp6DNode._bound_unknown_contact_turn(staged)
+            ModeAwareRemoteGrasp6DNode._use_unknown_motion_ranking(staged)
         return result
 
     def _observation_following_support_evaluation(self, prepared, result, target=None):
@@ -469,12 +541,11 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 or (self._mode_selection or {}).get('mode') != 'unknown'):
             return result, report
         delta = float(result.joint_max_delta_rad)
-        limit = UNKNOWN_OBSERVATION_MAX_JOINT_DELTA_RAD
         report = dict(report, unknown_observation_joint_delta_rad=delta,
-                      unknown_observation_joint_delta_limit_rad=limit)
-        if not math.isfinite(delta) or delta < 0 or delta > limit:
-            code = 'UNKNOWN_OBSERVATION_TURN_LIMIT'
-            reason = '%s: checked joint turn %.6f rad exceeds %.6f rad' % (code, delta, limit)
+                      unknown_observation_motion_policy='rank_checked_duration_and_joint_motion')
+        if not math.isfinite(delta) or delta < 0.0:
+            code = 'UNKNOWN_OBSERVATION_MOTION_INVALID'
+            reason = '%s: checked joint turn is not finite and non-negative' % code
             report.update(ok=False, reason=reason)
             result = replace(result, reachable=False, failure_code=code,
                              reason=reason, evidence_code='')
@@ -536,10 +607,56 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
         candidates = tuple(reachable_candidates)
         return min(candidates, key=rank) if candidates else None
 
+    def _unknown_projected_body_width(self, candidate):
+        """Rank the whole frozen object, not just a narrow local contact band.
+
+        This is a search preference only. The measured aperture, exact pose,
+        physical model and every geometry/MoveIt/MuJoCo gate are unchanged.
+        """
+        runtime = getattr(self, '_stable_variant_runtime', {}).get(
+            (candidate.track_id, candidate.variant_index), {})
+        try:
+            geometry = runtime['prepared'].geometry
+            sequence = runtime.get('final_execution_sequence') or runtime['sequence']
+            rotation = original.np.asarray(geometry.axes_base, dtype=float).reshape(3, 3)
+            size = original.np.asarray(geometry.size_xyz_m, dtype=float).reshape(3)
+            tool_rotation = original.pose_matrix(sequence.grasp)[:3, :3]
+            jaw = tool_rotation.dot(original.parse_tool_axis(self.gripper_tool_jaw_axis)[0])
+            if (not original.np.all(original.np.isfinite(rotation))
+                    or not original.np.all(original.np.isfinite(size))
+                    or original.np.any(size <= 0.0)
+                    or not original.np.allclose(rotation.T.dot(rotation), original.np.eye(3), atol=1e-8)
+                    or abs(original.np.linalg.det(rotation)-1.0) > 1e-8
+                    or not original.np.all(original.np.isfinite(jaw))
+                    or abs(original.np.linalg.norm(jaw)-1.0) > 1e-8):
+                return float('inf')
+            width = float(original.np.abs(rotation.T.dot(jaw)).dot(size))
+            return original.float32_wire_value(width)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            return float('inf')
+
+    def _unknown_body_ranking_active(self):
+        return ((self._mode_selection or {}).get('mode') == 'unknown'
+                and bool(getattr(self, 'near_field_planning_active', False)))
+
+    def _direct_near_field_moveit_rank_key(self, candidate):
+        rank = super()._direct_near_field_moveit_rank_key(candidate)
+        if not self._unknown_body_ranking_active():
+            return rank
+        return (max(rank[0], self._unknown_projected_body_width(candidate)), *rank[1:])
+
+    def _direct_near_field_execution_rank_key(self, candidate):
+        rank = super()._direct_near_field_execution_rank_key(candidate)
+        if not self._unknown_body_ranking_active():
+            return rank
+        return (max(rank[0], self._unknown_projected_body_width(candidate)), *rank[1:])
+
     def _check_direct_registered_candidate(self, candidate):
         result = super()._check_direct_registered_candidate(candidate)
-        if (not result.reachable or not self._direct_strategy_selected()
-                or (self._mode_selection or {}).get('mode') != 'unknown'):
+        if (not result.reachable
+                or (self._mode_selection or {}).get('mode') != 'unknown'
+                or not (self._direct_strategy_selected()
+                        or getattr(self, 'near_field_planning_active', False))):
             return result
         cfg = dict(getattr(self, 'mujoco_config', {}) or {})
         if not cfg.get('enabled', True) or not cfg.get('execution_gate_enabled', True):
@@ -574,12 +691,17 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 factory = getattr(self, '_mujoco_client_factory', original.MujocoDigitalTwinClient)
                 client = factory(cfg.get('server_url', 'http://172.23.132.97:8000'),
                                  timeout_sec=float(cfg.get('timeout_sec', 20.)))
+                policy_cfg = dict(cfg)
+                policy_cfg['unknown_lift_gate_enabled'] = rospy.get_param(
+                    '/mujoco_digital_twin/unknown_lift_gate_enabled', True)
+                record['lift_gate_enabled'] = original.mujoco_lift_gate_enabled(plan, policy_cfg)
                 response = client.simulate_grasp(payload)
                 self._require_stream_ticket_current(ticket)
                 gate = original.validate_mujoco_gate_response(response, str(plan.plan_id), cfg.get('min_score', 80),
                     expected_candidate_source=plan.candidate_source,
-                    expected_candidate_source_lineage=plan.candidate_source_lineage)
-                code, reason = ('OK', '') if gate.ok else (gate.code, gate.reason)
+                    expected_candidate_source_lineage=plan.candidate_source_lineage,
+                    require_lift_success=record['lift_gate_enabled'])
+                code, reason = (gate.code or 'OK', gate.reason) if gate.ok else (gate.code, gate.reason)
                 record.update(plan_id=plan.plan_id, passed=bool(gate.ok), score=gate.score)
             except original.StreamResultCancelled:
                 raise
@@ -589,7 +711,7 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
         self._record_mujoco_selection_attempt(candidate, record)
         if record['passed']:
             return result
-        rospy.loginfo('Unknown direct candidate rejected by MuJoCo: track=%s variant=%s code=%s reason=%s',
+        rospy.loginfo('Unknown contact candidate rejected by MuJoCo: track=%s variant=%s code=%s reason=%s',
                       candidate.track_id, candidate.variant_index, code, reason)
         # Reject this candidate inside the original bounded search. The next
         # candidate must independently pass geometry, strict paths and MuJoCo;
@@ -853,6 +975,11 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
             prepared, selection, *args, **kwargs)
         report['grasp_mode_selection'] = dict(self._mode_selection or {})
         report['snapshot_stamp_ns'] = int(getattr(prepared.snapshot, 'stamp_ns', 0))
+        if self._unknown_body_ranking_active():
+            report.setdefault('moveit_selection', {}).update({
+                'aperture_metric': 'max_measured_band_and_frozen_obb_projected_width',
+                'physical_aperture_and_gates_unchanged': True,
+            })
         if (self._mode_selection or {}).get('mode') == 'unknown' and not self._direct_strategy_selected():
             report['observation_selection_policy'] = 'SIDE_EVIDENCE_THEN_CHECKED_HARDWARE_DURATION'
         if self._direct_strategy_selected():

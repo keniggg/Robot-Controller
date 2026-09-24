@@ -116,6 +116,7 @@ from alicia_flexible_grasp.vision.mujoco_digital_twin_client import (
     MujocoDigitalTwinClient,
     build_mujoco_payload,
     validate_mujoco_gate_response,
+    mujoco_lift_gate_enabled,
 )
 from alicia_flexible_grasp.vision.graspnet_input_context import (
     CONTEXT_ROI,
@@ -14862,6 +14863,10 @@ class RemoteGrasp6DNode:
                     response = client_response
                     if callable(guard):
                         guard(prepared.ticket)
+                    policy_cfg = dict(cfg)
+                    policy_cfg['unknown_lift_gate_enabled'] = rospy.get_param(
+                        '/mujoco_digital_twin/unknown_lift_gate_enabled', True)
+                    record['lift_gate_enabled'] = mujoco_lift_gate_enabled(plan, policy_cfg)
                     gate = validate_mujoco_gate_response(
                         response,
                         str(plan.plan_id),
@@ -14870,6 +14875,7 @@ class RemoteGrasp6DNode:
                         expected_candidate_source_lineage=(
                             plan.candidate_source_lineage
                         ),
+                        require_lift_success=record['lift_gate_enabled'],
                     )
                     code = str(gate.code or '')
                     reason = str(gate.reason or '')
@@ -14884,7 +14890,7 @@ class RemoteGrasp6DNode:
                     ):
                         record['score'] = float(score)
                     record['passed'] = bool(gate.ok)
-                    record['code'] = 'OK' if gate.ok else code
+                    record['code'] = (code or 'OK') if gate.ok else code
                     record['reason'] = reason[:512]
                 except StreamResultCancelled:
                     raise

@@ -132,10 +132,11 @@ def test_two_stage_validates_mode_specific_observation_band_and_original_gates(m
     assert runner.audit_error(report)
     selected['observation_envelope']['minimum_support_clearance_m'] = .003
     selected['moveit']['joint_max_delta_rad'] = 3.1
+    assert not runner.audit_error(report)
     if mode == 'unknown':
-        assert runner.audit_error(report)
-    else:
-        assert not runner.audit_error(report)
+        for invalid in (float('nan'), float('inf'), -.1):
+            selected['moveit']['joint_max_delta_rad'] = invalid
+            assert runner.audit_error(report)
 
 
 def fake_run(monkeypatch, start):

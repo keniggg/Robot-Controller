@@ -1,0 +1,30 @@
+<launch>
+  <!-- Archived operator session startup. Running this starts real hardware
+       and enables joint torque; saving this file does not start any nodes. -->
+  <param name="/gui/joint_direct_mode" value="true"/>
+  <include file="$(find alicia_grasp_modes)/launch/full_system_modes.launch">
+    <arg name="initial_mode" value="unknown"/>
+    <arg name="initial_strategy" value="two_stage"/>
+    <arg name="start_real_arm" value="true"/>
+    <arg name="driver_port" value="/dev/alicia_arm"/>
+    <arg name="driver_baudrate" value="1000000"/>
+    <arg name="auto_torque_on_startup" value="true"/>
+    <arg name="self_check_poll_rate_hz" value="0.0"/>
+    <arg name="start_camera" value="true"/>
+    <arg name="start_tactile" value="true"/>
+    <arg name="start_gui" value="true"/>
+    <arg name="remote_grasp6d_url" value="http://172.23.132.97:8000"/>
+  </include>
+  <rosparam param="/alicia_d_driver_node/endpoint_feedback_trim_max_step_quantums_by_joint">[4, 7, 4, 4, 4, 4]</rosparam>
+  <param name="/mujoco_digital_twin/server_url" value="http://172.23.132.97:8001"/>
+  <param name="/mujoco_digital_twin/timeout_sec" value="40.0"/>
+  <param name="/mujoco_digital_twin/unknown_lift_gate_enabled" value="false"/>
+  <param name="/grasp/unknown_lift_after_close_enabled" value="false"/>
+  <param name="/grasp/unknown_pregrasp_joint2_response_probe_enabled" value="true"/>
+  <rosparam param="/camera/mode_depth_preset">
+    enabled: true
+    unknown_preset: high_accuracy
+    stationary_temporal_enabled: true
+    baseline_path: $(find alicia_grasp_modes)/../../.runtime/d405_carton_depth_baseline.json
+  </rosparam>
+</launch>

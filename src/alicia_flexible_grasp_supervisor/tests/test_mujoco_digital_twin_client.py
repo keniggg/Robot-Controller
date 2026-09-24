@@ -731,3 +731,68 @@ def test_carton_does_not_accept_unknown_operator_mass_override():
     plan.model_choice = 'carton_segment'
     with pytest.raises(ValueError):
         client_module.build_mujoco_payload(plan,['j'],[0.],config)
+
+
+# Captured from WSL MuJoCo 3.2.3: loaded opposed closure succeeds, lift loses it.
+def _recorded_lift_failure():
+    import json
+    return json.loads((ROOT / 'tests/fixtures/mujoco_lift_contact_loss.json').read_text())
+
+
+def _validate_recorded(response, **options):
+    return client_module.validate_mujoco_gate_response(
+        response, '14357aa4286c1b2b7eb8b03f', 80,
+        expected_candidate_source='tabletop_geometry',
+        expected_candidate_source_lineage=['tabletop_geometry'], **options)
+
+
+def test_lift_diagnostic_policy_preserves_actual_wsl_failure_and_can_be_reenabled():
+    from copy import deepcopy
+    response = _recorded_lift_failure()
+    original = deepcopy(response)
+    assert not _validate_recorded(response).ok
+    result = _validate_recorded(response, require_lift_success=False)
+    assert result.ok
+    assert result.code == 'MUJOCO_LIFT_DIAGNOSTIC_ONLY'
+    assert result.score == 55.0
+    assert response == original
+    assert not _validate_recorded(response, require_lift_success=True).ok
+
+
+@pytest.mark.parametrize('change', [
+    lambda r: r.update(ik_success=False),
+    lambda r: r.update(collision_free=False),
+    lambda r: r.update(plan_id='other-plan'),
+    lambda r: r.update(candidate_source='graspnet', candidate_source_lineage=['graspnet']),
+    lambda r: r.update(score=float('nan')),
+    lambda r: r.update(failure_code='SNAPSHOT_TOO_OLD'),
+    lambda r: r.update(simulation_ok='false'),
+    lambda r: r['lift_evidence'].pop('settled_gripper_state'),
+    lambda r: r['lift_evidence'].update(preload_settle_samples=0),
+    lambda r: r['lift_evidence'].update(lift_sample_count=0),
+    lambda r: r['lift_evidence'].update(max_prescribed_joint_speed_rad_s=0.081),
+    lambda r: r['lift_evidence']['settled_gripper_state'].update(left_object_normal_force_n=0),
+    lambda r: r['lift_evidence']['settled_gripper_state'].update(finger_object_contacts=[]),
+    lambda r: r['lift_evidence']['settled_gripper_state']['finger_object_contacts'][0].update(normal_base=[0, 0, 1]),
+    lambda r: r['ik_results'][0].update(orientation_error=0.19),
+])
+def test_lift_diagnostic_policy_never_bypasses_non_lift_failures(change):
+    response = _recorded_lift_failure()
+    change(response)
+    assert not _validate_recorded(response, require_lift_success=False).ok
+
+
+@pytest.mark.parametrize('value', ['false', 0, None])
+def test_lift_policy_requires_explicit_boolean(value):
+    result = _validate_recorded(_recorded_lift_failure(), require_lift_success=value)
+    assert not result.ok
+    assert result.code == 'MUJOCO_GATE_CONFIG_INVALID'
+
+
+def test_lift_policy_only_changes_unknown_object_plans():
+    plan = _rich_plan()
+    config = {'unknown_lift_gate_enabled': False}
+    assert client_module.mujoco_lift_gate_enabled(plan, config) is True
+    plan.model_choice = 'unknown_tabletop'
+    assert client_module.mujoco_lift_gate_enabled(plan, {}) is True
+    assert client_module.mujoco_lift_gate_enabled(plan, config) is False

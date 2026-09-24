@@ -1339,11 +1339,18 @@ class GraspTaskSequenceTest(unittest.TestCase):
         mujoco_enabled=True,
         execution_gate_enabled=True,
         planning_audit_output_path=None,
+        unknown_lift_gate_enabled=True,
+        unknown_plan=False,
+        at_first_action=None,
     ):
         node = grasp_task_node.GraspTaskNode.__new__(
             grasp_task_node.GraspTaskNode
         )
         plan = self._rich_plan(stamp_sec=1.0)
+        if unknown_plan:
+            plan.model_choice = 'unknown_tabletop'
+            plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+            plan.plan_id = compute_plan_id(plan)
         node.latest_grasp6d_plan = plan
         node.latest_obj = self._object(stamp_sec=1.0)
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(1.0)
@@ -1354,9 +1361,12 @@ class GraspTaskSequenceTest(unittest.TestCase):
         physical_actions = []
         payloads = []
         node.set_state = lambda *args, **kwargs: states.append(args)
-        node._command_gripper_position = lambda *args, **kwargs: (
-            physical_actions.append('open-gripper') or False
-        )
+        def first_action(*args, **kwargs):
+            physical_actions.append('open-gripper')
+            if at_first_action is not None:
+                at_first_action(node, plan)
+            return False
+        node._command_gripper_position = first_action
         configured_audit_path = (
             self._next_mujoco_audit_path()
             if audit_output_path is None
@@ -1390,6 +1400,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         original_client = grasp_task_node.MujocoDigitalTwinClient
         original_payload_builder = grasp_task_node.build_mujoco_payload
         twin_config = {
+            'unknown_lift_gate_enabled': unknown_lift_gate_enabled,
             'audit_output_path': configured_audit_path,
             'server_url': 'http://172.23.132.97:8000',
             'timeout_sec': 0.01,
@@ -6437,18 +6448,23 @@ class GraspTaskSequenceTest(unittest.TestCase):
             states[-1][1],
         )
 
-    def test_full_grasp_uses_6d_plan_sequence_when_enabled(self):
+    def _run_full_grasp_sequence(self, unknown=False, lift_enabled=True):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = self._object()
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(3.5)
         node.latest_grasp6d_plan = self._rich_plan(stamp_sec=1.0)
+        if unknown:
+            node.latest_grasp6d_plan.model_choice = 'unknown_tabletop'
+            node.latest_grasp6d_plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+            node.latest_grasp6d_plan.plan_id = compute_plan_id(node.latest_grasp6d_plan)
         node.active = True
         execution_plan = node._freeze_execution_plan(
             node.latest_grasp6d_plan
         )
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
         node._simulate_grasp6d_plan_if_required = lambda *_args: True
-        node.set_state = lambda *args, **kwargs: None
+        states = []
+        node.set_state = lambda *args, **kwargs: states.append(args)
 
         calls = []
         proxy_names = []
@@ -6495,23 +6511,19 @@ class GraspTaskSequenceTest(unittest.TestCase):
         grasp_task_node.rospy.get_param = lambda name, default=None: {
             '/grasp': {
                 'use_grasp6d_plan': True,
+                'unknown_lift_after_close_enabled': lift_enabled,
                 'plan_validity_sec': 2.0,
                 'target_observation_validity_sec': 1.5,
                 'lift_height_m': 0.05,
             },
             '/gripper': {
-                'open_position_m': 0.0,
+                'open_position_m': 0.05 if unknown else 0.0,
             },
         }.get(name, default)
         grasp_task_node.rospy.sleep = lambda *_args, **_kwargs: None
         grasp_task_node.rospy.Time.now = staticmethod(lambda: FakeTime(4.0))
         try:
-            self.assertTrue(
-                grasp_task_node.GraspTaskNode.execute(
-                    node,
-                    grasp6d_plan=execution_plan,
-                )
-            )
+            result = grasp_task_node.GraspTaskNode.execute(node, grasp6d_plan=execution_plan)
         finally:
             grasp_task_node.rospy.wait_for_service = original_wait_for_service
             grasp_task_node.rospy.ServiceProxy = original_service_proxy
@@ -6519,6 +6531,11 @@ class GraspTaskSequenceTest(unittest.TestCase):
             grasp_task_node.rospy.sleep = original_sleep
             grasp_task_node.rospy.Time.now = original_time_now
 
+        return result, calls, proxy_names, states
+
+    def test_full_grasp_uses_6d_plan_sequence_when_enabled(self):
+        result, calls, proxy_names, _ = self._run_full_grasp_sequence()
+        self.assertTrue(result)
         self.assertEqual(calls[0], ('set_gripper', 0.0))
         move_calls = [
             call for call in calls
@@ -6536,6 +6553,116 @@ class GraspTaskSequenceTest(unittest.TestCase):
         )
         self.assertIn(('close', True), calls)
         self.assertNotIn('/supervisor/move_to_pose', proxy_names)
+
+    def test_unknown_close_and_hold_never_plans_or_executes_lift(self):
+        result, calls, _, states = self._run_full_grasp_sequence(unknown=True, lift_enabled=False)
+        self.assertFalse(result)  # A close acknowledgement is not grasp evidence.
+        self.assertIn(('close', True), calls)
+        self.assertEqual([c for c in calls if c[0] == 'linear'], [
+            ('linear', 0.20, False), ('linear', 0.20, True),
+            ('linear', 0.30, False), ('linear', 0.30, True)])
+        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.HOLDING)
+        self.assertIn('GRASP_HOLD_UNVERIFIED:', states[-1][1])
+
+    def test_physical_lift_policy_is_unknown_only_and_boolean(self):
+        for unknown, enabled, expected in [(True, True, True), (False, False, True)]:
+            result, calls, _, _ = self._run_full_grasp_sequence(unknown, enabled)
+            self.assertIs(result, expected)
+            self.assertIn(('linear', 0.40, True), calls)
+        for invalid in ('false', None, 0):
+            result, calls, _, states = self._run_full_grasp_sequence(True, invalid)
+            self.assertFalse(result)
+            self.assertEqual(calls, [])
+            self.assertIn('GRASP_LIFT_CONFIG_INVALID:', states[-1][1])
+
+    def _hold_tactile_sample(self, stamp=10.1):
+        sample = grasp_task_node.TactileState()
+        for item in (sample, sample.left, sample.right):
+            item.header.stamp = grasp_task_node.rospy.Time.from_sec(stamp)
+            item.valid = True
+        for side in (sample.left, sample.right):
+            side.contact = True
+            side.total_force_mn = 300.0
+        sample.left_contact = sample.right_contact = sample.object_grasped = True
+        sample.total_grip_force_mn = 600.0
+        return sample
+
+    def test_hold_evidence_rejects_stale_one_sided_slipping_and_invalid_samples(self):
+        validate = grasp_task_node.GraspTaskNode._fresh_bilateral_hold_sample
+        sample = self._hold_tactile_sample()
+        self.assertTrue(validate(sample, 10000000000, 10200000000))
+        for path, value in [('valid', False), ('object_grasped', False),
+                ('right_contact', False), ('slip_detected', True),
+                ('right.valid', False), ('right.contact', False),
+                ('right.total_force_mn', float('nan')), ('left.total_force_mn', 0),
+                ('total_grip_force_mn', float('inf'))]:
+            changed = grasp_task_node.deepcopy(sample)
+            parent, _, key = path.rpartition('.')
+            setattr(getattr(changed, parent) if parent else changed, key, value)
+            self.assertFalse(validate(changed, 10000000000, 10200000000), path)
+        for stamp in (9.9, 10.0, 10.3):
+            changed = self._hold_tactile_sample(stamp)
+            self.assertFalse(validate(changed, 10000000000, 10200000000))
+        sample.right.header.stamp = grasp_task_node.rospy.Time.from_sec(9.9)
+        self.assertFalse(validate(sample, 10000000000, 10200000000))
+        self.assertFalse(validate(self._hold_tactile_sample(), 10000000000, 11000000000))
+
+    def test_hold_requires_sustained_real_contact_and_preserves_cancel(self):
+        for simulated, cancel, expected in [(False, False, True), (True, False, False),
+                                             (None, False, False), (False, True, False)]:
+            node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+            node.active = True
+            node.set_state = mock.Mock()
+            node._execution_checkpoint = mock.Mock(side_effect=[True, not cancel])
+            with mock.patch.object(grasp_task_node.rospy, 'get_param', return_value=simulated), \
+                    mock.patch.object(grasp_task_node.rospy, 'is_shutdown', return_value=False), \
+                    mock.patch.object(grasp_task_node.rospy.Time, 'now', side_effect=[
+                        grasp_task_node.rospy.Time.from_sec(t) for t in (10, 10.1, 10.2, 10.3)]), \
+                    mock.patch.object(grasp_task_node.rospy, 'wait_for_message', side_effect=[
+                        self._hold_tactile_sample(t) for t in (10.1, 10.2, 10.3)]) as receive:
+                self.assertIs(node._finish_grasp_without_lift(object(), {}), expected)
+            if simulated is not False:
+                receive.assert_not_called()
+            if cancel:
+                node.set_state.assert_not_called()
+            else:
+                self.assertEqual(node.set_state.call_args[0][0],
+                    grasp_task_node.GraspStages.SUCCESS if expected else grasp_task_node.GraspStages.HOLDING)
+
+    def test_hold_start_response_and_inactive_state_preserve_unknown_result(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = False
+        node.pub = mock.Mock()
+        def execute(**kwargs):
+            node.set_state(grasp_task_node.GraspStages.HOLDING, 'GRASP_HOLD_UNVERIFIED: no evidence', False)
+            return False
+        node.execute = execute
+        with mock.patch.object(grasp_task_node.rospy, 'get_param', side_effect=lambda name, default=None: default), \
+                mock.patch.object(grasp_task_node.rospy.Time, 'now', return_value=grasp_task_node.rospy.Time(10)):
+            result = node.start_cb(types.SimpleNamespace(execute=True, plan_id=''))
+        self.assertFalse(result.success)
+        self.assertTrue(result.message.startswith('GRASP_HOLD_UNVERIFIED:'))
+        final = node.pub.publish.call_args[0][0]
+        self.assertFalse(final.active)
+        self.assertFalse(final.success)
+        self.assertEqual(final.state, 'HOLDING')
+        self.assertIn(result.message, final.message)
+
+    def test_start_response_preserves_actual_compensation_failure_reason(self):
+        node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
+        node.active = False
+        node.pub = mock.Mock()
+        reason = 'PREGRASP_COMPENSATION_FAILED: PREGRASP_NO_BOUNDED_IMPROVING_STEP'
+        def execute(**kwargs):
+            node.set_state(grasp_task_node.GraspStages.FAILED, reason, False)
+            return False
+        node.execute = execute
+        with mock.patch.object(grasp_task_node.rospy, 'get_param', side_effect=lambda name, default=None: default), \
+                mock.patch.object(grasp_task_node.rospy.Time, 'now', return_value=grasp_task_node.rospy.Time(10)):
+            response = node.start_cb(types.SimpleNamespace(execute=True, plan_id=''))
+        self.assertFalse(response.success)
+        self.assertEqual(response.message, reason)
+        self.assertIn(reason, node.pub.publish.call_args[0][0].message)
 
     def test_6d_plan_uses_frozen_required_width_for_fixed_close(self):
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
@@ -6839,6 +6966,61 @@ class GraspTaskSequenceTest(unittest.TestCase):
         expected_hash = hashlib.sha256(node._test_mujoco_audit_bytes).hexdigest()
         self.assertIn('audit_path=' + node._test_mujoco_audit_path, states[-2][1])
         self.assertIn('audit_sha256=' + expected_hash, states[-2][1])
+
+    def test_direct_unknown_pregrasp_view_loss_uses_checked_frozen_plan(self):
+        observed = []
+        def lose_view(node, plan):
+            self.assertTrue(node._bound_target_occlusion_allowed)
+            digest = node._bound_execution_plan_digest
+            missing = self._object(stamp_sec=1.01)
+            missing.detected = False
+            tombstone = self._rich_plan(stamp_sec=1.02)
+            tombstone.valid = False
+            tombstone.diagnostic = 'TARGET_LOST: insufficient_support_spatial_coverage'
+            geometry = grasp_task_node.deepcopy(plan.object_geometry)
+            geometry.header.stamp = grasp_task_node.rospy.Time.from_sec(1.02)
+            geometry.valid = False
+            geometry.failure_reason = tombstone.diagnostic
+            with mock.patch.object(grasp_task_node.rospy, 'logwarn_throttle'):
+                node.obj_cb(missing)
+                node.target_geometry_cb(geometry)
+                node.grasp6d_plan_cb(tombstone)
+            result = node._validate_bound_plan(plan, {})
+            self.assertTrue(result.ok, result.reason)
+            self.assertEqual(node._bound_execution_plan_digest, digest)
+            self.assertIsNone(node.latest_visual_obj)
+            # An actual non-visual plan failure must still revoke the same plan.
+            tombstone.diagnostic = 'MUJOCO_COLLISION: unexpected collision'
+            with mock.patch.object(grasp_task_node.rospy, 'logwarn_throttle'):
+                node.grasp6d_plan_cb(tombstone)
+            self.assertFalse(node._validate_bound_plan(plan, {}).ok)
+            observed.append(True)
+        self._run_mujoco_gate_to_first_physical_action(
+            response=lambda bound: self._passing_mujoco_response(bound.plan_id),
+            unknown_plan=True, at_first_action=lose_view)
+        self.assertEqual(observed, [True])
+
+    def test_unknown_lift_policy_controls_execution_and_records_raw_failure(self):
+        fixture = json.loads((SCRIPT.parent.parent / 'tests/fixtures/mujoco_lift_contact_loss.json').read_text())
+        def response(bound):
+            result = dict(fixture)
+            result.update(plan_id=bound.plan_id, candidate_source=bound.candidate_source,
+                          candidate_source_lineage=list(bound.candidate_source_lineage))
+            return result
+        for unknown, enabled, expected in [(True, False, True), (True, True, False), (False, False, False)]:
+            with self.subTest(unknown=unknown, enabled=enabled):
+                _, actions, states, _, node, _ = self._run_mujoco_gate_to_first_physical_action(
+                    response=response, unknown_plan=unknown, unknown_lift_gate_enabled=enabled)
+                self.assertEqual(actions, ['open-gripper'] if expected else [])
+                audit = node._test_mujoco_audit
+                self.assertIs(audit['response']['simulation_ok'], False)
+                self.assertIs(audit['response']['lift_success'], False)
+                self.assertEqual(audit['response']['score'], 55.0)
+                self.assertIs(audit['lift_gate_enabled'], enabled if unknown else True)
+                if expected:
+                    self.assertEqual(audit['final_validation']['code'], 'MUJOCO_LIFT_DIAGNOSTIC_ONLY')
+                    self.assertIn('diagnostic only', states[-2][1])
+                    self.assertNotIn('MuJoCo simulation passed', states[-2][1])
 
     def test_strict_mujoco_gate_requires_exact_boolean_true_authority_flags(self):
         cases = (

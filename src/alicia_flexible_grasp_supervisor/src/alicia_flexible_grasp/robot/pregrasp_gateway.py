@@ -141,7 +141,11 @@ class PregraspCompensationGateway:
                 cfg = context['config']
                 correction = PregraspCompensation(fk, sample, pose_values(context['plan'].poses[0]),
                     position_tolerance_m=float(cfg['measured_endpoint_position_tolerance_m']),
-                    orientation_tolerance_rad=math.radians(float(cfg['measured_endpoint_orientation_tolerance_deg'])))
+                    orientation_tolerance_rad=math.radians(float(cfg['measured_endpoint_orientation_tolerance_deg'])),
+                    joint2_response_probe_enabled=(
+                        cfg.get('unknown_pregrasp_joint2_response_probe_enabled', False)
+                        if getattr(context['plan'], 'model_choice', '') == 'unknown_tabletop'
+                        else False))
                 context['initial_sdk_counts'] = correction.initial_counts
                 planner = self._ensure_planner()
                 if planner is None:

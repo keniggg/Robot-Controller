@@ -4,8 +4,7 @@ import re
 
 from alicia_flexible_grasp.grasp.gripper_geometry import CandidateGateResult
 from alicia_grasp_modes.selection import parse_selection
-from alicia_grasp_modes.observation_policy import (
-    observation_config, UNKNOWN_OBSERVATION_MAX_JOINT_DELTA_RAD)
+from alicia_grasp_modes.observation_policy import observation_config
 
 
 def selection_audit_error(report, selection, minimum_stamp_ns):
@@ -158,8 +157,8 @@ def unknown_observation_audit_error(report):
         return "selected observation lacks strict MoveIt evidence"
 
     delta = float(moveit.get("joint_max_delta_rad", float("nan")))
-    if not math.isfinite(delta) or not 0 <= delta <= UNKNOWN_OBSERVATION_MAX_JOINT_DELTA_RAD:
-        return "unknown observation exceeds the bounded joint turn"
+    if not math.isfinite(delta) or delta < 0.0:
+        return "unknown observation has invalid joint motion evidence"
 
     sequence = dict(selected.get("execution_sequence", {}) or {})
     stages = sequence.get("stages")

@@ -277,3 +277,14 @@ def test_wrapper_never_finalizes_bag_without_close_confirmation(tmp_path, monkey
     assert manifest['state'] == 'recording'
     assert manifest['recorder_closed'] is False
     assert manifest['upload']['status'] == 'recording'
+
+
+def test_hold_without_physical_evidence_is_unknown_not_failure_or_success():
+    outcome = {}
+    lifecycle.observe_task_state(outcome, state(active=True), 100)
+    reason = 'GRASP_HOLD_UNVERIFIED: close accepted, physical grip unknown'
+    lifecycle.observe_task_state(outcome, state(stamp=111, name='HOLDING', message=reason), 100)
+    result, recorded_reason, _ = lifecycle.classify_result(outcome,
+        'GRASP_RESULT success=False message=' + reason)
+    assert result == 'unknown'
+    assert recorded_reason == reason

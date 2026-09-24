@@ -11,6 +11,7 @@ import tempfile
 import threading
 import types
 import unittest
+from unittest import mock
 import urllib.error
 
 import numpy as np
@@ -7085,8 +7086,13 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
         self.assertAlmostEqual(measured.transform.translation.x, 0.00386)
         self.assertNotAlmostEqual(measured.transform.translation.x, 0.13)
 
-    @staticmethod
-    def _make_mujoco_selection_node(candidates):
+    def _make_mujoco_selection_node(self, candidates):
+        # Runtime policy is read on each selection. These tests supply their
+        # own default policy and must never consult a live ROS parameter server.
+        parameters = mock.patch.object(remote_node.rospy, 'get_param',
+                                       side_effect=lambda name, default=None: default)
+        parameters.start()
+        self.addCleanup(parameters.stop)
         node = remote_node.RemoteGrasp6DNode.__new__(
             remote_node.RemoteGrasp6DNode
         )

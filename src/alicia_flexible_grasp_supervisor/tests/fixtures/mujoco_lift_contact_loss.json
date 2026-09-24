@@ -1,0 +1,186 @@
+{
+  "backend": "mujoco",
+  "plan_id": "14357aa4286c1b2b7eb8b03f",
+  "simulation_ok": false,
+  "score": 55.0,
+  "ik_success": true,
+  "collision_free": true,
+  "contact_success": false,
+  "lift_success": false,
+  "failure_code": "MUJOCO_CONTACT_FAILED",
+  "failure_reason": "two-sided finger/object contact was lost during lift (lost 614/786 samples, max streak 608, grace 3; object lift 0.001m < 0.015m)",
+  "candidate_source": "tabletop_geometry",
+  "candidate_source_lineage": [
+    "tabletop_geometry"
+  ],
+  "diagnosis": [
+    "trajectory collision check passed",
+    "first simultaneous two-sided contact retained at 0.0257m gap",
+    "request-bound grasp target 0.0000m from contact width 0.0257m",
+    "preloaded grasp retained two-sided contact for lift",
+    "settled gripper gap 0.0181m actuator force L/R -1.808/1.805N object normal force L/R 1.804/1.809N",
+    "Cartesian lift path with 0.2000mm position and 0.2865deg orientation waypoint tolerances",
+    "single-pass Cartesian IK solved 676 samples at 0.000012m/0.000010rad tolerance",
+    "joint-speed time interpolation resampled 676->786 samples; reference peak 0.0930->0.0799rad/s",
+    "FK-validated interpolated reference max error 0.000017m/0.000029rad",
+    "two-sided contact missing for 614/786 lift samples (max streak 608, grace 3)",
+    "velocity-consistent prescribed tool lift 0.0329m, max/final Cartesian tracking error 0.0010/0.0000m, final orientation error 0.0000rad, max joint speed 0.0799rad/s",
+    "two-sided finger/object contact was lost during lift (lost 614/786 samples, max streak 608, grace 3; object lift 0.001m < 0.015m)"
+  ],
+  "ik_results": [
+    {
+      "name": "pregrasp",
+      "success": true,
+      "position_error_m": 0.00019635974072661715,
+      "orientation_error": 0.0006944775436057416,
+      "iterations": 115
+    },
+    {
+      "name": "approach",
+      "success": true,
+      "position_error_m": 0.00019838948643207066,
+      "orientation_error": 0.0006656958122162308,
+      "iterations": 149
+    },
+    {
+      "name": "grasp",
+      "success": true,
+      "position_error_m": 0.00019969058953208562,
+      "orientation_error": 0.0006766333984868645,
+      "iterations": 74
+    },
+    {
+      "name": "lift",
+      "success": true,
+      "position_error_m": 0.0001997922943376054,
+      "orientation_error": 0.0006608840460027046,
+      "iterations": 124
+    }
+  ],
+  "lift_evidence": {
+    "contract_version": 1,
+    "object_lift_m": 0.0005365608491379121,
+    "commanded_lift_m": 0.03300000000000001,
+    "minimum_lift_m": 0.015,
+    "actual_tool_lift_m": 0.03293621830561486,
+    "max_cartesian_tracking_error_m": 0.0010495531097566007,
+    "final_cartesian_tracking_error_m": 4.50273019594242e-05,
+    "final_cartesian_orientation_error_rad": 8.99939479007598e-06,
+    "max_prescribed_joint_speed_rad_s": 0.07993537631478809,
+    "initial_lift_sample_count": 676,
+    "reference_resampling_passes": 1,
+    "reference_ik_position_tolerance_m": 1.2214593823027431e-05,
+    "reference_ik_orientation_tolerance_rad": 1e-05,
+    "two_sided_lift_samples": 172,
+    "lost_contact_samples": 614,
+    "lift_sample_count": 786,
+    "max_lost_contact_streak": 608,
+    "contact_loss_grace_samples": 3,
+    "grip_target_inner_gap_m": 0.0,
+    "preload_settle_samples": 400,
+    "settled_gripper_state": {
+      "left_finger_qpos_m": -0.015961402409901286,
+      "right_finger_qpos_m": 0.015974650071198897,
+      "measured_inner_gap_m": 0.01806394751889982,
+      "left_ctrl_target_m": -0.025,
+      "right_ctrl_target_m": 0.025,
+      "left_actuator_force_n": -1.808000683480917,
+      "right_actuator_force_n": 1.804771569486098,
+      "left_object_normal_force_n": 1.8040176661103453,
+      "right_object_normal_force_n": 1.8091648932159266,
+      "jaw_axis_base": [
+        0.9846544574403199,
+        -0.1685873175538119,
+        0.04509895567437956
+      ],
+      "finger_object_contacts": [
+        {
+          "finger": "left",
+          "position_base_m": [
+            -0.13753988962615932,
+            -0.425422381466663,
+            0.09849624393216713
+          ],
+          "normal_base": [
+            -0.9846610547196069,
+            0.16855523267514777,
+            -0.045074836176055025
+          ],
+          "abs_normal_jaw_axis_cos": 0.9999999991726432,
+          "normal_force_n": 1.8040176661103453,
+          "distance_m": -0.002499069251556343
+        },
+        {
+          "finger": "right",
+          "position_base_m": [
+            -0.1174129310095054,
+            -0.42940543923921715,
+            0.09956755747551632
+          ],
+          "normal_base": [
+            0.9846604223686198,
+            -0.168549257337939,
+            0.04511097950256163
+          ],
+          "abs_normal_jaw_axis_cos": 0.9999999991856338,
+          "normal_force_n": 1.8091648932159266,
+          "distance_m": -0.0024992648069542224
+        }
+      ]
+    },
+    "first_contact_loss_state": {
+      "left_finger_qpos_m": -0.014984556911987926,
+      "right_finger_qpos_m": 0.01437906489349829,
+      "measured_inner_gap_m": 0.020636378194513787,
+      "left_ctrl_target_m": -0.025,
+      "right_ctrl_target_m": 0.025,
+      "left_actuator_force_n": -2.313265179036466,
+      "right_actuator_force_n": 2.547717587942263,
+      "left_object_normal_force_n": 3.274003790257213,
+      "right_object_normal_force_n": 2.314425533875883,
+      "jaw_axis_base": [
+        0.9846545303282179,
+        -0.1685876236648313,
+        0.045096219920985385
+      ],
+      "finger_object_contacts": [
+        {
+          "finger": "left",
+          "position_base_m": [
+            -0.13804779952182672,
+            -0.42679085668905276,
+            0.09415998198231254
+          ],
+          "normal_base": [
+            -0.4654800619013446,
+            0.4835858484558599,
+            0.7412644866345255
+          ],
+          "abs_normal_jaw_axis_cos": 0.506435414448846,
+          "normal_force_n": 3.274003790257213,
+          "distance_m": -0.003205923614160265
+        },
+        {
+          "finger": "right",
+          "position_base_m": [
+            -0.11634389278449835,
+            -0.4271476381527055,
+            0.10059386539450364
+          ],
+          "normal_base": [
+            0.9846539342692358,
+            -0.16858955531707184,
+            0.045102012883104906
+          ],
+          "abs_normal_jaw_axis_cos": 0.9999999999811777,
+          "normal_force_n": 2.314425533875883,
+          "distance_m": -0.000974547971081765
+        }
+      ],
+      "sample_index": 14,
+      "trajectory_alpha": 0.017834394904458598
+    }
+  },
+  "used_joint_state_source": "request",
+  "ok": true
+}

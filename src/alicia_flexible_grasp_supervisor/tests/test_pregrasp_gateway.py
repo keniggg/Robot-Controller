@@ -102,6 +102,40 @@ def test_no_response_leaves_original_goal_and_stops_after_one_step(monkeypatch):
     assert json.loads(result.message)['no_implicit_rollback_or_torque_disable']
 
 
+@pytest.mark.parametrize('unknown,enabled,responds,expected,moves', [
+    (True, True, True, True, 9), (True, True, False, False, 9),
+    (True, False, True, False, 8), (False, True, True, False, 8)])
+def test_unknown_joint2_recovery_shares_original_episode_and_requires_response(
+        monkeypatch, unknown, enabled, responds, expected, moves):
+    from pathlib import Path
+    rows = json.loads((Path(__file__).parent /
+        'fixtures/pregrasp_following_20260924_actual.json').read_text())['actual_stationary_steps']
+    def response(delta):
+        index = state['moves']
+        if index < len(rows):
+            assert sdk_counts(state['sdk']).tolist() == rows[index]['sdk_counts']
+            return (np.array(rows[index]['measured_counts'])-
+                    np.array(rows[index-1]['measured_counts']))*Q
+        # This ninth response is a hypothesis, not recorded hardware evidence.
+        assert index == 9
+        assert np.rint(delta/Q).astype(int).tolist() == [0,4,0,0,0,0]
+        return delta if responds else np.zeros(6)
+    node, planner, plan, state, calls, parameters = make_gateway(
+        monkeypatch, response=response, day='20260924_actual')
+    plan.model_choice = 'unknown_tabletop' if unknown else 'carton'
+    plan.plan_id = compute_plan_id(plan)
+    context = node._pregrasp_context(plan)
+    context['scene'].plan_id = plan.plan_id
+    context['config']['unknown_pregrasp_joint2_response_probe_enabled'] = enabled
+    result = node.handle_compensate_pregrasp(NS(plan=plan,execute=True))
+    report = json.loads(result.message)
+    assert result.success is expected and len(calls) == moves
+    assert not report['real_grasp_success']
+    assert planner.observation_path_guard_required is False
+    assert not node.handle_compensate_pregrasp(NS(plan=plan,execute=True)).success
+    assert len(calls) == moves  # No episode reset, second probe, or rollback.
+
+
 def test_unsettled_response_reports_completed_command_without_reusing_old_measurement(monkeypatch):
     node,_,plan,state,calls,parameters=make_gateway(monkeypatch)
     snapshot=node._endpoint_following_snapshot

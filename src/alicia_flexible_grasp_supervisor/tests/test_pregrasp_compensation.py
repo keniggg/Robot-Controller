@@ -21,6 +21,111 @@ def recorded_fixture(day='20260919'):
     return fk,sdk,actual,goal
 
 
+def replay_september24_to_last_sample(probe_enabled):
+    """Replay only actually recorded commands/responses; no synthetic success."""
+    record = json.loads((Path(__file__).parent /
+        'fixtures/pregrasp_following_20260924_actual.json').read_text())
+    fk, sdk, actual, goal = recorded_fixture('20260924_actual')
+    c = PregraspCompensation(fk, sample(fk, sdk, actual), goal,
+                            joint2_response_probe_enabled=probe_enabled)
+    rows = record['actual_stationary_steps']
+    for i, row in enumerate(rows[:-1]):
+        sdk = (np.array(row['sdk_counts'])-2048)*Q
+        actual = (np.array(row['measured_counts'])-2048)*Q
+        _, step, evidence = c.evaluate(sample(fk, sdk, actual, 10.+4*i))
+        assert evidence['position_error_m'] == pytest.approx(row['position_error_m'])
+        assert list(step.target_counts) == rows[i+1]['sdk_counts']
+        assert evidence['step_kind'] == 'bounded_cartesian_correction'
+        c.committed(step, 12.+4*i)
+    last = rows[-1]
+    sdk = (np.array(last['sdk_counts'])-2048)*Q
+    actual = (np.array(last['measured_counts'])-2048)*Q
+    return c, sample(fk, sdk, actual, 42.), record
+
+
+def test_september24_actual_failure_stays_failure_with_probe_disabled():
+    c, final, _ = replay_september24_to_last_sample(False)
+    with pytest.raises(ValueError, match='NO_BOUNDED_IMPROVING_STEP'):
+        c.evaluate(final)
+    assert c.last_evidence['position_error_m'] == pytest.approx(.006667775399362672)
+    assert c.last_evidence['saturated_joints'] == ['Joint3']
+    assert not c.last_evidence['real_grasp_success']
+
+
+def test_september24_recovery_is_one_isolated_bounded_proposal_not_success():
+    c, final, _ = replay_september24_to_last_sample(True)
+    code, step, evidence = c.evaluate(final)
+    assert code == 'PREGRASP_STEP_PROPOSED'
+    assert (np.array(step.target_counts)-step.baseline_counts).tolist() == [0,4,0,0,0,0]
+    assert evidence['step_kind'] == 'joint2_response_probe'
+    assert evidence['position_error_m'] > .006
+    assert evidence['predicted_position_error_m'] < .006
+    assert not evidence['real_grasp_success']
+    assert not c.joint2_response_probe_used  # A proposal is not an issued command.
+    origin, started, goal = c.initial_counts, c.started, c.goal.copy()
+    c.committed(step, 44.)
+    assert c.steps == 9 and c.joint2_response_probe_used
+    assert c.initial_counts == origin and c.started == started
+    np.testing.assert_array_equal(c.goal, goal)
+    assert not np.any(c._joint2_response_probe(
+        np.array(final['accepted_positions_rad']), np.array(step.measured_counts), .0067))
+
+
+@pytest.mark.parametrize('response_counts', [2, 3, 4])
+def test_september24_only_hypothetical_fresh_joint2_response_can_converge(response_counts):
+    c, final, _ = replay_september24_to_last_sample(True)
+    _, step, _ = c.evaluate(final)
+    c.committed(step, 44.)
+    # No actual measurement exists for the new command; explicitly hypothetical.
+    actual = np.array(final['accepted_positions_rad'])
+    actual[1] += response_counts*Q
+    code, next_step, report = c.evaluate(sample(c.fk, np.array(step.positions), actual, 46.))
+    assert code == 'PREGRASP_MEASURED_CONVERGED' and next_step is None
+    assert report['position_error_m'] <= .006 and report['steps_completed'] == 9
+    assert report['joint2_response_probe_used'] and not report['real_grasp_success']
+
+
+@pytest.mark.parametrize('response_counts', [0, 1, -2, 7])
+def test_joint2_probe_without_bounded_response_stops_without_accumulation(response_counts):
+    c, final, _ = replay_september24_to_last_sample(True)
+    _, step, _ = c.evaluate(final)
+    c.committed(step, 44.)
+    actual = np.array(final['accepted_positions_rad'])
+    actual[1] += response_counts*Q
+    failure = ('FOLLOWING_OUTSIDE_CONTRACT' if response_counts == -2
+               else 'NO_BOUNDED_DIRECTIONAL_RESPONSE')
+    for _ in range(2):
+        with pytest.raises(ValueError, match=failure):
+            c.evaluate(sample(c.fk, np.array(step.positions), actual, 46.))
+    assert c.steps == 9 and c.expected == step.target_counts
+    assert c.joint2_response_probe_used
+
+
+def test_joint2_probe_cannot_extend_step_time_or_total_limits():
+    c, final, _ = replay_september24_to_last_sample(True)
+    c.steps = c.MAX_STEPS
+    with pytest.raises(ValueError, match='STEP_BUDGET'):
+        c.evaluate(final)
+    c, final, _ = replay_september24_to_last_sample(True)
+    final['stamp_sec'] = c.started + c.MAX_SECONDS + .001
+    with pytest.raises(ValueError, match='STALE_OR_EXPIRED'):
+        c.evaluate(final)
+    c, final, _ = replay_september24_to_last_sample(True)
+    # The desired positive direction has no remaining original-box allowance.
+    c.initial_counts = tuple(np.array(c.expected)-np.array([0,32,0,0,0,0]))
+    actual = np.array(final['accepted_positions_rad'])
+    assert not np.any(c._joint2_response_probe(actual, np.array(final['accepted_positions_rad'])/Q+2048,
+                                             c.residual(actual)[0]))
+
+
+@pytest.mark.parametrize('invalid', ['true', 1, None])
+def test_joint2_probe_configuration_requires_boolean(invalid):
+    fk,sdk,actual,goal = recorded_fixture('20260924_actual')
+    with pytest.raises(ValueError, match='PROBE_CONFIG_INVALID'):
+        PregraspCompensation(fk, sample(fk,sdk,actual), goal,
+                            joint2_response_probe_enabled=invalid)
+
+
 def test_recorded_wrist_pose_converges_under_explicit_four_axes_response_hypothesis():
     fk,sdk,actual,goal = recorded_fixture('20260920_wrist')
     initial = sample(fk,sdk,actual)

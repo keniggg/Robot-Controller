@@ -1,0 +1,309 @@
+{
+  "scope": "Recorded generation 6 failed near-field planning; offline regression only",
+  "families": [
+    {
+      "stages": [
+        {
+          "stage": "pregrasp",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10394989066623887,
+            -0.4133302702336457,
+            0.129745153042792
+          ],
+          "quaternion_xyzw": [
+            -0.7373326828892595,
+            -0.6745153595885347,
+            -0.025070409198164712,
+            0.027221664260532717
+          ],
+          "linear_from_prior_state": false,
+          "resolve_orientation": true
+        },
+        {
+          "stage": "approach",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10459879520448583,
+            -0.4197638469959694,
+            0.11764784432742159
+          ],
+          "quaternion_xyzw": [
+            -0.7373326828892595,
+            -0.6745153595885347,
+            -0.025070409198164712,
+            0.027221664260532717
+          ],
+          "linear_from_prior_state": true,
+          "resolve_orientation": false
+        },
+        {
+          "stage": "grasp",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10459252811413702,
+            -0.41789174990420874,
+            0.09240611310816328
+          ],
+          "quaternion_xyzw": [
+            -0.7373326828892595,
+            -0.6745153595885347,
+            -0.025070409198164712,
+            0.027221664260532717
+          ],
+          "linear_from_prior_state": true,
+          "resolve_orientation": false
+        },
+        {
+          "stage": "lift",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10390395988936205,
+            -0.4130042507872812,
+            0.13241386013050016
+          ],
+          "quaternion_xyzw": [
+            -0.7373326828892595,
+            -0.6745153595885347,
+            -0.025070409198164712,
+            0.027221664260532717
+          ],
+          "linear_from_prior_state": false,
+          "resolve_orientation": true
+        }
+      ]
+    },
+    {
+      "stages": [
+        {
+          "stage": "pregrasp",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10394989066623887,
+            -0.4133302702336457,
+            0.129745153042792
+          ],
+          "quaternion_xyzw": [
+            -0.7373326828892595,
+            -0.6745153595885346,
+            -0.02507040919816471,
+            0.027221664260532713
+          ],
+          "linear_from_prior_state": false,
+          "resolve_orientation": true
+        },
+        {
+          "stage": "approach",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10459879520448583,
+            -0.4197638469959694,
+            0.11764784432742159
+          ],
+          "quaternion_xyzw": [
+            -0.7373326828892595,
+            -0.6745153595885346,
+            -0.02507040919816471,
+            0.027221664260532713
+          ],
+          "linear_from_prior_state": true,
+          "resolve_orientation": false
+        },
+        {
+          "stage": "grasp",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10459252811413702,
+            -0.41789174990420874,
+            0.09240611310816328
+          ],
+          "quaternion_xyzw": [
+            -0.7373326828892595,
+            -0.6745153595885346,
+            -0.02507040919816471,
+            0.027221664260532713
+          ],
+          "linear_from_prior_state": true,
+          "resolve_orientation": false
+        },
+        {
+          "stage": "lift",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10390395988936205,
+            -0.4130042507872812,
+            0.13241386013050016
+          ],
+          "quaternion_xyzw": [
+            -0.7373326828892595,
+            -0.6745153595885346,
+            -0.02507040919816471,
+            0.027221664260532713
+          ],
+          "linear_from_prior_state": false,
+          "resolve_orientation": true
+        }
+      ]
+    },
+    {
+      "stages": [
+        {
+          "stage": "pregrasp",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10363118993281127,
+            -0.43740111533315235,
+            0.1328375097584397
+          ],
+          "quaternion_xyzw": [
+            -0.6745153595885349,
+            0.7373326828892592,
+            0.027221664260532765,
+            0.025070409198164664
+          ],
+          "linear_from_prior_state": false,
+          "resolve_orientation": true
+        },
+        {
+          "stage": "approach",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10393012478406997,
+            -0.4190223369904209,
+            0.11770300573179367
+          ],
+          "quaternion_xyzw": [
+            -0.6745153595885349,
+            0.7373326828892592,
+            0.027221664260532765,
+            0.025070409198164664
+          ],
+          "linear_from_prior_state": true,
+          "resolve_orientation": false
+        },
+        {
+          "stage": "grasp",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10392385769372117,
+            -0.41715023989866024,
+            0.09246127451253536
+          ],
+          "quaternion_xyzw": [
+            -0.6745153595885349,
+            0.7373326828892592,
+            0.027221664260532765,
+            0.025070409198164664
+          ],
+          "linear_from_prior_state": true,
+          "resolve_orientation": false
+        },
+        {
+          "stage": "lift",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.1032352894689462,
+            -0.4122627407817327,
+            0.13246902153487222
+          ],
+          "quaternion_xyzw": [
+            -0.6745153595885349,
+            0.7373326828892592,
+            0.027221664260532765,
+            0.025070409198164664
+          ],
+          "linear_from_prior_state": false,
+          "resolve_orientation": true
+        }
+      ]
+    },
+    {
+      "stages": [
+        {
+          "stage": "pregrasp",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10363118993281129,
+            -0.43740111533315235,
+            0.1328375097584397
+          ],
+          "quaternion_xyzw": [
+            -0.6745153595885347,
+            0.7373326828892595,
+            0.027221664260532727,
+            0.025070409198164702
+          ],
+          "linear_from_prior_state": false,
+          "resolve_orientation": true
+        },
+        {
+          "stage": "approach",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10393012478406997,
+            -0.4190223369904209,
+            0.11770300573179367
+          ],
+          "quaternion_xyzw": [
+            -0.6745153595885347,
+            0.7373326828892595,
+            0.027221664260532727,
+            0.025070409198164702
+          ],
+          "linear_from_prior_state": true,
+          "resolve_orientation": false
+        },
+        {
+          "stage": "grasp",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.10392385769372117,
+            -0.41715023989866024,
+            0.09246127451253536
+          ],
+          "quaternion_xyzw": [
+            -0.6745153595885347,
+            0.7373326828892595,
+            0.027221664260532727,
+            0.025070409198164702
+          ],
+          "linear_from_prior_state": true,
+          "resolve_orientation": false
+        },
+        {
+          "stage": "lift",
+          "frame_id": "base_link",
+          "stamp_ns": 1790166192679677486,
+          "position_m": [
+            -0.1032352894689462,
+            -0.4122627407817327,
+            0.13246902153487222
+          ],
+          "quaternion_xyzw": [
+            -0.6745153595885347,
+            0.7373326828892595,
+            0.027221664260532727,
+            0.025070409198164702
+          ],
+          "linear_from_prior_state": false,
+          "resolve_orientation": true
+        }
+      ]
+    }
+  ]
+}

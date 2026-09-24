@@ -50,6 +50,8 @@ def observe_task_state(outcome, message, minimum_stamp_ns):
     reason = str(message.get('message', ''))
     if state == 'SUCCESS' and message.get('success') is True:
         result = 'success'
+    elif state == 'HOLDING' and message.get('success') is False:
+        result = 'unknown'
     elif state == 'FAILED' and message.get('success') is False:
         result = 'failure'
     elif state == 'EMERGENCY_STOP' or (state == 'IDLE' and reason == 'stop requested'):
@@ -83,7 +85,8 @@ def classify_result(recorder_outcome, runner_log, interrupted=False, returncode=
         match = _SERVICE_RESULT.fullmatch(line)
         if match:
             observations.append({
-                'result': 'success' if match.group(1) == 'True' else 'failure',
+                'result': ('unknown' if match.group(2).startswith('GRASP_HOLD_UNVERIFIED:')
+                           else ('success' if match.group(1) == 'True' else 'failure')),
                 'reason': match.group(2),
                 'evidence': {'source': 'StartGrasp service response in runner.log', 'line': line},
             })

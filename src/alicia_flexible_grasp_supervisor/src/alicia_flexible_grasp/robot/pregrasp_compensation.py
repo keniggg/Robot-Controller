@@ -7,6 +7,11 @@ does not stabilize an already oscillating actuator. Weakly responding axes
 are held for the rest of the episode; only bounded directional responses and
 measured Cartesian progress can authorize another step. FK convergence is not
 absolute accuracy.
+
+An explicitly enabled Joint2 recovery may propose ONE isolated step when the
+ordinary search has no improving step. It shares the original episode limits
+and must demonstrate the same measured response and progress as every step.
+It never enables repeated integration into a stalled joint or probes Joint5.
 """
 from copy import deepcopy
 from itertools import product
@@ -37,12 +42,15 @@ class PregraspCompensation:
     HELD_AXES = (1, 4)
 
     def __init__(self, fk, initial, goal_values, *, position_tolerance_m=.006,
-                 orientation_tolerance_rad=math.radians(5)):
+                 orientation_tolerance_rad=math.radians(5),
+                 joint2_response_probe_enabled=False):
         if not isinstance(fk, SerialUrdfFk) or tuple(fk.names) != ARM_NAMES:
             raise ValueError('PREGRASP_CANONICAL_FK_REQUIRED')
         if not (0 < position_tolerance_m <= .006
                 and 0 < orientation_tolerance_rad <= math.radians(5)):
             raise ValueError('PREGRASP_TOLERANCE_CANNOT_BE_RELAXED')
+        if type(joint2_response_probe_enabled) is not bool:
+            raise ValueError('PREGRASP_JOINT2_PROBE_CONFIG_INVALID')
         self.fk, self.goal = fk, pose_matrix(goal_values)
         self.goal.setflags(write=False)
         self.goal_values = tuple(float(v) for v in goal_values)
@@ -55,6 +63,9 @@ class PregraspCompensation:
         self.error, self.last_evidence = '', None
         self.held_axes = set(self.HELD_AXES)
         self.response_gains = np.ones(6)
+        self.joint2_response_probe_enabled = joint2_response_probe_enabled
+        self.joint2_response_probe_used = False
+        self._proposed_joint2_probe = False
         self._validate(initial)
 
     def _fail(self, code):
@@ -179,6 +190,32 @@ class PregraspCompensation:
                 best_key, selected = key, trial
         return selected
 
+    def _joint2_response_probe(self, measured, actual, position):
+        """One conditional recovery, not a claim that this actuator responds."""
+        selected = np.zeros(6, dtype=int)
+        if not self.joint2_response_probe_enabled or self.joint2_response_probe_used:
+            return selected
+        best = position
+        for amount in (-4, -2, 2, 4):
+            trial = np.zeros(6, dtype=int)
+            trial[1] = amount
+            target = np.asarray(self.expected) + trial
+            minimum_response = actual + 2 * np.sign(trial)
+            if (np.any(target < 0) or np.any(target > 4095)
+                    or max(abs(target - np.asarray(self.initial_counts))) > self.MAX_TOTAL_COUNTS
+                    or abs(target[1] - actual[1]) < 2
+                    or np.any(abs(target - minimum_response) * Q > .035)):
+                continue
+            try:
+                self.fk((target - 2048) * Q)
+                p, angle = self.residual(measured + trial * Q)
+            except ValueError:
+                continue
+            if (angle <= self.tolerances[1] and p < best - 1e-6
+                    and (p / self.tolerances[0])**2 < (position / self.tolerances[0])**2 - 1e-4):
+                selected, best = trial, p
+        return selected
+
     def evaluate(self, sample):
         actual = self._validate(sample)
         measured = np.asarray(sample['accepted_positions_rad'], dtype=float)
@@ -188,7 +225,11 @@ class PregraspCompensation:
             position_error_m=position, orientation_error_rad=angle,
             sdk_stamp_ns=sample['sdk_stamp_ns'], accepted_stamp_ns=sample['accepted_stamp_ns'],
             steps_completed=self.steps, held_joints=[ARM_NAMES[i] for i in sorted(self.held_axes)],
-            response_gains=self.response_gains.tolist(), real_grasp_success=False)
+            response_gains=self.response_gains.tolist(), real_grasp_success=False,
+            joint2_response_probe_enabled=self.joint2_response_probe_enabled,
+            joint2_response_probe_used=self.joint2_response_probe_used,
+            saturated_joints=[ARM_NAMES[i] for i in range(6)
+                              if abs(self.expected[i]-self.initial_counts[i]) >= self.MAX_TOTAL_COUNTS])
         self.last_evidence = deepcopy(evidence)
         if self.pending is not None:
             step, completed_ns, previous_cost, previous_position = self.pending
@@ -225,6 +266,7 @@ class PregraspCompensation:
             self.last_evidence = deepcopy(evidence)
             self.pending = None
         self.proposed = None
+        self._proposed_joint2_probe = False
         if position <= self.tolerances[0] and angle <= self.tolerances[1]:
             return 'PREGRASP_MEASURED_CONVERGED', None, evidence
         if position > .025 or angle > self.tolerances[1]:
@@ -233,6 +275,9 @@ class PregraspCompensation:
             self._fail('PREGRASP_STEP_BUDGET')
         guide, guide_error = self._remaining_budget_guide(measured)
         delta = self._guided_step(measured, actual, guide, position)
+        if not np.any(delta):
+            delta = self._joint2_response_probe(measured, actual, position)
+            self._proposed_joint2_probe = bool(np.any(delta))
         initial_cost = self._cost(measured)
         predicted_position, predicted_angle = self.residual(measured+delta*self.response_gains*Q)
         if (not np.any(delta) or (predicted_position/self.tolerances[0])**2 >= initial_cost-1e-4
@@ -241,6 +286,8 @@ class PregraspCompensation:
         self.proposed = CorrectionStep(self.expected, tuple((np.asarray(self.expected)+delta).tolist()),
             tuple(actual.tolist()), sample['sdk_stamp_ns'], sample['accepted_stamp_ns'])
         evidence['proposed_delta_counts'] = delta.tolist()
+        evidence['step_kind'] = ('joint2_response_probe' if self._proposed_joint2_probe
+                                 else 'bounded_cartesian_correction')
         evidence['predicted_position_error_m'] = predicted_position
         evidence['predicted_orientation_error_rad'] = predicted_angle
         evidence['conditional_budget_guide'] = dict(delta_counts=guide.tolist(),
@@ -257,6 +304,8 @@ class PregraspCompensation:
                 or not self.started <= completed_sec <= self.started+self.MAX_SECONDS):
             self._fail('PREGRASP_COMMIT_INVALID')
         self.expected = step.target_counts
+        if self._proposed_joint2_probe:
+            self.joint2_response_probe_used = True
         self.pending = step, int(completed_sec*1e9), self.proposed_cost, self.proposed_position
         self.proposed = None
         self.steps += 1

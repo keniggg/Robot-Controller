@@ -708,8 +708,8 @@ def test_unknown_compares_real_motion_between_equally_informative_views(configur
     assert node._select_far_field_observation([short_translation,short_motion,insufficient_view]) is short_translation
 
 
-@pytest.mark.parametrize('delta,admitted', [(.7,True), (np.pi/2,True), (np.pi,False)])
-def test_unknown_rejects_large_observation_turn_without_changing_carton(configured, monkeypatch, delta, admitted):
+@pytest.mark.parametrize('delta,admitted', [(.7,True), (np.pi/2,True), (np.pi,True), (float('nan'),False), (-.1,False)])
+def test_unknown_ranks_turn_without_extra_cap_and_rejects_invalid_motion(configured, monkeypatch, delta, admitted):
     node, params = configured
     select_unknown(params)
     assert node.reset_mode_cb(None).success
@@ -721,7 +721,7 @@ def test_unknown_rejects_large_observation_turn_without_changing_carton(configur
     assert result.reachable is admitted
     assert report['ok'] is admitted
     if not admitted:
-        assert result.failure_code == 'UNKNOWN_OBSERVATION_TURN_LIMIT'
+        assert result.failure_code == 'UNKNOWN_OBSERVATION_MOTION_INVALID'
     node._mode_selection['mode'] = 'carton'
     result, report = node._observation_following_support_evaluation(object(), checked, object())
     assert result is checked and report['ok']
@@ -799,13 +799,16 @@ def test_direct_final_geometry_evidence_preserves_original_execution_schema(conf
     assert base.RemoteGrasp6DNode._continuous_execution_schema_error(result,ticket)
 
 
+@pytest.mark.parametrize('lift_diagnostic', [False, True])
 @pytest.mark.parametrize('contact_ok', [False, True])
-def test_unknown_direct_search_rejects_failed_simulation_before_publication(configured, monkeypatch, contact_ok):
+@pytest.mark.parametrize('strategy', ['direct', 'two_stage'])
+def test_unknown_direct_search_rejects_failed_simulation_before_publication(configured, monkeypatch, contact_ok, strategy, lift_diagnostic):
     from dataclasses import dataclass, field, fields
     node, params = configured
     select_unknown(params)
-    params[module.SELECTION_PARAM]['strategy']='direct'
+    params[module.SELECTION_PARAM]['strategy']=strategy
     assert node.reset_mode_cb(None).success
+    node.near_field_planning_active=True
     node._near_field_phase_id=1
     node._require_stream_ticket_current=lambda ticket:None
     node.mujoco_config={'enabled':True,'execution_gate_enabled':True,'min_score':80}
@@ -837,6 +840,13 @@ def test_unknown_direct_search_rejects_failed_simulation_before_publication(conf
         lift_evidence=dict(contract_version=1,object_lift_m=.03,commanded_lift_m=.03,minimum_lift_m=.02,
             two_sided_lift_samples=10,lost_contact_samples=0,lift_sample_count=10,
             max_lost_contact_streak=0,contact_loss_grace_samples=0))
+    if lift_diagnostic:
+        plan.model_choice='unknown_tabletop'
+        params['/mujoco_digital_twin/unknown_lift_gate_enabled']=False
+        response=json.loads((Path(__file__).resolve().parents[2] / 'alicia_flexible_grasp_supervisor/tests/fixtures/mujoco_lift_contact_loss.json').read_text())
+        response['plan_id']=plan.plan_id
+        if not contact_ok:
+            response['lift_evidence'].pop('settled_gripper_state')
     calls=[]
     node._mujoco_client_factory=lambda *a,**kw:types.SimpleNamespace(simulate_grasp=lambda payload:(calls.append(payload) or response))
     observed=node._check_direct_registered_candidate(candidate)
@@ -845,6 +855,10 @@ def test_unknown_direct_search_rejects_failed_simulation_before_publication(conf
     audit=node._stable_variant_runtime[(1,0)]['mujoco_selection']
     assert audit['passed'] is contact_ok
     assert audit['plan_id']=='plan-one'
+    if lift_diagnostic and contact_ok:
+        assert audit['code']=='MUJOCO_LIFT_DIAGNOSTIC_ONLY'
+        assert audit['score']==55.0
+        assert audit['lift_gate_enabled'] is False
     if not contact_ok:assert 'MUJOCO_CONTACT_FAILED' in observed.reason
     node.mujoco_selection_max_candidates=1
     assert not node._check_direct_registered_candidate(candidate).reachable
@@ -1040,9 +1054,9 @@ def test_pregrasp_view_offset_cannot_relax_range_or_modify_carton(configured):
 
 
 @pytest.mark.parametrize('mode,turn,accepted', [
-    ('unknown', 3.03543331164935, False), ('unknown', .8, True),
+    ('unknown', 3.03543331164935, True), ('unknown', .8, True),
     ('unknown', float('nan'), False), ('carton', 3.03543331164935, True)])
-def test_final_actual_large_wrist_turn_is_rejected_before_publication(configured, monkeypatch, mode, turn, accepted):
+def test_final_motion_is_finite_without_extra_unknown_turn_cap(configured, monkeypatch, mode, turn, accepted):
     node, _ = configured
     node._mode_selection = dict(node._mode_selection, mode=mode)
     result = types.SimpleNamespace(joint_max_delta_rad=turn)
@@ -1079,3 +1093,60 @@ def test_contact_probe_is_only_used_for_unknown_near_field(configured, monkeypat
     monkeypatch.setattr(base.RemoteGrasp6DNode, '_contact_boundary_tilts', original)
     assert node._contact_boundary_tilts(None, None, None, (), 45., .003) == 'original-boundaries'
     assert bool(constructed) is expected_probe
+
+
+@pytest.mark.parametrize('mode,near_field', [('carton', False), ('carton', True),
+                                            ('unknown', False), ('unknown', True)])
+def test_scalar_contact_intersections_are_scoped_to_unknown_near_field(configured, monkeypatch, mode, near_field):
+    from alicia_grasp_modes import contact_intervals
+    node, _ = configured
+    node._mode_selection = {'mode': mode}
+    node.near_field_planning_active = near_field
+    node.gripper_tool_jaw_axis = 'y'
+    candidate = types.SimpleNamespace(T_base_tool0=np.eye(4), contact_center_base=np.zeros(3))
+    monkeypatch.setattr(base.RemoteGrasp6DNode, '_tabletop_candidate_contact_overlap_m', lambda *a: 'original')
+    captured=[]
+    monkeypatch.setattr(contact_intervals, 'finger_contact_patch_overlap_m', lambda *a: captured.append(a) or 'scalar')
+    result=node._tabletop_candidate_contact_overlap_m(None,candidate,np.array([0.,0.,1.]),(-.01,.01))
+    optimized = mode == 'unknown' and near_field
+    assert result == ('scalar' if optimized else 'original')
+    assert bool(captured) == optimized
+
+
+def test_unknown_short_face_precedes_narrow_corner_band_and_uses_real_motion(configured):
+    node, params = configured
+    select_unknown(params)
+    assert node.reset_mode_cb(None).success
+    node.near_field_planning_active = True
+    node.gripper_tool_jaw_axis = 'y'
+    geometry = types.SimpleNamespace(axes_base=np.eye(3), size_xyz_m=np.array([.030, .018, .014]))
+    node._stable_variant_runtime = {}
+    def candidate(track, yaw, width, duration):
+        pose = base.make_pose_stamped('base_link', [0, 0, .1],
+            [0, 0, np.sin(yaw/2), np.cos(yaw/2)])
+        c = types.SimpleNamespace(track_id=track, variant_index=0, pre_moveit_score=0.,
+            required_open_width_m=width, moveit_result=base.MoveItResult(reachable=True,
+            joint_path_cost=1., joint_max_delta_rad=.4,
+            reason='execution_duration_lower_bound_sec=%s hardware_limiting_joint=Joint3' % duration))
+        node._stable_variant_runtime[(track, 0)] = dict(prepared=types.SimpleNamespace(geometry=geometry),
+            sequence=types.SimpleNamespace(grasp=pose),
+            final_registered_geometry_gate={'required_open_width_m':width},
+            soft_evidence={'contact_start_orientation_delta_rad':abs(yaw),
+                           'contact_start_translation_delta_m':.01})
+        return c
+    corner = candidate(1, np.pi/4, .016, 10.)
+    short = candidate(2, 0., .022, 30.)
+    fast_short = candidate(3, np.pi, .022, 15.)
+    long = candidate(4, np.pi/2, .034, 5.)
+    assert min([corner, short, long], key=node._direct_near_field_moveit_rank_key) is short
+    assert min([corner, short, fast_short, long], key=node._direct_near_field_execution_rank_key) is fast_short
+    # Final orientation resolution must use the actual checked grasp pose.
+    node._stable_variant_runtime[(corner.track_id, 0)]['final_execution_sequence'] = types.SimpleNamespace(
+        grasp=base.make_pose_stamped('base_link', [0, 0, .1], [0, 0, 0, 1]))
+    assert min([corner, short], key=node._direct_near_field_execution_rank_key) is corner
+    # Missing geometry is unknown, never zero cost.
+    del node._stable_variant_runtime[(corner.track_id, 0)]['prepared']
+    assert node._unknown_projected_body_width(corner) == float('inf')
+    # Carton retains its measured-width ranking.
+    node._mode_selection['mode'] = 'carton'
+    assert min([corner, short, long], key=node._direct_near_field_moveit_rank_key) is corner

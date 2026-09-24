@@ -418,7 +418,7 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
     return payload
 
 
-def _validate_lift_evidence(response, score):
+def _validate_lift_evidence(response, score, require_success=True):
     evidence = response.get('lift_evidence')
     if not isinstance(evidence, dict):
         return MujocoGateValidationResult(
@@ -486,6 +486,8 @@ def _validate_lift_evidence(response, score):
             'MuJoCo lift evidence sample accounting is inconsistent',
             score,
         )
+    if not require_success:
+        return None
     if (
         counts['lost_contact_samples']
         > counts['contact_loss_grace_samples']
@@ -524,14 +526,86 @@ def _failure_details(response, default_code, default_reason):
     return code, reason
 
 
+def mujoco_lift_gate_enabled(plan, config):
+    """Keep the diagnostic lift policy scoped to unknown-object plans."""
+    if getattr(plan, 'model_choice', '') != 'unknown_tabletop':
+        return True
+    return config.get('unknown_lift_gate_enabled', True)
+
+
+def _validate_pre_lift_contact(response, score):
+    """Validate v1 settled evidence emitted only AFTER opposed preload passes.
+
+    The deployed server's contact_success and score include lift retention.
+    Preserve both and require loaded contacts from the completed preload.
+    Diagnosis text is never used as authorization.
+    """
+    try:
+        evidence = response['lift_evidence']
+        version = evidence['contract_version']
+        if response.get('backend') != 'mujoco' or type(version) is not int or version != 1:
+            raise ValueError('unsupported settled-contact evidence contract')
+        for key in ('preload_settle_samples', 'lift_sample_count'):
+            if type(evidence[key]) is not int or evidence[key] <= 0:
+                raise ValueError('completed preload and lift diagnostics are required')
+        speed = _finite_float(evidence['max_prescribed_joint_speed_rad_s'], 'lift joint speed')
+        if speed < 0.0 or speed > 0.08 + 1e-9:
+            raise ValueError('lift path exceeds the real 0.08 rad/s joint speed contract')
+        ik_results = response['ik_results']
+        if [item['name'] for item in ik_results] != ['pregrasp', 'approach', 'grasp', 'lift']:
+            raise ValueError('complete sequence IK evidence is required')
+        for item in ik_results:
+            if (item['success'] is not True
+                    or not 0.0 <= _finite_float(item['orientation_error'], 'IK orientation error') <= 0.18):
+                raise ValueError('sequence IK/orientation evidence failed')
+        state = evidence['settled_gripper_state']
+        gap = _finite_float(state['measured_inner_gap_m'], 'settled gap')
+        if not 0.0 < gap <= _MAX_INNER_GAP_M:
+            raise ValueError('settled gripper gap is invalid')
+        axis = _finite_vector3(state['jaw_axis_base'], 'jaw axis')
+        norm = math.sqrt(sum(v*v for v in axis))
+        if abs(norm - 1.0) > 1e-3:
+            raise ValueError('settled jaw axis must be unit length')
+        axis = [v / norm for v in axis]
+        contacts = {'left': [], 'right': []}
+        for finger in contacts:
+            if _finite_float(state[finger + '_object_normal_force_n'], 'settled normal force') <= 0:
+                raise ValueError('both fingers must carry object contact force')
+        for contact in state['finger_object_contacts']:
+            finger = contact.get('finger')
+            if finger not in contacts:
+                continue
+            position = _finite_vector3(contact['position_base_m'], 'contact position')
+            normal = _finite_vector3(contact['normal_base'], 'contact normal')
+            normal_norm = math.sqrt(sum(v*v for v in normal))
+            if abs(normal_norm - 1.0) > 1e-3:
+                continue
+            cosine = sum(a*n for a, n in zip(axis, normal)) / normal_norm
+            if (abs(cosine) < math.cos(math.radians(30.0))
+                    or _finite_float(contact['normal_force_n'], 'contact force') <= 0):
+                continue
+            contacts[finger].append((sum(p*a for p, a in zip(position, axis)), cosine))
+        if not any(right[0] > left[0] and left[1]*right[1] < 0
+                   for left in contacts['left'] for right in contacts['right']):
+            raise ValueError('settled state has no loaded opposed finger contact pair')
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
+        return MujocoGateValidationResult(False, 'MUJOCO_CONTACT_FAILED',
+            'Pre-lift closure evidence is missing or invalid: %s' % exc, score)
+    return None
+
+
 def validate_mujoco_gate_response(
     response,
     expected_plan_id,
     min_score,
     expected_candidate_source=None,
     expected_candidate_source_lineage=None,
+    require_lift_success=True,
 ):
-    """Accept only an exactly correlated, fully explicit MuJoCo safety pass."""
+    """Validate the selected policy without altering the raw simulation verdict."""
+    if type(require_lift_success) is not bool:
+        return MujocoGateValidationResult(False, 'MUJOCO_GATE_CONFIG_INVALID',
+            'unknown_lift_gate_enabled must be an explicit boolean')
     if not isinstance(response, dict):
         return MujocoGateValidationResult(
             False,
@@ -564,7 +638,7 @@ def validate_mujoco_gate_response(
         )
 
     if (
-        response.get('simulation_ok') is False
+        require_lift_success and response.get('simulation_ok') is False
         and isinstance(response.get('failure_code'), str)
         and response.get('failure_code')
     ):
@@ -637,6 +711,30 @@ def validate_mujoco_gate_response(
                 'MuJoCo response %s must be an explicit Python bool' % key,
                 score,
             )
+    if not require_lift_success:
+        for key, code, reason in _COMPONENT_FAILURES[:2]:
+            if response[key] is not True:
+                return MujocoGateValidationResult(False, code, reason, score)
+        # Other errors (including path-speed contract violations) still block.
+        failure_code = response.get('failure_code', '')
+        if failure_code not in ('', 'MUJOCO_CONTACT_FAILED', 'MUJOCO_LIFT_FAILED'):
+            return MujocoGateValidationResult(False, failure_code,
+                str(response.get('failure_reason', 'MuJoCo simulation failed')), score)
+        if not response['simulation_ok'] and not failure_code:
+            return MujocoGateValidationResult(False, 'WSL_UNAVAILABLE',
+                'failed simulation must identify its failed component', score)
+        failure = _validate_lift_evidence(response, score, require_success=False)
+        if failure is not None:
+            return failure
+        failure = _validate_pre_lift_contact(response, score)
+        if failure is not None:
+            return failure
+        # Aggregate score includes lift retention; it cannot be a pre-lift
+        # threshold. Preserve the original score and verdict as diagnostics.
+        return MujocoGateValidationResult(True, 'MUJOCO_LIFT_DIAGNOSTIC_ONLY',
+            'IK, collision and loaded opposed closure passed; lift and aggregate '
+            'score are diagnostic only (raw simulation_ok=%s, lift_success=%s)'
+            % (response['simulation_ok'], response['lift_success']), score)
     if (
         response['simulation_ok'] is not True
         and isinstance(response.get('failure_code'), str)

@@ -1,5 +1,12 @@
 grasp:
   use_grasp6d_plan: true
+  # Unknown 6D plans may close and hold in place. This is independent of the
+  # simulated lift gate; missing tactile evidence yields HOLDING, not SUCCESS.
+  unknown_lift_after_close_enabled: true
+  # If ordinary pregrasp correction stalls, allow one isolated Joint2 step
+  # within the same four-count step, total budget and measured-response rules.
+  # Joint5 stays held; failed Joint2 response cannot authorize another probe.
+  unknown_pregrasp_joint2_response_probe_enabled: true
   # 2026-08-10 CC200 pruned-27 OpenCV/Park hand-eye result passes the formal
   # five-fold contract: 2.812/4.606 mm translation and 0.863/1.351 deg
   # rotation. The centering-margin gate remains active and still compares the
@@ -729,6 +736,9 @@ robot:
   strict_execution_no_actuation_min_desired_delta_rad: 0.12
 mujoco_digital_twin:
   enabled: true
+  # false: unknown-object lift/aggregate score are diagnostic; IK, collision
+  # and loaded opposed closure remain mandatory. Other object modes stay strict.
+  unknown_lift_gate_enabled: true
   execution_gate_enabled: true
   # Near-field selection screens only candidates that already passed every
   # analytical hard gate and the complete MoveIt sequence. Candidates are
