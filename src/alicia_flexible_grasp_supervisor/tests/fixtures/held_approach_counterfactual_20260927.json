@@ -1,0 +1,307 @@
+{
+  "schema": 1,
+  "scope": "offline_counterfactual_candidate_not_executed_or_motion_authority",
+  "source_fixture": "contact_no_response_20260927.json",
+  "record_id": "20260927T063422.563534Z_094d509c116648378bf54b272bcc3489",
+  "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+  "robot_description_fixture": "pregrasp_following_20260919.json",
+  "before_stationary": {
+    "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+    "stamp_sec": 1790491081.8,
+    "epoch_ns": 1790469885813935287,
+    "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+    "sdk_stamp_ns": 1790491081775095814,
+    "accepted_stamp_ns": 1790491081766721001,
+    "accepted_gripper_opening_m": 0.04975,
+    "opening_stamp_ns": 1790491081766721001,
+    "stationary_window_start_ns": 1790491081466721001,
+    "stationary_window_end_ns": 1790491081766721001,
+    "sdk_sample_count": 4,
+    "accepted_sample_count": 4,
+    "joint_names": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "sdk_positions_rad": [
+      -1.9174759848570513,
+      -0.6902913545485385,
+      1.4005244593395905,
+      -0.12425244381873693,
+      -1.1274758790959463,
+      0.28685440733461487
+    ],
+    "accepted_positions_rad": [
+      -1.9098060809176234,
+      -0.7163690279425944,
+      1.37598076673342,
+      -0.1227184630308513,
+      -1.1274758790959463,
+      0.2914563496982718
+    ],
+    "joint_error_sdk_counts": [
+      4.999999999999802,
+      -16.99999999999998,
+      -16.00000000000009,
+      0.9999999999999966,
+      0.0,
+      2.99999999999999
+    ],
+    "position_error_m": 0.020043092658742705,
+    "position_error_vector_m": [
+      0.005079306259874794,
+      0.004740937684122648,
+      -0.01880025853866399
+    ],
+    "orientation_error_rad": 0.05164731824423153,
+    "sdk_tool_position_m": [
+      -0.13398716109694367,
+      -0.43239129520251973,
+      0.13868379517533874
+    ],
+    "accepted_tool_position_m": [
+      -0.12890785483706887,
+      -0.4276503575183971,
+      0.11988353663667475
+    ],
+    "certifies_command_response_or_calibration": false
+  },
+  "frozen_plan": {
+    "header": {
+      "seq": 98598,
+      "stamp": {
+        "secs": 1790490870,
+        "nsecs": 674145698
+      },
+      "frame_id": "base_link"
+    },
+    "valid": true,
+    "poses": [
+      {
+        "position": {
+          "x": -0.1299351962888992,
+          "y": -0.4236253517640575,
+          "z": 0.12486351600672568
+        },
+        "orientation": {
+          "x": 0.7113248120182387,
+          "y": 0.6821686124322386,
+          "z": -0.1182345900851456,
+          "w": 0.12117581329163547
+        }
+      },
+      {
+        "position": {
+          "x": -0.12972620499197202,
+          "y": -0.4219251500441767,
+          "z": 0.112142763909698
+        },
+        "orientation": {
+          "x": 0.7113248120182387,
+          "y": 0.6821686124322386,
+          "z": -0.1182345900851456,
+          "w": 0.12117581329163547
+        }
+      },
+      {
+        "position": {
+          "x": -0.1297780759934752,
+          "y": -0.4279317964435222,
+          "z": 0.0951746317663997
+        },
+        "orientation": {
+          "x": 0.7113248120182387,
+          "y": 0.6821686124322386,
+          "z": -0.1182345900851456,
+          "w": 0.12117581329163547
+        }
+      },
+      {
+        "position": {
+          "x": -0.1299509083184416,
+          "y": -0.42319470729611103,
+          "z": 0.12783240443075827
+        },
+        "orientation": {
+          "x": 0.7113248120182387,
+          "y": 0.6821686124322386,
+          "z": -0.1182345900851456,
+          "w": 0.12117581329163547
+        }
+      }
+    ],
+    "score": -0.03723954036831856,
+    "candidate_width_m": 0.0,
+    "required_open_width_m": 0.01709379442036152,
+    "object_geometry": {
+      "header": {
+        "seq": 0,
+        "stamp": {
+          "secs": 1790490870,
+          "nsecs": 674145698
+        },
+        "frame_id": "base_link"
+      },
+      "valid": true,
+      "label": "unknown_small",
+      "target_track_id": "g1-t5",
+      "source_mode": "instance_mask",
+      "pose_base": {
+        "position": {
+          "x": -0.12921133338700655,
+          "y": -0.4219688533470484,
+          "z": 0.09263046163607942
+        },
+        "orientation": {
+          "x": -0.05372810201672501,
+          "y": 0.047943234297594825,
+          "z": 0.6907610908036842,
+          "w": 0.7194886050317064
+        }
+      },
+      "size_xyz_m": {
+        "x": 0.023261534282308885,
+        "y": 0.017547861324917223,
+        "z": 0.013312159865136727
+      },
+      "support_normal_base": {
+        "x": -0.005237343180799654,
+        "y": 0.14354815598215578,
+        "z": 0.9896294746775326
+      },
+      "support_offset_m": -0.025117628276348114,
+      "valid_depth_points": 653,
+      "valid_depth_ratio": 0.9382184147834778,
+      "depth_mad_m": 0.00279999990016222,
+      "fused_frames": 3,
+      "support_inlier_ratio": 0.8157181739807129,
+      "object_point_count": 258,
+      "failure_reason": ""
+    },
+    "model_choice": "unknown_tabletop",
+    "plan_id": "a37bd0366fc9fbbbf059d2e4",
+    "diagnostic": "CONTACT_EXECUTION_PLAN",
+    "candidate_source": "tabletop_geometry",
+    "candidate_source_lineage": [
+      "tabletop_geometry"
+    ],
+    "has_candidate_model_width": false,
+    "target_track_id": "g1-t5",
+    "refinement_status": "NOT_EVALUATED",
+    "refinement_inlier_count": 0,
+    "refinement_overlap_fraction": 0.0,
+    "refinement_rmse_m": 0.0,
+    "refinement_translation_m": 0.0,
+    "refinement_rotation_deg": 0.0,
+    "refinement_source_clipped": false,
+    "fused_view_count": 0,
+    "contact_geometry_evidence": "{\"contact_center_base\":[-0.12921133338700655,-0.4219688533470484,0.09263046163607942],\"contact_height_axis_base\":[-0.002881722305733414,-0.3337025777414162,-0.9426740079610169],\"contact_height_bounds_m\":[-0.003961493806535373,-0.0013763845778894514],\"grasp_tool_pose_base\":[-0.1297780759934752,-0.4279317964435222,0.0951746317663997,0.7113248120182387,0.6821686124322386,-0.1182345900851456,0.12117581329163547],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"schema_version\":1,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}"
+  },
+  "controller_hold": {
+    "positions": [
+      -1.9174759848570528,
+      -0.690291354548538,
+      1.4005244593395911,
+      -0.12425244381873687,
+      -1.1274758790959467,
+      0.28685440733461487
+    ],
+    "velocities": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "accelerations": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "effort": [],
+    "time_from_start": {
+      "secs": 0,
+      "nsecs": 0
+    }
+  },
+  "controller_hold_bag_time_sec": 1790491081.5008328,
+  "controller_constraints": {
+    "Joint1": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint2": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint3": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint4": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint5": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint6": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "goal_time": 8.0,
+    "stopped_velocity_tolerance": 0.03
+  },
+  "stop_trajectory_duration_sec": 0.5,
+  "gripper_geometry": {
+    "finger_box_xyz_m": [
+      0.0434,
+      0.0286,
+      0.06
+    ],
+    "max_inner_gap_m": 0.05,
+    "opening_fit_clearance_each_side_m": 0.0005,
+    "palm_box_xyz_m": [
+      0.1175,
+      0.155,
+      0.0774
+    ],
+    "tool_finger_length_axis": "z",
+    "tool_jaw_axis": "y",
+    "width_safety_margin_per_side_m": 0.002,
+    "support_clearance_m": 0.003
+  },
+  "opening_m": 0.04975,
+  "counterfactual": {
+    "frozen_goal_pose_index": 1,
+    "delta_counts": [
+      -4,
+      0,
+      -18,
+      0,
+      0,
+      32
+    ],
+    "duration_sec": 47.0,
+    "curve": "two_waypoint_zero_velocity_zero_acceleration_quintic_from_historical_stationary_hold",
+    "predicted_position_error_m": 0.0005489776820292594,
+    "predicted_orientation_error_rad": 0.029475825419648546
+  },
+  "limitations": {
+    "moveit_state_validity_checked": false,
+    "full_robot_collision_checked": false,
+    "hardware_response_verified": false,
+    "calibration_accuracy_proven": false,
+    "real_grasp_success": false,
+    "target_obb_tracking_uncertainty_checked": false,
+    "physical_path_executed": false
+  }
+}

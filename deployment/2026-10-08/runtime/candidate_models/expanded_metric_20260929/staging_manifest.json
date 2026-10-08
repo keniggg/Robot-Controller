@@ -1,0 +1,17 @@
+{
+  "staged_directory": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929",
+  "source_manifest": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/grasp_repair_resume_20260928T120606Z/expanded_metric_training_once/candidate_model/manifest.json",
+  "files": {
+    "candidate_parameters.launch": "4fe1fdf65ff3ea5b1f2b66f0a019feaf8cfba15769844a180ee2d96f74ca38cf",
+    "handeye_candidate_config.yaml": "f0c0748ec65e90d24d02f206222a9d84c69c77f5e4ca8b442444665b4a32fa62",
+    "alicia_expanded_metric_candidate.urdf": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+    "d405_expanded_metric_candidate_eye_on_hand.yaml": "637701accca5eb5042075c213c5e00e9b189d3cd7788d916c8c06bf89f7b1a0c"
+  },
+  "runtime_parameters_changed": false,
+  "production_source_changed": false,
+  "persistent_launch_changed": false,
+  "nodes_restarted": [],
+  "motor_commands_sent": 0,
+  "validation_required": "new fixed board layout and changed poses; no refit",
+  "remaining": "matched MuJoCo model and dependency-coordinated activation after independent validation"
+}

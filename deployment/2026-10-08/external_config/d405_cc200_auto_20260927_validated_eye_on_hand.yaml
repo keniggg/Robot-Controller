@@ -1,0 +1,18 @@
+parameters:
+  eye_on_hand: true
+  freehand_robot_movement: true
+  move_group: alicia
+  move_group_namespace: /
+  namespace: /d405_cc200_auto_20260927T102700Z_eye_on_hand/
+  robot_base_frame: base_link
+  robot_effector_frame: tool0
+  tracking_base_frame: camera_link
+  tracking_marker_frame: charuco_auto_20260927T102700Z
+transformation:
+  qw: 0.6933306192720848
+  qx: 0.004578288114871353
+  qy: -0.720538213113373
+  qz: 0.009817082107857342
+  x: -0.08042187082666649
+  y: 0.008141452543848241
+  z: -0.11500942357111774

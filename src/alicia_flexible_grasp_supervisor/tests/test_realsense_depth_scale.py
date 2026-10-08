@@ -63,6 +63,15 @@ class FakeFrame:
     def get_data(self):
         return self.data
 
+    def get_timestamp(self):
+        return 1000.
+
+    def get_frame_timestamp_domain(self):
+        return 'timestamp_domain.hardware_clock'
+
+    def get_profile(self):
+        return types.SimpleNamespace(fps=lambda: 30)
+
 
 class FakeFrames:
     def __init__(self, color, depth):

@@ -137,6 +137,12 @@ AliciaDDriverNode::AliciaDDriverNode()
       last_process_time_(0.0)
 {
     load_parameters();
+    // Initialize before setup_ros_communications starts feedback/send timers.
+    // Wait 1 s after each read; each RPC has a 250 ms deadline (plus scheduling).
+    gripper_stroke_.reset(new alicia_d_driver::GripperStrokeSnapshot(
+        ros::master::getHost(), static_cast<int>(ros::master::getPort()),
+        alicia_d_driver::GripperStrokeSnapshot::master_path(ros::master::getURI()),
+        ros::this_node::getName(), pnh_.resolveName("gripper_stroke_m")));
     endpoint_trim_config_.joint_count = 6;
     endpoint_trim_config_.sdk_quantum_rad = SDK_JOINT_QUANTIZATION_RAD;
     endpoint_trim_config_.max_step_rad =
@@ -210,6 +216,7 @@ AliciaDDriverNode::AliciaDDriverNode()
 
 AliciaDDriverNode::~AliciaDDriverNode()
 {
+    if (gripper_stroke_) gripper_stroke_->stop();
     if (communicator_) {
         communicator_->disconnect();
     }
@@ -233,7 +240,11 @@ void AliciaDDriverNode::load_parameters()
     pnh_.param<double>("rate_limit_sec", rate_limit_sec_, 0.01);
     pnh_.param<double>("command_rate_hz", command_rate_hz_, 200.0);
     pnh_.param<double>("state_poll_rate_hz", state_poll_rate_hz_, 20.0);
-    pnh_.param<double>("temperature_poll_rate_hz", temperature_poll_rate_hz_, 1.0);
+    // Software temperature monitoring is an explicit opt-in. This does not
+    // change firmware protection or the measured-feedback actuation contract.
+    pnh_.param<bool>("software_temperature_monitoring_enabled",
+                     software_temperature_monitoring_enabled_, false);
+    pnh_.param<double>("temperature_poll_rate_hz", temperature_poll_rate_hz_, 0.0);
     pnh_.param<double>("self_check_poll_rate_hz", self_check_poll_rate_hz_, 0.5);
     pnh_.param<bool>(
         "suppress_diagnostic_queries_while_motion_active",
@@ -432,6 +443,20 @@ void AliciaDDriverNode::load_parameters()
     pnh_.param<double>("max_joint_accel_rad_s2", max_joint_accel_rad_s2_, 8.0);
     pnh_.param<double>("max_gripper_accel_rad_s2", max_gripper_accel_rad_s2_, 10.0);
     pnh_.param<double>("joint_speed_deg_s", joint_speed_deg_s_, 15.0);
+    pnh_.param<bool>("gui_direct_profile_enabled", gui_direct_profile_enabled_, true);
+    GuiDirectProfileLimits gui_profile_limits;
+    pnh_.param<double>("gui_direct_profile_max_velocity_rad_s", gui_profile_limits.velocity, 0.30);
+    pnh_.param<double>("gui_direct_profile_max_accel_rad_s2", gui_profile_limits.acceleration, 1.0);
+    pnh_.param<double>("gui_direct_profile_max_jerk_rad_s3", gui_profile_limits.jerk, 10.0);
+    pnh_.param<double>("gui_direct_profile_min_duration_sec", gui_profile_limits.minimum_duration, 0.20);
+    gui_profile_limits.velocity = std::min(gui_profile_limits.velocity,
+        std::min(max_joint_velocity_rad_s_, speed_deg_s_to_hw(joint_speed_deg_s_) * SDK_JOINT_QUANTIZATION_RAD));
+    gui_profile_limits.acceleration = std::min(gui_profile_limits.acceleration, max_joint_accel_rad_s2_);
+    gui_profile_limits.maximum_tick = 1.0 / std::max(1.0, command_rate_hz_);
+    gui_direct_profile_ = GuiDirectProfile(gui_profile_limits);
+    ROS_INFO("GUI direct profile enabled=%s max_v=%.6f rad/s max_a=%.6f rad/s2 max_j=%.6f rad/s3 min_duration=%.3f s; automatic trajectories unchanged",
+        gui_direct_profile_enabled_ ? "true" : "false", gui_profile_limits.velocity,
+        gui_profile_limits.acceleration, gui_profile_limits.jerk, gui_profile_limits.minimum_duration);
     // Feedback is CRC-checked, but retained hardware evidence contains a
     // one-frame channel-like jump large enough to abort ros_control while the
     // neighbouring accepted samples and outgoing SDK targets remained stable.
@@ -671,6 +696,14 @@ void AliciaDDriverNode::clear_retained_command_state()
     // Invalidate one complete command epoch. A concurrent mode callback must
     // not restore a cached pre-reset hold between clearing targets and frames.
     std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);
+    clear_retained_command_state_locked(true);
+    initial_probe_stream_retired_ = false;
+}
+
+void AliciaDDriverNode::clear_retained_command_state_locked(bool discard_feedback)
+{
+    gui_direct_profile_.clear();
+    gui_direct_profile_tick_ = std::chrono::steady_clock::time_point();
     const uint64_t previous_epoch_ns = control_reference_reset_time_.toNSec();
     control_reference_reset_time_ = ros::Time::now();
     // This is a reset barrier, not a measured sample timestamp. Repeated clock
@@ -721,12 +754,15 @@ void AliciaDDriverNode::clear_retained_command_state()
     }
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
-        has_real_feedback_ = false;
-        last_feedback_time_ = ros::Time(0);
-        last_accepted_joint_feedback_time_ = ros::Time(0);
-        last_joint_feedback_frame_time_ = ros::Time(0);
-        pending_joint_feedback_.clear();
-        pending_joint_feedback_count_ = 0;
+        if (discard_feedback) {
+            has_real_feedback_ = false;
+            last_feedback_time_ = ros::Time(0);
+            last_accepted_joint_feedback_time_ = ros::Time(0);
+            last_joint_feedback_frame_time_ = ros::Time(0);
+            initial_joint_feedback_window_.reset();
+            pending_joint_feedback_.clear();
+            pending_joint_feedback_count_ = 0;
+        }
         last_streamed_joint_positions_.clear();
         last_streamed_gripper_rad_ = 0.0;
         last_streamed_joint_positions_time_ = ros::Time(0);
@@ -737,6 +773,25 @@ void AliciaDDriverNode::clear_retained_command_state()
         epoch_msg.frame_id = "sdk_reference_epoch";
         control_reference_epoch_pub_.publish(epoch_msg);
     }
+}
+
+bool AliciaDDriverNode::retire_failed_initial_probe_locked()
+{
+    // Only the sending/ownership domain consumes retirement. Status publication
+    // also runs under parser data_mutex_ and writer send_mutex_, so must never
+    // call back into command clearing. A live predicate, not a queued event,
+    // prevents a late failure notification from retiring a new enable epoch.
+    {
+        std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
+        actuation_confirmation_.update(ros::Time::now().toSec());
+        if (!actuation_confirmation_.initial_probe_failed()) return false;
+    }
+    if (!initial_probe_stream_retired_) {
+        clear_retained_command_state_locked(false);
+        initial_probe_stream_retired_ = true;
+        ROS_WARN("INITIAL_PROBE_TARGET_RETIRED: initial encoder response timed out; host target and replay cache cleared, accepted feedback and torque request unchanged; new positive enable required. Device-held target is not cleared by this operation.");
+    }
+    return true;
 }
 
 void AliciaDDriverNode::publish_actuation_status()
@@ -777,9 +832,12 @@ void AliciaDDriverNode::publish_actuation_status()
 bool AliciaDDriverNode::request_positive_enable(
     const std::string& source, bool preserve_fresh_confirmation)
 {
+    // Reset, failure retirement, command admission and SDK writes share the
+    // ownership lock. No prior timeout may clear a newly enabled command epoch.
+    std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);
     const ros::Time now = ros::Time::now();
     bool sustained_temperature_protection = false;
-    {
+    if (software_temperature_monitoring_enabled_) {
         std::lock_guard<std::mutex> lock(data_mutex_);
         const bool temperature_fresh =
             has_temperature_feedback_ &&
@@ -831,7 +889,8 @@ bool AliciaDDriverNode::request_positive_enable(
         return true;
     }
 
-    clear_retained_command_state();
+    clear_retained_command_state_locked(true);
+    initial_probe_stream_retired_ = false;
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
         motion_commands_enabled_ = true;
@@ -881,7 +940,8 @@ void AliciaDDriverNode::state_poll_timer_callback(const ros::TimerEvent& event)
     const ros::Time now = ros::Time::now();
     const bool diagnostic_queries_suppressed =
         diagnostic_query_suppressed_for_motion(now);
-    const bool temperature_due = !diagnostic_queries_suppressed &&
+    const bool temperature_due = software_temperature_monitoring_enabled_ &&
+        !diagnostic_queries_suppressed &&
         temperature_poll_rate_hz_ > 0.0 &&
         (last_temperature_query_time_.isZero() ||
          (now - last_temperature_query_time_).toSec() >= 1.0 / temperature_poll_rate_hz_);
@@ -893,7 +953,7 @@ void AliciaDDriverNode::state_poll_timer_callback(const ros::TimerEvent& event)
     if (diagnostic_queries_suppressed) {
         ROS_INFO_THROTTLE(
             5.0,
-            "Deferring SDK temperature/self-check queries while the arm target is active; joint feedback polling remains enabled."
+            "Deferring enabled SDK diagnostics while the arm target is active; joint feedback polling remains enabled."
         );
     }
 
@@ -1060,7 +1120,12 @@ void AliciaDDriverNode::gui_control_mode_callback(const std_msgs::Bool::ConstPtr
     // Serialize ownership changes with both command admission and SDK writes.
     std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);
     if (gui_control_mode_ == msg->data) return;
+    // Consume an already-expired initial probe before ownership clears its
+    // observation window. Switching modes must not erase a completed timeout.
+    retire_failed_initial_probe_locked();
     gui_control_mode_ = msg->data;
+    gui_direct_profile_.clear();
+    gui_direct_profile_tick_ = std::chrono::steady_clock::time_point();
     control_mode_changed_time_ = ros::Time::now();
     control_mode_needs_sync_ = !gui_control_mode_;
     control_mode_hold_only_ = true;
@@ -1366,13 +1431,27 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
             gripper_value = deg * M_PI / 180.0;
         } else {
             // Treat incoming value as meters for the prismatic joint [0..stroke]
-            double stroke_m = 0.05; // default 5 cm stroke per URDF
-            pnh_.param<double>("gripper_stroke_m", stroke_m, 0.05);
+            const double stroke_m = gripper_stroke_->load();
             const double m = std::max(0.0, std::min(stroke_m, it_grip->second));
             const double pct = (stroke_m > 1e-6) ? (m / stroke_m) : 0.0; // 0..1
             const double deg = pct * 100.0; // 0..100 deg displayed in HW space
             gripper_value = deg * M_PI / 180.0; // radians for internal smoothing + HW mapping
         }
+    }
+
+    // Prepare without mutation. A rejected redirect must not publish a new
+    // GUI target, reset trim ownership, or create a deferred motion request.
+    GuiDirectProfile gui_profile_candidate = gui_direct_profile_;
+    bool gui_profile_request = false;
+    if (gui_direct_profile_enabled_ && gui_direct_command && gui_direct_edited_index < 6) {
+        if ((!gui_profile_candidate.initialized() && !gui_profile_candidate.seed(
+                streamed_hold_is_valid ? streamed_hold_joint_angles : feedback_joint_angles)) ||
+            !gui_profile_candidate.request(gui_direct_edited_index, joint_angles[gui_direct_edited_index])) {
+            ROS_WARN("GUI_DIRECT_PROFILE_REJECTED: edited_index=%d requested_rad=%.9f; cannot redirect with continuous velocity/acceleration inside old/new target envelope and derivative limits; previous target retained, no deferred target",
+                gui_direct_edited_index, joint_angles[gui_direct_edited_index]);
+            return;
+        }
+        gui_profile_request = true;
     }
 
     std::string actuation_rejection;
@@ -1533,6 +1612,16 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
         latest_gripper_rad_ = gripper_value;
         has_latest_command_ = true;
         control_mode_hold_only_ = false;
+        if (gui_profile_request) {
+            const bool first_profile = !gui_direct_profile_.initialized();
+            gui_direct_profile_ = gui_profile_candidate;
+            if (first_profile) gui_direct_profile_tick_ = std::chrono::steady_clock::now();
+            const auto& profile_axis = gui_direct_profile_.axis(gui_direct_edited_index);
+            ROS_INFO("GUI_DIRECT_PROFILE_ACCEPTED: joint=%d target_word=%u duration=%.6f elapsed=%.6f bounds_rad=[%.9f,%.9f] continuous_max_v=%.6f continuous_max_a=%.6f continuous_max_j=%.6f; SDK quantization and measured arrival remain separate",
+                gui_direct_edited_index + 1, static_cast<unsigned>(profile_axis.target_word),
+                profile_axis.duration, profile_axis.elapsed, profile_axis.lower, profile_axis.upper,
+                profile_axis.velocity_bound, profile_axis.acceleration_bound, profile_axis.jerk_bound);
+        }
         if (endpoint_trim_explicit_gui_command) {
             // Commit only after admission. Multiple explicitly edited joints
             // retain their independent goals and may interpolate concurrently.
@@ -1568,6 +1657,10 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::JointState::Co
 void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event)
 {
     std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);
+    if (retire_failed_initial_probe_locked()) {
+        publish_actuation_status();
+        return;
+    }
     if (!communicator_ || !communicator_->is_connected()) return;
 
     std::unique_lock<std::mutex> send_lock(send_mutex_, std::try_to_lock);
@@ -2025,8 +2118,23 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
         );
     }
 
-    // Interpolate toward latest command (slew limiting)
-    if (use_trajectory_smoothing_) {
+    // Interpolate toward latest command through the selected source policy.
+    // A successful-write transaction: failed serial writes do not advance the
+    // profile. Capped monotonic time prevents scheduler stalls from skipping
+    // straight to the goal. Encoder residuals never enter this interpolation.
+    const bool gui_profile_tick = gui_control_mode_ && gui_direct_profile_enabled_ &&
+        gui_direct_profile_.initialized();
+    GuiDirectProfile gui_profile_next = gui_direct_profile_;
+    const auto gui_profile_now = std::chrono::steady_clock::now();
+    if (gui_profile_tick) {
+        gui_profile_next.advance(std::chrono::duration<double>(
+            gui_profile_now - gui_direct_profile_tick_).count());
+        cmd_joint_angles_ = gui_profile_next.positions();
+        for (size_t i = 0; i < cmd_joint_velocities_.size(); ++i)
+            cmd_joint_velocities_[i] = gui_profile_next.sample(i).velocity;
+        cmd_gripper_rad_ = gripper_value;
+        cmd_gripper_vel_rad_s_ = 0.0;
+    } else if (use_trajectory_smoothing_) {
         const double dt = 1.0 / std::max(1.0, command_rate_hz_);
 
         // Trapezoidal profile per joint: accelerate to velocity, cruise, decelerate toward target
@@ -2174,13 +2282,33 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
                             (now - last_sent_sdk_command_time_).toSec() >= keepalive_period;
         }
         if (!keepalive_due) {
+            // These position words are already physically submitted. It is
+            // valid to advance sub-quantum phase without a duplicate write.
+            if (gui_profile_tick) {
+                gui_direct_profile_ = gui_profile_next;
+                gui_direct_profile_tick_ = gui_profile_now;
+            }
             ROS_DEBUG_THROTTLE(5.0, "Skipping redundant SDK command frame while holding target.");
             return;
         }
     }
 
-    const bool wrote = communicator_->write_raw_frame(servo_frame);
+    bool wrote = false;
+    {
+        // A feedback callback can latch the initial timeout during interpolation.
+        // Serialize the last admission check with status changes and this write;
+        // release actuation before taking data_mutex_ below (parser order is
+        // data -> actuation). Retirement itself runs next tick without send held.
+        std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
+        actuation_confirmation_.update(ros::Time::now().toSec());
+        if (actuation_confirmation_.initial_probe_failed()) return;
+        wrote = communicator_->write_raw_frame(servo_frame);
+    }
     if (wrote) {
+        if (gui_profile_tick) {
+            gui_direct_profile_ = gui_profile_next;
+            gui_direct_profile_tick_ = gui_profile_now;
+        }
         last_sent_sdk_command_frame_ = servo_frame;
         last_sent_sdk_command_time_ = now;
         std::vector<double> wire_joint_angles;
@@ -2218,8 +2346,7 @@ void AliciaDDriverNode::send_command_timer_callback(const ros::TimerEvent& event
                 : (!control_mode_needs_sync_ && !control_mode_hold_only_
                     ? "sdk_tracking" : "sdk_reference_unconfirmed"));
         control_reference_msg.name.push_back("right_finger");
-        double gripper_stroke_m = 0.05;
-        pnh_.param<double>("gripper_stroke_m", gripper_stroke_m, 0.05);
+        const double gripper_stroke_m = gripper_stroke_->load();
         control_reference_msg.position.push_back(
             static_cast<double>(gripper_hw_val) / 1000.0 * gripper_stroke_m);
         control_reference_pub_.publish(control_reference_msg);
@@ -2442,7 +2569,8 @@ void AliciaDDriverNode::publish_sdk_raw_diagnostic(
     if (command == SDK_CMD_JOINT && function == SDK_FUNC_QUERY_JOINT_GRIPPER && payload.size() >= 15) {
         sdk_diagnostic_value(status, "run_status_hex", format_bytes_as_hex({payload[14]}));
         sdk_diagnostic_value(status, "joint_evidence", "raw_before_acceptance_filter");
-        if (payload[14] == 0xE1 || payload[14] == 0xE2) {
+        if (software_temperature_monitoring_enabled_ &&
+            (payload[14] == 0xE1 || payload[14] == 0xE2)) {
             status.level = diagnostic_msgs::DiagnosticStatus::ERROR;
             status.message = "hardware protection status event; not masked by temperature filtering";
         }
@@ -2520,12 +2648,42 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
     const ros::Time feedback_time = ros::Time::now();
 
     bool accept_joint_positions = true;
+    if (!has_real_feedback_ && last_accepted_joint_feedback_time_.isZero()) {
+        // Only initial acquisition after an explicit feedback reset. Three
+        // independent frames spanning two nominal polls (0.2 s at 10 Hz) must
+        // fit within two encoder counts across the entire window. This does
+        // not alter the running velocity bound or discontinuity recovery.
+        const double nominal_poll_period_sec =
+            1.0 / std::max(1.0, state_poll_rate_hz_);
+        const alicia_d_driver::InitialJointFeedbackConfig acquisition_config{
+            2.0 * SDK_JOINT_QUANTIZATION_RAD,
+            2.0 * nominal_poll_period_sec,
+            2.0 * nominal_poll_period_sec,
+            std::max(3, feedback_jump_confirm_samples_)
+        };
+        const bool has_streamed_reference =
+            !last_streamed_joint_positions_.empty() ||
+            !last_streamed_joint_positions_time_.isZero();
+        accept_joint_positions = initial_joint_feedback_window_.observe(
+            candidate_joint_positions, feedback_time.toSec(),
+            has_streamed_reference, acquisition_config);
+        if (accept_joint_positions) {
+            ROS_INFO("INITIAL_JOINT_FEEDBACK_READY: stable independent samples=%d span=%.3fs; accepting initial encoder baseline without motion confirmation.",
+                initial_joint_feedback_window_.sample_count(),
+                initial_joint_feedback_window_.span_sec());
+        } else {
+            ROS_INFO_THROTTLE(1.0,
+                "INITIAL_JOINT_FEEDBACK_PENDING: samples=%d span=%.3fs; waiting for stable boot feedback, accepted baseline unchanged.",
+                initial_joint_feedback_window_.sample_count(),
+                initial_joint_feedback_window_.span_sec());
+        }
+    }
     bool accepted_joint_feedback_discontinuity = false;
     double maximum_joint_delta_rad = 0.0;
     size_t maximum_joint_delta_index = 0;
     double allowed_joint_delta_rad = 0.0;
     if (
-        reject_implausible_joint_feedback_ &&
+        accept_joint_positions && reject_implausible_joint_feedback_ &&
         !last_accepted_joint_feedback_time_.isZero() &&
         !last_joint_feedback_frame_time_.isZero() &&
         candidate_joint_positions.size() == current_joint_positions_.size()
@@ -2611,7 +2769,10 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
                             current_joint_positions_,
                             candidate_joint_positions,
                             last_streamed_joint_positions_,
-                            feedback_jump_confirmation_tolerance_rad_
+                            feedback_jump_confirmation_tolerance_rad_,
+                            allowed_joint_delta_rad,
+                            std::min(feedback_jump_base_tolerance_rad_,
+                                     feedback_jump_confirmation_tolerance_rad_)
                         );
                 }
             }
@@ -2745,62 +2906,64 @@ void AliciaDDriverNode::parse_sdk_joint_state_frame(const std::vector<uint8_t>& 
     status_msg.data = last_run_status_;
     run_status_pub_.publish(status_msg);
 
-    const bool temperature_fresh = has_temperature_feedback_ &&
-        (feedback_time - last_temperature_time_).toSec() <= 3.0;
-    float max_temperature = 0.0f;
-    for (float value : latest_temperatures_c_) {
-        if (std::isfinite(value)) {
-            max_temperature = std::max(max_temperature, value);
+    if (software_temperature_monitoring_enabled_) {
+        const bool temperature_fresh = has_temperature_feedback_ &&
+            (feedback_time - last_temperature_time_).toSec() <= 3.0;
+        float max_temperature = 0.0f;
+        for (float value : latest_temperatures_c_) {
+            if (std::isfinite(value)) {
+                max_temperature = std::max(max_temperature, value);
+            }
         }
-    }
-    const bool sustained_high_temperature_telemetry = temperature_fresh &&
-        consecutive_high_temperature_samples_ >= temperature_over_limit_confirm_samples_;
+        const bool sustained_high_temperature_telemetry = temperature_fresh &&
+            consecutive_high_temperature_samples_ >= temperature_over_limit_confirm_samples_;
 
-    if (last_run_status_ == 0xE1) {
-        ++consecutive_e1_frames_;
-        ROS_WARN_THROTTLE(
-            2.0,
-            "Hardware reports E1 overheat warning (%d/%d consecutive, temperature %s, max %.1f C).",
-            consecutive_e1_frames_, e1_confirm_consecutive_frames_,
-            temperature_fresh ? "fresh" : "unavailable/stale", max_temperature);
-    } else {
-        consecutive_e1_frames_ = 0;
-    }
+        if (last_run_status_ == 0xE1) {
+            ++consecutive_e1_frames_;
+            ROS_WARN_THROTTLE(
+                2.0,
+                "Hardware reports E1 overheat warning (%d/%d consecutive, temperature %s, max %.1f C).",
+                consecutive_e1_frames_, e1_confirm_consecutive_frames_,
+                temperature_fresh ? "fresh" : "unavailable/stale", max_temperature);
+        } else {
+            consecutive_e1_frames_ = 0;
+        }
 
-    const bool protection_status_event = last_run_status_ == 0xE1 || last_run_status_ == 0xE2;
-    if (
-        protection_status_event &&
-        sustained_high_temperature_telemetry
-    ) {
-        std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
-        actuation_confirmation_.mark_overheat_blocked(
-            "SUSTAINED_SAME_CHANNEL_TEMPERATURE",
-            feedback_time.toSec()
-        );
-    }
-    if (sustained_high_temperature_telemetry) {
-        // Temperature bytes are diagnostic evidence only. Retained real-arm
-        // data contains physically impossible repeated values (174 C followed
-        // by 45 C one second later), so this parser must never autonomously
-        // remove torque or change the motion-enable state. Explicit operator
-        // zero-torque mode remains the only runtime torque-off path.
-        ROS_ERROR_THROTTLE(
-            2.0,
-            "Over-temperature telemetry diagnostic: status=0x%02X temperature_channel=%d streak=%d joint_payload=[%s] temperatures_c=%s self_check_mask=%s0x%04X; autonomous torque_off is disabled and motion enable is unchanged",
-            last_run_status_,
-            consecutive_high_temperature_channel_index_ >= 0
-                ? consecutive_high_temperature_channel_index_ + 1
-                : -1,
-            consecutive_high_temperature_samples_,
-            format_bytes_as_hex(data_payload).c_str(),
-            format_temperatures(latest_temperatures_c_).c_str(),
-            has_self_check_feedback_ ? "" : "unavailable/",
-            static_cast<unsigned>(latest_self_check_mask_));
-    } else if (protection_status_event) {
-        ROS_WARN_THROTTLE(
-            2.0,
-            "Treating hardware status 0x%02X as a status event; no torque_off sent without sustained measured over-temperature.",
-            last_run_status_);
+        const bool protection_status_event = last_run_status_ == 0xE1 || last_run_status_ == 0xE2;
+        if (
+            protection_status_event &&
+            sustained_high_temperature_telemetry
+        ) {
+            std::lock_guard<std::mutex> actuation_lock(actuation_mutex_);
+            actuation_confirmation_.mark_overheat_blocked(
+                "SUSTAINED_SAME_CHANNEL_TEMPERATURE",
+                feedback_time.toSec()
+            );
+        }
+        if (sustained_high_temperature_telemetry) {
+            // Temperature bytes are diagnostic evidence only. Retained real-arm
+            // data contains physically impossible repeated values (174 C followed
+            // by 45 C one second later), so this parser must never autonomously
+            // remove torque or change the motion-enable state. Explicit operator
+            // zero-torque mode remains the only runtime torque-off path.
+            ROS_ERROR_THROTTLE(
+                2.0,
+                "Over-temperature telemetry diagnostic: status=0x%02X temperature_channel=%d streak=%d joint_payload=[%s] temperatures_c=%s self_check_mask=%s0x%04X; autonomous torque_off is disabled and motion enable is unchanged",
+                last_run_status_,
+                consecutive_high_temperature_channel_index_ >= 0
+                    ? consecutive_high_temperature_channel_index_ + 1
+                    : -1,
+                consecutive_high_temperature_samples_,
+                format_bytes_as_hex(data_payload).c_str(),
+                format_temperatures(latest_temperatures_c_).c_str(),
+                has_self_check_feedback_ ? "" : "unavailable/",
+                static_cast<unsigned>(latest_self_check_mask_));
+        } else if (protection_status_event) {
+            ROS_WARN_THROTTLE(
+                2.0,
+                "Treating hardware status 0x%02X as a status event; no torque_off sent without sustained measured over-temperature.",
+                last_run_status_);
+        }
     }
 
     std_msgs::Bool protection_msg;
@@ -2878,6 +3041,12 @@ void AliciaDDriverNode::parse_sdk_self_check_frame(const std::vector<uint8_t>& d
 
 void AliciaDDriverNode::parse_sdk_temperature_frame(const std::vector<uint8_t>& data_payload)
 {
+    // Transport validation and raw SDK evidence already ran before dispatch.
+    // With monitoring disabled, unsolicited temperature packets have no
+    // decoded publication, warning, retained sample, or actuation side effect.
+    if (!software_temperature_monitoring_enabled_) {
+        return;
+    }
     if (data_payload.empty()) {
         ROS_WARN("Received empty SDK temperature frame.");
         return;
@@ -3119,8 +3288,7 @@ void AliciaDDriverNode::publish_joint_state(bool accepted_sdk_sample)
     // Combine arm joints and gripper
     js_msg.position = current_joint_positions_;
     // Convert internal gripper radians back to meters for the prismatic joint interface
-    double stroke_m = 0.05;
-    pnh_.param<double>("gripper_stroke_m", stroke_m, 0.05);
+    const double stroke_m = gripper_stroke_->load();
     // Internal representation: 0..(100deg in rad). Map to 0..stroke_m
     double gripper_deg = std::max(0.0, std::min(100.0, current_gripper_position_ * 180.0 / M_PI));
     double gripper_m = (gripper_deg / 100.0) * stroke_m;

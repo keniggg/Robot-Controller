@@ -43,14 +43,20 @@ class PregraspCompensation:
 
     def __init__(self, fk, initial, goal_values, *, position_tolerance_m=.006,
                  orientation_tolerance_rad=math.radians(5),
-                 joint2_response_probe_enabled=False):
+                 joint2_response_probe_enabled=False, endpoint_acceptance=None):
         if not isinstance(fk, SerialUrdfFk) or tuple(fk.names) != ARM_NAMES:
             raise ValueError('PREGRASP_CANONICAL_FK_REQUIRED')
-        if not (0 < position_tolerance_m <= .006
+        # The operator-selected unknown-object policy may use 10 mm. The
+        # default remains 6 mm; response/progress checks are independent.
+        if not (0 < position_tolerance_m <= .010
                 and 0 < orientation_tolerance_rad <= math.radians(5)):
             raise ValueError('PREGRASP_TOLERANCE_CANNOT_BE_RELAXED')
         if type(joint2_response_probe_enabled) is not bool:
             raise ValueError('PREGRASP_JOINT2_PROBE_CONFIG_INVALID')
+        if endpoint_acceptance is not None and not callable(endpoint_acceptance):
+            raise ValueError('PREGRASP_ENDPOINT_ACCEPTANCE_INVALID')
+        self.endpoint_acceptance = endpoint_acceptance
+        self._contact_cache = {}
         self.fk, self.goal = fk, pose_matrix(goal_values)
         self.goal.setflags(write=False)
         self.goal_values = tuple(float(v) for v in goal_values)
@@ -105,7 +111,86 @@ class PregraspCompensation:
         position, _ = self.residual(measured)
         # Orientation is a hard admissibility constraint. Do not sacrifice
         # required position accuracy to improve an already admissible angle.
-        return (position/self.tolerances[0])**2
+        cost = (position/self.tolerances[0])**2
+        if self.endpoint_acceptance is not None:
+            contact = self._contact_report(measured)
+            deficit = max(0., contact['minimum_contact_overlap_m']
+                          - contact['actual_overlap_m'])
+            # A fixed tool0 norm alone can decrease while the finite contact
+            # patch moves farther above the measured target. Within the SAME
+            # position/angle and support bounds, require measured improvement
+            # in a merit which also consumes the frozen contact requirement.
+            cost += 4.*(deficit/contact['minimum_contact_overlap_m'])**2
+            height = contact.get('height_registration_margin')
+            if height is not None:
+                limit = height['translation_evidence_limit_m']
+                height_deficit = max(0., limit-height['maximum_symmetric_normal_translation_m'])
+                if not contact['ok'] or not height['ok']:
+                    # Within the existing hard position/orientation bounds,
+                    # satisfying REQUIRED contact has priority over reducing
+                    # an already admissible tool0 norm. A weighted sum can
+                    # otherwise settle at a lower norm with a failing margin.
+                    # The feasible tier has cost <= 1; no predicted sample is
+                    # allowed to declare real convergence.
+                    return (2. + deficit/contact['minimum_contact_overlap_m']
+                            + height_deficit/limit
+                            + 1e-6*(position/self.tolerances[0])**2)
+        return cost
+
+    def _contact_report(self, measured):
+        key = np.asarray(measured, dtype=float).tobytes()
+        if key in self._contact_cache:
+            return self._contact_cache[key]
+        contact = self.endpoint_acceptance(self.fk(measured))
+        if (not isinstance(contact, dict) or type(contact.get('ok')) is not bool
+                or contact.get('code') not in ('MEASURED_CONTACT_GEOMETRY_OK',
+                                                'MEASURED_CONTACT_PATCH_MISS')):
+            raise ValueError('PREGRASP_ENDPOINT_ACCEPTANCE_INVALID_OR_UNSAFE')
+        try:
+            minimum = float(contact['minimum_contact_overlap_m'])
+            overlap = float(contact['actual_overlap_m'])
+            clearance = float(contact['minimum_support_clearance_m'])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError('PREGRASP_ENDPOINT_ACCEPTANCE_INVALID') from exc
+        if (not all(math.isfinite(v) for v in (minimum, overlap, clearance))
+                or minimum <= 0. or overlap < 0. or clearance < .003-1e-9
+                or contact['ok'] != (overlap+1e-9 >= minimum)
+                or contact['ok'] != (contact['code'] == 'MEASURED_CONTACT_GEOMETRY_OK')):
+            raise ValueError('PREGRASP_ENDPOINT_ACCEPTANCE_INVALID_OR_UNSAFE')
+        height = contact.get('height_registration_margin')
+        if 'height_registration_margin' in contact:
+            try:
+                if not isinstance(height, dict):
+                    raise ValueError('height evidence must be a mapping')
+                limit = height['translation_evidence_limit_m']
+                margin = height['maximum_symmetric_normal_translation_m']
+                expected_ok = bool(contact['ok'] and margin+1e-12 >= limit)
+                if (height.get('evaluated') is not True
+                        or type(height.get('ok')) is not bool
+                        or type(limit) not in (int, float) or type(margin) not in (int, float)
+                        or not math.isfinite(limit) or not math.isfinite(margin)
+                        or limit <= 0. or margin < 0.
+                        or height['ok'] != expected_ok
+                        or height.get('covers_entire_normal_translation_interval') is not expected_ok
+                        or height.get('code') != ('CONTACT_HEIGHT_NORMAL_MARGIN_OK'
+                            if expected_ok else 'CONTACT_HEIGHT_NORMAL_MARGIN_INSUFFICIENT')):
+                    raise ValueError('inconsistent height margin evidence')
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError('PREGRASP_CONTACT_HEIGHT_EVIDENCE_INVALID') from exc
+        # Bounded to this one measured-response evaluation. A fresh accepted
+        # sample/opening always clears it, and it cannot certify real response.
+        if len(self._contact_cache) < 8192:
+            self._contact_cache[key] = contact
+        return contact
+
+    def _improves(self, predicted, position, previous_cost):
+        p, angle = self.residual(predicted)
+        if self.endpoint_acceptance is None:
+            return p < position-1e-6 and self._cost(predicted) < previous_cost-1e-4
+        if angle > self.tolerances[1]:
+            return False
+        return (p <= self.tolerances[0]
+                and self._cost(predicted) < previous_cost-1e-4)
 
     def _remaining_budget_guide(self, measured):
         """Conditional endpoint heuristic, never a path or response proof.
@@ -121,7 +206,9 @@ class PregraspCompensation:
         low = np.maximum(origin-self.MAX_TOTAL_COUNTS-sdk, -reach)
         high = np.minimum(origin+self.MAX_TOTAL_COUNTS-sdk, reach)
         delta = np.zeros(6, dtype=int)
-        best = self.residual(measured)[0]
+        best_position = self.residual(measured)[0]
+        contact_mode = self.endpoint_acceptance is not None
+        best = self._cost(measured) if contact_mode else best_position
         # Fixed work bound; coordinate search is not a global reachability test.
         for _ in range(8):
             changed = False
@@ -142,15 +229,17 @@ class PregraspCompensation:
                         if np.any(abs(command-predicted) > .035):
                             continue
                         position, angle = self.residual(predicted)
+                        merit = self._cost(predicted) if contact_mode else position
                     except ValueError:
                         continue
-                    if angle <= self.tolerances[1] and position < best-1e-9:
-                        chosen, best = value, position
+                    if (angle <= self.tolerances[1] and merit < best-1e-9
+                            and (not contact_mode or position <= self.tolerances[0])):
+                        chosen, best, best_position = value, merit, position
                 if chosen != delta[axis]:
                     delta[axis], changed = chosen, True
             if not changed:
                 break
-        return delta, best
+        return delta, best_position
 
     def _guided_step(self, measured, actual, guide, position):
         choices = []
@@ -161,7 +250,7 @@ class PregraspCompensation:
                 sign = int(np.sign(distance))
                 choices.append(tuple(sign*v for v in (0, 2, 4) if v <= abs(distance)))
         best_key, selected = None, np.zeros(6, dtype=int)
-        initial_cost = (position/self.tolerances[0])**2
+        initial_cost = self._cost(measured)
         for values in product(*choices):
             trial = np.asarray(values, dtype=int)
             if not np.any(trial):
@@ -177,17 +266,56 @@ class PregraspCompensation:
                 continue
             try:
                 self.fk((target-2048)*Q)
-                p, a = self.residual(measured+trial*self.response_gains*Q)
+                predicted = measured+trial*self.response_gains*Q
+                p, a = self.residual(predicted)
+                improves = self._improves(predicted, position, initial_cost)
+                merit = self._cost(predicted) if self.endpoint_acceptance is not None else p
             except ValueError:
                 continue
-            if (a > self.tolerances[1] or p >= position-1e-6
-                    or (p/self.tolerances[0])**2 >= initial_cost-1e-4):
+            if a > self.tolerances[1] or not improves:
                 continue
-            # Prefer progress toward the whole-budget solution; immediate FK
-            # error only breaks ties. Every step must still improve measured FK.
-            key = (int(np.sum((guide-trial)**2)), p)
+            # Prefer progress toward the whole-budget solution. Immediate
+            # position (or contact merit) breaks ties; real feedback must later
+            # demonstrate the same improvement before another proposal.
+            key = (int(np.sum((guide-trial)**2)), merit)
             if best_key is None or key < best_key:
                 best_key, selected = key, trial
+        return selected
+
+    def _contact_local_step(self, measured, actual, position):
+        """A fixed-size simultaneous search when the coordinate guide stalls.
+
+        The narrow physical contact band and support plane can require two
+        axes to move together. Every endpoint still obeys the original single
+        step/episode box; no intermediate coordinate trial authorizes motion.
+        """
+        selected = np.zeros(6, dtype=int)
+        if self.endpoint_acceptance is None:
+            return selected
+        choices = [(0,) if i in self.held_axes else (-4, -2, 0, 2, 4)
+                   for i in range(6)]
+        best = self._cost(measured)
+        for values in product(*choices):
+            trial = np.asarray(values, dtype=int)
+            active = trial != 0
+            if not np.any(active):
+                continue
+            target = np.asarray(self.expected)+trial
+            minimum_response = actual+2*np.sign(trial)
+            if (np.any(target < 0) or np.any(target > 4095)
+                    or max(abs(target-np.asarray(self.initial_counts))) > self.MAX_TOTAL_COUNTS
+                    or np.any(abs(target-actual)[active] < 2)
+                    or np.any(abs(target-minimum_response)*Q > .035)):
+                continue
+            try:
+                self.fk((target-2048)*Q)
+                predicted = measured+trial*self.response_gains*Q
+                if not self._improves(predicted, position, best):
+                    continue
+                cost = self._cost(predicted)
+            except ValueError:
+                continue
+            selected, best = trial, cost
         return selected
 
     def _joint2_response_probe(self, measured, actual, position):
@@ -217,6 +345,7 @@ class PregraspCompensation:
         return selected
 
     def evaluate(self, sample):
+        self._contact_cache.clear()
         actual = self._validate(sample)
         measured = np.asarray(sample['accepted_positions_rad'], dtype=float)
         position, angle = self.residual(measured)
@@ -254,7 +383,11 @@ class PregraspCompensation:
             self.last_evidence = deepcopy(evidence)
             if not bounded or not np.any(strong):
                 self._fail('PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE')
-            if self._cost(measured) >= previous_cost-1e-4 or position >= previous_position-1e-6:
+            try:
+                improves = self._improves(measured, previous_position, previous_cost)
+            except ValueError as exc:
+                self._fail(str(exc))
+            if not improves:
                 self._fail('PREGRASP_NO_CARTESIAN_PROGRESS')
             # Do not integrate another command into an axis with <2 counts
             # of directional response. Keep its last SDK word, not its measured
@@ -267,7 +400,21 @@ class PregraspCompensation:
             self.pending = None
         self.proposed = None
         self._proposed_joint2_probe = False
-        if position <= self.tolerances[0] and angle <= self.tolerances[1]:
+        contact_accepted = True
+        if self.endpoint_acceptance is not None:
+            # A small tool0 residual is not proof that the finite finger patch
+            # still overlaps a small object. Use the same frozen contact band
+            # at every REAL feedback sample; predicted points never converge.
+            try:
+                contact = self._contact_report(measured)
+            except ValueError as exc:
+                self._fail(str(exc))
+            evidence['measured_contact'] = deepcopy(contact)
+            evidence['contact_merit'] = self._cost(measured)
+            self.last_evidence = deepcopy(evidence)
+            contact_accepted = contact['ok'] and contact.get(
+                'height_registration_margin', {}).get('ok', True)
+        if position <= self.tolerances[0] and angle <= self.tolerances[1] and contact_accepted:
             return 'PREGRASP_MEASURED_CONVERGED', None, evidence
         if position > .025 or angle > self.tolerances[1]:
             self._fail('PREGRASP_OUTSIDE_LOCAL_CAPTURE_RANGE')
@@ -276,12 +423,18 @@ class PregraspCompensation:
         guide, guide_error = self._remaining_budget_guide(measured)
         delta = self._guided_step(measured, actual, guide, position)
         if not np.any(delta):
+            delta = self._contact_local_step(measured, actual, position)
+        if not np.any(delta):
             delta = self._joint2_response_probe(measured, actual, position)
             self._proposed_joint2_probe = bool(np.any(delta))
         initial_cost = self._cost(measured)
-        predicted_position, predicted_angle = self.residual(measured+delta*self.response_gains*Q)
-        if (not np.any(delta) or (predicted_position/self.tolerances[0])**2 >= initial_cost-1e-4
-                or predicted_position >= position-1e-6):
+        predicted = measured+delta*self.response_gains*Q
+        predicted_position, predicted_angle = self.residual(predicted)
+        try:
+            improves = self._improves(predicted, position, initial_cost)
+        except ValueError:
+            improves = False
+        if not np.any(delta) or not improves:
             self._fail('PREGRASP_NO_BOUNDED_IMPROVING_STEP')
         self.proposed = CorrectionStep(self.expected, tuple((np.asarray(self.expected)+delta).tolist()),
             tuple(actual.tolist()), sample['sdk_stamp_ns'], sample['accepted_stamp_ns'])
@@ -290,6 +443,9 @@ class PregraspCompensation:
                                  else 'bounded_cartesian_correction')
         evidence['predicted_position_error_m'] = predicted_position
         evidence['predicted_orientation_error_rad'] = predicted_angle
+        if self.endpoint_acceptance is not None:
+            evidence['predicted_contact_merit'] = self._cost(predicted)
+            evidence['predicted_contact'] = deepcopy(self._contact_report(predicted))
         evidence['conditional_budget_guide'] = dict(delta_counts=guide.tolist(),
             predicted_position_error_m=guide_error, physical_convergence_proven=False,
             path_authorized=False, globally_optimal=False)

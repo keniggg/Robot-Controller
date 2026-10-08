@@ -21,7 +21,7 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (
 )
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     plan_id_matches_content, pose_values, stamp_nanoseconds,
-    validate_plan_header_binding, validate_rich_geometry,
+    validate_plan_header_binding, validate_rich_geometry, is_silhouette_observation_plan,
 )
 
 # Computational limits only. A six-dimensional uncertainty proof needs more
@@ -87,6 +87,7 @@ class FrozenObservationScene:
     size: np.ndarray
     track_id: str = ''
     geometry_digest: str = ''
+    require_target_visibility: bool = False
 
     @classmethod
     def from_plan(cls, plan):
@@ -99,9 +100,10 @@ class FrozenObservationScene:
 
     @classmethod
     def _from_plan_phase(cls, plan, phase):
+        expected_poses = 1 if is_silhouette_observation_plan(plan) else 4
         if (getattr(plan, 'valid', False) is not True
                 or str(plan.diagnostic) != phase
-                or len(plan.poses) != 4 or not plan_id_matches_content(plan)):
+                or len(plan.poses) != expected_poses or not plan_id_matches_content(plan)):
             raise ObservationPathError('invalid committed %s plan' % phase)
         stamp = validate_plan_header_binding(plan)
         pose, size, support = validate_rich_geometry(plan.object_geometry)
@@ -119,7 +121,9 @@ class FrozenObservationScene:
             array.setflags(write=False)
         return cls(str(plan.plan_id), committed_plan_digest(plan), stamp, normal,
                    float(support[3]) / norm, center, rotation, dimensions,
-                   str(plan.target_track_id), wire_digest(plan.object_geometry))
+                   str(plan.target_track_id), wire_digest(plan.object_geometry),
+                   phase == 'FAR_FIELD_OBSERVATION_PLAN'
+                   and str(plan.model_choice) == 'unknown_tabletop')
 
 
 class CommittedObservationContexts:
@@ -199,6 +203,24 @@ class CommittedObservationContexts:
             raise ObservationPathError('committed observation source is stale or future at admission')
         self.active_scene = scene
         return scene, self.revocation
+
+    def admit_task_view(self, scene, previous_scene, revocation):
+        """Explicit caller-authorized switch; ordinary plan ingest cannot rebind.
+
+        The gateway caller must hold its context lock and validate the complete
+        task/session transaction. Keep the task revocation token; any previously
+        captured trajectory still fails ``validate_capture`` by scene identity.
+        """
+        self.validate_capture(previous_scene, revocation)
+        if (not isinstance(scene, FrozenObservationScene)
+                or scene.track_id != previous_scene.track_id
+                or scene.source_ns <= previous_scene.source_ns
+                or scene.plan_id == previous_scene.plan_id):
+            raise ObservationPathError('supplemental scene is not new and same-target')
+        self.active_scene = scene
+        self.entries[(scene.source_ns, 'base_link')] = scene
+        while len(self.entries) > self.capacity:
+            self.entries.popitem(last=False)
 
     def validate_capture(self, scene, revocation):
         if (not self.active or self.blocked or self.revocation != revocation

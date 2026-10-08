@@ -4,7 +4,7 @@ This boundary intentionally has no semantic label, model, or known-object
 input.  Every fused point originates in a validated measured ``SurfaceView``.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from numbers import Integral, Real
 
 import numpy as np
@@ -219,6 +219,91 @@ class RegistrationConfig:
 
 
 @dataclass(frozen=True)
+class SupportConsistencyAudit:
+    """Diagnostic plane distances on one final matched reference footprint.
+
+    These values do not replace the existing raw support acceptance metrics.
+    The footprint lies on the reference support plane; it is not evidence
+    about the entire table, the transform's physical cause, or TF accuracy.
+    """
+
+    anchor_base: tuple
+    correspondence_count: int
+    raw_normal_angle_deg: float
+    raw_plane_separation_m: float
+    transformed_normal_angle_deg: float
+    transformed_plane_separation_m: float
+    raw_maximum_footprint_separation_m: float
+    transformed_maximum_footprint_separation_m: float
+    transform_semantics: str = field(
+        default='moving_snapshot_base_estimate_to_phase_reference', init=False)
+    anchor_policy: str = field(
+        default='final_matched_reference_centroid_projected_to_reference_support',
+        init=False)
+    diagnostic_only: bool = field(default=True, init=False)
+
+    def __post_init__(self):
+        anchor = _immutable_float_array(self.anchor_base, (3,), 'anchor_base')
+        object.__setattr__(self, 'anchor_base', tuple(float(v) for v in anchor))
+        object.__setattr__(self, 'correspondence_count', _strict_integer(
+            self.correspondence_count, 'correspondence_count', 1))
+        for name in ('raw_normal_angle_deg', 'transformed_normal_angle_deg'):
+            object.__setattr__(self, name, _strict_number(
+                getattr(self, name), name, minimum=0.0, maximum=180.0))
+        for name in ('raw_plane_separation_m', 'transformed_plane_separation_m',
+                     'raw_maximum_footprint_separation_m',
+                     'transformed_maximum_footprint_separation_m'):
+            object.__setattr__(self, name, _strict_number(
+                getattr(self, name), name, minimum=0.0))
+
+
+def _support_consistency_audit(reference, moving, transform, matched_reference):
+    """Compare raw/corrected moving planes over exactly the same footprint.
+
+    For x' = R x + t, the moving plane transforms as n' = R n and
+    d' = d - n' dot t. Normalize each plane's normal and offset together.
+    Use only the final one-to-one matched reference points, projected onto
+    the reference support plane. Their arithmetic centroid, unlike a
+    componentwise median, transforms covariantly with a rigid frame change.
+    Maximum local distances also expose planes crossing at that centroid.
+    No value here participates in registration selection or acceptance.
+    """
+
+    reference_scale = np.linalg.norm(reference.support_normal_base)
+    reference_normal = reference.support_normal_base / reference_scale
+    reference_offset = reference.support_offset_m / reference_scale
+    moving_scale = np.linalg.norm(moving.support_normal_base)
+    moving_normal = moving.support_normal_base / moving_scale
+    moving_offset = moving.support_offset_m / moving_scale
+    corrected_normal = transform[:3, :3].dot(moving_normal)
+    corrected_offset = moving_offset - float(np.dot(
+        corrected_normal, transform[:3, 3]))
+    points = np.asarray(matched_reference, dtype=np.float64)
+    footprint = points - (
+        points.dot(reference_normal) + reference_offset
+    )[:, None] * reference_normal
+    anchor = np.mean(footprint, axis=0)
+
+    def metrics(normal, offset):
+        normal_delta = normal - reference_normal
+        offset_delta = offset - reference_offset
+        # atan2 keeps identical oblique normals at zero despite roundoff in
+        # their squared norm, and stays well conditioned near parallelism.
+        angle = float(np.degrees(np.arctan2(
+            np.linalg.norm(np.cross(reference_normal, normal)),
+            np.dot(reference_normal, normal))))
+        separation = abs(float(np.dot(normal_delta, anchor) + offset_delta))
+        maximum = float(np.max(np.abs(footprint.dot(normal_delta) + offset_delta)))
+        return angle, separation, maximum
+
+    raw_angle, raw_separation, raw_maximum = metrics(moving_normal, moving_offset)
+    angle, separation, maximum = metrics(corrected_normal, corrected_offset)
+    return SupportConsistencyAudit(
+        tuple(anchor), len(points), raw_angle, raw_separation, angle, separation,
+        raw_maximum, maximum)
+
+
+@dataclass(frozen=True)
 class RegistrationResult:
     ok: bool
     code: str
@@ -226,15 +311,21 @@ class RegistrationResult:
     inlier_count: int
     overlap_fraction: float
     rmse_m: float
+    # Existing raw acceptance metrics retain their original median anchor.
     support_normal_angle_deg: float
     support_plane_separation_m: float
     maximum_point_displacement_m: float = 0.0
+    # Rejected and legacy constructed results have no post-registration audit.
+    support_consistency_audit: SupportConsistencyAudit = None
 
     def __post_init__(self):
         if type(self.ok) is not bool:
             raise ValueError('ok must be a boolean')
         if not isinstance(self.code, str) or not self.code:
             raise ValueError('code must be a non-empty string')
+        if (self.support_consistency_audit is not None
+                and not isinstance(self.support_consistency_audit, SupportConsistencyAudit)):
+            raise ValueError('support_consistency_audit must be a SupportConsistencyAudit')
         transform = _immutable_rigid_transform(self.transform_base)
         object.__setattr__(self, 'transform_base', transform)
         object.__setattr__(self, 'inlier_count', _strict_integer(
@@ -279,6 +370,9 @@ class FusedTargetSurface:
     points_base: np.ndarray
     view_indices: np.ndarray
     view_stamps_ns: tuple
+    # Source indices supporting this representative's voxel, not claims that
+    # the exact point was independently measured from different camera angles.
+    view_sources: tuple = None
 
     def __post_init__(self):
         validate_target_identity(self.identity)
@@ -300,6 +394,62 @@ class FusedTargetSurface:
             raise ValueError('view_indices must reference view_stamps_ns')
         object.__setattr__(self, 'view_indices', indices)
         object.__setattr__(self, 'view_stamps_ns', stamps)
+        raw_sources = self.view_sources
+        if raw_sources is None:
+            sources = tuple((int(index),) for index in indices)
+        else:
+            if not isinstance(raw_sources, (tuple, list)) or len(raw_sources) != len(points):
+                raise ValueError('view_sources must contain one source set per point voxel')
+            sources = []
+            for index, row in zip(indices, raw_sources):
+                if not isinstance(row, (tuple, list)) or not row:
+                    raise ValueError('view_sources rows must be non-empty source index sequences')
+                row = tuple(_strict_integer(value, 'voxel source index') for value in row)
+                if (any(b <= a for a, b in zip(row, row[1:]))
+                        or row[-1] >= len(stamps) or int(index) not in row):
+                    raise ValueError('view_sources must be sorted unique valid indices containing the representative')
+                sources.append(row)
+            sources = tuple(sources)
+        object.__setattr__(self, 'view_sources', sources)
+
+    @property
+    def view_support_counts(self):
+        """Immutable distinct source-frame count for each retained voxel."""
+        counts = np.asarray([len(row) for row in self.view_sources], dtype=np.int64)
+        return _immutable_integer_array(counts, (len(self.points_base),), 'view_support_counts')
+
+
+def surface_provenance_audit(surface):
+    """Summarize real source-frame support without granting contact authority.
+
+    Shared voxels demonstrate repeated measurements, not independent viewing
+    angles, reduced uncertainty, contact quality, or reconstructed unseen faces.
+    """
+    if not isinstance(surface, FusedTargetSurface):
+        raise ValueError('surface must be a FusedTargetSurface')
+    supported = [0] * len(surface.view_stamps_ns)
+    exclusive = [0] * len(surface.view_stamps_ns)
+    representative = [0] * len(surface.view_stamps_ns)
+    histogram = {}
+    for index, sources in zip(surface.view_indices, surface.view_sources):
+        representative[int(index)] += 1
+        histogram[str(len(sources))] = histogram.get(str(len(sources)), 0) + 1
+        for source in sources:
+            supported[source] += 1
+        if len(sources) == 1:
+            exclusive[sources[0]] += 1
+    return dict(schema_version=1, policy='registered_measured_voxel_source_sets',
+        target_track_id=surface.identity.track_id, target_epoch=surface.identity.epoch,
+        voxel_count=len(surface.points_base), source_count=len(surface.view_stamps_ns),
+        multi_source_voxel_count=sum(len(row) > 1 for row in surface.view_sources),
+        support_count_histogram=dict(sorted(histogram.items(), key=lambda item:int(item[0]))),
+        per_view=[dict(view_index=index, source_stamp_ns=stamp,
+            represented_voxel_count=representative[index], supported_voxel_count=supported[index],
+            exclusive_voxel_count=exclusive[index],
+            shared_voxel_count=supported[index] - exclusive[index])
+            for index, stamp in enumerate(surface.view_stamps_ns)],
+        independent_viewpoint_evidence=False, uncertainty_reduction_certified=False,
+        contact_or_motion_authorized=False)
 
 
 def surface_view_from_observation(observation):
@@ -707,17 +857,28 @@ def register_surface_view(reference, moving, config=None):
         normal_angle,
         support_plane_separation,
         translation_m,
+        support_consistency_audit=_support_consistency_audit(
+            reference, moving, transform, reference_points[_indices[inliers]]),
     )
 
 
 def _voxel_deduplicate(points, view_indices, voxel_size_m):
+    """Keep the original two-array helper contract for representative points."""
+    points, provenance, _sources = _voxel_deduplicate_with_sources(
+        points, view_indices, voxel_size_m)
+    return points, provenance
+
+
+def _voxel_deduplicate_with_sources(points, view_indices, voxel_size_m, view_sources=None):
     voxel_size = _strict_number(
         voxel_size_m, 'voxel_size_m', minimum=0.0, minimum_inclusive=False)
     points = np.asarray(points, dtype=np.float64)
     provenance = np.asarray(view_indices, dtype=np.int64)
     keys = np.floor(points / voxel_size).astype(np.int64)
-    # Newer views win a duplicate voxel, retaining the accepted registration's
-    # provenance while the older view still owns every distinct measured voxel.
+    if view_sources is None:
+        view_sources = tuple((int(index),) for index in provenance)
+    # Keep the same latest measured representative; retain every source that
+    # measured this voxel instead of erasing old support during replacement.
     order = np.lexsort((
         points[:, 2], points[:, 1], points[:, 0], -provenance,
         keys[:, 2], keys[:, 1], keys[:, 0],
@@ -726,6 +887,12 @@ def _voxel_deduplicate(points, view_indices, voxel_size_m):
     first = np.ones(len(order), dtype=bool)
     first[1:] = np.any(sorted_keys[1:] != sorted_keys[:-1], axis=1)
     selected = order[first]
+    starts = np.flatnonzero(first)
+    stops = np.r_[starts[1:], len(order)]
+    selected_sources = tuple(tuple(sorted({source
+        for point_index in order[start:stop]
+        for source in view_sources[int(point_index)]}))
+        for start, stop in zip(starts, stops))
     selected_points = points[selected]
     selected_provenance = provenance[selected]
     final_order = np.lexsort((
@@ -734,7 +901,8 @@ def _voxel_deduplicate(points, view_indices, voxel_size_m):
         selected_points[:, 1],
         selected_points[:, 0],
     ))
-    return selected_points[final_order], selected_provenance[final_order]
+    return (selected_points[final_order], selected_provenance[final_order],
+            tuple(selected_sources[int(index)] for index in final_order))
 
 
 def fused_surface_from_view(view, voxel_size_m=DEFAULT_FUSION_VOXEL_SIZE_M):
@@ -788,11 +956,13 @@ def append_registered_view(
         surface.view_indices,
         np.full(np.count_nonzero(fusion_members), new_index, dtype=np.int64),
     ))
-    points, provenance = _voxel_deduplicate(
-        combined_points, combined_indices, voxel_size_m)
+    combined_sources = surface.view_sources + ((new_index,),) * int(np.count_nonzero(fusion_members))
+    points, provenance, sources = _voxel_deduplicate_with_sources(
+        combined_points, combined_indices, voxel_size_m, combined_sources)
     return result, FusedTargetSurface(
         identity=surface.identity,
         points_base=points,
         view_indices=provenance,
         view_stamps_ns=surface.view_stamps_ns + (moving.stamp_ns,),
+        view_sources=sources,
     )

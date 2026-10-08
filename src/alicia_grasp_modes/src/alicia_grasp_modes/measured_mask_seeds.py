@@ -8,6 +8,12 @@ import cv2
 import numpy as np
 
 
+# Existing local plane-fit residual limit. Its use below as a narrow seed-band
+# half-width is a conservative labeling scale, NOT a confidence interval for
+# height above the independently measured support plane.
+LOCAL_SURFACE_MAX_RMS_M = .0005
+
+
 def local_surface_normals(points, depth, valid):
     weight = valid.astype(np.float64)
     xyz = np.where(valid[..., None], points, 0.)
@@ -24,13 +30,60 @@ def local_surface_normals(points, depth, valid):
     variance = np.maximum(values[..., 0], 0.)
     local_max = cv2.dilate(np.where(valid, depth, 0.).astype(np.float32), np.ones((5, 5), np.uint8))
     local_min = cv2.erode(np.where(valid, depth, 1e4).astype(np.float32), np.ones((5, 5), np.uint8))
-    reliable = ((count >= 21) & (variance <= .0005 ** 2)
+    reliable = ((count >= 21) & (variance <= LOCAL_SURFACE_MAX_RMS_M ** 2)
                 & (variance / np.maximum(values.sum(-1), 1e-15) <= .04)
                 & (local_max - local_min <= .008) & (values[..., 1] >= 1e-8))
     return vectors[..., 0], reliable
 
 
-def confidence_labels(seed, points, depth, heights, plane_normal, config):
+def _side_seed_colour_evidence(bgr, core, support, heights, upper_height, side_cosine):
+    """Demote support-coloured depth ramps to probable, not hard, foreground.
+
+    Smooth stereo edge errors can satisfy the local planar-side test. Compare
+    their chromaticity with measured support and the measured upper interior
+    in this same image. Keep upper seeds and dark/ambiguous pixels unchanged;
+    this does not label a surface as background or change any depth value.
+    """
+    top = core & (heights >= upper_height)
+    intensity = bgr.astype(float).sum(axis=-1)
+    chroma = bgr.astype(float) / np.maximum(intensity, 1.)[..., None]
+    lit = intensity > 60.
+    background = (cv2.erode(support.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0) & lit
+    report = dict(support_colour_demoted_side_pixels=0,
+                  support_colour_reference_pixels=int(np.count_nonzero(background)))
+    if np.count_nonzero(background) < 25 or np.count_nonzero(top & lit) < 25:
+        return core, report
+
+    def distance(reference, query):
+        # Quantization bounds the reference set independently of image size.
+        colours = np.unique(np.round(chroma[reference] * 32.), axis=0) / 32.
+        return np.concatenate([np.sqrt(np.min(np.sum(
+            (chunk[:, None, :] - colours[None, :, :]) ** 2, axis=2), axis=1))
+            for chunk in np.array_split(query, max(1, int(np.ceil(len(query) / 256.))))])
+
+    # Weak chroma is readily changed by reflected table light on a dark
+    # physical face. Preserve it and sides steeper than 60 degrees to the
+    # support. Only shallow, strongly coloured ramps are ambiguous here.
+    side = (core & ~top & lit & (np.ptp(chroma, axis=-1) > .5)
+            & (side_cosine >= .5))
+    if not np.any(side):
+        return core, report
+    query = chroma[side]
+    support_distance = distance(background, query)
+    top_distance = distance(top & lit, query)
+    ambiguous_side = ((support_distance < .08)
+                      & (top_distance > support_distance + .04))
+    # Isolated coloured edge pixels must not alter the entire colour model.
+    # Require a substantial contradictory region before demoting any seed.
+    if np.count_nonzero(ambiguous_side) < max(25, .1 * np.count_nonzero(core)):
+        return core, report
+    result = core.copy()
+    result[side] = ~ambiguous_side
+    report['support_colour_demoted_side_pixels'] = int(np.count_nonzero(ambiguous_side))
+    return result, report
+
+
+def confidence_labels(seed, points, depth, heights, plane_normal, config, *, bgr=None):
     valid = (np.isfinite(depth) & (depth >= config.depth_min_m)
              & (depth <= config.depth_max_m) & np.all(np.isfinite(points), axis=-1))
     measured = (seed & valid & (heights >= config.foreground_min_m)
@@ -47,6 +100,8 @@ def confidence_labels(seed, points, depth, heights, plane_normal, config):
     side = core & reliable & (cosine <= np.sqrt(.5))
     upper_height = float(np.percentile(heights[measured], 90.))
     top = core & (heights >= upper_height)
+    original_top_pixels = int(np.count_nonzero(top))
+    upper_surface_band_used = False
     foreground = top | side
     # A low-profile object can have real side pixels inside the support
     # uncertainty band. Only make support depth an irreversible background
@@ -55,6 +110,25 @@ def confidence_labels(seed, points, depth, heights, plane_normal, config):
     # depth still faces the same downstream geometry/contact requirements.
     separated = upper_height >= (config.foreground_min_m + 2 * config.support_threshold_m)
     background = valid & (np.abs(heights) <= config.support_threshold_m) & separated
+    colour_evidence = {}
+    if bgr is not None:
+        foreground, colour_evidence = _side_seed_colour_evidence(
+            bgr, foreground, background, heights, upper_height, cosine)
+    if np.count_nonzero(foreground) < 25 and original_top_pixels < 25:
+        # On a small noisy planar face, the highest decile can contain fewer
+        # than 25 pixels even when its measured interior is reliable. Reuse
+        # the SAME local fits; never expand to the full depth component or
+        # admit a pixel outside its eroded, >=foreground_min_m interior.
+        # Normal residual and support-relative height are different measures:
+        # this narrow absolute band is not a statistical depth correction.
+        top = (core & reliable & (cosine >= np.sqrt(.5))
+               & (heights >= upper_height - LOCAL_SURFACE_MAX_RMS_M)
+               & (heights <= upper_height + LOCAL_SURFACE_MAX_RMS_M))
+        foreground = top | side
+        if bgr is not None:
+            foreground, colour_evidence = _side_seed_colour_evidence(
+                bgr, foreground, background, heights, upper_height, cosine)
+        upper_surface_band_used = True
     if np.any(foreground & background):
         raise ValueError('rgb_depth_foreground_support_conflict')
     if np.count_nonzero(foreground) < 25:
@@ -62,8 +136,12 @@ def confidence_labels(seed, points, depth, heights, plane_normal, config):
     return foreground, background, dict(
         seed_policy='measured_upper_interior_and_planar_sides',
         upper_seed_height_m=upper_height,
+        original_top_pixels=original_top_pixels,
+        upper_surface_band_used=upper_surface_band_used,
+        upper_surface_band_half_width_m=(LOCAL_SURFACE_MAX_RMS_M
+                                        if upper_surface_band_used else None),
         support_background_height_separated=bool(separated),
         trusted_top_pixels=int(np.count_nonzero(top)),
         trusted_side_pixels=int(np.count_nonzero(side)),
         trusted_core_pixels=int(np.count_nonzero(foreground)),
-        measured_support_background_pixels=int(np.count_nonzero(background)))
+        measured_support_background_pixels=int(np.count_nonzero(background)), **colour_evidence)

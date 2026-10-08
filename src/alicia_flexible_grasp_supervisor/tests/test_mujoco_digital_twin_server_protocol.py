@@ -719,6 +719,16 @@ def test_arm_targets_hold_state_but_contact_grip_command_preserves_response():
     class FakeModel:
         jnt_qposadr = server_module.np.asarray([0, 1], dtype=int)
         jnt_dofadr = server_module.np.asarray([0, 1], dtype=int)
+        actuator_gainprm = server_module.np.tile([90.] + [0.] * 9, (4, 1))
+        actuator_biasprm = server_module.np.tile([0., -90., -12.] + [0.] * 7, (4, 1))
+        actuator_gear = server_module.np.tile([1., 0., 0., 0., 0., 0.], (4, 1))
+        actuator_trnid = server_module.np.asarray([[0, -1], [1, -1], [0, -1], [1, -1]])
+        actuator_dyntype = server_module.np.zeros(4, dtype=int)
+        actuator_gaintype = server_module.np.zeros(4, dtype=int)
+        actuator_biastype = server_module.np.ones(4, dtype=int)
+        actuator_trntype = server_module.np.zeros(4, dtype=int)
+        actuator_ctrllimited = server_module.np.zeros(4, dtype=bool)
+        actuator_ctrlrange = server_module.np.zeros((4, 2))
 
     class FakeData:
         qpos = server_module.np.zeros(2, dtype=float)
@@ -780,7 +790,7 @@ def test_arm_targets_hold_state_but_contact_grip_command_preserves_response():
     )
     assert data.qpos == pytest.approx([0.10, -0.20])
     assert data.qvel == pytest.approx([0.5, 1.0])
-    assert data.ctrl[2:] == pytest.approx([0.11, -0.18])
+    assert data.ctrl[2:] == pytest.approx([0.11 + 12./90.*.5, -0.18 + 12./90.])
     assert max_speed == pytest.approx(1.0)
 
 

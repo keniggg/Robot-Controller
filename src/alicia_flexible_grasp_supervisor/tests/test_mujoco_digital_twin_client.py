@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import io
 import pathlib
 import sys
 import types
@@ -31,6 +32,22 @@ SAFETY_KEYS = (
     'contact_success',
     'lift_success',
 )
+
+
+@pytest.mark.parametrize('width', [.0167228875332801, .05])
+def test_preview_and_ros_wire_plan_build_identical_simulation_payloads(width):
+    plan = _rich_plan()
+    plan.required_open_width_m = width
+    plan.object_geometry.support_offset_m = -.011254547024737854
+    encoded = io.BytesIO()
+    plan.serialize(encoded)
+    received = Grasp6DPlan()
+    received.deserialize(encoded.getvalue())
+    names, positions = ['Joint1'], [0.]
+    before = client_module.build_mujoco_payload(plan, names, positions)
+    after = client_module.build_mujoco_payload(received, names, positions)
+    assert before == after
+    assert before['required_open_width_m'] <= .05
 
 
 def test_grasp_system_launch_wires_shared_remote_url_to_both_clients():
@@ -759,6 +776,63 @@ def test_lift_diagnostic_policy_preserves_actual_wsl_failure_and_can_be_reenable
     assert not _validate_recorded(response, require_lift_success=True).ok
 
 
+def test_failed_preload_with_no_lift_samples_reports_contact_failure():
+    response = _recorded_lift_failure()
+    response['lift_evidence'].pop('settled_gripper_state')
+    response['lift_evidence'].update(lift_sample_count=0, two_sided_lift_samples=0,
+                                     lost_contact_samples=0)
+    result = _validate_recorded(response, require_lift_success=False)
+    assert not result.ok
+    assert result.code == 'MUJOCO_CONTACT_FAILED'
+
+
+def _recorded_lift_ik_failure():
+    import json
+    return json.loads((ROOT / 'tests/fixtures/mujoco_lift_only_ik_failure_20260925.json').read_text())
+
+
+def _validate_lift_ik_failure(response, require_lift_success=False):
+    return client_module.validate_mujoco_gate_response(
+        response, 'bdbd1ed6139bfccd75d6217a', 80,
+        expected_candidate_source='tabletop_geometry',
+        expected_candidate_source_lineage=['tabletop_geometry'],
+        require_lift_success=require_lift_success)
+
+
+def test_recorded_lift_ik_failure_allows_verified_closure_only_without_lift():
+    from copy import deepcopy
+    response = _recorded_lift_ik_failure()
+    original = deepcopy(response)
+    assert not _validate_lift_ik_failure(response, True).ok
+    result = _validate_lift_ik_failure(response)
+    assert result.ok and result.code == 'MUJOCO_LIFT_DIAGNOSTIC_ONLY'
+    assert result.score == 35.0
+    assert response == original
+
+
+@pytest.mark.parametrize('change', [
+    lambda r: r.update(collision_free=False),
+    lambda r: r.update(failure_code='MUJOCO_COLLISION'),
+    lambda r: r.update(plan_id='another'),
+    lambda r: r['ik_results'][0].update(success=False),
+    lambda r: r['ik_results'][2].update(success=False),
+    lambda r: r['ik_results'][-1].update(name='grasp'),
+    lambda r: r['ik_results'][-1].update(success=True),
+    lambda r: r['ik_results'][-1].update(position_error_m=float('nan')),
+    lambda r: r['lift_evidence'].pop('settled_gripper_state'),
+    lambda r: r['lift_evidence'].update(preload_settle_samples=0),
+    lambda r: r['lift_evidence'].update(lift_sample_count=False),
+    lambda r: r['lift_evidence'].update(lift_sample_count=1),
+    lambda r: r['lift_evidence'].update(commanded_lift_m=0.01),
+    lambda r: r['lift_evidence']['settled_gripper_state'].update(left_object_normal_force_n=0),
+    lambda r: r['lift_evidence']['settled_gripper_state'].update(finger_object_contacts=[]),
+])
+def test_lift_ik_diagnostic_exception_requires_exact_structured_pre_lift_proof(change):
+    response = _recorded_lift_ik_failure()
+    change(response)
+    assert not _validate_lift_ik_failure(response).ok
+
+
 @pytest.mark.parametrize('change', [
     lambda r: r.update(ik_success=False),
     lambda r: r.update(collision_free=False),
@@ -796,3 +870,69 @@ def test_lift_policy_only_changes_unknown_object_plans():
     plan.model_choice = 'unknown_tabletop'
     assert client_module.mujoco_lift_gate_enabled(plan, {}) is True
     assert client_module.mujoco_lift_gate_enabled(plan, config) is False
+
+
+@pytest.mark.parametrize('case', [0, 1])
+@pytest.mark.parametrize('require_lift', [False, True])
+def test_recorded_closure_failures_keep_physical_reason_without_authorizing(case, require_lift):
+    from copy import deepcopy
+    import json
+    fixture = json.loads((ROOT / 'tests/fixtures/mujoco_failed_closure_excerpts_20260926.json').read_text())
+    excerpt = fixture['responses'][case]
+    # The audit omits wire-envelope fields. Preserve a known valid envelope,
+    # then reproduce all recorded verdict/evidence fields exactly.
+    response = _recorded_lift_failure()
+    response.update(deepcopy(excerpt))
+    if 'lift_evidence' not in excerpt:
+        response.pop('lift_evidence', None)
+    original = deepcopy(response)
+    result = client_module.validate_mujoco_gate_response(
+        response, excerpt['plan_id'], 80,
+        expected_candidate_source='tabletop_geometry',
+        expected_candidate_source_lineage=['tabletop_geometry'],
+        require_lift_success=require_lift)
+    assert not result.ok and result.code == 'MUJOCO_CONTACT_FAILED'
+    assert excerpt['failure_reason'] in result.reason
+    assert response == original
+
+
+def _declared_unknown_bound():
+    return dict(source='operator_declared_operational_limit', scope='all_unknown_objects',
+                maximum_mass_kg=.020, operator_statement='以后所有的未知物体不会超过20g')
+
+
+def test_declared_unknown_mass_bound_tests_upper_limit_and_preserves_other_physics():
+    from copy import deepcopy
+    plan=_rich_plan();plan.model_choice='unknown_tabletop'
+    baseline=client_module.build_mujoco_payload(plan,['j'],[0.])
+    config={'unknown_object_mass_bound':_declared_unknown_bound()};before=deepcopy(config)
+    actual=client_module.build_mujoco_payload(plan,['j'],[0.],config)
+    assert actual['object_model']['mass_kg']==.020
+    evidence=actual['object_model']['dynamics_assumptions']
+    assert evidence['source']=='operator_declared_unknown_mass_upper_bound'
+    assert evidence['declared_upper_bound_kg']==.020 and evidence['measured_upper_bound'] is False
+    assert evidence['operator_mass_policy']==config['unknown_object_mass_bound']
+    assert actual['object_model']['friction']==baseline['object_model']['friction']
+    for key in ('trajectory','gripper','support_plane','plan_id','snapshot_stamp_sec'):
+        assert actual[key]==baseline[key]
+    assert config==before
+    plan.plan_id='new-independent-plan';plan.target_track_id='new-target'
+    assert client_module.build_mujoco_payload(plan,['j'],[0.],config)['object_model']['mass_kg']==.020
+
+
+def test_declared_unknown_bound_never_changes_carton_or_unspecified_policy():
+    plan=_rich_plan()
+    baseline=client_module.build_mujoco_payload(plan,['j'],[0.])
+    assert client_module.build_mujoco_payload(plan,['j'],[0.],
+        {'unknown_object_mass_bound':_declared_unknown_bound()})==baseline
+    plan.model_choice='unknown_tabletop'
+    assert client_module.build_mujoco_payload(plan,['j'],[0.])['object_model']['mass_kg']==.5
+
+
+@pytest.mark.parametrize('field,value', [('maximum_mass_kg',True),('maximum_mass_kg','0.02'),
+    ('maximum_mass_kg',0),('maximum_mass_kg',float('nan')),('maximum_mass_kg',float('inf')),
+    ('maximum_mass_kg',.51),('source','inferred_from_image'),('scope','carton'),('operator_statement','')])
+def test_declared_unknown_mass_bound_rejects_invalid_or_unattributed_policy(field,value):
+    plan=_rich_plan();plan.model_choice='unknown_tabletop';policy=_declared_unknown_bound();policy[field]=value
+    with pytest.raises((ValueError,TypeError)):
+        client_module.build_mujoco_payload(plan,['j'],[0.],{'unknown_object_mass_bound':policy})

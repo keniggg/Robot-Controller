@@ -162,3 +162,41 @@ def test_comparison_budget_starts_only_after_qualified_incumbent():
         assert audit['variant_results'][-1]['reason'] == 'OBSERVATION_COMPARISON_BUDGET_REACHED'
     finally:
         node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('already_exhausted', [False, True])
+def test_unchecked_tilt_views_are_not_reported_as_proven_unreachable(already_exhausted):
+    node = streaming_node(clock=MutableClock(50.), start_worker=False)
+    node.execution_plan_validity_sec = 120.
+    node.mujoco_selection_snapshot_reserve_sec = 30.
+    elapsed = MutableClock(0.)
+    node._observation_tilt_clock = elapsed
+    try:
+        node.start_streaming(); node.submit_stream_snapshot(snapshot(49.8))
+        ticket = node._stream_worker_ticket
+        variants = [dict(sequence=NS(pregrasp=remote.PoseStamped()),
+            camera_tilt_offset_deg=30., camera_roll_offset_deg=0., preference_index=i,
+            observation_envelope=remote.ObservationEnvelopeResult(True, '', '', .08-i*.01))
+            for i in range(2)]
+        runtime = dict(prepared=NS(ticket=ticket), grasp_pose=variants[0]['sequence'].pregrasp,
+            observation_sequence=variants[0]['sequence'], observation_variants=variants, soft_evidence={})
+        node._stable_variant_runtime = {(3,1):runtime}
+        if already_exhausted:
+            node._observation_tilt_search_budget = dict(
+                request_key=(ticket.generation,ticket.target_epoch,ticket.request_id),
+                checked_count=4,used_sec=4.)
+        def strict(pose, observation=False):
+            elapsed.value += 4.
+            return MoveItResult(reachable=False,joint_path_cost=0.,joint_max_delta_rad=0.,
+                reason='fixture strict failure',failure_code='MOVEIT_UNREACHABLE'),{},''
+        node._strict_moveit_evaluation = strict
+        result = node._check_moveit_stable_candidate(NS(track_id=3,variant_index=1))
+        assert not result.reachable and result.failure_code=='MOVEIT_CHECK_ERROR'
+        assert 'OBSERVATION_SEARCH_INCOMPLETE' in result.reason
+        audit=runtime['observation_orientation_search']
+        assert audit['search_complete'] is False
+        assert audit['checked_variant_count']==(0 if already_exhausted else 1)
+        assert audit['unchecked_variant_count']==(2 if already_exhausted else 1)
+        assert audit['strict_moveit_rechecked'] is (not already_exhausted)
+    finally:
+        node.shutdown_streaming_worker()

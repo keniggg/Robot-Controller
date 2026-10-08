@@ -1,0 +1,11 @@
+# Read-only candidate precheck. No motion or execution cache may be created.
+alicia_flexible_grasp_supervisor/Grasp6DPlan plan
+time deadline
+---
+bool success
+string failure_code
+string failed_stage
+float64 joint_path_cost
+float64 joint_max_delta
+string message
+string evidence_json

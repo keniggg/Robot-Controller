@@ -22,6 +22,7 @@ for name in (
     'SetTargetPose',
     'CompensatePregrasp',
     'CheckPoseSequence',
+    'CheckContactSequence',
     'ResolveFreeSpaceOrientations',
     'CartesianJog',
     'TriggerZero',

@@ -3,9 +3,12 @@
 
 #include "ros/ros.h"
 #include "alicia_d_driver/actuation_confirmation.hpp"
+#include "alicia_d_driver/gripper_stroke_snapshot.hpp"
+#include "alicia_d_driver/joint_feedback_recovery.hpp"
 #include "alicia_d_driver/endpoint_trim_continuity.hpp"
 #include "alicia_d_driver/endpoint_trim_driver_admission.hpp"
 #include "alicia_d_driver/sdk_diagnostic_evidence.hpp"
+#include "alicia_d_driver/gui_direct_profile.hpp"
 #include "serial_communicator.hpp" // Assuming this is a non-ROS helper class
 #include "std_msgs/Bool.h"
 #include "std_msgs/Header.h"
@@ -22,6 +25,7 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include <chrono>
 
 
 constexpr uint8_t CMD_DUAL_ARM = 0x06;
@@ -40,11 +44,15 @@ private:
     // ROS 1 NodeHandle
    ros::NodeHandle nh_;
    ros::NodeHandle pnh_; // Private NodeHandle for parameters
+   std::unique_ptr<alicia_d_driver::GripperStrokeSnapshot> gripper_stroke_;
 
    // Initialization
    void load_parameters();
    void setup_ros_communications();
    void clear_retained_command_state();
+   // Caller holds control_mode_mutex_; never call while holding send/data locks.
+   void clear_retained_command_state_locked(bool discard_feedback);
+   bool retire_failed_initial_probe_locked();
    bool request_positive_enable(
        const std::string& source, bool preserve_fresh_confirmation = false);
    void publish_actuation_status();
@@ -69,6 +77,7 @@ private:
    bool gui_control_mode_ = false;
    bool control_mode_needs_sync_ = false;
    bool control_mode_hold_only_ = false;
+   bool initial_probe_stream_retired_ = false; // guarded by control_mode_mutex_
    ros::Time control_mode_changed_time_;
    ros::Time control_reference_reset_time_;
    ros::Subscriber gui_control_mode_sub_;
@@ -139,7 +148,8 @@ private:
    double rate_limit_sec_;
 	   double command_rate_hz_;
 	   double state_poll_rate_hz_;
-	   double temperature_poll_rate_hz_ = 1.0;
+	   bool software_temperature_monitoring_enabled_ = false;
+	   double temperature_poll_rate_hz_ = 0.0;
 	   double self_check_poll_rate_hz_ = 0.5;
 	   bool suppress_diagnostic_queries_while_motion_active_ = true;
 	   double diagnostic_query_motion_quiet_sec_ = 0.5;
@@ -187,6 +197,11 @@ private:
 	   ros::Time last_process_time_;
     // Trajectory smoothing parameters
     bool use_trajectory_smoothing_ = true;
+    // Separate from the legacy global smoother: automatic timed trajectories
+    // never enter this GUI-only shaper. Guarded by control_mode_mutex_.
+    bool gui_direct_profile_enabled_ = true;
+    GuiDirectProfile gui_direct_profile_;
+    std::chrono::steady_clock::time_point gui_direct_profile_tick_;
     double max_joint_velocity_rad_s_ = 2.5;     // per-joint max command slew rate (rad/s)
     double max_gripper_velocity_rad_s_ = 1.5;   // gripper slew rate (rad/s)
     double max_joint_accel_rad_s2_ = 8.0;       // per-joint max acceleration (rad/s^2)
@@ -212,6 +227,7 @@ private:
    std::vector<std::string> joint_names_;
 	   ros::Time last_accepted_joint_feedback_time_;
 	   ros::Time last_joint_feedback_frame_time_;
+	   alicia_d_driver::InitialJointFeedbackWindow initial_joint_feedback_window_;
 	   std::vector<double> pending_joint_feedback_;
 	   int pending_joint_feedback_count_ = 0;
 

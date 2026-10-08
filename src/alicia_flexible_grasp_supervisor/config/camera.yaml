@@ -4,14 +4,20 @@ camera:
   use_realsense: true
   width: 640
   height: 480
+  # SDK 采集尺寸独立于运行时校正画布；实际内参与有效域由设备生成。
+  stream_width: 640
+  stream_height: 480
+  pair_rectification:
+    enabled: true
   fps: 30
   # D405 以 30 FPS 取帧；ROS 限制发布速率，避免多订阅者重复拷贝拖慢 GUI。
   publish_fps: 20
+  async_publication_enabled: true
   fallback_to_simulation: false
   read_failure_limit: 3
   color_topic: "/supervisor/camera/color/image_raw"
   depth_topic: "/supervisor/camera/depth/image_raw"
-  # GUI 使用较小的深度预览，完整 640x480 深度仍供感知与 6D 规划使用。
+  # GUI 使用较小的深度预览，完整校正深度供感知与 6D 规划使用。
   depth_preview_topic: "/supervisor/camera/depth/preview"
   depth_preview_width: 320
   depth_preview_height: 240

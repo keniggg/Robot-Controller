@@ -7115,7 +7115,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             for candidate in candidates
         }
         node._require_stream_ticket_current = lambda _ticket: None
-        node._build_selected_preview_bundle = lambda candidate: {
+        node._build_selected_preview_bundle = lambda candidate, ticket=None: {
             'rich_plan': types.SimpleNamespace(
                 plan_id='plan-%d' % candidate.track_id,
                 candidate_source='tabletop_geometry',

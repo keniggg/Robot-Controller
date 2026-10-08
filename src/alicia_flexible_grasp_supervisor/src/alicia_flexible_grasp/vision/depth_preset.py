@@ -1,7 +1,8 @@
-"""Opt-in measured-depth preset; restore the saved carton sensor baseline.
+"""Measured-depth preset, independent of the task's stationary-filter mode.
 
 This selects an SDK matcher preset, not a calibration or a depth-image repair.
 Invalid pixels remain invalid. A saved baseline survives camera process restart.
+Unknown defaults to high_accuracy; saved_baseline is an explicit alternative.
 """
 import hashlib
 import json
@@ -10,8 +11,10 @@ from pathlib import Path
 
 class ModeDepthPreset:
     def __init__(self, rs, device, config, depth_scale):
-        if config.get('unknown_preset', 'high_accuracy') != 'high_accuracy':
-            raise ValueError('only the qualified high_accuracy preset is supported')
+        unknown_preset = config.get('unknown_preset', 'high_accuracy')
+        if type(unknown_preset) is not str or unknown_preset not in ('high_accuracy', 'saved_baseline'):
+            raise ValueError('unsupported unknown depth preset: expected high_accuracy or saved_baseline')
+        self.unknown_preset = unknown_preset
         path = Path(config['baseline_path']).expanduser()
         saved = json.loads(path.read_text())
         serial = str(device.get_info(rs.camera_info.serial_number))
@@ -52,7 +55,7 @@ class ModeDepthPreset:
         self.dirty = True
         try:
             self._restore()
-            if mode == 'unknown':
+            if mode == 'unknown' and self.unknown_preset == 'high_accuracy':
                 self.dirty = True
                 self.sensor.set_option(self.rs.option.visual_preset, 3.)
                 if float(self.sensor.get_option(self.rs.option.visual_preset)) != 3.:
@@ -67,7 +70,9 @@ class ModeDepthPreset:
 
     def evidence(self):
         return dict(mode=self.mode,
-                    preset='high_accuracy' if self.mode == 'unknown' else 'saved_baseline',
+                    preset=(self.unknown_preset if self.mode == 'unknown' else
+                            'saved_baseline' if self.mode == 'carton' else None),
+                    configured_unknown_preset=self.unknown_preset,
                     baseline_sha256=self.baseline_hash,
                     depth_scale_m_per_unit=self.depth_scale,
                     invalid_depth_filling=False)

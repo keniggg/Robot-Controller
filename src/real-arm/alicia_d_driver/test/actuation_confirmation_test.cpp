@@ -256,6 +256,118 @@ TEST(ActuationConfirmationTest, SmoothResponseUsesDisplacementDespiteFixedEncode
     EXPECT_TRUE(confirmation.motion_confirmed(12.8));
 }
 
+TEST(ActuationConfirmationTest, PendingSmoothProbeIgnoresUncommandedAxisDrift)
+{
+    // A GUI recovery probe is only 16 SDK counts. Feedback movement on a
+    // different, held axis must not repeatedly erase the commanded axis's
+    // accumulated wire displacement before the original 0.02 rad threshold.
+    for (const auto axis : {0u, 5u}) {
+        for (const double direction : {-1.0, 1.0}) {
+            ActuationConfirmation confirmation(test_config());
+            confirmation.reset_for_positive_enable(10.0);
+            confirmation.note_feedback(joints(), 10.1);
+            ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+            const unsigned held_axis = (axis + 1u) % 6u;
+            for (int count = 1; count <= 16; ++count) {
+                auto target = joints();
+                target[axis] = direction * sdk_joint_position_decode(2048 + count);
+                const double stamp = 10.2 + .04 * count;
+                confirmation.note_streamed_target(target, stamp);
+                if (count == 14) {
+                    EXPECT_EQ(confirmation.status_text(), "PENDING:COMMAND_SYNCHRONIZED");
+                }
+                auto measured = target;
+                measured[held_axis] = count % 2 ? .004 : 0.0;
+                confirmation.note_feedback(measured, stamp + .01);
+            }
+            EXPECT_TRUE(confirmation.motion_confirmed(10.86)) << axis << ":" << direction;
+        }
+    }
+}
+
+TEST(ActuationConfirmationTest, PendingHeldAxisDriftCannotReplaceCommandedResponse)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    for (int count = 1; count <= 16; ++count) {
+        const double stamp = 10.2 + .04 * count;
+        confirmation.note_streamed_target(joints(sdk_joint_position_decode(2048 + count)), stamp);
+        confirmation.note_feedback(joints(0.0, count % 2 ? .004 : 0.0), stamp + .01);
+    }
+    EXPECT_FALSE(confirmation.motion_confirmed(10.86));
+    EXPECT_EQ(confirmation.status_text(), "PENDING:AWAITING_ENCODER_RESPONSE");
+    confirmation.update(12.0);
+    EXPECT_TRUE(confirmation.initial_probe_failed());
+    EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT");
+}
+
+TEST(ActuationConfirmationTest, PendingProbeStillRequiresFeedbackAfterThreshold)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    for (int count = 1; count <= 14; ++count) {
+        const double stamp = 10.2 + .04 * count;
+        const double target = sdk_joint_position_decode(2048 + count);
+        confirmation.note_streamed_target(joints(target), stamp);
+        confirmation.note_feedback(joints(target, count % 2 ? .004 : 0.0), stamp + .01);
+    }
+    EXPECT_FALSE(confirmation.motion_confirmed(10.77));
+    confirmation.note_streamed_target(joints(sdk_joint_position_decode(2063)), 10.8);
+    EXPECT_EQ(confirmation.status_text(), "PENDING:AWAITING_ENCODER_RESPONSE");
+    EXPECT_FALSE(confirmation.motion_confirmed(10.8));
+    confirmation.note_feedback(joints(sdk_joint_position_decode(2063)), 10.8);
+    EXPECT_FALSE(confirmation.motion_confirmed(10.8));
+    confirmation.note_feedback(joints(sdk_joint_position_decode(2063)), 10.81);
+    EXPECT_TRUE(confirmation.motion_confirmed(10.81));
+}
+
+TEST(ActuationConfirmationTest, PendingPreviouslyUncommandedMotionCannotBecomeResponse)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(.001), 10.3);
+    confirmation.note_feedback(joints(.001, .025), 10.4);
+    confirmation.note_streamed_target(joints(.002), 10.5);
+    confirmation.note_feedback(joints(.002, .025), 10.6);
+    // This newly commanded axis has already moved before any command to it.
+    // Its old displacement is still grounds to replace the baseline.
+    confirmation.note_streamed_target(joints(.002, .025), 10.7);
+    confirmation.note_feedback(joints(.002, .025), 10.8);
+    EXPECT_FALSE(confirmation.motion_confirmed(10.8));
+    EXPECT_EQ(confirmation.status_text(), "PENDING:COMMAND_SYNCHRONIZED");
+}
+
+TEST(ActuationConfirmationTest, PendingQuantizedGuiProbeSurvivesOneHeldAxisStep)
+{
+    // Deterministic reconstruction of the logged 16-count Joint1 probe and
+    // held Joint4 change, not a replay of unavailable 50 Hz wire/feedback data.
+    ActuationConfirmation confirmation(test_config());
+    const auto baseline = joints(degrees(-3.0), degrees(-2.0), degrees(-1.9),
+                                 degrees(-.3), degrees(-.7), 0.0);
+    auto command = joints(sdk_joint_position_decode(2014), degrees(-1.3), degrees(-1.4),
+                          degrees(-.2), degrees(-.7), degrees(-.1));
+    for (auto& value : command) value = driver_sdk_quantize(value);
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(baseline, 10.1);
+    ASSERT_TRUE(confirmation.admit_command(command, 10.2, nullptr));
+    for (int count = 0; count <= 16; ++count) {
+        const double stamp = 10.3 + .033 * count;
+        command[0] = sdk_joint_position_decode(2014 - count);
+        confirmation.note_streamed_target(command, stamp);
+        auto measured = baseline;
+        measured[0] += degrees(-1.2) * count / 16.0;
+        if (count >= 8) measured[3] = 0.0;
+        confirmation.note_feedback(measured, stamp + .01);
+    }
+    EXPECT_TRUE(confirmation.motion_confirmed(10.84));
+}
+
 TEST(ActuationConfirmationTest, SmoothCommandWithoutResponseStillTimesOut)
 {
     ActuationConfirmation confirmation(test_config());
@@ -357,6 +469,89 @@ TEST(ActuationConfirmationTest, ZeroResponseTimesOutUnconfirmed)
     );
 }
 
+TEST(ActuationConfirmationTest, InitialTimeoutRejectsResidualTargetsUntilNewEnable)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(0.0, 0.025), 10.3);
+    confirmation.note_feedback(joints(), 11.2);
+    confirmation.update(11.31);
+    ASSERT_TRUE(confirmation.initial_probe_failed());
+    ASSERT_TRUE(confirmation.synchronized()); // Covers the former admission fast path.
+
+    std::string reason;
+    for (const auto& target : {joints(), joints(0.0, .025), joints(.2)}) {
+        EXPECT_FALSE(confirmation.admit_command(target, 11.4, &reason));
+        EXPECT_EQ(reason, "INITIAL_PROBE_FAILED_REQUIRES_POSITIVE_ENABLE");
+    }
+    // Late movement/keepalives and ownership changes do not revive this epoch.
+    confirmation.note_feedback(joints(0.0, .025), 11.5);
+    confirmation.note_streamed_target(joints(0.0, .025), 11.6);
+    confirmation.reset_motion_observation();
+    confirmation.reset_command_synchronization();
+    EXPECT_TRUE(confirmation.initial_probe_failed());
+    EXPECT_FALSE(confirmation.motion_confirmed(11.6));
+    EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT");
+    EXPECT_FALSE(confirmation.admit_command(joints(0.0, .025), 11.7, nullptr));
+
+    // A subsequent telemetry diagnostic must not erase the failed-probe latch.
+    confirmation.mark_unconfirmed("DISCONTINUOUS_FEEDBACK_RECOVERY", 11.8);
+    EXPECT_TRUE(confirmation.initial_probe_failed());
+    EXPECT_FALSE(confirmation.admit_command(joints(), 11.9, nullptr));
+}
+
+TEST(ActuationConfirmationTest, NewPositiveEnableRequiresFreshSyncAndMeasuredResponse)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(.025), 10.3);
+    confirmation.update(11.31);
+    ASSERT_TRUE(confirmation.initial_probe_failed());
+
+    confirmation.reset_for_positive_enable(12.0);
+    EXPECT_FALSE(confirmation.initial_probe_failed());
+    EXPECT_FALSE(confirmation.synchronized());
+    EXPECT_FALSE(confirmation.admit_command(joints(.4), 12.01, nullptr));
+    confirmation.note_feedback(joints(.4), 12.1);
+    EXPECT_FALSE(confirmation.admit_command(joints(.025), 12.2, nullptr));
+    ASSERT_TRUE(confirmation.admit_command(joints(.4), 12.3, nullptr));
+    EXPECT_FALSE(confirmation.motion_confirmed(12.3));
+    confirmation.note_streamed_target(joints(.425), 12.4);
+    confirmation.note_feedback(joints(.41), 12.5);
+    EXPECT_TRUE(confirmation.motion_confirmed(12.5));
+    EXPECT_FALSE(confirmation.initial_probe_failed());
+}
+
+TEST(ActuationConfirmationTest, ConfirmedLossAndStaleFeedbackDoNotRetireInitialProbe)
+{
+    for (bool exercise_response_loss : {false, true}) {
+        ActuationConfirmation confirmation(test_config());
+        confirmation.reset_for_positive_enable(10.0);
+        confirmation.note_feedback(joints(), 10.1);
+        ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+        confirmation.note_streamed_target(joints(.025), 10.3);
+        confirmation.note_feedback(joints(.01), 10.4);
+        ASSERT_TRUE(confirmation.motion_confirmed(10.4));
+        if (exercise_response_loss) {
+            confirmation.note_streamed_target(joints(.025), 10.5);
+            confirmation.note_streamed_target(joints(.06), 10.6);
+            confirmation.note_feedback(joints(.01), 11.0);
+            confirmation.update(11.61);
+            EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+        } else {
+            confirmation.update(12.41);
+            EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:CONFIRMED_FEEDBACK_STALE");
+        }
+        EXPECT_FALSE(confirmation.initial_probe_failed());
+        // Existing confirmed-stream failure/hold admission remains unchanged.
+        EXPECT_TRUE(confirmation.admit_command(joints(.025), 12.5, nullptr));
+    }
+}
+
 TEST(ActuationConfirmationTest, OppositeAndUnrelatedMotionDoNotConfirm)
 {
     ActuationConfirmation confirmation(test_config());
@@ -390,6 +585,38 @@ TEST(ActuationConfirmationTest, RepeatedKeepaliveDoesNotResetProbeDeadline)
         confirmation.status_text(),
         "UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT"
     );
+}
+
+TEST(ActuationConfirmationTest, LaterMovingAxisJoinsSameResponseWindow)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    // Joint3 crosses the threshold first; Joint2 has not yet reached it.
+    confirmation.note_streamed_target(joints(0., -.017, .0215), 10.3);
+    confirmation.note_feedback(joints(0., -.006, -.05), 10.4);
+    ASSERT_FALSE(confirmation.motion_confirmed(10.4));
+    // A transient high J3 baseline cannot hide independent, genuinely
+    // commanded J2 motion once J2 also crosses the original 0.02-rad gate.
+    confirmation.note_streamed_target(joints(0., -.025, .03), 10.5);
+    confirmation.note_feedback(joints(0., -.009, -.04), 10.6);
+    EXPECT_TRUE(confirmation.motion_confirmed(10.6));
+}
+
+TEST(ActuationConfirmationTest, AddedAxisNeverExtendsDeadlineOrCreditsSmallMotion)
+{
+    for (double delta : {-.019, -.025}) {
+        ActuationConfirmation confirmation(test_config());
+        confirmation.reset_for_positive_enable(10.0);
+        confirmation.note_feedback(joints(), 10.1);
+        ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+        confirmation.note_streamed_target(joints(0., -.017, .0215), 10.3);
+        confirmation.note_streamed_target(joints(0., delta, .03), 11.2);
+        confirmation.note_feedback(joints(0., delta == -.019 ? -.006 : 0., 0.), 11.25);
+        confirmation.update(11.31);
+        EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT");
+    }
 }
 
 TEST(ActuationConfirmationTest, TimedOutProbeCannotRearmFromRetainedTargets)
@@ -538,6 +765,243 @@ TEST(ActuationConfirmationTest, ConfirmedStreamDoesNotAcceptUnrelatedJointMotion
         }
     }
     EXPECT_TRUE(response_lost);
+}
+
+namespace
+{
+ActuationConfirmation confirmed_with_pending_positive_probe()
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    confirmation.admit_command(joints(), 10.2, nullptr);
+    confirmation.note_streamed_target(joints(.03), 10.3);
+    confirmation.note_feedback(joints(.006), 10.4);
+    confirmation.note_streamed_target(joints(.03), 10.41);
+    confirmation.note_feedback(joints(.03), 10.5);
+    confirmation.note_streamed_target(joints(.03), 10.51);
+    confirmation.note_streamed_target(joints(.04), 10.6);
+    confirmation.note_streamed_target(joints(.055), 10.7);
+    return confirmation;
+}
+}
+
+TEST(ActuationConfirmationTest, ActiveResponseProbeAcceptsMeasuredCommandReversal)
+{
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    confirmation.note_feedback(joints(), 10.1);
+    ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+    confirmation.note_streamed_target(joints(.03), 10.3);
+    confirmation.note_feedback(joints(.006), 10.4);
+    ASSERT_TRUE(confirmation.motion_confirmed(10.4));
+    confirmation.note_streamed_target(joints(.03), 10.41);
+    confirmation.note_feedback(joints(.03), 10.5);
+    confirmation.note_streamed_target(joints(.03), 10.51);
+    confirmation.note_streamed_target(joints(.04), 10.6);
+    confirmation.note_streamed_target(joints(.055), 10.7);
+
+    // The SDK target reverses before the pending positive response arrives.
+    // Subsequent real reverse movement must satisfy the new command direction,
+    // without extending this observation window's original deadline.
+    confirmation.note_streamed_target(joints(), 10.75);
+    confirmation.note_feedback(joints(.02), 10.8);
+    confirmation.note_feedback(joints(.01), 10.9);
+    confirmation.note_feedback(joints(), 11.0);
+    confirmation.update(11.71);
+    EXPECT_TRUE(confirmation.motion_confirmed(11.71));
+}
+
+TEST(ActuationConfirmationTest, ReversedProbeRequiresNewDirectionalResponse)
+{
+    for (int response_kind = 0; response_kind < 4; ++response_kind) {
+        SCOPED_TRACE(response_kind); // stationary, old direction, other axis, prior reverse drift
+        auto confirmation = confirmed_with_pending_positive_probe();
+        if (response_kind == 3) {
+            confirmation.note_feedback(joints(.02), 10.72);
+        }
+        confirmation.note_streamed_target(joints(), 10.75);
+        const double stationary = response_kind == 3 ? .02 : .03;
+        for (int i = 0; i < 9; ++i) {
+            const double now = 10.8 + .1 * i;
+            confirmation.note_feedback(joints(
+                response_kind == 1 ? .04 : stationary,
+                response_kind == 2 ? .03 : 0.), now);
+            confirmation.note_streamed_target(joints(), now + .01);
+        }
+        confirmation.update(11.71);
+        EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+    }
+}
+
+TEST(ActuationConfirmationTest, RepeatedProbeReversalsCannotExtendDeadline)
+{
+    auto confirmation = confirmed_with_pending_positive_probe();
+    for (int i = 0; i < 10; ++i) {
+        const double now = 10.75 + .09 * i;
+        confirmation.note_streamed_target(joints(i % 2 ? .06 : 0.), now);
+        confirmation.note_feedback(joints(.03), now + .01);
+        confirmation.update(now + .02);
+        ASSERT_TRUE(confirmation.motion_confirmed(now + .02));
+    }
+    confirmation.note_feedback(joints(.03), 11.69);
+    confirmation.note_streamed_target(joints(), 11.70);
+    confirmation.update(11.71);
+    EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+    confirmation.note_streamed_target(joints(.06), 11.72);
+    confirmation.note_feedback(joints(.04), 11.73);
+    EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+}
+
+TEST(ActuationConfirmationTest, ProbeReversalPreservesOtherEligibleAxes)
+{
+    auto confirmation = confirmed_with_pending_positive_probe();
+    confirmation.note_streamed_target(joints(.055, .025), 10.72);
+    confirmation.note_streamed_target(joints(0., .025), 10.75);
+    confirmation.note_feedback(joints(.03, .006), 10.8);
+    confirmation.update(11.71);
+    EXPECT_TRUE(confirmation.motion_confirmed(11.71));
+}
+
+TEST(ActuationConfirmationTest, RetractionWithoutMeasuredCrossingKeepsGoalDirection)
+{
+    for (bool toward_target : {false, true}) {
+        SCOPED_TRACE(toward_target);
+        auto confirmation = confirmed_with_pending_positive_probe();
+        confirmation.note_streamed_target(joints(.08), 10.72);
+        confirmation.note_streamed_target(joints(.075), 10.75);
+        confirmation.note_streamed_target(joints(.065), 10.8);
+        confirmation.note_streamed_target(joints(.055), 10.85);
+        // .055 is still above measured .03. Negative movement goes away
+        // from the current target, despite the SDK target retracting.
+        confirmation.note_feedback(joints(toward_target ? .036 : .02), 10.9);
+        confirmation.update(11.71);
+        EXPECT_EQ(confirmation.motion_confirmed(11.71), toward_target);
+    }
+}
+
+TEST(ActuationConfirmationTest, CumulativeReversalMustCrossMeasuredPosition)
+{
+    auto confirmation = confirmed_with_pending_positive_probe();
+    confirmation.note_streamed_target(joints(.08), 10.72);
+    confirmation.note_streamed_target(joints(.075), 10.75);
+    confirmation.note_streamed_target(joints(.065), 10.8);
+    confirmation.note_streamed_target(joints(.045), 10.85);
+    confirmation.note_streamed_target(joints(.025), 10.9);
+    confirmation.note_streamed_target(joints(), 10.95);
+    confirmation.note_feedback(joints(.02), 11.0);
+    confirmation.update(11.71);
+    EXPECT_TRUE(confirmation.motion_confirmed(11.71));
+}
+
+TEST(ActuationConfirmationTest, ShallowCrossingPreservesExistingResponseDirection)
+{
+    for (double goal : {.02, .03}) {
+        for (double measured : {.026, .04}) {
+            SCOPED_TRACE(goal);
+            SCOPED_TRACE(measured);
+            auto confirmation = confirmed_with_pending_positive_probe();
+            confirmation.note_streamed_target(joints(goal), 10.75);
+            confirmation.note_feedback(joints(measured), 10.8);
+            confirmation.note_feedback(joints(measured), 11.69);
+            confirmation.update(11.71);
+            // Below the command probe threshold, this is still the original
+            // response observation. Confirmation records directional motion;
+            // it does not claim that the newest absolute target was reached.
+            EXPECT_EQ(confirmation.motion_confirmed(11.71), measured > .03);
+        }
+    }
+}
+
+TEST(ActuationConfirmationTest, ConfirmedResponsePreservesFixedSetpointEncoderOffset)
+{
+    for (double sign : {-1., 1.}) {
+        for (bool commanded_axis_responds : {false, true}) {
+            SCOPED_TRACE(sign);
+            SCOPED_TRACE(commanded_axis_responds);
+            ActuationConfirmation confirmation(test_config());
+            confirmation.reset_for_positive_enable(10.0);
+            confirmation.note_feedback(joints(), 10.1);
+            ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+            confirmation.note_streamed_target(joints(sign * .05), 10.3);
+            confirmation.note_feedback(joints(sign * .006), 10.4);
+            ASSERT_TRUE(confirmation.motion_confirmed(10.4));
+            confirmation.note_streamed_target(joints(sign * .05), 10.41);
+            confirmation.note_feedback(joints(sign * .08), 10.5);
+            confirmation.note_streamed_target(joints(sign * .05), 10.51);
+
+            // An established 0.03 rad setpoint/encoder offset does not change
+            // the sign of a new 0.025 rad command displacement. Compare the
+            // two displacements, not the absolute target with the encoder.
+            confirmation.note_streamed_target(joints(sign * .075), 10.6);
+            confirmation.note_feedback(joints(sign * (commanded_axis_responds ? .086 : .08)), 10.7);
+            confirmation.note_feedback(joints(sign * (commanded_axis_responds ? .105 : .08)), 11.59);
+            confirmation.update(11.61);
+            EXPECT_EQ(confirmation.motion_confirmed(11.61), commanded_axis_responds);
+            if (!commanded_axis_responds) {
+                EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+            }
+        }
+    }
+}
+
+TEST(ActuationConfirmationTest, SmallCommandRetractionCannotChangeProbeDirection)
+{
+    auto confirmation = confirmed_with_pending_positive_probe();
+    confirmation.note_streamed_target(joints(.045), 10.75);
+    confirmation.note_feedback(joints(.02), 10.8);
+    confirmation.note_feedback(joints(.02), 11.69);
+    confirmation.update(11.71);
+    EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+}
+
+TEST(ActuationConfirmationTest, FeedbackBeforeReversedWireTargetCannotConfirmIt)
+{
+    auto confirmation = confirmed_with_pending_positive_probe();
+    confirmation.note_streamed_target(joints(), 10.75);
+    confirmation.note_feedback(joints(.02), 10.74);
+    confirmation.note_feedback(joints(.03), 10.8);
+    confirmation.note_feedback(joints(.03), 11.69);
+    confirmation.update(11.71);
+    EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+}
+
+TEST(ActuationConfirmationTest, LateReversedFeedbackCannotBeatTimeoutUpdate)
+{
+    auto confirmation = confirmed_with_pending_positive_probe();
+    confirmation.note_streamed_target(joints(), 10.75);
+    // The original probe expires at 11.7, regardless of callback ordering.
+    // Its new direction cannot obtain another second for a delayed response.
+    confirmation.note_feedback(joints(.02), 11.71);
+    confirmation.update(11.72);
+    EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+}
+
+TEST(ActuationConfirmationTest, UneditedAxisOffsetCannotSatisfyNewAxisProbe)
+{
+    for (bool edited_axis_responds : {false, true}) {
+        SCOPED_TRACE(edited_axis_responds);
+        ActuationConfirmation confirmation(test_config());
+        confirmation.reset_for_positive_enable(10.0);
+        confirmation.note_feedback(joints(), 10.1);
+        ASSERT_TRUE(confirmation.admit_command(joints(), 10.2, nullptr));
+        confirmation.note_streamed_target(joints(.05), 10.3);
+        confirmation.note_feedback(joints(.025), 10.4);
+        ASSERT_TRUE(confirmation.motion_confirmed(10.4));
+        // J1 retains a >0.02 rad setpoint/encoder offset while only J2's
+        // transmitted command changes. J1 drift is not a J2 response.
+        confirmation.note_streamed_target(joints(.05), 10.41);
+        confirmation.note_streamed_target(joints(.05, .01), 10.5);
+        confirmation.note_streamed_target(joints(.05, .03), 10.6);
+        const double response = edited_axis_responds ? .006 : 0.;
+        confirmation.note_feedback(joints(.035, response), 10.7);
+        confirmation.note_feedback(joints(.035, response), 11.59);
+        confirmation.update(11.61);
+        EXPECT_EQ(confirmation.motion_confirmed(11.61), edited_axis_responds);
+        if (!edited_axis_responds) {
+            EXPECT_EQ(confirmation.status_text(), "UNCONFIRMED:ENCODER_RESPONSE_LOST");
+        }
+    }
 }
 
 TEST(ActuationConfirmationTest, September13SettlingThenReverseUsesNewMotionBaseline)
@@ -2476,4 +2940,198 @@ int main(int argc, char** argv)
 {
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+
+TEST(JointFeedbackRecoveryTest, September26SubToleranceJoint4JumpCanRecover)
+{
+    const double count = 2.0 * M_PI / 4096.0;
+    const auto candidate = joints(-1200*count, 310*count, -63*count,
+                                  31*count, -289*count, -71*count);
+    auto previous = candidate;
+    previous[3] += 32*count;
+    auto command = candidate;
+    command[3] += 2*count;
+    const double physical_limit = 8*count + 0.3*0.1;
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        previous, candidate, command, 0.05));
+    EXPECT_TRUE(alicia_d_driver::command_consistent_feedback_recovery(
+        previous, candidate, command, 0.05, physical_limit, 8*count));
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        candidate, previous, command, 0.05, physical_limit, 8*count));
+    auto mixed = candidate;
+    mixed[2] += 0.06;
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        previous, mixed, command, 0.05, physical_limit, 8*count));
+}
+
+TEST(JointFeedbackRecoveryTest, SubToleranceRecoveryRequiresMeaningfulImprovement)
+{
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(-0.024), joints(0.023), joints(), 0.05, 0.0423, 0.0123));
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(0.025), joints(), joints(), 0.05, 0.0423, 0.0123));
+    // A slower packet interval must not hide another large inconsistent axis.
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(0.2, -0.04), joints(0.0, 0.02), joints(),
+        0.05, 0.0723, 0.0123));
+    // Large discontinuities retain the earlier 0.05 rad improvement margin.
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(-0.04), joints(0.02), joints(), 0.05, 0.0423, 0.0123));
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(0.049), joints(), joints(), 0.05, 0.0, 0.0123));
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(0.049), joints(), joints(), 0.05, 0.0423, 0.0));
+    EXPECT_FALSE(alicia_d_driver::command_consistent_feedback_recovery(
+        joints(0.049), joints(), joints(), 0.05, 0.0423, 0.06));
+}
+
+namespace
+{
+alicia_d_driver::InitialJointFeedbackConfig initial_feedback_config()
+{
+    return {2.0 * 2.0 * M_PI / 4096.0, 0.2, 0.2, 3};
+}
+
+std::vector<double> decoded_joint_counts(const std::vector<int>& counts)
+{
+    std::vector<double> positions;
+    for (int count : counts) positions.push_back(sdk_joint_position_decode(count));
+    return positions;
+}
+}  // namespace
+
+TEST(InitialJointFeedbackWindowTest, September26BootSequenceWaitsForStableNearZeroBaseline)
+{
+    using alicia_d_driver::InitialJointFeedbackWindow;
+    InitialJointFeedbackWindow window;
+    const auto config = initial_feedback_config();
+    struct Sample { double time; std::vector<int> counts; };
+    // Actual 2026-09-26 startup feedback: Joint2 74.62 deg -> -0.62 deg,
+    // Joint5 -23.82 deg -> -0.62 deg. These are receipt timestamps and encoder
+    // words, not host goals; the first sample previously latched for 10.8 s.
+    const std::vector<Sample> samples = {
+        {10.000000000, {2045, 2897, 2038, 2046, 1777, 2044}},
+        {10.099465609, {2045, 2846, 2038, 2046, 1829, 2044}},
+        {10.199563742, {2045, 2794, 2038, 2046, 1880, 2044}},
+        {10.299429178, {2045, 2743, 2038, 2046, 1930, 2044}},
+        {10.399435043, {2045, 2691, 2038, 2046, 1981, 2044}},
+        {10.499562740, {2045, 2640, 2038, 2046, 2027, 2044}},
+        {10.599417448, {2045, 2590, 2038, 2046, 2038, 2044}},
+        {10.799979687, {2045, 2487, 2038, 2046, 2038, 2044}},
+        {10.900096655, {2045, 2436, 2038, 2046, 2038, 2044}},
+        {10.999430895, {2045, 2386, 2038, 2046, 2038, 2044}},
+        {11.099421263, {2045, 2335, 2038, 2046, 2038, 2044}},
+        {11.199426174, {2046, 2283, 2038, 2046, 2038, 2044}},
+        {11.299492836, {2047, 2234, 2038, 2046, 2038, 2044}},
+        {11.399488926, {2047, 2183, 2038, 2046, 2038, 2044}},
+        {11.499439240, {2049, 2133, 2038, 2046, 2039, 2044}},
+        {11.599595070, {2050, 2080, 2038, 2046, 2039, 2044}},
+        {11.699892044, {2050, 2042, 2038, 2046, 2039, 2044}},
+        {11.899583101, {2049, 2041, 2038, 2045, 2041, 2044}},
+        {11.999420881, {2049, 2041, 2038, 2045, 2041, 2044}},
+    };
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        const bool ready = window.observe(decoded_joint_counts(samples[i].counts),
+            samples[i].time, false, config);
+        EXPECT_EQ(ready, i == samples.size() - 1) << "sample " << i;
+    }
+    EXPECT_GE(window.sample_count(), 3);
+    EXPECT_GE(window.span_sec(), config.minimum_span_sec);
+}
+
+TEST(InitialJointFeedbackWindowTest, WholeWindowRejectsSlowAccumulatedMotion)
+{
+    alicia_d_driver::InitialJointFeedbackWindow window;
+    const auto config = initial_feedback_config();
+    for (int i = 0; i < 20; ++i) {
+        // Each step is only one count, but the required elapsed window would
+        // span four counts; pairwise-only comparisons would accept this ramp.
+        const auto q = decoded_joint_counts({2048, 2048 + i, 2048, 2048, 2048, 2048});
+        EXPECT_FALSE(window.observe(q, 10.0 + i * 0.05, false, config));
+    }
+}
+
+TEST(InitialJointFeedbackWindowTest, RequiresIndependentFramesAndElapsedWindow)
+{
+    alicia_d_driver::InitialJointFeedbackWindow window;
+    const auto config = initial_feedback_config();
+    EXPECT_FALSE(window.observe(joints(), 10.0, false, config));
+    EXPECT_FALSE(window.observe(joints(), 10.0, false, config));
+    EXPECT_EQ(window.sample_count(), 0);
+    EXPECT_FALSE(window.observe(joints(), 10.1, false, config));
+    EXPECT_FALSE(window.observe(joints(), 10.100001, false, config));
+    EXPECT_FALSE(window.observe(joints(), 10.100002, false, config));
+    EXPECT_FALSE(window.observe(joints(), 10.2, false, config));
+    EXPECT_TRUE(window.observe(joints(), 10.3, false, config));
+    // A clock rollback starts no fake stable interval.
+    EXPECT_FALSE(window.observe(joints(), 10.2, false, config));
+    EXPECT_EQ(window.sample_count(), 0);
+}
+
+TEST(InitialJointFeedbackWindowTest, GapResetAndEveryAxisAreRequired)
+{
+    alicia_d_driver::InitialJointFeedbackWindow window;
+    const auto config = initial_feedback_config();
+    EXPECT_FALSE(window.observe(joints(), 10.0, false, config));
+    EXPECT_FALSE(window.observe(joints(), 10.1, false, config));
+    EXPECT_FALSE(window.observe(joints(), 10.31, false, config));
+    EXPECT_EQ(window.sample_count(), 1);
+    EXPECT_FALSE(window.observe(joints(), 10.41, false, config));
+    // Another joint moving invalidates an otherwise stable Joint2/Joint5 pair.
+    EXPECT_FALSE(window.observe(joints(0.0, 0.0, 0.0, 0.0, 0.0, 0.01), 10.51, false, config));
+    EXPECT_EQ(window.sample_count(), 1);
+    EXPECT_FALSE(window.observe(joints(0.0, 0.0, 0.0, 0.0, 0.0, 0.01), 10.61, false, config));
+    EXPECT_TRUE(window.observe(joints(0.0, 0.0, 0.0, 0.0, 0.0, 0.01), 10.71, false, config));
+    window.reset(); // Same path used by all-zero/full-scale feedback and reconnect.
+    EXPECT_EQ(window.sample_count(), 0);
+    EXPECT_FALSE(window.observe(joints(), 11.0, false, config));
+    EXPECT_FALSE(window.observe(joints(), 11.1, false, config));
+    EXPECT_TRUE(window.observe(joints(), 11.2, false, config));
+}
+
+TEST(InitialJointFeedbackWindowTest, NeverAdmitsAnActiveCommandReference)
+{
+    alicia_d_driver::InitialJointFeedbackWindow window;
+    const auto config = initial_feedback_config();
+    EXPECT_FALSE(window.observe(joints(), 10.0, false, config));
+    EXPECT_FALSE(window.observe(joints(), 10.1, false, config));
+    EXPECT_FALSE(window.observe(joints(), 10.2, true, config));
+    EXPECT_EQ(window.sample_count(), 0);
+    for (int i = 0; i < 10; ++i)
+        EXPECT_FALSE(window.observe(joints(), 10.3 + i * 0.1, true, config));
+    EXPECT_FALSE(window.observe(joints(), 12.0, false, config));
+    EXPECT_FALSE(window.observe(joints(), 12.1, false, config));
+    EXPECT_TRUE(window.observe(joints(), 12.2, false, config));
+}
+
+TEST(InitialJointFeedbackWindowTest, InvalidEvidenceCannotCompleteAcquisition)
+{
+    alicia_d_driver::InitialJointFeedbackWindow window;
+    const auto config = initial_feedback_config();
+    EXPECT_FALSE(window.observe(joints(), 10.0, false, config));
+    EXPECT_FALSE(window.observe(joints(), 10.1, false, config));
+    EXPECT_FALSE(window.observe(joints(std::numeric_limits<double>::quiet_NaN()), 10.2, false, config));
+    EXPECT_EQ(window.sample_count(), 0);
+    EXPECT_FALSE(window.observe(std::vector<double>{0.0}, 10.3, false, config));
+    auto invalid_config = config;
+    invalid_config.minimum_samples = 1;
+    EXPECT_FALSE(window.observe(joints(), 10.4, false, invalid_config));
+    EXPECT_FALSE(window.observe(joints(), std::numeric_limits<double>::infinity(), false, config));
+}
+
+TEST(InitialJointFeedbackWindowTest, StableInitialBaselineDoesNotConfirmActuation)
+{
+    alicia_d_driver::InitialJointFeedbackWindow window;
+    const auto config = initial_feedback_config();
+    ActuationConfirmation confirmation(test_config());
+    confirmation.reset_for_positive_enable(10.0);
+    for (int i = 0; i < 3; ++i) {
+        const double receipt = 10.1 + i * 0.1;
+        const bool ready = window.observe(joints(), receipt, false, config);
+        if (ready) confirmation.note_feedback(joints(), receipt);
+        EXPECT_FALSE(confirmation.motion_confirmed(receipt));
+    }
+    EXPECT_EQ(confirmation.state(), ActuationState::PENDING);
+    EXPECT_EQ(confirmation.status_text(), "PENDING:POSITIVE_ENABLE_REQUESTED");
 }

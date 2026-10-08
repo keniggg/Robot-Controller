@@ -23,7 +23,7 @@ def observation_timing(selection, config, baseline):
     strategy = selection.get('strategy', 'two_stage')
     if (type(generation) is not int or generation < 1
             or type(stamp) is not int or stamp < 1
-            or strategy not in ('direct', 'two_stage')):
+            or strategy not in ('direct', 'two_stage', 'observe_return')):
         raise ValueError('invalid observation mode generation')
     velocity = config.get('velocity_scaling', .30)
     acceleration = config.get('acceleration_scaling', .20)

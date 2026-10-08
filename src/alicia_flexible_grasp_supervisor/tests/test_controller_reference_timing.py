@@ -38,7 +38,8 @@ def setup(route='strict'):
     planner.strict_execution_joint_velocity_limits_rad_s = {'Joint2': .02}
     planner.controller_reference_guard_required = True
     planner.controller_reference_provider = lambda names: NS(
-        positions=[.01] * 6, velocities=[0.] * 6, accelerations=[0.] * 6)
+        positions=[-.01 if route == 'prefix' else .01] * 6,
+        velocities=[0.] * 6, accelerations=[0.] * 6)
     planner._remember_pose_plan(make_pose(), plan,
                                 'cartesian' if route == 'cartesian' else 'strict pose')
     return planner, manipulator, plan
@@ -55,7 +56,9 @@ def execute(planner, route):
 @pytest.mark.parametrize('route', ['strict', 'cartesian', 'prefix'])
 def test_every_execution_route_proves_final_bridge_before_cad_and_rechecks_reference(route):
     planner, manipulator, original = setup(route)
-    expected = bounded_observation_prefix(original) if route == 'prefix' else original
+    expected = (bounded_observation_prefix(original,
+        controller_reference=planner.controller_reference_provider(NAMES))
+        if route == 'prefix' else original)
     events = []
     reference = planner.controller_reference_provider(NAMES)
     def provide(names):
@@ -93,6 +96,15 @@ def test_every_execution_route_proves_final_bridge_before_cad_and_rechecks_refer
             planner._last_controller_reference_audit['applied_time_scale']) in message
     assert planner._last_pose_plan is None
     assert not manipulator.go_calls and not manipulator.start_states
+
+
+def test_prefix_towards_offset_desired_cannot_claim_enough_command_delta():
+    planner, manipulator, _ = setup('prefix')
+    planner.controller_reference_provider = lambda names: NS(
+        positions=[.01]*6, velocities=[0.]*6, accelerations=[0.]*6)
+    ok, message = execute(planner, 'prefix')
+    assert not ok and 'insufficient directional command delta' in message
+    assert not manipulator.executed_plans and planner._last_pose_plan is None
 
 
 @pytest.mark.parametrize('route', ['strict', 'cartesian', 'prefix'])

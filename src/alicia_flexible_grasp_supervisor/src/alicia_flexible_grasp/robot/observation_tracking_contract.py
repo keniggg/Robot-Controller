@@ -144,7 +144,7 @@ def required_command_time_scale(plan, hold):
 
 
 def qualify_contract_path(plan, hold, scene, fk, gripper, opening, constraints, stop_duration,
-                          *, trajectory_stop_reserve=False):
+                          *, trajectory_stop_reserve=False, path_validator=None):
     """Search the same finite tracking contracts for every pose/target.
 
     A returned candidate is still only a conditional geometric certificate.
@@ -160,8 +160,9 @@ def qualify_contract_path(plan, hold, scene, fk, gripper, opening, constraints, 
     bounds = derivatives if trajectory_stop_reserve else None
     for contract in tracking_contract_candidates(constraints, fk.names, stop_duration,
                                                  command_bounds=bounds):
+        options = {} if path_validator is None else {'path_validator': path_validator}
         report = qualify_candidate_path(plan, hold, scene, fk, gripper, opening,
-                                        contract['joint_error_bounds_rad'])
+                                        contract['joint_error_bounds_rad'], **options)
         attempts.append(dict(path_position_tolerance_rad=contract['path_position_tolerance_rad'],
                              ok=report['ok'], failure_location=report.get('failure_location'),
                              reason=report.get('reason', '')))

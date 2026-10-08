@@ -1648,6 +1648,7 @@ class MujocoDigitalTwinBackend:
             'lift_execution_contract': (
                 'velocity_consistent_prescribed_position'
             ),
+            'prescribed_arm_velocity_reference_version': 2,
             'cartesian_lift_position_tolerance_m': (
                 CARTESIAN_LIFT_POSITION_TOLERANCE_M
             ),
@@ -2384,7 +2385,15 @@ class MujocoDigitalTwinBackend:
         target_values,
         timestep_s,
     ):
-        """Prescribe one controller-tracked step with consistent velocity."""
+        """Prescribe a step with matching position *and* servo velocity.
+
+        A MuJoCo position actuator produces kp*(ctrl-q)-kv*qdot. Merely
+        prescribing a nonzero qdot while leaving ctrl at the position target
+        makes its damper brake the requested motion. Encode the same desired
+        velocity in ctrl so the damping term acts on velocity error instead.
+        This changes no gain, effort limit, contact parameter, or free-object
+        state; it corrects the reference supplied to the existing actuator.
+        """
 
         count = len(joints)
         if (
@@ -2400,7 +2409,7 @@ class MujocoDigitalTwinBackend:
             raise RuntimeError(
                 'prescribed arm reference timestep must be positive'
             )
-        max_speed = 0.0
+        references = []
         for joint_id, actuator_id, start, target in zip(
             joints,
             actuator_ids,
@@ -2410,9 +2419,38 @@ class MujocoDigitalTwinBackend:
             start_value = float(start)
             target_value = float(target)
             speed = (target_value - start_value) / timestep
+            if not all(math.isfinite(v) for v in (start_value, target_value, speed)):
+                raise RuntimeError('prescribed arm reference must be finite')
+            actuator_id = int(actuator_id)
+            kp = float(model.actuator_gainprm[actuator_id, 0])
+            bias = np.asarray(model.actuator_biasprm[actuator_id], dtype=float)
+            gear = np.asarray(model.actuator_gear[actuator_id], dtype=float)
+            # The reference is in joint radians. Do not silently apply this
+            # conversion to an unrelated/general actuator or geared length.
+            if (not math.isfinite(kp) or kp <= 0.0
+                    or not np.isfinite(bias).all()
+                    or bias[0] != 0.0 or bias[1] != -kp or bias[2] > 0.0
+                    or int(model.actuator_dyntype[actuator_id]) != 0
+                    or int(model.actuator_gaintype[actuator_id]) != 0
+                    or int(model.actuator_biastype[actuator_id]) != 1
+                    or int(model.actuator_trntype[actuator_id]) != 0
+                    or int(model.actuator_trnid[actuator_id, 0]) != int(joint_id)
+                    or not np.array_equal(gear, [1., 0., 0., 0., 0., 0.])):
+                raise RuntimeError('prescribed reference requires a unit-gear position actuator')
+            ctrl = target_value - bias[2] / kp * speed
+            if not math.isfinite(ctrl):
+                raise RuntimeError('prescribed arm actuator reference must be finite')
+            if bool(model.actuator_ctrllimited[actuator_id]):
+                lower, upper = model.actuator_ctrlrange[actuator_id]
+                if not float(lower) <= ctrl <= float(upper):
+                    raise RuntimeError('prescribed arm reference exceeds actuator control range')
+            references.append((int(joint_id), actuator_id, start_value, speed, ctrl))
+        # Validate the entire command before mutating any state.
+        max_speed = 0.0
+        for joint_id, actuator_id, start_value, speed, ctrl in references:
             data.qpos[model.jnt_qposadr[int(joint_id)]] = start_value
             data.qvel[model.jnt_dofadr[int(joint_id)]] = speed
-            data.ctrl[int(actuator_id)] = target_value
+            data.ctrl[int(actuator_id)] = ctrl
             max_speed = max(max_speed, abs(speed))
         self._mujoco.mj_forward(model, data)
         return max_speed

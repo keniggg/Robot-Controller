@@ -25,6 +25,53 @@ class RgbdSample:
 
 
 @dataclass(frozen=True)
+class FrozenRgbdSample:
+    """Request-owned original measurement, distinct from fused pixel arrays."""
+    color_bgr: np.ndarray
+    depth_raw: np.ndarray
+    object_mask: np.ndarray
+    bbox: tuple
+    object_msg: object
+    stamp_sec: float
+    frame_id: str
+    joint_positions: np.ndarray
+    stamp_ns: int = 0
+    target_epoch: int = 0
+    target_identity: TargetTrackIdentity = None
+
+    def __post_init__(self):
+        for name in ('color_bgr', 'depth_raw', 'object_mask', 'joint_positions'):
+            value = getattr(self, name)
+            object.__setattr__(self, name, None if value is None else _readonly_copy(value))
+        object.__setattr__(self, 'bbox', tuple(self.bbox or ()))
+        object.__setattr__(self, 'object_msg', deepcopy(self.object_msg))
+
+
+def retained_exact_source(snapshot):
+    """Return only the original final sample already admitted into this request.
+
+    Retention preserves evidence, not its execution lifetime. Existing request
+    expiry, target identity and current-frame motion authority still apply.
+    A malformed retained binding is rejected; it must not fall back to a newer
+    frame or silently use the temporal median.
+    """
+    sample = getattr(snapshot, 'original_sample', None)
+    if sample is None:
+        return None
+    if (not isinstance(sample, FrozenRgbdSample)
+            or sample.stamp_ns != snapshot.stamp_ns
+            or sample.stamp_sec != snapshot.stamp_sec
+            or sample.frame_id != snapshot.frame_id
+            or sample.target_epoch != snapshot.target_epoch
+            or sample.target_identity != snapshot.target_identity
+            or not snapshot.sample_stamp_ns
+            or snapshot.sample_stamp_ns[-1] != sample.stamp_ns
+            or not np.array_equal(sample.color_bgr, snapshot.color_bgr)):
+        raise ValueError('retained raw sample does not match its request snapshot')
+    return sample
+
+
+@dataclass(frozen=True)
 class DepthQuality:
     fused_frames: int
     mask_area: int
@@ -56,6 +103,7 @@ class SnapshotResult:
     target_epoch: int = 0
     target_identity: TargetTrackIdentity = None
     sample_stamp_ns: tuple = ()
+    original_sample: FrozenRgbdSample = None
 
     def __post_init__(self):
         for name in ('color_bgr', 'depth_raw', 'target_depth_raw', 'object_mask'):
@@ -462,6 +510,12 @@ def fuse_stable_samples(
         target_epoch=int(getattr(latest, 'target_epoch', 0) or 0),
         target_identity=getattr(latest, 'target_identity', None),
         sample_stamp_ns=sample_stamp_ns,
+        # Only one original frame travels with a request; no global history is
+        # added. Collection already applied the normal raw/mask/object timing
+        # gates. Re-querying that cache after queueing would apply its short
+        # receive-age limit a second time and can lose valid source evidence.
+        original_sample=FrozenRgbdSample(**{
+            name: getattr(latest, name) for name in RgbdSample.__dataclass_fields__}),
     )
 
 

@@ -54,6 +54,52 @@ def _window(messages, frame, names, now, epoch_ns, maximum_age, start=None):
     return rows
 
 
+def accepted_stationary_window(measured_messages, *, now_sec, epoch_ns,
+                               after_ns, duration_sec, position_epsilon_rad,
+                               minimum_samples=3, maximum_age_sec=.5,
+                               maximum_gap_sec=.25):
+    """Certify a complete post-action encoder window, never polling repeats.
+
+    The range of all six named arm joints is bounded across the whole window.
+    A small difference between adjacent polls cannot establish this: an old
+    cached message, slow drift or an oscillation between polls could pass it.
+    This proves measured stillness only, not arrival or physical contact.
+    """
+    now, duration = float(now_sec), float(duration_sec)
+    epsilon, maximum = float(position_epsilon_rad), float(maximum_age_sec)
+    gap = float(maximum_gap_sec)
+    if (not all(math.isfinite(v) for v in (now, duration, epsilon, maximum, gap))
+            or now <= 0 or duration <= 0 or epsilon < 0
+            or not 0 < gap <= maximum <= .5
+            or type(minimum_samples) is not int or minimum_samples < 2
+            or type(epoch_ns) is not int or not 0 < epoch_ns <= int(now*1e9)
+            or type(after_ns) is not int or after_ns < epoch_ns):
+        raise ValueError('invalid accepted stationary window contract')
+    measured_messages = tuple(measured_messages)
+    rows = _window(measured_messages, 'sdk_measured',
+                   ARM_NAMES+('right_finger',), now, epoch_ns, maximum)
+    end = rows[-1][0]
+    start = end - int(math.ceil(duration*1e9))
+    if start < after_ns:
+        raise ValueError('insufficient post-action stationary duration')
+    rows = _window(measured_messages, 'sdk_measured',
+                   ARM_NAMES+('right_finger',), now, epoch_ns, maximum, start)
+    if rows[0][0] < after_ns:
+        raise ValueError('stationary window crosses action boundary')
+    if (len(rows) < minimum_samples
+            or any((b[0]-a[0])*1e-9 > gap + 1e-12
+                   for a, b in zip(rows, rows[1:]))):
+        raise ValueError('insufficient continuous accepted samples')
+    span = np.ptp(np.asarray([q for _, q in rows]), axis=0)
+    if np.any(span > epsilon + 1e-12):
+        raise ValueError('accepted feedback range is not stationary')
+    return dict(epoch_ns=epoch_ns, accepted_stamp_ns=end,
+                stationary_window_start_ns=rows[0][0],
+                stationary_window_end_ns=end, accepted_sample_count=len(rows),
+                accepted_positions_rad=rows[-1][1].tolist(),
+                joint_peak_to_peak_rad=span.tolist())
+
+
 def stationary_following_error(fk, sdk_messages, measured_messages, *,
                                now_sec, epoch_ns, maximum_age_sec=.5):
     """Compare FK of successful wire targets and real accepted encoder data.
@@ -70,6 +116,9 @@ def stationary_following_error(fk, sdk_messages, measured_messages, *,
             or not math.isfinite(maximum) or not 0 < maximum <= .5
             or type(epoch_ns) is not int or not 0 < epoch_ns <= int(now*1e9)):
         raise ValueError('invalid following model, clock, epoch or freshness contract')
+    # Freeze the input sequence once: both window passes and the gripper
+    # evidence below must reference the exact same accepted message.
+    sdk_messages, measured_messages = tuple(sdk_messages), tuple(measured_messages)
     sdk = _window(sdk_messages, 'sdk_transmitted', ARM_NAMES,
                   now, epoch_ns, maximum)
     measured = _window(measured_messages, 'sdk_measured', ARM_NAMES+('right_finger',),
@@ -85,6 +134,12 @@ def stationary_following_error(fk, sdk_messages, measured_messages, *,
     measured_q = np.asarray([q for _, q in measured])
     if np.any(np.ptp(measured_q, axis=0) > SDK_QUANTUM_RAD+1e-12):
         raise ValueError('accepted feedback is not stationary')
+    accepted_stamp_ns = measured[-1][0]
+    accepted_message = next(
+        msg for msg in reversed(measured_messages)
+        if int(msg.header.stamp.to_nsec()) == accepted_stamp_ns)
+    accepted_opening = float(dict(zip(accepted_message.name,
+                                      accepted_message.position))['right_finger'])
     target, actual = fk(sdk[-1][1]), fk(measured[-1][1])
     error = actual[:3, 3] - target[:3, 3]
     angle = math.acos(float(np.clip(
@@ -95,7 +150,9 @@ def stationary_following_error(fk, sdk_messages, measured_messages, *,
         'epoch_ns': epoch_ns,
         'model_sha256': fk.model_sha256,
         'sdk_stamp_ns': sdk[-1][0],
-        'accepted_stamp_ns': measured[-1][0],
+        'accepted_stamp_ns': accepted_stamp_ns,
+        'accepted_gripper_opening_m': accepted_opening,
+        'opening_stamp_ns': accepted_stamp_ns,
         'stationary_window_start_ns': start,
         'stationary_window_end_ns': end,
         'sdk_sample_count': len(sdk),

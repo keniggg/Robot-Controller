@@ -37,6 +37,43 @@ class TabletopTests(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertEqual(reason, 'no_center_instance')
 
+    def test_initial_support_uses_local_table_when_outer_ring_is_cluttered(self):
+        depth, transform = self.scene([(0.288, 0, 0)])
+        y, x = np.indices(depth.shape)
+        radius = np.hypot(x-160, y-120)
+        # The outer annulus is a raised surrounding surface. The central
+        # annulus is measured table, with an isolated central object.
+        depth[radius > 70] = .25
+        result = segment(depth, self.intrinsics, transform)
+        selected, _ = TargetTracker().choose(result, depth.shape)
+        self.assertIsNotNone(selected)
+        self.assertEqual(result.metrics['support_ring_outer_radius_px'], 70.)
+        self.assertGreaterEqual(result.metrics['support_inlier_ratio'], Config().support_min_ratio)
+        self.assertAlmostEqual(selected.depth_m, .288, places=5)
+        self.assertGreaterEqual(selected.metrics['support_quadrants'], 3)
+
+    def test_support_fallback_does_not_retry_missing_depth(self):
+        depth, transform = self.scene([(0.288, 0, 0)])
+        target = segment(depth, self.intrinsics, transform).candidates[0]
+        for reason, arguments in (
+                ('insufficient_support_depth', {}),
+                ('insufficient_support_depth', dict(target_position_base=target.position_base,
+                    plane_base=np.array([-1., 0., 0., .30]),
+                    target_footprint_base=target.support_footprint_base))):
+            with patch('alicia_grasp_modes.tabletop._fit_plane', side_effect=ValueError(reason)) as fit:
+                with self.assertRaisesRegex(ValueError, reason):
+                    segment(depth, self.intrinsics, transform, **arguments)
+                self.assertEqual(fit.call_count, 1)
+
+    def test_support_fallback_is_bounded_and_never_relaxes_inlier_ratio(self):
+        depth, transform = self.scene([(0.288, 0, 0)])
+        with patch('alicia_grasp_modes.tabletop._fit_plane',
+                   side_effect=ValueError('support_plane_inlier_ratio_low')) as fit:
+            with self.assertRaisesRegex(ValueError, 'support_plane_inlier_ratio_low'):
+                segment(depth, self.intrinsics, transform)
+            self.assertEqual(fit.call_count, 3)
+            self.assertTrue(all(call.args[1].support_min_ratio == .70 for call in fit.call_args_list))
+
     def test_two_equally_centered_objects_are_ambiguous(self):
         # Separate instances have equally good center distance.
         depth, transform = self.scene([(0.288, 0.029, 0), (0.288, -0.029, 0)])
@@ -209,7 +246,94 @@ class TabletopTests(unittest.TestCase):
                                               tracker.config, anchor, anchor,
                                               tracker.plane_base)
         self.assertEqual(result.metrics['support_source'], 'locked_base_plane')
+        self.assertTrue(result.metrics['support_current_audit_available'])
+        self.assertGreaterEqual(result.metrics['support_current_audit_quadrants'], 3)
         self.assertFalse(result.metrics.get('support_refit_attempted', False))
+
+    def test_matching_reference_candidate_cannot_hide_current_support_shift(self):
+        depth, transform = self.scene([(0.288, 0, 0)])
+        tracker = TargetTracker()
+        anchor, _ = tracker.choose(segment(depth, self.intrinsics, transform), depth.shape)
+        plane = tracker.plane_base.copy()
+        shifted = depth + .006
+        # Four remote old-plane patches let the frozen segmentation retain a
+        # plausible motor, while the actual raw target ring moved by 6 mm.
+        shifted[:10, :10] = shifted[:10, -10:] = .30
+        shifted[-10:, :10] = shifted[-10:, -10:] = .30
+        legacy = segment(shifted, self.intrinsics, transform, tracker.config,
+                         target_position_base=anchor.position_base,
+                         plane_base=plane, fit_current_support=False)
+        self.assertEqual(len(_matching_candidates(
+            legacy.candidates, anchor, anchor, tracker.config)), 1)
+        self.assertLess(legacy.metrics['support_inlier_ratio'], .01)
+        with self.assertRaisesRegex(ValueError, 'support_plane_local_distance_inconsistent'):
+            segment_with_support_fallback(shifted, self.intrinsics, transform,
+                tracker.config, anchor, anchor, plane)
+        self.assertIs(tracker.anchor, anchor)
+        self.assertIs(tracker.last, anchor)
+        np.testing.assert_array_equal(tracker.plane_base, plane)
+
+    def test_shift_is_audited_before_old_plane_visibility_rejection(self):
+        depth, transform = self.scene([(0.288, 0, 0)])
+        tracker = TargetTracker()
+        anchor, _ = tracker.choose(segment(depth, self.intrinsics, transform), depth.shape)
+        with self.assertRaisesRegex(ValueError, 'locked_support_plane_no_longer_visible'):
+            segment(depth + .010, self.intrinsics, transform, tracker.config,
+                    target_position_base=anchor.position_base,
+                    plane_base=tracker.plane_base, fit_current_support=False)
+        with self.assertRaisesRegex(ValueError, 'support_plane_local_distance_inconsistent'):
+            segment_with_support_fallback(depth + .010, self.intrinsics, transform,
+                tracker.config, anchor, anchor, tracker.plane_base)
+
+    def test_two_quadrants_cannot_establish_current_support_contradiction(self):
+        depth, transform = self.scene([(0.288, 0, 0)])
+        tracker = TargetTracker()
+        anchor, _ = tracker.choose(segment(depth, self.intrinsics, transform), depth.shape)
+        shifted = depth + .006
+        y, x = np.indices(depth.shape)
+        radius = np.hypot(x-160, y-120)
+        shifted[(x >= 155) & (radius >= 30) & (radius <= 90)] = 0.
+        shifted[:10, :10] = shifted[:10, -10:] = .30
+        shifted[-10:, :10] = shifted[-10:, -10:] = .30
+        result = segment_with_support_fallback(shifted, self.intrinsics, transform,
+            tracker.config, anchor, anchor, tracker.plane_base)
+        self.assertFalse(result.metrics['support_current_audit_available'])
+        self.assertEqual(result.metrics['support_current_audit_quadrants'], 2)
+        self.assertEqual(result.metrics['support_current_audit_reason'],
+                         'insufficient_support_spatial_coverage')
+        self.assertEqual(len(_matching_candidates(
+            result.candidates, anchor, anchor, tracker.config)), 1)
+        with self.assertRaisesRegex(ValueError, 'insufficient_support_spatial_coverage'):
+            segment(shifted, self.intrinsics, transform, tracker.config,
+                    target_position_base=anchor.position_base,
+                    plane_base=tracker.plane_base,
+                    target_footprint_base=anchor.support_footprint_base)
+
+    def test_unavailable_current_support_does_not_create_contradiction(self):
+        depth, transform = self.scene([(0.288, 0, 0)])
+        tracker = TargetTracker()
+        anchor, _ = tracker.choose(segment(depth, self.intrinsics, transform), depth.shape)
+        for reason in ('insufficient_support_depth', 'support_plane_not_found',
+                       'support_plane_inlier_ratio_low'):
+            with patch('alicia_grasp_modes.tabletop._fit_plane', side_effect=ValueError(reason)):
+                result = segment_with_support_fallback(depth, self.intrinsics, transform,
+                    tracker.config, anchor, anchor, tracker.plane_base)
+            self.assertFalse(result.metrics['support_current_audit_available'])
+            self.assertEqual(result.metrics['support_current_audit_reason'], reason)
+            self.assertEqual(len(result.candidates), 1)
+            self.assertIs(tracker.last, anchor)
+
+    def test_current_support_residual_is_checked_before_plane_comparison(self):
+        depth, transform = self.scene([(0.288, 0, 0)])
+        tracker = TargetTracker()
+        anchor, _ = tracker.choose(segment(depth, self.intrinsics, transform), depth.shape)
+        with patch('alicia_grasp_modes.tabletop._fit_plane',
+                   return_value=(np.array([-1., 0., 0., .306]), 1., .0021, 1800)):
+            result = segment_with_support_fallback(depth, self.intrinsics, transform,
+                tracker.config, anchor, anchor, tracker.plane_base)
+        self.assertFalse(result.metrics['support_current_audit_available'])
+        self.assertEqual(result.metrics['support_current_audit_reason'],
+                         'support_plane_residual_too_large')
 
     def test_reference_component_cap_uses_validated_same_frame_refit(self):
         depth, transform = self.scene([(0.288, 0, 0)])

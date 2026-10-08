@@ -61,10 +61,34 @@ def test_task_uses_bound_unknown_observation_distance_then_restores_carton(confi
     node, _ = configured
     config = {'near_field_replan_enabled':True, 'observation_camera_target_max_distance_m':.22}
     node._mode_bound_selection = dict(mode='unknown', strategy='two_stage')
-    assert node._strategy_config(config)['observation_camera_target_max_distance_m'] == .30
+    assert node._strategy_config(config)['observation_camera_target_max_distance_m'] == .50
     assert node._strategy_config(config)['near_field_replan_enabled'] is True
     node._mode_bound_selection = dict(mode='carton', strategy='two_stage')
     assert node._strategy_config(config) is config
+
+
+@pytest.mark.parametrize('strategy', ['direct', 'two_stage'])
+def test_unknown_arrival_uses_same_ten_mm_policy_as_compensation(configured, strategy):
+    from alicia_flexible_grasp.grasp.endpoint_tolerance import measured_position_tolerance
+    node, _ = configured
+    config = dict(measured_endpoint_position_tolerance_m=.006,
+                  unknown_measured_endpoint_position_tolerance_m=.010,
+                  measured_endpoint_orientation_tolerance_deg=5.)
+    node._mode_bound_selection = dict(mode='unknown', strategy=strategy)
+    selected = node._strategy_config(config)
+    assert selected['measured_endpoint_position_tolerance_m'] == measured_position_tolerance(config, 'unknown_tabletop') == .010
+    assert selected['measured_endpoint_orientation_tolerance_deg'] == 5.
+    assert config['measured_endpoint_position_tolerance_m'] == .006
+    node._mode_bound_selection = dict(mode='carton', strategy=strategy)
+    assert node._strategy_config(config)['measured_endpoint_position_tolerance_m'] == .006
+    assert measured_position_tolerance(config, 'carton_segment') == .006
+
+
+@pytest.mark.parametrize('value', [True, '0.01', 0., float('nan'), float('inf'), .01001])
+def test_unknown_arrival_rejects_invalid_or_larger_tolerance(configured, value):
+    node, _ = configured
+    with pytest.raises(ValueError, match='TOLERANCE_INVALID'):
+        node._strategy_config(dict(unknown_measured_endpoint_position_tolerance_m=value))
 
 
 @pytest.mark.parametrize('field', ['active', '_start_inflight', '_mode_start_reserved'])
@@ -188,3 +212,19 @@ def test_queued_old_plan_and_wrong_mode_cannot_cross_task_reset(configured, monk
     msg.model_choice = 'unknown_tabletop'
     node.grasp6d_plan_cb(msg)
     assert calls == [msg]
+
+
+@pytest.mark.parametrize('deadline,code', [(10000000000,'OBSERVE_RETURN_SESSION_EXPIRED'),
+    ('10000000000','OBSERVE_RETURN_SESSION_EXPIRED'), (None,'OBSERVE_RETURN_SESSION_INVALID'),
+    (True,'OBSERVE_RETURN_SESSION_INVALID')])
+def test_v2_final_action_boundary_rechecks_original_session_deadline(configured,monkeypatch,deadline,code):
+    node,_=configured
+    node._mode_bound_selection=dict(node._mode_selection)
+    node._observe_return_session=dict(version=2,deadline_ns=deadline)
+    monkeypatch.setattr(module.rospy.Time,'now',staticmethod(lambda:module.rospy.Time(10)))
+    monkeypatch.setattr(base.GraspTaskNode,'_validate_bound_plan_locked',
+        lambda *args:pytest.fail('expired session reached action validator'))
+    action=[]
+    result,response=node._invoke_plan_bound_action(object(),{},'supplement after slow preflight',
+        lambda:action.append('motion'))
+    assert not result.ok and result.code==code and response is None and action==[]

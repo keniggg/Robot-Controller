@@ -1,0 +1,69 @@
+{
+  "readonly_health": {
+    "ok": false,
+    "backend": "not_configured",
+    "protocol_version": 3,
+    "candidate_fields": [
+      "score",
+      "width_m",
+      "height_m",
+      "depth_m",
+      "translation_m",
+      "rotation_matrix"
+    ],
+    "loaded": false,
+    "grasp_backend": {
+      "ok": false,
+      "backend": "not_configured",
+      "loaded": false,
+      "reason": "Dedicated real MuJoCo; existing GraspNet remains on port 8000."
+    },
+    "digital_twin": {
+      "ok": true,
+      "backend": "mujoco",
+      "model_xml": "/home/lv/.local/share/alicia-mujoco-20260923-6047f9a74046/src/arm-mujoco/synriard/mjcf/Alicia_D_v5_6/Alicia_D_v5_6_gripper_50mm.xml",
+      "mujoco": "3.2.3",
+      "joint_state_age_sec": 3411.690618991852,
+      "max_snapshot_age_sec": 120.0,
+      "ros_sync_joint_states": false,
+      "min_lift_success_m": 0.015,
+      "grip_preload_m": 0.003,
+      "preload_settle_steps": 8,
+      "lift_contact_loss_grace_steps": 3,
+      "lift_speed_m_s": 0.1,
+      "max_lift_joint_speed_rad_s": 0.08,
+      "lift_evidence_contract_version": 1,
+      "strict_dynamic_object_lift_required": true,
+      "request_bound_gripper_close_contract": true,
+      "gripper_effort_contract_version": 1,
+      "gripper_joint_effort_limit_n": 5.0,
+      "gripper_position_stiffness_n_m": 200.0,
+      "gripper_position_damping_n_s_m": 7.0,
+      "opposed_contact_gate_version": 1,
+      "max_opposed_contact_normal_angle_deg": 30.0,
+      "lift_path_contract": "cartesian_pose_interpolation",
+      "lift_execution_contract": "velocity_consistent_prescribed_position",
+      "cartesian_lift_position_tolerance_m": 0.0002,
+      "cartesian_lift_orientation_tolerance_rad": 0.005,
+      "contact_geometry_telemetry_version": 1,
+      "missing": [],
+      "deployment_id": "6047f9a740465aaf01759f261b8aff436bbdbf47adea951624b7d245f6e3aec5",
+      "source_sha256": "919ddaf6c9499c86eb913ad5d44bd40dbb6aabde4e5268c0267c9fa7601b7dd6",
+      "initial_unknown_ik_position_tolerance_m": 0.0002,
+      "initial_unknown_ik_orientation_tolerance_rad": 0.005
+    }
+  },
+  "endpoint": "http://172.23.132.97:8001",
+  "archive_server_sha256": "919ddaf6c9499c86eb913ad5d44bd40dbb6aabde4e5268c0267c9fa7601b7dd6",
+  "local_server_sha256": "919ddaf6c9499c86eb913ad5d44bd40dbb6aabde4e5268c0267c9fa7601b7dd6",
+  "method_AST_equal": {
+    "_apply_joint_state": true,
+    "_set_arm_qpos": true,
+    "_gripper_center": true,
+    "_solve_ik": true,
+    "_validate_runtime_gripper_contract": true,
+    "_apply_gripper_inner_gap": true
+  },
+  "no_remote_xml_digest_exposed": true,
+  "identity_limit": "remote health pins deployment id/source but does not expose current XML bytes; archive evidence matches deployed path and original verified switch, not a new remote file hash"
+}

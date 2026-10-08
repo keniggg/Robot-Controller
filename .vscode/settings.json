@@ -9,5 +9,21 @@
         "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages",
         "/opt/ros/noetic/lib/python3/dist-packages"
     ],
-    "cmake.sourceDirectory": "/home/zhuyupei/alicia_wa_full/src/easy_handeye/easy_handeye"
+    "cmake.sourceDirectory": "/home/zhuyupei/alicia_wa_full/src/easy_handeye/easy_handeye",
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/devel/**": true,
+        "**/install/**": true,
+        "**/.ros_log/**": true,
+        "**/.pytest_cache/**": true,
+        "**/__pycache__/**": true
+    },
+    "search.exclude": {
+        "**/build/**": true,
+        "**/devel/**": true,
+        "**/install/**": true,
+        "**/.ros_log/**": true,
+        "**/.pytest_cache/**": true,
+        "**/__pycache__/**": true
+    }
 }

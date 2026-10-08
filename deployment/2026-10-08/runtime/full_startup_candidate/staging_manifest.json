@@ -1,0 +1,175 @@
+{
+  "schema": 1,
+  "status": "installed_for_next_cold_start",
+  "active_files_modified": true,
+  "services_started": false,
+  "ros_operations": false,
+  "source_entry_sha256": {
+    "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/start_ros.sh": "d16971e5f28b89973ed781a66f8802dad313ed08e0f75798df25648d9579f648",
+    "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/resume_modes.launch": "15398f0f582b40f9d18d09b99dd63e37203cade17871686a891982f71c69a809"
+  },
+  "staged_to_destination": {
+    "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/start_ros.staged.sh": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/start_ros.sh",
+    "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/resume_modes.staged.launch": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/resume_modes.launch",
+    "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/alicia-candidate-simulation.service": "/home/zhuyupei/.config/systemd/user/alicia-candidate-simulation.service"
+  },
+  "future_migration_prerequisite": "Reviewed entry files and fixed user unit are installed; daemon-reload completed without service actions. Only the next full root cold start may execute the parent/type guarded --prepare handoff and start the candidate simulator. Current live processes are unchanged and full cold-start runtime behavior remains unverified.",
+  "offline_validation": {
+    "pure_tests_passed": 44,
+    "elapsed_seconds": 0.12,
+    "bash_syntax_passed": true,
+    "systemd_static_verify_passed": true,
+    "systemd_static_verify_with_root_fragment": "/run/user/1000/systemd/transient/alicia-ros-live-20260928.service",
+    "network_or_device_access_in_tests": false,
+    "active_entry_sha_checks_passed": true,
+    "legacy_owner_argv_matches": 8,
+    "root_type_observed": "simple",
+    "full_cold_start_executed": false,
+    "post_install_validation_passed": true,
+    "installed_sha_readback_passed": true,
+    "installed_permission_readback_passed": true,
+    "process_identity_before_after_unchanged": true,
+    "installed_unit_inactive": true,
+    "validation_report": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/startup_owner_extension_20260929T142404Z_4d_mfj9f/validation.json",
+    "owner_registry_entries": 9
+  },
+  "artifact_sha256": {
+    "README.md": "6369e1f998dbbe922ec5a7aebb9579061e243db4681513330e126ef8629a13bf",
+    "alicia-candidate-simulation.service": "bf93925fe8f353f8a6f853c57f7d648e494578a52e1e3ce9c3dc49079c377f17",
+    "candidate_pair_and_simulation.launch": "04e4d86d82afbd4272f0e1a21fcf3e03208d0f5e8a3b9186d826ff494989e6e0",
+    "candidate_simulation_startup.py": "dab922722b43e85ab7723ba4c44b88f53d31498e4ef206d6f8f7c43a07542dfd",
+    "cold_start_handoff.py": "260379aa7066464b80cf38759321c2cced76234d5af256eee5dd469f07de11e1",
+    "legacy_owner_commands.json": "edec86062474590a5bec04fbab6409fc64171fdd8b92d286727be8fc78e9e7f3",
+    "original_resume_modes.launch": "15398f0f582b40f9d18d09b99dd63e37203cade17871686a891982f71c69a809",
+    "original_start_ros.sh": "d16971e5f28b89973ed781a66f8802dad313ed08e0f75798df25648d9579f648",
+    "owner_extension_evidence.json": "6fb549862be0507e26c8c8af8f11ecd2e092d724100d44c2f0595ef09542d648",
+    "resume_modes.staged.launch": "5fde91608eca2fb40956c5b8d1e14960aa46d44a09fe9f96eb0491964b9edb17",
+    "start_ros.staged.sh": "2fa616e35c47da743b2719361fb3f51eea0d9eb5489da3af0d43debc8253d620",
+    "startup_entries.patch": "f1f9bbb856f8797fc6abdf2a228db20e4e0bb29da17c6b3a44cf5b045ef780b5",
+    "test_cold_start_handoff.py": "9d579feab3958914802824fa82bbc93996a53295a2a2ec23d5778635b617deb5",
+    "test_full_startup_candidate.py": "7655839790852cdbe0dbf227ec8bed5d0ba818f6636bc7225b6a40e822c332eb"
+  },
+  "baseline_files": {
+    "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/start_ros.sh": ".runtime/full_startup_candidate/original_start_ros.sh",
+    "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/resume_modes.launch": ".runtime/full_startup_candidate/original_resume_modes.launch"
+  },
+  "review": {
+    "reviewed_at_utc": "2026-09-29T09:43:57.775313+00:00",
+    "conclusion": "installed_for_next_cold_start; not_runtime_verified",
+    "service_operations_executed": false,
+    "root_main_pid_observed": 8526,
+    "source": "local systemd.unit(5), static unit verifier, read-only properties, isolated pure tests",
+    "daemon_reload_executed": true,
+    "installed_at_utc": "2026-09-29T09:52:10.592768+00:00"
+  },
+  "runtime_verification_status": "not_runtime_verified",
+  "daemon_reload": true,
+  "services_stopped": false,
+  "services_restarted": false,
+  "deployed_entry_sha256": {
+    "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/start_ros.sh": "2fa616e35c47da743b2719361fb3f51eea0d9eb5489da3af0d43debc8253d620",
+    "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/resume_modes.launch": "1382755e65c2b43e34c8617191a5c386eb663ba50a7224fe11d5df4554be7bcf",
+    "/home/zhuyupei/.config/systemd/user/alicia-candidate-simulation.service": "bf93925fe8f353f8a6f853c57f7d648e494578a52e1e3ce9c3dc49079c377f17"
+  },
+  "deployment_directory": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/startup_persistence_20260929T095210Z_sgvtmgth",
+  "deployment_report": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/startup_persistence_20260929T095210Z_sgvtmgth/deployment.json",
+  "processes_unchanged": true,
+  "initial_install_validation": {
+    "pure_tests_passed": 41,
+    "elapsed_seconds": 0.09,
+    "bash_syntax_passed": true,
+    "systemd_static_verify_passed": true,
+    "systemd_static_verify_with_root_fragment": "/run/user/1000/systemd/transient/alicia-ros-live-20260928.service",
+    "network_or_device_access_in_tests": false,
+    "active_entry_sha_checks_passed": true,
+    "legacy_owner_argv_matches": 8,
+    "root_type_observed": "simple",
+    "full_cold_start_executed": false,
+    "post_install_validation_passed": true,
+    "installed_sha_readback_passed": true,
+    "installed_permission_readback_passed": true,
+    "process_identity_before_after_unchanged": true,
+    "installed_unit_inactive": true,
+    "validation_report": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/startup_persistence_20260929T095210Z_sgvtmgth/validation.json"
+  },
+  "owner_registry_extension": {
+    "date_utc": "2026-09-29T14:25:14.708955+00:00",
+    "added_owner": "alicia-idle-detector-cache-20260929.service",
+    "owner_count": 9,
+    "old_composite_owner_retained": true,
+    "installed_entries_modified": false,
+    "service_actions": false,
+    "ros_operations": false,
+    "historical_deployment_reports_modified": false,
+    "root_live_state_pointer_modified": false,
+    "evidence_directory": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/startup_owner_extension_20260929T142404Z_4d_mfj9f",
+    "new_unit_readonly_observation": {
+      "MainPID": "0",
+      "PartOf": "",
+      "ConsistsOf": "",
+      "LoadState": "not-found",
+      "ActiveState": "inactive"
+    },
+    "new_unit_actual_argv_validated": false,
+    "unlisted_root_child_owners": [],
+    "tests_passed": 44
+  },
+  "pointer_index_followup": {
+    "updated_at_utc": "2026-09-29T14:32:39.355060+00:00",
+    "initial_deployment_preserved": true,
+    "owner_extension_indexed": true,
+    "runtime_operations": false,
+    "cold_start_verified": false
+  },
+  "configuration_updates": [
+    {
+      "kind": "read_only_precheck_and_passive_monitor_owner_registration",
+      "updated_ns": 1790735814159224887,
+      "owners": {
+        "alicia-contact-precheck-remote-20260930.service": "/bin/bash /home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_contact_precheck_remote_20260930.sh",
+        "alicia-supervision-20260930.service": "/bin/bash /home/zhuyupei/alicia_wa_full/.ros_log/unknown_grasp_20260923/start_watch_current.sh"
+      },
+      "prior_manifest": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_ros_latest_start_20260930T014325Z/precheck_prior_staging_manifest.json",
+      "runtime_operations_performed": false
+    },
+    {
+      "kind": "diagnostic_observation_task_owner_registration",
+      "updated_ns": 1790753099012557108,
+      "owners": {
+        "alicia-plan-bound-observation-task-20260930.service": "/bin/bash /home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_plan_bound_observation_task_20260930.sh"
+      },
+      "prior_manifest": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/resumed_observe_return_grasp_20260930T040740Z/silhouette_prior_startup_manifest.json",
+      "runtime_operations_performed": false
+    },
+    {
+      "kind": "perception_stage_timing_owner_registration",
+      "updated_ns": 1790757087711590717,
+      "owners": {
+        "alicia-perception-stage-timing-20260930.service": "/bin/bash /home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_perception_stage_timing_20260930.sh"
+      },
+      "prior_manifest": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/resumed_observe_return_grasp_20260930T040740Z/perception_timing_prior_staging_manifest.json",
+      "runtime_operations_performed": false
+    },
+    {
+      "kind": "reviewed_simulation_velocity_v2_and_existing_regional_camera_receipt",
+      "updated_at_utc": "2026-10-06T05:50:14.853477+00:00",
+      "regional_change": "Only regional_stationary_enabled:true differs from previously staged resume_modes.launch; previously deployed and validated, not changed this turn",
+      "simulation_source_sha256": "5342482a2ccdff1e555bb914f6a049727892aec7a769f5c907faaff59621fb59",
+      "previous_manifest_sha256": "637852979546e44ae47b3a8a90f5b081543927ad3cd8e19cae3563b1e034abe0"
+    },
+    {
+      "kind": "explicit_user_temporary_close_hold",
+      "updated_at_utc": "2026-10-06T06:08:50.449590+00:00",
+      "request": "我换一个目标物继续执行抓取任务，就先不要上升阶段",
+      "physical_lift_after_close": false,
+      "simulation_lift_gate": false,
+      "backup_directory": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/close_hold_policy_20261006",
+      "previous_files_sha256": {
+        "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/resume_modes.launch": "46d83f7eaae22f7a38cd2414ddb18c03572bbadaacbc3e11f808d1c232baae40",
+        "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/resume_modes.staged.launch": "24126dac397c0d82c543b65f6ec277b1f37ee69ee60ef5d27430f73b04c603cb",
+        "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/staging_manifest.json": "1691c54b6b2fd42611d5e7ef355dc94916f8c363361f38dba0ae2bac2aa9d036"
+      },
+      "source_defaults_unchanged": true
+    }
+  ]
+}

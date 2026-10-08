@@ -19,6 +19,9 @@ from .observation_path_guard import ObservationPathError, wire_digest
 from .observation_tracking_contract import (
     tracking_contract_candidates, validate_command_derivatives, TRAJECTORY_STOP_POLICY,
 )
+from .contact_tracking_contract import (
+    POLICY as CONTACT_POLICY, validate_contact_tracking_contract_binding,
+)
 
 
 def bound_action_goal(plan, audit, constraints, stop_duration, *, reference=None):
@@ -36,9 +39,19 @@ def bound_action_goal(plan, audit, constraints, stop_duration, *, reference=None
         bounds = validate_command_derivatives(plan, reference)
         if audit.get('command_derivative_bounds') != bounds:
             raise ObservationPathError('trajectory stopping derivative proof changed')
-    choices = tracking_contract_candidates(constraints, names, stop_duration, command_bounds=bounds)
-    if not isinstance(contract, dict) or contract not in choices:
-        raise ObservationPathError('observation action has no exact tracking contract')
+    is_contact = isinstance(contract, dict) and contract.get('policy') == CONTACT_POLICY
+    if is_contact:
+        if reference is None:
+            raise ObservationPathError('contact action needs the bound controller reference')
+        validate_contact_tracking_contract_binding(contract, plan, reference, constraints, stop_duration)
+        if (audit.get('compensation_pose_index') != 2
+                or audit.get('command_derivative_bounds') != contract['command_derivative_bounds']
+                or audit.get('model_sha256') != contract['model_sha256']):
+            raise ObservationPathError('contact action scope or model changed')
+    else:
+        choices = tracking_contract_candidates(constraints, names, stop_duration, command_bounds=bounds)
+        if not isinstance(contract, dict) or contract not in choices:
+            raise ObservationPathError('observation action has no exact tracking contract')
     following = audit.get('following_support') or {}
     errors = np.asarray(following.get('joint_error_bounds_rad', []), dtype=float)
     if (errors.shape != (6,)
@@ -58,6 +71,8 @@ def bound_action_goal(plan, audit, constraints, stop_duration, *, reference=None
         if (isinstance(endpoint, bool) or not isinstance(endpoint, (int, float))
                 or not math.isfinite(endpoint) or endpoint <= 0.):
             raise ObservationPathError('missing positive endpoint tolerance for '+name)
+        if is_contact:
+            endpoint = contract['goal_position_tolerance_rad'][names.index(name)]
         velocity = constraints.get('stopped_velocity_tolerance', 0.)
         if (isinstance(velocity, bool) or not isinstance(velocity, (int, float))
                 or not math.isfinite(velocity) or velocity < 0.):
@@ -107,7 +122,7 @@ class ContractedTrajectoryExecutor:
         if self.active:
             self.client.cancel_goal()
 
-    def execute(self, goal, *, before_send, still_authorized):
+    def execute(self, goal, *, before_send, still_authorized, execution_monitor=None):
         if not callable(before_send) or not callable(still_authorized):
             raise ObservationPathError('observation action requires live authority callbacks')
         if self.hold_publisher.get_num_connections() < 1:
@@ -121,6 +136,8 @@ class ContractedTrajectoryExecutor:
             # Revalidate the final controller reference after transport setup,
             # immediately before this exact action is sent.
             before_send()
+            if execution_monitor is not None:
+                execution_monitor()
             if not still_authorized():
                 return False, 'observation authority revoked before submission'
             self.active = True
@@ -132,7 +149,11 @@ class ContractedTrajectoryExecutor:
                 if not still_authorized() or rospy.is_shutdown():
                     self.client.cancel_goal()
                     return False, 'observation authority revoked during execution'
+                if execution_monitor is not None:
+                    execution_monitor()
                 if self.client.wait_for_result(rospy.Duration.from_sec(.05)):
+                    if execution_monitor is not None:
+                        execution_monitor()
                     result, state = self.client.get_result(), self.client.get_state()
                     if (state == GoalStatus.SUCCEEDED and result is not None
                             and result.error_code == result.SUCCESSFUL):

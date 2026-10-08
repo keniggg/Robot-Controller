@@ -78,6 +78,7 @@ public:
     void reset_for_positive_enable(double now_sec)
     {
         (void)now_sec;
+        initial_probe_failed_ = false;
         state_ = ActuationState::PENDING;
         reason_ = "POSITIVE_ENABLE_REQUESTED";
         synchronized_ = false;
@@ -141,8 +142,10 @@ public:
             (state_ != ActuationState::PENDING &&
              state_ != ActuationState::CONFIRMED) ||
             !probe_active_ ||
+            stamp_sec - probe_start_sec_ > config_.response_timeout_sec ||
             probe_baseline_.size() != joints.size() ||
-            probe_requested_delta_.size() != joints.size()
+            probe_requested_delta_.size() != joints.size() ||
+            probe_response_start_sec_.size() != joints.size()
         ) {
             return;
         }
@@ -151,7 +154,8 @@ public:
             const double requested_delta = probe_requested_delta_[i];
             if (
                 std::abs(requested_delta) <
-                config_.command_probe_min_delta_rad
+                    config_.command_probe_min_delta_rad ||
+                stamp_sec <= probe_response_start_sec_[i]
             ) {
                 continue;
             }
@@ -178,6 +182,10 @@ public:
     {
         if (rejection_reason != nullptr) {
             rejection_reason->clear();
+        }
+        if (initial_probe_failed_) {
+            set_rejection(rejection_reason, "INITIAL_PROBE_FAILED_REQUIRES_POSITIVE_ENABLE");
+            return false;
         }
         if (
             !valid_joints(target) ||
@@ -232,8 +240,8 @@ public:
         // handshake resets it; streaming an old target is not a new request.
         if (
             !synchronized_ ||
+            initial_probe_failed_ ||
             !has_feedback_ ||
-            probe_active_ ||
             (state_ != ActuationState::PENDING &&
              state_ != ActuationState::CONFIRMED) ||
             !valid_joints(target) ||
@@ -242,6 +250,55 @@ public:
             stamp_sec < latest_feedback_stamp_sec_ ||
             stamp_sec - latest_feedback_stamp_sec_ > config_.confirmation_freshness_sec
         ) {
+            return;
+        }
+
+        if (probe_active_) {
+            // Axes in a smooth multi-joint trajectory cross the displacement
+            // threshold at different times. Keep this window's original
+            // measured baseline and deadline, but admit another axis when its
+            // transmitted displacement becomes substantial in the same
+            // direction. Freezing the eligible-axis set can falsely report
+            // response loss while another commanded axis is visibly moving.
+            if (stamp_sec <= probe_start_sec_ + config_.response_timeout_sec &&
+                stream_command_baseline_.size() == target.size() &&
+                probe_requested_delta_.size() == target.size() &&
+                probe_command_extreme_.size() == target.size() &&
+                probe_response_start_sec_.size() == target.size()) {
+                for (std::size_t i = 0; i < target.size(); ++i) {
+                    const double requested = probe_requested_delta_[i];
+                    if (std::abs(requested) >= config_.command_probe_min_delta_rad) {
+                        const double reversal = target[i] - probe_command_extreme_[i];
+                        if (reversal * requested >= 0.0) {
+                            probe_command_extreme_[i] = target[i];
+                        } else if (std::abs(reversal) >= config_.command_probe_min_delta_rad) {
+                            const double remaining = target[i] - latest_feedback_[i];
+                            // A retracting target can still lie ahead of the
+                            // encoder. Reverse the response direction only if
+                            // the new target is sufficiently beyond the current
+                            // measured position in that same reverse direction.
+                            if (remaining * reversal > 0.0 &&
+                                std::abs(remaining) >= config_.command_probe_min_delta_rad) {
+                                // Require a subsequent measured response, with
+                                // the ORIGINAL deadline: repeated reversals may
+                                // never hide a stall. Other axes are unchanged.
+                                probe_baseline_[i] = latest_feedback_[i];
+                                probe_requested_delta_[i] = remaining;
+                                probe_command_extreme_[i] = target[i];
+                                probe_response_start_sec_[i] = stamp_sec;
+                            }
+                        }
+                        continue;
+                    }
+                    const double delta = target[i] - stream_command_baseline_[i];
+                    if (std::abs(probe_requested_delta_[i]) < config_.command_probe_min_delta_rad &&
+                        std::abs(delta) >= config_.command_probe_min_delta_rad &&
+                        delta * probe_requested_delta_[i] >= 0.0) {
+                        probe_requested_delta_[i] = delta;
+                        probe_command_extreme_[i] = target[i];
+                    }
+                }
+            }
             return;
         }
 
@@ -260,8 +317,8 @@ public:
         // reversal is tested against the old forward-motion origin and can
         // falsely time out despite real reverse motion (September 13 Joint5).
         // Once displacement has begun, freeze this baseline so small streamed
-        // increments still accumulate. The early probe_active_ return above
-        // also keeps an already armed probe's original response deadline.
+        // increments still accumulate. An active probe retains its original
+        // response deadline even when another axis joins that same window.
         if (state_ == ActuationState::CONFIRMED &&
             stream_target_.size() == target.size() &&
             stream_target_ == stream_command_baseline_) {
@@ -276,11 +333,15 @@ public:
         if (stream_baseline_.size() == target.size() &&
             stream_target_.size() == target.size()) {
             for (std::size_t i = 0; i < target.size(); ++i) {
-                if (state_ == ActuationState::CONFIRMED &&
-                    (target[i] - stream_command_baseline_[i]) *
+                if ((target[i] - stream_command_baseline_[i]) *
                         (latest_feedback_[i] - stream_baseline_[i]) <= 0.0) {
                     // Motion on an uncommanded axis or against the requested
                     // direction cannot reset the response observation window.
+                    // This applies to the initial bounded GUI probe as well:
+                    // held-axis feedback drift is neither evidence for that
+                    // probe nor a reason to erase another axis's command sum.
+                    // A newly commanded axis still checks any prior motion in
+                    // its requested direction below, before opening a probe.
                     continue;
                 }
                 feedback_ahead_of_command = feedback_ahead_of_command ||
@@ -329,6 +390,8 @@ public:
         probe_active_ = true;
         probe_baseline_ = stream_baseline_;
         probe_requested_delta_.resize(target.size());
+        probe_command_extreme_ = target;
+        probe_response_start_sec_.assign(target.size(), stamp_sec);
         for (std::size_t i = 0; i < target.size(); ++i) {
             // Retain the exact delta used by the admission threshold above.
             // Reconstructing an absolute encoder target and subtracting again
@@ -355,6 +418,9 @@ public:
             now_sec - probe_start_sec_ >
                 config_.response_timeout_sec
         ) {
+            if (state_ == ActuationState::PENDING) {
+                initial_probe_failed_ = true;
+            }
             reason_ = state_ == ActuationState::CONFIRMED
                 ? "ENCODER_RESPONSE_LOST" : "ENCODER_RESPONSE_TIMEOUT";
             state_ = ActuationState::UNCONFIRMED;
@@ -378,6 +444,14 @@ public:
     ActuationState state() const
     {
         return state_;
+    }
+
+    // A failed initial probe retires its host target until another explicit
+    // positive-enable handshake. This is not a torque/enable command, and it
+    // deliberately excludes response loss after confirmation and stale input.
+    bool initial_probe_failed() const
+    {
+        return initial_probe_failed_;
     }
 
     bool synchronized() const
@@ -453,6 +527,8 @@ private:
         probe_active_ = false;
         probe_baseline_.clear();
         probe_requested_delta_.clear();
+        probe_command_extreme_.clear();
+        probe_response_start_sec_.clear();
         probe_start_sec_ = 0.0;
     }
 
@@ -465,12 +541,15 @@ private:
     ActuationState state_ = ActuationState::DISABLED;
     std::string reason_ = "NOT_REQUESTED";
     bool synchronized_ = false;
+    bool initial_probe_failed_ = false;
     bool has_feedback_ = false;
     std::vector<double> latest_feedback_;
     double latest_feedback_stamp_sec_ = 0.0;
     bool probe_active_ = false;
     std::vector<double> probe_baseline_;
     std::vector<double> probe_requested_delta_;
+    std::vector<double> probe_command_extreme_;
+    std::vector<double> probe_response_start_sec_;
     double probe_start_sec_ = 0.0;
 };
 

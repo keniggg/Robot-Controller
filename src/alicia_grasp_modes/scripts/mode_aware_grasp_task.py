@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Bind mode/strategy to the existing rich-plan executor without editing it."""
+"""Bind mode/strategy to the existing rich-plan executor."""
 
 from copy import deepcopy
+from collections import deque
 import importlib.util
 import json
 from pathlib import Path
@@ -11,10 +12,17 @@ import threading
 import rospkg
 import rospy
 from std_srvs.srv import Trigger, TriggerResponse
+from std_msgs.msg import String
 
 from alicia_grasp_modes.selection import SELECTION_PARAM, parse_selection
 from alicia_grasp_modes.observation_policy import observation_config
+from alicia_grasp_modes.runner_contract import unknown_target_loss_reason
+from alicia_grasp_modes.observe_return_task import ObserveReturnTask
+from alicia_grasp_modes.observe_return_session import exact_ns
 from alicia_grasp_modes.target_mass import mass_config_from_ros
+from alicia_grasp_modes.support_observation import (
+    support_contradiction, contradiction_after_plan, qualify_support_source)
+from alicia_flexible_grasp.grasp.endpoint_tolerance import measured_position_tolerance
 
 
 def _load_original():
@@ -32,10 +40,16 @@ def _load_original():
 original = _load_original()
 
 
-def execution_config(config, strategy):
+def execution_config(config, strategy, entry_phase=None):
     """Only change phase scheduling; retain physical, temporal and IK gates."""
     if strategy == 'two_stage':
         return config
+    if strategy == 'observe_return':
+        if entry_phase == 'CONTACT_EXECUTION_PLAN':
+            return execution_config(config, 'direct')
+        return dict(config, near_field_replan_enabled=True, near_field_replan_required=True,
+                    near_field_strategy='single_snapshot_direct', final_visual_refine_enabled=False,
+                    observation_reuse_position_tolerance_m=0.0)
     if strategy != 'direct':
         raise ValueError('unsupported execution strategy')
     selected = deepcopy(config)
@@ -48,19 +62,159 @@ def execution_config(config, strategy):
     return selected
 
 
-class ModeAwareGraspTaskNode(original.GraspTaskNode):
+class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
     def __init__(self):
         self._initialize_mode_boundary()
         super().__init__()
+        self._setup_observe_return_io()
+        self._unknown_support_sub = rospy.Subscriber(
+            '/perception/unknown/detector_status', String,
+            self._unknown_support_status_cb, queue_size=20)
         self._mode_reset_service = rospy.Service(
             '/grasp_mode/reset_task', Trigger, self.reset_mode_cb)
 
     def _initialize_mode_boundary(self):
+        self._initialize_observe_return_state()
         self._mode_task_lock = threading.RLock()
+        # Independent lock: the detector callback never takes the execution
+        # lock held across a synchronous trajectory service. Its positive
+        # evidence must remain available at the next physical action boundary.
+        self._unknown_support_lock = threading.Lock()
+        self._unknown_support_fault = None
+        self._unknown_support_pending = {}
+        self._unknown_support_overflow = None
+        self._unknown_support_diagnostics = deque(maxlen=128)
+        self._unknown_support_qualified_sources = set()
+        self._unknown_target_loss = None
         self._mode_selection = None
         self._mode_bound_selection = None
         self._mode_ready = False
         self._mode_start_reserved = False
+
+    def _support_source_snapshot(self):
+        lock = getattr(self, '_following_evidence_lock', None)
+        if lock is None:
+            return (), (), None
+        with lock:
+            return (tuple(self._following_sdk_history),
+                    tuple(self._following_accepted_history), self._following_epoch_ns)
+
+    def _refresh_unknown_support_sources(self):
+        # Histories are copied under their existing lock, independently of the
+        # execution lock. Revisit delayed brackets on feedback arrival, before
+        # the 128-entry history can evict evidence from a long trajectory.
+        sdk, accepted, epoch = self._support_source_snapshot()
+        diagnostics = []
+        with self._unknown_support_lock:
+            for key, fault in tuple(self._unknown_support_pending.items()):
+                qualification = qualify_support_source(sdk, accepted,
+                    source_stamp_ns=fault['source_stamp_ns'], epoch_ns=epoch,
+                    expected_epoch_ns=fault['observed_epoch_ns'])
+                current_epoch = self._support_source_snapshot()[2]
+                if epoch != current_epoch:
+                    qualification.update(state='unqualified',
+                        reason='support_control_epoch_changed_during_qualification')
+                previous = fault.get('source_qualification')
+                fault['source_qualification'] = qualification
+                if previous != qualification:
+                    diagnostics.append(deepcopy(fault))
+                if qualification['state'] == 'stationary':
+                    hard = self._unknown_support_fault
+                    if (hard is None or hard['generation'] != fault['generation']
+                            or hard['source_stamp_ns'] < fault['source_stamp_ns']):
+                        self._unknown_support_fault = deepcopy(fault)
+                    del self._unknown_support_pending[key]
+                    self._unknown_support_qualified_sources.add(key)
+                elif qualification['state'] == 'moving':
+                    # Cache this ORIGINAL source verdict; current stillness or
+                    # later history eviction must not turn it into a hard fault.
+                    del self._unknown_support_pending[key]
+                    self._unknown_support_qualified_sources.add(key)
+                # Unqualified evidence stays pending and blocks only a plan
+                # older than this positive anomaly; ordinary occlusion adds
+                # neither a pending observation nor a new observation duty.
+            self._unknown_support_diagnostics.extend(diagnostics)
+        for diagnostic in diagnostics:
+            rospy.loginfo('Support source qualification: %s',
+                          json.dumps(diagnostic, sort_keys=True))
+
+    def accepted_joint_cb(self, message):
+        super().accepted_joint_cb(message)
+        self._refresh_unknown_support_sources()
+
+    def following_sdk_cb(self, message):
+        super().following_sdk_cb(message)
+        self._refresh_unknown_support_sources()
+
+    def _unknown_support_status_cb(self, message):
+        try:
+            status = json.loads(message.data)
+        except (TypeError, ValueError, AttributeError):
+            return
+        if not isinstance(status, dict):
+            return
+        self._refresh_unknown_support_sources()
+        selected = self._mode_bound_selection or self._mode_selection
+        # Independent diagnostic latch: do not change active trajectory or
+        # frozen-contact occlusion handling from this callback.
+        if status.get('target_lost') is True:
+            try:
+                reason = unknown_target_loss_reason(status, selected, rospy.Time.now().to_nsec())
+            except Exception:
+                reason = ''
+            if reason:
+                with self._unknown_support_lock:
+                    previous = self._unknown_target_loss
+                    if previous is None or previous['selection'] != selected:
+                        self._unknown_target_loss = dict(selection=deepcopy(selected), reason=reason)
+        fault = support_contradiction(status, selected)
+        if fault is None:
+            # A subsequent missing/occluded view cannot erase an observed
+            # contradiction of the frozen table model.
+            return
+        fault['observed_epoch_ns'] = self._support_source_snapshot()[2]
+        with self._unknown_support_lock:
+            if selected != (self._mode_bound_selection or self._mode_selection):
+                return
+            key = (fault['generation'], fault['selection_stamp_ns'], fault['source_stamp_ns'])
+            if key in self._unknown_support_qualified_sources:
+                return
+            if key not in self._unknown_support_pending:
+                if len(self._unknown_support_pending) >= 128:
+                    # Never silently discard unresolved contradictory evidence.
+                    fault['source_qualification'] = dict(state='unqualified',
+                        reason='support_source_pending_capacity_exceeded')
+                    self._unknown_support_overflow = fault
+                else:
+                    self._unknown_support_pending[key] = fault
+        self._refresh_unknown_support_sources()
+
+    def _near_field_wait_failure(self, current_plan, _gcfg):
+        """Only an observation waiting for contact evidence consumes this latch."""
+        selected = self._mode_bound_selection
+        if (not selected or selected.get('mode') != 'unknown'
+                or selected.get('strategy') not in ('two_stage', 'observe_return')
+                or getattr(current_plan, 'model_choice', '') != 'unknown_tabletop'
+                or original._plan_phase(current_plan) != original._FAR_FIELD_OBSERVATION_PLAN):
+            return None
+        with self._unknown_support_lock:
+            fault = self._unknown_target_loss
+        if fault is None or fault['selection'] != selected:
+            return None
+        return original.PlanValidationResult(False, 'TARGET_LOST', fault['reason'].partition(': ')[2])
+
+    def _final_visual_wait_failure(self, plan):
+        # This hook runs only while a fresh post-arrival reference is required;
+        # it adds no gate to a frozen approach, closure, or lift action.
+        selected = self._mode_bound_selection
+        if (not selected or selected.get('mode') != 'unknown'
+                or getattr(plan, 'model_choice', '') != 'unknown_tabletop'):
+            return None
+        with self._unknown_support_lock:
+            fault = self._unknown_target_loss
+        if fault is None or fault['selection'] != selected:
+            return None
+        return original.PlanValidationResult(False, 'TARGET_LOST', fault['reason'].partition(': ')[2])
 
     def _read_selection(self):
         return parse_selection(rospy.get_param(SELECTION_PARAM, None))
@@ -98,6 +252,14 @@ class ModeAwareGraspTaskNode(original.GraspTaskNode):
                 self._grasp6d_watermark_plan_id = ''
                 self._grasp6d_watermark_tombstoned = True
                 self._mode_bound_selection = None
+                with self._unknown_support_lock:
+                    self._unknown_target_loss = None
+                    self._unknown_support_fault = None
+                    self._unknown_support_pending.clear()
+                    self._unknown_support_overflow = None
+                    self._unknown_support_diagnostics.clear()
+                    self._unknown_support_qualified_sources.clear()
+                self._clear_observe_return_attempt()
                 self._mode_selection = selected
                 self._mode_ready = True
                 return TriggerResponse(True, json.dumps(dict(selected, ready=True), sort_keys=True))
@@ -158,6 +320,7 @@ class ModeAwareGraspTaskNode(original.GraspTaskNode):
                 return original.StartGraspResponse(False, 'grasp strategy reset is not ready')
             if self._mode_start_reserved or bool(getattr(self, 'active', False)):
                 return original.StartGraspResponse(False, 'already active')
+            self._clear_observe_return_attempt()
             self._mode_start_reserved = True
             self._mode_bound_selection = dict(self._mode_selection)
         try:
@@ -175,8 +338,13 @@ class ModeAwareGraspTaskNode(original.GraspTaskNode):
 
     def _strategy_config(self, config):
         selected = self._mode_bound_selection or self._mode_selection or {}
-        return observation_config(
-            execution_config(config, selected.get('strategy', 'two_stage')), selected)
+        result = observation_config(
+            execution_config(config, selected.get('strategy', 'two_stage'),
+                             self._observe_return_entry_phase), selected)
+        if selected.get('mode') == 'unknown':
+            result = dict(result, measured_endpoint_position_tolerance_m=
+                          measured_position_tolerance(config, 'unknown_tabletop'))
+        return result
 
     def _copy_requested_grasp6d_plan(self, plan_id, gcfg=None):
         selected = self._mode_bound_selection or self._mode_selection
@@ -194,6 +362,47 @@ class ModeAwareGraspTaskNode(original.GraspTaskNode):
         if not self._selection_current(self._mode_bound_selection):
             return original.PlanValidationResult(False, 'GRASP_STRATEGY_STALE',
                 'mode or strategy changed after execution was bound')
+        session = getattr(self, '_observe_return_session', None)
+        if isinstance(session, dict) and session.get('version') == 2:
+            # This runs again under the action lock after slow preflight. A
+            # session budget cannot be renewed by preparing another view.
+            try:
+                deadline = exact_ns(session.get('deadline_ns'), 'deadline_ns')
+                if rospy.Time.now().to_nsec() >= deadline:
+                    return original.PlanValidationResult(False, 'OBSERVE_RETURN_SESSION_EXPIRED',
+                        'shared observation session expired before action submission')
+            except (TypeError, ValueError, OverflowError):
+                return original.PlanValidationResult(False, 'OBSERVE_RETURN_SESSION_INVALID',
+                    'shared observation deadline is missing or malformed')
+            if original._plan_phase(plan) == original._FAR_FIELD_OBSERVATION_PLAN:
+                failure = self._near_field_wait_failure(plan, gcfg)
+                if failure is not None and not failure.ok:
+                    return failure
+        if (getattr(plan, 'model_choice', '') == 'unknown_tabletop'
+                and original._plan_phase(plan) == original._CONTACT_EXECUTION_PLAN):
+            self._refresh_unknown_support_sources()
+            with self._unknown_support_lock:
+                fault = self._unknown_support_fault
+                pending = tuple(self._unknown_support_pending.values())
+                if self._unknown_support_overflow is not None:
+                    pending += (self._unknown_support_overflow,)
+            plan_stamp = original._stamp_nanoseconds(getattr(getattr(plan, 'header', None), 'stamp', None))
+            if contradiction_after_plan(fault, self._mode_bound_selection,
+                    plan_stamp):
+                return original.PlanValidationResult(False,
+                    'SUPPORT_GEOMETRY_CONTRADICTION',
+                    'source-qualified stationary RGB-D contradicts the frozen support: %s; '
+                    'source_stamp_ns=%s; require new registered observations'
+                    % (fault['detail'], fault['source_stamp_ns']))
+            unresolved = [row for row in pending
+                if contradiction_after_plan(row, self._mode_bound_selection, plan_stamp)]
+            if unresolved:
+                fault = min(unresolved, key=lambda row: row['source_stamp_ns'])
+                return original.PlanValidationResult(False,
+                    'SUPPORT_OBSERVATION_UNQUALIFIED',
+                    'positive support anomaly lacks original-source motion/stillness evidence; '
+                    'source_stamp_ns=%s; reason=%s' % (fault['source_stamp_ns'],
+                        fault.get('source_qualification', {}).get('reason', 'awaiting_source_evidence')))
         return super()._validate_bound_plan_locked(plan, gcfg)
 
     def _execute_grasp6d_plan(self, gcfg, gripper_cfg, open_position, move_pose,
@@ -207,6 +416,36 @@ class ModeAwareGraspTaskNode(original.GraspTaskNode):
                 and original._plan_phase(plan) != original._CONTACT_EXECUTION_PLAN):
             self.set_state(original.GraspStages.FAILED, 'DIRECT_CONTACT_PLAN_REQUIRED')
             return False
+        observation_source = original.is_silhouette_observation_plan(plan)
+        if observation_source and selected['strategy'] != 'observe_return':
+            self.set_state(original.GraspStages.FAILED, 'DIAGNOSTIC_OBSERVATION_STRATEGY_REQUIRED')
+            return False
+        if selected['strategy'] == 'observe_return':
+            self._observe_return_entry_phase = original._plan_phase(plan)
+            if self._observe_return_entry_phase == original._FAR_FIELD_OBSERVATION_PLAN:
+                try:
+                    self._begin_observe_return(plan, self._strategy_config(gcfg))
+                    if self._diagnostic_observation_only():
+                        observation = original.observation_plan_pose(plan)
+                        return self._execute_diagnostic_observation(
+                            plan, self._strategy_config(gcfg), observation, move_pose,
+                            strict_execute_pose, original.write_mujoco_execution_audit)
+                    if observation_source:
+                        raise ValueError('DIAGNOSTIC_OBSERVATION_TRIGGER_REQUIRED')
+                except Exception as exc:
+                    self.set_state(original.GraspStages.FAILED, 'OBSERVE_RETURN_FAILED: ' + str(exc))
+                    return False
+            elif self._observe_return_entry_phase == original._CONTACT_EXECUTION_PLAN:
+                try:
+                    report = self._observe_return_report(plan)
+                    if report['observe_return']['phase'] != 'initial_contact':
+                        raise ValueError('OBSERVE_RETURN_INITIAL_CONTACT_REQUIRED')
+                except Exception as exc:
+                    self.set_state(original.GraspStages.FAILED, 'OBSERVE_RETURN_FAILED: ' + str(exc))
+                    return False
+            else:
+                self.set_state(original.GraspStages.FAILED, 'OBSERVE_RETURN_ENTRY_PHASE_INVALID')
+                return False
         return super()._execute_grasp6d_plan(
             self._strategy_config(gcfg), gripper_cfg, open_position, move_pose,
             move_pose_linear, set_gripper, close, plan,

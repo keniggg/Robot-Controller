@@ -1,6 +1,8 @@
 """Pure mode/plan binding policy; never controls a robot."""
 from dataclasses import dataclass, field
 
+from alicia_grasp_modes.selection import validate_mode_strategy
+
 
 @dataclass
 class ModePolicy:
@@ -18,11 +20,8 @@ class ModePolicy:
     plans: dict = field(default_factory=dict)
 
     def begin_switch(self, mode, stamp_ns, strategy=None):
-        if mode not in ('carton', 'unknown'):
-            raise ValueError('mode must be carton or unknown')
         strategy = self.strategy if strategy is None else strategy
-        if strategy not in ('two_stage', 'direct'):
-            raise ValueError('strategy must be two_stage or direct')
+        validate_mode_strategy(mode, strategy)
         if not self.state_known:
             return 'TASK_STATE_UNAVAILABLE'
         if self.active or self.reserved or self.switching:

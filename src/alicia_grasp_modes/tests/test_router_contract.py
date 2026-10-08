@@ -51,7 +51,8 @@ def router_fixture():
     namespace = dict(json=json, threading=threading, time=time,
                      rospy=rospy, ModePolicy=ModePolicy,
                      String=lambda data: types.SimpleNamespace(data=data),
-                     StartGraspResponse=response)
+                     StartGraspResponse=response, SetBoolResponse=response,
+                     SetGraspModeResponse=response)
     module = ast.Module(body=[class_node], type_ignores=[])
     exec(compile(module, str(ROOT / 'scripts' / 'mode_router.py'), 'exec'), namespace)
     router = namespace['ModeRouter'].__new__(namespace['ModeRouter'])
@@ -165,3 +166,49 @@ def test_ambiguous_response_clears_only_after_this_calls_execution_slot_release(
     router.on_state(state(1790040471603499177, 'execution slot released: success'))
     assert not router.policy.reserved
     assert not router.service_uncertain
+
+
+def test_observe_return_switch_requires_matching_strategy_acknowledgements():
+    router, parameters = router_fixture()
+    router.policy.strategy = 'observe_return'
+    router.apply_switch()
+    assert router.policy.accepting
+    assert parameters['/grasp_mode/selection']['strategy'] == 'observe_return'
+    assert json.loads(router.selection_pub.messages[-1].data)['strategy'] == 'observe_return'
+
+
+@pytest.mark.parametrize('obsolete', ['direct', 'two_stage'])
+def test_old_task_cannot_acknowledge_observe_return_as_an_existing_strategy(obsolete):
+    router, _ = router_fixture()
+    router.policy.strategy = 'observe_return'
+    router.reset_task = lambda: response(True, json.dumps(dict(router.policy.selection(), ready=True, strategy=obsolete)))
+    router.apply_switch()
+    assert not router.policy.accepting and not router.selection_pub.messages
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_router_rejects_carton_observe_return_without_clearing_authority(legacy):
+    router, _ = router_fixture()
+    router.policy.strategy = 'observe_return'
+    router.policy.finish_switch(True)
+    selected = router.policy.selection()
+    if legacy:
+        result = router.set_unknown(types.SimpleNamespace(data=False))
+    else:
+        result = router.select(types.SimpleNamespace(mode='carton', strategy='observe_return'))
+    assert not result.success and 'requires unknown' in result.message
+    assert router.policy.selection() == selected and router.policy.accepting
+    assert not router.policy.switching and not router.selection_pub.messages
+
+
+@pytest.mark.parametrize('phase', ['CONTACT_EXECUTION_PLAN', 'FAR_FIELD_OBSERVATION_PLAN'])
+def test_observe_return_policy_admits_both_bound_initial_plan_phases(phase):
+    router, _ = router_fixture()
+    router.policy.strategy = 'observe_return'
+    router.policy.finish_switch(True)
+    msg = types.SimpleNamespace(valid=True, plan_id='current', model_choice='unknown_tabletop',
+        diagnostic=phase, header=types.SimpleNamespace(stamp=types.SimpleNamespace(
+            to_nsec=lambda: 1790040471603499175)))
+    router.on_plan('/grasp_6d/preview_plan_enriched', msg)
+    assert router.policy.reserve_start('current', True) == ''
+    assert router.policy.strategy == 'observe_return'

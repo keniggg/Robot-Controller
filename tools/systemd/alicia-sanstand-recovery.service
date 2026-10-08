@@ -1,0 +1,12 @@
+[Unit]
+Description=Resume Alicia archive workers after SanStand mounts
+ConditionPathIsMountPoint=/media/zhuyupei/SanStand
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade
+ExecStart=/usr/bin/python3 /home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/tools/recover_sanstand_archive_services.py
+TimeoutStartSec=120
+Nice=10
+StandardOutput=journal
+StandardError=inherit

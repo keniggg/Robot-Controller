@@ -19,7 +19,7 @@ SPEC.loader.exec_module(archive)
 def config(tmp_path):
     value = archive.load_config(tmp_path / "unused_config.json")
     value.update(repo="example/grasp-recordings", min_free_bytes=0,
-                 delete_enabled=False)
+                 upload_enabled=True, delete_enabled=False)
     return value
 
 
@@ -251,9 +251,9 @@ def deletion_config(config):
         "restore_verified": True, "retention_verified": True})
 
 
-def test_all_results_share_one_latest_ten_completed_retention_set(tmp_path, config):
+def test_all_results_share_one_latest_five_completed_retention_set(tmp_path, config):
     outcomes = ["success", "failure", "unknown", "interrupted"] * 3
-    assert archive.RETAIN == 10
+    assert archive.RETAIN == 5
     records = [completed(tmp_path, config, index=i, result=result)
                for i, result in enumerate(outcomes)]
     (records[0] / "unregistered.log").write_text("newer modification on older record")
@@ -261,12 +261,12 @@ def test_all_results_share_one_latest_ten_completed_retention_set(tmp_path, conf
     archive.process_queue(tmp_path, config=config, store_factory=store.factory)
     preview = archive.preview(tmp_path, config=config)
     assert set(preview["protected"]) == {p.name for p in records[-archive.RETAIN:]}
-    assert {item["record_id"] for item in preview["cleanup"]} == {p.name for p in records[:2]}
+    assert {item["record_id"] for item in preview["cleanup"]} == {p.name for p in records[:-archive.RETAIN]}
     assert all(archive.load_manifest(p)["upload"]["status"] == "verified" for p in records)
     result = archive.cleanup(tmp_path, config=deletion_config(config),
                              store_factory=store.factory, dry_run=False)
-    assert set(result["deleted"]) == {p.name for p in records[:2]}
-    for p in records[:2]:
+    assert set(result["deleted"]) == {p.name for p in records[:-archive.RETAIN]}
+    for p in records[:-archive.RETAIN]:
         assert not (p / "capture.bag").exists()
         assert archive.load_manifest(p)["local_data_deleted"]
         assert (p / "manifest.json").exists()
@@ -637,7 +637,7 @@ def test_bounded_worker_uploads_by_completion_then_reclaims_before_next(tmp_path
     cleaned = archive.cleanup(tmp_path, deletion_config(config), store.factory, dry_run=False)
     assert cleaned['deleted'] == [by_index[0].name]
     assert not (by_index[0] / 'capture.bag').exists()
-    assert all((by_index[i] / 'capture.bag').exists() for i in range(1, archive.RETAIN + 2))
+    assert all((p / 'capture.bag').exists() for i, p in by_index.items() if i != 0)
     second = archive.process_queue(tmp_path, config, store.factory, max_records=1)
     assert second['uploaded'] == [by_index[1].name]
 
@@ -661,19 +661,287 @@ def test_invalid_queue_batch_limit_fails_before_upload(tmp_path, config, limit):
         archive.process_queue(tmp_path, config, max_records=limit)
 
 
-def test_old_five_record_validation_cannot_authorize_ten_record_deletion(tmp_path, config):
+def test_old_ten_record_validation_cannot_authorize_five_record_deletion(tmp_path, config):
     previous = deletion_config(config)
-    previous['deletion_validation']['retain_count'] = 5
+    previous['deletion_validation']['retain_count'] = 10
     assert not archive.deletion_authorized(tmp_path, previous)
 
 
-def test_existing_five_and_next_five_stay_local_after_migration(tmp_path, config):
+def test_ten_record_inventory_is_reduced_to_latest_five_after_verified_upload(tmp_path, config):
     first = [completed(tmp_path, config, index=i) for i in range(5)]
     store = MemoryStore()
     archive.process_queue(tmp_path, config, store.factory)
     newer = [completed(tmp_path, config, index=i, result='failure') for i in range(5, 10)]
     archive.process_queue(tmp_path, config, store.factory)
     report = archive.cleanup(tmp_path, deletion_config(config), store.factory, dry_run=False)
-    assert report['deleted'] == []
-    assert len(archive.preview(tmp_path, config)['protected']) == 10
-    assert all((p / 'capture.bag').exists() for p in first + newer)
+    assert set(report['deleted']) == {p.name for p in first}
+    assert len(archive.preview(tmp_path, config)['protected']) == 5
+    assert all(not (p / 'capture.bag').exists() for p in first)
+    assert all((p / 'capture.bag').exists() for p in newer)
+    assert all(archive.load_manifest(p)['upload']['status'] == 'verified' for p in first + newer)
+
+
+@pytest.mark.parametrize('old_count', [0, 4, 6, 10])
+def test_config_requires_exactly_five_total_records(tmp_path, old_count):
+    path = tmp_path / 'archive_config.json'
+    archive.atomic_json(path, {'retain_count': old_count})
+    with pytest.raises(archive.ArchiveError, match='exactly 5 total records'):
+        archive.load_config(path)
+
+
+@pytest.mark.parametrize('root_order', [(0, 1), (1, 0)])
+def test_two_roots_retain_only_global_latest_five(tmp_path, config, root_order):
+    roots = [tmp_path / 'active', tmp_path / 'legacy']
+    cfg = dict(config, retention_roots=[str(p) for p in roots])
+    mixed = ['success', 'failure', 'unknown', 'interrupted']
+    attempts = [completed(roots[i % 2], cfg, index=i, result=mixed[i % 4])
+                for i in range(12)]
+    store = MemoryStore()
+    for root in roots:
+        archive.process_queue(root, cfg, store.factory)
+    expected = {p.name for p in attempts[-5:]}
+    for root in roots:
+        preview = archive.preview(root, cfg)
+        assert set(preview['protected']) == expected
+        assert set(preview['retention_roots']) == {str(p) for p in roots}
+        assert {item['record_id'] for item in preview['records']} == {
+            p.name for p in attempts if p.parent == root}
+    deleted = []
+    for root_index in root_order:
+        report = archive.cleanup(roots[root_index], deletion_config(cfg),
+                                 store.factory, dry_run=False)
+        assert not report['failed']
+        deleted.extend(report['deleted'])
+    assert set(deleted) == {p.name for p in attempts[:-5]}
+    assert {p.name for p in attempts if (p / 'capture.bag').exists()} == expected
+    assert all(archive.load_manifest(p)['upload']['status'] == 'verified' for p in attempts)
+
+
+def test_retention_roots_default_remains_current_root_only(tmp_path, config):
+    active, unrelated = tmp_path / 'active', tmp_path / 'unrelated'
+    attempts = [completed(active, config, index=i) for i in range(7)]
+    for i in range(7, 14):
+        completed(unrelated, config, index=i)
+    assert archive.preview(active, config)['retention_roots'] == [str(active)]
+    assert set(archive.preview(active, config)['protected']) == {p.name for p in attempts[-5:]}
+
+
+def test_retention_roots_always_include_current_root_and_deduplicate_aliases(tmp_path, config):
+    active, legacy = tmp_path / 'active', tmp_path / 'legacy'
+    attempts = [completed(active if i % 2 else legacy, config, index=i) for i in range(7)]
+    cfg = dict(config, retention_roots=[str(legacy), str(legacy / '..' / 'legacy')])
+    preview = archive.preview(active, cfg)
+    assert preview['retention_roots'] == [str(active), str(legacy)]
+    assert set(preview['protected']) == {p.name for p in attempts[-5:]}
+
+
+@pytest.mark.parametrize('operation', ['preview', 'cleanup'])
+def test_duplicate_record_id_across_roots_blocks_retention(tmp_path, config, operation):
+    import shutil
+    active, legacy = tmp_path / 'active', tmp_path / 'legacy'
+    attempts = [completed(active, config, index=i) for i in range(7)]
+    store = MemoryStore()
+    archive.process_queue(active, config, store.factory)
+    legacy.mkdir()
+    shutil.copytree(attempts[0], legacy / attempts[0].name)
+    cfg = dict(deletion_config(config), retention_roots=[str(active), str(legacy)])
+    with pytest.raises(archive.ArchiveError, match='duplicate record_id across retention roots'):
+        if operation == 'preview':
+            archive.preview(active, cfg)
+        else:
+            archive.cleanup(active, cfg, store.factory, dry_run=False)
+    assert all((p / 'capture.bag').exists() for p in attempts)
+    assert (legacy / attempts[0].name / 'capture.bag').exists()
+
+
+def test_incomplete_records_across_roots_do_not_consume_retention_slots(tmp_path, config):
+    roots = [tmp_path / 'active', tmp_path / 'legacy']
+    cfg = dict(config, retention_roots=[str(p) for p in roots])
+    attempts = [completed(roots[i % 2], cfg, index=i) for i in range(7)]
+    incomplete = []
+    for root in roots:
+        record = archive.begin_record(root, config=cfg)
+        (record / 'capture.bag').write_bytes(b'unclosed recording')
+        manifest = archive.load_manifest(record)
+        manifest.update(state='incomplete', completed_at='2026-12-01T00:00:00+00:00')
+        save_manifest(record, manifest)
+        incomplete.append(record)
+    store = MemoryStore()
+    for root in roots:
+        archive.process_queue(root, cfg, store.factory)
+        archive.cleanup(root, deletion_config(cfg), store.factory, dry_run=False)
+    assert all((p / 'capture.bag').exists() for p in incomplete)
+    assert {p.name for p in attempts if (p / 'capture.bag').exists()} == {
+        p.name for p in attempts[-5:]}
+
+
+@pytest.mark.parametrize('bad_roots', [None, '/tmp/root', ['relative'], [''], [1], {}])
+def test_retention_roots_reject_ambiguous_configuration(tmp_path, config, bad_roots):
+    cfg = dict(config, retention_roots=bad_roots)
+    archive.atomic_json(tmp_path / 'archive_config.json', cfg)
+    with pytest.raises(archive.ArchiveError, match='list of absolute paths'):
+        archive.load_config(tmp_path / 'archive_config.json')
+    with pytest.raises(archive.ArchiveError, match='list of absolute paths'):
+        archive.preview(tmp_path / 'other', cfg)
+
+
+@pytest.fixture
+def external_storage(tmp_path, monkeypatch):
+    project = tmp_path / 'workspace' / '.worktrees' / 'active'
+    mount = tmp_path / 'external'
+    storage = dict(mount_point=str(mount), archive_root=str(mount / 'grasp_records'),
+                   ros_log_root=str(mount / 'ros_log'))
+    path = project / '.runtime' / 'experiment_storage.json'
+    path.parent.mkdir(parents=True)
+    archive.atomic_json(path, storage)
+    monkeypatch.setattr(archive, 'PROJECT_ROOT', project)
+    monkeypatch.setattr(archive, 'STORAGE_CONFIG_PATH', path)
+    monkeypatch.delenv('GRASP_RECORD_ROOT', raising=False)
+    monkeypatch.setattr(archive.os.path, 'ismount', lambda value: Path(value) == mount)
+    return project, storage
+
+
+def test_storage_config_maps_default_and_both_internal_aliases(external_storage):
+    project, storage = external_storage
+    assert archive.root_path() == Path(storage['archive_root'])
+    assert archive.root_path(project / '.grasp_records') == Path(storage['archive_root'])
+    old_ops = project.parent.parent / '.ros_log' / 'unknown_grasp_20260923'
+    assert archive.root_path(old_ops) == Path(storage['ros_log_root']) / old_ops.name
+    cfg = dict(retention_roots=[str(project / '.grasp_records'), str(old_ops)])
+    assert archive.retention_roots(old_ops, cfg) == [
+        Path(storage['ros_log_root']) / old_ops.name, Path(storage['archive_root'])]
+
+
+def test_storage_environment_and_explicit_other_roots_take_priority(external_storage, tmp_path, monkeypatch):
+    project, storage = external_storage
+    custom = tmp_path / 'custom'
+    explicit = tmp_path / 'explicit'
+    monkeypatch.setenv('GRASP_RECORD_ROOT', str(custom))
+    monkeypatch.setattr(archive.os.path, 'ismount', lambda _: False)
+    assert archive.root_path() == custom
+    assert archive.root_path(explicit) == explicit
+
+
+@pytest.mark.parametrize('selection', ['default', 'canonical_alias', 'ops_alias', 'external_canonical', 'external_ops'])
+def test_missing_external_mount_never_falls_back_or_creates_data(external_storage, monkeypatch, selection):
+    project, storage = external_storage
+    selected = {
+        'default': None,
+        'canonical_alias': project / '.grasp_records',
+        'ops_alias': project.parent.parent / '.ros_log' / 'unknown_grasp_20260923',
+        'external_canonical': Path(storage['archive_root']),
+        'external_ops': Path(storage['ros_log_root']) / 'unknown_grasp_20260923',
+    }[selection]
+    monkeypatch.setattr(archive.os.path, 'ismount', lambda _: False)
+    with pytest.raises(archive.ArchiveError, match='EXPERIMENT_STORAGE_UNAVAILABLE'):
+        archive.root_path(selected)
+    assert not (project / '.grasp_records').exists()
+    assert not Path(storage['archive_root']).exists()
+
+
+def test_no_storage_config_preserves_original_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(archive, 'STORAGE_CONFIG_PATH', tmp_path / 'missing.json')
+    monkeypatch.delenv('GRASP_RECORD_ROOT', raising=False)
+    assert archive.root_path() == tmp_path / '.grasp_records'
+
+
+
+def test_persisted_upload_disabled_never_constructs_store(tmp_path, config):
+    record = completed(tmp_path, config)
+    before = (record / 'manifest.json').read_bytes()
+    disabled = dict(config, upload_enabled=False)
+    (tmp_path / 'archive_config.json').write_text(json.dumps(disabled))
+    def forbidden_store(*args):
+        pytest.fail('disabled upload constructed a network store')
+    report = archive.process_queue(tmp_path, store_factory=forbidden_store)
+    assert report['upload_disabled'] is True
+    assert report['uploaded'] == report['failed'] == []
+    assert (record / 'manifest.json').read_bytes() == before
+    assert (record / 'capture.bag').read_bytes() == b'raw rosbag bytes'
+    assert archive.preview(tmp_path)['upload_enabled'] is False
+
+
+@pytest.mark.parametrize('disabled_value', [False, None, 'false', 0])
+def test_upload_override_without_explicit_true_fails_closed(tmp_path, config, disabled_value):
+    record = completed(tmp_path, config)
+    def forbidden_store(*args):
+        pytest.fail('disabled upload constructed a network store')
+    report = archive.process_queue(tmp_path, dict(config, upload_enabled=disabled_value), forbidden_store)
+    assert report['upload_disabled'] is True
+    assert archive.load_manifest(record)['upload']['status'] == 'pending'
+
+
+
+def test_upload_missing_permission_defaults_to_disabled(tmp_path, config):
+    record = completed(tmp_path, config)
+    old = dict(config); old.pop('upload_enabled')
+    (tmp_path / 'archive_config.json').write_text(json.dumps(old))
+    assert archive.load_config(tmp_path / 'archive_config.json')['upload_enabled'] is False
+    def forbidden_store(*args):
+        pytest.fail('old config without explicit permission uploaded')
+    assert archive.process_queue(tmp_path, store_factory=forbidden_store)['upload_disabled'] is True
+    assert (record / 'capture.bag').exists()
+
+
+
+def test_upload_explicit_true_preserves_existing_upload_behavior(tmp_path, config):
+    record = completed(tmp_path, config)
+    (tmp_path / 'archive_config.json').write_text(json.dumps(config))
+    store = MemoryStore()
+    report = archive.process_queue(tmp_path, store_factory=store.factory)
+    assert report['uploaded'] == [record.name]
+    assert store.prepared == [True]
+    assert {relative for _, relative in store.uploads} == {'capture.bag', 'archive_manifest.json'}
+
+
+@pytest.mark.parametrize('invalid', ['false', None, 0, 1])
+def test_upload_config_requires_boolean(tmp_path, config, invalid):
+    path = tmp_path / 'archive_config.json'
+    path.write_text(json.dumps(dict(config, upload_enabled=invalid)))
+    with pytest.raises(archive.ArchiveError, match='upload_enabled'):
+        archive.load_config(path)
+
+
+
+def test_disabled_upload_preserves_restore_and_query(tmp_path, config):
+    root = tmp_path / 'records'
+    record = completed(root, config)
+    store = MemoryStore()
+    archive.process_queue(root, config, store.factory)
+    uploads_before = list(store.uploads)
+    disabled = dict(config, upload_enabled=False, delete_enabled=False)
+    destination = tmp_path / 'restored'
+    result = archive.restore_manifest(record / 'archive_manifest.json', destination,
+                                      disabled, store.factory)
+    assert result['verified'] is True
+    assert (destination / 'capture.bag').read_bytes() == b'raw rosbag bytes'
+    assert store.uploads == uploads_before
+    assert archive.preview(root, disabled)['records'][0]['upload'] == 'verified'
+    assert archive.cleanup(root, disabled, store.factory, dry_run=False)['deleted'] == []
+    assert (record / 'capture.bag').exists()
+
+
+
+def test_disabled_worker_once_does_not_create_store(tmp_path, config, monkeypatch, capsys):
+    record = completed(tmp_path, config)
+    (tmp_path / 'archive_config.json').write_text(json.dumps(dict(config, upload_enabled=False)))
+    monkeypatch.setattr(archive, 'make_store', lambda *args: pytest.fail('disabled worker accessed store'))
+    monkeypatch.setattr(archive.sys, 'argv', ['grasp_archive.py', '--root', str(tmp_path), 'worker', '--once'])
+    archive.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report['upload_disabled'] is True
+    assert report['uploaded'] == []
+    assert (record / 'capture.bag').exists()
+
+
+
+def test_low_disk_does_not_bypass_disabled_upload(tmp_path, config, monkeypatch):
+    record = completed(tmp_path, config)
+    usage = namedtuple('usage', 'total used free')(100, 99, 1)
+    monkeypatch.setattr(archive.shutil, 'disk_usage', lambda root: usage)
+    monkeypatch.setattr(archive, 'make_store', lambda *args: pytest.fail('low disk bypassed disabled upload'))
+    with pytest.raises(archive.InsufficientSpace):
+        archive.preflight_space(tmp_path, dict(config, upload_enabled=False, min_free_bytes=2))
+    assert archive.load_manifest(record)['upload']['status'] == 'pending'
+    assert (record / 'capture.bag').exists()

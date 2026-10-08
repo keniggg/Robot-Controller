@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from alicia_flexible_grasp.grasp.gripper_close_contract import bind_simulated_fixed_close
 import hashlib
 import json
 import math
@@ -44,6 +45,11 @@ from alicia_flexible_grasp.grasp.adaptive_stage_profiles import (
     adaptive_stage_profile_for_tilt,
     derive_adaptive_stage_profiles,
 )
+from alicia_flexible_grasp.grasp.contact_height_margin import evaluate_contact_height_margin
+from alicia_flexible_grasp.grasp.contact_height_placement import place_contact_height
+from alicia_flexible_grasp.grasp.contact_evidence import (
+    decode_contact_evidence, encode_contact_evidence,
+)
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     compute_plan_id,
     float32_wire_value,
@@ -72,6 +78,8 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (
     gripper_contract_mismatch_reason,
     parse_tool_axis,
     _obb_line_interval,
+    _obb_overlap,
+    _stage_boxes,
 )
 from alicia_flexible_grasp.grasp.hybrid_grasp_candidates import (
     MergeConfig,
@@ -150,7 +158,9 @@ from alicia_flexible_grasp.vision.multiview_surface import (
     maximum_point_displacement_m,
     support_plane_separation_m,
     surface_view_from_observation,
+    surface_provenance_audit,
 )
+from alicia_flexible_grasp.vision.fused_scene_geometry import enclose_registered_surface
 from alicia_flexible_grasp.vision.object_geometry import (
     GeometryEstimate,
     estimate_object_geometry,
@@ -180,6 +190,8 @@ from alicia_flexible_grasp_supervisor.msg import (
 )
 from alicia_flexible_grasp_supervisor.srv import (
     CheckPoseSequence,
+    CheckContactSequence,
+    CheckContactSequenceRequest,
     CheckPoseSequenceRequest,
     ResolveFreeSpaceOrientations,
     ResolveFreeSpaceOrientationsRequest,
@@ -603,6 +615,7 @@ class PreparedPrediction:
     near_field_phase_id: int = 0
     near_field_phase_deadline_sec: float = 0.0
     target_observation: object = None
+    refinement_binding: object = None
 
     def __post_init__(self):
         for name in (
@@ -649,6 +662,8 @@ NEAR_FIELD_STABILITY_MIN_HITS = 2
 # the task-owned phase deadline. Leave time to rebuild/revalidate publication.
 DIRECT_NEAR_FIELD_COMPARISON_SEC = 8.0
 DIRECT_NEAR_FIELD_PUBLICATION_RESERVE_SEC = 2.0
+DIRECT_NEAR_FIELD_RESOLVER_BUDGET_SEC = 4.0
+DIRECT_NEAR_FIELD_SEARCH_WIDTH_BIN_M = 0.001
 MAX_CONTINUOUS_REQUEST_HZ = 5.0
 
 CONTINUOUS_RUNTIME_DEFAULTS = {
@@ -2578,6 +2593,72 @@ def project_base_target_at_tool_pose(tool_pose, target_base_xyz, tool_from_camer
     return u, v, optical_z
 
 
+def summarize_observation_view_rejections(rejections):
+    """Describe all endpoint rejections without ranking unlike failure stages.
+
+    Later information-gain/working-volume filters may reject a pose that has
+    already passed its CAD envelope. Missing clearance is not a collision,
+    and a collision row's clearance cannot represent those later rejections.
+    This report has no candidate, planning or execution authority.
+    """
+
+    codes, stages, clearances = Counter(), Counter(), []
+    rows = tuple(rejections or ())
+    for item in rows:
+        row = item if isinstance(item, Mapping) else {}
+        code = row.get('failure_code')
+        if not isinstance(code, str) or not code:
+            reason = row.get('reason')
+            code = (reason if isinstance(reason, str)
+                    and reason.startswith('OBSERVATION_') else
+                    'OBSERVATION_REJECTION_UNSPECIFIED')
+            if reason == 'OBSERVE_RETURN_VIEW_BASELINE_INSUFFICIENT':
+                code = reason
+        stage = row.get('rejection_stage')
+        if not isinstance(stage, str) or not stage:
+            if code in ('OBSERVATION_SUPPORT_COLLISION',
+                        'OBSERVATION_TARGET_COLLISION',
+                        'OBSERVATION_ENVELOPE_INVALID'):
+                stage = 'endpoint_geometry'
+            elif code == 'OBSERVATION_WORKING_VOLUME_INVALID':
+                stage = 'working_volume'
+            elif code == 'OBSERVE_RETURN_VIEW_BASELINE_INSUFFICIENT':
+                stage = 'view_baseline'
+            elif (code == 'OBSERVATION_TILT_SIDE_EVIDENCE_INSUFFICIENT'
+                  or code.startswith('OBSERVE_RETURN_MISSING_SIDE_')
+                  or code.startswith('OBSERVE_RETURN_VIEW_GAIN_')):
+                stage = 'information_gain'
+            else:
+                stage = 'unspecified'
+        codes[code] += 1
+        stages[stage] += 1
+        envelope = row.get('observation_envelope')
+        clearance = row.get('minimum_support_clearance_m')
+        if clearance is None and isinstance(envelope, Mapping):
+            clearance = envelope.get('minimum_support_clearance_m')
+        # -1e6 is the existing "not evaluated" envelope sentinel. Never
+        # present it, NaN, or an absent measurement as actual table clearance.
+        if (not isinstance(clearance, (bool, np.bool_))
+                and isinstance(clearance, (int, float, np.integer, np.floating))
+                and math.isfinite(float(clearance))
+                and float(clearance) != -1.0e6):
+            clearances.append(float(clearance))
+    return {
+        'rejected_count': len(rows),
+        'failure_code_counts': dict(sorted(codes.items())),
+        'rejection_stage_counts': dict(sorted(stages.items())),
+        'clearance_evidence_count': len(clearances),
+        'clearance_missing_count': len(rows) - len(clearances),
+        'clearance_range_m': (
+            [min(clearances), max(clearances)] if clearances else None
+        ),
+        'clearance_scope': 'only_rejected_rows_with_computed_clearance',
+        'ranking_performed': False,
+        'motion_planning_performed': False,
+        'contact_or_motion_authorized': False,
+    }
+
+
 def observation_camera_distance_variants(
     nominal_camera_target_distance_m,
     min_camera_target_distance_m,
@@ -3180,6 +3261,7 @@ def build_rich_plan(
     geometry_msg,
     snapshot_header,
     model_choice,
+    contact_geometry_evidence='',
 ):
     """Build one immutable-by-copy execution plan from one RGB-D snapshot."""
     raw_score = getattr(selected_candidate, 'score', None)
@@ -3236,6 +3318,8 @@ def build_rich_plan(
     message.refinement_status = 'NOT_EVALUATED'
     message.model_choice = model
     message.diagnostic = ''
+    message.contact_geometry_evidence = str(contact_geometry_evidence or '')
+    decode_contact_evidence(message, required=False)
     validate_rich_geometry(message.object_geometry)
     validate_plan_header_binding(message)
     validate_candidate_model_width(message)
@@ -3326,6 +3410,8 @@ class RemoteGrasp6DNode:
         grasp_cfg = rospy.get_param('/grasp', {})
         if not isinstance(grasp_cfg, dict):
             grasp_cfg = {}
+        self.contact_sequence_precheck_enabled = bool(
+            grasp_cfg.get('unknown_contact_sequence_precheck_enabled', False))
         self.near_field_strategy = str(
             grasp_cfg.get('near_field_strategy', 'legacy_gated')
             or 'legacy_gated'
@@ -3377,7 +3463,7 @@ class RemoteGrasp6DNode:
         self.mujoco_selection_max_candidates = max(
             1,
             min(
-                12,
+                64,
                 int(twin_cfg.get('selection_max_candidates', 12)),
             ),
         )
@@ -4570,7 +4656,17 @@ class RemoteGrasp6DNode:
     def near_field_state_cb(self, msg):
         """Reset candidate evidence only at the explicit near-field boundary."""
 
+        from alicia_flexible_grasp.grasp.refinement_continuity import (
+            binding_from_phase, RefinementContinuityError)
         requested_active = bool(getattr(msg, 'active', False))
+        planning_stage = str(getattr(msg, 'planning_stage', '') or 'contact_replan')
+        binding_error = None
+        try:
+            refinement_binding = binding_from_phase(msg, getattr(self, 'grasp_config', {}))
+        except RefinementContinuityError as exc:
+            refinement_binding = None
+            binding_error = exc
+            rospy.logwarn('Rejected final refinement binding: %s: %s', exc.code, exc)
         phase_id = int(getattr(msg, 'phase_id', 0) or 0)
         started_sec = self._stamp_to_sec(
             getattr(getattr(msg, 'header', None), 'stamp', None)
@@ -4595,6 +4691,7 @@ class RemoteGrasp6DNode:
         phase_budget_sec = deadline_sec - started_sec
         valid_active_contract = bool(
             requested_active
+            and binding_error is None
             and phase_id > 0
             and math.isfinite(started_sec)
             and started_sec > 0.0
@@ -4645,6 +4742,8 @@ class RemoteGrasp6DNode:
                 deadline_sec if active else 0.0
             )
             if active and (not previous or phase_id != previous_phase_id):
+                self._near_field_planning_stage = planning_stage
+                self._near_field_refinement_binding = refinement_binding
                 observation = resolved_observation
                 reference_valid = bool(
                     getattr(msg, 'reference_center_valid', False)
@@ -4728,6 +4827,8 @@ class RemoteGrasp6DNode:
                         captured_reference_view = None
                 self._reset_multiview_surface()
             elif not active:
+                self._near_field_planning_stage = 'contact_replan'
+                self._near_field_refinement_binding = None
                 self._reset_multiview_surface()
         if requested_active and not valid_active_contract:
             rospy.logwarn(
@@ -5140,6 +5241,10 @@ class RemoteGrasp6DNode:
                 return False, code
             if not bool(getattr(rich_plan, 'valid', False)):
                 return False, 'PLAN_INVALID'
+            try:
+                decode_contact_evidence(rich_plan)
+            except ValueError:
+                return False, 'CONTACT_GEOMETRY_EVIDENCE_INVALID'
             # Construct both outgoing messages before publishing either one.
             outgoing_rich = deepcopy(rich_plan)
             outgoing_legacy = rich_plan_to_legacy(outgoing_rich)
@@ -5217,6 +5322,7 @@ class RemoteGrasp6DNode:
 
     def _clear_geometry_cache(self):
         self._latest_geometry_estimate = None
+        self._latest_fused_scene_audit = None
         self._selected_candidate_gate = None
         self.selected_required_open_width_m = None
         self.latest_target_cloud_base_xyz = None
@@ -5337,6 +5443,7 @@ class RemoteGrasp6DNode:
         stream_guard = getattr(self, '_stream_condition', self._geometry_state_guard())
         with stream_guard, self._geometry_state_guard():
             lifecycle = self._multiview_lifecycle_token()
+            self._latest_fused_scene_audit = None
         try:
             target_depth, object_mask = self._snapshot_geometry_inputs(snapshot)
         except Exception as exc:
@@ -5387,6 +5494,11 @@ class RemoteGrasp6DNode:
             support_bbox_expand_ratio=float(
                 getattr(self, 'geometry_support_bbox_expand_ratio', 0.30)
             ),
+            support_minimum_span_m=(max(
+                float(self.gripper_geometry.finger_size_xyz_m[0]),
+                float(self.gripper_geometry.max_inner_gap_m)
+                + 2. * float(self.gripper_geometry.finger_size_xyz_m[1]))
+                + 2. * float(self.gripper_geometry.support_clearance_m)),
             support_distance_threshold_m=float(
                 getattr(self, 'geometry_support_distance_threshold_m', 0.004)
             ),
@@ -5421,6 +5533,25 @@ class RemoteGrasp6DNode:
                 self._latest_target_observation = observation
                 if bool(getattr(self, 'near_field_planning_active', False)):
                     self._register_near_field_surface(observation)
+                    # A historical measured side used for contact must also
+                    # occupy the scene supplied to every downstream checker.
+                    # _snapshot_multiview_surface verifies this source's
+                    # registration before converting history into its frame.
+                    surface, _ = self._snapshot_multiview_surface()
+                    if surface is not None and len(surface.view_stamps_ns) >= 2:
+                        try:
+                            estimate, scene_audit = enclose_registered_surface(
+                                estimate, surface, expected_identity=observation.identity,
+                                max_size_m=float(getattr(self, 'geometry_max_size_m', .600)),
+                                max_height_m=float(getattr(self, 'geometry_max_height_m', .500)))
+                            self._latest_fused_scene_audit = dict(scene_audit,
+                                snapshot_stamp_ns=int(observation.stamp_ns),
+                                coordinate_frame='current_snapshot_base_estimate',
+                                geometry_consumers='candidate_contact_analytic_sweep_moveit_mujoco')
+                        except (TypeError, ValueError, OverflowError) as exc:
+                            return (self._invalid_geometry_estimate(
+                                'FUSED_SCENE_GEOMETRY_INVALID', str(exc), snapshot.source_mode),
+                                target_depth, transform)
         return estimate, target_depth, transform
 
     def _multiview_lifecycle_token(self):
@@ -5676,6 +5807,8 @@ class RemoteGrasp6DNode:
                     for index, count in zip(unique, counts)
                 },
                 'point_count': len(surface.points_base),
+                'voxel_source_evidence': surface_provenance_audit(surface),
+                'fused_scene_geometry': deepcopy(getattr(self, '_latest_fused_scene_audit', None)),
                 'stored_coordinate_frame': 'phase_reference',
                 'candidate_coordinate_frame': 'current_snapshot',
                 'final_registered_coordinate_frame': 'phase_reference',
@@ -5708,6 +5841,9 @@ class RemoteGrasp6DNode:
                     ),
                     'source_clipped': bool(evidence.source_clipped),
                 }
+                if evidence.result.support_consistency_audit is not None:
+                    audit['latest_registration']['support_consistency_audit'] = asdict(
+                        evidence.result.support_consistency_audit)
             return audit
 
     def _support_plane_camera_from_geometry(self, estimate, transform):
@@ -7182,6 +7318,12 @@ class RemoteGrasp6DNode:
             stamp=prepared.stamp,
         )
 
+    def _observation_distance_preferences(self, geometry, snapshot, reference_pose, prepared):
+        return observation_camera_distance_variants(
+            self.grasp_config.get('observation_camera_target_nominal_distance_m', .200),
+            self.grasp_config.get('observation_camera_target_min_distance_m', .180),
+            self.grasp_config.get('observation_camera_target_max_distance_m', .220))
+
     def _far_field_observation_variants(
         self,
         grasp_pose,
@@ -7255,33 +7397,21 @@ class RemoteGrasp6DNode:
             observation_reference_pose,
             getattr(geometry, 'support_normal_base', None),
         )
-        distances = observation_camera_distance_variants(
-            self.grasp_config.get(
-                'observation_camera_target_nominal_distance_m', 0.200,
-            ),
-            self.grasp_config.get(
-                'observation_camera_target_min_distance_m', 0.180,
-            ),
-            self.grasp_config.get(
-                'observation_camera_target_max_distance_m', 0.220,
-            ),
-        )
-        # Inspect tilts at the nominal distance across all angles first, then
-        # the other existing distance preferences. Never spend the small
-        # extra strict-check budget on every distance of only the first tilt.
-        # The original roll family/order remains unchanged behind this at
-        # most 3 x 5 endpoint-only extension; no tilt x roll product is added.
-        tilt_jobs = tuple(
-            (index, distance, variant)
-            for index, distance in enumerate(distances)
-            for variant in tilt_variants
-        )
-        roll_jobs = tuple(
-            (index, distance, variant)
-            for index, distance in enumerate(distances)
-            for variant in reference_variants
-        )
-        for distance_index, camera_distance, reference_variant in tilt_jobs + roll_jobs:
+        def jobs(variants):
+            rows = [(distance_index, variant_index, distance, variant)
+                    for variant_index, variant in enumerate(variants)
+                    for distance_index, distance in enumerate(
+                        self._observation_distance_preferences(geometry, snapshot,
+                            variant['reference_pose'], prepared))]
+            return tuple((index, distance, variant)
+                         for index, _, distance, variant in sorted(rows, key=lambda row: row[:2]))
+        # Interleave distance preferences across orientations; each orientation
+        # can have a different target/FOV-derived feasible depth interval.
+        tilt_jobs = jobs(tilt_variants)
+        roll_jobs = jobs(reference_variants)
+        indexed_jobs = (tuple((len(roll_jobs)+i, *row) for i, row in enumerate(tilt_jobs))
+                        + tuple((i, *row) for i, row in enumerate(roll_jobs)))
+        for preference_index, distance_index, camera_distance, reference_variant in indexed_jobs:
             if getattr(self, '_stream_condition', None) is not None:
                 self._require_stream_ticket_current(prepared.ticket)
             sequence = self._make_observation_sequence(
@@ -7398,13 +7528,7 @@ class RemoteGrasp6DNode:
                     reference_variant['camera_roll_offset_deg']
                 ),
                 'camera_tilt_offset_deg': tilt_deg,
-                'preference_index': int(
-                    (len(roll_jobs) if tilt_deg > 0. else 0)
-                    + distance_index * (
-                        len(tilt_variants) if tilt_deg > 0. else len(reference_variants)
-                    )
-                    + reference_variant['preference_index']
-                ),
+                'preference_index': preference_index,
             })
         if view_cache is not None:
             view_cache.update({
@@ -7870,8 +7994,20 @@ class RemoteGrasp6DNode:
         required_overlap_m,
         contact_height_bounds_m=None,
         contact_probe=None,
+        surface_snapshot=None,
+        contact_overlap_probe=None,
+        include_lower_boundary=False,
     ):
-        """Derive the largest CAD/contact-safe tilt for each wrist branch."""
+        """Refine observed contact-feasible brackets without changing gates."""
+
+        del surface_snapshot  # Bound by the mode-specific overlap callback.
+
+        def measured_overlap(candidate):
+            if contact_overlap_probe is not None:
+                return float(contact_overlap_probe(candidate))
+            return self._tabletop_candidate_contact_overlap_m(
+                proposal, candidate, support_normal,
+                contact_height_bounds_m=contact_height_bounds_m)
 
         required_overlap = float(required_overlap_m)
         if not math.isfinite(required_overlap) or required_overlap < 0.0:
@@ -7889,12 +8025,7 @@ class RemoteGrasp6DNode:
             if tilt <= 1e-9:
                 polarity = 0.0
             key = (int(candidate.variant_index), polarity)
-            overlap = self._tabletop_candidate_contact_overlap_m(
-                proposal,
-                candidate,
-                support_normal,
-                contact_height_bounds_m=contact_height_bounds_m,
-            )
+            overlap = measured_overlap(candidate)
             branch_samples.setdefault(key, []).append(
                 (tilt, overlap)
             )
@@ -7912,14 +8043,12 @@ class RemoteGrasp6DNode:
         def overlap_at(angle_deg, branch_key):
             if contact_probe is not None:
                 item = contact_probe(angle_deg, branch_key)
-                return self._tabletop_candidate_contact_overlap_m(
-                    proposal, item, support_normal,
-                    contact_height_bounds_m=contact_height_bounds_m)
+                return measured_overlap(item)
             variants = materialize_tabletop_candidates(
                 proposal=proposal,
                 support_point_base=support_point,
                 support_normal_base=support_normal,
-                gripper=self.gripper_geometry,
+                gripper=self._tabletop_placement_gripper(),
                 tool_jaw_axis=self.gripper_tool_jaw_axis,
                 tool_finger_length_axis=(
                     self.gripper_tool_finger_length_axis
@@ -7948,12 +8077,7 @@ class RemoteGrasp6DNode:
                     )
                     <= 1e-8
                 ):
-                    return self._tabletop_candidate_contact_overlap_m(
-                        proposal,
-                        item,
-                        support_normal,
-                        contact_height_bounds_m=contact_height_bounds_m,
-                    )
+                    return measured_overlap(item)
             return -float('inf')
 
         boundaries = []
@@ -7962,6 +8086,22 @@ class RemoteGrasp6DNode:
             if abs(float(branch_key[1])) <= 1e-9:
                 continue
             ordered = sorted(samples)
+            interior_probe_count = 0
+            if include_lower_boundary and not any(
+                    overlap + 1e-9 >= required_overlap for _, overlap in ordered):
+                # A concave pad may have a feasible island between two unsafe
+                # grid endpoints. Probe each original gap once (at most four),
+                # then refine only brackets supported by these measurements.
+                interiors = []
+                for first, second in zip(ordered, ordered[1:]):
+                    midpoint = .5 * (float(first[0]) + float(second[0]))
+                    if (second[0] - first[0] > 1e-9
+                            and 0. < midpoint <= float(maximum_tilt_deg)):
+                        interiors.append((midpoint, overlap_at(midpoint, branch_key)))
+                        interior_probe_count += 1
+                        if interior_probe_count >= 4:
+                            break
+                ordered = sorted(ordered + interiors)
             finite_samples = [
                 (float(angle), float(overlap))
                 for angle, overlap in ordered
@@ -7975,6 +8115,7 @@ class RemoteGrasp6DNode:
             evidence = {
                 'required_contact_patch_overlap_m': float(required_overlap),
                 'sample_count': int(len(finite_samples)),
+                'interior_probe_count': interior_probe_count,
                 'maximum_observed_contact_patch_overlap_m': (
                     float(maximum_observed[1])
                     if maximum_observed is not None
@@ -7999,6 +8140,20 @@ class RemoteGrasp6DNode:
                     **evidence,
                 })
                 continue
+            minimum_safe = float(safe_samples[0][0])
+            if include_lower_boundary:
+                previous = next((sample for sample in reversed(ordered)
+                                 if sample[0] < minimum_safe - 1e-9), None)
+                if previous is not None and previous[1] + 1e-9 < required_overlap:
+                    unsafe_angle = float(previous[0])
+                    # Only refine this observed entering bracket. Concave CAD
+                    # contact is not assumed globally monotone in tilt.
+                    for _iteration in range(14):
+                        midpoint = .5 * (unsafe_angle + minimum_safe)
+                        if overlap_at(midpoint, branch_key) + 1e-9 >= required_overlap:
+                            minimum_safe = midpoint
+                        else:
+                            unsafe_angle = midpoint
             lower_angle, lower_overlap = safe_samples[-1]
             upper_sample = next(
                 (
@@ -8025,8 +8180,17 @@ class RemoteGrasp6DNode:
                 float(maximum_tilt_deg),
                 float(lower_angle),
             )
-            if maximum_safe > 1e-6:
+            if (maximum_safe > 1e-6 and (not include_lower_boundary
+                    or overlap_at(maximum_safe, branch_key) + 1e-9 >= required_overlap)):
                 boundaries.append(maximum_safe)
+            if include_lower_boundary:
+                # Include a small feasible angle and a verified interior pose;
+                # every resulting candidate still runs the full final gates.
+                for angle in (minimum_safe, .5 * (minimum_safe + maximum_safe)):
+                    if (1e-6 < angle <= float(maximum_tilt_deg)
+                            and overlap_at(angle, branch_key) + 1e-9 >= required_overlap):
+                        boundaries.append(float(angle))
+                evidence['minimum_observed_safe_tilt_deg'] = minimum_safe
             branch_audit.append({
                 'variant_index': int(branch_key[0]),
                 'tilt_polarity': float(branch_key[1]),
@@ -8039,6 +8203,14 @@ class RemoteGrasp6DNode:
         for angle in sorted(boundaries, reverse=True):
             if not any(abs(angle - prior) <= 1e-5 for prior in unique):
                 unique.append(float(angle))
+        if include_lower_boundary:
+            # Four new angles retain the existing bounded eight-angle union.
+            # Spread the budget across entering/interior/leaving samples;
+            # descending truncation would discard every new smaller angle.
+            unique.sort()
+            if len(unique) > 4:
+                unique = [unique[int(round(index * (len(unique) - 1) / 3.))]
+                          for index in range(4)]
         return tuple(unique[:4]), tuple(branch_audit)
 
     @staticmethod
@@ -8068,8 +8240,13 @@ class RemoteGrasp6DNode:
         # stratum.
         return (1, rotated_branch, -tilt)
 
+    def _tabletop_placement_gripper(self, contact_execution_phase=None):
+        """Pose construction geometry; physical gate geometry stays independent."""
+        return self.gripper_geometry
+
     def _materialize_tabletop_union(self, proposal, support_point, support_normal,
-                                   probe_variants, probe_tilts, union_tilts):
+                                   probe_variants, probe_tilts, union_tilts,
+                                   contact_execution_phase=None):
         """Extend one proposal's frozen probe grid, preserving full-grid IDs.
 
         Existing CAD results belong only to this local generation call. New
@@ -8080,7 +8257,7 @@ class RemoteGrasp6DNode:
             return probe_variants
         arguments = dict(
             proposal=proposal, support_point_base=support_point,
-            support_normal_base=support_normal, gripper=self.gripper_geometry,
+            support_normal_base=support_normal, gripper=self._tabletop_placement_gripper(contact_execution_phase),
             tool_jaw_axis=self.gripper_tool_jaw_axis,
             tool_finger_length_axis=self.gripper_tool_finger_length_axis,
         )
@@ -8300,7 +8477,7 @@ class RemoteGrasp6DNode:
                         proposal=proposal,
                         support_point_base=support_point,
                         support_normal_base=support_normal,
-                        gripper=self.gripper_geometry,
+                        gripper=self._tabletop_placement_gripper(contact_execution_phase),
                         tool_jaw_axis=self.gripper_tool_jaw_axis,
                         tool_finger_length_axis=(
                             self.gripper_tool_finger_length_axis
@@ -8320,6 +8497,7 @@ class RemoteGrasp6DNode:
                         maximum_tilt,
                         required_overlap_m=required_overlap,
                         contact_height_bounds_m=contact_height_bounds,
+                        surface_snapshot=(fused_surface, reference) if contact_execution_phase else None,
                     )
                 )
                 contact_boundary_profiles.append({
@@ -8353,7 +8531,8 @@ class RemoteGrasp6DNode:
                 )
                 variants = self._materialize_tabletop_union(
                     proposal, support_point, support_normal,
-                    probe_variants, tilt_degrees, materialization_tilts)
+                    probe_variants, tilt_degrees, materialization_tilts,
+                    contact_execution_phase=contact_execution_phase)
                 contact_boundary_profiles[-1][
                     'materialization_tilts_deg'
                 ] = tuple(materialization_tilts)
@@ -8631,6 +8810,11 @@ class RemoteGrasp6DNode:
             near_field_phase_id = int(
                 getattr(self, '_near_field_phase_id', 0) or 0
             )
+            refinement_binding = getattr(self, '_near_field_refinement_binding', None) if near_field else None
+            if (near_field and getattr(self, '_near_field_planning_stage', 'contact_replan')
+                    in ('final_refinement', 'post_refine_confirmation')
+                    and refinement_binding is None):
+                raise CandidateContractError('FINAL_REFINE_PHASE_INVALID', 'missing bound refinement contract')
             near_field_phase_deadline_sec = float(
                 getattr(
                     self,
@@ -8780,6 +8964,7 @@ class RemoteGrasp6DNode:
             decode_ms=decode_ms,
             near_field=near_field,
             near_field_phase_id=near_field_phase_id,
+            refinement_binding=refinement_binding,
             near_field_phase_deadline_sec=(
                 near_field_phase_deadline_sec
             ),
@@ -10514,14 +10699,14 @@ class RemoteGrasp6DNode:
         return tuple(stable)
 
     def _direct_near_field_moveit_rank_key(self, candidate):
-        """Prefer the narrowest hard-safe grasp, then the smallest correction.
+        """Search short-side grasps in millimetre bands, then by pose change.
 
         This is only an ordering policy for candidates that already passed
         every hard geometry and collision gate. Aperture margin is physical
-        room for centering error, so it takes precedence over avoiding a wrist
-        rotation. Widths indistinguishable in the float32 plan message still
-        minimize frozen-pose change. Rigid-transform roundoff in equivalent
-        jaw variants must not choose a large wrist turn ahead of a small one.
+        room for centering error. Sub-millimetre width differences must not
+        spend the phase on large wrist turns before trying a nearby pose.
+        Binning affects search order only: physical aperture gates and final
+        selection still use the complete measured width.
         """
 
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
@@ -10556,13 +10741,109 @@ class RemoteGrasp6DNode:
             required_width = float('inf')
 
         return (
-            float32_wire_value(required_width),
+            (math.floor(float32_wire_value(required_width)
+                        / DIRECT_NEAR_FIELD_SEARCH_WIDTH_BIN_M)
+             if math.isfinite(required_width) else float('inf')),
             nonnegative_finite('contact_start_orientation_delta_rad'),
             nonnegative_finite('contact_start_translation_delta_m'),
             candidate.pre_moveit_score,
             candidate.track_id,
             candidate.variant_index,
         )
+
+    def _direct_contact_endpoint_priorities(self, candidates, prepared, diagnostics):
+        """Use bounded endpoint IK only to order full sequence checks.
+
+        A failed or unavailable probe is UNKNOWN, never an unreachable proof.
+        No candidate is removed, no pose changes, and all execution authority
+        still comes from the existing registered geometry and strict sequence.
+        The hints live only in this request; no joint solutions are executed.
+        """
+        priorities = {}
+        report = dict(policy='request_local_endpoint_ik_search_hint',
+                      execution_authority=False, candidates_removed=0,
+                      maximum_seconds=5.0, checked_count=0, hinted_count=0,
+                      status='unavailable')
+        diagnostics['endpoint_ik_search_order'] = report
+        state = deepcopy(getattr(self, 'latest_joint_state', None))
+        state_audit = self._joint_state_audit(state)
+        report['joint_seed'] = state_audit
+        if not state_audit.get('available'):
+            return priorities
+        source_ns = state_audit.get('stamp_ns', 0)
+        if not isinstance(source_ns, int) or source_ns <= 0:
+            report['status'] = 'joint_seed_stale'
+            return priorities
+        age = (rospy.Time.now().to_nsec() - source_ns) * 1e-9
+        if not 0.0 <= age <= 0.5:
+            report['status'] = 'joint_seed_stale'
+            return priorities
+        deadline_gate = self._direct_near_field_deadline_gate(prepared)
+        if not deadline_gate():
+            report['status'] = 'phase_expired'
+            return priorities
+        clock = getattr(self, '_endpoint_probe_clock', time.monotonic)
+        deadline = clock() + 5.0
+        try:
+            from moveit_msgs.msg import RobotState
+            from moveit_msgs.srv import GetPositionIK, GetPositionIKRequest
+            rospy.wait_for_service('/compute_ik', timeout=0.15)
+            service = rospy.ServiceProxy('/compute_ik', GetPositionIK)
+        except Exception as exc:
+            report['reason'] = str(exc)
+            return priorities
+        report['status'] = 'complete'
+        for candidate in sorted(candidates, key=self._direct_near_field_moveit_rank_key):
+            if clock() >= deadline or not deadline_gate():
+                report['status'] = 'budget_exhausted'
+                break
+            key = (candidate.track_id, candidate.variant_index)
+            runtime = self._stable_variant_runtime[key]
+            sequence = runtime.get('sequence')
+            row = dict(status='unknown', stages=[], execution_authority=False)
+            runtime['endpoint_ik_search_probe'] = row
+            report['checked_count'] += 1
+            seed = RobotState()
+            seed.joint_state = deepcopy(state)
+            try:
+                for stage in ('grasp', 'approach'):
+                    remaining = deadline - clock()
+                    if remaining <= 0.0 or not deadline_gate():
+                        row['reason'] = 'budget_exhausted'
+                        break
+                    pose = getattr(sequence, stage, None)
+                    if pose is None or pose.header.frame_id != 'base_link':
+                        row['reason'] = 'exact_base_frame_endpoint_unavailable'
+                        break
+                    request = GetPositionIKRequest()
+                    request.ik_request.group_name = 'alicia'
+                    request.ik_request.ik_link_name = 'tool0'
+                    request.ik_request.robot_state = deepcopy(seed)
+                    request.ik_request.pose_stamped = deepcopy(pose)
+                    request.ik_request.avoid_collisions = True
+                    request.ik_request.timeout = rospy.Duration(min(0.025, remaining))
+                    response = service(request)
+                    code = int(response.error_code.val)
+                    row['stages'].append(dict(stage=stage, error_code=code))
+                    if code != 1:
+                        row['reason'] = 'no_endpoint_hint; candidate remains eligible'
+                        break
+                    solved = self._joint_state_audit(response.solution.joint_state)
+                    if (not solved.get('available') or not set('Joint%d' % j for j in range(1, 7))
+                            .issubset(solved.get('name', ()))):
+                        row['reason'] = 'invalid_ik_response'
+                        break
+                    row['stages'][-1]['joint_solution'] = solved
+                    seed = deepcopy(response.solution)
+                else:
+                    if clock() < deadline and deadline_gate():
+                        priorities[key] = 0
+                        row['status'] = 'endpoint_pair_found'
+                        report['hinted_count'] += 1
+            except Exception as exc:
+                row['reason'] = str(exc)
+        report['elapsed_sec'] = max(0.0, clock() - (deadline - 5.0))
+        return priorities
 
     def _direct_near_field_execution_rank_key(self, candidate):
         """Preserve aperture margin; compare actual strict motion, not SO(3).
@@ -10575,7 +10856,9 @@ class RemoteGrasp6DNode:
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
             (candidate.track_id, candidate.variant_index), {})
         gate = runtime.get('final_registered_geometry_gate', {})
-        width = float(gate.get('required_open_width_m', prior[0]))
+        stable = getattr(candidate, 'stable_candidate', candidate)
+        width = float(gate.get('required_open_width_m',
+                               getattr(stable, 'required_open_width_m', float('inf'))))
         if not math.isfinite(width) or width <= 0.0:
             width = float('inf')
         result = candidate.moveit_result
@@ -10593,14 +10876,14 @@ class RemoteGrasp6DNode:
     def _direct_near_field_comparison_search(self, prepared):
         """Bound additional comparisons without spending a valid incumbent.
 
-        The initial search retains the full phase deadline. Only after a
-        complete hard-safe result exists do we cap further comparisons. The
+        Reserve publication time even before finding the first incumbent.
+        After a complete hard-safe result exists we cap further comparisons. The
         same cutoff reaches both strict sequence calls and the IK resolver.
         No plan is published by this checker.
         """
         phase_gate = self._direct_near_field_deadline_gate(prepared)
         phase_deadline = self._direct_near_field_deadline_sec(prepared)
-        cutoff = [phase_deadline]
+        cutoff = [phase_deadline - DIRECT_NEAR_FIELD_PUBLICATION_RESERVE_SEC]
 
         def continue_checking():
             return bool(phase_gate() and
@@ -11990,6 +12273,32 @@ class RemoteGrasp6DNode:
         pose.pose.orientation.w = float(quaternion[3])
         return pose
 
+    def _contact_height_evidence_limit(self):
+        cfg = getattr(self, 'grasp_config', {})
+        enabled = cfg.get('contact_height_registration_margin_enabled', False)
+        if type(enabled) is not bool:
+            raise CandidateContractError('CONTACT_HEIGHT_REGISTRATION_MARGIN',
+                                         'height margin flag must be boolean')
+        if not enabled:
+            return None
+        limit = cfg.get('handeye_translation_max_error_m')
+        if (isinstance(limit, (bool, np.bool_))
+                or not isinstance(limit, (int, float, np.number))
+                or not math.isfinite(float(limit)) or float(limit) <= 0.):
+            raise CandidateContractError('CONTACT_HEIGHT_REGISTRATION_MARGIN',
+                                         'height evidence limit must be finite and positive')
+        return float(limit)
+
+    def _contact_height_geometry(self, transform, geometry, center, bounds, axis, minimum):
+        return dict(gripper=self.gripper_geometry,
+            actual_T_base_tool0=transform, planned_T_base_tool0=transform,
+            contact_center_base=center, contact_height_axis_base=axis,
+            contact_height_bounds_m=bounds, minimum_contact_overlap_m=minimum,
+            support_normal_base=geometry.support_normal_base,
+            support_offset_m=geometry.support_offset_m,
+            opening_width_m=min(float(self.gripper_geometry.max_inner_gap_m),
+                                float(self.gripper_physical_open_width_m)))
+
     def _reproject_tabletop_stable_pose_for_support_clearance(
         self,
         grasp_pose,
@@ -12063,7 +12372,7 @@ class RemoteGrasp6DNode:
             ).reshape(3),
             support_point=support_point,
             support_normal=support_normal,
-            clearance_m=float(self.gripper_geometry.support_clearance_m),
+            clearance_m=float(self._tabletop_placement_gripper().support_clearance_m),
             gripper=self.gripper_geometry,
             tool_jaw_axis=self.gripper_tool_jaw_axis,
             tool_finger_length_axis=self.gripper_tool_finger_length_axis,
@@ -12097,6 +12406,7 @@ class RemoteGrasp6DNode:
         )
         runtime = {}
         scored = []
+        observation_rejections = []
         observation_view_cache = {}
         for stable in tuple(stable_candidates):
             normalized = stable.payload
@@ -12115,6 +12425,7 @@ class RemoteGrasp6DNode:
                         prepared.stamp,
                     )
                     camera_candidate = None
+                    height_placement = None
                     if normalized.candidate_source == 'graspnet':
                         source_payload = normalized.payload
                         if not isinstance(source_payload, LocalCandidatePayload):
@@ -12207,6 +12518,27 @@ class RemoteGrasp6DNode:
                                 )
                             else:
                                 target_points_base = surface.points_base
+                                if str(stable.model_choice) == 'unknown_tabletop':
+                                    limit = self._contact_height_evidence_limit()
+                                    if limit is not None:
+                                        transform, height_placement = place_contact_height(
+                                            translation_evidence_limit_m=limit,
+                                            **self._contact_height_geometry(transform,
+                                                geometry, stable.center_base_xyz,
+                                                measured_bounds, measured_axis,
+                                                self._phase_contact_overlap_requirement_m(
+                                                    True, stage_profile)))
+                                        if transform is None:
+                                            raise CandidateContractError(
+                                                'CONTACT_HEIGHT_REGISTRATION_MARGIN',
+                                                height_placement['reason'])
+                                        grasp_pose = make_pose_stamped('base_link',
+                                            transform[:3, 3], quaternion_from_matrix(transform),
+                                            stamp=grasp_pose.header.stamp)
+                                        sequence, stage_profile = self._make_contact_sequence(
+                                            grasp_pose, geometry,
+                                            insertion_axis_base=transform[:3, 2],
+                                            snapshot=prepared.snapshot)
                         explicit_gate_kwargs = {
                             'gripper': self.gripper_geometry,
                             'candidate_center_base': stable.center_base_xyz,
@@ -12428,49 +12760,27 @@ class RemoteGrasp6DNode:
                             view_cache=observation_view_cache,
                         )
                         if not observation_variants:
-                            best_rejection = max(
-                                tuple(rejected_observation_variants or ()),
-                                key=lambda item: float(
-                                    item.get(
-                                        'minimum_support_clearance_m',
-                                        -1.0e6,
-                                    )
-                                ),
-                                default={},
+                            rejection_summary = summarize_observation_view_rejections(
+                                rejected_observation_variants,
                             )
+                            observation_rejections.append({
+                                'track_id': int(stable.track_id),
+                                'variant_index': int(variant_index),
+                                'candidate_source': normalized.candidate_source,
+                                'source_index': int(normalized.source_index),
+                                'summary': deepcopy(rejection_summary),
+                            })
                             rospy.logwarn(
                                 (
                                     'remote 6D observation roll lattice '
-                                    'rejected: track=%s variant=%d tested=%d '
-                                    'best_roll=%.1fdeg code=%s '
-                                    'clearance=%.3fmm reason=%s'
+                                    'rejected: track=%s variant=%d '
+                                    'all_rejections=%s'
                                 ),
                                 getattr(stable, 'track_id', 'unknown'),
                                 int(variant_index),
-                                len(rejected_observation_variants),
-                                float(
-                                    best_rejection.get(
-                                        'camera_roll_offset_deg',
-                                        0.0,
-                                    )
-                                ),
-                                str(
-                                    best_rejection.get(
-                                        'failure_code',
-                                        'OBSERVATION_ENVELOPE_INVALID',
-                                    )
-                                ),
-                                1000.0 * float(
-                                    best_rejection.get(
-                                        'minimum_support_clearance_m',
-                                        -1.0e6,
-                                    )
-                                ),
-                                str(
-                                    best_rejection.get(
-                                        'failure_reason',
-                                        'no endpoint-safe observation roll',
-                                    )
+                                json.dumps(
+                                    rejection_summary,
+                                    sort_keys=True, separators=(',', ':'),
                                 ),
                             )
                             continue
@@ -12638,6 +12948,7 @@ class RemoteGrasp6DNode:
                             observation_variants
                         ),
                         'adaptive_stage_profile': stage_profile,
+                        'contact_height_placement': deepcopy(height_placement),
                         'camera_candidate': camera_candidate,
                         'geometry_gate': gate,
                         'scored_candidate': candidate,
@@ -12708,12 +13019,22 @@ class RemoteGrasp6DNode:
         if condition is None:
             self._stable_variant_runtime = runtime
             self._near_field_request_plan_cache = {}
+            self._observation_rejection_audit = (prepared, observation_rejections)
         else:
             with condition:
                 self._require_stream_ticket_current_locked(prepared.ticket)
                 self._stable_variant_runtime = runtime
                 self._near_field_request_plan_cache = {}
+                self._observation_rejection_audit = (prepared, observation_rejections)
         return tuple(scored)
+
+    def _observation_rejection_audit_for(self, prepared):
+        """Keep rejected families tied to the exact accepted request object."""
+
+        audit = getattr(self, '_observation_rejection_audit', None)
+        if not isinstance(audit, tuple) or len(audit) != 2 or audit[0] is not prepared:
+            return []
+        return deepcopy(audit[1])
 
     @staticmethod
     def _tabletop_moveit_dedupe_key(candidate):
@@ -13302,6 +13623,24 @@ class RemoteGrasp6DNode:
     ):
         """Reuse only a proven success at the exact unchanged arm state."""
 
+        stage_poses = tuple(stage_poses)
+        close_hold = bool(
+            getattr(prepared, 'near_field', False)
+            and getattr(prepared, 'model_choice', '') == 'unknown_tabletop'
+            and rospy.get_param('/grasp/unknown_lift_after_close_enabled', True) is False
+        )
+        if close_hold and tuple(name for name, _ in stage_poses) == (
+                'pregrasp', 'approach', 'grasp', 'lift'):
+            # The fourth pose remains a simulation diagnostic in the rich
+            # plan. It is not a commanded motion for close-and-hold tasks.
+            # Include only executed stages in the strict check AND cache key;
+            # enabling lift therefore cannot reuse this three-stage proof.
+            stage_poses = stage_poses[:3]
+        runtime['moveit_execution_stage_policy'] = {
+            'close_hold_only': close_hold,
+            'checked_stage_names': [name for name, _ in stage_poses],
+            'lift_path_verified': any(name == 'lift' for name, _ in stage_poses),
+        }
         joint_state = deepcopy(getattr(self, 'latest_joint_state', None))
         cache_key = self._near_field_plan_cache_key(
             stage_poses,
@@ -13377,6 +13716,11 @@ class RemoteGrasp6DNode:
     ):
         """Reuse deterministic resolver results for one exact static request."""
 
+        close_hold = bool(
+            getattr(prepared, 'near_field', False)
+            and getattr(prepared, 'model_choice', '') == 'unknown_tabletop'
+            and rospy.get_param('/grasp/unknown_lift_after_close_enabled', True) is False
+        )
         joint_state = deepcopy(getattr(self, 'latest_joint_state', None))
         cache_key = self._near_field_plan_cache_key(
             stage_poses,
@@ -13387,7 +13731,7 @@ class RemoteGrasp6DNode:
         if not isinstance(cache, dict):
             cache = {}
             self._near_field_request_plan_cache = cache
-        entry_key = ('deterministic_orientation_resolver', cache_key)
+        entry_key = ('deterministic_orientation_resolver', cache_key, close_hold)
         cached = cache.get(entry_key) if cache_key is not None else None
         if isinstance(cached, tuple) and len(cached) == 4:
             self._record_near_field_plan_cache(
@@ -13401,7 +13745,29 @@ class RemoteGrasp6DNode:
             )
             return tuple(deepcopy(value) for value in cached)
 
-        if float(deadline_sec) > 0.0:
+        if self._direct_near_field_active(prepared):
+            # A failed contact direction must not spend the entire shared
+            # phase on alternate free-space orientations. Keep the remaining
+            # short-side candidates eligible; a timeout stays an unknown
+            # result and is never cached as deterministic unreachability.
+            parent_deadline = self._direct_near_field_candidate_deadline_sec(
+                prepared, runtime)
+            if float(deadline_sec) > 0.0:
+                parent_deadline = min(parent_deadline, float(deadline_sec))
+            deadline_sec = min(
+                parent_deadline,
+                self._execution_plan_validity_now_sec()
+                + DIRECT_NEAR_FIELD_RESOLVER_BUDGET_SEC,
+            )
+            runtime['orientation_search_budget'] = {
+                'maximum_sec': DIRECT_NEAR_FIELD_RESOLVER_BUDGET_SEC,
+                'deadline_sec': deadline_sec,
+                'parent_deadline_sec': parent_deadline,
+            }
+        if close_hold:
+            outcome = self._resolve_free_space_sequence(
+                stage_poses, deadline_sec=deadline_sec, include_lift=False)
+        elif float(deadline_sec) > 0.0:
             outcome = self._resolve_free_space_sequence(
                 stage_poses,
                 deadline_sec=deadline_sec,
@@ -13453,6 +13819,18 @@ class RemoteGrasp6DNode:
         return outcome
 
     @staticmethod
+    def _observation_search_source_audit(variants):
+        """Describe the checked view family without changing its admission."""
+        directed = any((variant.get('observation_view', {}) or {}).get(
+            'orientation_source') == 'measured_missing_side_geodesic' for variant in variants)
+        return dict(
+            policy=('measured_missing_side_and_existing_camera_view_search' if directed
+                    else 'object_yaw_independent_camera_roll_and_support_normal_tilt_lattice'),
+            object_yaw_used=directed,
+            measured_target_geometry_direction_used=directed,
+            contact_candidate_yaw_used=False)
+
+    @staticmethod
     def _activate_far_field_observation_variant(
         runtime,
         variant,
@@ -13480,8 +13858,7 @@ class RemoteGrasp6DNode:
         )
         runtime['observation_orientation_search'] = {
             'available': True,
-            'policy': 'object_yaw_independent_camera_roll_and_support_normal_tilt_lattice',
-            'object_yaw_used': False,
+            **RemoteGrasp6DNode._observation_search_source_audit((variant,)),
             'configured_variant_count': len(
                 tuple(runtime.get('observation_variants', ()) or ())
             ),
@@ -13522,12 +13899,27 @@ class RemoteGrasp6DNode:
             return (-clearance, int(variant.get('preference_index', 0)))
         return tuple(sorted(tilts, key=priority) + rolls)
 
-    def _claim_observation_tilt_check(self, ticket):
+    def _observation_source_reserve_available(self, ticket):
+        try:
+            now = float(self._stream_source_clock())
+            source = float(ticket.snapshot_stamp_sec)
+            validity = float(self._configured_execution_plan_validity_sec())
+            reserve = float(getattr(self, 'mujoco_selection_snapshot_reserve_sec', 0.))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        return (all(math.isfinite(v) for v in (now, source, validity, reserve))
+            and source > 0. and reserve >= 0. and validity > reserve
+            and 0. <= now-source < validity-reserve)
+
+    def _claim_observation_tilt_check(self, ticket, comparison_deadline=None):
         """Claim bounded additional work without extending source authority.
 
         This is a *start-new-check* budget: SetTargetPose has no deadline
         field, so an in-flight strict call retains its existing MoveIt timeout.
         Original roll checks do not consume/reset this supplemental budget.
+        Information-driven comparison may use the already allocated shared
+        post-incumbent window after the initial tilt budget is spent; it never
+        resets the count, source reserve, or overall observation-session TTL.
         Use the far-field plan's existing source lifetime, not the unrelated
         contact-simulation snapshot limit advertised by WSL /health. Contact
         simulation gets fresh near-field evidence after this observation.
@@ -13540,19 +13932,16 @@ class RemoteGrasp6DNode:
             if not isinstance(budget, dict) or budget.get('request_key') != key:
                 budget = {'request_key': key, 'checked_count': 0, 'used_sec': 0.}
                 self._observation_tilt_search_budget = budget
-            try:
-                now = float(self._stream_source_clock())
-                expiry = float(ticket.snapshot_stamp_sec) + float(
-                    self._configured_execution_plan_validity_sec()
-                ) - float(self.mujoco_selection_snapshot_reserve_sec)
-            except (AttributeError, TypeError, ValueError, OverflowError):
-                return None, 'OBSERVATION_TILT_SNAPSHOT_RESERVE_REACHED'
-            if not (math.isfinite(now) and math.isfinite(expiry) and now < expiry):
+            if not self._observation_source_reserve_available(ticket):
                 return None, 'OBSERVATION_TILT_SNAPSHOT_RESERVE_REACHED'
             if (
                 budget.get('disabled_reason')
                 or budget['checked_count'] >= OBSERVATION_TILT_MAX_STRICT_CHECKS
-                or budget['used_sec'] >= OBSERVATION_TILT_STRICT_BUDGET_SEC
+                or (budget['used_sec'] >= OBSERVATION_TILT_STRICT_BUDGET_SEC
+                    and not (comparison_deadline is not None
+                        and self._information_driven_observation_comparison()
+                        and getattr(self, '_observation_comparison_clock', time.monotonic)()
+                            < comparison_deadline))
             ):
                 return None, 'OBSERVATION_TILT_CHECK_BUDGET_REACHED'
             budget['checked_count'] += 1
@@ -13628,22 +14017,47 @@ class RemoteGrasp6DNode:
                        ik_valid=None, planning_success=None, evidence_code='',
                        reason=code + ': ' + str(report)), report
 
-    def _far_field_observation_search(self):
-        """Stop this frozen request after its shared starting hold fails.
+    def _information_driven_observation_comparison(self):
+        return False
 
-        All far-field variants in this invocation share one source plane and
-        live starting hold. An explicit start rejection makes more endpoints
-        useless; leave their tail unchecked. State is local to this request,
-        so a later aligned request receives an entirely new evaluation.
-        """
+    def _checked_observation_variant_rank(self, result, variant):
+        metrics = self._parse_plan_metrics(result.reason)
+        return (float(metrics.get('observation_screened_duration_sec',
+                    metrics.get('execution_duration_lower_bound_sec', float('inf')))),
+                float(result.joint_max_delta_rad), float(result.joint_path_cost),
+                int(variant.get('preference_index', 0)))
+
+    def _far_field_observation_search(self):
+        """One bounded comparison across view families; no optimum assertion."""
         start_rejected = [False]
+        information_driven = self._information_driven_observation_comparison()
+        shared = dict(deadline=None, ticket=None, stop_reason='')
+        if information_driven:
+            self._observation_information_comparison = shared
         def checker(candidate):
+            if information_driven:
+                runtime = self._stable_variant_runtime.get((candidate.track_id, candidate.variant_index), {})
+                shared['ticket'] = getattr(runtime.get('prepared'), 'ticket', None)
             result = self._check_moveit_stable_candidate(candidate)
             if (isinstance(result, MoveItResult) and not result.reachable
                     and result.failure_code == 'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID'):
                 start_rejected[0] = True
             return result
-        return checker, lambda: not start_rejected[0]
+        def continuing():
+            if start_rejected[0]:
+                shared['stop_reason'] = 'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID'
+                return False
+            if (information_driven and shared['ticket'] is not None
+                    and not self._observation_source_reserve_available(shared['ticket'])):
+                shared['stop_reason'] = 'OBSERVATION_SOURCE_RESERVE_REACHED'
+                return False
+            deadline = shared['deadline'] if information_driven else None
+            within = (deadline is None or
+                getattr(self, '_observation_comparison_clock', time.monotonic)() < deadline)
+            if not within:
+                shared['stop_reason'] = 'OBSERVATION_COMPARISON_BUDGET_REACHED'
+            return within
+        return checker, continuing
 
     def _check_moveit_stable_candidate(self, candidate):
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
@@ -13734,7 +14148,12 @@ class RemoteGrasp6DNode:
             attempted_count = 0
             variant_results = []
             comparison_clock = getattr(self, '_observation_comparison_clock', time.monotonic)
-            comparison_deadline = None
+            information_driven = self._information_driven_observation_comparison()
+            comparison_state = (getattr(self, '_observation_information_comparison', None)
+                if information_driven else None)
+            if not isinstance(comparison_state, dict):
+                comparison_state = dict(deadline=None)
+            comparison_deadline = comparison_state['deadline']
             comparison_terminated = False
             for observation_variant in self._order_observation_checks(observation_variants):
                 tilt_budget = None
@@ -13761,9 +14180,16 @@ class RemoteGrasp6DNode:
                     variant_results.append(row)
                     comparison_terminated = True
                     continue
+                if information_driven and not self._observation_source_reserve_available(prepared.ticket):
+                    row['reason'] = 'OBSERVATION_SOURCE_RESERVE_REACHED'
+                    variant_results.append(row)
+                    comparison_state['stop_reason'] = row['reason']
+                    comparison_terminated = True
+                    continue
                 if row['camera_tilt_offset_deg'] > 0.:
                     tilt_budget, skip_reason = self._claim_observation_tilt_check(
-                        prepared.ticket
+                        prepared.ticket,
+                        comparison_deadline=comparison_deadline if information_driven else None,
                     )
                     if tilt_budget is None:
                         row['reason'] = skip_reason
@@ -13819,6 +14245,7 @@ class RemoteGrasp6DNode:
                         if comparison_deadline is None:
                             comparison_deadline = (comparison_clock()
                                 + OBSERVATION_COMPARISON_AFTER_INCUMBENT_SEC)
+                            comparison_state['deadline'] = comparison_deadline
                         reachable_variants.append((
                             result,
                             observation_variant,
@@ -13840,20 +14267,7 @@ class RemoteGrasp6DNode:
             if reachable_variants:
                 result, observation_variant = min(
                     reachable_variants,
-                    key=lambda item: (
-                        float(
-                            self._parse_plan_metrics(
-                                item[0].reason
-                            ).get(
-                                'observation_screened_duration_sec',
-                                self._parse_plan_metrics(item[0].reason).get(
-                                    'execution_duration_lower_bound_sec', float('inf')),
-                            )
-                        ),
-                        float(item[0].joint_max_delta_rad),
-                        float(item[0].joint_path_cost),
-                        int(item[1].get('preference_index', 0)),
-                    ),
+                    key=lambda item: self._checked_observation_variant_rank(item[0], item[1]),
                 )
                 selected_plan_metrics = self._parse_plan_metrics(
                     result.reason
@@ -13867,6 +14281,8 @@ class RemoteGrasp6DNode:
                     'variant_results': variant_results,
                     'check_order': 'tilt_support_margin_descending_then_original_rolls',
                     'ranking_scope': 'qualified_checked_variants_only',
+                    'information_motion_comparison': information_driven,
+                    'comparison_budget_shared_across_view_families': information_driven,
                     'comparison_budget_after_incumbent_sec': OBSERVATION_COMPARISON_AFTER_INCUMBENT_SEC,
                     'comparison_budget_reached': comparison_terminated,
                     'search_complete': attempted_count == len(observation_variants),
@@ -13895,11 +14311,11 @@ class RemoteGrasp6DNode:
                 })
                 rospy.loginfo(
                     (
-                        'remote 6D observation selected by minimum duration '
+                        'remote 6D observation selected by configured information/motion ranking '
                         'among qualified checked views: roll=%.1fdeg tilt=%.1fdeg checked=%d/%d '
                         'reachable=%d joint_path_cost=%.3f '
                         'joint_max_delta=%.3frad duration_lb=%s '
-                        'limiting_joint=%s object_yaw_used=false'
+                        'limiting_joint=%s object_yaw_used=%s'
                     ),
                     float(
                         observation_variant.get(
@@ -13930,21 +14346,28 @@ class RemoteGrasp6DNode:
                             'unavailable',
                         )
                     ),
+                    str(runtime['observation_orientation_search']['object_yaw_used']).lower(),
                 )
                 return result
             runtime['observation_orientation_search'] = {
                 'available': False,
-                'policy': (
-                    'object_yaw_independent_camera_roll_and_support_normal_tilt_lattice'
-                ),
-                'object_yaw_used': False,
+                **self._observation_search_source_audit(observation_variants),
                 'configured_variant_count': len(observation_variants),
                 'attempted_variant_count': len(failures),
                 'variant_results': variant_results,
                 'endpoint_envelope_rechecked': True,
-                'strict_moveit_rechecked': True,
+                'strict_moveit_rechecked': bool(failures),
+                'checked_variant_count': len(failures),
+                'unchecked_variant_count': sum(not row.get('checked', False) for row in variant_results),
+                'search_complete': all(row.get('checked', False) for row in variant_results),
                 'reason': 'no checked endpoint-safe observation branch passed strict MoveIt',
             }
+            if any(not row.get('checked', False) for row in variant_results):
+                return MoveItResult(
+                    reachable=False, joint_path_cost=0.0, joint_max_delta_rad=0.0,
+                    reason='OBSERVATION_SEARCH_INCOMPLETE: bounded comparison checked %d/%d views; '
+                           'unchecked views are not proven unreachable' % (len(failures), len(variant_results)),
+                    failure_code='MOVEIT_CHECK_ERROR')
             if not failures:
                 return MoveItResult(
                     reachable=False,
@@ -14133,6 +14556,7 @@ class RemoteGrasp6DNode:
 
         runtime.pop('final_registered_geometry_gate', None)
         runtime.pop('registration_support_lift_m', None)
+        runtime.pop('final_contact_geometry_evidence', None)
         adjusted = deepcopy(plan)
         geometry = prepared.geometry
         normal = np.asarray(geometry.support_normal_base, dtype=float)
@@ -14150,7 +14574,7 @@ class RemoteGrasp6DNode:
                     lateral_target=transform[:3, 3],
                     support_point=-float(geometry.support_offset_m) * normal,
                     support_normal=normal,
-                    clearance_m=float(self.gripper_geometry.support_clearance_m),
+                    clearance_m=float(self._tabletop_placement_gripper().support_clearance_m),
                     gripper=self.gripper_geometry,
                     tool_jaw_axis=self.gripper_tool_jaw_axis,
                     tool_finger_length_axis=self.gripper_tool_finger_length_axis,
@@ -14185,8 +14609,23 @@ class RemoteGrasp6DNode:
         plan.poses = adjusted.poses
         plan.refinement_translation_m = adjusted.refinement_translation_m
         plan.required_open_width_m = float(gate.required_open_width_m)
+        self._freeze_final_contact_evidence(plan, runtime)
         runtime['final_registered_geometry_gate'] = asdict(gate)
         runtime['registration_support_lift_m'] = support_lift_m
+        if (str(plan.model_choice) == 'unknown_tabletop'
+                and str(plan.diagnostic) == CONTACT_EXECUTION_PLAN):
+            limit = self._contact_height_evidence_limit()
+            if limit is not None:
+                evidence = decode_contact_evidence(plan, required=True)
+                transform = pose_matrix(self._rich_plan_execution_sequence(plan).grasp)
+                report = evaluate_contact_height_margin(
+                    translation_evidence_limit_m=limit,
+                    **self._contact_height_geometry(transform, geometry,
+                        evidence['contact_center_base'], evidence['contact_height_bounds_m'],
+                        evidence['contact_height_axis_base'], evidence['minimum_contact_overlap_m']))
+                runtime['final_contact_height_margin'] = report
+                if report['ok'] is not True:
+                    raise CandidateContractError('CONTACT_HEIGHT_REGISTRATION_MARGIN', report['reason'])
 
     def _registered_sequence_geometry_gate(self, plan, prepared, runtime, sequence):
         """Use the exact corrected object/contact coordinates for final gates."""
@@ -14204,9 +14643,84 @@ class RemoteGrasp6DNode:
                         'final contact coordinates require the exact registered snapshot')
                 final_runtime['contact_registration_transform'] = _readonly_rigid_transform(
                     evidence.result.transform_base, 'final contact registration')
+        # A prior candidate/registration result cannot authorize this family.
+        final_runtime.pop('final_contact_geometry_evidence', None)
+        runtime.pop('final_contact_geometry_evidence', None)
         gate = self._resolved_sequence_geometry_gate(final_runtime, sequence)
-        return self._apply_final_approach_lateral_gate(
+        gate = self._apply_final_approach_lateral_gate(
             gate, sequence, prepared.geometry.support_normal_base)
+        if isinstance(gate, CandidateGateResult) and gate.ok:
+            runtime['final_contact_geometry_evidence'] = final_runtime.get(
+                'final_contact_geometry_evidence', '')
+        return gate
+
+    @staticmethod
+    def _freeze_final_contact_evidence(plan, runtime):
+        """Freeze only the measurement made for the final registered family."""
+        plan.contact_geometry_evidence = str(runtime.get(
+            'final_contact_geometry_evidence', '') or '')
+        try:
+            decode_contact_evidence(plan)
+        except ValueError as exc:
+            raise CandidateContractError('CONTACT_GEOMETRY_EVIDENCE_INVALID', str(exc)) from exc
+
+    def _final_contact_sequence_evaluation(self, plan, stages, prepared, runtime,
+                                           operation, deadline_sec=0.0):
+        if not (getattr(self, 'contact_sequence_precheck_enabled', False)
+                and plan.model_choice == 'unknown_tabletop'):
+            return self._cached_strict_moveit_sequence_evaluation(
+                stages, prepared, runtime, operation, deadline_sec=deadline_sec)
+        # This service plans the entire virtual sequence and additionally checks
+        # the contact curve with fresh SDK/encoder bias. Do not reuse the nominal
+        # cache: it contains neither the SDK reference nor the enable epoch.
+        metrics = {'joint_path_cost': 0., 'joint_max_delta': 0.}
+        try:
+            now = self._execution_plan_validity_now_sec()
+            if deadline_sec > 0. and now >= deadline_sec:
+                raise CandidateContractError('MOVEIT_TIMEOUT', 'contact precheck deadline consumed')
+            service = '/supervisor/check_contact_sequence'
+            rospy.wait_for_service(service, timeout=min(.5, deadline_sec-now)
+                                   if deadline_sec > 0. else .5)
+            request = CheckContactSequenceRequest(plan=deepcopy(plan),
+                deadline=rospy.Time.from_sec(deadline_sec) if deadline_sec > 0. else rospy.Time(0))
+            response = rospy.ServiceProxy(service, CheckContactSequence)(request)
+            evidence = json.loads(response.evidence_json)
+            runtime['contact_sequence_precheck'] = deepcopy(evidence)
+            if (not isinstance(evidence, dict) or evidence.get('plan_id') != plan.plan_id
+                    or evidence.get('scope') != 'read_only_candidate_constant_bias_prediction'
+                    or evidence.get('execution_authorized') is not False
+                    or type(response.success) is not bool
+                    or evidence.get('success') is not response.success):
+                raise CandidateContractError('MOVEIT_CHECK_ERROR', 'unbound contact precheck response')
+            if deadline_sec > 0. and self._execution_plan_validity_now_sec() >= deadline_sec:
+                raise CandidateContractError('MOVEIT_TIMEOUT', 'contact precheck returned after deadline')
+            if not response.success:
+                raise CandidateContractError(response.failure_code or 'MOVEIT_CHECK_ERROR', response.message)
+            prediction = evidence.get('contact_prediction', {})
+            if (prediction.get('scope') != 'constant_current_bias_prediction'
+                    or prediction.get('future_following_verified') is not False
+                    or prediction.get('execution_authorized') is not False
+                    or not prediction.get('predicted_command_geometry')
+                    or not prediction.get('nominal_geometry')):
+                raise CandidateContractError('MOVEIT_CHECK_ERROR', 'missing contact prediction evidence')
+            cost, delta = float(response.joint_path_cost), float(response.joint_max_delta)
+            if not all(math.isfinite(v) and v >= 0. for v in (cost, delta)):
+                raise CandidateContractError('MOVEIT_CHECK_ERROR', 'invalid contact sequence costs')
+            metrics.update(joint_path_cost=cost, joint_max_delta=delta)
+            parsed = self._parse_plan_metrics(response.message)
+            for name in ('execution_duration_lower_bound_sec', 'hardware_limiting_joint'):
+                if name in parsed:
+                    metrics[name] = parsed[name]
+            checked = evidence.get('checked_stage_names', [])
+            runtime['moveit_execution_stage_policy'] = dict(
+                close_hold_only='lift' not in checked, checked_stage_names=checked,
+                lift_path_verified='lift' in checked)
+            return MoveItResult(reachable=True, joint_path_cost=cost, joint_max_delta_rad=delta,
+                reason=response.message, collision_free=True, within_joint_limits=True,
+                ik_valid=True, planning_success=True), metrics
+        except Exception as exc:
+            return MoveItResult(reachable=False, joint_path_cost=0., joint_max_delta_rad=0.,
+                reason=str(exc), failure_code=str(getattr(exc, 'code', 'MOVEIT_CHECK_ERROR'))), metrics
 
     def _strict_check_final_near_field_plan(
         self,
@@ -14222,8 +14736,16 @@ class RemoteGrasp6DNode:
             'final_strict_moveit_metrics',
             'final_strict_plan_id',
             'final_orientation_resolution',
+            'contact_sequence_precheck',
         ):
             runtime.pop(name, None)
+        # The original free-space resolver, registration and support-height
+        # restoration have now finished. Unlike the earlier pre-resolution
+        # shortcut, this exact family cannot acquire another support lift.
+        # Reject only a core overlap shared by every allowed final contact
+        # endpoint; an inconclusive result still needs the complete precheck.
+        self._reject_inevitable_contact_goal(
+            plan, runtime, 'final_registered_after_original_resolution')
         sequence = self._rich_plan_execution_sequence(plan)
         stage_poses = (
             ('pregrasp', sequence.pregrasp),
@@ -14239,8 +14761,8 @@ class RemoteGrasp6DNode:
             if self._direct_near_field_active(prepared)
             else 0.0
         )
-        result, metrics = self._cached_strict_moveit_sequence_evaluation(
-            stage_poses,
+        result, metrics = self._final_contact_sequence_evaluation(
+            plan, stage_poses,
             prepared,
             runtime,
             'final_registered_strict_sequence',
@@ -14268,8 +14790,14 @@ class RemoteGrasp6DNode:
                     str(getattr(resolved_gate, 'failure_reason', '') or 'missing evidence'))
             resolved_stages = tuple((name, getattr(resolved, name))
                                     for name in ('pregrasp', 'approach', 'grasp', 'lift'))
-            result, metrics = self._cached_strict_moveit_sequence_evaluation(
-                resolved_stages, prepared, runtime, 'final_resolved_strict_sequence',
+            resolved_plan = deepcopy(plan)
+            resolved_plan.poses = [deepcopy(getattr(resolved, name).pose)
+                                   for name in ('pregrasp', 'approach', 'grasp', 'lift')]
+            resolved_plan.required_open_width_m = float(resolved_gate.required_open_width_m)
+            self._freeze_final_contact_evidence(resolved_plan, runtime)
+            resolved_plan.plan_id = compute_plan_id(resolved_plan)
+            result, metrics = self._final_contact_sequence_evaluation(
+                resolved_plan, resolved_stages, prepared, runtime, 'final_resolved_strict_sequence',
                 deadline_sec=deadline_sec)
             sequence = resolved
         hard_evidence = bool(
@@ -14298,6 +14826,7 @@ class RemoteGrasp6DNode:
             plan.poses = [deepcopy(getattr(sequence, name).pose)
                           for name in ('pregrasp', 'approach', 'grasp', 'lift')]
             plan.required_open_width_m = float(resolved_gate.required_open_width_m)
+            self._freeze_final_contact_evidence(plan, runtime)
             # Publish/hash only the fully validated final family, never its
             # rejected pre-resolution poses or an intermediate plan ID.
             plan.plan_id = compute_plan_id(plan)
@@ -14308,8 +14837,145 @@ class RemoteGrasp6DNode:
         runtime['final_strict_plan_id'] = str(plan.plan_id)
         return sequence, result, dict(metrics or {})
 
+    def _check_refinement_candidate_continuity(self, plan, prepared, runtime):
+        from alicia_flexible_grasp.grasp.refinement_continuity import (
+            validate_candidate_continuity, RefinementContinuityError)
+        try:
+            evidence = validate_candidate_continuity(
+                getattr(prepared, 'refinement_binding', None), plan,
+                getattr(prepared, 'near_field_phase_id', 0))
+        except RefinementContinuityError as exc:
+            raise CandidateContractError(exc.code, str(exc)) from exc
+        if evidence is not None:
+            runtime['refinement_continuity'] = evidence
+
+    @staticmethod
+    def _contact_goal_inevitable_collision(plan, gripper, opening, opening_tolerance):
+        """Reject only overlap shared by every permitted nominal contact goal.
+
+        The contact precheck's compensate_cartesian_path requires an endpoint
+        within 0.5 mm / 0.005 rad of its final grasp pose before certifying
+        its continuous path. The original and final free-space resolvers may
+        each retain contact poses only to their numeric equality tolerance;
+        accumulate both tolerances rather than treating them as exact. Erode
+        each body by a displacement bound covering
+        that complete pose-error ball and every opening the open/skip policy
+        permits. Intersection of the remaining core with the SAME frozen OBB
+        is a necessary failure of the existing nominal contact check. This
+        cannot attest free space, a path, following response, or a grasp.
+        """
+        report = dict(policy='inevitable_frozen_contact_goal_obb_overlap',
+                      execution_authorized=False, path_verified=False,
+                      rejected=False, checked=False, bodies=[])
+        if (not isinstance(gripper, GripperGeometry)
+                or not all(math.isfinite(float(v)) for v in (opening, opening_tolerance))
+                or not 0. < opening <= gripper.max_inner_gap_m
+                or not 0. <= opening_tolerance < opening):
+            report['reason'] = 'invalid opening prediction; retain full checker'
+            return report
+        pose, size, _support = validate_rich_geometry(plan.object_geometry)
+        object_rotation = quaternion_matrix(pose[3:])[:3, :3]
+        transform = pose_matrix(RemoteGrasp6DNode._rich_plan_execution_sequence(plan).grasp)
+        # All future skip/open postures are included; no stale encoder opening
+        # or target-specific nominal width is used for this necessary test.
+        low = max(0., opening-opening_tolerance)
+        high = min(gripper.max_inner_gap_m, opening+opening_tolerance)
+        midpoint = .5*(low+high)
+        # At most one original and one final registered resolver contribute
+        # to any returned family. Publication rebuilds that same family; it
+        # does not compound additional resolver outputs into runtime.sequence.
+        resolver_count = 2
+        resolver_position = resolver_count*math.sqrt(3.)*1e-12
+        resolver_angle = resolver_count*2.*math.acos(1.-1e-9)
+        position_bound = .0005+resolver_position
+        angle_bound = .005+resolver_angle
+        report.update(checked=True, plan_id=str(plan.plan_id),
+                      opening_interval_m=[low, high],
+                      goal_position_tolerance_m=.0005,
+                      goal_orientation_tolerance_rad=.005,
+                      maximum_contact_orientation_resolutions=resolver_count,
+                      accumulated_resolver_position_allowance_m=resolver_position,
+                      accumulated_resolver_orientation_allowance_rad=resolver_angle,
+                      total_goal_position_bound_m=position_bound,
+                      total_goal_orientation_bound_rad=angle_bound)
+        for name, center, dimensions in _stage_boxes(transform, gripper, midpoint, 'y', 'z'):
+            radius = float(np.linalg.norm(center-transform[:3, 3]) + .5*np.linalg.norm(dimensions))
+            # A point in this eroded box remains inside the original body
+            # under every allowed pose. The extra 1e-7 m keeps a numerical
+            # SAT boundary from becoming a false inevitable-overlap claim.
+            displacement = position_bound + 2.*radius*math.sin(angle_bound/2.)
+            if name != 'palm':
+                displacement += .25*(high-low)
+            erosion = displacement + 1e-7
+            core = np.asarray(dimensions)-2.*erosion
+            collision = bool(np.all(core > 0.) and _obb_overlap(
+                center, transform[:3, :3], core,
+                np.asarray(pose[:3]), object_rotation, np.asarray(size)))
+            report['bodies'].append(dict(body=name,
+                maximum_pose_and_opening_displacement_m=displacement,
+                core_size_xyz_m=core.tolist(), inevitable_overlap=collision))
+            report['rejected'] = report['rejected'] or collision
+        report['reason'] = ('every permitted contact endpoint overlaps the frozen target OBB'
+                            if report['rejected'] else 'no necessary failure proven; retain full checker')
+        return report
+
+    def _early_contact_goal_rejection(self, candidate, runtime):
+        """Cheap rejection before searching free-space orientations.
+
+        Nonidentity registration may require support-height restoration that
+        depends on the resolved free-space rotations. Leave that case to the
+        complete checker. At identity, every resolver result already has to
+        pass the same four-pose support gate, so it cannot alter grasp height.
+        """
+        if (not getattr(self, 'contact_sequence_precheck_enabled', False)
+                or getattr(runtime.get('prepared'), 'model_choice', '') != 'unknown_tabletop'):
+            return None
+        try:
+            plan = self._build_selected_preview_bundle(candidate, geometry_only=True)['rich_plan']
+        except CandidateContractError as exc:
+            # A pregrasp/lift geometry failure can still be repaired by the
+            # bounded resolver. This shortcut never turns it into a verdict.
+            runtime['contact_goal_necessary_check'] = dict(checked=False, rejected=False,
+                execution_authorized=False,
+                reason='pre-resolution final geometry unavailable: '+str(exc))
+            return None
+        if (float(plan.refinement_translation_m) != 0.
+                or float(plan.refinement_rotation_deg) != 0.
+                or float(runtime.get('registration_support_lift_m', 0.)) != 0.):
+            runtime['contact_goal_necessary_check'] = dict(checked=False, rejected=False,
+                execution_authorized=False,
+                reason='registration or support restoration can change contact height; retain full checker')
+            return None
+        return self._reject_inevitable_contact_goal(plan, runtime, 'pre_resolution_identity')
+
+    def _reject_inevitable_contact_goal(self, plan, runtime, proof_stage):
+        """Share the necessary collision test without widening its authority."""
+        if (not getattr(self, 'contact_sequence_precheck_enabled', False)
+                or str(plan.model_choice) != 'unknown_tabletop'):
+            return None
+        config = rospy.get_param('/gripper', {})
+        report = self._contact_goal_inevitable_collision(plan, self.gripper_geometry,
+            float(config.get('open_position_m', .05)),
+            float(config.get('open_skip_tolerance_m', .001)))
+        report['proof_stage'] = proof_stage
+        runtime['contact_goal_necessary_check'] = report
+        if report['rejected']:
+            raise CandidateContractError('CONTACT_SEQUENCE_PRECHECK_FAILED',
+                'nominal contact goal has unavoidable target OBB collision within '
+                'unchanged pose/opening tolerances: '+','.join(
+                    b['body'] for b in report['bodies'] if b['inevitable_overlap']))
+        return None
+
     def _check_direct_registered_candidate(self, candidate):
         """Keep final contact failures inside the bounded ranked search."""
+        runtime = self._stable_variant_runtime[(candidate.track_id, candidate.variant_index)]
+        runtime.pop('final_contact_rejection', None)
+        try:
+            self._early_contact_goal_rejection(candidate, runtime)
+        except CandidateContractError as exc:
+            runtime['final_contact_rejection'] = {'code': exc.code, 'reason': str(exc)}
+            return MoveItResult(reachable=False, joint_path_cost=0., joint_max_delta_rad=0.,
+                reason='%s: %s' % (exc.code, exc), failure_code='MOVEIT_CHECK_ERROR')
         result = self._check_moveit_stable_candidate(candidate)
         if not result.reachable:
             return result
@@ -14352,13 +15018,39 @@ class RemoteGrasp6DNode:
             )
         return MoveItResult(**runtime['final_strict_moveit_result'])
 
-    def _build_selected_preview_bundle(self, selected):
+    def _selected_preview_runtime(self, selected, ticket=None):
+        """Bind a current request and its runtime under the invalidation lock.
+
+        Target loss/stop may clear this cache after MoveIt selection. Check
+        the explicit request first so that case is cancellation, not a broken
+        current cache. Cached callers without an explicit ticket must still
+        derive and validate the actual runtime ticket; they gain no bypass.
+        """
+        with self._stream_condition:
+            if ticket is not None:
+                self._require_stream_ticket_current_locked(ticket)
+            runtime = getattr(self, '_stable_variant_runtime', {}).get(
+                (selected.track_id, selected.variant_index)
+            )
+            if not isinstance(runtime, dict):
+                raise RuntimeError('selected stable variant runtime is unavailable')
+            runtime_ticket = getattr(runtime.get('prepared'), 'ticket', None)
+            if runtime_ticket is None:
+                raise RuntimeError('selected stable variant runtime ticket is unavailable')
+            self._require_stream_ticket_current_locked(runtime_ticket)
+            if ticket is not None and any(
+                int(getattr(ticket, field)) != int(getattr(runtime_ticket, field))
+                for field in ('request_id', 'generation', 'target_epoch')
+            ):
+                raise RuntimeError('selected stable variant runtime ticket mismatch')
+            if (int(selected.evaluation_request_id) != int(runtime_ticket.request_id)
+                    or int(selected.stable_candidate.target_epoch) != int(runtime_ticket.target_epoch)):
+                raise RuntimeError('selected candidate does not match runtime request/target')
+            return runtime
+
+    def _build_selected_preview_bundle(self, selected, ticket=None, geometry_only=False):
         """Build one immutable candidate-bound preview without publishing it."""
-        runtime = getattr(self, '_stable_variant_runtime', {}).get(
-            (selected.track_id, selected.variant_index)
-        )
-        if not isinstance(runtime, dict):
-            raise RuntimeError('selected stable variant runtime is unavailable')
+        runtime = self._selected_preview_runtime(selected, ticket=ticket)
         prepared = runtime['prepared']
         stable = selected.stable_candidate
         normalized = selected.payload
@@ -14438,6 +15130,11 @@ class RemoteGrasp6DNode:
                 rich_plan, prepared, runtime,
             )
         rich_plan.plan_id = compute_plan_id(rich_plan)
+        self._check_refinement_candidate_continuity(rich_plan, prepared, runtime)
+        if geometry_only:
+            # The same registration, contact-height placement and frozen
+            # geometry used for final validation, with no service/publication.
+            return {'rich_plan': rich_plan}
         final_strict_result = None
         final_strict_metrics = {}
         if near_field:
@@ -14450,6 +15147,13 @@ class RemoteGrasp6DNode:
                 prepared,
                 runtime,
             )
+        # Free-space resolution may alter the final family. Recheck the
+        # frozen reference after resolution as well as before its path search.
+        self._check_refinement_candidate_continuity(rich_plan, prepared, runtime)
+        try:
+            decode_contact_evidence(rich_plan)
+        except ValueError as exc:
+            raise CandidateContractError('CONTACT_GEOMETRY_EVIDENCE_INVALID', str(exc)) from exc
         legacy_plan = rich_plan_to_legacy(rich_plan)
         stage_profile = runtime.get('adaptive_stage_profile')
         stage_profile_audit = (
@@ -14496,6 +15200,7 @@ class RemoteGrasp6DNode:
                 'final_registered_geometry_gate'),
             'registration_support_lift_m': float(runtime.get(
                 'registration_support_lift_m', 0.0)),
+            'refinement_continuity': deepcopy(runtime.get('refinement_continuity')),
             'strict_sequence_stages': (
                 ['pregrasp', 'approach', 'grasp', 'lift']
                 if near_field
@@ -14564,6 +15269,7 @@ class RemoteGrasp6DNode:
             ),
             'pre_moveit_score': float(selected.pre_moveit_score),
             'final_orientation_resolution': deepcopy(runtime.get('final_orientation_resolution', {})),
+            'moveit_execution_stage_policy': deepcopy(runtime.get('moveit_execution_stage_policy', {})),
             'final_score': float(selected.final_score),
             'score_components': dict(
                 soft_candidate_cost(
@@ -14634,8 +15340,8 @@ class RemoteGrasp6DNode:
             'proposal': proposal,
         }
 
-    def _publish_selected_preview(self, selected):
-        bundle = self._build_selected_preview_bundle(selected)
+    def _publish_selected_preview(self, selected, ticket=None):
+        bundle = self._build_selected_preview_bundle(selected, ticket=ticket)
         self._publish_preview_plan(
             bundle['rich_plan'],
             bundle['legacy_plan'],
@@ -14847,14 +15553,14 @@ class RemoteGrasp6DNode:
                 }
                 response = None
                 try:
-                    bundle = self._build_selected_preview_bundle(candidate)
+                    bundle = self._build_selected_preview_bundle(candidate, ticket=prepared.ticket)
                     plan = bundle['rich_plan']
                     record['plan_id'] = str(plan.plan_id)
                     payload = build_mujoco_payload(
                         plan,
                         joint_names,
                         joint_positions,
-                        cfg,
+                        bind_simulated_fixed_close(plan, cfg, rospy.get_param('/gripper', {})),
                     )
                     record['payload_plan_id'] = str(
                         payload.get('plan_id', '') or ''
@@ -15161,6 +15867,14 @@ class RemoteGrasp6DNode:
                 'pre_moveit_score': float(evaluated.pre_moveit_score),
                 'final_score': final_score,
                 'moveit': moveit,
+                'contact_height_placement': deepcopy(
+                    candidate_runtime.get('contact_height_placement')),
+                'final_contact_height_margin': deepcopy(
+                    candidate_runtime.get('final_contact_height_margin')),
+                'contact_sequence_precheck': deepcopy(
+                    candidate_runtime.get('contact_sequence_precheck')),
+                'contact_goal_necessary_check': deepcopy(
+                    candidate_runtime.get('contact_goal_necessary_check')),
                 'final_contact_rejection': deepcopy(
                     candidate_runtime.get('final_contact_rejection')),
                 'execution_sequence': self._execution_sequence_audit(
@@ -15235,6 +15949,10 @@ class RemoteGrasp6DNode:
                 'request_plan_cache': deepcopy(
                     candidate_runtime.get('request_plan_cache', {})
                 ),
+                'endpoint_ik_search_probe': deepcopy(
+                    candidate_runtime.get('endpoint_ik_search_probe', {})),
+                'moveit_execution_stage_policy': deepcopy(
+                    candidate_runtime.get('moveit_execution_stage_policy', {})),
                 'final_orientation_resolution': deepcopy(
                     candidate_runtime.get('final_orientation_resolution', {})),
                 'latest_soft_evidence': deepcopy(
@@ -15379,6 +16097,7 @@ class RemoteGrasp6DNode:
             if item['candidate_source'] == 'graspnet':
                 item['candidate_index'] = item['source_index']
         report['stable_evaluations'] = deepcopy(stable_evaluations)
+        report['observation_view_rejections'] = self._observation_rejection_audit_for(prepared)
         report['lineage'] = deepcopy(stable_evaluations)
         report['selected'] = selected_lineage
         preview_audit = dict(
@@ -15842,6 +16561,14 @@ class RemoteGrasp6DNode:
                 else self._far_field_observation_moveit_rank_key
             )
         )
+        if direct_near_field:
+            endpoint_priorities = self._direct_contact_endpoint_priorities(
+                moveit_candidates, prepared, acceptance_diagnostics)
+            original_rank = moveit_ranking_key
+            moveit_ranking_key = lambda candidate: (
+                endpoint_priorities.get((candidate.track_id, candidate.variant_index), 1),
+                *original_rank(candidate),
+            )
         direct_checker, direct_continuation = (
             self._direct_near_field_comparison_search(prepared)
             if direct_near_field else (None, None)
@@ -15871,13 +16598,13 @@ class RemoteGrasp6DNode:
             # bounded set so an arbitrary Top-N cutoff cannot be reported as
             # evidence that all contact sequences are unreachable.
             exhaustive=bool(near_field),
-            # Far-field's information/translation ranking is also its final
-            # selection rule.  The first strictly reachable item in this
-            # ordering is the exact optimum, so checking lower-ranked poses
-            # cannot change the result and only makes live plans stale.
+            # Legacy far-field uses the same pre/post ranking. Information-
+            # driven views need actual timed-path costs, so compare them under
+            # one shared budget instead of declaring the first feasible best.
             # Direct contact pose distance is only a preflight heuristic,
             # not an authoritative joint-path/duration ranking.
-            first_reachable_by_rank=bool(not near_field),
+            first_reachable_by_rank=bool(not near_field
+                and not self._information_driven_observation_comparison()),
             # Near-field MoveIt checks can each run the deterministic
             # orientation resolver. Stop starting new checks before the
             # server-advertised snapshot lifetime is consumed, preserving
@@ -15895,9 +16622,16 @@ class RemoteGrasp6DNode:
                 'NEAR_FIELD_DIRECT_TIMEOUT'
                 if direct_near_field
                 else ('MUJOCO_SNAPSHOT_RESERVE_REACHED' if near_field
-                      else 'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID')
+                      else ('OBSERVATION_COMPARISON_STOPPED'
+                            if self._information_driven_observation_comparison()
+                            else 'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID'))
             ),
         )
+        if (not near_field and self._information_driven_observation_comparison()
+                and selection.terminated_early):
+            reason = getattr(self, '_observation_information_comparison', {}).get('stop_reason')
+            if reason:
+                selection = replace(selection, termination_reason=reason)
         if direct_near_field and len(selection.reachable) > 1:
             selection = replace(
                 selection,
@@ -15973,7 +16707,7 @@ class RemoteGrasp6DNode:
             status = 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'
         if selection.selected is not None:
             promotion_proposal = self._publish_selected_preview(
-                selection.selected
+                selection.selected, ticket=ticket
             )
             preview_count = 1
             status = 'PREVIEW_READY'
@@ -17500,6 +18234,7 @@ class RemoteGrasp6DNode:
                 deepcopy(self.latest_object_geometry),
                 deepcopy(self.latest_object_geometry.header),
                 str(getattr(self, '_last_model_choice', '') or ''),
+                contact_geometry_evidence=getattr(selected, '_contact_geometry_evidence', ''),
             )
             self._apply_registration_evidence_to_plan(
                 rich_plan,
@@ -17875,7 +18610,7 @@ class RemoteGrasp6DNode:
         mujoco_selection_max_candidates = max(
             1,
             min(
-                12,
+                64,
                 int(twin_cfg.get('selection_max_candidates', 12)),
             ),
         )
@@ -18826,6 +19561,7 @@ class RemoteGrasp6DNode:
         contact_execution_phase=True,
         contact_surface_frame='snapshot',
     ):
+        setattr(camera_candidate, '_contact_geometry_evidence', '')
         estimate = (
             geometry
             if geometry is not None
@@ -18941,6 +19677,15 @@ class RemoteGrasp6DNode:
             estimate.support_normal_base,
         )
         self._record_geometry_gate_result(result)
+        if result.ok and bool(contact_execution_phase):
+            camera_candidate._contact_geometry_evidence = encode_contact_evidence(
+                contact_center_base=candidate_center_base,
+                contact_height_axis_base=contact_height_axis,
+                contact_height_bounds_m=contact_height_bounds,
+                minimum_contact_overlap_m=self._phase_contact_overlap_requirement_m(
+                    True, getattr(plan, 'adaptive_stage_profile', None)),
+                grasp_pose=grasp_pose,
+            )
         if not result.ok:
             rospy.logwarn(
                 (
@@ -21189,6 +21934,7 @@ class RemoteGrasp6DNode:
         self,
         stage_poses,
         deadline_sec=0.0,
+        include_lift=True,
     ):
         """Resolve only pregrasp/lift rotations through the planning-only API."""
 
@@ -21215,14 +21961,15 @@ class RemoteGrasp6DNode:
                 'MOVEIT_RESOLVE_ERROR',
                 unavailable['reason'],
             )
+        checked_stages = stages if include_lift is not False else stages[:3]
         try:
             service_name = '/supervisor/resolve_free_space_orientations'
             rospy.wait_for_service(service_name, timeout=0.5)
             request = ResolveFreeSpaceOrientationsRequest()
-            request.targets = [deepcopy(pose) for _name, pose in stages]
-            request.stage_names = [str(name) for name, _pose in stages]
-            request.linear = [False, True, True, False]
-            request.resolve_orientation = [True, False, False, True]
+            request.targets = [deepcopy(pose) for _name, pose in checked_stages]
+            request.stage_names = [str(name) for name, _pose in checked_stages]
+            request.linear = [False, True, True, False][:len(checked_stages)]
+            request.resolve_orientation = [True, False, False, True][:len(checked_stages)]
             request.deadline = (
                 rospy.Time.from_sec(float(deadline_sec))
                 if float(deadline_sec) > 0.0
@@ -21282,10 +22029,10 @@ class RemoteGrasp6DNode:
         resolved_targets = list(
             getattr(response, 'resolved_targets', ()) or ()
         )
-        if len(resolved_targets) != len(stages):
+        if len(resolved_targets) != len(checked_stages):
             unavailable['reason'] = (
                 'orientation resolver returned %d targets for %d stages'
-                % (len(resolved_targets), len(stages))
+                % (len(resolved_targets), len(checked_stages))
             )
             return (
                 None,
@@ -21320,7 +22067,7 @@ class RemoteGrasp6DNode:
                 unavailable['reason'],
             )
         for index, ((stage_name, original), resolved) in enumerate(
-            zip(stages, resolved_targets)
+            zip(checked_stages, resolved_targets)
         ):
             original_position = np.asarray(
                 [
@@ -21366,15 +22113,20 @@ class RemoteGrasp6DNode:
                     self._pose_quaternion_xyzw(resolved),
                     dtype=float,
                 )
-                dot = abs(
-                    float(
-                        np.dot(
-                            original_quaternion,
-                            resolved_quaternion,
-                        )
-                    )
-                )
-                if abs(dot - 1.0) > 1e-9:
+                norms = [float(np.linalg.norm(q)) for q in
+                         (original_quaternion, resolved_quaternion)]
+                if (not all(np.all(np.isfinite(q)) for q in
+                            (original_quaternion, resolved_quaternion))
+                        or not all(math.isfinite(n) and n > 1e-12 for n in norms)):
+                    unavailable['reason'] = 'orientation resolver returned invalid contact quaternion at '+stage_name
+                    return None, unavailable, 'MOVEIT_RESOLVE_ERROR', unavailable['reason']
+                # The preservation contract bounds rotation, not quaternion
+                # scale. A raw dot product near one is no angular proof for
+                # nonunit service responses.
+                raw_dot = abs(float(np.dot(original_quaternion, resolved_quaternion)))
+                dot = abs(float(np.dot(original_quaternion/norms[0],
+                                       resolved_quaternion/norms[1])))
+                if abs(raw_dot - 1.0) > 1e-9 or abs(dot - 1.0) > 1e-9:
                     unavailable['reason'] = (
                         'orientation resolver changed physical contact '
                         'orientation at %s'
@@ -21404,7 +22156,9 @@ class RemoteGrasp6DNode:
                 ),
             ),
             'max_position_error': maximum_position_error,
-            'resolved_stages': ['pregrasp', 'lift'],
+            'resolved_stages': ['pregrasp', 'lift'] if include_lift is not False else ['pregrasp'],
+            'checked_stage_names': [name for name, _ in checked_stages],
+            'lift_path_verified': False,  # Resolution still needs strict path validation.
             'contact_orientation_preserved_stages': [
                 'approach',
                 'grasp',
@@ -21415,7 +22169,8 @@ class RemoteGrasp6DNode:
                 pregrasp=resolved_targets[0],
                 approach=resolved_targets[1],
                 grasp=resolved_targets[2],
-                lift=resolved_targets[3],
+                lift=(resolved_targets[3] if include_lift is not False
+                      else deepcopy(stages[3][1])),
             ),
             audit,
             '',
@@ -21473,8 +22228,9 @@ class RemoteGrasp6DNode:
                 camera_candidate = deepcopy(camera_candidate)
                 camera_candidate._center_base_xyz = center
             surface_frame = 'reference'
+        runtime.pop('final_contact_geometry_evidence', None)
         if isinstance(payload, LocalCandidatePayload):
-            return self._evaluate_candidate_geometry(
+            gate = self._evaluate_candidate_geometry(
                 payload.raw_candidate,
                 camera_candidate,
                 grasp_pose,
@@ -21483,6 +22239,10 @@ class RemoteGrasp6DNode:
                 contact_execution_phase=True,
                 contact_surface_frame=surface_frame,
             )
+            if gate.ok:
+                runtime['final_contact_geometry_evidence'] = getattr(
+                    camera_candidate, '_contact_geometry_evidence', '')
+            return gate
         if not isinstance(payload, NormalizedPlanningCandidate):
             return CandidateGateResult(
                 ok=False,
@@ -21522,7 +22282,7 @@ class RemoteGrasp6DNode:
             return self._bilateral_surface_gate_failure(
                 bilateral_evidence
             )
-        return evaluate_explicit_candidate(
+        gate = evaluate_explicit_candidate(
             gripper=self.gripper_geometry,
             candidate_center_base=center,
             candidate_tool0_base=transform[:3, 3],
@@ -21564,6 +22324,15 @@ class RemoteGrasp6DNode:
                 )
             ),
         )
+        if gate.ok:
+            runtime['final_contact_geometry_evidence'] = encode_contact_evidence(
+                contact_center_base=center,
+                contact_height_axis_base=measured_axis,
+                contact_height_bounds_m=measured_bounds,
+                minimum_contact_overlap_m=self._phase_contact_overlap_requirement_m(True, profile),
+                grasp_pose=grasp_pose,
+            )
+        return gate
 
     def _strict_moveit_sequence_evaluation(
         self,

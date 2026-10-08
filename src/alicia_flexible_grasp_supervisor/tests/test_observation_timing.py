@@ -101,3 +101,12 @@ def test_smooth_retimer_preserves_per_joint_caps_and_duration_floor(recorded_pla
     bounds = command_derivative_bounds(result,hold)
     assert result.joint_trajectory.points[-1].time_from_start.to_sec() >= 30.-1e-9
     assert all(v <= limits[n]+1e-9 for n,v in zip(result.joint_trajectory.joint_names,bounds['maximum_velocity_rad_s']))
+
+
+def test_observe_return_uses_separate_strategy_bound_timing_identity():
+    selected = dict(SELECTION, strategy='observe_return')
+    key, values = observation_timing(selected, dict(enabled=True), BASE)
+    assert values == (.30, .20)
+    assert key[:4] == ('unknown', 'observe_return', 12, 12000)
+    for old in ('direct', 'two_stage'):
+        assert key != observation_timing(dict(selected, strategy=old), dict(enabled=True), BASE)[0]

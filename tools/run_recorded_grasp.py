@@ -49,7 +49,7 @@ def observe_task_state(outcome, message, minimum_stamp_ns):
     state = str(message.get('state', ''))
     reason = str(message.get('message', ''))
     if state == 'SUCCESS' and message.get('success') is True:
-        result = 'success'
+        result = ('unknown' if reason.startswith('DIAGNOSTIC_OBSERVATION_COMPLETE:') else 'success')
     elif state == 'HOLDING' and message.get('success') is False:
         result = 'unknown'
     elif state == 'FAILED' and message.get('success') is False:
@@ -85,7 +85,9 @@ def classify_result(recorder_outcome, runner_log, interrupted=False, returncode=
         match = _SERVICE_RESULT.fullmatch(line)
         if match:
             observations.append({
-                'result': ('unknown' if match.group(2).startswith('GRASP_HOLD_UNVERIFIED:')
+                'result': ('unknown' if (match.group(2).startswith('GRASP_HOLD_UNVERIFIED:')
+                           or (match.group(1) == 'True' and match.group(2).startswith(
+                               'DIAGNOSTIC_OBSERVATION_COMPLETE:')))
                            else ('success' if match.group(1) == 'True' else 'failure')),
                 'reason': match.group(2),
                 'evidence': {'source': 'StartGrasp service response in runner.log', 'line': line},
@@ -96,6 +98,9 @@ def classify_result(recorder_outcome, runner_log, interrupted=False, returncode=
             response_unknown = True
     evidence = {'observations': observations, 'runner_returncode': returncode,
                 'recorder_stop_reason': recorder_outcome.get('stop_reason', '')}
+    if observations and all(entry['result'] == 'unknown' and entry['reason'].startswith(
+            'DIAGNOSTIC_OBSERVATION_COMPLETE:') for entry in observations):
+        evidence.update(diagnostic_observation_completed=True, grasp_performed=False)
     results = {entry['result'] for entry in observations}
     if len(results) > 1:
         return 'unknown', 'conflicting actual task results; manual confirmation required', evidence
@@ -145,11 +150,10 @@ def _closed_recording_files(directory, outcome):
 
 
 def main(argv=None):
-    from grasp_archive import begin_record, finalize_record, load_config
+    from grasp_archive import begin_record, finalize_record, load_config, root_path
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root', default=os.environ.get(
-        'GRASP_RECORD_ROOT', str(Path(__file__).resolve().parents[1] / '.grasp_records')))
+    parser.add_argument('--root', help='record root (default: configured experiment storage)')
     parser.add_argument('--config', help='archive configuration (default: ROOT/archive_config.json)')
     parser.add_argument('--duration', type=float, default=600.,
                         help='unchanged keyframe recorder duration, seconds (default: 600)')
@@ -165,7 +169,7 @@ def main(argv=None):
         parser.error('duration must be in (0, 1800] seconds')
     if args.ready_timeout <= 0 or (args.min_free_bytes is not None and args.min_free_bytes < 0):
         parser.error('ready timeout must be positive and free-space reserve nonnegative')
-    root = Path(args.root).expanduser().resolve()
+    root = root_path(args.root)
     config = load_config(args.config or root / 'archive_config.json')
     if args.min_free_bytes is not None:
         config['min_free_bytes'] = args.min_free_bytes

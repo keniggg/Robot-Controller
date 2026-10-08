@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -eo pipefail
+cd /home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade
+launch_path="$1"
+log_path="$2"
+shift 2
+source /home/zhuyupei/alicia_wa_full/.ros_log/unknown_grasp_20260923/sanstand_storage.sh
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+export ROS_MASTER_URI=http://localhost:11311
+export ROS_LOG_DIR="$log_path"
+export PYTHONUNBUFFERED=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+mkdir -p "$ROS_LOG_DIR"
+exec roslaunch --wait "$launch_path" "$@"

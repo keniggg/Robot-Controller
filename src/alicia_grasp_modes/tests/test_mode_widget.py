@@ -99,3 +99,38 @@ def test_stale_heartbeat_and_teardown_do_not_issue_robot_commands(widget):
     view._shutdown_ros()
     assert removed == [True]
     assert calls == []
+
+
+def test_observe_return_choice_sends_only_atomic_mode_selection(widget, app):
+    view, calls, _ = widget
+    status(view)
+    index = view.strategy.findData('observe_return')
+    assert view.strategy.itemText(index) == '一阶段优先（必要时补充观察）'
+    assert view.strategy.model().item(index).isEnabled()
+    view.strategy.setCurrentIndex(index)
+    assert '视角不足' in view.description.text() and '回到初始姿态' in view.description.text()
+    view.apply_selection()
+    deadline = time.monotonic()+2.
+    while view._requesting and time.monotonic() < deadline:
+        app.processEvents()
+    assert not view._requesting
+    assert calls == [('/grasp_mode/select', ('unknown', 'observe_return'))]
+
+
+def test_carton_does_not_offer_or_retain_unknown_only_strategy(widget):
+    view, calls, _ = widget
+    status(view, strategy='observe_return')
+    assert view.strategy.currentData() == 'observe_return'
+    view.target.setCurrentIndex(view.target.findData('carton'))
+    assert not view.strategy.model().item(view.strategy.findData('observe_return')).isEnabled()
+    assert view.strategy.currentData() == 'two_stage'
+    assert calls == []
+
+
+def test_observe_return_status_and_reservation_keep_controls_bound(widget):
+    view, calls, _ = widget
+    status(view, strategy='observe_return', active=True)
+    assert '一阶段优先（必要时补充观察）' in view.status.text()
+    assert not view.apply_button.isEnabled()
+    view.apply_selection()
+    assert calls == []

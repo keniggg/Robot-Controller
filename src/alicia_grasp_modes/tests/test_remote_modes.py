@@ -737,7 +737,7 @@ def test_unknown_observation_preferences_refresh_without_global_parameter_write(
         return 'unchanged_continuous_config'
     monkeypatch.setattr(base.RemoteGrasp6DNode, '_stage_runtime_params', staticmethod(staged))
     assert node._stage_runtime_params(node) == 'unchanged_continuous_config'
-    assert node.grasp_config['observation_camera_target_max_distance_m'] == .30
+    assert node.grasp_config['observation_camera_target_max_distance_m'] == .50
     node._mode_selection['mode'] = 'carton'
     node._stage_runtime_params(node)
     assert node.grasp_config == {'observation_camera_target_max_distance_m':.22, 'sentinel':True}
@@ -827,7 +827,8 @@ def test_unknown_direct_search_rejects_failed_simulation_before_publication(conf
     monkeypatch.setattr(base.RemoteGrasp6DNode,'_check_direct_registered_candidate',lambda self,c:result)
     node._stable_variant_runtime={(1,0):{'prepared':types.SimpleNamespace(ticket=object())}}
     plan=types.SimpleNamespace(plan_id='plan-one',candidate_source='tabletop_geometry',candidate_source_lineage=['tabletop_geometry'])
-    def build(c):
+    def build(c, ticket=None):
+        assert ticket is node._stable_variant_runtime[(1, 0)]["prepared"].ticket
         assert isinstance(c.final_score, float) and np.isfinite(c.final_score)
         assert c.moveit_result is result
         return {'rich_plan':plan}
@@ -889,12 +890,14 @@ def test_direct_deadline_does_not_replace_inflight_work_or_executable_plan(confi
     assert len(node.preview_rich_plan_pub.messages)==count
 
 
-def test_unknown_requires_visible_pregrasp_and_restores_carton_policy(configured):
+@pytest.mark.parametrize('strategy,required', [('two_stage', True), ('direct', False)])
+def test_unknown_pregrasp_visibility_matches_refinement_strategy(configured, strategy, required):
     node, params = configured
     original_policy = dict(node._carton_visibility_settings)
     select_unknown(params)
+    params[module.SELECTION_PARAM]['strategy'] = strategy
     assert node.reset_mode_cb(None).success
-    assert node.camera_visibility_gate_enabled is True
+    assert node.camera_visibility_gate_enabled is required
     assert node.camera_visibility_min_depth_m >= .070
     assert node.camera_visibility_max_depth_m <= .500
     params[module.SELECTION_PARAM] = {
@@ -957,10 +960,12 @@ def test_real_gen9_pregrasp_view_is_checked_after_pose_resolution(configured, mo
     assert node._resolved_sequence_geometry_gate(runtime, sequence) is geometry_gate
 
 
-@pytest.mark.parametrize('mode,enabled,minimum,maximum', [
-    ('unknown', True, .070, .500), ('carton', False, .01, .9)])
-def test_runtime_refresh_preserves_unknown_view_contract(monkeypatch, mode, enabled, minimum, maximum):
-    node = types.SimpleNamespace(_mode_selection={'mode': mode}, grasp_config={})
+@pytest.mark.parametrize('mode,strategy,enabled,minimum,maximum', [
+    ('unknown', 'two_stage', True, .070, .500),
+    ('unknown', 'direct', False, .070, .500),
+    ('carton', 'direct', False, .01, .9)])
+def test_runtime_refresh_preserves_unknown_view_contract(monkeypatch, mode, strategy, enabled, minimum, maximum):
+    node = types.SimpleNamespace(_mode_selection={'mode': mode, 'strategy': strategy}, grasp_config={})
     def refresh(staged):
         staged.camera_visibility_gate_enabled = False
         staged.camera_visibility_diagnostic_enabled = False
@@ -1039,6 +1044,35 @@ def test_actual_out_of_frame_pose_uses_bounded_planar_offset_without_changing_co
         support_normal_base=np.array(fixture["geometry"]["support_normal_base"]))) is resolved
 
 
+def test_direct_frozen_contact_keeps_occluded_pregrasp_and_geometry_gates(configured, monkeypatch):
+    from dataclasses import dataclass
+    node, sequence, fixture = real_pregrasp_fixture_node(configured)
+    node._mode_selection = dict(node._mode_selection, strategy='direct')
+    geometry = types.SimpleNamespace(center_base=np.array(fixture['target_base']),
+        support_normal_base=np.array(fixture['geometry']['support_normal_base']))
+    # Direct execution does not need a fresh image after arriving at pregrasp.
+    # Keep the physical pose unchanged instead of adding a view-only detour.
+    assert node._visible_unknown_pregrasp(sequence, geometry) is sequence
+
+    @dataclass
+    class GeometryGate:
+        ok: bool = True
+        failure_code: str = ''
+        failure_reason: str = ''
+        failed_gate: str = ''
+
+    gate = GeometryGate()
+    monkeypatch.setattr(base.RemoteGrasp6DNode, '_resolved_sequence_geometry_gate',
+                        lambda *args: gate)
+    runtime = {'prepared': types.SimpleNamespace(geometry=geometry)}
+    assert node._resolved_sequence_geometry_gate(runtime, sequence) is gate
+    assert runtime['unknown_pregrasp_visibility']['ok'] is False
+    assert runtime['unknown_pregrasp_visibility']['required'] is False
+    gate.ok, gate.failure_code = False, 'GRIPPER_SWEEP_COLLISION'
+    assert node._resolved_sequence_geometry_gate(runtime, sequence) is gate
+    assert not gate.ok
+
+
 def test_pregrasp_view_offset_cannot_relax_range_or_modify_carton(configured):
     node, sequence, fixture = real_pregrasp_fixture_node(configured)
     geometry = types.SimpleNamespace(center_base=np.asarray(fixture['target_base']),
@@ -1079,6 +1113,7 @@ def test_contact_probe_is_only_used_for_unknown_near_field(configured, monkeypat
     node._mode_selection = {'mode': mode}
     node.near_field_planning_active = near_field
     node.gripper_geometry = object()
+    node._tabletop_placement_gripper = lambda: node.gripper_geometry
     node.gripper_tool_jaw_axis = 'y'
     node.gripper_tool_finger_length_axis = 'z'
     probe = object()
@@ -1113,7 +1148,7 @@ def test_scalar_contact_intersections_are_scoped_to_unknown_near_field(configure
     assert bool(captured) == optimized
 
 
-def test_unknown_short_face_precedes_narrow_corner_band_and_uses_real_motion(configured):
+def test_unknown_search_prefers_short_face_but_checked_execution_prefers_duration(configured):
     node, params = configured
     select_unknown(params)
     assert node.reset_mode_cb(None).success
@@ -1139,7 +1174,8 @@ def test_unknown_short_face_precedes_narrow_corner_band_and_uses_real_motion(con
     fast_short = candidate(3, np.pi, .022, 15.)
     long = candidate(4, np.pi/2, .034, 5.)
     assert min([corner, short, long], key=node._direct_near_field_moveit_rank_key) is short
-    assert min([corner, short, fast_short, long], key=node._direct_near_field_execution_rank_key) is fast_short
+    assert min([corner, short, fast_short], key=node._direct_near_field_execution_rank_key) is corner
+    assert min([corner, short, fast_short, long], key=node._direct_near_field_execution_rank_key) is long
     # Final orientation resolution must use the actual checked grasp pose.
     node._stable_variant_runtime[(corner.track_id, 0)]['final_execution_sequence'] = types.SimpleNamespace(
         grasp=base.make_pose_stamped('base_link', [0, 0, .1], [0, 0, 0, 1]))
@@ -1150,3 +1186,4 @@ def test_unknown_short_face_precedes_narrow_corner_band_and_uses_real_motion(con
     # Carton retains its measured-width ranking.
     node._mode_selection['mode'] = 'carton'
     assert min([corner, short, long], key=node._direct_near_field_moveit_rank_key) is corner
+    assert min([short, fast_short, long], key=node._direct_near_field_execution_rank_key) is fast_short

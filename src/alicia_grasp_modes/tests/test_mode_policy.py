@@ -98,3 +98,49 @@ def test_legacy_mode_service_keeps_selected_execution_strategy():
     policy.finish_switch(True)
     policy.begin_switch('carton', 300)
     assert policy.strategy == 'direct'
+
+
+def test_observe_return_gets_its_own_generation_and_does_not_inherit_direct_plan():
+    policy = ready()
+    policy.begin_switch('unknown', 200, 'direct')
+    policy.finish_switch(True)
+    policy.observe_plan('plan', True, 'direct-plan', 201, 'unknown_tabletop', 'unknown_tabletop')
+    assert policy.begin_switch('unknown', 300, 'observe_return') == 'SWITCHING'
+    policy.finish_switch(True)
+    assert policy.selection() == dict(mode='unknown', strategy='observe_return', generation=3, stamp_ns=300)
+    assert policy.reserve_start('direct-plan', True) == 'PLAN_NOT_BOUND_TO_CURRENT_MODE'
+    policy.observe_plan('preview', True, 'current-plan', 301, 'unknown_tabletop', 'unknown_tabletop')
+    assert policy.reserve_start('current-plan', True) == ''
+
+
+def test_observe_return_request_queues_as_atomic_selection():
+    policy = ready()
+    policy.active = True
+    assert policy.begin_switch('unknown', 200, 'observe_return') == 'QUEUED'
+    assert policy.strategy == 'two_stage' and policy.generation == 1
+    assert (policy.pending, policy.pending_strategy) == ('unknown', 'observe_return')
+    policy.active = False
+    assert policy.begin_switch(policy.pending, 300, policy.pending_strategy) == 'SWITCHING'
+    assert policy.strategy == 'observe_return' and policy.generation == 2
+
+
+def test_carton_observe_return_is_rejected_before_mutation_or_queue():
+    from copy import deepcopy
+    import pytest
+    for active in (False, True):
+        policy = ready()
+        policy.active = active
+        before = deepcopy(policy)
+        with pytest.raises(ValueError, match='requires unknown'):
+            policy.begin_switch('carton', 200, 'observe_return')
+        assert policy == before
+
+
+def test_legacy_carton_switch_cannot_keep_unknown_only_observe_return():
+    import pytest
+    policy = ready()
+    policy.begin_switch('unknown', 200, 'observe_return')
+    policy.finish_switch(True)
+    with pytest.raises(ValueError, match='requires unknown'):
+        policy.begin_switch('carton', 300)
+    assert (policy.mode, policy.strategy, policy.generation) == ('unknown', 'observe_return', 2)

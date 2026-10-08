@@ -15,7 +15,8 @@ from alicia_flexible_grasp.vision.multiview_surface import RegistrationConfig
 _CANONICAL_PREFIX = b'ALICIA_GRASP6D_PLAN_V2\x00'
 _PLAN_ID_PATTERN = re.compile(r'^[0-9a-f]{24}$')
 SUPPORTED_GEOMETRY_SOURCE_MODES = frozenset(('instance_mask', 'bbox_depth'))
-SUPPORTED_CANDIDATE_SOURCES = frozenset(('graspnet', 'tabletop_geometry'))
+SILHOUETTE_OBSERVATION_SOURCE = 'silhouette_observation'
+SUPPORTED_CANDIDATE_SOURCES = frozenset(('graspnet', 'tabletop_geometry', SILHOUETTE_OBSERVATION_SOURCE))
 GRIPPER_MAX_OPEN_WIDTH_M = 0.050
 
 
@@ -246,7 +247,30 @@ def validate_candidate_source(source, lineage):
         item not in SUPPORTED_CANDIDATE_SOURCES for item in items
     ):
         raise ValueError('candidate source lineage is inconsistent')
+    if SILHOUETTE_OBSERVATION_SOURCE in items and items != (SILHOUETTE_OBSERVATION_SOURCE,):
+        raise ValueError('observation source cannot have contact candidate lineage')
     return canonical, items
+
+
+def is_silhouette_observation_plan(plan):
+    return getattr(plan, 'candidate_source', None) == SILHOUETTE_OBSERVATION_SOURCE
+
+
+def validate_silhouette_observation_plan(plan):
+    """An inert single-view request; this never certifies contact feasibility."""
+    if not is_silhouette_observation_plan(plan):
+        raise ValueError('silhouette observation source required')
+    validate_candidate_source(plan.candidate_source, plan.candidate_source_lineage)
+    if (getattr(plan, 'diagnostic', '') != 'FAR_FIELD_OBSERVATION_PLAN'
+            or getattr(plan, 'model_choice', '') != 'unknown_tabletop'
+            or len(getattr(plan, 'poses', ()) or ()) != 1
+            or bool(plan.has_candidate_model_width)
+            or float(plan.candidate_width_m) != 0.
+            or float(plan.required_open_width_m) != 0.
+            or getattr(plan, 'contact_geometry_evidence', '') != ''
+            or getattr(plan, 'refinement_status', '') != 'NOT_EVALUATED'):
+        raise ValueError('observation source requires one view, zero widths and no contact evidence')
+    validate_finite_pose(plan.poses[0], 'observation pose')
 
 
 def validate_candidate_model_width(plan):
@@ -254,6 +278,8 @@ def validate_candidate_model_width(plan):
         plan.candidate_source,
         plan.candidate_source_lineage,
     )
+    if source == SILHOUETTE_OBSERVATION_SOURCE:
+        validate_silhouette_observation_plan(plan)
     present = bool(plan.has_candidate_model_width)
     width = float(plan.candidate_width_m)
     if not math.isfinite(width) or width < 0.0:
@@ -283,8 +309,9 @@ def canonical_plan_bytes(plan):
     candidate_width = validate_candidate_model_width(plan)
     candidate_width_value = float(plan.candidate_width_m)
     poses = list(getattr(plan, 'poses', ()) or ())
-    if len(poses) != 4:
-        raise ValueError('rich plan must contain exactly four poses')
+    expected_poses = 1 if is_silhouette_observation_plan(plan) else 4
+    if len(poses) != expected_poses:
+        raise ValueError('rich plan has an invalid pose count for its source')
 
     payload = bytearray(_CANONICAL_PREFIX)
     track = validate_track_id(getattr(plan, 'target_track_id', None))
@@ -333,6 +360,17 @@ def canonical_plan_bytes(plan):
     payload.extend(struct.pack('>3d', *support[:3]))
     # ObjectGeometry.support_offset_m is also float32 on the ROS wire.
     payload.extend(struct.pack('>f', support[3]))
+    # Preserve historical empty-field hashes for non-contact/carton consumers.
+    # Nonempty evidence is exact signed content, including its version and the
+    # final measured bounds; execution validates its canonical JSON separately.
+    contact_evidence = getattr(plan, 'contact_geometry_evidence', '')
+    if not isinstance(contact_evidence, str):
+        raise ValueError('contact geometry evidence must be a string')
+    if contact_evidence:
+        encoded = contact_evidence.encode('utf-8')
+        payload.extend(b'CONTACT_GEOMETRY_EVIDENCE\x00')
+        payload.extend(struct.pack('>I', len(encoded)))
+        payload.extend(encoded)
     return bytes(payload)
 
 

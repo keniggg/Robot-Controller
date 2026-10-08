@@ -288,3 +288,17 @@ def test_hold_without_physical_evidence_is_unknown_not_failure_or_success():
         'GRASP_RESULT success=False message=' + reason)
     assert result == 'unknown'
     assert recorded_reason == reason
+
+
+@pytest.mark.parametrize('source', ['state', 'service', 'both'])
+def test_diagnostic_observation_completion_never_claims_a_grasp(source):
+    reason = 'DIAGNOSTIC_OBSERVATION_COMPLETE: audit_path=/external/evidence.json; no grasp performed'
+    outcome = {}
+    if source in ('state', 'both'):
+        lifecycle.observe_task_state(outcome, state(active=True), 100)
+        lifecycle.observe_task_state(outcome, state(stamp=111, success=True, name='SUCCESS', message=reason), 100)
+    log = 'GRASP_RESULT success=True message=' + reason if source in ('service', 'both') else ''
+    result, recorded, evidence = lifecycle.classify_result(outcome, log, returncode=0)
+    assert result == 'unknown' and recorded == reason
+    assert evidence['diagnostic_observation_completed']
+    assert evidence['grasp_performed'] is False

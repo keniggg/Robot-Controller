@@ -1,0 +1,5 @@
+<launch>
+  <node pkg="alicia_grasp_modes" type="mode_aware_grasp_task.py" name="grasp_task_node" output="screen" respawn="false">
+    <remap from="/grasp/start" to="/grasp/internal_start"/>
+  </node>
+</launch>

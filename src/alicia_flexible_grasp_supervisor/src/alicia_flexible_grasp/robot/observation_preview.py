@@ -71,7 +71,7 @@ def decode_path_evidence(token, target, fk):
         raise ObservationPathError('invalid candidate path evidence: %s' % exc)
 
 
-def qualify_candidate_path(plan, hold, scene, fk, gripper, opening, errors):
+def qualify_candidate_path(plan, hold, scene, fk, gripper, opening, errors, *, path_validator=None):
     """Distinguish an impossible start from an endpoint or intermediate failure.
 
     Start and goal checks are necessary but not sufficient. Only the complete
@@ -96,7 +96,8 @@ def qualify_candidate_path(plan, hold, scene, fk, gripper, opening, errors):
             return report
     report['failure_location'] = 'path'
     try:
-        report['continuous_path'] = validate_observation_trajectory(
+        validator = validate_observation_trajectory if path_validator is None else path_validator
+        report['continuous_path'] = validator(
             plan, scene, fk, gripper, opening, hold,
             joint_error_bounds_rad=errors, max_checks=FOLLOWING_PATH_MAX_CHECKS,
             max_seconds=FOLLOWING_PATH_MAX_SECONDS)

@@ -46,7 +46,8 @@ include_directories(
 # --- Build Targets ---
 
 # 1. Hardware Driver Node (communicates with serial port)
-add_executable(alicia_d_driver_node src/alicia_d_driver_node.cpp src/serial_communicator.cpp)
+add_executable(alicia_d_driver_node src/alicia_d_driver_node.cpp src/serial_communicator.cpp
+  src/gripper_stroke_snapshot.cpp)
 # Link against catkin libraries, which now includes the 'serial' library
 target_link_libraries(alicia_d_driver_node
   ${catkin_LIBRARIES}
@@ -69,6 +70,12 @@ target_link_libraries(alicia_d_hw_interface_node
 )
 
 if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(gui_direct_profile_test test/gui_direct_profile_test.cpp)
+  catkin_add_gtest(gripper_stroke_snapshot_test
+    test/gripper_stroke_snapshot_test.cpp src/gripper_stroke_snapshot.cpp)
+  if(TARGET gripper_stroke_snapshot_test)
+    target_link_libraries(gripper_stroke_snapshot_test ${catkin_LIBRARIES})
+  endif()
   catkin_add_gtest(sdk_diagnostic_evidence_test test/sdk_diagnostic_evidence_test.cpp)
   catkin_add_gtest(
     actuation_confirmation_test

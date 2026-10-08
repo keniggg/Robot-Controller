@@ -7,6 +7,8 @@ import urllib.parse
 import urllib.request
 
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
+    float32_wire_value,
+    required_open_width_is_valid,
     validate_candidate_model_width,
     validate_candidate_source,
 )
@@ -228,6 +230,39 @@ def _apply_target_mass_estimate(plan, object_config, evidence, mass, assumptions
     return simulation_mass, updated
 
 
+
+def _apply_unknown_mass_bound(plan, policy, mass, assumptions):
+    """Apply the operator's persistent operating-domain bound to unknowns.
+
+    This is an explicit declared upper limit, not a weight estimate or a
+    measurement. The payload always tests that upper limit; dynamics and
+    physical acceptance gates otherwise remain unchanged.
+    """
+    if policy is None or plan.model_choice != 'unknown_tabletop':
+        return mass, assumptions
+    if (not isinstance(policy, dict)
+            or policy.get('source') != 'operator_declared_operational_limit'
+            or policy.get('scope') != 'all_unknown_objects'
+            or not isinstance(policy.get('operator_statement'), str)
+            or not policy['operator_statement'].strip()):
+        raise ValueError('unknown mass bound requires explicit operator provenance')
+    raw = policy.get('maximum_mass_kg')
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError('unknown maximum mass must be a finite number')
+    maximum = _finite_float(raw, 'unknown maximum_mass_kg')
+    if not 0.0 < maximum <= assumptions['operational_mass_ceiling_kg']:
+        raise ValueError('unknown maximum mass exceeds the operating range')
+    evidence = dict(policy)
+    updated = dict(assumptions,
+        source='operator_declared_unknown_mass_upper_bound',
+        previous_envelope_mass_kg=mass,
+        declared_upper_bound_kg=maximum,
+        simulation_mass_kg=maximum,
+        measured_upper_bound=False,
+        operator_mass_policy=evidence)
+    return maximum, updated
+
+
 def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None):
     """Build the finite, JSON-only schema-v3 request for one immutable plan."""
     if plan is None:
@@ -279,12 +314,18 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
     ]
 
     candidate_width = validate_candidate_model_width(plan)
+    if candidate_width is not None:
+        candidate_width = float32_wire_value(candidate_width)
     required_width = _finite_float(
         getattr(plan, 'required_open_width_m', None),
         'required_open_width_m',
     )
-    if required_width <= 0.0 or required_width > _MAX_INNER_GAP_M:
+    if not required_open_width_is_valid(required_width):
         raise ValueError('required_open_width_m must be in (0, 0.050]')
+    # Preview runs before ROS serialization; execution consumes the wire copy.
+    # Both simulations must use identical geometry, including float32 fields.
+    # The float32 representation of exactly 50 mm lies slightly above .05.
+    required_width = min(float32_wire_value(required_width), _MAX_INNER_GAP_M)
 
     root_config = _config_mapping(gripper_config, 'gripper_config')
     model_config = _config_mapping(
@@ -361,10 +402,12 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
     )
     if math.sqrt(sum(item * item for item in support_normal)) <= 1e-12:
         raise ValueError('support_plane.normal_base must be non-zero')
-    support_offset = _finite_float(
+    support_offset = float32_wire_value(_finite_float(
         getattr(geometry, 'support_offset_m', None),
         'support_plane.offset_m',
-    )
+    ))
+    if not math.isfinite(support_offset):
+        raise ValueError('support_plane.offset_m must remain finite on the ROS wire')
 
     object_config = _config_mapping(
         root_config.get('object_model', {}),
@@ -380,6 +423,8 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
 
     mass, dynamics_assumptions = _apply_target_mass_estimate(
         plan, object_config, root_config.get('target_mass_evidence'), mass, dynamics_assumptions)
+    mass, dynamics_assumptions = _apply_unknown_mass_bound(
+        plan, root_config.get('unknown_object_mass_bound'), mass, dynamics_assumptions)
 
     payload = {
         'schema_version': 3,
@@ -418,7 +463,7 @@ def build_mujoco_payload(plan, joint_names, joint_positions, gripper_config=None
     return payload
 
 
-def _validate_lift_evidence(response, score, require_success=True):
+def _validate_lift_evidence(response, score, require_success=True, allow_empty=False):
     evidence = response.get('lift_evidence')
     if not isinstance(evidence, dict):
         return MujocoGateValidationResult(
@@ -473,7 +518,7 @@ def _validate_lift_evidence(response, score, require_success=True):
             )
         counts[name] = value
     if (
-        counts['lift_sample_count'] <= 0
+        (counts['lift_sample_count'] <= 0 and not (allow_empty and not require_success))
         or (
             counts['two_sided_lift_samples']
             + counts['lost_contact_samples']
@@ -533,7 +578,7 @@ def mujoco_lift_gate_enabled(plan, config):
     return config.get('unknown_lift_gate_enabled', True)
 
 
-def _validate_pre_lift_contact(response, score):
+def _validate_pre_lift_contact(response, score, allow_unexecuted_lift=False):
     """Validate v1 settled evidence emitted only AFTER opposed preload passes.
 
     The deployed server's contact_success and score include lift retention.
@@ -545,13 +590,17 @@ def _validate_pre_lift_contact(response, score):
         version = evidence['contract_version']
         if response.get('backend') != 'mujoco' or type(version) is not int or version != 1:
             raise ValueError('unsupported settled-contact evidence contract')
-        for key in ('preload_settle_samples', 'lift_sample_count'):
+        for key in ('preload_settle_samples',):
             if type(evidence[key]) is not int or evidence[key] <= 0:
-                raise ValueError('completed preload and lift diagnostics are required')
+                raise ValueError('completed preload is required')
+        samples = evidence['lift_sample_count']
+        if (type(samples) is not int or samples < 0
+                or (samples == 0 and not allow_unexecuted_lift)):
+            raise ValueError('completed lift diagnostics or an attested lift-only IK failure is required')
         speed = _finite_float(evidence['max_prescribed_joint_speed_rad_s'], 'lift joint speed')
         if speed < 0.0 or speed > 0.08 + 1e-9:
             raise ValueError('lift path exceeds the real 0.08 rad/s joint speed contract')
-        ik_results = response['ik_results']
+        ik_results = response['ik_results'][:-1] if allow_unexecuted_lift else response['ik_results']
         if [item['name'] for item in ik_results] != ['pregrasp', 'approach', 'grasp', 'lift']:
             raise ValueError('complete sequence IK evidence is required')
         for item in ik_results:
@@ -589,9 +638,57 @@ def _validate_pre_lift_contact(response, score):
                    for left in contacts['left'] for right in contacts['right']):
             raise ValueError('settled state has no loaded opposed finger contact pair')
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
-        return MujocoGateValidationResult(False, 'MUJOCO_CONTACT_FAILED',
-            'Pre-lift closure evidence is missing or invalid: %s' % exc, score)
+        reason = 'Pre-lift closure evidence is missing or invalid: %s' % exc
+        raw_reason = response.get('failure_reason')
+        if (response.get('failure_code') == 'MUJOCO_CONTACT_FAILED'
+                and isinstance(raw_reason, str) and raw_reason.strip()):
+            # Failed closure/preload intentionally has no settled proof. Keep
+            # its physical diagnosis visible instead of reporting only the
+            # absent later lift field. This branch always rejects the plan.
+            reason = raw_reason + '; ' + reason
+        return MujocoGateValidationResult(False, 'MUJOCO_CONTACT_FAILED', reason, score)
     return None
+
+
+def _lift_only_ik_failure(response):
+    """Recognize v1 lift-reference construction failure after proven preload.
+
+    The server appends this named result only after initial sequence IK,
+    trajectory collision checks and preload. Do not infer this from prose.
+    Actual loaded opposed contact is independently validated by the caller.
+    """
+    if (response.get('failure_code') != 'MUJOCO_IK_FAILED'
+            or response.get('ik_success') is not False
+            or response.get('collision_free') is not True
+            or response.get('simulation_ok') is not False
+            or response.get('contact_success') is not False
+            or response.get('lift_success') is not False):
+        return False
+    try:
+        rows = response['ik_results']
+        if ([r['name'] for r in rows] !=
+                ['pregrasp', 'approach', 'grasp', 'lift', 'lift_cartesian_waypoint']
+                or any(r['success'] is not True for r in rows[:4])
+                or rows[-1]['success'] is not False):
+            return False
+        for row in rows:
+            for key in ('position_error_m', 'orientation_error'):
+                if _finite_float(row[key], key) < 0:
+                    return False
+        evidence = response['lift_evidence']
+        # Reference IK failed before lift dynamics started. Nonzero/boolean
+        # counters cannot be reinterpreted as an unexecuted lift.
+        for key in ('lift_sample_count', 'two_sided_lift_samples', 'lost_contact_samples',
+                    'max_lost_contact_streak', 'contact_loss_grace_samples'):
+            if type(evidence[key]) is not int or evidence[key] != 0:
+                return False
+        for key in ('object_lift_m', 'commanded_lift_m', 'minimum_lift_m',
+                    'actual_tool_lift_m', 'max_prescribed_joint_speed_rad_s'):
+            if _finite_float(evidence[key], key) != 0.0:
+                return False
+        return True
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+        return False
 
 
 def validate_mujoco_gate_response(
@@ -712,27 +809,35 @@ def validate_mujoco_gate_response(
                 score,
             )
     if not require_lift_success:
+        lift_only_ik_failure = _lift_only_ik_failure(response)
         for key, code, reason in _COMPONENT_FAILURES[:2]:
+            if key == 'ik_success' and lift_only_ik_failure:
+                continue
             if response[key] is not True:
                 return MujocoGateValidationResult(False, code, reason, score)
         # Other errors (including path-speed contract violations) still block.
         failure_code = response.get('failure_code', '')
-        if failure_code not in ('', 'MUJOCO_CONTACT_FAILED', 'MUJOCO_LIFT_FAILED'):
+        if (failure_code not in ('', 'MUJOCO_CONTACT_FAILED', 'MUJOCO_LIFT_FAILED')
+                and not lift_only_ik_failure):
             return MujocoGateValidationResult(False, failure_code,
                 str(response.get('failure_reason', 'MuJoCo simulation failed')), score)
         if not response['simulation_ok'] and not failure_code:
             return MujocoGateValidationResult(False, 'WSL_UNAVAILABLE',
                 'failed simulation must identify its failed component', score)
-        failure = _validate_lift_evidence(response, score, require_success=False)
+        # A failed preload produces no lift samples. Report its physical
+        # closure failure before validating the later diagnostic phase.
+        failure = _validate_pre_lift_contact(
+            response, score, allow_unexecuted_lift=lift_only_ik_failure)
         if failure is not None:
             return failure
-        failure = _validate_pre_lift_contact(response, score)
+        failure = _validate_lift_evidence(response, score, require_success=False,
+                                        allow_empty=lift_only_ik_failure)
         if failure is not None:
             return failure
         # Aggregate score includes lift retention; it cannot be a pre-lift
         # threshold. Preserve the original score and verdict as diagnostics.
         return MujocoGateValidationResult(True, 'MUJOCO_LIFT_DIAGNOSTIC_ONLY',
-            'IK, collision and loaded opposed closure passed; lift and aggregate '
+            'Pre-lift IK, collision and loaded opposed closure passed; lift and aggregate '
             'score are diagnostic only (raw simulation_ok=%s, lift_success=%s)'
             % (response['simulation_ok'], response['lift_success']), score)
     if (

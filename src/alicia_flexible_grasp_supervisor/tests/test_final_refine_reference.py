@@ -168,6 +168,8 @@ def test_late_final_checks_cannot_authorize_refined_plan(monkeypatch, delay_stag
     monkeypatch.setattr(module.rospy.Time, 'now', lambda: module.rospy.Time.from_sec(
         clock[0] if ros_override[0] is None else ros_override[0]))
     current = helper._rich_plan(stamp_sec=10.)
+    current.diagnostic = module._CONTACT_EXECUTION_PLAN
+    current.plan_id = sequence.compute_plan_id(current)
     candidate = helper._rich_plan(stamp_sec=12.01)
     node.set_state = Mock()
 

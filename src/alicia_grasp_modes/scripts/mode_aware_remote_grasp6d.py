@@ -8,8 +8,10 @@ publish a plan after the service returns. This node never commands the robot.
 
 import importlib.util
 import json
-from dataclasses import replace
+from dataclasses import asdict, fields, replace
 from copy import copy, deepcopy
+from alicia_flexible_grasp.grasp.gripper_close_contract import bind_simulated_fixed_close
+from alicia_flexible_grasp.vision.rgbd_snapshot import retained_exact_source
 import math
 from pathlib import Path
 import sys
@@ -22,7 +24,24 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger, TriggerResponse
 from alicia_grasp_modes.selection import SELECTION_PARAM, parse_selection
 from alicia_grasp_modes.target_mass import mass_config_from_ros
-from alicia_grasp_modes.observation_policy import observation_config
+from alicia_grasp_modes.observation_policy import (
+    observation_config, observation_distance_preferences, WORKING_VOLUME_POLICY)
+from alicia_flexible_grasp.grasp.observation_working_volume import (
+    observation_obb_corners, validate_planned_observation_working_volume)
+from alicia_grasp_modes.observation_view_utility import (
+    POLICY as INFORMATION_MOTION_POLICY, predicted_information_utility, information_motion_rank)
+from alicia_grasp_modes.observe_return_remote import ObserveReturnRemoteMixin
+from alicia_grasp_modes.unknown_pending_identity import UnknownPendingIdentityMixin
+from alicia_grasp_modes.silhouette_observation_planning import SilhouetteObservationPlanningMixin
+from alicia_grasp_modes.silhouette_observation import directed_silhouette_rotations
+from alicia_grasp_modes.silhouette_snapshot_diagnostic import (
+    SilhouetteSnapshotConfig, build_silhouette_snapshot_evidence)
+from alicia_grasp_modes.tabletop import Config as UnknownPerceptionConfig
+from alicia_grasp_modes.rgb_observation_source import camera_geometry_snapshot
+from alicia_flexible_grasp.vision.rgbd_rectification import require_rectified_source_after_activation
+from alicia_grasp_modes.silhouette_observation_geometry import conservative_silhouette_observation_geometry
+from alicia_grasp_modes.observe_return_visual import (directed_missing_side_rotations,
+    bounded_existing_camera_rolls, diversified_observation_checks)
 
 
 def _load_original():
@@ -41,10 +60,15 @@ def _load_original():
 original = _load_original()
 
 
-class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
+class ModeAwareRemoteGrasp6DNode(UnknownPendingIdentityMixin, SilhouetteObservationPlanningMixin, ObserveReturnRemoteMixin, original.RemoteGrasp6DNode):
+    _observe_return_original = original
     def __init__(self):
         self._initialize_mode_boundary()
         super().__init__()
+        self._setup_observe_return_io()
+        self._silhouette_status_sub = rospy.Subscriber(
+            '/perception/unknown/detector_status', String,
+            self._silhouette_source_status_cb, queue_size=64)
         self._mode_reset_service = rospy.Service(
             '/grasp_mode/reset_remote', Trigger, self.reset_mode_cb)
         self._mode_subscriber = rospy.Subscriber(
@@ -55,8 +79,12 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
         self._mode_reset_lock = threading.RLock()
         self._mode_work_lock = threading.RLock()
         self._mode_phase_lock = threading.RLock()
+        self._silhouette_source_lock = threading.RLock()
+        self._silhouette_source_status = {}
         self._mode_selection = None
         self._mode_ready = False
+        self._reset_observe_return()
+        self._initialize_unknown_pending_identity()
 
     def _read_selection(self):
         return parse_selection(rospy.get_param(SELECTION_PARAM, None))
@@ -122,6 +150,10 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 if self._read_selection() != selected:
                     raise RuntimeError('mode selection changed during remote reset')
                 self._mode_selection = dict(selected)
+                self._reset_observe_return()
+                self._initialize_unknown_pending_identity()
+                with self._silhouette_source_lock:
+                    self._silhouette_source_status.clear()
                 if not hasattr(self, '_carton_internal_hole_area_px'):
                     self._carton_internal_hole_area_px = getattr(self, 'mask_internal_hole_max_area_px', 25)
                 # A colour silhouette can contain missing-depth pixels. For
@@ -129,9 +161,9 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 # interpolated contact geometry. Restore carton unchanged.
                 self.mask_internal_hole_max_area_px = (
                     0 if selected['mode'] == 'unknown' else self._carton_internal_hole_area_px)
-                # Unknown-object execution requires a fresh visual refinement
-                # after reaching pregrasp. A soft visibility cost alone allowed
-                # an otherwise valid endpoint to put the target below the image.
+                # Two-stage execution needs fresh visual refinement at pregrasp.
+                # Direct execution already freezes its contact plan before any
+                # motion and disables that refinement in execution_config.
                 # Save/restore the carton policy at the mode boundary.
                 if not hasattr(self, '_carton_visibility_settings'):
                     defaults = dict(camera_visibility_gate_enabled=False,
@@ -144,7 +176,7 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 for key, value in self._carton_visibility_settings.items():
                     setattr(self, key, value)
                 if selected['mode'] == 'unknown':
-                    self.camera_visibility_gate_enabled = True
+                    self.camera_visibility_gate_enabled = not self._direct_strategy_selected()
                     self.camera_visibility_diagnostic_enabled = True
                     self.camera_visibility_min_depth_m = max(
                         0.070, self.camera_visibility_min_depth_m)
@@ -179,6 +211,8 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 self._latest_preview_promotion = None
                 self.near_field_planning_active = False
                 self._near_field_phase_id = 0
+                self._near_field_planning_stage = 'contact_replan'
+                self._near_field_refinement_binding = None
                 self._near_field_phase_started_sec = 0.0
                 self._near_field_phase_deadline_sec = 0.0
                 self._direct_near_field_submission_generation = None
@@ -250,6 +284,8 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
     def near_field_state_cb(self, msg):
         # Reached-view reconstruction may wait for camera callbacks. Do not
         # hold their control lock while waiting for their input.
+        if self._observe_return_selected():
+            return self._observe_return_near_field_cb(msg)
         with self._mode_phase_lock:
             # Direct planning owns a contact-only phase at the current view.
             # The task's normal entry/exit "far field" event must not convert
@@ -260,19 +296,32 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 return super().near_field_state_cb(msg)
 
     def _direct_strategy_selected(self):
-        return (self._mode_selection or {}).get('strategy', 'two_stage') == 'direct'
+        strategy = (self._mode_selection or {}).get('strategy', 'two_stage')
+        return strategy == 'direct' or (strategy == 'observe_return' and
+            self._observe_return_phase in ('initial_contact', 'observing_contact', 'returned_contact'))
 
     def grasp_state_cb(self, msg):
         previous_active = bool(getattr(self, 'robot_execution_active', False))
         super().grasp_state_cb(msg)
         if (previous_active and not bool(getattr(msg, 'active', False))
-                and self._direct_strategy_selected()):
+                and (self._direct_strategy_selected() or self._observe_return_selected())):
             self.stop_streaming()
 
     def _configured_near_field_strategy(self):
         if self._direct_strategy_selected():
             return 'single_snapshot_direct'
         return super()._configured_near_field_strategy()
+
+    def _tabletop_placement_gripper(self, contact_execution_phase=None):
+        # A boundary goal can fall below the physical clearance after wire/FK
+        # roundoff. Reserve 0.5 mm before any candidate is frozen, then still
+        # run the original contact, collision, IK and simulation gates.
+        contact = (getattr(self, 'near_field_planning_active', False)
+                   if contact_execution_phase is None else contact_execution_phase)
+        geometry = super()._tabletop_placement_gripper(contact)
+        if (self._mode_selection or {}).get('mode') == 'unknown' and contact:
+            return replace(geometry, support_clearance_m=geometry.support_clearance_m + .0005)
+        return geometry
 
     def _generate_tabletop_candidates(self, geometry, snapshot=None,
                                      contact_execution_phase=True, target_label=''):
@@ -317,17 +366,44 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
 
     def _contact_boundary_tilts(self, proposal, support_point, support_normal,
                                 probe_variants, maximum_tilt_deg, required_overlap_m,
-                                contact_height_bounds_m=None):
+                                contact_height_bounds_m=None, surface_snapshot=None):
         probe = None
-        if ((self._mode_selection or {}).get('mode') == 'unknown'
-                and getattr(self, 'near_field_planning_active', False)):
+        overlap_probe = None
+        measured_boundary = ((self._mode_selection or {}).get('mode') == 'unknown'
+                             and getattr(self, 'near_field_planning_active', False))
+        if measured_boundary:
             from alicia_grasp_modes.contact_probe import contact_tilt_probe
             probe = contact_tilt_probe(proposal, support_point, support_normal,
-                self.gripper_geometry, self.gripper_tool_jaw_axis,
+                self._tabletop_placement_gripper(), self.gripper_tool_jaw_axis,
                 self.gripper_tool_finger_length_axis)
+            def overlap_probe(item):
+                if surface_snapshot is None:
+                    return -float('inf')
+                _, evidence, bounds, axis = self._current_bilateral_surface_measurement(
+                    item.contact_center_base,
+                    original.np.asarray(item.T_base_tool0, dtype=float)[:3, :3],
+                    surface_snapshot=surface_snapshot)
+                if evidence is None or not evidence.ok or bounds is None:
+                    return -float('inf')
+                return self._tabletop_candidate_contact_overlap_m(
+                    proposal, item, support_normal, contact_height_bounds_m=bounds,
+                    contact_height_axis_base_override=axis)
         return super()._contact_boundary_tilts(proposal, support_point, support_normal,
             probe_variants, maximum_tilt_deg, required_overlap_m,
-            contact_height_bounds_m=contact_height_bounds_m, contact_probe=probe)
+            contact_height_bounds_m=contact_height_bounds_m, contact_probe=probe,
+            surface_snapshot=surface_snapshot, contact_overlap_probe=overlap_probe,
+            include_lower_boundary=measured_boundary)
+
+    def _tabletop_stratum_priority(self, candidate, proposal_index):
+        priority = super()._tabletop_stratum_priority(candidate, proposal_index)
+        if ((self._mode_selection or {}).get('mode') == 'unknown'
+                and self._direct_strategy_selected()
+                and getattr(self, 'near_field_planning_active', False)
+                and float(candidate.audit.get('approach_tilt_deg', 0.)) > 1e-9):
+            # Retain wrist/yaw diversity while exposing the newly measured
+            # smaller feasible tilts within the existing 32-candidate budget.
+            return priority[:2] + (abs(priority[2]),)
+        return priority
 
     def _use_unknown_motion_ranking(self):
         # Operator preference: compare real motion cost instead of imposing
@@ -341,6 +417,7 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
         CAD sweep, strict MoveIt sequence and contact simulation before motion.
         """
         if ((self._mode_selection or {}).get('mode') != 'unknown'
+                or self._direct_strategy_selected()
                 or not getattr(self, 'near_field_planning_active', False)):
             return sequence
         # Capture these once, rather than querying ROS/TF for every angle.
@@ -511,9 +588,10 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
             center = correction[:3, :3].dot(center) + correction[:3, 3]
         visible, metrics, reason = self._candidate_visibility_metrics(
             sequence.grasp, center, sequence=sequence)
+        required = not self._direct_strategy_selected()
         runtime['unknown_pregrasp_visibility'] = dict(
-            ok=bool(visible), metrics=metrics, reason=reason)
-        if not visible:
+            ok=bool(visible), metrics=metrics, reason=reason, required=required)
+        if required and not visible:
             return replace(gate, ok=False,
                 failure_code='UNKNOWN_PREGRASP_NOT_VISIBLE',
                 failure_reason=reason, failed_gate='unknown_pregrasp_visibility')
@@ -525,7 +603,7 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
         staged.grasp_config = observation_config(
             staged.grasp_config, staged._mode_selection)
         if (staged._mode_selection or {}).get('mode') == 'unknown':
-            staged.camera_visibility_gate_enabled = True
+            staged.camera_visibility_gate_enabled = not ModeAwareRemoteGrasp6DNode._direct_strategy_selected(staged)
             staged.camera_visibility_diagnostic_enabled = True
             staged.camera_visibility_min_depth_m = max(
                 0.070, getattr(staged, 'camera_visibility_min_depth_m', 0.070))
@@ -549,9 +627,22 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
             report.update(ok=False, reason=reason)
             result = replace(result, reachable=False, failure_code=code,
                              reason=reason, evidence_code='')
+        if (result.reachable and self._observe_return_selected()
+                and self._observe_return_phase == 'observation_prefix'):
+            baseline = (self._frozen_observation_translation_delta_m(prepared, target)
+                        if target is not None else float('nan'))
+            report['observe_return_view_translation_m'] = baseline
+            if baseline is None or not math.isfinite(baseline) or baseline < .015:
+                code = 'OBSERVE_RETURN_VIEW_BASELINE_INSUFFICIENT'
+                reason = code + ': observation needs at least 15 mm actual camera/tool translation'
+                report.update(ok=False, reason=reason)
+                result = replace(result, reachable=False, failure_code=code,
+                                 reason=reason, evidence_code='')
         return result, report
 
     def _register_near_field_surface(self, observation):
+        if (self._observe_return_selected() and self._observe_return_phase != 'initial_contact'):
+            return super()._register_near_field_surface(observation)
         if not self._direct_strategy_selected():
             return super()._register_near_field_surface(observation)
         # The original two-stage entry seeds this structure from the reached
@@ -579,10 +670,322 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
 
     def _multiview_surface_audit(self):
         audit = super()._multiview_surface_audit()
-        if self._direct_strategy_selected():
+        if self._direct_strategy_selected() and (not self._observe_return_selected()
+                or self._observe_return_phase == 'initial_contact'):
             audit['evidence_kind'] = 'current_view_only'
             audit['cross_view_registration_performed'] = False
         return audit
+
+    def _observation_distance_preferences(self, geometry, snapshot, reference_pose, prepared):
+        if self.grasp_config.get('observation_acceptance_policy') != WORKING_VOLUME_POLICY:
+            return super()._observation_distance_preferences(geometry, snapshot, reference_pose, prepared)
+        camera = self._camera_intrinsics()
+        proposed = original.pose_matrix(reference_pose).dot(self._tool_from_camera_matrix())
+        current = original._readonly_rigid_transform(
+            prepared.pose_estimator.T_base_camera_link, 'source camera transform')
+        limits = self._observation_view_limit_configuration()['effective_visibility_limits']
+        return observation_distance_preferences(
+            observation_obb_corners(geometry.center_base, geometry.axes_base, geometry.size_xyz_m),
+            geometry.center_base, proposed[:3, :3], current[:3, 3],
+            [camera.fx, camera.fy, camera.cx, camera.cy], camera.width, camera.height, **limits)
+
+    def _observation_reference_tilt_variants(self, reference_tool_pose, support_normal_base):
+        standard = super()._observation_reference_tilt_variants(
+            reference_tool_pose, support_normal_base)
+        if not (self._observe_return_selected() and self._observe_return_phase == 'observation_prefix'):
+            return standard
+        self._observe_return_directed_views = ()
+        try:
+            tool_camera = original._readonly_rigid_transform(
+                self._tool_from_camera_matrix(), 'observation T_tool0_camera_link')
+            reference = original.pose_matrix(reference_tool_pose)
+            rotation = reference[:3, :3].dot(tool_camera[:3, :3])
+            identity = self._current_stream_target_identity()
+            gaps = tuple(gap for gap in self._observe_return_view_gaps
+                if gap['target_epoch'] == identity.epoch and gap['target_track_id'] == identity.track_id)
+            if self._observe_return_diagnostic_observation_only:
+                # This proposal direction belongs to the original ambiguous
+                # source. Fresh support is separately verified by the unchanged
+                # 4 mm/4 degree union contract and endpoint/path collision gates.
+                # Passing a newly fitted normal here would fail the source
+                # equality check even for sub-degree accepted fit variation.
+                source_normal = self._observe_return_silhouette_evidence['view_geometry']['support_normal_base']
+                directed = directed_silhouette_rotations(self._observe_return_silhouette_evidence,
+                    rotation, source_normal, self._observe_return_view_uncertainty_m,
+                    self.grasp_config.get('observation_camera_target_nominal_distance_m', .260))
+            else:
+                directed = directed_missing_side_rotations(gaps, rotation, support_normal_base,
+                    self._observe_return_view_uncertainty_m,
+                    self.grasp_config.get('observation_camera_target_nominal_distance_m', .260),
+                    allow_geometry_directed_expansion=True)
+            rolls = bounded_existing_camera_rolls(self._parse_observation_camera_roll_offsets_deg(
+                getattr(self, 'observation_camera_roll_offsets_deg',
+                        original.DEFAULT_OBSERVATION_CAMERA_ROLL_OFFSETS_DEG)))
+            added, rolled_views = [], []
+            for camera_rotation, metadata in directed:
+                for roll in rolls:
+                    local_roll = original.quaternion_matrix(original.quaternion_from_euler(
+                        math.radians(roll), 0., 0.))[:3, :3]
+                    rolled_camera = camera_rotation.dot(local_roll)
+                    roll_metadata = dict(metadata, camera_roll_offset_deg=roll,
+                        maximum_existing_roll_variants=25,
+                        configured_existing_roll_variants=len(rolls),
+                        optical_axis_and_centered_camera_origin_unchanged=True)
+                    rolled_views.append((rolled_camera, roll_metadata))
+                    transform = original.np.eye(4)
+                    transform[:3, :3] = rolled_camera.dot(tool_camera[:3, :3].T)
+                    added.append(dict(preference_index=len(standard)+len(added),
+                        camera_roll_offset_deg=roll,
+                        camera_tilt_offset_deg=metadata['camera_rotation_offset_deg'],
+                        reference_pose=original.make_pose_stamped(
+                            str(reference_tool_pose.header.frame_id or 'base_link'),
+                            reference[:3, 3], original.quaternion_from_matrix(transform),
+                            stamp=reference_tool_pose.header.stamp)))
+            self._observe_return_directed_views = tuple(rolled_views)
+            return tuple(standard) + tuple(added)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return standard
+
+    @staticmethod
+    def _observation_rejected_variant_evidence(variant):
+        """Preserve passed endpoint evidence when a later view test rejects it."""
+        envelope = variant.get('observation_envelope')
+        record = {key: variant[key] for key in (
+            'camera_target_distance_m', 'camera_roll_offset_deg',
+            'camera_tilt_offset_deg') if key in variant}
+        if isinstance(envelope, original.ObservationEnvelopeResult):
+            record.update(observation_envelope=asdict(envelope),
+                minimum_support_clearance_m=envelope.minimum_support_clearance_m)
+        return record
+
+    def _observation_endpoint_cache_context(self, camera, limits, corners, tool_camera):
+        """Exact mode-filter inputs, never a path/authority cache key.
+
+        Contact seed yaw and contact-stage poses do not enter these filters.
+        The base still rebuilds each family and independently checks its side
+        evidence. Only pregrasp, uncertainty and the full base-view evidence
+        below can be shared when every request/source/calibration input agrees.
+        """
+        identity = self._current_stream_target_identity()
+        return json.dumps(dict(
+            selection=self._mode_selection, phase=self._observe_return_phase,
+            paused=self._observe_return_paused,
+            diagnostic=self._observe_return_diagnostic_observation_only,
+            identity=[identity.epoch, identity.track_id],
+            camera={key:getattr(camera, key) for key in
+                    ('width', 'height', 'fx', 'fy', 'cx', 'cy', 'depth_scale')},
+            limits=limits, corners=original.np.asarray(corners).tolist(),
+            tool_camera=original.np.asarray(tool_camera).tolist(),
+            gaps=self._observe_return_view_gaps,
+            uncertainty=self._observe_return_view_uncertainty_m,
+            visited=[original.np.asarray(value).tolist()
+                     for value in self._observe_return_visited_camera_origins],
+            directed=[(original.np.asarray(rotation).tolist(), metadata)
+                      for rotation, metadata in self._observe_return_directed_views]),
+            sort_keys=True, allow_nan=False)
+
+    def _far_field_observation_variants(self, *args, **kwargs):
+        passing, rejected = super()._far_field_observation_variants(*args, **kwargs)
+        # Read current camera inputs for every invocation. The optional cache
+        # below is bound to this request and exact numerical inputs; the original
+        # source/calibration binding is still revalidated before path proof and
+        # publication. No cached endpoint result grants motion authority.
+        camera = None
+        camera_transforms = {}
+        mode_cache = None
+        base_passing = tuple(passing)
+        base_rejected_count = len(rejected)
+        if self.grasp_config.get('observation_acceptance_policy') == WORKING_VOLUME_POLICY:
+            geometry = kwargs.get('geometry', args[1] if len(args) > 1 else None)
+            snapshot = kwargs.get('snapshot', args[3] if len(args) > 3 else None)
+            camera = self._camera_intrinsics()
+            limits = self._observation_view_limit_configuration()['effective_visibility_limits']
+            corners = observation_obb_corners(geometry.center_base, geometry.axes_base, geometry.size_xyz_m)
+            view_cache = kwargs.get('view_cache', args[6] if len(args) > 6 else None)
+            if (isinstance(view_cache, dict) and self._unknown_observation_planning_active()
+                    and not self._observe_return_diagnostic_observation_only):
+                prepared = kwargs.get('prepared', args[5] if len(args) > 5 else None)
+                reference = kwargs.get('observation_reference_pose', args[4] if len(args) > 4 else None)
+                # Base cache identity is necessary as well as full numerical
+                # mode inputs. A new request cannot inherit endpoint evidence.
+                if (prepared is not None and reference is not None
+                        and view_cache.get('prepared') is prepared
+                        and view_cache.get('geometry') is geometry
+                        and view_cache.get('snapshot') is snapshot
+                        and view_cache.get('reference') is reference):
+                    tool_camera = self._tool_from_camera_matrix()
+                    context = self._observation_endpoint_cache_context(camera, limits, corners, tool_camera)
+                    inputs = []
+                    for variant in base_passing:
+                        sequence = variant['sequence']
+                        pose = original.pose_matrix(sequence.pregrasp)
+                        camera_transforms[id(sequence)] = pose.dot(tool_camera)
+                        values = dict(variant)
+                        values.pop('sequence')
+                        envelope = values.get('observation_envelope')
+                        if isinstance(envelope, original.ObservationEnvelopeResult):
+                            values['observation_envelope'] = asdict(envelope)
+                        values['sequence'] = dict(pregrasp=pose.tolist(),
+                            depth_uncertainty_m=sequence.adaptive_stage_profile.depth_uncertainty_m,
+                            observation_view_audit=sequence.observation_view_audit)
+                        inputs.append(values)
+                    signature = json.dumps(dict(context=context, source_stamp_ns=int(snapshot.stamp_ns),
+                        variants=inputs), sort_keys=True, allow_nan=False)
+                    cached = view_cache.get('mode_endpoint_evidence')
+                    if (isinstance(cached, dict) and cached.get('signature') == signature
+                            and cached.get('prepared') is prepared
+                            and cached.get('geometry') is geometry
+                            and cached.get('snapshot') is snapshot
+                            and cached.get('reference') is reference):
+                        admitted = []
+                        for index, audit, gain in cached['passing']:
+                            variant = dict(base_passing[index], observe_return_missing_side_gain=deepcopy(gain))
+                            variant['sequence'].observation_view_audit = deepcopy(audit)
+                            variant['observation_view'] = deepcopy(audit)
+                            admitted.append(variant)
+                        return tuple(admitted), tuple(rejected) + tuple(deepcopy(cached['rejected']))
+                    mode_cache = (view_cache, signature, context, tool_camera, prepared, reference)
+            admitted, rejected = [], list(rejected)
+            for variant in passing:
+                sequence = variant['sequence']
+                try:
+                    camera_transform = camera_transforms.get(id(sequence))
+                    if camera_transform is None:
+                        camera_transform = original.pose_matrix(sequence.pregrasp).dot(
+                            self._tool_from_camera_matrix())
+                    prediction = validate_planned_observation_working_volume(corners,
+                        camera_transform,
+                        [camera.fx, camera.fy, camera.cx, camera.cy], camera.width, camera.height,
+                        snapshot_stamp_ns=int(snapshot.stamp_ns), **limits)
+                except ValueError as exc:
+                    rejected.append(dict(failure_code='OBSERVATION_WORKING_VOLUME_INVALID',
+                        failure_reason=str(exc), rejection_stage='working_volume',
+                        **self._observation_rejected_variant_evidence(variant)))
+                    continue
+                camera_transforms[id(sequence)] = camera_transform
+                sequence.observation_view_audit = dict(sequence.observation_view_audit,
+                    acceptance_policy=WORKING_VOLUME_POLICY, working_volume=prediction,
+                    selection_rule='target_fov_distance_preferences', distance_is_soft_preference=True)
+                variant['observation_view'] = deepcopy(sequence.observation_view_audit)
+                admitted.append(variant)
+            passing, rejected = tuple(admitted), tuple(rejected)
+        if not (self._observe_return_selected() and self._observe_return_phase == 'observation_prefix'):
+            return passing, rejected
+        admitted, rejected = [], list(rejected)
+        for variant in passing:
+            baseline = variant.get('observation_translation_delta_m')
+            if baseline is not None and math.isfinite(baseline) and baseline >= .015:
+                gain = self._observe_return_view_gain(variant.get('sequence'))
+                if gain['ok']:
+                    gain_key = ('observe_return_silhouette_gain' if
+                        self._observe_return_diagnostic_observation_only else 'observe_return_missing_side_gain')
+                    variant = dict(variant, **{gain_key: gain})
+                    sequence = variant['sequence']
+                    sequence.observation_view_audit = dict(
+                        getattr(sequence, 'observation_view_audit', {}) or {},
+                        **{gain_key: deepcopy(gain)})
+                    if self._observe_return_directed_views:
+                        camera_transform = camera_transforms.get(id(sequence))
+                        if camera_transform is None:
+                            camera_transform = original.pose_matrix(sequence.pregrasp).dot(
+                                self._tool_from_camera_matrix())
+                        camera_rotation = camera_transform[:3, :3]
+                        for proposed_rotation, metadata in self._observe_return_directed_views:
+                            if original.np.allclose(camera_rotation, proposed_rotation, atol=1e-8, rtol=0.):
+                                diagnostic = self._observe_return_diagnostic_observation_only
+                                sequence.observation_view_audit.update(
+                                    orientation_source=('measured_silhouette_ambiguity_geodesic'
+                                        if diagnostic else 'measured_missing_side_geodesic'),
+                                    object_yaw_used=True, contact_candidate_yaw_used=False,
+                                    direction_source=('measured_silhouette_ambiguity'
+                                        if diagnostic else 'measured_bilateral_weak_side'),
+                                    measured_target_geometry_direction_used=True,
+                                    **{('observe_return_directed_silhouette' if diagnostic else
+                                        'observe_return_directed_missing_side'): deepcopy(metadata)})
+                                break
+                    if not self._observe_return_diagnostic_observation_only:
+                        # Prediction ranks search only. The most distant OBB
+                        # corner and weaker focal axis avoid overstating image
+                        # resolution; accepted registration remains mandatory.
+                        depths = sequence.observation_view_audit['working_volume']['target_corner_depths_m']
+                        if camera is None:
+                            camera = self._camera_intrinsics()
+                        benefit = predicted_information_utility(
+                            gain['predicted_new_side_gain_m'], gain['depth_uncertainty_m'],
+                            max(depths), min(camera.fx, camera.fy))
+                        sequence.observation_view_audit = dict(sequence.observation_view_audit,
+                            information_utility=benefit)
+                    variant['observation_view'] = deepcopy(sequence.observation_view_audit)
+                    admitted.append(variant)
+                else:
+                    rejected.append(dict(failure_code=gain['code'],
+                        rejection_stage='information_gain',
+                        **self._observation_rejected_variant_evidence(variant),
+                        failure_reason='existing observation does not add the required measured visual information',
+                        observation_translation_delta_m=baseline, **{('observe_return_silhouette_gain'
+                            if self._observe_return_diagnostic_observation_only else
+                            'observe_return_missing_side_gain'): gain}))
+            else:
+                rejected.append(dict(reason='OBSERVE_RETURN_VIEW_BASELINE_INSUFFICIENT',
+                    failure_code='OBSERVE_RETURN_VIEW_BASELINE_INSUFFICIENT',
+                    rejection_stage='view_baseline',
+                    **self._observation_rejected_variant_evidence(variant),
+                    observation_translation_delta_m=baseline, minimum_translation_m=.015))
+        if mode_cache is not None:
+            view_cache, signature, context, tool_camera, prepared, reference = mode_cache
+            if context == self._observation_endpoint_cache_context(camera, limits, corners, tool_camera):
+                indices = {id(variant['sequence']): index for index, variant in enumerate(base_passing)}
+                view_cache['mode_endpoint_evidence'] = dict(signature=signature,
+                    prepared=prepared, geometry=geometry, snapshot=snapshot, reference=reference,
+                    passing=deepcopy(tuple((indices[id(variant['sequence'])], variant['observation_view'],
+                        variant['observe_return_missing_side_gain']) for variant in admitted)),
+                    rejected=deepcopy(tuple(rejected[base_rejected_count:])))
+        return tuple(admitted), tuple(rejected)
+
+    def _order_observation_checks(self, variants):
+        if self._unknown_observation_planning_active():
+            return self._order_unknown_observation_checks(variants)
+        original_order = super()._order_observation_checks(variants)
+        if not (self._observe_return_selected() and self._observe_return_phase == 'observation_prefix'):
+            return original_order
+        directed, legacy = [], []
+        for variant in original_order:
+            audit = getattr(variant.get('sequence'), 'observation_view_audit', {}) or {}
+            (directed if audit.get('orientation_source') in ('measured_missing_side_geodesic',
+                'measured_silhouette_ambiguity_geodesic') else legacy).append(variant)
+        ordered = diversified_observation_checks(directed,
+            self.grasp_config.get('observation_camera_target_nominal_distance_m', .26))
+        for index, variant in enumerate(ordered):
+            sequence = variant['sequence']
+            sequence.observation_view_audit = dict(sequence.observation_view_audit,
+                check_scheduling_policy='bounded_existing_roll_and_distance_interleave',
+                check_scheduling_index=index, original_strict_check_budget_unchanged=True)
+            variant['observation_view'] = deepcopy(sequence.observation_view_audit)
+        return tuple(ordered) + tuple(legacy)
+
+    def _information_driven_observation_comparison(self):
+        return bool(self._unknown_observation_planning_active()
+            and not self._observe_return_diagnostic_observation_only)
+
+    def _checked_observation_variant_rank(self, result, variant):
+        if not self._information_driven_observation_comparison():
+            return super()._checked_observation_variant_rank(result, variant)
+        audit = variant.get('observation_view', {})
+        benefit = audit['information_utility']
+        metrics = self._parse_plan_metrics(result.reason)
+        duration = metrics.get('observation_screened_duration_sec',
+            metrics.get('execution_duration_lower_bound_sec'))
+        try:
+            rank = information_motion_rank(benefit['utility'], duration,
+                result.joint_max_delta_rad, result.joint_path_cost)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise original.CandidateContractError('OBSERVATION_INFORMATION_RANK_INVALID', str(exc))
+        audit['checked_information_motion_rank'] = dict(
+            cost=rank[0] if math.isfinite(rank[0]) else None,
+            screened_duration_sec=duration, utility=benefit['utility'],
+            prediction_only=True, selection_scope='strictly_qualified_checked_views',
+            claims_global_optimum=False)
+        return (*rank, int(variant.get('preference_index', 0)))
 
     def _select_far_field_observation(self, reachable_candidates):
         if (self._mode_selection or {}).get('mode') != 'unknown':
@@ -597,6 +1000,10 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
             except (TypeError, ValueError):
                 return float('inf')
         def rank(candidate):
+            if self._information_driven_observation_comparison():
+                runtime = self._stable_variant_runtime[(candidate.track_id, candidate.variant_index)]
+                return self._checked_observation_variant_rank(candidate.moveit_result,
+                    dict(observation_view=runtime['observation_view']))
             information = super(ModeAwareRemoteGrasp6DNode, self)._far_field_observation_moveit_rank_key(candidate)
             result = candidate.moveit_result
             metrics = self._parse_plan_metrics(result.reason)
@@ -605,6 +1012,19 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                     nonnegative(result.joint_max_delta_rad), nonnegative(result.joint_path_cost),
                     *information[1:])
         candidates = tuple(reachable_candidates)
+        if self._observe_return_selected() and self._observe_return_phase == 'observation_prefix':
+            admitted = []
+            for candidate in candidates:
+                runtime = getattr(self, '_stable_variant_runtime', {}).get(
+                    (candidate.track_id, candidate.variant_index), {})
+                sequence = runtime.get('observation_sequence')
+                baseline = self._frozen_observation_translation_delta_m(
+                    runtime.get('prepared'), getattr(sequence, 'pregrasp', None))
+                if baseline is not None and math.isfinite(baseline) and baseline >= .015:
+                    gain = self._observe_return_view_gain(sequence)
+                    if gain['ok']:
+                        admitted.append(candidate)
+            candidates = tuple(admitted)
         return min(candidates, key=rank) if candidates else None
 
     def _unknown_projected_body_width(self, candidate):
@@ -643,13 +1063,24 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
         rank = super()._direct_near_field_moveit_rank_key(candidate)
         if not self._unknown_body_ranking_active():
             return rank
-        return (max(rank[0], self._unknown_projected_body_width(candidate)), *rank[1:])
+        width = self._unknown_projected_body_width(candidate)
+        # The base search key is a millimetre-band index, not metres. Mixing
+        # these units erased the whole-body short-side preference and let a
+        # narrow corner contact consume the search before the short face.
+        band = (math.floor(width / original.DIRECT_NEAR_FIELD_SEARCH_WIDTH_BIN_M)
+                if math.isfinite(width) else float('inf'))
+        return (max(rank[0], band), *rank[1:])
 
     def _direct_near_field_execution_rank_key(self, candidate):
         rank = super()._direct_near_field_execution_rank_key(candidate)
         if not self._unknown_body_ranking_active():
             return rank
-        return (max(rank[0], self._unknown_projected_body_width(candidate)), *rank[1:])
+        # Final comparison contains complete geometry/MoveIt/simulation successes.
+        # Keep short-side geometry as a search preference and a tie-breaker;
+        # a sub-millimetre width difference must not buy a full wrist reversal.
+        # Physical aperture and all admission gates remain unchanged.
+        width = max(rank[0], self._unknown_projected_body_width(candidate))
+        return (*rank[1:4], width, *rank[4:])
 
     def _check_direct_registered_candidate(self, candidate):
         result = super()._check_direct_registered_candidate(candidate)
@@ -681,9 +1112,10 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                     joint_path_cost=result.joint_path_cost,
                     joint_max_delta_rad=result.joint_max_delta_rad), candidate.score_weights).total
                 checked = replace(candidate, moveit_result=result, final_score=score)
-                plan = self._build_selected_preview_bundle(checked)['rich_plan']
+                plan = self._build_selected_preview_bundle(checked, ticket=ticket)['rich_plan']
                 joints = deepcopy(self.latest_joint_state)
                 plan_cfg = mass_config_from_ros(cfg, plan, self._mode_selection)
+                plan_cfg = bind_simulated_fixed_close(plan, plan_cfg, rospy.get_param('/gripper', {}))
                 payload = original.build_mujoco_payload(plan, list(joints.name), list(joints.position), plan_cfg)
                 if 'target_mass_evidence' in plan_cfg:
                     record['operator_mass_evidence'] = deepcopy(plan_cfg['target_mass_evidence'])
@@ -772,6 +1204,8 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
     def stop_streaming(self):
         with self._mode_control_lock:
             changed = super().stop_streaming()
+            if self._observe_return_selected():
+                self._reset_observe_return()
             if self._direct_strategy_selected():
                 with self._stream_condition, self._geometry_state_guard():
                     self.near_field_planning_active = False
@@ -796,8 +1230,18 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 return super().replan_execution_cb(req)
 
     def _poll_stream_snapshot(self):
+        if self._unknown_identity_poll():
+            return False
+        if self._observe_return_publish_identity_terminal():
+            return False
+        if self._unknown_identity_retired_selection == self._mode_selection:
+            return False
         with self._mode_control_lock:
-            if not self._selection_is_current():
+            if not self._selection_is_current() or self._observe_return_paused:
+                return False
+            session = self._observe_return_session
+            if session and int(self._ros_source_clock_ns()) >= session['deadline_ns']:
+                self._observe_return_paused = True
                 return False
             direct = self._direct_strategy_selected()
         # Snapshot collection waits for callbacks, so release control before
@@ -951,26 +1395,218 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
 
     def submit_stream_snapshot(self, snapshot, **kwargs):
         with self._mode_control_lock:
-            if not self._selection_is_current():
+            if not self._selection_is_current() or self._observe_return_paused:
                 return False
-            return super().submit_stream_snapshot(snapshot, **kwargs)
+            with self._stream_condition:
+                if (self._unknown_identity_pending is not None
+                        or self._unknown_identity_retired_selection == self._mode_selection
+                        or int(snapshot.stamp_ns) <= self._unknown_identity_cancelled_through_ns
+                        or any(int(ns) <= self._unknown_identity_cancelled_through_ns
+                               for ns in getattr(snapshot, 'sample_stamp_ns', ()))):
+                    return False
+                return super().submit_stream_snapshot(snapshot, **kwargs)
 
     def _stream_ticket_cancellation_code_locked(self, ticket):
         if not self._mode_ready:
             return 'GRASP_MODE_CHANGED'
+        if self._observe_return_selected():
+            session = self._observe_return_session
+            if self._observe_return_paused or (session and int(self._ros_source_clock_ns()) >= session['deadline_ns']):
+                return 'OBSERVE_RETURN_PHASE_PAUSED'
+        pending_code = self._unknown_identity_ticket_code(ticket)
+        if pending_code:
+            return pending_code
         return super()._stream_ticket_cancellation_code_locked(ticket)
+
+    def _prepare_snapshot_geometry(self, snapshot, stamp):
+        estimate, depth, transform = super()._prepare_snapshot_geometry(snapshot, stamp)
+        if not (self._observe_return_selected() and self._observe_return_diagnostic_observation_only
+                and self._observe_return_phase == 'observation_prefix'):
+            return estimate, depth, transform
+        self._silhouette_observation_envelope_audit = None
+        if not estimate.ok:
+            return estimate, depth, transform
+        try:
+            source = self._observe_return_diagnostic_collision_source
+            frozen = self._observe_return_diagnostic_collision_geometry
+            identity = self._current_stream_target_identity()
+            if (not self._selection_is_current() or source['selection'] != self._mode_selection
+                    or source['target_epoch'] != identity.epoch
+                    or source['target_track_id'] != identity.track_id
+                    or snapshot.target_identity != identity
+                    or snapshot.target_epoch != identity.epoch
+                    or snapshot.stamp_ns <= source['source_stamp_ns']):
+                raise ValueError('diagnostic observation collision source identity changed')
+            with self._silhouette_source_lock:
+                status = deepcopy(self._silhouette_source_status.get(snapshot.stamp_ns))
+            initial_status = source['perception_status']
+            if (not isinstance(status, dict) or not isinstance(initial_status, dict)
+                    or status.get('state') != 'ready' or status.get('mode') != 'unknown'
+                    or status.get('target_lost') is not False or status.get('exact_rgbd') is not True
+                    or status.get('generation') != self._mode_selection['generation']
+                    or status.get('selection_stamp_ns') != self._mode_selection['stamp_ns']
+                    or any(status.get(key) != snapshot.stamp_ns for key in
+                        ('source_stamp_ns','color_stamp_ns','depth_stamp_ns','tf_lookup_stamp_ns'))
+                    or any(status.get(key) != snapshot.frame_id for key in ('color_frame_id','depth_frame_id'))
+                    or snapshot.frame_id != 'camera_link'
+                    or status.get('projection_frame_convention') != 'ros_camera_link'):
+                raise ValueError('diagnostic observation requires exact current ready perception status')
+            reference_keys = ('anchor_source_stamp_ns', 'anchor_position_base',
+                              'reference_support_plane_base', 'reference_support_footprint_base')
+            if any(key not in initial_status or status.get(key) != initial_status[key]
+                   for key in reference_keys):
+                raise ValueError('perception frozen anchor or support reference changed')
+            # Perception already enforces its original 4 mm fixed-reference
+            # gate. This extra envelope comparison uses separate fitted planes
+            # and can only reject more; it does not replace that gate.
+            geometry, audit = conservative_silhouette_observation_geometry(frozen, estimate,
+                original_source_stamp_ns=source['source_stamp_ns'], fresh_source_stamp_ns=snapshot.stamp_ns,
+                max_size_m=float(getattr(self, 'geometry_max_size_m', .600)),
+                max_height_m=float(getattr(self, 'geometry_max_height_m', .500)),
+                support_config=UnknownPerceptionConfig())
+            audit = deepcopy(audit)
+            audit.update(selection=deepcopy(self._mode_selection), target_epoch=identity.epoch,
+                target_track_id=identity.track_id,
+                original_request_id=source['request_id'], original_generation=source['generation'],
+                fresh_generation=self._stream_generation,
+                perception_reference={key: deepcopy(status[key]) for key in reference_keys},
+                perception_source_stamp_ns=snapshot.stamp_ns,
+                perception_support_audit=deepcopy(status['geometry_metrics']))
+            self._silhouette_observation_envelope_audit = audit
+            return geometry, depth, transform
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            return (self._invalid_geometry_estimate('SILHOUETTE_OBSERVATION_ENVELOPE_INVALID',
+                str(exc), snapshot.source_mode), depth, transform)
+
+    def _add_silhouette_envelope_diagnostic(self, prepared):
+        if not (self._observe_return_selected() and self._observe_return_diagnostic_observation_only
+                and self._observe_return_phase == 'observation_prefix'):
+            return prepared
+        audit = deepcopy(self._silhouette_observation_envelope_audit)
+        if (not isinstance(audit, dict) or audit['source']['fresh_stamp_ns'] != prepared.snapshot.stamp_ns
+                or audit['fresh_generation'] != prepared.ticket.generation
+                or audit['target_epoch'] != prepared.ticket.target_epoch):
+            raise original.CandidateContractError('SILHOUETTE_OBSERVATION_ENVELOPE_INVALID',
+                'prepared observation is missing its bound conservative collision envelope')
+        audit['fresh_request_id'] = prepared.ticket.request_id
+        diagnostics = original._thaw_request_evidence(prepared.remote_diagnostics)
+        diagnostics['silhouette_observation_envelope'] = audit
+        return replace(prepared, remote_diagnostics=diagnostics)
+
+    def _silhouette_source_status_cb(self, msg):
+        """Bounded source-stamped evidence cache, never a current/latest fallback."""
+        try:
+            status = json.loads(msg.data)
+            if not isinstance(status, dict):
+                return
+            self._unknown_identity_status_cb(status)
+            ns = status['source_stamp_ns']
+            if (type(ns) is not int or ns <= 0 or status.get('state') != 'ready'
+                    or status.get('mode') != 'unknown' or status.get('target_lost') is not False):
+                return
+            # Do not take the mode-control lock: the inference worker can be
+            # preparing a frame while this frame's status publication arrives.
+            with self._silhouette_source_lock:
+                self._silhouette_source_status[ns] = status
+                while len(self._silhouette_source_status) > 64:
+                    del self._silhouette_source_status[min(self._silhouette_source_status)]
+        except (KeyError, TypeError, ValueError):
+            return
+
+    def _capture_silhouette_source(self, ticket):
+        """Capture the exact original final sample before geometry/WSL latency."""
+        if ((self._mode_selection or {}).get('mode') != 'unknown'
+                or not self._observe_return_selected()
+                or self._observe_return_phase != 'initial_contact'):
+            return None
+        try:
+            snapshot, _config = ticket.payload
+            sample = retained_exact_source(snapshot)
+            if sample is None:
+                sample = self.frames.wait_for_exact_sample(
+                    snapshot.stamp_ns, snapshot.target_identity, timeout_sec=0., require_mask=True,
+                    max_age_sec=self.planning_snapshot_max_age_sec,
+                    max_inference_latency_sec=self.planning_snapshot_max_inference_latency_sec)
+            raw = rospy.get_param('/unknown_perception', {})
+            perception = UnknownPerceptionConfig(**{
+                f.name: raw[f.name] for f in fields(UnknownPerceptionConfig) if f.name in raw})
+            camera = camera_geometry_snapshot(rospy.get_param('/camera', {}))
+            require_rectified_source_after_activation(camera, sample.stamp_ns)
+            intrinsics = self._camera_intrinsics()
+            if (camera != camera_geometry_snapshot(rospy.get_param('/camera', {}))
+                    or any(float(camera[key]) != float(getattr(intrinsics, key))
+                           for key in ('fx', 'fy', 'cx', 'cy', 'depth_scale'))
+                    or sample.depth_raw.shape != (camera['height'], camera['width'])
+                    or sample.frame_id != camera['frame_id']):
+                raise ValueError('silhouette_source_camera_geometry_changed')
+            return dict(sample=sample, selection=deepcopy(self._mode_selection),
+                intrinsics=intrinsics, perception=perception, camera_geometry=camera)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            return dict(error='SILHOUETTE_ORIGINAL_SOURCE_UNAVAILABLE')
+
+    def _add_silhouette_source_diagnostic(self, prepared, source):
+        """Attach immutable diagnosis; leave every candidate and geometry intact."""
+        if source is None:
+            return prepared
+        started = time.perf_counter()
+        failure = dict(ok=False, diagnostic_only=True, execution_authority=False,
+            observation_authority=False, code='SILHOUETTE_ORIGINAL_SOURCE_UNAVAILABLE')
+        try:
+            sample = source.get('sample')
+            if sample is None:
+                diagnostic = failure
+            else:
+                with self._silhouette_source_lock:
+                    status = deepcopy(self._silhouette_source_status.get(sample.stamp_ns))
+                if status is None:
+                    diagnostic = dict(failure, code='SILHOUETTE_EXACT_SOURCE_STATUS_UNAVAILABLE')
+                else:
+                    profiles = self._adaptive_stage_profiles(prepared.geometry, prepared.snapshot)
+                    uncertainty = max(float(p.depth_uncertainty_m) for p in profiles)
+                    intrinsics = source['intrinsics']
+                    diagnostic = build_silhouette_snapshot_evidence(sample, prepared.snapshot,
+                        prepared.geometry, prepared.pose_estimator._T_base_optical, intrinsics,
+                        source['selection'], prepared.ticket,
+                        SilhouetteSnapshotConfig(intrinsics.depth_scale, source['perception'], status,
+                                                 source['camera_geometry']),
+                        uncertainty)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            diagnostic = dict(failure, code='SILHOUETTE_SOURCE_DIAGNOSTIC_UNAVAILABLE', reason=str(exc))
+        diagnostics = original._thaw_request_evidence(prepared.remote_diagnostics)
+        diagnostics['silhouette_ambiguity'] = diagnostic
+        elapsed_ms = max(0., (time.perf_counter() - started) * 1000.)
+        diagnostics.setdefault('ros_prepare_stages_ms', {})['silhouette_source_diagnostic'] = elapsed_ms
+        return replace(prepared, remote_diagnostics=diagnostics,
+            ros_prepare_ms=prepared.ros_prepare_ms + elapsed_ms)
 
     def _prepare_and_predict(self, ticket):
         with self._mode_work_lock:
             self._require_stream_ticket_current(ticket)
-            return super()._prepare_and_predict(ticket)
+            if self._diagnostic_observation_planning_active():
+                return self._prepare_diagnostic_observation_prediction(ticket)
+            source = self._capture_silhouette_source(ticket)
+            view_source = (self._capture_diagnostic_observation_view_source(ticket)
+                if self._unknown_observation_planning_active() else None)
+            prepared = super()._prepare_and_predict(ticket)
+            self._require_stream_ticket_current(ticket)
+            prepared = self._add_silhouette_source_diagnostic(prepared, source)
+            prepared = self._add_silhouette_envelope_diagnostic(prepared)
+            if view_source is not None:
+                self._bind_diagnostic_observation_view_source(prepared, view_source)
+            # Diagnosis must not make an expired inference result admissible.
+            self._require_stream_ticket_current(ticket)
+            return prepared
 
     def _accept_prediction(self, prepared):
         with self._mode_work_lock:
             self._require_stream_ticket_current(prepared.ticket)
+            if self._diagnostic_observation_planning_active():
+                return self._accept_diagnostic_observation_prediction(prepared)
             return super()._accept_prediction(prepared)
 
     def _build_streaming_gate_audit_report(self, prepared, selection, *args, **kwargs):
+        if self._diagnostic_observation_planning_active():
+            return self._build_diagnostic_observation_gate_audit(prepared, selection, *args, **kwargs)
         report, summary, selected_lineage = super()._build_streaming_gate_audit_report(
             prepared, selection, *args, **kwargs)
         report['grasp_mode_selection'] = dict(self._mode_selection or {})
@@ -980,8 +1616,21 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                 'aperture_metric': 'max_measured_band_and_frozen_obb_projected_width',
                 'physical_aperture_and_gates_unchanged': True,
             })
+            if self._direct_near_field_active(prepared):
+                report['moveit_selection'].update({
+                    'policy': 'CHECKED_HARDWARE_DURATION_THEN_JOINT_MOTION',
+                    'ranking_order': ['execution_duration_lower_bound_sec',
+                        'joint_max_delta_rad', 'joint_path_cost', 'aperture_width_m'],
+                })
         if (self._mode_selection or {}).get('mode') == 'unknown' and not self._direct_strategy_selected():
             report['observation_selection_policy'] = 'SIDE_EVIDENCE_THEN_CHECKED_HARDWARE_DURATION'
+            if self._information_driven_observation_comparison():
+                report['observation_selection_policy'] = INFORMATION_MOTION_POLICY
+                report['observation_ranking_contract'] = dict(
+                    primary_cost='(1 + screened_duration_sec) / predicted_information_utility',
+                    tie_breakers=['screened_duration_sec', 'joint_max_delta_rad', 'joint_path_cost'],
+                    scope='strictly_qualified_checked_views', claims_global_optimum=False,
+                    motion_angle_has_independent_weight=False)
         if self._direct_strategy_selected():
             report['execution_strategy'] = 'direct'
             report['planning_origin'] = 'current_view_contact_snapshot'
@@ -1007,13 +1656,47 @@ class ModeAwareRemoteGrasp6DNode(original.RemoteGrasp6DNode):
                     record['final_geometry_gate'] = gate
                 if isinstance(selected_lineage, dict):
                     selected_lineage['final_geometry_gate'] = deepcopy(gate)
+        self._observe_return_audit(report, prepared)
         return report, summary, selected_lineage
+
+    def _publish_direct_near_field_terminal(self, prepared, code, reason):
+        if self._observe_return_prepare_supplement(prepared, code):
+            return
+        ambiguity = self._observe_return_silhouette_failure(prepared, code)
+        if ambiguity is not None and self._observe_return_silhouette_fallback(prepared, ambiguity):
+            return
+        if (self._observe_return_precheck_visual_failure(prepared, code)
+                and self._observe_return_fallback(prepared)):
+            return
+        opportunity = self._observe_return_mixed_visual_failure(prepared, code)
+        if opportunity is not None and self._observe_return_fallback(
+                prepared, visual_opportunity=opportunity):
+            return
+        return super()._publish_direct_near_field_terminal(prepared, code, reason)
 
     def _publish_preview_plan(self, *args, **kwargs):
         # A worker failure can publish a terminal preview after acceptance
         # raises. Include that path in the same reset completion barrier.
         with self._mode_work_lock:
-            return super()._publish_preview_plan(*args, **kwargs)
+            rich = args[0] if args else kwargs.get('rich_plan')
+            if getattr(rich, 'valid', False):
+                with self._stream_condition:
+                    if self._unknown_identity_pending is not None:
+                        raise original.StreamResultCancelled('TARGET_MEASUREMENT_PENDING')
+                    ticket = kwargs.get('ticket', args[2] if len(args) > 2 else None)
+                    if ticket is not None:
+                        self._require_stream_ticket_current_locked(ticket)
+                    # Publication starts before the first ROS send. A false
+                    # callback during that send must use normal retirement,
+                    # never the unpublished-planning identity exception.
+                    self._unknown_identity_publication_started = True
+            result = super()._publish_preview_plan(*args, **kwargs)
+            plan = getattr(self, 'latest_preview_rich_plan', None)
+            if (self._observe_return_selected() and self._observe_return_phase == 'observation_prefix'
+                    and plan is not None and plan.valid
+                    and plan.diagnostic == 'FAR_FIELD_OBSERVATION_PLAN'):
+                self._observe_return_accept_view_plan(plan)
+            return result
 
 
 if __name__ == '__main__':

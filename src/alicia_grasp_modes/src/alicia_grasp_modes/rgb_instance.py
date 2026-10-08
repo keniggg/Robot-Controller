@@ -17,17 +17,25 @@ from alicia_grasp_modes.measured_mask_seeds import confidence_labels
 _grabcut_lock = threading.Lock()
 
 
-def instance_mask_from_seed(bgr, depth_seed, *, geometry=None):
+def instance_mask_from_seed(bgr, depth_seed, *, geometry=None, rgb_valid=None):
     color = np.asarray(bgr)
     seed = np.asarray(depth_seed) > 0
     if color.dtype != np.uint8 or color.ndim != 3 or color.shape[2] != 3 or color.shape[:2] != seed.shape:
         raise ValueError('rgb_seed_shape_or_encoding_invalid')
+    if rgb_valid is not None:
+        rgb_valid = np.asarray(rgb_valid)
+        if rgb_valid.shape != seed.shape or rgb_valid.dtype != np.bool_:
+            raise ValueError('invalid_rgb_validity_mask')
+        if np.any(seed & ~rgb_valid):
+            raise ValueError('rgb_seed_contains_unobserved_rgb')
     ys, xs = np.nonzero(seed)
     if len(xs) < 60:
         raise ValueError('rgb_seed_has_insufficient_measured_foreground')
     margin = max(8, int(round(16 * min(seed.shape[1] / 640., seed.shape[0] / 480.))))
     x0, x1 = max(0, int(xs.min())-margin), min(seed.shape[1], int(xs.max())+margin+1)
     y0, y1 = max(0, int(ys.min())-margin), min(seed.shape[0], int(ys.max())+margin+1)
+    if rgb_valid is not None and not np.all(rgb_valid[y0:y1, x0:x1]):
+        raise ValueError('rgb_search_contains_unobserved_rgb')
     patch = np.ascontiguousarray(color[y0:y1, x0:x1])
     measured = seed[y0:y1, x0:x1].astype(np.uint8)
     support = np.zeros(measured.shape, dtype=bool)
@@ -41,54 +49,107 @@ def instance_mask_from_seed(bgr, depth_seed, *, geometry=None):
             raise ValueError('rgb_depth_geometry_shape_mismatch')
         sl = np.s_[y0:y1, x0:x1]
         core, support, seed_evidence = confidence_labels(
-            measured > 0, points[sl], depth[sl], heights[sl], normal, config)
+            measured > 0, points[sl], depth[sl], heights[sl], normal, config, bgr=patch)
     if np.count_nonzero(core) < 25:
         raise ValueError('rgb_seed_core_too_small')
-    near = cv2.dilate(measured, np.ones((15, 15), np.uint8)) > 0
-    labels = np.full(measured.shape, cv2.GC_PR_BGD, np.uint8)
-    labels[near] = cv2.GC_PR_FGD
-    labels[core] = cv2.GC_FGD
-    labels[support] = cv2.GC_BGD
-    labels[:3] = labels[-3:] = cv2.GC_BGD
-    labels[:, :3] = labels[:, -3:] = cv2.GC_BGD
-    # OpenCV has process-global RNG state. Keep each measured-frame result
-    # deterministic without persisting colour models from an earlier target.
-    with _grabcut_lock:
-        cv2.setRNGSeed(23)
-        cv2.grabCut(patch, labels, None, np.zeros((1, 65)), np.zeros((1, 65)),
-                    3, cv2.GC_INIT_WITH_MASK)
-    foreground = np.isin(labels, (cv2.GC_FGD, cv2.GC_PR_FGD)).astype(np.uint8)
-    count, components = cv2.connectedComponents(foreground, connectivity=8)
-    # Keep only the single colour component containing the measured seed.
-    # Independent neighbouring components never get merged into the target.
-    matching = [index for index in range(1, count)
-                if np.count_nonzero((components == index) & core) >= .85 * np.count_nonzero(core)]
-    if len(matching) != 1:
-        raise ValueError('rgb_seed_component_ambiguous_or_fragmented')
-    chosen = components == matching[0]
-    if (np.any(chosen[3]) or np.any(chosen[-4])
-            or np.any(chosen[:, 3]) or np.any(chosen[:, -4])):
-        raise ValueError('rgb_instance_reaches_search_boundary')
-    retained = float(np.count_nonzero(chosen & (measured > 0))) / float(np.count_nonzero(measured))
-    expansion = float(np.count_nonzero(chosen)) / float(np.count_nonzero(measured))
-    trusted_retained = float(np.count_nonzero(chosen & core)) / float(np.count_nonzero(core))
-    # The noisy full component remains probable foreground. Requiring 85% of
-    # it would force shadows back into otherwise consistent RGB silhouettes.
-    # Preserve the 85% component/core gate, expansion cap and downstream exact
-    # measured-depth, three-frame IoU, contact and collision requirements.
-    if (expansion > 4. or trusted_retained < .85
-            or (geometry is None and (retained < .85 or expansion < .85))):
-        raise ValueError('rgb_instance_not_supported_by_depth_seed')
-    result = np.zeros(seed.shape, np.uint8)
-    result[y0:y1, x0:x1] = chosen.astype(np.uint8) * 255
-    return result, dict(mask_kind='current_rgb_instance', depth_seed_retained_fraction=retained,
+    # Freeze the measured trusted core from the first same-frame search. A
+    # larger crop may supply more current background, never a new identity or
+    # a different hard-foreground seed.
+    first_bounds = (x0, y0, x1, y1)
+    first_core, first_support = core.copy(), support.copy()
+
+    def attempt(search_margin):
+        ax0 = max(0, int(xs.min()) - search_margin)
+        ax1 = min(seed.shape[1], int(xs.max()) + search_margin + 1)
+        ay0 = max(0, int(ys.min()) - search_margin)
+        ay1 = min(seed.shape[0], int(ys.max()) + search_margin + 1)
+        # Unobserved black padding must not train a foreground/background
+        # colour model. Refuse this RGB estimate without editing real depth.
+        if rgb_valid is not None and not np.all(rgb_valid[ay0:ay1, ax0:ax1]):
+            raise ValueError('rgb_search_contains_unobserved_rgb')
+        current = np.ascontiguousarray(color[ay0:ay1, ax0:ax1])
+        measured_now = seed[ay0:ay1, ax0:ax1].astype(np.uint8)
+        core_now = np.zeros(measured_now.shape, dtype=bool)
+        core_now[y0-ay0:y1-ay0, x0-ax0:x1-ax0] = first_core
+        if (ax0, ay0, ax1, ay1) == first_bounds:
+            support_now = first_support
+        elif geometry is None:
+            support_now = np.zeros(measured_now.shape, dtype=bool)
+        else:
+            # This is the same measured-support label rule as confidence_labels,
+            # extended to the larger CURRENT crop with the frozen seed height.
+            sl = np.s_[ay0:ay1, ax0:ax1]
+            valid = (np.isfinite(depth[sl]) & (depth[sl] >= config.depth_min_m)
+                     & (depth[sl] <= config.depth_max_m)
+                     & np.all(np.isfinite(points[sl]), axis=-1))
+            support_now = (valid & (np.abs(heights[sl]) <= config.support_threshold_m)
+                           & seed_evidence['support_background_height_separated'])
+        if np.any(core_now & support_now):
+            raise ValueError('rgb_depth_foreground_support_conflict')
+        near = cv2.dilate(measured_now, np.ones((15, 15), np.uint8)) > 0
+        labels = np.full(measured_now.shape, cv2.GC_PR_BGD, np.uint8)
+        labels[near] = cv2.GC_PR_FGD
+        labels[core_now] = cv2.GC_FGD
+        labels[support_now] = cv2.GC_BGD
+        labels[:3] = labels[-3:] = cv2.GC_BGD
+        labels[:, :3] = labels[:, -3:] = cv2.GC_BGD
+        # OpenCV has process-global RNG state. Neither attempt persists colour
+        # models or masks from another image, target, or this first attempt.
+        with _grabcut_lock:
+            cv2.setRNGSeed(23)
+            cv2.grabCut(current, labels, None, np.zeros((1, 65)), np.zeros((1, 65)),
+                        3, cv2.GC_INIT_WITH_MASK)
+        foreground = np.isin(labels, (cv2.GC_FGD, cv2.GC_PR_FGD)).astype(np.uint8)
+        count, components = cv2.connectedComponents(foreground, connectivity=8)
+        matching = [index for index in range(1, count)
+                    if np.count_nonzero((components == index) & core_now)
+                    >= .85 * np.count_nonzero(core_now)]
+        if len(matching) != 1:
+            raise ValueError('rgb_seed_component_ambiguous_or_fragmented')
+        chosen = components == matching[0]
+        if (np.any(chosen[3]) or np.any(chosen[-4])
+                or np.any(chosen[:, 3]) or np.any(chosen[:, -4])):
+            raise ValueError('rgb_instance_reaches_search_boundary')
+        retained = float(np.count_nonzero(chosen & (measured_now > 0))) / float(np.count_nonzero(measured_now))
+        expansion = float(np.count_nonzero(chosen)) / float(np.count_nonzero(measured_now))
+        trusted_retained = float(np.count_nonzero(chosen & core_now)) / float(np.count_nonzero(core_now))
+        if (expansion > 4. or trusted_retained < .85
+                or (geometry is None and (retained < .85 or expansion < .85))):
+            raise ValueError('rgb_instance_not_supported_by_depth_seed')
+        result = np.zeros(seed.shape, np.uint8)
+        result[ay0:ay1, ax0:ax1] = chosen.astype(np.uint8) * 255
+        evidence = dict(seed_evidence)
+        if geometry is not None:
+            evidence['measured_support_background_pixels'] = int(np.count_nonzero(support_now))
+        evidence.update(mask_kind='current_rgb_instance', depth_seed_retained_fraction=retained,
                         rgb_to_depth_seed_area_ratio=expansion,
                         rgb_instance_pixels=int(np.count_nonzero(result)),
                         rgb_seed_pixels=int(np.count_nonzero(seed)),
-                        trusted_core_retained_fraction=trusted_retained, **seed_evidence)
+                        trusted_core_retained_fraction=trusted_retained,
+                        rgb_search_margin_px=int(search_margin),
+                        rgb_search_box_xyxy=[ax0, ay0, ax1, ay1],
+                        rgb_trusted_core_source='first_same_frame_search')
+        return result, evidence
+
+    retry_reason = ''
+    try:
+        result, evidence = attempt(margin)
+        attempts = 1
+    except ValueError as exc:
+        if str(exc) != 'rgb_instance_reaches_search_boundary':
+            raise
+        retry_reason = str(exc)
+        # Exactly one same-source retry, not a search for a preferred mask.
+        # A second boundary or any other original gate failure still rejects.
+        result, evidence = attempt(2 * margin)
+        attempts = 2
+    evidence.update(rgb_search_attempts=attempts,
+                    rgb_search_initial_margin_px=int(margin),
+                    rgb_search_retry_reason=retry_reason)
+    return result, evidence
 
 
-def refine_candidate(bgr, depth_m, intrinsics, transform_base_camera, candidate, config):
+def refine_candidate(bgr, depth_m, intrinsics, transform_base_camera, candidate, config, *, rgb_valid=None):
     depth = np.asarray(depth_m)
     transform = np.asarray(transform_base_camera)
     if depth.shape != candidate.mask.shape:
@@ -98,7 +159,8 @@ def refine_candidate(bgr, depth_m, intrinsics, transform_base_camera, candidate,
     plane_camera = transform.T @ plane
     heights = np.einsum('ijk,k->ij', points, plane_camera[:3]) + plane_camera[3]
     mask, evidence = instance_mask_from_seed(
-        bgr, candidate.mask, geometry=(points, depth, heights, plane_camera[:3], config))
+        bgr, candidate.mask, geometry=(points, depth, heights, plane_camera[:3], config),
+        **({} if rgb_valid is None else {'rgb_valid': rgb_valid}))
     measured = ((mask > 0) & np.isfinite(depth)
                 & (depth >= config.depth_min_m) & (depth <= config.depth_max_m)
                 & (heights >= config.foreground_min_m) & (heights <= config.foreground_max_m))

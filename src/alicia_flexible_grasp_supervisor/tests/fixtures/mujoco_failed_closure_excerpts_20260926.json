@@ -1,0 +1,128 @@
+{
+  "source_record": "20260926T015201.841634Z_80006e5db43749e2b7f9b03c05c34d83",
+  "source_audit_sha256": "a32bab6fa279cc62f18b8f2492c3a56b9be09b025eea0fcab134a5f5d679ac1b",
+  "source_snapshot_stamp_ns": 1790387535026844739,
+  "scope": "Recorded audit response excerpts, not complete wire responses. Tests overlay these observed fields on a valid protocol-envelope fixture; omitted lift_evidence stays omitted.",
+  "responses": [
+    {
+      "collision_free": true,
+      "contact_success": false,
+      "diagnosis": [
+        "trajectory collision check passed",
+        "first simultaneous two-sided contact retained at 0.0143m gap",
+        "request-bound grasp target 0.0000m from contact width 0.0143m",
+        "preloaded grasp did not retain geometrically opposed two-sided contact"
+      ],
+      "failure_code": "MUJOCO_CONTACT_FAILED",
+      "failure_reason": "preloaded grasp did not retain geometrically opposed two-sided contact",
+      "ik_results": [
+        {
+          "iterations": 75,
+          "name": "pregrasp",
+          "orientation_error": 0.00076141934617514,
+          "position_error_m": 0.0001883639795028155,
+          "success": true
+        },
+        {
+          "iterations": 32,
+          "name": "approach",
+          "orientation_error": 0.0007821348482572653,
+          "position_error_m": 0.0001908305363794396,
+          "success": true
+        },
+        {
+          "iterations": 14,
+          "name": "grasp",
+          "orientation_error": 0.000887940698302289,
+          "position_error_m": 0.0001808382836198412,
+          "success": true
+        },
+        {
+          "iterations": 36,
+          "name": "lift",
+          "orientation_error": 0.0007546920624889545,
+          "position_error_m": 0.00018710916504473594,
+          "success": true
+        }
+      ],
+      "ik_success": true,
+      "lift_evidence": {
+        "actual_tool_lift_m": 0.0,
+        "commanded_lift_m": 0.0,
+        "contact_loss_grace_samples": 0,
+        "contract_version": 1,
+        "final_cartesian_orientation_error_rad": 0.0,
+        "final_cartesian_tracking_error_m": 0.0,
+        "grip_target_inner_gap_m": 0.0,
+        "initial_lift_sample_count": 0,
+        "lift_sample_count": 0,
+        "lost_contact_samples": 0,
+        "max_cartesian_tracking_error_m": 0.0,
+        "max_lost_contact_streak": 0,
+        "max_prescribed_joint_speed_rad_s": 0.0,
+        "minimum_lift_m": 0.0,
+        "object_lift_m": 0.0,
+        "preload_settle_samples": 400,
+        "reference_ik_orientation_tolerance_rad": 0.0,
+        "reference_ik_position_tolerance_m": 0.0,
+        "reference_resampling_passes": 0,
+        "two_sided_lift_samples": 0
+      },
+      "lift_success": false,
+      "plan_id": "6c3993ab7ec89ac9e3d897ad",
+      "response_sha256": "fbe46ef3d1c3fa35381bcc9852811139697cd54c82c32ca00cf04d9324483fb2",
+      "score": 55.0,
+      "simulation_ok": false,
+      "strict_json": true,
+      "used_joint_state_source": "request"
+    },
+    {
+      "collision_free": true,
+      "contact_success": false,
+      "diagnosis": [
+        "trajectory collision check passed",
+        "closure ended without simultaneous two-sided finger/object contact"
+      ],
+      "failure_code": "MUJOCO_CONTACT_FAILED",
+      "failure_reason": "closure ended without simultaneous two-sided finger/object contact",
+      "ik_results": [
+        {
+          "iterations": 145,
+          "name": "pregrasp",
+          "orientation_error": 0.0007942037935047802,
+          "position_error_m": 0.00019447673756753007,
+          "success": true
+        },
+        {
+          "iterations": 32,
+          "name": "approach",
+          "orientation_error": 0.0007687880867769524,
+          "position_error_m": 0.0001867245317819078,
+          "success": true
+        },
+        {
+          "iterations": 14,
+          "name": "grasp",
+          "orientation_error": 0.0009194210181176634,
+          "position_error_m": 0.00018602015966531654,
+          "success": true
+        },
+        {
+          "iterations": 36,
+          "name": "lift",
+          "orientation_error": 0.0007451098385915213,
+          "position_error_m": 0.00018412360080753457,
+          "success": true
+        }
+      ],
+      "ik_success": true,
+      "lift_success": false,
+      "plan_id": "9898283f72bf1da9fc0f0065",
+      "response_sha256": "4efeb97e4186538c11062c3166201775d04afd309ca95ada901d0c6c4797f94a",
+      "score": 55.0,
+      "simulation_ok": false,
+      "strict_json": true,
+      "used_joint_state_source": "request"
+    }
+  ]
+}

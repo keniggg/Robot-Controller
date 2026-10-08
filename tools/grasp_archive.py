@@ -15,12 +15,14 @@ import time
 import uuid
 
 GIB = 1 << 30
-RETAIN = 10
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+STORAGE_CONFIG_PATH = PROJECT_ROOT / '.runtime' / 'experiment_storage.json'
+RETAIN = 5
 RESULTS = {'success', 'failure', 'unknown', 'interrupted'}
 ALLOWED = {'.bag', '.log', '.jsonl', '.json', '.jpg', '.jpeg', '.png', '.txt'}
 PERSISTENT = {'manifest.json', 'result_summary.json', 'archive_manifest.json', '.lock'}
 DEFAULTS = dict(repo='', tag_prefix='grasp-record-', chunk_size=GIB,
-                min_free_bytes=2*GIB, retain_count=RETAIN, delete_enabled=False,
+                min_free_bytes=2*GIB, retain_count=RETAIN, retention_roots=[], upload_enabled=False, delete_enabled=False,
                 deletion_validation=None, retry_base_seconds=30, retry_max_seconds=3600)
 
 class ArchiveError(RuntimeError): pass
@@ -32,7 +34,34 @@ def utc_now():
 
 
 def root_path(root=None):
-    return Path(root or os.environ.get('GRASP_RECORD_ROOT', Path(__file__).resolve().parents[1] / '.grasp_records')).expanduser().resolve()
+    selected = Path(root or os.environ.get('GRASP_RECORD_ROOT', PROJECT_ROOT / '.grasp_records')).expanduser().resolve()
+    if not STORAGE_CONFIG_PATH.is_file():
+        return selected
+    try:
+        storage = json.loads(STORAGE_CONFIG_PATH.read_text())
+        paths = {}
+        for key in ('mount_point', 'archive_root', 'ros_log_root'):
+            raw = storage[key]
+            if not isinstance(raw, str) or not Path(raw).expanduser().is_absolute():
+                raise ValueError('storage paths must be absolute')
+            paths[key] = Path(raw).expanduser().resolve()
+        mount = paths['mount_point']
+        if any(mount not in paths[key].parents for key in ('archive_root', 'ros_log_root')):
+            raise ValueError('storage roots must be below mount_point')
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise ArchiveError('invalid experiment storage configuration: ' + str(exc)) from exc
+    workspace = PROJECT_ROOT.parent.parent if PROJECT_ROOT.parent.name == '.worktrees' else PROJECT_ROOT
+    aliases = {
+        (PROJECT_ROOT / '.grasp_records').resolve(): paths['archive_root'],
+        (workspace / '.ros_log' / 'unknown_grasp_20260923').resolve():
+            paths['ros_log_root'] / 'unknown_grasp_20260923',
+    }
+    selected = aliases.get(selected, selected)
+    managed = any(selected == paths[key] or paths[key] in selected.parents
+                  for key in ('archive_root', 'ros_log_root'))
+    if managed and not os.path.ismount(str(mount)):
+        raise ArchiveError('EXPERIMENT_STORAGE_UNAVAILABLE: mount is not mounted: ' + str(mount))
+    return selected
 
 
 def atomic_json(path, value):
@@ -55,9 +84,11 @@ def load_config(config_path=None):
     value = dict(DEFAULTS)
     if p.exists(): value.update(json.loads(p.read_text()))
     if value['retain_count'] != RETAIN: raise ArchiveError('retain_count must be exactly %d total records' % RETAIN)
+    if type(value['upload_enabled']) is not bool: raise ArchiveError('invalid upload_enabled: expected boolean')
     for key in ('chunk_size', 'min_free_bytes'):
         if type(value[key]) is not int or value[key] < 0: raise ArchiveError('invalid ' + key)
     if not 0 < value['chunk_size'] < 2*GIB: raise ArchiveError('invalid chunk size')
+    configured_retention_roots(value)
     return value
 
 
@@ -226,6 +257,41 @@ def mark_result(record_dir, result, reason='', evidence=None):
         return m
 
 
+def configured_retention_roots(config):
+    """Only explicitly named absolute roots can join aggregate retention."""
+    configured = config.get('retention_roots', [])
+    if not isinstance(configured, list):
+        raise ArchiveError('retention_roots must be a list of absolute paths')
+    roots = []
+    for value in configured:
+        if not isinstance(value, str) or not value.strip():
+            raise ArchiveError('retention_roots must be a list of absolute paths')
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            raise ArchiveError('retention_roots must be a list of absolute paths')
+        roots.append(root_path(path))
+    return roots
+
+
+def retention_roots(root, config):
+    # The current root always participates, including when omitted from config.
+    return list(dict.fromkeys([root_path(root), *configured_retention_roots(config)]))
+
+
+def retention_records(root, config):
+    """Collect one global chronology without aliasing distinct record owners."""
+    items = []
+    owners = {}
+    for record_root in retention_roots(root, config):
+        for path, manifest in records(record_root):
+            record_id = manifest['record_id']
+            if record_id in owners:
+                raise ArchiveError('duplicate record_id across retention roots: ' + record_id)
+            owners[record_id] = path
+            items.append((path, manifest))
+    return items
+
+
 def protected_ids(items):
     complete=[m for p,m in items if m.get('state')=='complete' and m.get('recorder_closed')]
     complete.sort(key=lambda m:(m['completed_at'],m['record_id']),reverse=True)
@@ -240,8 +306,11 @@ def eligible(m,protected):
 
 
 def preview(root,config=None):
-    root=root_path(root); cfg=config_for(root,config); items=records(root); keep=protected_ids(items)
+    root=root_path(root); cfg=config_for(root,config); items=records(root)
+    keep=protected_ids(retention_records(root,cfg))
     return {'dry_run':True,'repo':cfg['repo'],'retain_count':RETAIN,'delete_enabled':cfg['delete_enabled'],
+            'upload_enabled':cfg['upload_enabled'],
+            'retention_roots':[str(p) for p in retention_roots(root,cfg)],
             'protected':sorted(keep),
             'upload':[{'record_id':m['record_id'],'result':m['result'],'files':[f['path'] for f in m['files'] if f.get('upload',{}).get('status')!='verified']} for p,m in items if m['state']=='complete' and m['upload']['status']!='verified' ],
             'cleanup':[{'record_id':m['record_id'],'files':[f['path'] for f in m['files']],'bytes':sum(f['size_bytes'] for f in m['files'])} for p,m in items if eligible(m,keep)],
@@ -264,6 +333,10 @@ def process_queue(root,config=None,store_factory=None,max_records=None):
     if max_records is not None and (type(max_records) is not int or max_records < 1):
         raise ValueError('max_records must be a positive integer')
     report={'uploaded':[],'failed':[],'pending':[]}
+    # Require explicit upload permission before store construction or release creation.
+    # Restore and preview remain available independently of this upload-only gate.
+    if cfg.get('upload_enabled') is not True:
+        return dict(report,upload_disabled=True,reason='upload_enabled is not true')
     if not cfg['repo']: return dict(report,configuration_required='GitHub owner/repo')
     factory=store_factory or make_store
     try:
@@ -327,12 +400,12 @@ def cleanup(root,config=None,store_factory=None,dry_run=True):
     if not deletion_authorized(root,cfg): return {'deleted':[],'blocked':'deletion disabled or validation incomplete'}
     result={'deleted':[],'failed':[]}; factory=store_factory or make_store
     with locked(root/'.queue.lock'):
-        items=records(root); keep=protected_ids(items)
+        items=records(root); keep=protected_ids(retention_records(root,cfg))
         for p,old in items:
             if not eligible(old,keep): continue
             with locked(p/'.lock'):
                 m=load_manifest(p)
-                if not eligible(m,protected_ids(records(root))): continue
+                if not eligible(m,protected_ids(retention_records(root,cfg))): continue
                 try:
                     store=factory(cfg,m)
                     if not store.verify_file(m['remote_manifest']['entry']): raise ArchiveError('remote manifest no longer verified')
@@ -425,7 +498,7 @@ def restore_manifest(manifest,destination,config=None,store_factory=None):
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--root',default=str(root_path()))
+    ap.add_argument('--root',help='record root (default: configured experiment storage)')
     sub=ap.add_subparsers(dest='command',required=True)
     sub.add_parser('preview'); sub.add_parser('preflight'); sub.add_parser('recover')
     worker=sub.add_parser('worker');worker.add_argument('--once',action='store_true');worker.add_argument('--interval',type=float,default=30)

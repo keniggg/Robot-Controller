@@ -23,7 +23,7 @@ from run_recorded_grasp import atomic_json, classify_result, observe_task_state,
 import rosbag
 import rospy
 from sensor_msgs.msg import Image, CameraInfo, JointState
-from std_msgs.msg import String, Bool, Header, UInt8, Float32MultiArray
+from std_msgs.msg import String, Bool, Header, UInt8
 from control_msgs.msg import (
     JointTrajectoryControllerState, FollowJointTrajectoryActionGoal,
     FollowJointTrajectoryActionResult,
@@ -43,6 +43,165 @@ SOURCES = {
     '/perception/object_mask': Image,
     '/perception/object': ObjectPose,
 }
+
+
+def camera_runtime_metadata_snapshot(parameters, read_interval, previous_content=None,
+                                     read_error=None):
+    """Return changed parameter evidence, never an image-synchronized CameraInfo.
+
+    Deduplication excludes the read interval so an unchanged profile is not
+    rewritten every second. Preserve the complete namespace, including native
+    and aligned geometry, distortion model, SDK provenance and depth units.
+    Availability describes parameter content only, not a live-camera check.
+    """
+    profile = parameters.get('runtime_profile') if isinstance(parameters, dict) else None
+    if read_error == 'parameter_read_pending':
+        reason = 'parameter_read_pending'
+    elif read_error:
+        reason = 'parameter_read_failed'
+    elif not isinstance(parameters, dict):
+        reason = 'camera_parameter_missing_or_invalid'
+    elif not isinstance(profile, dict):
+        reason = 'active_profile_missing'
+    elif profile.get('source') != 'realsense_active_profile':
+        reason = 'active_profile_unavailable'
+    elif (not isinstance(profile.get('geometry_intrinsics'), dict)
+          or 'depth_scale_m_per_unit' not in profile):
+        reason = 'active_geometry_missing'
+    else:
+        reason = None
+    content = {
+        'schema_version': 1,
+        'source_parameter': '/camera',
+        'status': 'unavailable' if reason else 'available',
+        'unavailable_reason': reason,
+        'read_error': read_error,
+        'availability_scope': 'parameter_content_only; camera_liveness_not_checked',
+        'time_semantics': 'parameter_read_interval; not_image_or_exposure_time',
+        'image_time_association': 'none',
+        'unit_conventions': {
+            'intrinsics_focal_length_and_principal_point': 'pixels',
+            'depth_scale': 'metres_per_depth_unit',
+            'runtime_profile.depth_scale_m_per_unit': 'metres_per_depth_unit',
+            'runtime_profile.depth_to_color_extrinsics.translation_m': 'metres',
+        },
+        'parameters': parameters,
+    }
+    try:
+        serialized = json.dumps(content, sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        # Malformed parameters must not stop recording valid sensor keyframes.
+        content.update(status='unavailable', unavailable_reason='parameter_not_json_serializable',
+                       read_error='%s: %s' % (type(exc).__name__, exc), parameters=None)
+        serialized = json.dumps(content, sort_keys=True, allow_nan=False)
+    if serialized == previous_content:
+        return serialized, None
+    payload = json.loads(serialized)
+    payload['parameter_read_interval'] = read_interval
+    return serialized, json.dumps(payload, sort_keys=True, allow_nan=False)
+
+
+def read_camera_parameters():
+    """Use a private read-only connection, never rospy's shared RPC lock."""
+    caller_id = rospy.get_name()
+    from rosgraph import get_master_uri
+    from xmlrpc.client import ServerProxy
+
+    # rospy.get_param shares one locked XMLRPC proxy per master URI. A stuck
+    # background call on it could also block the existing foreground diagnostic
+    # read. This connection belongs only to the camera metadata worker.
+    with ServerProxy(get_master_uri()) as master:
+        code, message, parameters = master.getParam(caller_id, '/camera')
+    if code == 1:
+        return parameters
+    if code == -1:
+        return None  # ROS parameter server reports a missing namespace.
+    raise RuntimeError('camera getParam failed: %s' % message)
+
+
+class CameraRuntimeMetadataReader:
+    """One daemon isolates a possibly stuck, read-only parameter RPC.
+
+    At most one request is outstanding. Polling never starts another worker;
+    pending reads have no fabricated completion time and can recover later.
+    """
+
+    def __init__(self, read_parameter, read_clock):
+        self._read_parameter = read_parameter
+        self._read_clock = read_clock
+        self._lock = threading.Lock()
+        self._requested = threading.Event()
+        self._ready = threading.Event()
+        self._closed = False
+        self._outstanding = False
+        self._submitted = None
+        self._started = None
+        self._result = None
+        self._worker = threading.Thread(
+            target=self._run, name='camera-runtime-metadata-reader', daemon=True)
+        self._worker.start()
+
+    def request(self):
+        with self._lock:
+            if self._closed or self._outstanding:
+                return False
+            self._outstanding = True
+            self._submitted = self._read_clock()
+            self._started = None
+            self._ready.clear()
+            self._requested.set()
+            return True
+
+    def poll(self, wait_seconds=0.):
+        # Only startup uses a bounded wait. Periodic polls are non-blocking.
+        self._ready.wait(timeout=wait_seconds)
+        with self._lock:
+            if self._closed:
+                return None
+            if self._result is not None:
+                result = self._result
+                self._result = None
+                self._outstanding = False
+                self._ready.clear()
+                return result
+            if self._outstanding:
+                return (None, {
+                    'requested': self._submitted, 'started': self._started,
+                    'finished': None, 'observed_pending': self._read_clock(),
+                }, 'parameter_read_pending')
+            return None
+
+    def close(self):
+        # Never join a potentially stuck RPC. The sole daemon cannot write the
+        # bag, and discards any late result after recorder shutdown.
+        with self._lock:
+            self._closed = True
+            self._requested.set()
+            self._ready.set()
+
+    def _run(self):
+        while True:
+            self._requested.wait()
+            self._requested.clear()
+            with self._lock:
+                if self._closed:
+                    return
+                self._started = self._read_clock()
+                started = self._started
+                submitted = self._submitted
+            parameters, read_error = None, None
+            try:
+                parameters = self._read_parameter()
+            except Exception as exc:
+                read_error = '%s: %s' % (type(exc).__name__, exc)
+            finished = self._read_clock()
+            with self._lock:
+                if self._closed:
+                    return
+                self._result = (parameters, {
+                    'requested': submitted, 'started': started, 'finished': finished,
+                }, read_error)
+                self._ready.set()
 
 
 def archive_gate_audit(message_data, directory):
@@ -187,6 +346,31 @@ def main():
                     state['audit_callbacks'] -= 1
                     callbacks_done.notify_all()
 
+    last_camera_content = None
+    camera_reader = CameraRuntimeMetadataReader(
+        # One namespace read preserves the camera node's atomic profile
+        # replacement. This is passive parameter evidence, not calibration.
+        read_camera_parameters,
+        lambda: {'utc': utc_now(), 'ros_time_ns': rospy.Time.now().to_nsec()})
+
+    def sample_camera_runtime_metadata(request=False, wait_seconds=0.):
+        nonlocal last_camera_content
+        if request:
+            camera_reader.request()
+        sample = camera_reader.poll(wait_seconds=wait_seconds)
+        if sample is None:
+            return
+        parameters, read_interval, read_error = sample
+        content, payload = camera_runtime_metadata_snapshot(
+            parameters, read_interval, previous_content=last_camera_content,
+            read_error=read_error)
+        if payload is not None:
+            metadata('/grasp_record/camera_runtime_metadata', String(data=payload))
+            last_camera_content = content
+
+    # Capture before subscribers/READY. A hung parameter service delays startup
+    # by at most this wait; pending/unavailable metadata never gates keyframes.
+    sample_camera_runtime_metadata(request=True, wait_seconds=.2)
     subscribers = []
     for topic, msg_type in SOURCES.items():
         subscribers.append(rospy.Subscriber(
@@ -211,7 +395,6 @@ def main():
         ('/demonstration', Bool),
         ('/alicia_d/protection_latched', Bool),
         ('/alicia_d/run_status', UInt8),
-        ('/alicia_d/temperatures_c', Float32MultiArray),
         ('/alicia_d/sdk_diagnostics', DiagnosticArray),
         ('/alicia_d/device_info', DiagnosticArray),
         ('/alicia_controller/state', JointTrajectoryControllerState),
@@ -223,6 +406,9 @@ def main():
         ('/gui/joint_direct_mode', Bool),
         ('/grasp_6d/status', String),
         ('/grasp_6d/gate_audit', String),
+        ('/perception/unknown/detector_status', String),
+        ('/grasp_mode/observe_return_session', String),
+        ('/grasp_mode/observe_return_ack', String),
         ('/rosout_agg', Log),
         ('/grasp/state', GraspState), ('/grasp/near_field_phase', NearFieldPlanningPhase),
         ('/grasp_6d/plan_enriched', Grasp6DPlan),
@@ -249,8 +435,11 @@ def main():
             if terminal_at is not None and time.monotonic() - terminal_at >= 3.:
                 outcome['stop_reason'] = 'observed_task_became_inactive'
                 break
+            # Poll completed camera reads without blocking callback recording.
+            sample_camera_runtime_metadata()
             if time.monotonic() - last_parameter_sample >= 1.:
                 last_parameter_sample = time.monotonic()
+                camera_reader.request()
                 # This diagnostic exists as a parameter, not a ROS topic.
                 # Write a bag-only snapshot; do not publish or alter it.
                 try:
@@ -278,6 +467,7 @@ def main():
         outcome['stop_reason'] = 'recorder_exception: %s: %s' % (type(exc).__name__, exc)
         raise
     finally:
+        camera_reader.close()
         for subscriber in subscribers:
             subscriber.unregister()
         with callbacks_done:

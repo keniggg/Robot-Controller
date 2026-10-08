@@ -5,6 +5,7 @@ import hashlib
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -36,8 +37,28 @@ from alicia_flexible_grasp.robot.actuation_bootstrap import PENDING_BOOTSTRAP_ST
 from alicia_flexible_grasp.robot.stationary_following import stationary_following_error, ARM_NAMES
 from alicia_flexible_grasp.robot.observation_preview import encode_path_evidence
 from alicia_flexible_grasp.robot.observation_timing import observation_timing
+from alicia_flexible_grasp.robot.pregrasp_timing import (
+    unknown_pregrasp_velocity_limits, pregrasp_velocity_scope, temporary_attribute,
+)
 from alicia_flexible_grasp.robot.endpoint_correction import EndpointCorrection
 from alicia_flexible_grasp.robot.pregrasp_gateway import PregraspCompensationGateway
+from alicia_flexible_grasp.robot.observe_return_gateway import ObserveReturnGateway
+try:
+    from alicia_flexible_grasp.robot.rgb_acquisition_gateway import RgbAcquisitionGateway
+    RGB_ACQUISITION_ADDON_ERROR = ''
+except ImportError as exc:
+    # grasp_modes is an optional integration addon; do not create a catkin
+    # dependency cycle or prevent the original gateway from starting alone.
+    RGB_ACQUISITION_ADDON_ERROR = str(exc)
+    class RgbAcquisitionGateway:
+        def _initialize_rgb_acquisition(self):
+            rospy.logwarn('RGB acquisition addon unavailable: %s', RGB_ACQUISITION_ADDON_ERROR)
+        def _rgb_acquisition_revoke_event(self):
+            pass
+from alicia_flexible_grasp.robot.observation_view_gateway import ObservationViewGateway
+from alicia_flexible_grasp.robot.contact_sequence_precheck import ContactSequencePrecheckGateway
+from alicia_flexible_grasp.robot.contact_linear_compensation import ContactLinearCompensationGateway
+from alicia_flexible_grasp.robot.lift_linear_gateway import LiftLinearCompensationGateway
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from alicia_flexible_grasp.robot.joint_commander import JointCommander
 from alicia_flexible_grasp.robot.gripper_commander import GripperCommander
@@ -48,6 +69,7 @@ from alicia_flexible_grasp_supervisor.srv import (
     CartesianJogResponse,
     CompensatePregrasp,
     CheckPoseSequence,
+    CheckContactSequence,
     CheckPoseSequenceResponse,
     ResolveFreeSpaceOrientations,
     ResolveFreeSpaceOrientationsResponse,
@@ -68,9 +90,10 @@ except Exception:
     SwitchControllerRequest = None
     ListControllers = None
 
-class MotionGateway(PregraspCompensationGateway):
+class MotionGateway(RgbAcquisitionGateway, ObservationViewGateway, ContactSequencePrecheckGateway, LiftLinearCompensationGateway, PregraspCompensationGateway, ContactLinearCompensationGateway, ObserveReturnGateway):
     def __init__(self):
         cfg = rospy.get_param('/robot', {})
+        self._initialize_observation_view_tf()
         self.joint_names = cfg.get('joint_names', ['Joint1','Joint2','Joint3','Joint4','Joint5','Joint6','right_finger'])
         self.trajectory_controller_names = cfg.get('trajectory_controller_names', ['alicia_controller', 'hand_controller'])
         self.joint_cmd = JointCommander(cfg.get('joint_command_topic','/joint_commands'), self.joint_names)
@@ -127,6 +150,9 @@ class MotionGateway(PregraspCompensationGateway):
         self._observation_plan_sub = rospy.Subscriber(
             '/grasp_6d/plan_enriched', Grasp6DPlan,
             self._committed_observation_plan_cb, queue_size=10)
+        self._observe_return_view_session_sub = rospy.Subscriber(
+            '/grasp_mode/observe_return_session', String,
+            self._observe_return_view_session_cb, queue_size=8)
         self._observation_feedback_sub = rospy.Subscriber(
             '/alicia_d/accepted_joint_states', JointState, self._observation_joint_feedback_cb,
             queue_size=1)
@@ -154,6 +180,24 @@ class MotionGateway(PregraspCompensationGateway):
                       self.handle_endpoint_feedback_correction)
         rospy.Service('/supervisor/compensate_pregrasp', CompensatePregrasp,
                       self.handle_compensate_pregrasp)
+        rospy.Service('/supervisor/capture_observe_return_origin', CompensatePregrasp,
+                      self.handle_capture_observe_return_origin)
+        rospy.Service('/supervisor/return_observe_return_origin', CompensatePregrasp,
+                      self.handle_return_observe_return_origin)
+        rospy.Service('/supervisor/admit_observe_return_view', CompensatePregrasp,
+                      self.handle_admit_observe_return_view)
+        # Reuse the frozen-plan/execute wire contract. Each service binds one
+        # immutable pose; requests cannot supply an arbitrary correction goal.
+        rospy.Service('/supervisor/compensate_approach', CompensatePregrasp,
+                      self.handle_compensate_approach)
+        rospy.Service('/supervisor/compensate_grasp_pose', CompensatePregrasp,
+                      self.handle_compensate_grasp_pose)
+        rospy.Service('/supervisor/move_contact_approach', CompensatePregrasp,
+                      self.handle_contact_approach)
+        rospy.Service('/supervisor/move_contact_grasp_pose', CompensatePregrasp,
+                      self.handle_contact_grasp_pose)
+        rospy.Service('/supervisor/move_contact_lift', CompensatePregrasp,
+                      self.handle_contact_lift)
         rospy.Service('/supervisor/set_gripper', SetFloat, self.handle_gripper)
         rospy.Service('/supervisor/move_to_pose', SetTargetPose, self.handle_pose)
         rospy.Service('/supervisor/move_to_pose_linear', SetTargetPose, self.handle_pose_linear)
@@ -164,6 +208,12 @@ class MotionGateway(PregraspCompensationGateway):
                       self.handle_observation_pose_strict_execute)
         rospy.Service('/supervisor/plan_and_execute_observation_pose_strict', SetTargetPose,
                       self.handle_observation_pose_strict_plan_execute)
+        self._initialize_rgb_acquisition()
+        if not RGB_ACQUISITION_ADDON_ERROR:
+            rospy.Service('/supervisor/plan_and_execute_rgb_acquisition_pose_strict', SetTargetPose,
+                          self.handle_rgb_acquisition_pose_strict)
+        rospy.Service('/supervisor/check_contact_sequence', CheckContactSequence,
+                      self.handle_contact_sequence_precheck)
         rospy.Service(
             '/supervisor/check_pose_sequence_strict',
             CheckPoseSequence,
@@ -190,6 +240,7 @@ class MotionGateway(PregraspCompensationGateway):
         was_manual = getattr(self, '_gui_direct_mode', False)
         self._gui_direct_mode = bool(msg.data)
         if self._gui_direct_mode != was_manual:
+            self._rgb_acquisition_revoke_event()
             self._completed_command_reference = None
         if self._gui_direct_mode and hasattr(self, '_observation_context_lock'):
             with self._observation_context_lock:
@@ -362,6 +413,14 @@ class MotionGateway(PregraspCompensationGateway):
             try:
                 if float(msg.header.stamp.to_sec()) > float(rospy.get_time()):
                     raise ObservationPathError('committed geometry source is future')
+                if self._compensation_allows_visual_loss(msg):
+                    rospy.logwarn_throttle(2.0,
+                        'Preserving frozen contact compensation through TARGET_LOST')
+                    return
+                compensation = getattr(self, '_compensation_visual_context', None)
+                if (compensation is not None and msg.valid is True
+                        and msg.target_track_id != compensation['scene'].track_id):
+                    raise ObservationPathError('contact compensation target track changed')
                 self._observation_contexts.ingest(msg)
             except Exception as exc:
                 self._observation_contexts.clear()
@@ -377,6 +436,7 @@ class MotionGateway(PregraspCompensationGateway):
                 return
             self._observation_task_state_stamp_ns = stamp_ns
             self._pregrasp_task_stage = int(msg.stage)
+            self._compensation_task_label = str(msg.message)
             terminal_stages = (GraspStages.SUCCESS, GraspStages.FAILED,
                                GraspStages.EMERGENCY_STOP)
             terminal = (msg.stage in terminal_stages or
@@ -473,6 +533,7 @@ class MotionGateway(PregraspCompensationGateway):
             old = getattr(self, '_control_reference_epoch_ns', None)
             if old is not None and stamp_ns <= old:
                 return
+            self._rgb_acquisition_revoke_event()
             self._control_reference_epoch_ns = stamp_ns
             self._positive_enable_reference_epoch_sec = float(msg.stamp.to_sec())
             self._sdk_command_feedback = None
@@ -516,6 +577,86 @@ class MotionGateway(PregraspCompensationGateway):
         if not 0. <= positions[-1] <= .05:
             raise ObservationPathError('accepted gripper opening outside physical range')
         return positions
+
+    def _rgb_validate_measured_feedback(self, message, epoch_ns):
+        """Validate an owned SDK sample; command/heartbeat caches are not evidence."""
+        if len(self.joint_names) != 7 or set(self.joint_names[:-1]) != set(ARM_NAMES):
+            raise ObservationPathError('RGB_MEASURED_ARM_JOINT_NAMES_INVALID')
+        positions = self._fresh_named_reference(
+            message, 'sdk_measured', list(ARM_NAMES)+[self.joint_names[-1]])
+        stamp_ns = message.header.stamp.to_nsec()
+        if type(epoch_ns) is not int or epoch_ns <= 0 or stamp_ns <= epoch_ns:
+            raise ObservationPathError('RGB_MEASURED_FEEDBACK_OUTSIDE_EPOCH')
+        self._sdk_arm_words(positions[:-1])
+        if not 0. <= positions[-1] <= .05:
+            raise ObservationPathError('accepted gripper opening outside physical range')
+        maximum = float(rospy.get_param(
+            '/robot/strict_execution_controller_sync_max_feedback_age_sec', .5))
+        age = (rospy.Time.now().to_nsec()-stamp_ns)*1e-9
+        if not math.isfinite(maximum) or not 0. < maximum <= .5 or not 0. <= age <= maximum:
+            raise ObservationPathError('RGB_MEASURED_FEEDBACK_EXPIRED_DURING_VALIDATION')
+        with self._command_reference_lock:
+            if self._control_reference_epoch_ns != epoch_ns:
+                raise ObservationPathError('RGB_MEASURED_FEEDBACK_EPOCH_CHANGED')
+        return SimpleNamespace(stamp_ns=stamp_ns, epoch_ns=epoch_ns, positions=positions[:-1],
+                               maximum_age_ns=int(maximum*1e9))
+
+    def _rgb_measured_feedback_snapshot(self, expected_epoch=None):
+        with self._command_reference_lock:
+            epoch_ns = self._control_reference_epoch_ns
+            message = deepcopy(getattr(self, '_observation_joint_feedback', None))
+        if expected_epoch is not None and epoch_ns != expected_epoch:
+            raise ObservationPathError('RGB_MEASURED_FEEDBACK_EPOCH_CHANGED')
+        return self._rgb_validate_measured_feedback(message, epoch_ns)
+
+    def _rgb_measured_arm_snapshot(self):
+        return self._rgb_measured_feedback_snapshot().positions
+
+    def _wait_for_stationary_rgb_feedback(self):
+        """Require new accepted SDK samples spanning the original .25 s window."""
+        started_ns = rospy.Time.now().to_nsec()
+        deadline = time.monotonic()+2.
+        try:
+            epoch_ns = self._rgb_measured_feedback_snapshot().epoch_ns
+            with self._endpoint_feedback_lock:
+                seen = {id(msg): msg for msg in self._endpoint_feedback_history['accepted']}
+            last = None
+            anchor = None
+            stable_stamp_ns = None
+            while not rospy.is_shutdown() and time.monotonic() <= deadline:
+                if self._manual_control_active():
+                    return False, 'MANUAL_CONTROL_ACTIVE'
+                latest = self._rgb_measured_feedback_snapshot(expected_epoch=epoch_ns)
+                with self._endpoint_feedback_lock:
+                    incoming = [(id(msg), msg, deepcopy(msg)) for msg in
+                        self._endpoint_feedback_history['accepted'] if id(msg) not in seen]
+                for ident, owned, message in incoming:
+                    seen[ident] = owned  # Keep identities alive until this bounded wait ends.
+                    sample = self._rgb_validate_measured_feedback(message, epoch_ns)
+                    if sample.stamp_ns <= started_ns and last is None:
+                        continue
+                    if last is not None and sample.stamp_ns <= last.stamp_ns:
+                        if (sample.stamp_ns == last.stamp_ns
+                                and sample.positions == last.positions):
+                            continue  # Repeated packets never advance the window.
+                        raise ObservationPathError('RGB_MEASURED_FEEDBACK_SOURCE_REGRESSED')
+                    if (last is None or sample.stamp_ns-last.stamp_ns > sample.maximum_age_ns
+                            or max(abs(a-b) for a,b in zip(anchor, sample.positions))
+                                > 2.*math.pi/4096.+1e-9):
+                        anchor = list(sample.positions)
+                        stable_stamp_ns = sample.stamp_ns
+                    last = sample
+                if (last is not None and latest.stamp_ns == last.stamp_ns
+                        and latest.positions == last.positions
+                        and last.stamp_ns-stable_stamp_ns >= 250_000_000):
+                    final = self._rgb_measured_feedback_snapshot(expected_epoch=epoch_ns)
+                    if (final.stamp_ns == last.stamp_ns and final.positions == last.positions
+                            and time.monotonic() <= deadline):
+                        return True, 'new accepted SDK samples stationary for at least .25 s'
+                time.sleep(.02)
+        except (ObservationPathError, ValueError, TypeError, AttributeError, KeyError) as exc:
+            return False, 'RGB_MEASURED_FEEDBACK_INVALID: '+str(exc)
+        return False, 'RGB_MEASURED_FEEDBACK_NOT_SETTLED'
 
     def _command_reference_snapshot(self):
         """Read paired successful-write telemetry, never a requested target.
@@ -703,7 +844,7 @@ class MotionGateway(PregraspCompensationGateway):
         return opening
 
     def _validate_frozen_observation_path(self, context, trajectory, planner,
-                                        context_validator=None):
+                                        context_validator=None, contact_tracking_context=None):
         scene, revocation = context
         with self._observation_context_lock:
             self._require_live_observation_task()
@@ -747,11 +888,39 @@ class MotionGateway(PregraspCompensationGateway):
         contracted = getattr(planner, 'observation_tracking_contract_required', False)
         stop_duration = rospy.get_param('/alicia_controller/stop_trajectory_duration', None)
         original_digest = wire_digest(trajectory)
+        view_audit = self._unknown_observation_view_audit(scene, trajectory, model, desired)
         if contracted:
             from alicia_flexible_grasp.robot.observation_tracking_contract import qualify_contract_path
             result = qualify_contract_path(trajectory, desired, scene, model, gripper,
                                            opening, constraints, stop_duration,
                                            trajectory_stop_reserve=context_validator is not None)
+            if not result['ok'] and contact_tracking_context is not None:
+                # Only the admitted, bounded final contact correction may ask
+                # for stricter per-axis JTC tolerances. The SAME full bridge,
+                # curve, CAD, support and stopping proof is still required.
+                from alicia_flexible_grasp.robot.contact_tracking_contract import build_contact_tracking_contract
+                from alicia_flexible_grasp.robot.observation_preview import qualify_candidate_path
+                contact = contact_tracking_context
+                if (context_validator is None or contact.get('pose_index') != 2
+                        or contact['plan'].model_choice != 'unknown_tabletop'
+                        or contact['scene'].digest != scene.digest):
+                    raise ObservationPathError('CONTACT_TRACKING_SCOPE_INVALID')
+                self._validate_pregrasp_context(contact)
+                with self._endpoint_feedback_lock:
+                    sdk = tuple(self._endpoint_feedback_history['sdk'])
+                    accepted = tuple(self._endpoint_feedback_history['accepted'])
+                contract = build_contact_tracking_contract(trajectory, desired, model,
+                    sdk, accepted, constraints, stop_duration,
+                    now_sec=rospy.get_time(), epoch_ns=contact['epoch'])
+                tighter = qualify_candidate_path(trajectory, desired, scene, model, gripper,
+                    opening, contract['joint_error_bounds_rad'])
+                tighter['tracking_contract_search'] = result['tracking_contract_search'] + [dict(
+                    policy=contract['policy'], path_position_tolerance_rad=contract['path_position_tolerance_rad'],
+                    ok=tighter['ok'], failure_location=tighter.get('failure_location'),
+                    reason=tighter.get('reason', ''))]
+                tighter['execution_tracking_contract'] = contract
+                tighter['command_derivative_bounds'] = contract['command_derivative_bounds']
+                result = tighter
             if not result['ok']:
                 raise ObservationPathError(str(result))
             audit = result['continuous_path']
@@ -770,6 +939,7 @@ class MotionGateway(PregraspCompensationGateway):
                 self._observation_contexts.validate_capture(scene, revocation)
             else:
                 context_validator()
+        self._revalidate_unknown_observation_view(scene, view_audit)
         after = self._observation_controller_hold(names)
         if (after.positions != desired.positions
                 or self._observation_measured_opening() != opening
@@ -782,6 +952,8 @@ class MotionGateway(PregraspCompensationGateway):
                 or wire_digest(trajectory) != original_digest
                 or self._manual_control_active()):
             raise ObservationPathError('observation path inputs changed before submission')
+        if view_audit is not None:
+            audit['unknown_observation_target_visibility'] = view_audit
         audit['model_group_frame_tool_sha256'] = model_signature
         audit['following_allowance_source'] = (audit['execution_tracking_contract']['policy'] if contracted
             else 'configured_controller_path_band_floor_0.12_plus_sdk_half_count')
@@ -807,6 +979,7 @@ class MotionGateway(PregraspCompensationGateway):
                 self._observation_contexts.validate_capture(scene, revocation)
             else:
                 context_validator()
+        self._revalidate_unknown_observation_view(scene, audit.get('unknown_observation_target_visibility'))
         contract = audit['execution_tracking_contract']
         if (not self._observation_execution_authorized()
                 or rospy.get_param('/robot/observation_tracking_contract_enabled', False) is not True
@@ -834,12 +1007,24 @@ class MotionGateway(PregraspCompensationGateway):
     def _actuation_cb(self, msg):
         # Status is also a heartbeat on every accepted SDK feedback packet.
         # Only the driver's separately stamped reset event revokes an epoch.
-        self._actuation_status = str(msg.data).strip()
-        self._actuation_received_sec = float(rospy.get_time())
+        with self._command_reference_lock:
+            self._actuation_status = str(msg.data).strip()
+            self._actuation_received_sec = float(rospy.get_time())
+            # Latch every received prefix revocation, including excursions
+            # that recover before the executor next polls its live gate.
+            prefix_event = getattr(self, '_rgb_prefix_actuation_event', None)
+            if prefix_event is not None:
+                prefix_event(self._actuation_status)
 
     def _fresh_actuation_status(self):
-        age = float(rospy.get_time()) - getattr(self, '_actuation_received_sec', 0.0)
-        return getattr(self, '_actuation_status', '') if 0.0 <= age <= 2.0 else ''
+        # A callback between reading now and receipt previously produced a
+        # negative age for a fresh packet. Pair the status/time and clock read
+        # under the same lock; genuine stale/future receipts remain invalid.
+        with self._command_reference_lock:
+            status = getattr(self, '_actuation_status', '')
+            received = getattr(self, '_actuation_received_sec', 0.0)
+            age = float(rospy.get_time()) - received
+        return status if 0.0 <= age <= 2.0 else ''
 
     def handle_observation_actuation(self, req):
         if self._manual_control_active():
@@ -1350,12 +1535,16 @@ class MotionGateway(PregraspCompensationGateway):
                     0.0,
                     message,
                 )
-            ok, code, failed_stage, metrics, message = planner.check_pose_sequence(
-                req.targets,
-                req.stage_names,
-                req.linear,
-                deadline_sec=self._request_deadline_sec(req),
-            )
+            # Stage-specific duration estimates must use the same limits as
+            # execution. Cartesian approach/grasp/lift retain contact timing.
+            profile = self._unknown_pregrasp_velocity_limits(planner)
+            with temporary_attribute(planner, 'unknown_pregrasp_joint_velocity_limits_rad_s', profile):
+                ok, code, failed_stage, metrics, message = planner.check_pose_sequence(
+                    req.targets,
+                    req.stage_names,
+                    req.linear,
+                    deadline_sec=self._request_deadline_sec(req),
+                )
         response = CheckPoseSequenceResponse(
             bool(ok),
             str(code or ''),
@@ -1450,6 +1639,29 @@ class MotionGateway(PregraspCompensationGateway):
             else 0.0
         )
 
+    def _unknown_pregrasp_velocity_limits(self, planner):
+        return unknown_pregrasp_velocity_limits(
+            rospy.get_param('/grasp_mode/selection', {}),
+            rospy.get_param('/robot/unknown_pregrasp_timing', {}),
+            getattr(planner, 'strict_execution_max_joint_velocity_rad_s', .08))
+
+    @contextmanager
+    def _strict_pregrasp_timing_scope(self, planner):
+        # Inside the planner lock; only the named unknown pregrasp task stage.
+        # The exact path is still retimed and validated against its selected
+        # limits, acceleration bounds and unchanged controller tolerances.
+        selection = rospy.get_param('/grasp_mode/selection', {})
+        enabled = (isinstance(selection, dict) and selection.get('mode') == 'unknown'
+            and getattr(self, '_pregrasp_task_stage', None) == GraspStages.MOVE_PREGRASP
+            and getattr(self, '_compensation_task_label', '') in (
+                'planning 6D pregrasp', 'moving 6D pregrasp',
+                'planning 6D near-field pregrasp',
+                'moving 6D near-field pregrasp'))
+        profile = self._unknown_pregrasp_velocity_limits(planner) if enabled else None
+        with temporary_attribute(planner, 'strict_collinear_timing_enabled', enabled):
+            with pregrasp_velocity_scope(planner, profile):
+                yield
+
     def handle_pose_strict_execute(self, req):
         if self._manual_control_active():
             return SetTargetPoseResponse(False, 'MANUAL_CONTROL_ACTIVE')
@@ -1482,7 +1694,8 @@ class MotionGateway(PregraspCompensationGateway):
             execution_start_positions = (
                 self._current_arm_positions_snapshot()
             )
-            ok, msg = planner.execute_cached_strict_pose(req.target)
+            with self._strict_pregrasp_timing_scope(planner):
+                ok, msg = planner.execute_cached_strict_pose(req.target)
             if not ok and not any(code in str(msg) for code in (
                     'OBSERVATION_PATH_INVALID:', 'CONTROLLER_REFERENCE_INVALID',
                     'CONTROLLER_BRIDGE_INVALID')):
@@ -1545,7 +1758,8 @@ class MotionGateway(PregraspCompensationGateway):
             execution_start_positions = (
                 self._current_arm_positions_snapshot()
             )
-            ok, msg = planner.execute_cached_strict_pose(req.target)
+            with self._strict_pregrasp_timing_scope(planner):
+                ok, msg = planner.execute_cached_strict_pose(req.target)
             if not ok and not any(code in str(msg) for code in (
                     'OBSERVATION_PATH_INVALID:', 'CONTROLLER_REFERENCE_INVALID',
                     'CONTROLLER_BRIDGE_INVALID')):
@@ -2055,12 +2269,13 @@ class MotionGateway(PregraspCompensationGateway):
                 # wait within the SAME admission deadline, without resending.
                 # This pending state never authorizes trajectory execution.
                 reference = SimpleNamespace(mode='controller_frame_pending')
-            elif (mode == 'frozen_sdk_handoff'
+            elif (mode in ('initial_positive_enable', 'frozen_sdk_handoff')
                   and self._is_own_frozen_reference_transition(
                       desired, transition_origin, positions)):
-                # publish+duration is not controller receipt+duration. A
-                # source-stamped intermediate frame can legitimately be newer
-                # than that wall-clock estimate. Do not declare completion;
+                # publish+duration is not controller receipt+duration. This
+                # also applies to initial admission (gen16): its successful
+                # SDK write can precede the first stationary controller frame.
+                # Recognize only our own bridge, never declare completion, and
                 # wait within the SAME deadline without another publication.
                 reference = SimpleNamespace(mode='controller_frame_pending')
             elif any(value != 0. for value in desired.velocities + desired.accelerations):

@@ -22,6 +22,7 @@ def test_unknown_view_search_preserves_all_physical_configuration():
     before = deepcopy(config)
     result = observation_config(config, dict(mode='unknown', strategy='two_stage'))
     assert result == dict(before, observation_camera_target_nominal_distance_m=.26,
-                         observation_camera_target_min_distance_m=.22,
-                         observation_camera_target_max_distance_m=.30)
+                         observation_camera_target_min_distance_m=.07,
+                         observation_camera_target_max_distance_m=.50,
+                         observation_acceptance_policy='rgbd_working_volume_v1')
     assert config == before

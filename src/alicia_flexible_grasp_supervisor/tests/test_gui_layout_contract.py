@@ -231,6 +231,9 @@ class GuiLayoutContractTest(unittest.TestCase):
         tabs = window.findChild(QtWidgets.QTabWidget)
         self.assertIsNotNone(tabs)
         self.assertEqual(tabs.count(), 9)
+        joint_controls = tabs.widget(1)
+        self.assertTrue(joint_controls.show_feedback_angles)
+        self.assertEqual(len(joint_controls.feedback_labels), len(joint_controls.names))
         expected_tabs = (
             '总览监控',
             '关节控制',

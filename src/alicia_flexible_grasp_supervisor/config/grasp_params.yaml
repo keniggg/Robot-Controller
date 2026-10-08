@@ -7,14 +7,25 @@ grasp:
   # within the same four-count step, total budget and measured-response rules.
   # Joint5 stays held; failed Joint2 response cannot authorize another probe.
   unknown_pregrasp_joint2_response_probe_enabled: true
-  # 2026-08-10 CC200 pruned-27 OpenCV/Park hand-eye result passes the formal
-  # five-fold contract: 2.812/4.606 mm translation and 0.863/1.351 deg
-  # rotation. The centering-margin gate remains active and still compares the
-  # object-specific jaw margin against this measured maximum translation error.
+  # Only unknown pose-0/1 feedforward timing. Disabled retains 0.002 rad/s.
+  # Enabling still requires the existing continuous path/tracking/stop proof;
+  # lower planner/per-joint limits remain effective. The two recorded curves
+  # passed independent 0.008 retiming; each live path must still be certified.
+  unknown_feedforward_timing_enabled: true
+  unknown_feedforward_max_joint_velocity_rad_s: 0.008
+  # 2026-09-27 current-intrinsics Tsai-Lenz: 22 groups, five-fold CV,
+  # then 7 independent groups and 1 return pose with the candidate frozen.
+  # Use the larger observed translation maximum from CV and held-out data.
+  # This local empirical stress scale is not a certified workspace error bound.
   calibration_interlock_active: false
-  calibration_interlock_reason: "HAND_EYE_CROSS_VALIDATION_PASSED"
+  calibration_interlock_reason: "HAND_EYE_CURRENT_INTRINSICS_CV_AND_INDEPENDENT_VALIDATION_PASSED"
   calibration_centering_margin_gate_enabled: true
-  handeye_translation_max_error_m: 0.00460616416406
+  handeye_translation_max_error_m: 0.0026767676132463574
+  # Required independently of the historical jaw-centering override: a
+  # contact plan must tolerate this empirical translation stress along the
+  # support normal while retaining finite finger overlap and 3 mm clearance.
+  # This necessary 1D check does not certify calibration or actual grip.
+  contact_height_registration_margin_enabled: true
   # Explicit operator risk decision on 2026-08-10: keep this override enabled
   # for future physical grasps. Collision, MoveIt, target-drift, and measured
   # endpoint gates remain mandatory.
@@ -31,7 +42,7 @@ grasp:
   # Legacy non-rich-plan fallback only. The production 6D contact sequence
   # derives its candidate-specific pregrasp from live geometry and gripper CAD.
   pregrasp_distance_m: 0.036
-  # The first 6D result only authorizes a camera observation move.  Construct
+  # Auxiliary observation only: when initial evidence is insufficient, construct
   # that pose from the live target and calibrated tool0->camera transform so
   # the RGB-D optical centre is nominally 200 mm from the target.  The actual
   # reached view is accepted inclusively in [180, 220] mm; TCP-to-contact-pose
@@ -77,12 +88,15 @@ grasp:
   # uncertainty plus the measured observation endpoint residual.
   measured_endpoint_check_enabled: true
   measured_endpoint_position_tolerance_m: 0.006
+  # Operator-selected unknown-object arrival tolerance, shared by both
+  # strategies and by task verification and compensation services.
+  unknown_measured_endpoint_position_tolerance_m: 0.010
   measured_endpoint_orientation_tolerance_deg: 5.0
   # Only automatic contact-plan poses acquire this expiring driver lease.
   # The ordinary driver trim remains disabled, so GUI/manual commands never
   # inherit the task's encoder-derived endpoint compensation.
   contact_endpoint_precision_enabled: true
-  # Second-stage no-contact pregrasp only: keep the visual pose fixed and
+  # Contact pregrasp for both initial and supplemented views: keep the visual pose fixed and
   # correct measured Cartesian residual using Joint1/3/4/6 while holding
   # Joint2/5 SDK targets. J5 oscillated after a recorded four-count step.
   # Replaces the driver trim at this stage; never accepts moving feedback.
@@ -92,6 +106,34 @@ grasp:
   # <=32 counts total per axis, <=12 steps, <=60 seconds. No overall response,
   # reverse/overshoot, no progress or authority loss ends the episode.
   pregrasp_cartesian_compensation_enabled: true
+  # Unknown pregrasp replaces the small-step episode with one measured-IK
+  # correction using the current SDK-minus-encoder bias. The complete path
+  # stays in the original 32-count box, with strict continuous path/tracking
+  # checks and fresh measured arrival within the configured position/angle
+  # limits. No retry or micro-step fallback.
+  unknown_pregrasp_feedforward_enabled: true
+  # Use the existing bounded guide with weak Joint2/Joint5 SDK targets held.
+  unknown_pregrasp_held_axes_feedforward_enabled: true
+  # Unknown contact lines start from fresh measured joints, retain the bounded
+  # SDK-minus-encoder following offset along the entire actuator path, and
+  # require the same configured measured arrival before advancing.
+  # Each remaining correction is bound to that specific frozen plan waypoint.
+  unknown_contact_cartesian_compensation_enabled: true
+  # Candidate-time prediction uses fresh measured following bias on virtual
+  # contact paths. It is not future response proof; execution rechecks fresh
+  # feedback and both full curves. No object-specific offsets or new views.
+  unknown_contact_sequence_precheck_enabled: true
+  # Separate closed-gripper lift route: full SDK-bias path, request-local
+  # MoveIt occupancy checks and finite-pad/support guard; no legacy fallback.
+  # Missing optional camera/mount CAD is explicit diagnostic coverage.
+  # Keep disabled until the recorded lift model and fresh experiment pass.
+  unknown_lift_cartesian_compensation_enabled: false
+  # Unknown pose1 only: one existing 32-count/60-second correction with
+  # Joint2/Joint5 held. Approach convergence is at most 6 mm, even when the
+  # general unknown endpoint gate is 10 mm; full path/FK checks still apply.
+  # The final pose2 contact descent retains its measured-contact contract.
+  unknown_approach_held_axes_feedforward_enabled: true
+  unknown_contact_joint2_response_probe_enabled: false
   contact_endpoint_precision_service: "/alicia_d_driver_node/set_task_endpoint_precision"
   contact_endpoint_precision_service_timeout_sec: 2.0
   # The observation stage records tool0 execution error for the fresh
@@ -151,6 +193,11 @@ grasp:
   # without relaxing any geometry, collision, MoveIt or centering gate.
   # Includes the initial registered snapshot, one observation recovery and a
   # second fresh snapshot. The absolute deadline is fixed at phase entry.
+  # Unknown observe-return: total observation and measured-return session budget.
+  unknown_observe_return_session_timeout_sec: 600.0
+  # Initial contact first; additional views share the same identity and deadline.
+  unknown_observe_return_session_version: 2
+  unknown_observe_return_max_observations: 3
   near_field_replan_timeout_sec: 90.0
   near_field_replan_poll_sec: 0.05
   near_field_replan_snapshot_slack_sec: 3.0
@@ -298,7 +345,7 @@ grasp_6d:
     # topic stays bounded and carries only summary/path/hash/selected evidence.
     # This is planning-only diagnostics and never sends a motion command.
     gate_audit_enabled: true
-    gate_audit_output_path: ~/.ros/grasp6d_gate_audit_latest.json
+    gate_audit_output_path: /media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/planning_audits/grasp6d_gate_audit_latest.json
     server_url: "http://172.23.132.97:8000"
     timeout_sec: 30.0
     auto_request: false
@@ -664,6 +711,12 @@ robot:
   strict_execution_velocity_scaling: 0.20
   strict_execution_acceleration_scaling: 0.30
   strict_execution_max_joint_velocity_rad_s: 0.08
+  # User-requested faster unknown-object pregrasp. Only this non-Cartesian
+  # stage raises Joint3/4/6 from 0.02 to 0.04 rad/s; approach/grasp/lift and
+  # compensation keep their contact limits. Real following remains checked.
+  unknown_pregrasp_timing:
+    enabled: true
+    joint_velocity_rad_s: 0.04
   # Observation-only planner/cache. Recent user-controlled encoder motion
   # reached 0.08 rad/s on Joint3 and 0.23 rad/s on Joint4/6 after driver repair.
   # Verify following during the actual observation; contact retains its limits.
@@ -736,9 +789,16 @@ robot:
   strict_execution_no_actuation_min_desired_delta_rad: 0.12
 mujoco_digital_twin:
   enabled: true
+  # User-declared operating domain: all future unknown objects are <= 20 g.
+  # Applies only to unknown_tabletop. This is not a measured per-object mass.
+  unknown_object_mass_bound:
+    source: operator_declared_operational_limit
+    scope: all_unknown_objects
+    maximum_mass_kg: 0.020
+    operator_statement: "以后所有的未知物体不会超过20g"
   # false: unknown-object lift/aggregate score are diagnostic; IK, collision
   # and loaded opposed closure remain mandatory. Other object modes stay strict.
-  unknown_lift_gate_enabled: true
+  unknown_lift_gate_enabled: false
   execution_gate_enabled: true
   # Near-field selection screens only candidates that already passed every
   # analytical hard gate and the complete MoveIt sequence. Candidates are
@@ -777,8 +837,8 @@ mujoco_digital_twin:
   gripper_model:
     name: "Alicia_D_v5_6_gripper_50mm"
     max_inner_gap_m: 0.05
-    # Mirror the generic real gripper command contract, not target geometry.
-    # The simulated fingers close toward the same hardware limit and settle
-    # for the same command interval used by the task node.
+    # Fallback for adaptive/non-fixed closure. Fixed-position 6D candidates
+    # and the task bind these fields from the shared /gripper close contract
+    # and frozen required opening; they do not simulate a 0 mm hardware stop.
     close_target_inner_gap_m: 0.0
     close_settle_sec: 0.8

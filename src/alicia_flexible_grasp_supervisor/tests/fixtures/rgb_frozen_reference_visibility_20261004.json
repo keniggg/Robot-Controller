@@ -1,0 +1,295 @@
+{
+  "archive_directory": "rgb_acquisition_gateway_20261004T060325.983836Z_2884f100",
+  "result_sha256": "fad204fe11463b24fd31dd7ddd309a561edf0a01984e878d1b08d22a0523bd9c",
+  "trajectory_sha256": "1412b48834c32ac48cb330319fe0a758b8629a9c0a6a5d477da1e4f9759df8e0",
+  "robot_description_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "robot_description": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<robot name=\"alicia_D_v5_5\">\n  <mujoco>\n    <compiler meshdir=\"../meshes\" discardvisual=\"false\" />\n    <contact>\n      <exclude body1=\"base_link\" body2=\"Link1\"/>\n      <exclude body1=\"Link1\" body2=\"Link2\"/>\n      <exclude body1=\"Link2\" body2=\"Link3\"/>\n      <exclude body1=\"Link3\" body2=\"Link4\"/>\n      <exclude body1=\"Link4\" body2=\"Link5\"/>\n      <exclude body1=\"Link5\" body2=\"Link6\"/>\n      <exclude body1=\"Link6\" body2=\"Link7\"/>\n      <exclude body1=\"Link6\" body2=\"Link8\"/>\n    </contact>\n  </mujoco>\n  <link\n    name=\"base_link\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <link\n    name=\"Link1\">\n    <inertial>\n      <origin\n        xyz=\"-0.000232391087694535 -1.30049454546467E-05 0.00272122513752755\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.193725361315237\" />\n      <inertia\n        ixx=\"0.000258312653055438\"\n        ixy=\"8.79363230651008E-07\"\n        ixz=\"-6.87511809706199E-07\"\n        iyy=\"0.000149233685494123\"\n        iyz=\"-1.07703111237371E-06\"\n        izz=\"0.000339752801671385\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint1\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0 0.1295\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"base_link\" />\n    <child\n      link=\"Link1\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-2.16\"\n      upper=\"2.16\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link2\">\n    <inertial>\n      <origin\n        xyz=\"0.149948141017768 -0.00073733103436536 -0.000614552702572041\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.216765318032361\" />\n      <inertia\n        ixx=\"0.00012827957403101\"\n        ixy=\"-1.18676813578654E-07\"\n        ixz=\"-1.68171130903575E-06\"\n        iyy=\"0.000226231611908606\"\n        iyz=\"-3.50051091633141E-07\"\n        izz=\"0.000143215063853149\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint2\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 -5E-05 0.04287\"\n      rpy=\"1.570796326670687 -1.4619552299123753 3.673328578425508e-06\" />\n    <parent\n      link=\"Link1\" />\n    <child\n      link=\"Link2\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.57\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link3\">\n    <inertial>\n      <origin\n        xyz=\"0.055786319810667 0.00248143782929366 0.000269720725052352\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0845575681430802\" />\n      <inertia\n        ixx=\"2.87941478239851E-05\"\n        ixy=\"-2.26498116289353E-06\"\n        ixz=\"-5.38445390787684E-06\"\n        iyy=\"7.61918370068424E-05\"\n        iyz=\"-3.82299515503286E-07\"\n        izz=\"8.043706644056E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint3\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.22367 -0.022592 0\"\n      rpy=\"0 0 -2.4010124372456678\" />\n    <parent\n      link=\"Link2\" />\n    <child\n      link=\"Link3\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-0.5\"\n      upper=\"2.35619\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link4\">\n    <inertial>\n      <origin\n        xyz=\"0.000298365504501796 -0.000601368925849056 0.0663740391896737\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0653695953286747\" />\n      <inertia\n        ixx=\"7.03004188086337E-05\"\n        ixy=\"-9.68417851161416E-09\"\n        ixz=\"-7.50131707418093E-07\"\n        iyy=\"6.8747029788813E-05\"\n        iyz=\"4.45271906086873E-08\"\n        izz=\"1.68226189350765E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint4\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.0986 -0.00211 0.0002\"\n      rpy=\"-1.5708000003911129 0.014592309644319679 -1.5708000536043512\" />\n    <parent\n      link=\"Link3\" />\n    <child\n      link=\"Link4\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link5\">\n    <inertial>\n      <origin\n        xyz=\"-0.0110961410990681 0.0308024762289942 -0.000207575403674642\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0463941316397046\" />\n      <inertia\n        ixx=\"1.8425786696003E-05\"\n        ixy=\"2.02919305442313E-06\"\n        ixz=\"-5.09341788606234E-08\"\n        iyy=\"2.39811947218569E-05\"\n        iyz=\"-4.22854804621873E-08\"\n        izz=\"1.63952567717743E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint5\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0.00015 0.12275\"\n      rpy=\"1.5708000000612679 0.0057757130913083099 2.1215614713127198e-08\" />\n    <parent\n      link=\"Link4\" />\n    <child\n      link=\"Link5\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.5\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link6\">\n    <inertial>\n      <origin\n        xyz=\"-3.11347120307559E-09 6.19962735608128E-10 -0.00146275616399921\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.000754053623586768\" />\n      <inertia\n        ixx=\"1.9236769291339E-08\"\n        ixy=\"9.19452445636026E-14\"\n        ixz=\"3.52333012571258E-15\"\n        iyy=\"1.92358360258478E-08\"\n        iyz=\"-3.901270498029E-17\"\n        izz=\"3.70123450485896E-08\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6\"\n    type=\"revolute\">\n    <origin\n      xyz=\"-0.00385 0.0573 -0.00035\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Link5\" />\n    <child\n      link=\"Link6\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Grasp_base\">\n    <inertial>\n      <origin\n        xyz=\"-0.0321082111389046 -0.000168822009778203 0.0275474621634362\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.119820573147005\" />\n      <inertia\n        ixx=\"8.23026483118452E-05\"\n        ixy=\"2.1627287972411E-08\"\n        ixz=\"-6.37078693697654E-06\"\n        iyy=\"3.33372461482565E-05\"\n        iyz=\"2.3095070932307E-08\"\n        izz=\"8.59654133961544E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6_to_gripper_base\"\n    type=\"fixed\">\n    <origin\n      xyz=\"0 0 0\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Link6\" />\n    <child\n      link=\"Grasp_base\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n  <link\n    name=\"Link7\">\n    <inertial>\n      <origin\n        xyz=\"2.97087521250461E-08 0.0434087591943518 0.0106596716155943\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0256461121677861\" />\n      <inertia\n        ixx=\"6.46830326573767E-06\"\n        ixy=\"2.39543799544883E-11\"\n        ixz=\"-4.63721293861409E-12\"\n        iyy=\"5.13428741941794E-06\"\n        iyz=\"-1.26432048814187E-06\"\n        izz=\"8.03606347912567E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"left_finger\"\n    type=\"prismatic\">\n    <!--\n      The real SDK and /joint_states public contract is 0 m closed and\n      0.05 m open.  Keep the original CAD poses, but parameterize them in\n      that public direction: right_finger=0 is the centered/closed pose and\n      right_finger=0.05 is the original fully-open pose.\n    -->\n    <origin\n      xyz=\"-0.0002 0.000502 0.131180183660255\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link7\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-0.05\"\n      upper=\"0\"\n      effort=\"5\"\n      velocity=\"10\" />\n    <mimic joint=\"right_finger\" multiplier=\"-1\" offset=\"0\"/>\n  </joint>\n  <link\n    name=\"Link8\">\n    <inertial>\n      <origin\n        xyz=\"-2.97087521250461E-08 -0.0434087591943727 0.0106596716155944\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.025646112167786\" />\n      <inertia\n        ixx=\"6.46830326573761E-06\"\n        ixy=\"2.39543799589352E-11\"\n        ixz=\"4.63721294819601E-12\"\n        iyy=\"5.13428741941793E-06\"\n        iyz=\"1.26432048814186E-06\"\n        izz=\"8.03606347912559E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"right_finger\"\n    type=\"prismatic\">\n    <origin\n      xyz=\"-0.0002 -0.000498 0.131180183660255\"\n      rpy=\"1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link8\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"0\"\n      upper=\"0.05\"\n      effort=\"5\"\n      velocity=\"10\" />\n  </joint>\n  <link\n    name=\"tool0\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <sphere radius=\"0.005\" /> <!-- 定义一个半径为0.02米的小球体 -->\n      </geometry>\n      <material\n        name=\"green_virtual_sphere_material\"> <!-- 可以给材质起个名字 -->\n        <color\n          rgba=\"0 1 0 1\" /> <!-- 绿色 (R G B A)，A为1表示不透明 -->\n      </material>\n    </visual>\n  </link>\n  <joint\n    name=\"Grasp2tool\"\n    type=\"fixed\">\n    <origin\n      xyz=\"-0.0002 -0.0003 0.13118\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"tool0\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n</robot>\n",
+  "trajectory": {
+    "names": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "points": [
+      {
+        "positions": [
+          -1.8285050991596845,
+          0.607456392002714,
+          -0.30066023442558565,
+          -0.007669903939428206,
+          -0.47706802503243445,
+          0.0046019423636569235
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "accelerations": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "time": 0.0
+      },
+      {
+        "positions": [
+          -1.8266145404072225,
+          0.5196609138432805,
+          -0.3001519262896163,
+          -0.0049466538792771,
+          -0.47759900908526937,
+          0.0007254817769790636
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "accelerations": [
+          -0.000420124166884237,
+          0.01951010624234812,
+          -0.00011295736346014268,
+          -0.0006051666795588854,
+          0.0001179964560929801,
+          0.0008614356852527017
+        ],
+        "time": 3.0
+      }
+    ]
+  },
+  "desired_positions": [
+    -1.829897650459455,
+    0.6102695778079569,
+    -0.2950579456538944,
+    -0.00921800620071727,
+    -0.4739534502130273,
+    0.009482344384585638
+  ],
+  "source_context": {
+    "camera": {
+      "align_depth_to_color": true,
+      "coeffs": null,
+      "color_topic": "/supervisor/camera/color/image_raw",
+      "cx": 317.9961242675781,
+      "cy": 244.833984375,
+      "depth_scale": 9.999999747378752e-05,
+      "depth_topic": "/supervisor/camera/depth/image_raw",
+      "distortion_coefficients": null,
+      "distortion_model": null,
+      "frame_id": "camera_link",
+      "fx": 395.7682800292969,
+      "fy": 395.6027526855469,
+      "height": 480,
+      "intrinsics_source": "sdk_active_color_profile",
+      "model": null,
+      "runtime_profile_geometry": {
+        "alignment": {
+          "enabled": true,
+          "target_stream": "color"
+        },
+        "color_intrinsics": {
+          "coeffs": [
+            -0.05372992530465126,
+            0.05834611505270004,
+            0.002122000325471163,
+            0.0007625872385688126,
+            -0.019704923033714294
+          ],
+          "cx": 317.9961242675781,
+          "cy": 244.833984375,
+          "fx": 395.7682800292969,
+          "fy": 395.6027526855469,
+          "height": 480,
+          "model": "inverse_brown_conrady",
+          "width": 640
+        },
+        "depth_scale_m_per_unit": 9.999999747378752e-05,
+        "depth_to_color_extrinsics": {
+          "rotation_column_major": [
+            0.9999755024909973,
+            -0.0032465485855937004,
+            -0.006196357309818268,
+            0.0032532282639294863,
+            0.999994158744812,
+            0.0010682024294510484,
+            0.006192853208631277,
+            -0.0010883343638852239,
+            0.9999802112579346
+          ],
+          "translation_m": [
+            -5.0697817641776055e-05,
+            2.1683623344870284e-05,
+            9.552900883136317e-05
+          ]
+        },
+        "device": {
+          "firmware_version": "5.17.0.10",
+          "serial_number": "260522277974"
+        },
+        "geometry_intrinsics": {
+          "coeffs": [
+            -0.05372992530465126,
+            0.05834611505270004,
+            0.002122000325471163,
+            0.0007625872385688126,
+            -0.019704923033714294
+          ],
+          "cx": 317.9961242675781,
+          "cy": 244.833984375,
+          "fx": 395.7682800292969,
+          "fy": 395.6027526855469,
+          "height": 480,
+          "model": "inverse_brown_conrady",
+          "width": 640
+        },
+        "geometry_intrinsics_source": "sdk_active_color_profile",
+        "native_depth_intrinsics": {
+          "coeffs": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "cx": 321.01190185546875,
+          "cy": 245.62918090820312,
+          "fx": 389.4533996582031,
+          "fy": 389.4533996582031,
+          "height": 480,
+          "model": "brown_conrady",
+          "width": 640
+        }
+      },
+      "width": 640
+    },
+    "epoch_ns": 1791073775730162994,
+    "handeye": {
+      "allow_static_fallback": false,
+      "base_frame": "base_link",
+      "calibration_file": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/d405_expanded_metric_candidate_eye_on_hand.yaml",
+      "camera_frame": "camera_link",
+      "child_frame": "camera_link",
+      "mode": "eye_on_hand",
+      "parent_frame": "tool0",
+      "publish_static_tf": true,
+      "rotation_xyzw": [
+        0.005930378367648055,
+        -0.7209825458838591,
+        0.008460310130839265,
+        0.692876195503739
+      ],
+      "tf_lookup_latest": true,
+      "tf_timeout_sec": 0.2,
+      "translation_xyz": [
+        -0.08124712569175627,
+        0.008418611687707862,
+        -0.10832724917416199
+      ],
+      "use_tf": true
+    },
+    "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+    "observation_view_parameters": {
+      "camera_visibility_margin_px": 36,
+      "camera_visibility_max_depth_m": 0.5,
+      "camera_visibility_min_depth_m": 0.07
+    },
+    "perception": {},
+    "selection": {
+      "generation": 7,
+      "mode": "unknown",
+      "stamp_ns": 1791093762197976112,
+      "strategy": "observe_return"
+    },
+    "tool_camera": [
+      [
+        -0.03977481663336202,
+        -0.020275293579598223,
+        -0.9990029411528495,
+        -0.08124712569175627
+      ],
+      [
+        0.003172496405352382,
+        0.9997865075298131,
+        -0.020417507876746316,
+        0.008418611687707862
+      ],
+      [
+        0.9992036325135837,
+        -0.00398143587165168,
+        -0.039702001713509016,
+        -0.10832724917416199
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "current_vertices": [
+    [
+      [
+        -0.09866638327895791,
+        -0.38809081163300563,
+        0.0040505210886939425
+      ],
+      [
+        -0.11763725074450404,
+        -0.38286213217300874,
+        0.003195747604582161
+      ],
+      [
+        -0.11062885003396182,
+        -0.36201462454610933,
+        0.002585089042081018
+      ],
+      [
+        -0.09234022869945382,
+        -0.36708628892624573,
+        0.0034103841709295923
+      ],
+      [
+        -0.06799974029379943,
+        -0.2813760423880117,
+        0.12091624993783984
+      ],
+      [
+        -0.07634990407250312,
+        -0.2790746015120681,
+        0.12054001524013878
+      ],
+      [
+        -0.0732651060860065,
+        -0.2698984210670495,
+        0.12027122948118427
+      ],
+      [
+        -0.06521523784950203,
+        -0.272130750626131,
+        0.12063448906876864
+      ]
+    ]
+  ],
+  "current_set_sha256": "0a435133490ced57621901f847c0df0bd6c5ea9aa8d2b546e0f0c065a4b2c81e",
+  "reference": {
+    "reference_id": "7c9d357653341b4c25f052050834bf50b6312e1d1ce010887e8d60c493acc91d",
+    "reference_observation_set_sha256": "11bdaf34826e8114b642f8e20913a873702e710ff06d08ccd4f3258dbc5fbec7",
+    "reference_volumes_json": "[{\"vertices_base_m\": [[-0.09959564278944844, -0.3866975892193724, 0.003924152729445823], [-0.11712517066038829, -0.3819440198309627, 0.0030424338615390734], [-0.11101964575608485, -0.36401537298346026, 0.002483372731778649], [-0.094088319494688, -0.3686343158312662, 0.003336222885984702], [-0.0738192626175664, -0.2999458619599993, 0.12127995910001858], [-0.08268546106152977, -0.29754157076487475, 0.12083399760509396], [-0.07959736902592765, -0.2884735033330522, 0.12055123203632016], [-0.0710337328767822, -0.29080970224220043, 0.12098259212575478]]}]",
+    "reference_volume_json": "{\"vertices_base_m\": [[-0.09959564278944844, -0.3866975892193724, 0.003924152729445823], [-0.11712517066038829, -0.3819440198309627, 0.0030424338615390734], [-0.11101964575608485, -0.36401537298346026, 0.002483372731778649], [-0.094088319494688, -0.3686343158312662, 0.003336222885984702], [-0.0738192626175664, -0.2999458619599993, 0.12127995910001858], [-0.08268546106152977, -0.29754157076487475, 0.12083399760509396], [-0.07959736902592765, -0.2884735033330522, 0.12055123203632016], [-0.0710337328767822, -0.29080970224220043, 0.12098259212575478]]}"
+  },
+  "trajectory_wire_base64": "AAAAAAAAAAAAAAAACQAAAGJhc2VfbGluawYAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYCAAAABgAAAH9cF5COQf2/4bosY0hw4z+GMoRsBD7Tv144VSl6an+/ydJeU0iI3r/SITN/fNlyPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAEknFyvQOf2/c+y+7A+h4D8Ss89ssDXTvyuTLUrxQnS/JeMnb/uQ3r/4l8NAyMVHPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAClOZjoOIO79ybQIRdfqTP4v2RLpwnB2/fnN1jIHUQ7+Y2Aqum+4eP7kdQgw/Okw/AAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}

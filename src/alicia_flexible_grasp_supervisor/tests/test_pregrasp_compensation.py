@@ -21,6 +21,41 @@ def recorded_fixture(day='20260919'):
     return fk,sdk,actual,goal
 
 
+def test_september25_actual_joint2_stall_cannot_be_reported_as_arrival():
+    """Replay actual commands/encoders, with timestamps rebased for the fixture."""
+    record = json.loads((Path(__file__).parent /
+        'fixtures/pregrasp_following_20260925_actual.json').read_text())
+    fk, sdk, actual, goal = recorded_fixture('20260925_actual')
+    correction = PregraspCompensation(fk, sample(fk, sdk, actual), goal,
+                                     joint2_response_probe_enabled=True)
+    rows = record['actual_stationary_steps']
+    for i, row in enumerate(rows[:-1]):
+        sdk = (np.array(row['sdk_counts']) - 2048) * Q
+        actual = (np.array(row['measured_counts']) - 2048) * Q
+        _, step, report = correction.evaluate(sample(fk, sdk, actual, 10. + 4*i))
+        assert report['position_error_m'] == pytest.approx(row['position_error_m'])
+        assert report['held_joints'] == row['held_joints']
+        assert list(step.target_counts) == rows[i+1]['sdk_counts']
+        assert max(abs(np.array(step.target_counts) - correction.initial_counts)) <= 32
+        assert max(abs(np.array(step.target_counts) - step.baseline_counts)) <= 4
+        correction.committed(step, 12. + 4*i)
+
+    last = rows[-1]
+    final = sample(fk, (np.array(last['sdk_counts']) - 2048)*Q,
+                   (np.array(last['measured_counts']) - 2048)*Q, 46.)
+    for _ in range(2):
+        with pytest.raises(ValueError, match=record['result']):
+            correction.evaluate(final)
+    report = correction.last_evidence
+    assert correction.steps == 9 and correction.joint2_response_probe_used
+    assert report['position_error_m'] == pytest.approx(.0062177692275435115)
+    assert report['last_step_response']['command_delta_counts'] == [0, 4, 0, 0, 0, 0]
+    assert report['last_step_response']['measured_delta_counts'] == [0, 0, 1, 0, 0, 0]
+    assert report['saturated_joints'] == ['Joint3']
+    assert not report['real_grasp_success']
+    assert correction.tolerances[0] == .006
+
+
 def replay_september24_to_last_sample(probe_enabled):
     """Replay only actually recorded commands/responses; no synthetic success."""
     record = json.loads((Path(__file__).parent /
@@ -199,11 +234,37 @@ def test_already_inside_tolerance_requires_no_command():
     assert code=='PREGRASP_MEASURED_CONVERGED' and step is None and c.steps==0
 
 
-@pytest.mark.parametrize('p,a',[(.0061,.05),(.006,.09),(0,.05),(.006,float('nan'))])
+@pytest.mark.parametrize('p,a',[(.0101,.05),(.006,.09),(0,.05),(.006,float('nan'))])
 def test_tolerance_cannot_be_relaxed(p,a):
     fk,sdk,actual,goal=recorded_fixture()
     with pytest.raises(ValueError):PregraspCompensation(fk,sample(fk,sdk,actual),goal,
         position_tolerance_m=p,orientation_tolerance_rad=a)
+
+
+def test_ten_mm_policy_accepts_recorded_residual_without_claiming_a_grasp():
+    record = json.loads((Path(__file__).parent /
+        'fixtures/pregrasp_following_20260925_actual.json').read_text())
+    fk, _, _, goal = recorded_fixture('20260925_actual')
+    # A fresh stationary sample with the recorded positions under the NEW
+    # policy; this does not rewrite the historical failed episode.
+    row = record['actual_stationary_steps'][-1]
+    initial = sample(fk, (np.array(row['sdk_counts'])-2048)*Q,
+                     (np.array(row['measured_counts'])-2048)*Q)
+    correction = PregraspCompensation(fk, initial, goal, position_tolerance_m=.010)
+    code, step, evidence = correction.evaluate(initial)
+    assert code == 'PREGRASP_MEASURED_CONVERGED' and step is None
+    assert evidence['position_error_m'] == pytest.approx(.0062177692275435115)
+    assert not evidence['real_grasp_success']
+
+
+def test_ten_mm_policy_does_not_accept_a_stalled_correction():
+    fk, sdk, actual, goal = recorded_fixture('20260925_actual')
+    correction = PregraspCompensation(fk, sample(fk, sdk, actual), goal,
+                                      position_tolerance_m=.010)
+    _, step, _ = correction.evaluate(sample(fk, sdk, actual))
+    correction.committed(step, 11.)
+    with pytest.raises(ValueError, match='NO_BOUNDED_DIRECTIONAL_RESPONSE'):
+        correction.evaluate(sample(fk, step.positions, actual, 12.))
 
 
 def test_step_budget_prevents_implicit_retry():

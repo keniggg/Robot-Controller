@@ -896,3 +896,279 @@ def test_iteration_budget_is_an_exact_integer_limit(monkeypatch, iterations):
     assert len(calls) == iterations
     with pytest.raises(ValueError):
         RegistrationConfig(maximum_iterations=np.nextafter(float(iterations), np.inf))
+
+
+def provenance_stationary_view(stamp_ns=1_000_000_000):
+    # Cell interiors keep numerical ICP ties away from quantization boundaries.
+    points = np.asarray([(0.001 + .005*x, 0.001 + .005*y, .021)
+                         for x in range(10) for y in range(10)])
+    return view(points, stamp_ns)
+
+
+def test_reobserved_voxels_keep_all_sources_and_original_measured_representatives():
+    reference = provenance_stationary_view()
+    original = fused_surface_from_view(reference)
+    result, twice = append_registered_view(original, reference,
+        dataclasses.replace(reference, stamp_ns=reference.stamp_ns + 1))
+    assert result.ok
+    assert len(twice.points_base) == len(original.points_base)
+    assert twice.view_sources == ((0, 1),) * len(twice.points_base)
+    assert np.all(twice.view_support_counts == 2)
+    assert np.all(twice.view_indices == 1)  # Same representative rule as before.
+    expected = reference.points_base.dot(result.transform_base[:3, :3].T) + result.transform_base[:3, 3]
+    assert all(np.any(np.all(expected == point, axis=1)) for point in twice.points_base)
+    result, thrice = append_registered_view(twice, reference,
+        dataclasses.replace(reference, stamp_ns=reference.stamp_ns + 2))
+    assert result.ok
+    assert thrice.view_sources == ((0, 1, 2),) * len(thrice.points_base)
+    assert np.all(thrice.view_support_counts == 3)
+    assert original.view_sources == ((0,),) * len(original.points_base)
+    assert twice.view_sources == ((0, 1),) * len(twice.points_base)
+    audit = multiview_surface.surface_provenance_audit(thrice)
+    assert audit['source_count'] == 3
+    assert audit['multi_source_voxel_count'] == len(thrice.points_base)
+    assert audit['support_count_histogram'] == {'3': len(thrice.points_base)}
+    assert [row['represented_voxel_count'] for row in audit['per_view']] == [0, 0, len(thrice.points_base)]
+    assert all(row['supported_voxel_count'] == len(thrice.points_base) for row in audit['per_view'])
+    assert all(row['exclusive_voxel_count'] == 0 for row in audit['per_view'])
+    assert all(row['shared_voxel_count'] == len(thrice.points_base) for row in audit['per_view'])
+    assert not audit['independent_viewpoint_evidence']
+    assert not audit['uncertainty_reduction_certified']
+    assert not audit['contact_or_motion_authorized']
+
+
+def test_opposing_face_fusion_keeps_unique_new_old_and_shared_voxel_contributions():
+    reference, moving = opposing_side_views()
+    original = fused_surface_from_view(reference)
+    result, fused = append_registered_view(original, reference, moving)
+    assert result.ok
+    kinds = set(fused.view_sources)
+    assert {(0,), (1,), (0, 1)} <= kinds
+    negative = np.isclose(fused.points_base[:, 1], -.025) & (fused.points_base[:, 2] < .030)
+    positive = np.isclose(fused.points_base[:, 1], .025) & (fused.points_base[:, 2] < .030)
+    assert any(negative) and any(positive)
+    assert all(fused.view_sources[index] == (0,) for index in np.flatnonzero(negative))
+    assert all(fused.view_sources[index] == (1,) for index in np.flatnonzero(positive))
+    audit = multiview_surface.surface_provenance_audit(fused)
+    assert all(row['exclusive_voxel_count'] > 0 for row in audit['per_view'])
+    assert all(row['shared_voxel_count'] > 0 for row in audit['per_view'])
+    assert sum(row['supported_voxel_count'] for row in audit['per_view']) == int(np.sum(fused.view_support_counts))
+
+
+@pytest.mark.parametrize('fault', ['repeat_stamp', 'older_stamp', 'identity', 'support'])
+def test_source_support_never_changes_on_rejected_registration(fault):
+    reference = provenance_stationary_view()
+    moving = dataclasses.replace(reference, stamp_ns=reference.stamp_ns + 1)
+    result, fused = append_registered_view(fused_surface_from_view(reference), reference, moving)
+    assert result.ok
+    before = multiview_surface.surface_provenance_audit(fused)
+    candidate = dataclasses.replace(moving, stamp_ns=moving.stamp_ns + 1)
+    if fault == 'repeat_stamp': candidate = moving
+    elif fault == 'older_stamp': candidate = reference
+    elif fault == 'identity': candidate = dataclasses.replace(candidate, identity=TargetTrackIdentity.from_stream(4, 8))
+    elif fault == 'support': candidate = dataclasses.replace(candidate, support_offset_m=.005)
+    failure, unchanged = append_registered_view(fused, reference, candidate)
+    assert not failure.ok and unchanged is fused
+    assert multiview_surface.surface_provenance_audit(unchanged) == before
+
+
+def test_legacy_surface_constructor_and_snapshot_coordinate_replace_preserve_provenance():
+    points = np.asarray([[.001, .001, .01], [.006, .001, .01]])
+    old = FusedTargetSurface(IDENTITY, points, np.asarray([0, 1]), (100, 200))
+    assert old.view_sources == ((0,), (1,))
+    assert old.view_support_counts.tolist() == [1, 1]
+    shared = dataclasses.replace(old, view_sources=((0,), (0, 1)))
+    moved = dataclasses.replace(shared, points_base=shared.points_base + [.1, -.2, .3])
+    assert moved.view_sources == shared.view_sources
+    assert moved.view_support_counts.tolist() == [1, 2]
+    assert multiview_surface.surface_provenance_audit(moved) == multiview_surface.surface_provenance_audit(shared)
+    assert np.allclose(shared.points_base, points)
+    assert np.allclose(moved.points_base, points + [.1, -.2, .3])
+
+
+def test_voxel_source_arrays_cannot_be_mutated_through_constructor_inputs_or_properties():
+    rows = [[0], [0, 1]]
+    surface = FusedTargetSurface(IDENTITY, np.zeros((2, 3)), np.asarray([0, 1]), (100, 200), rows)
+    rows[1].append(2)
+    assert surface.view_sources == ((0,), (0, 1))
+    with pytest.raises(dataclasses.FrozenInstanceError): surface.view_sources = ()
+    with pytest.raises(TypeError): surface.view_sources[1][0] = 1
+    counts = surface.view_support_counts
+    with pytest.raises(ValueError): counts[0] = 4
+    with pytest.raises(ValueError): counts.setflags(write=True)
+    audit = multiview_surface.surface_provenance_audit(surface)
+    audit['per_view'][0]['supported_voxel_count'] = -1
+    assert multiview_surface.surface_provenance_audit(surface)['per_view'][0]['supported_voxel_count'] == 2
+
+
+@pytest.mark.parametrize('sources', [
+    (), ((0,),), ((0,), (1,), (1,)), ((), (1,)),
+    ((0,), (1, 0)), ((0,), (0, 0, 1)), ((0,), (0, 2)),
+    ((0,), (0,)), ((False,), (1,)), ((0,), (1.0,)),
+    ((0,), ('1',)), ((-1, 0), (1,)), 'invalid', ((0,), {1}),
+])
+def test_voxel_source_sets_reject_malformed_or_inconsistent_provenance(sources):
+    with pytest.raises(ValueError):
+        FusedTargetSurface(IDENTITY, np.zeros((2, 3)), np.asarray([0, 1]), (100, 200), sources)
+
+
+def test_voxel_source_sets_do_not_hide_invalid_source_timestamps():
+    for stamps in ((100, 100), (200, 100), (True, 200), (100, 200.0)):
+        with pytest.raises(ValueError):
+            FusedTargetSurface(IDENTITY, np.zeros((2, 3)), np.asarray([0, 1]), stamps, ((0,), (0, 1)))
+
+
+def test_support_audit_exposes_object_only_shift_without_changing_fusion(monkeypatch):
+    reference, moving = registered_pair()
+    # The object's apparent height changes, while the measured support does
+    # not. Existing ICP can match the target exactly without agreeing with
+    # that support under the same moving-to-reference correction.
+    moving = dataclasses.replace(
+        moving, points_base=moving.points_base + [0., 0., .006])
+    surface = fused_surface_from_view(reference)
+    result, fused = append_registered_view(surface, reference, moving)
+    audit = result.support_consistency_audit
+    assert result.ok and result.code == 'REGISTERED'
+    assert result.support_plane_separation_m == 0.
+    assert result.rmse_m < 1e-12
+    assert result.transform_base[2, 3] == pytest.approx(-.005, abs=1e-12)
+    assert audit.raw_plane_separation_m == 0.
+    assert audit.transformed_plane_separation_m == pytest.approx(.005, abs=1e-12)
+    assert audit.transformed_maximum_footprint_separation_m == pytest.approx(.005, abs=1e-12)
+    assert audit.transformed_plane_separation_m > RegistrationConfig().maximum_support_offset_delta_m
+    assert audit.correspondence_count == result.inlier_count
+    assert audit.diagnostic_only is True
+    assert audit.transform_semantics == 'moving_snapshot_base_estimate_to_phase_reference'
+
+    # The diagnostic does not become a new acceptance/fusion gate, including
+    # when its corrected discrepancy exceeds the existing raw support bound.
+    monkeypatch.setattr(multiview_surface, '_support_consistency_audit', lambda *_: None)
+    without_audit, original_fusion = append_registered_view(surface, reference, moving)
+    assert without_audit.support_consistency_audit is None
+    for attribute in dataclasses.fields(result):
+        if attribute.name not in ('support_consistency_audit', 'transform_base'):
+            assert getattr(result, attribute.name) == getattr(without_audit, attribute.name)
+    np.testing.assert_array_equal(result.transform_base, without_audit.transform_base)
+    np.testing.assert_array_equal(fused.points_base, original_fusion.points_base)
+    np.testing.assert_array_equal(fused.view_indices, original_fusion.view_indices)
+    assert fused.view_sources == original_fusion.view_sources
+    assert fused.view_stamps_ns == original_fusion.view_stamps_ns
+
+
+def test_support_audit_recovers_consistent_rigid_plane_and_serializes_immutably():
+    # registered_pair uses a +1 mm reference correction in Z. Transform its
+    # support by the inverse too, making target and support one rigid scene.
+    reference, moving = registered_pair(offset=.001)
+    result = register_surface_view(reference, moving)
+    assert result.ok
+    audit = result.support_consistency_audit
+    assert audit.raw_plane_separation_m == pytest.approx(.001)
+    assert audit.raw_maximum_footprint_separation_m == pytest.approx(.001)
+    assert audit.transformed_plane_separation_m == pytest.approx(0., abs=1e-12)
+    assert audit.transformed_maximum_footprint_separation_m == pytest.approx(0., abs=1e-12)
+    assert audit.raw_normal_angle_deg == pytest.approx(0., abs=1e-6)
+    assert audit.transformed_normal_angle_deg == pytest.approx(0., abs=1e-6)
+    assert audit.anchor_base[2] == pytest.approx(0., abs=1e-12)
+    serialized = json.loads(json.dumps(dataclasses.asdict(audit), allow_nan=False))
+    assert serialized['anchor_policy'] == (
+        'final_matched_reference_centroid_projected_to_reference_support')
+    assert serialized['diagnostic_only'] is True
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        audit.raw_plane_separation_m = .1
+    with pytest.raises(TypeError):
+        audit.anchor_base[0] = .1
+
+
+def _reexpress_surface_view(source, transform):
+    normal = transform[:3, :3].dot(source.support_normal_base)
+    return dataclasses.replace(source,
+        points_base=source.points_base.dot(transform[:3, :3].T) + transform[:3, 3],
+        support_normal_base=normal,
+        support_offset_m=source.support_offset_m - float(normal.dot(transform[:3, 3])))
+
+
+@pytest.mark.parametrize('origin', [(0., 0., 0.), (1.3, -2.4, .8), (1e4, -2e4, 3e4)])
+def test_support_audit_is_covariant_under_tilt_and_origin_change(origin):
+    points = np.asarray([[-.03, -.02, .09], [.04, -.01, .08],
+                         [.02, .05, .09], [-.02, .02, .06]])
+    reference = view(points, 100, offset=-.05)
+    moving = view(points, 200,
+        normal=(np.sin(.03), 0., np.cos(.03)), offset=-.048)
+    correction = np.eye(4)
+    correction[:3, :3] = [[1., 0., 0.], [0., np.cos(.01), -np.sin(.01)],
+                          [0., np.sin(.01), np.cos(.01)]]
+    correction[:3, 3] = [.003, -.002, .001]
+    baseline = multiview_surface._support_consistency_audit(
+        reference, moving, correction, points)
+    # Fix the same correspondences; this tests plane/frame mathematics
+    # independently of ICP tie-breaking and its selected correspondence set.
+    rx = np.asarray([[1., 0., 0.], [0., np.cos(.47), -np.sin(.47)],
+                     [0., np.sin(.47), np.cos(.47)]])
+    rz = np.asarray([[np.cos(-.62), -np.sin(-.62), 0.],
+                     [np.sin(-.62), np.cos(-.62), 0.], [0., 0., 1.]])
+    frame = np.eye(4)
+    frame[:3, :3] = rz.dot(rx)
+    frame[:3, 3] = origin
+    changed_reference = _reexpress_surface_view(reference, frame)
+    changed = multiview_surface._support_consistency_audit(
+        changed_reference, _reexpress_surface_view(moving, frame),
+        frame.dot(correction).dot(np.linalg.inv(frame)), changed_reference.points_base)
+    np.testing.assert_allclose(changed.anchor_base,
+        frame[:3, :3].dot(baseline.anchor_base) + frame[:3, 3], atol=2e-11, rtol=0.)
+    for name in ('raw_normal_angle_deg', 'transformed_normal_angle_deg',
+                 'raw_plane_separation_m', 'transformed_plane_separation_m',
+                 'raw_maximum_footprint_separation_m',
+                 'transformed_maximum_footprint_separation_m'):
+        assert getattr(changed, name) == pytest.approx(getattr(baseline, name), abs=2e-11)
+
+
+def test_support_audit_maximum_exposes_planes_crossing_at_local_centroid():
+    points = np.asarray([(x, y, .04) for x in (-.03, .03) for y in (-.02, .02)])
+    reference = view(points, 100)
+    angle = np.deg2rad(2.)
+    moving = view(points, 200, normal=(np.sin(angle), 0., np.cos(angle)))
+    audit = multiview_surface._support_consistency_audit(reference, moving, np.eye(4), points)
+    np.testing.assert_allclose(audit.anchor_base, [0., 0., 0.], atol=1e-12)
+    assert audit.raw_plane_separation_m == pytest.approx(0., abs=1e-12)
+    assert audit.raw_maximum_footprint_separation_m == pytest.approx(.03 * np.sin(angle))
+    assert audit.transformed_maximum_footprint_separation_m == audit.raw_maximum_footprint_separation_m
+    # Unmatched target tails/newly visible sides cannot alter this footprint.
+    larger_view = dataclasses.replace(reference, points_base=np.vstack((points, [1., 2., 3.])))
+    assert multiview_surface._support_consistency_audit(
+        larger_view, moving, np.eye(4), points) == audit
+
+
+def test_support_audit_normalizes_plane_equations_and_parallel_angle():
+    points = np.asarray([[-.03, -.02, .09], [.04, -.01, .08], [.02, .05, .09]])
+    normal = np.asarray([-.22655837913202842, .19995903251431088, .9532511139049401])
+    reference = view(points, 100, normal=normal, offset=-.05)
+    moving = view(points, 200, normal=normal, offset=-.05)
+    baseline = multiview_surface._support_consistency_audit(
+        reference, moving, np.eye(4), points)
+    assert baseline.raw_normal_angle_deg == 0.
+    assert baseline.transformed_normal_angle_deg == 0.
+    # SurfaceView permits small normalization roundoff. Equivalent plane
+    # equations must scale both their normal and offset before distances.
+    scaled = dataclasses.replace(moving,
+        support_normal_base=normal * (1. + 5e-7), support_offset_m=-.05 * (1. + 5e-7))
+    audit = multiview_surface._support_consistency_audit(
+        reference, scaled, np.eye(4), points)
+    assert audit.raw_plane_separation_m == pytest.approx(0., abs=1e-16)
+    assert audit.raw_maximum_footprint_separation_m == pytest.approx(0., abs=1e-16)
+    assert audit.raw_normal_angle_deg == pytest.approx(0., abs=1e-12)
+    assert audit.transformed_plane_separation_m == audit.raw_plane_separation_m
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_support_audit_keeps_raw_four_millimeter_acceptance_boundary(outside):
+    reference, moving = registered_pair()
+    offset = np.nextafter(.004, np.inf) if outside else .004
+    moving = dataclasses.replace(moving, support_offset_m=offset)
+    result = register_surface_view(reference, moving)
+    assert result.support_plane_separation_m == offset
+    assert result.ok is (not outside)
+    if outside:
+        assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+        assert result.support_consistency_audit is None
+    else:
+        assert result.support_consistency_audit.raw_plane_separation_m == offset
