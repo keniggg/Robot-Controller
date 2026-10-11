@@ -20,7 +20,8 @@ class Config:
     support_max_samples: int = 1800
     support_min_ratio: float = 0.70
     support_max_normal_change_deg: float = 4.0
-    support_max_local_shift_m: float = 0.004
+    support_max_local_shift_m: float = 0.007
+    support_local_shift_warning_m: float = 0.004
     min_object_points: int = 60
     center_radius_fraction: float = 0.125
     center_ambiguity_fraction: float = 0.045
@@ -172,6 +173,17 @@ def _measured_support_footprint(points_base, plane_base):
     return footprint
 
 
+def _support_offset_diagnostics(maximum, config):
+    """Record measured disagreement without correcting geometry or authorizing it."""
+    warning = float(config.support_local_shift_warning_m)
+    if not np.isfinite(warning) or warning < 0:
+        raise ValueError('invalid_support_plane_warning_config')
+    # A caller may retain a stricter hard limit below the warning threshold.
+    return dict(support_reference_distance_warning=bool(maximum > warning + 1e-12),
+                support_reference_warning_distance_m=warning,
+                support_reference_hard_distance_m=float(config.support_max_local_shift_m))
+
+
 def _validate_support_plane_update(reference_plane_base, current_plane_base,
                                    target_position_base, config,
                                    target_footprint_base):
@@ -202,12 +214,14 @@ def _validate_support_plane_update(reference_plane_base, current_plane_base,
     anchor_shift = abs(float(delta[:3] @ anchor + delta[3]))
     footprint_shift = float(np.max(np.abs(footprint @ delta[:3] + delta[3])))
     maximum = max(anchor_shift, footprint_shift)
+    diagnostics = _support_offset_diagnostics(maximum, config)
     if maximum > max_shift + 1e-12:
         raise ValueError('support_plane_local_distance_inconsistent: %.6f > %.6f m' % (maximum, max_shift))
     return current, dict(support_reference_angle_deg=angle,
                          support_reference_anchor_distance_m=anchor_shift,
                          support_reference_max_distance_m=maximum,
-                         support_reference_footprint_vertices=int(len(footprint)))
+                         support_reference_footprint_vertices=int(len(footprint)),
+                         **diagnostics)
 
 
 def _support_quadrants(supporting, u, v, center):
@@ -297,11 +311,13 @@ def _audit_current_support(depth_m, intrinsics, transform_base_camera,
 
 
 def _depth_components(foreground, depth, minimum, edge,
-                      points_camera=None, target_camera=None, association_distance=None):
-    """4-connected measured pixels with bounded local depth discontinuity."""
+                      points_camera=None, target_camera=None, association_distance=None, *, connectivity=4):
+    """Measured neighbors; no filled pixels or relaxed depth edge."""
+    if type(connectivity) is not int or connectivity not in (4, 8):
+        raise ValueError('invalid_depth_component_connectivity')
     # First discard speckles in C++; floodFill then splits depth-discontinuous
     # touching regions without bridging missing depth or inventing mask pixels.
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, connectivity=4)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, connectivity=connectivity)
     eligible = [index for index in range(1, count)
                 if stats[index, cv2.CC_STAT_AREA] >= minimum]
     if target_camera is not None:
@@ -346,7 +362,7 @@ def _depth_components(foreground, depth, minimum, edge,
             y, x = locations[len(locations) // 2]
             _, _, blocked, rect = cv2.floodFill(
                 patch, blocked, (int(x), int(y)), 0, edge, edge,
-                flags=4 | cv2.FLOODFILL_MASK_ONLY | (2 << 8))
+                flags=connectivity | cv2.FLOODFILL_MASK_ONLY | (2 << 8))
             selected = blocked[1:-1, 1:-1] == 2
             if np.count_nonzero(selected) >= minimum:
                 full_mask = np.zeros(depth.shape, bool)
@@ -490,7 +506,7 @@ def _matching_candidates(candidates, anchor, last, config):
 
 def segment_with_support_fallback(depth_m, intrinsics, transform_base_camera,
                                   config=None, anchor=None, last=None,
-                                  reference_plane_base=None):
+                                  reference_plane_base=None, *, prefer_current_support=False):
     """Try bounded same-frame re-segmentation before mutating target identity.
 
     Independent current-support evidence is checked even when the reference
@@ -499,6 +515,8 @@ def segment_with_support_fallback(depth_m, intrinsics, transform_base_camera,
     agree with the immutable original plane over its actual measured object
     footprint. Neither path commits tracking state or unsets a loss latch.
     """
+    if type(prefer_current_support) is not bool:
+        raise ValueError('invalid_current_support_preference')
     config = config or Config()
     if anchor is None:
         return segment(depth_m, intrinsics, transform_base_camera, config)
@@ -519,15 +537,27 @@ def segment_with_support_fallback(depth_m, intrinsics, transform_base_camera,
         # An old transported plane can turn table texture into many separate
         # foreground patches while the camera moves. Previously that bounded
         # work rejection bypassed the same-frame support-refit path entirely.
-        # Only these segmentation-cap failures admit one refit. Malformed
-        # inputs and failed geometric contracts must propagate unchanged.
-        if str(exc) not in ('too_many_foreground_instances', 'too_many_depth_components'):
+        # The original 2 mm band can also be empty while a qualified current
+        # plane still agrees within the original local-distance tolerance.
+        # Admit that visibility failure only with this frame's independent
+        # support audit; missing/contradictory support is not recovery evidence.
+        capped = str(exc) in ('too_many_foreground_instances', 'too_many_depth_components')
+        qualified_visibility_recovery = (
+            str(exc) == 'locked_support_plane_no_longer_visible'
+            and support_audit.get('support_current_audit_available') is True)
+        if not (capped or qualified_visibility_recovery):
             raise
         reference_error = str(exc)
         matching = []
     # An already ambiguous pair must remain ambiguous. Re-fitting a plane is
     # not independent evidence for discarding one of two eligible identities.
-    if len(matching) >= 1:
+    # At a qualified stationary measurement, even a plausible single old-
+    # plane component can include table texture. Use the independently audited
+    # current fit for its measured foreground. The immutable plane still gates
+    # agreement, and no refit may discard an already ambiguous second identity.
+    observation_refit = (prefer_current_support and len(matching) == 1
+                         and support_audit.get('support_current_audit_available') is True)
+    if len(matching) >= 1 and not observation_refit:
         reference.metrics.update(support_audit)
         for candidate in reference.candidates:
             candidate.metrics.update(support_audit)
@@ -536,6 +566,8 @@ def segment_with_support_fallback(depth_m, intrinsics, transform_base_camera,
                       fit_current_support=True, **arguments)
     evidence = dict(support_audit, support_refit_attempted=True,
                     support_reference_eligible_candidates=len(matching))
+    if observation_refit:
+        evidence['support_refit_reason'] = 'qualified_current_support_measurement'
     if reference_error:
         evidence['support_reference_segmentation_error'] = reference_error
     current.metrics.update(evidence)

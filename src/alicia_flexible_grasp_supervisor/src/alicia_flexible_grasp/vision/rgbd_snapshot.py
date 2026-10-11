@@ -1,5 +1,6 @@
 from copy import deepcopy
 from dataclasses import dataclass
+import hashlib
 import threading
 import time
 
@@ -104,11 +105,13 @@ class SnapshotResult:
     target_identity: TargetTrackIdentity = None
     sample_stamp_ns: tuple = ()
     original_sample: FrozenRgbdSample = None
+    sample_mask_sha256: tuple = ()
 
     def __post_init__(self):
         for name in ('color_bgr', 'depth_raw', 'target_depth_raw', 'object_mask'):
             object.__setattr__(self, name, _readonly_copy(getattr(self, name)))
         object.__setattr__(self, 'bbox', tuple(self.bbox or ()))
+        object.__setattr__(self, 'sample_mask_sha256', tuple(self.sample_mask_sha256 or ()))
         if self.target_identity is not None:
             validate_target_identity(self.target_identity)
             if self.target_identity.epoch != self.target_epoch:
@@ -516,6 +519,11 @@ def fuse_stable_samples(
         # receive-age limit a second time and can lose valid source evidence.
         original_sample=FrozenRgbdSample(**{
             name: getattr(latest, name) for name in RgbdSample.__dataclass_fields__}),
+        # Bind historical masks to the actual fusion inputs without retaining
+        # another image copy or changing any admission/fusion/expiry rule.
+        sample_mask_sha256=tuple(hashlib.sha256(np.ascontiguousarray(
+            np.asarray(item.object_mask) > 0, dtype=np.uint8).tobytes()).hexdigest()
+            for item in samples) if require_mask else (),
     )
 
 

@@ -255,9 +255,9 @@ class TabletopTests(unittest.TestCase):
         tracker = TargetTracker()
         anchor, _ = tracker.choose(segment(depth, self.intrinsics, transform), depth.shape)
         plane = tracker.plane_base.copy()
-        shifted = depth + .006
+        shifted = depth + .008
         # Four remote old-plane patches let the frozen segmentation retain a
-        # plausible motor, while the actual raw target ring moved by 6 mm.
+        # plausible motor, while the actual raw target ring moved beyond 7 mm.
         shifted[:10, :10] = shifted[:10, -10:] = .30
         shifted[-10:, :10] = shifted[-10:, -10:] = .30
         legacy = segment(shifted, self.intrinsics, transform, tracker.config,
@@ -367,7 +367,7 @@ class TabletopTests(unittest.TestCase):
             return segment(*args, **kwargs)
         with patch('alicia_grasp_modes.tabletop.segment', side_effect=capped):
             with self.assertRaisesRegex(ValueError, 'support_plane_local_distance_inconsistent'):
-                segment_with_support_fallback(depth + .005, self.intrinsics, transform,
+                segment_with_support_fallback(depth + .008, self.intrinsics, transform,
                     tracker.config, anchor, anchor, tracker.plane_base)
         self.assertIs(tracker.last, anchor)
 

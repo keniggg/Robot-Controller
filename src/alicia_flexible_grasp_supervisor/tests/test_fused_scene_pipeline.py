@@ -5,6 +5,7 @@ binding, registration, inverse frame mapping, enclosure and ROS serialization
 run their production implementations; no services or worker threads start.
 """
 from dataclasses import replace
+from copy import deepcopy
 import io
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -23,6 +24,7 @@ remote = streaming.remote_node
 def node(monkeypatch):
     result = streaming.streaming_node(start_worker=False)
     streaming.seed_measured_reference_surface(result)
+    monkeypatch.setattr(remote.rospy.Time, 'now', lambda: remote.rospy.Time(20, 500_000_000))
     monkeypatch.setattr(result, '_snapshot_base_optical_transform', lambda *_: np.eye(4))
     monkeypatch.setattr(result, '_camera_intrinsics', lambda: SimpleNamespace(depth_scale=.001))
     yield result
@@ -105,7 +107,8 @@ def test_registered_historical_surface_expands_actual_returned_scene(
     np.testing.assert_array_equal(old_surface.points_base, old_points)
     if yaw:
         assert not np.allclose(snapshot_surface.points_base, node._near_field_fused_surface.points_base)
-    np.testing.assert_array_equal(prepared.center_base, original.center_base)
+    assert abs(float((prepared.center_base-original.center_base) @ original.support_normal_base)) < 1e-12
+    np.testing.assert_array_equal(node._latest_target_observation.points_base, original.object_points_base)
     np.testing.assert_array_equal(prepared.axes_base, original.axes_base)
     assert prepared.support_offset_m == original.support_offset_m
     assert prepared.size_xyz_m[2] > .050
@@ -151,7 +154,8 @@ def test_rejected_registration_cannot_enclose_or_reuse_previous_view_geometry(
         (prepared, _, _), _ = run_prepare(node, monkeypatch, current_top_geometry())
         assert prepared.ok and node._latest_fused_scene_audit['expanded']
     original_surface = node._near_field_fused_surface
-    original = replace(current_top_geometry(), support_offset_m=.005)
+    original = replace(current_top_geometry(), support_offset_m=(
+        node.multiview_registration_config.maximum_support_offset_delta_m + .00001))
     snapshot = exact_snapshot(node, 20_200_000_000)
     enclosure = Mock(wraps=remote.enclose_registered_surface)
     monkeypatch.setattr(remote, 'enclose_registered_surface', enclosure)
@@ -231,3 +235,52 @@ def test_initial_single_view_keeps_original_scene_without_enclosure(node, monkey
     assert prepared is original
     enclosure.assert_not_called()
     assert node._latest_fused_scene_audit is None
+
+
+def test_recentered_scene_keeps_raw_registration_and_binds_new_center_through_wire_and_plan(node, monkeypatch):
+    from geometry_msgs.msg import PoseStamped
+    from alicia_flexible_grasp.grasp.rich_plan_integrity import compute_plan_id, plan_id_matches_content
+    from alicia_flexible_grasp.robot.observation_path_guard import FrozenObservationScene, wire_digest
+    original = current_top_geometry()
+    original = replace(original, center_base=original.center_base + [.007, .004, 0.])
+    (prepared, _, _), snapshot = run_prepare(node, monkeypatch, original)
+    assert prepared.ok
+    assert np.linalg.norm(prepared.center_base - original.center_base) > .001
+    observation = node._latest_target_observation
+    assert observation.identity == snapshot.target_identity
+    assert observation.stamp_ns == snapshot.stamp_ns
+    np.testing.assert_array_equal(observation.points_base, original.object_points_base)
+    assert node._latest_registration_evidence.stamp_ns == snapshot.stamp_ns
+    assert node._latest_registration_evidence.result.ok
+    message = remote.geometry_estimate_to_message(prepared, snapshot=snapshot,
+        stamp=remote.rospy.Time(*divmod(snapshot.stamp_ns, 10**9)))
+    stamped = PoseStamped()
+    stamped.header = deepcopy(message.header)
+    stamped.pose.orientation.w = 1.
+    stamped.pose.position.z = .20
+    sequence = SimpleNamespace(**{name: deepcopy(stamped)
+        for name in ('pregrasp', 'approach', 'grasp', 'lift')})
+    candidate = SimpleNamespace(score=.9, candidate_source='tabletop_geometry',
+        source_lineage=('tabletop_geometry',), model_width_m=None,
+        required_open_width_m=.044, grasp_sequence=sequence)
+    plan = remote.build_rich_plan(candidate, message, message.header, 'unknown_tabletop')
+    plan.diagnostic = 'CONTACT_EXECUTION_PLAN'
+    plan.plan_id = compute_plan_id(plan)
+    wire = io.BytesIO()
+    plan.serialize(wire)
+    decoded = remote.Grasp6DPlan().deserialize(wire.getvalue())
+    assert plan_id_matches_content(decoded)
+    scene = FrozenObservationScene.from_contact_plan(decoded)
+    np.testing.assert_allclose(scene.center, prepared.center_base, atol=1e-15)
+    np.testing.assert_allclose(scene.size, prepared.size_xyz_m, atol=1e-15)
+    assert scene.track_id == observation.identity.track_id
+    assert scene.source_ns == observation.stamp_ns
+    assert scene.geometry_digest == wire_digest(decoded.object_geometry)
+    # Reusing an old center with a new geometry/plan digest is rejected.
+    stale = deepcopy(decoded)
+    for axis, value in zip(('x', 'y', 'z'), original.center_base):
+        setattr(stale.object_geometry.pose_base.position, axis, value)
+    assert not plan_id_matches_content(stale)
+    assert compute_plan_id(stale) != decoded.plan_id
+    with pytest.raises(ValueError):
+        FrozenObservationScene.from_contact_plan(stale)

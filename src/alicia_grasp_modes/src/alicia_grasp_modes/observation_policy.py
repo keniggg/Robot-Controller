@@ -5,6 +5,7 @@ measured visibility, CAD, tracking, IK and final execution gates still apply.
 Carton and current-view direct planning retain their original configuration.
 """
 
+from alicia_flexible_grasp.robot.observation_view_limits import MINIMUM_OBSERVATION_IMAGE_MARGIN_PX
 from alicia_flexible_grasp.robot.observation_view_limits import effective_observation_view_limits
 
 WORKING_VOLUME_POLICY = 'rgbd_working_volume_v1'
@@ -25,7 +26,7 @@ def observation_config(config, selection):
 
 def observation_distance_preferences(corners_base, center_base, camera_rotation,
                                      current_camera_position, intrinsics, width, height,
-                                     *, roi_margin_px=36., minimum_depth_m=.070,
+                                     *, roi_margin_px=MINIMUM_OBSERVATION_IMAGE_MARGIN_PX, minimum_depth_m=.070,
                                      maximum_depth_m=.500):
     """Propose at most five centred views from this orientation's full FOV.
 

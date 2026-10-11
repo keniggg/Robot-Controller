@@ -13,11 +13,19 @@ from std_msgs.msg import String
 from alicia_flexible_grasp_supervisor.srv import CompensatePregrasp
 from alicia_flexible_grasp.grasp.grasp_state_machine import GraspStages
 from alicia_flexible_grasp.robot.observation_path_guard import committed_plan_digest
+from alicia_flexible_grasp.grasp.rich_plan_integrity import pose_values
 from alicia_grasp_modes.selection import parse_selection
+from alicia_grasp_modes.contact_search_yield import contact_search_yield_proof_valid
+from alicia_grasp_modes.contact_station_task import ContactStationTaskMixin
 from alicia_grasp_modes.observe_return_session import exact_ns, parse_session, VIEW_FIELDS
 from alicia_grasp_modes.active_observation_policy import observation_budget, evidence_digest, information_gain_valid
+from alicia_grasp_modes.observe_return_measurement import (
+    REQUEST_TOPIC as MEASUREMENT_REQUEST_TOPIC, ACK_TOPIC as MEASUREMENT_ACK_TOPIC,
+    PARTICIPANTS, parse_measurement_request, validate_measurement_ack)
 from alicia_grasp_modes.runner_contract import (observe_return_audit_error, audit_matches_preview,
-                                               unknown_observation_audit_error)
+                                               observed_contact_audit_error,
+                                               unknown_observation_audit_error,
+                                               surface_view_required_search_proof_valid)
 
 
 _EXPERIMENT_MOUNT = '/media/zhuyupei/SanStand'
@@ -33,17 +41,21 @@ def positive_ns(value):
     return value
 
 
-class ObserveReturnTask:
+class ObserveReturnTask(ContactStationTaskMixin):
     def _initialize_observe_return_state(self):
         self._observe_return_condition = threading.Condition(threading.RLock())
         self._observe_return_reports = {}
         self._observe_return_report_references = {}
         self._diagnostic_observation_consumed_sources = set()
         self._observe_return_acks = {}
+        self._observation_measurement_acks = {}
+        self._observation_measurement_request = None
         self._clear_observe_return_attempt()
 
     def _clear_observe_return_attempt(self):
         """Retire one finished attempt without discarding a fresh plan audit."""
+        self._observation_measurement_revoke('task attempt finished')
+        self._contact_station_retired_measurement = None
         with self._observe_return_condition:
             self._observe_return_session = None
             self._observe_return_entry_phase = None
@@ -55,14 +67,379 @@ class ObserveReturnTask:
             self._observe_return_bound_reference = None
             self._diagnostic_observation_sample_reference = None
             self._observe_return_acks.clear()
+            self._observation_measurement_acks.clear()
+            self._observation_measurement_request = None
 
     def _setup_observe_return_io(self):
+        self._setup_contact_station_io()
         self._observe_return_pub = rospy.Publisher(
             '/grasp_mode/observe_return_session', String, queue_size=4, latch=True)
         self._observe_return_ack_sub = rospy.Subscriber(
             '/grasp_mode/observe_return_ack', String, self._observe_return_ack_cb, queue_size=8)
         self._observe_return_audit_sub = rospy.Subscriber(
             '/grasp_6d/gate_audit', String, self._observe_return_audit_cb, queue_size=8)
+        self._observation_measurement_pub = rospy.Publisher(
+            MEASUREMENT_REQUEST_TOPIC, String, queue_size=8, latch=True)
+        self._observation_measurement_sub = rospy.Subscriber(
+            MEASUREMENT_ACK_TOPIC, String, self._observation_measurement_ack_cb, queue_size=16)
+
+    def _observation_measurement_ack_cb(self, msg):
+        try:
+            ack = json.loads(msg.data)
+            if (not isinstance(ack, dict) or ack.get('participant') not in PARTICIPANTS
+                    or not isinstance(ack.get('request_id'), str)):
+                return
+            with self._observe_return_condition:
+                self._observation_measurement_acks[(ack['request_id'], ack['participant'])] = ack
+                while len(self._observation_measurement_acks) > 32:
+                    del self._observation_measurement_acks[next(iter(self._observation_measurement_acks))]
+                self._observe_return_condition.notify_all()
+        except (ValueError, TypeError, AttributeError):
+            return
+
+    def _observation_measurement_scope(self, plan):
+        selection = self._mode_bound_selection or {}
+        session = self._observe_return_session or {}
+        return (selection.get('mode') == 'unknown' and selection.get('strategy') == 'observe_return'
+            and session.get('version') == 2 and session.get('phase') in ('observing', 'returning')
+            and not self._diagnostic_observation_only()
+            and getattr(plan, 'model_choice', '') == 'unknown_tabletop'
+            and getattr(plan, 'diagnostic', '') == 'FAR_FIELD_OBSERVATION_PLAN'
+            and getattr(plan, 'plan_id', None) == session.get('view_plan_id'))
+
+    def _observation_measurement_live(self, request):
+        self._observe_return_live()
+        with self._following_evidence_lock:
+            epoch = self._following_epoch_ns
+        if epoch != request['control_epoch_ns']:
+            raise ValueError('OBSERVATION_MEASUREMENT_CONTROL_EPOCH_CHANGED')
+        session = self._observe_return_session or {}
+        if (session.get('session_id') != request['session_id']
+                or session.get('view_plan_id') != request['view_plan_id']
+                or session.get('target_epoch') != request['target_epoch']
+                or session.get('target_track_id') != request['target_track_id']):
+            raise ValueError('OBSERVATION_MEASUREMENT_SESSION_CHANGED')
+
+    def _observation_measurement_publish(self, request, *, qualified=False):
+        self._observation_measurement_live(request)
+        self._observation_measurement_request = request
+        self._observation_measurement_pub.publish(String(data=json.dumps(request, allow_nan=False)))
+        rospy.loginfo('Observe-return measurement request: %s', json.dumps(request, allow_nan=False))
+        cutoff = request['capture_deadline_ns'] if qualified else request['deadline_ns']
+        remaining = max(0., (cutoff-rospy.Time.now().to_nsec())/1e9)
+        deadline = time.monotonic() + (remaining if qualified else min(5., remaining))
+        while time.monotonic() < deadline:
+            self._observation_measurement_live(request)
+            now = rospy.Time.now().to_nsec()
+            with self._observe_return_condition:
+                acks = [deepcopy(self._observation_measurement_acks.get((request['request_id'], p)))
+                        for p in PARTICIPANTS]
+                if any(ack is None for ack in acks):
+                    self._observe_return_condition.wait(.02)
+                    continue
+            waiting = False
+            for participant, ack in zip(PARTICIPANTS, acks):
+                validate_measurement_ack(ack, request, participant, now)
+                if qualified and ack['qualified'] is not True:
+                    waiting = True
+                elif qualified:
+                    validate_measurement_ack(ack, request, participant, now, require_qualified=True)
+            if waiting:
+                with self._observe_return_condition:
+                    self._observe_return_condition.wait(.02)
+                continue
+            if qualified and acks[0]['source_stamps_ns'] != acks[1]['source_stamps_ns']:
+                raise ValueError('OBSERVATION_MEASUREMENT_SOURCE_ACK_MISMATCH')
+            rospy.loginfo('Observe-return measurement acknowledged: %s', json.dumps(dict(
+                request_id=request['request_id'], state=request['state'], acks=acks), allow_nan=False))
+            return acks
+        raise ValueError('OBSERVATION_MEASUREMENT_ACK_TIMEOUT')
+
+    def _observation_measurement_begin(self, plan, motion_kind='observation'):
+        old = self._observation_measurement_request
+        if old is not None and old['state'] not in ('qualified', 'revoked'):
+            raise ValueError('OBSERVATION_MEASUREMENT_ALREADY_PENDING')
+        session, origin = self._observe_return_session, self._observe_return_origin_proof
+        now = rospy.Time.now().to_nsec()
+        lease = '%s:%s:%d' % (session['session_id'], motion_kind, now)
+        request = dict(version=1, state='executing', lease_id=lease, request_id=lease+':executing',
+            selection=deepcopy(self._mode_bound_selection), session_id=session['session_id'],
+            target_epoch=session['target_epoch'], target_track_id=session['target_track_id'],
+            origin_plan_id=session['origin_plan_id'], origin_snapshot_stamp_ns=session['origin_snapshot_stamp_ns'],
+            view_plan_id=plan.plan_id, view_source_stamp_ns=plan.header.stamp.to_nsec(),
+            view_index=session['view_index'], plan_sha256=committed_plan_digest(plan),
+            control_epoch_ns=positive_ns(origin['epoch_ns']), deadline_ns=session['deadline_ns'],
+            stamp_ns=now, motion_kind=motion_kind, arrival_stamp_ns=0, capture_deadline_ns=0,
+            metric_geometry_authority=False, motion_authorized=False)
+        request = parse_measurement_request(request, self._mode_bound_selection, now)
+        self._observation_measurement_publish(request)
+        return request
+
+    def _observation_measurement_revoke(self, reason):
+        previous = getattr(self, '_observation_measurement_request', None)
+        publisher = getattr(self, '_observation_measurement_pub', None)
+        if previous is None or previous['state'] in ('qualified', 'revoked') or publisher is None:
+            return
+        now = max(rospy.Time.now().to_nsec(), previous['stamp_ns'] + 1)
+        request = dict(previous, state='revoked', stamp_ns=now,
+            request_id=previous['lease_id']+':revoked:'+str(now), reason=str(reason))
+        self._observation_measurement_request = request
+        publisher.publish(String(data=json.dumps(request, allow_nan=False)))
+        rospy.loginfo('Observe-return measurement revoked: %s', json.dumps(request, allow_nan=False))
+
+    def _observation_measurement_finish(self, plan, gcfg):
+        previous = self._observation_measurement_request
+        if previous is None or previous['state'] != 'executing':
+            raise ValueError('OBSERVATION_MEASUREMENT_EXECUTION_RECEIPT_MISSING')
+        self._observation_measurement_live(previous)
+        settled = deepcopy(getattr(self, '_last_motion_settle_sample', None))
+        now = rospy.Time.now().to_nsec()
+        timeout = gcfg.get('unknown_observe_return_requalification_timeout_sec', 3.)
+        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                or not math.isfinite(timeout) or not 0. < timeout <= 10.):
+            raise ValueError('OBSERVATION_MEASUREMENT_CAPTURE_BUDGET_INVALID')
+        deadline = min(previous['deadline_ns'], now + int(timeout*1e9))
+        recovery = previous.get('observation_station_requalification')
+        if recovery is not None:
+            deadline = min(deadline, recovery['deadline_ns'])
+        request = dict(previous, state='requalifying', request_id=previous['lease_id']+':requalifying',
+            stamp_ns=now, arrival_stamp_ns=now, capture_deadline_ns=deadline, settle=settled)
+        request = parse_measurement_request(request, self._mode_bound_selection, now, previous)
+        acks = self._observation_measurement_publish(request, qualified=True)
+        sources = acks[0]['source_stamps_ns']
+        # Topic callbacks can arrive after the participant ACK. Wait for the
+        # actual source-bound object; an ACK never stands in for geometry.
+        wall_deadline = time.monotonic() + max(0., (deadline-rospy.Time.now().to_nsec())/1e9)
+        while rospy.Time.now().to_nsec() < deadline and time.monotonic() < wall_deadline:
+            self._observation_measurement_live(request)
+            with self._grasp6d_plan_guard():
+                obj = deepcopy(getattr(self, 'latest_obj', None))
+            if (obj is not None and getattr(obj, 'detected', False)
+                    and self._object_source_stamp(obj).to_nsec() == sources[-1]
+                    and self._observed_target_matches_plan(plan, obj, gcfg)):
+                break
+            with self._observe_return_condition:
+                self._observe_return_condition.wait(.02)
+        else:
+            raise ValueError('OBSERVATION_MEASUREMENT_TASK_SOURCE_MISSING')
+        now = rospy.Time.now().to_nsec()
+        done = dict(request, state='qualified', request_id=previous['lease_id']+':qualified',
+            stamp_ns=now, source_stamps_ns=sources)
+        done = parse_measurement_request(done, self._mode_bound_selection, now, request)
+        self._observation_measurement_publish(done)
+
+    def _compensate_observation_before_measurement(self, plan, gcfg):
+        """Keep any checked correction inside the existing executing lease.
+
+        The gateway owns command compensation. Only fresh observations after
+        its final settle may qualify the station; its receipt is not RGB or
+        target-identity evidence and never renews the task deadline.
+        """
+        enabled = gcfg.get('observation_endpoint_compensation_enabled', False)
+        if type(enabled) is not bool:
+            raise ValueError('OBSERVATION_COMPENSATION_CONFIG_INVALID')
+        if not enabled:
+            return
+        session = self._observe_return_session or {}
+        if session.get('phase') != 'observing':
+            return
+        previous = deepcopy(self._observation_measurement_request)
+        if (not self._observation_measurement_scope(plan)
+                or not isinstance(previous, dict)
+                or previous.get('state') != 'executing'
+                or previous.get('motion_kind') != 'observation'):
+            raise ValueError('OBSERVATION_COMPENSATION_EXECUTION_CONTEXT_MISSING')
+        self._observation_measurement_live(previous)
+        started = rospy.Time.now().to_nsec()
+        self.set_state(GraspStages.MOVE_PREGRASP, 'correcting observation endpoint')
+        name = '/supervisor/compensate_observation_endpoint'
+        rospy.wait_for_service(name, timeout=2.)
+        service = rospy.ServiceProxy(name, CompensatePregrasp)
+        validation, response = self._invoke_observation_compensation_action(
+            plan, gcfg,
+            lambda: service(deepcopy(plan), True), expected_request=previous)
+        if not validation.ok:
+            raise ValueError(validation.code + ': ' + validation.reason)
+        if not response.success:
+            raise ValueError('OBSERVATION_COMPENSATION_FAILED: ' + response.message)
+        report = json.loads(response.message)
+        now = rospy.Time.now().to_nsec()
+        self._observation_measurement_live(previous)
+        if (self._observation_measurement_request != previous
+                or report.get('code') != 'OBSERVATION_ENDPOINT_READY'
+                or report.get('plan_id') != plan.plan_id
+                or report.get('plan_digest') != committed_plan_digest(plan)
+                or report.get('fixed_goal_pose') != list(pose_values(plan.poses[0]))
+                or any(report.get(key) != previous[key] for key in
+                    ('control_epoch_ns', 'session_id', 'lease_id', 'view_index'))
+                or type(report.get('physical_motion_submitted')) is not bool
+                or report.get('real_grasp_success') is not False
+                or not isinstance(report.get('view_audit'), dict)
+                or not started <= positive_ns(report['completion_stamp_ns']) <= now
+                or not previous['control_epoch_ns'] <= positive_ns(report['accepted_stamp_ns']) <= now
+                or now - positive_ns(report['accepted_stamp_ns']) > 500_000_000
+                or now >= previous['deadline_ns']):
+            raise ValueError('OBSERVATION_COMPENSATION_RECEIPT_INVALID')
+        if report['physical_motion_submitted']:
+            if (positive_ns(report['accepted_stamp_ns']) <= positive_ns(report['completion_stamp_ns'])
+                    or self._wait_for_motion_settle('observation endpoint compensation') is not True):
+                raise ValueError('OBSERVATION_COMPENSATION_POST_MOTION_SETTLE_MISSING')
+            settled = self._last_motion_settle_sample
+            if (not isinstance(settled, dict)
+                    or settled.get('epoch_ns') != previous['control_epoch_ns']
+                    or positive_ns(settled['stationary_window_start_ns']) <= positive_ns(report['completion_stamp_ns'])):
+                raise ValueError('OBSERVATION_COMPENSATION_POST_MOTION_SETTLE_MISSING')
+        self._observation_measurement_live(previous)
+        self._last_observation_endpoint_compensation_report = deepcopy(report)
+        rospy.loginfo('Observation endpoint compensation completed: %s', response.message)
+
+    def _observation_compensation_action_context(self, plan):
+        """Bind the already executing observation, never a new observation lease."""
+        now = rospy.Time.now().to_nsec()
+        request = deepcopy(self._observation_measurement_request)
+        parsed = parse_measurement_request(request, self._mode_bound_selection, now)
+        self._observation_measurement_live(parsed)
+        session = deepcopy(self._observe_return_session)
+        origin = deepcopy(self._observe_return_origin_proof)
+        origin_plan = self._observe_return_origin_plan
+        active_plan = self._observe_return_active_view_plan
+        settled = deepcopy(getattr(self, '_last_motion_settle_sample', None))
+        if (not self._observation_measurement_scope(plan)
+                or session.get('phase') != 'observing'
+                or parse_selection(session.get('selection')) != parsed['selection']
+                or parsed['state'] != 'executing' or parsed['motion_kind'] != 'observation'
+                or self.stage != GraspStages.MOVE_PREGRASP
+                or self._last_state_message != 'correcting observation endpoint'
+                or parsed['view_plan_id'] != plan.plan_id
+                or parsed['view_source_stamp_ns'] != plan.header.stamp.to_nsec()
+                or parsed['plan_sha256'] != committed_plan_digest(plan)
+                or committed_plan_digest(active_plan) != parsed['plan_sha256']
+                or origin_plan.plan_id != parsed['origin_plan_id']
+                or origin_plan.header.stamp.to_nsec() != parsed['origin_snapshot_stamp_ns']
+                or not self._observe_return_origin_valid(origin, origin_plan, parsed['stamp_ns'])
+                or origin['plan_digest'] != committed_plan_digest(origin_plan)
+                or origin['plan_id'] != origin_plan.plan_id
+                or origin['session_id'] != parsed['session_id']
+                or origin['target_track_id'] != parsed['target_track_id']
+                or positive_ns(origin['epoch_ns']) != parsed['control_epoch_ns']
+                or any(parsed[k] != session.get(k) for k in
+                    ('session_id', 'target_epoch', 'target_track_id', 'origin_plan_id', 'view_plan_id'))
+                or any(parsed[k] != positive_ns(session.get(k)) for k in
+                    ('origin_snapshot_stamp_ns', 'view_source_stamp_ns', 'view_index', 'deadline_ns'))
+                or not isinstance(settled, dict)
+                or settled.get('epoch_ns') != parsed['control_epoch_ns']
+                or not parsed['stamp_ns'] < positive_ns(settled['stationary_window_start_ns'])
+                    < positive_ns(settled['stationary_window_end_ns']) <= now):
+            raise ValueError('OBSERVATION_COMPENSATION_ACTION_BINDING_INVALID')
+        return dict(request=request, session=session, origin=origin,
+                    origin_digest=committed_plan_digest(origin_plan),
+                    plan_digest=parsed['plan_sha256'], settled=settled)
+
+    def _invoke_observation_compensation_action(self, plan, gcfg, action, *, expected_request):
+        # The normal base action gate still owns frozen plan integrity, manual
+        # control, cancellation, identity, geometry and drift. Only its age
+        # check knows this one in-flight observation has yet to requalify RGB-D.
+        with self._grasp6d_plan_guard():
+            if self._observation_measurement_request != expected_request:
+                raise ValueError('OBSERVATION_COMPENSATION_ACTION_LEASE_CHANGED')
+            if getattr(self, '_observation_compensation_action_scope', None) is not None:
+                raise ValueError('OBSERVATION_COMPENSATION_ACTION_ALREADY_ACTIVE')
+            context = self._observation_compensation_action_context(plan)
+            self._observation_compensation_action_scope = context
+            try:
+                result, response = self._invoke_plan_bound_action(plan, gcfg,
+                    'measured observation endpoint compensation', action)
+                if result.ok:
+                    if self._observation_compensation_action_context(plan) != context:
+                        raise ValueError('OBSERVATION_COMPENSATION_ACTION_CONTEXT_CHANGED')
+                    result = self._validate_bound_plan_locked(plan, gcfg)
+                return result, response
+            finally:
+                self._observation_compensation_action_scope = None
+
+    def _bound_observation_age_allowed(self, plan, gcfg, observation_age):
+        context = getattr(self, '_observation_compensation_action_scope', None)
+        if context is None:
+            return super()._bound_observation_age_allowed(plan, gcfg, observation_age)
+        try:
+            if (not math.isfinite(observation_age) or observation_age < 0.
+                    or gcfg.get('observation_endpoint_compensation_enabled') is not True
+                    or self._observation_compensation_action_context(plan) != context):
+                return False
+            request = context['request']
+            # Retained historical object must have been fresh when this exact
+            # view began. No new/future/missing source gains an age exemption.
+            source = positive_ns(self.latest_obj_time.to_nsec())
+            observed = self.latest_obj
+            if (source != positive_ns(self._object_source_stamp(observed).to_nsec())
+                    or source != positive_ns(observed.pose_base.header.stamp.to_nsec())
+                    or not request['view_source_stamp_ns'] <= source <= request['stamp_ns']
+                    or not 0. <= (request['stamp_ns']-source)*1e-9
+                        <= self._configured_target_observation_validity(gcfg)):
+                return False
+            return True
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            return False
+
+    def _wrap_pose_submission_executor(self, stage, plan, gcfg, executor):
+        # The base chooses its stage-specific service first. Wrap that final
+        # executor, so a later service selection cannot erase this handshake.
+        if not self._contact_station_scope(plan, stage):
+            return executor
+        if not callable(executor):
+            raise ValueError('CONTACT_STATION_STRICT_EXECUTOR_MISSING')
+        def submit(pose, execute):
+            if execute is not True:
+                raise ValueError('CONTACT_STATION_SUBMISSION_REQUIRES_EXECUTE')
+            self._contact_station_before_submit(plan, gcfg)
+            return executor(pose, execute)
+        return submit
+
+    def _plan_and_execute_pose(self, stage, label, pose, move_pose, settle_reason,
+                              execution_plan_id=None, execution_plan=None, gcfg=None,
+                              execute_pose=None, allow_post_failure_observation_validation=False):
+        """Wrap only the already validated strict submission of an ordinary view."""
+        scoped = self._observation_measurement_scope(execution_plan)
+        contact_station = self._contact_station_scope(execution_plan, stage)
+        submitted = [False]
+        original_execute = execute_pose
+        if scoped:
+            if not callable(original_execute):
+                self.set_state(GraspStages.FAILED, 'OBSERVATION_MEASUREMENT_STRICT_EXECUTOR_MISSING')
+                return False
+            def execute_pose(*args, **kwargs):
+                self._observation_measurement_begin(execution_plan)
+                # The dual acknowledgement is asynchronous. Re-run the SAME
+                # original gate before the physical call, without age waivers.
+                validation = self._validate_bound_plan_locked(execution_plan, gcfg or {})
+                if not validation.ok:
+                    raise ValueError(validation.code + ': ' + validation.reason)
+                submitted[0] = True
+                response = original_execute(*args, **kwargs)
+                if not bool(getattr(response, 'success', False)):
+                    self._observation_measurement_revoke('strict execution failed')
+                return response
+        try:
+            result = super()._plan_and_execute_pose(stage, label, pose, move_pose, settle_reason,
+                execution_plan_id=execution_plan_id, execution_plan=execution_plan, gcfg=gcfg,
+                execute_pose=execute_pose,
+                allow_post_failure_observation_validation=allow_post_failure_observation_validation)
+            if scoped and submitted[0]:
+                if not result:
+                    self._observation_measurement_revoke('motion or original endpoint gate failed')
+                else:
+                    self._compensate_observation_before_measurement(execution_plan, gcfg or {})
+                    self._observation_measurement_finish(execution_plan, gcfg or {})
+            return result
+        except Exception as exc:
+            if contact_station:
+                self.set_state(GraspStages.FAILED, 'CONTACT_STATION_HANDOFF_FAILED: ' + str(exc))
+                return False
+            if not scoped:
+                raise
+            self._observation_measurement_revoke(str(exc))
+            self.set_state(GraspStages.FAILED, 'OBSERVATION_MEASUREMENT_FAILED: ' + str(exc))
+            return False
 
     def _observe_return_audit_cb(self, msg):
         try:
@@ -112,7 +489,7 @@ class ObserveReturnTask:
         if session is not None and rospy.Time.now().to_nsec() >= positive_ns(session['deadline_ns']):
             raise ValueError('OBSERVE_RETURN_SESSION_EXPIRED')
 
-    def _observe_return_report(self, plan, allow_returned=False):
+    def _observe_return_report(self, plan, allow_returned=False, *, observed_contact=False):
         deadline = time.monotonic() + 3.
         while time.monotonic() < deadline:
             self._observe_return_live()
@@ -123,7 +500,21 @@ class ObserveReturnTask:
                     continue
             if parse_selection(report.get('grasp_mode_selection')) != self._mode_bound_selection:
                 raise ValueError('OBSERVE_RETURN_AUDIT_SELECTION_CHANGED')
-            reason = observe_return_audit_error(report, allow_returned=allow_returned)
+            if observed_contact:
+                measurement = getattr(self, '_observation_measurement_request', None)
+                self._observation_measurement_live(measurement)
+                phase = getattr(self, '_published_near_field_phase', None)
+                if (not getattr(self, '_near_field_active', False)
+                        or phase is None or phase.phase_id != getattr(self, '_near_field_phase_id', None)
+                        or phase.deadline.to_nsec() != rospy.Time.from_sec(
+                            self._near_field_phase_deadline_sec).to_nsec()):
+                    raise ValueError('OBSERVE_RETURN_CONTACT_PHASE_CHANGED')
+                reason = observed_contact_audit_error(report,
+                    session=self._observe_return_session,
+                    reached_phase=phase,
+                    measurement=measurement, now_ns=rospy.Time.now().to_nsec())
+            else:
+                reason = observe_return_audit_error(report, allow_returned=allow_returned)
             if reason:
                 raise ValueError('OBSERVE_RETURN_AUDIT_INVALID: ' + reason)
             if (report['observe_return']['target_track_id'] != plan.target_track_id
@@ -182,8 +573,16 @@ class ObserveReturnTask:
             # Waits must remain outside the callback lock. Recheck the active
             # view at the actual return submission, while the gateway retains
             # the immutable origin plan as its return destination.
+            def submit_return():
+                if (name == '/supervisor/return_observe_return_origin'
+                        and self._observation_measurement_scope(bound_plan)):
+                    self._observation_measurement_begin(bound_plan, 'return')
+                    validation = self._validate_bound_plan_locked(bound_plan, gcfg or {})
+                    if not validation.ok:
+                        raise ValueError(validation.code + ': ' + validation.reason)
+                return call(plan, True)
             validation, response = self._invoke_plan_bound_action(bound_plan, gcfg,
-                'observe-return origin submission', lambda: call(plan, True))
+                'observe-return origin submission', submit_return)
             if not validation.ok:
                 raise ValueError(validation.code + ': ' + validation.reason)
         if not response.success:
@@ -310,19 +709,31 @@ class ObserveReturnTask:
         gain = metadata['previous_gain']
         failure = metadata['failed_search']
         opportunity = metadata['visual_opportunity']
+        yielded = (contact_search_yield_proof_valid(failure)
+            and opportunity.get('yielded_contact_search') == failure
+            and 'transition_ns' in failure['yield_evidence']
+            and failure['yield_evidence']['transition_ns'] <= rospy.Time.now().to_nsec()
+            and failure['yield_evidence']['original_phase_deadline_ns']
+                <= positive_ns(session['deadline_ns']))
+        completed = (failure['selected'] is False and failure['terminated_early'] is False
+            and failure['reachable_count'] == 0
+            and failure['checked_count'] == failure['shortlist_count']
+            and failure['contact_search_code'] in ('NEAR_FIELD_NO_HARD_SAFE_CANDIDATE',
+                'NEAR_FIELD_NO_REACHABLE_CANDIDATE', 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'))
         if (gain['target_epoch'] != session['target_epoch']
                 or gain['target_track_id'] != session['target_track_id']
                 or positive_ns(gain['source_stamp_ns']) <= positive_ns(session['view_source_stamp_ns'])
                 or positive_ns(failure['snapshot_stamp_ns']) < positive_ns(gain['source_stamp_ns'])
                 or failure['target_epoch'] != session['target_epoch']
-                or failure['selected'] is not False or failure['terminated_early'] is not False
-                or failure['reachable_count'] != 0
-                or failure['checked_count'] != failure['shortlist_count']
-                or failure['contact_search_code'] not in ('NEAR_FIELD_NO_HARD_SAFE_CANDIDATE', 'NEAR_FIELD_NO_REACHABLE_CANDIDATE')
+                or not (completed or yielded)
                 or any(opportunity[key] != failure[key] for key in (
                     'request_id', 'generation', 'target_epoch', 'snapshot_stamp_ns', 'contact_search_code'))
                 or opportunity.get('contact_or_motion_authorized') is not False
                 or opportunity.get('policy') != 'current_request_independent_bilateral_view_gap'):
+            raise ValueError('OBSERVE_RETURN_SUPPLEMENTAL_EVIDENCE_INVALID')
+        if (failure['contact_search_code'] == 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'
+                and (not surface_view_required_search_proof_valid(failure)
+                     or opportunity.get('completed_contact_search') != failure)):
             raise ValueError('OBSERVE_RETURN_SUPPLEMENTAL_EVIDENCE_INVALID')
         request_fields = ('session_id', 'view_index', 'previous_view_index', 'origin_plan_id',
             'origin_snapshot_stamp_ns', 'target_epoch', 'target_track_id', 'deadline_ns',
@@ -482,7 +893,7 @@ class ObserveReturnTask:
         if not self._execution_checkpoint(plan, gcfg, label):
             return False
         # Preserve the same-generation loss latch, including the original
-        # 4 mm support-plane contradiction; a later good frame cannot erase it.
+        # Hard support-plane contradiction; a later good frame cannot erase it.
         failure = self._near_field_wait_failure(plan, gcfg)
         if failure is not None:
             self.set_state(GraspStages.FAILED, '%s: %s' % (failure.code, failure.reason))
@@ -640,6 +1051,17 @@ class ObserveReturnTask:
                 raise ValueError('OBSERVE_RETURN_ADDITIONAL_VIEW_REQUIRED')
             if candidate.target_track_id != session['target_track_id']:
                 raise ValueError('OBSERVE_RETURN_TARGET_CHANGED')
+            return_to_origin = gcfg.get('unknown_observe_return_return_to_origin', False)
+            if type(return_to_origin) is not bool:
+                raise ValueError('OBSERVE_RETURN_RETURN_OPTION_MUST_BE_BOOL')
+            if not return_to_origin:
+                # The full four-stage plan was checked from actual reached
+                # state. Continue through the unchanged base freeze/current
+                # source/state checks and strict pregrasp execution.
+                if getattr(candidate, 'refinement_status', '') != 'VALID_3D':
+                    raise ValueError('OBSERVE_RETURN_REGISTERED_CONTACT_REQUIRED')
+                self._observe_return_report(candidate, observed_contact=True)
+                return None
             returning = dict(session, phase='returning', stamp_ns=str(rospy.Time.now().to_nsec()))
             self._observe_return_publish(returning)
             self._observe_return_session = returning
@@ -662,6 +1084,11 @@ class ObserveReturnTask:
             now = rospy.Time.now().to_nsec()
             if not positive_ns(returning['stamp_ns']) < completed < verified <= now:
                 raise ValueError('OBSERVE_RETURN_FRESH_RETURN_PROOF_REQUIRED')
+            if self._observation_measurement_scope(current_plan):
+                if self._wait_for_motion_settle('observe-return measured origin') is not True:
+                    raise ValueError('OBSERVATION_MEASUREMENT_RETURN_NOT_SETTLED')
+                self._observation_measurement_finish(current_plan, gcfg)
+                now = rospy.Time.now().to_nsec()
             budget = float(gcfg.get('near_field_replan_timeout_sec', 90.))
             if not math.isfinite(budget) or not 0. < budget <= 300.:
                 raise ValueError('OBSERVE_RETURN_CONTACT_BUDGET_INVALID')
@@ -680,5 +1107,6 @@ class ObserveReturnTask:
             return dict(retry=True, minimum_stamp_ns=max(verified + 1, now),
                         phase_deadline_sec=contact_deadline/1e9)
         except Exception as exc:
+            self._observation_measurement_revoke(str(exc))
             self.set_state(GraspStages.FAILED, 'OBSERVE_RETURN_FAILED: ' + str(exc))
             return dict(failed=True)

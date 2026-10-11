@@ -146,6 +146,24 @@ def test_raw_cross_view_support_disagreement_is_reported_without_alignment(shift
     assert not result.associated
 
 
+@pytest.mark.parametrize('shift,warning', [(.004, False), (.0058, True), (.007, True)])
+def test_raw_warning_band_keeps_rgb_association_and_original_reference(shift, warning):
+    ref = reference(frame(missing_depth=True))
+    original = np.asarray(ref.volume.support_plane_base).copy()
+    current = frame(STAMP+100_000_000, plane=(0., 0., 1., shift), missing_depth=True)
+    depth = plane_depth(current)
+    depth[region().mask != 0] = np.nan
+    current = replace(current, depth_m=depth)
+    result = associate(ref, current)
+    assert result.associated and result.measured_candidate is None
+    audit = dict(result.support_audit)
+    assert audit['support_reference_distance_warning'] is warning
+    assert audit['support_reference_warning_distance_m'] == .004
+    assert audit['support_reference_hard_distance_m'] == .007
+    np.testing.assert_array_equal(ref.volume.support_plane_base, original)
+    assert audit['support_alignment_applied'] is False
+
+
 def test_support_angle_disagreement_is_not_hidden_by_projection():
     angle = np.deg2rad(5.)
     result = associate(f=frame(STAMP+100_000_000, plane=(np.sin(angle), 0., np.cos(angle), 0.)))
@@ -213,7 +231,7 @@ def test_fixed_domain_keeps_all_original_vertices_separate_from_real_support():
 
 def test_original_ring_edge_disagreement_is_audited_but_local_domain_can_agree():
     ref = reference(frame(missing_depth=True))
-    angle = np.deg2rad(1.)
+    angle = np.deg2rad(2.)
     normal = np.array([np.sin(angle), 0., np.cos(angle)])
     offset = .0028-normal @ ref.support_consistency_domain_base.mean(axis=0)
     current = frame(STAMP+100_000_000, plane=tuple(normal)+(offset,), missing_depth=True)
@@ -224,7 +242,7 @@ def test_original_ring_edge_disagreement_is_audited_but_local_domain_can_agree()
     audit = dict(result.support_audit)
     assert result.associated and result.measured_candidate is None
     assert audit['support_reference_max_distance_m'] < .004
-    assert audit['support_original_ring_max_distance_m'] > .004
+    assert audit['support_original_ring_max_distance_m'] > .007
     assert not audit['support_original_ring_consistent']
     assert 'local_distance_inconsistent' in audit['support_original_ring_rejection']
     assert audit['support_original_domain_covered_vertices'] == 8
@@ -236,7 +254,7 @@ def test_original_ring_edge_disagreement_is_audited_but_local_domain_can_agree()
 
 
 def test_domain_edges_cannot_be_replaced_by_matching_center():
-    reg = region((260, 180, 120, 120))
+    reg = region((230, 180, 180, 120))
     ref = reference(frame(regions=(reg,)), reg)
     angle = np.deg2rad(3.9)
     normal = np.array([np.sin(angle), 0., np.cos(angle)])
@@ -246,7 +264,7 @@ def test_domain_edges_cannot_be_replaced_by_matching_center():
     assert abs(ref.support_consistency_domain_base.mean(axis=0) @ normal+offset) < 1e-12
     result = associate(ref, current, (reg,))
     assert 'support_plane_local_distance_inconsistent' in result.reason
-    assert dict(result.support_audit)['support_reference_max_distance_m'] > .004
+    assert dict(result.support_audit)['support_reference_max_distance_m'] > .007
     assert not result.associated and not result.projected_volume_pixels
 
 

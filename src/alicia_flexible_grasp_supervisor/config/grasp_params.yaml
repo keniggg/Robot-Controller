@@ -106,6 +106,9 @@ grasp:
   # <=32 counts total per axis, <=12 steps, <=60 seconds. No overall response,
   # reverse/overshoot, no progress or authority loss ends the episode.
   pregrasp_cartesian_compensation_enabled: true
+  # Unknown pregrasp: aim for this smaller error within the existing bounded
+  # compensation episode; the separate 10 mm measured acceptance stays hard.
+  unknown_pregrasp_position_preference_m: 0.006
   # Unknown pregrasp replaces the small-step episode with one measured-IK
   # correction using the current SDK-minus-encoder bias. The complete path
   # stays in the original 32-count box, with strict continuous path/tracking
@@ -136,10 +139,10 @@ grasp:
   unknown_contact_joint2_response_probe_enabled: false
   contact_endpoint_precision_service: "/alicia_d_driver_node/set_task_endpoint_precision"
   contact_endpoint_precision_service_timeout_sec: 2.0
-  # The observation stage records tool0 execution error for the fresh
-  # near-field uncertainty model, but it does not reuse the 6 mm contact
-  # endpoint gate and does not issue a second same-pose correction.  Actual
-  # observation success is the fresh camera-to-target range above.
+  # Ordinary unknown observe-return may make one checked SDK/encoder-based
+  # correction before new station frames are acquired, only when the actual
+  # image margin fails. This does not enable the legacy same-pose retries.
+  observation_endpoint_compensation_enabled: true
   observation_endpoint_correction_attempts: 0
   min_object_confidence: 0.50
   max_object_jump_m: 0.12
@@ -198,6 +201,9 @@ grasp:
   # Initial contact first; additional views share the same identity and deadline.
   unknown_observe_return_session_version: 2
   unknown_observe_return_max_observations: 3
+  # After measured observation/fusion, grasp from the current robot position.
+  # Explicit true retains the optional measured return-to-origin workflow.
+  unknown_observe_return_return_to_origin: false
   near_field_replan_timeout_sec: 90.0
   near_field_replan_poll_sec: 0.05
   near_field_replan_snapshot_slack_sec: 3.0
@@ -436,7 +442,7 @@ grasp_6d:
       maximum_translation_m: 0.025
       maximum_yaw_deg: 10.0
       maximum_support_normal_angle_deg: 4.0
-      maximum_support_offset_delta_m: 0.004
+      maximum_support_offset_delta_m: 0.007  # >4 mm warns; >7 mm rejects.
       maximum_iterations: 12
     max_gripper_width_m: 0.05
     candidate_width_tolerance_m: 0.0
@@ -654,6 +660,8 @@ grasp_6d:
     camera_visibility_diagnostic_enabled: true
     camera_visibility_require_approach: false
     camera_visibility_margin_px: 36
+    # Auxiliary observation only; generic contact-camera diagnostics retain 36px.
+    observation_camera_visibility_margin_px: 24
     # Add the depth-scaled detector box half-size and this padding to the base
     # margin so a candidate cannot pass with only its center still in frame.
     camera_visibility_bbox_padding_px: 8

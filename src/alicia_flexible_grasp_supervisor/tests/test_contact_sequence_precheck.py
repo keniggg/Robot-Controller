@@ -111,7 +111,7 @@ def gateway_case(monkeypatch):
     monkeypatch.setattr(module.rospy,'get_param',lambda key,default=None:deepcopy(params.get(key,default)))
     node=MotionGateway.__new__(MotionGateway)
     node._planner_lock=threading.RLock();node._control_reference_epoch_ns=1
-    node._contact_precheck_sample=mock.Mock(side_effect=lambda *a:deepcopy(sample))
+    node._contact_precheck_sample=mock.Mock(side_effect=lambda *a,**k:deepcopy(sample))
     node._contact_command_collision_check=mock.Mock(return_value=10)
     node._contact_precheck_scene_digest=mock.Mock(return_value='unchanged-scene')
     node._unknown_pregrasp_velocity_limits=lambda _:None

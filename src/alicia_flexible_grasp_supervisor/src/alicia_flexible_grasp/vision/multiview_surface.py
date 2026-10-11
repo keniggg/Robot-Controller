@@ -17,6 +17,7 @@ from .target_observation import (
 
 
 DEFAULT_FUSION_VOXEL_SIZE_M = 0.0025
+SUPPORT_OFFSET_WARNING_M = 0.004
 _NEAREST_NEIGHBOR_CHUNK = 512
 _NEAREST_NEIGHBOR_TARGET_CHUNK = 2048
 _TRIM_FRACTION = 0.10
@@ -50,6 +51,23 @@ def _strict_number(
     if maximum is not None and number > maximum:
         raise ValueError('%s is above its bound' % name)
     return number
+
+
+def support_offset_diagnostic(separation_m, hard_limit_m):
+    """Report the 4 mm warning independently of the caller's hard limit.
+
+    ROS measurements may cross a float32 boundary; compare both sides in that
+    domain so an encoded exact 4 mm value does not warn due to representation
+    noise. Keep the original values in diagnostics. This helper neither accepts
+    geometry nor changes an explicitly stricter registration configuration.
+    """
+    measured = _strict_number(separation_m, 'separation_m', minimum=0.0)
+    hard_limit = _strict_number(hard_limit_m, 'hard_limit_m', minimum=0.0)
+    with np.errstate(over='ignore'):
+        warning = bool(np.float32(measured) > np.float32(SUPPORT_OFFSET_WARNING_M))
+    return dict(warning_flag=warning, measured_m=measured,
+                warning_threshold_m=SUPPORT_OFFSET_WARNING_M,
+                hard_limit_m=hard_limit)
 
 
 def _immutable_float_array(value, shape, name):
@@ -174,7 +192,7 @@ class RegistrationConfig:
     maximum_translation_m: float = 0.025
     maximum_yaw_deg: float = 10.0
     maximum_support_normal_angle_deg: float = 4.0
-    maximum_support_offset_delta_m: float = 0.004
+    maximum_support_offset_delta_m: float = 0.007
     maximum_iterations: int = 12
 
     def __post_init__(self):
@@ -530,13 +548,15 @@ def _principal_yaw(points_local):
     return float(np.arctan2(axis[1], axis[0]))
 
 
-def _initial_support_transform(reference, moving, basis):
-    """Align the unoriented measured footprint axes before local ICP."""
+def _initial_support_transform(reference, moving, basis, *, align_yaw=True):
+    """Align measured footprint midpoints, optionally their unoriented axes."""
 
     reference_local = reference.dot(basis)
     moving_local = moving.dot(basis)
-    yaw = _principal_yaw(reference_local) - _principal_yaw(moving_local)
-    yaw = (yaw + 0.5 * np.pi) % np.pi - 0.5 * np.pi
+    yaw = 0.0
+    if align_yaw:
+        yaw = _principal_yaw(reference_local) - _principal_yaw(moving_local)
+        yaw = (yaw + 0.5 * np.pi) % np.pi - 0.5 * np.pi
     cosine = np.cos(yaw)
     sine = np.sin(yaw)
     rotation_local = np.asarray(
@@ -779,6 +799,22 @@ def register_surface_view(reference, moving, config=None):
             coarse_inliers, coarse_distances ** 2, unmatched_cost)))
         if coarse_cost <= initial_cost:
             transform = coarse_transform
+
+        # A changed visible face can rotate PCA without rotating the object.
+        # Offer the SAME measured midpoint translation without that rotation,
+        # under the original overlap/span admission and full correspondence
+        # cost. Strict improvement preserves the old identity/PCA tie policy.
+        # Only the selected initialization receives the original ICP budget;
+        # no motion/acceptance bound participates in this choice.
+        translation_transform = _initial_support_transform(
+            reference_points, moving_points, basis, align_yaw=False)
+        _points, _indices, translation_distances, translation_inliers = (
+            _registration_correspondences(
+                reference_points, moving_points, translation_transform, config))
+        translation_cost = float(np.mean(np.where(
+            translation_inliers, translation_distances ** 2, unmatched_cost)))
+        if translation_cost < min(initial_cost, coarse_cost):
+            transform = translation_transform
 
     for _iteration in range(config.maximum_iterations):
         transformed, indices, distances, inliers = _registration_correspondences(

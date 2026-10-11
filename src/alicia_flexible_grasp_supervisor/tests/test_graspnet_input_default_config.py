@@ -95,7 +95,7 @@ class GraspNetInputDefaultConfigTest(unittest.TestCase):
                 'maximum_translation_m': 0.025,
                 'maximum_yaw_deg': 10.0,
                 'maximum_support_normal_angle_deg': 4.0,
-                'maximum_support_offset_delta_m': 0.004,
+                'maximum_support_offset_delta_m': 0.007,
                 'maximum_iterations': 12,
             },
         )

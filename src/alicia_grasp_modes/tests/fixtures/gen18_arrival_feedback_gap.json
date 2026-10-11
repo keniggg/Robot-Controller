@@ -1,0 +1,27 @@
+{
+  "provenance": {
+    "path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_restart_20261010T002347Z/gen18_analysis/arrival_feedback_bracket_first_failure.json",
+    "sha256": "544b27253f84a564c57d29ecb1869ea226662ebad36ac58af10644b356c4e0a9",
+    "scope": "Exact recorded timing and q; test RGB-D and fixed station pose are synthetic, not physical recovery replay."
+  },
+  "reference_ns": 1791619496730262041,
+  "selection_ns": 1791619450953784465,
+  "source_ns": 1791619497059015274,
+  "failure_ns": 1791619497267997264,
+  "before_ns": 1791619497028975282,
+  "after_ns": 1791619497255907571,
+  "q": [
+    -2.029456582372703,
+    -0.3574175235773544,
+    0.8559612796401878,
+    0.10431069357622359,
+    -1.1075341288534328,
+    0.07209709703062514
+  ],
+  "next": {
+    "source_ns": 1791619497456113815,
+    "finish_ns": 1791619497584604263,
+    "before_ns": 1791619497425983066,
+    "after_ns": 1791619497525899996
+  }
+}

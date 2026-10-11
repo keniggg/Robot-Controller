@@ -69,9 +69,9 @@ def test_qualified_large_ring_positive_contradiction_never_tries_smaller_ring(pa
     with patch.object(t,'_fit_plane',wraps=original) as fit:
         with pytest.raises(ValueError,match='support_plane_local_distance_inconsistent'):
             if path == 'audit':
-                t._audit_current_support(depth+.006,K,transform,tracker.config,anchor,tracker.plane_base)
+                t._audit_current_support(depth+.008,K,transform,tracker.config,anchor,tracker.plane_base)
             else:
-                t.segment(depth+.006,K,transform,tracker.config,
+                t.segment(depth+.008,K,transform,tracker.config,
                     target_position_base=anchor.position_base,plane_base=tracker.plane_base,
                     target_footprint_base=anchor.support_footprint_base)
         assert fit.call_count == 1

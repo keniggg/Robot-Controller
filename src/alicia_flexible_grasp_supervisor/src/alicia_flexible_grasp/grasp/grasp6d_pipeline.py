@@ -956,6 +956,7 @@ def _validated_moveit_result(result):
             # structured collision evidence.
             'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID',
             'OBSERVATION_FOLLOWING_SUPPORT_INVALID',
+            'OBSERVATION_REFERENCE_UNAVAILABLE',
         }
         if result.reachable:
             if (

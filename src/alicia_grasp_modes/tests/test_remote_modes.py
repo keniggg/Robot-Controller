@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from dataclasses import asdict
+from copy import deepcopy
 from pathlib import Path
 import threading
 import types
@@ -31,6 +32,8 @@ def configured(monkeypatch):
         '/perception': {'detector': 'simple_hsv', 'yolo_model_choice': 'carton'},
     }
     monkeypatch.setattr(module.rospy, 'get_param', lambda name, default=None: params.get(name, default))
+    monkeypatch.setattr(module.rospy, 'get_master', lambda: types.SimpleNamespace(
+        getParam=lambda name: (1, 'fixture master', deepcopy(params.get(name)))))
     node = module.ModeAwareRemoteGrasp6DNode.__new__(module.ModeAwareRemoteGrasp6DNode)
     node._initialize_mode_boundary()
     node._initialize_streaming_state(start_worker=False, source_clock=lambda: 10.0)

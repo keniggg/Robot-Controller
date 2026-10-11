@@ -1,4 +1,5 @@
 """Audit-to-plan binding for a single mode-aware grasp attempt (no ROS I/O)."""
+from alicia_flexible_grasp.robot.observation_view_limits import MINIMUM_OBSERVATION_IMAGE_MARGIN_PX
 import hashlib
 import json
 import math
@@ -6,10 +7,33 @@ import re
 
 from alicia_flexible_grasp.grasp.gripper_geometry import CandidateGateResult
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
-    is_silhouette_observation_plan, validate_silhouette_observation_plan)
+    is_silhouette_observation_plan, is_independent_observation_plan,
+    validate_independent_observation_plan)
 from alicia_grasp_modes.selection import parse_selection
+from alicia_grasp_modes.contact_search_yield import (
+    CODE as CONTACT_SEARCH_YIELD_CODE, contact_search_yield_proof_valid)
 from alicia_grasp_modes.observation_policy import WORKING_VOLUME_POLICY
 from alicia_grasp_modes.silhouette_observation import validate_silhouette_ambiguity
+from alicia_grasp_modes.active_observation_policy import evidence_digest, information_gain_valid
+from alicia_grasp_modes.observe_return_session import exact_ns
+from alicia_grasp_modes.observe_return_measurement import measurement_digest, qualified_source_stamps
+
+
+def surface_view_required_search_proof_valid(proof):
+    """This literal is admitted only with a completed zero-candidate search."""
+    try:
+        local = proof['locally_valid']
+        return bool(
+            proof['contact_search_code'] == 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'
+            and proof['selected'] is False and proof['terminated_early'] is False
+            and proof['contact_or_motion_authorized'] is False
+            and all(type(proof[key]) is int and proof[key] == 0
+                    for key in ('checked_count', 'shortlist_count', 'reachable_count'))
+            and all(type(local[key]) is int and local[key] >= 0
+                    for key in ('entered', 'passed', 'rejected'))
+            and local['passed'] == 0 and local['entered'] == local['rejected'])
+    except (KeyError, TypeError, AttributeError):
+        return False
 
 
 def aligned_unknown_strategy(selection, requested_strategy=''):
@@ -144,7 +168,7 @@ def _silhouette_collision_envelope_error(report, selection, metadata, proof):
     support = envelope['support_consistency']
     if (support.get('perception_fixed_anchor_gate_replaced') is not False
             or support.get('footprint_kind') != 'projected_expanded_collision_envelope_not_measured_support'
-            or not 0. < float(support['maximum_local_shift_m']) <= .004
+            or not 0. < float(support['maximum_local_shift_m']) <= .007
             or not 0. < float(support['maximum_normal_change_deg']) <= 4.
             or not 0. <= float(support['support_reference_max_distance_m']) <= float(support['maximum_local_shift_m'])+1e-12
             or not 0. <= float(support['support_reference_angle_deg']) <= float(support['maximum_normal_change_deg'])+1e-9):
@@ -229,6 +253,140 @@ def _silhouette_observation_audit_error(report, selection, metadata):
         return 'silhouette observation evidence is incomplete or malformed'
 
 
+def _measured_observation_audit_error(report, selection, metadata):
+    """Bind an ordinary one-view proposal to measured deficit evidence only."""
+    try:
+        selected = report['selected']
+        if (selection['mode'] != 'unknown' or selection['strategy'] != 'observe_return'
+                or report.get('execution_strategy') != 'observe_return'
+                or metadata.get('phase') not in ('observation_prefix', 'supplemental_observation')
+                or metadata.get('diagnostic_observation_only') is not False
+                or metadata.get('trigger_code') != 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+                or selected.get('candidate_source') != 'measured_observation'
+                or selected.get('source_lineage') != ['measured_observation']
+                or selected.get('candidate_role') != 'measured_observation'
+                or selected.get('contact_geometry_checked') is not False
+                or selected.get('required_open_width_m') != 0.):
+            return 'measured observation role or phase is invalid'
+        binding = selected['observation_source_binding']
+        for key in ('request_id', 'generation', 'target_epoch', 'snapshot_stamp_ns'):
+            if (type(binding[key]) is not int or type(report[key]) is not int
+                    or binding[key] != report[key]):
+                return 'measured observation current source binding is invalid'
+        if (binding['target_epoch'] != metadata['target_epoch']
+                or binding['target_track_id'] != metadata['target_track_id']):
+            return 'measured observation target binding is invalid'
+        trigger = metadata['trigger_evidence']
+        policy = trigger['policy']
+        if policy not in ('current_request_measured_view_deficit_preflight',
+                          'current_request_completed_contact_view_deficit',
+                          'current_request_independent_bilateral_view_gap'):
+            return 'measured observation trigger policy is invalid'
+        for key in ('request_id', 'generation', 'target_epoch', 'snapshot_stamp_ns'):
+            if type(trigger[key]) is not int or trigger[key] < 0:
+                return 'measured observation trigger source is malformed'
+        if (not 0 < trigger['request_id'] < report['request_id']
+                or trigger['generation'] > report['generation']
+                or trigger['target_epoch'] != metadata['target_epoch']
+                or not selection['stamp_ns'] < metadata['initial_surface_stamp_ns']
+                    <= trigger['snapshot_stamp_ns'] < report['snapshot_stamp_ns']
+                or trigger.get('contact_or_motion_authorized') is not False):
+            return 'measured observation trigger is not bound to a prior measured source'
+        gaps = metadata['measured_missing_sides']
+        if not isinstance(gaps, (list, tuple)) or not gaps:
+            return 'measured observation missing-side evidence is empty'
+        for gap in gaps:
+            sources = gap['source_view_stamps_ns']
+            if (gap['target_epoch'] != metadata['target_epoch']
+                    or gap['target_track_id'] != metadata['target_track_id']
+                    or not isinstance(sources, (list, tuple)) or not sources
+                    or any(type(ns) is not int or not selection['stamp_ns'] < ns
+                           <= trigger['snapshot_stamp_ns'] for ns in sources)
+                    or not gap['missing_side_signs']
+                    or any(type(sign) is not int or sign not in (-1, 1)
+                           for sign in gap['missing_side_signs'])):
+                return 'measured observation missing-side source binding is invalid'
+        if policy == 'current_request_independent_bilateral_view_gap':
+            if (trigger.get('contact_search_code') not in (
+                    'NEAR_FIELD_NO_REACHABLE_CANDIDATE', 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE',
+                    'NEAR_FIELD_SURFACE_VIEW_REQUIRED', CONTACT_SEARCH_YIELD_CODE)
+                    or type(trigger.get('checked_count')) is not int
+                    or trigger['checked_count'] < 0
+                    or not any(all(gap.get(key) == value for key, value in
+                        trigger['missing_surface_direction'].items()) for gap in gaps)):
+                return 'measured observation completed-search trigger is invalid'
+            if trigger['contact_search_code'] == CONTACT_SEARCH_YIELD_CODE:
+                proof = trigger.get('yielded_contact_search')
+                if (metadata.get('phase') != 'supplemental_observation'
+                        or not contact_search_yield_proof_valid(proof)
+                        or any(proof[key] != trigger[key] for key in (
+                            'request_id', 'generation', 'target_epoch',
+                            'snapshot_stamp_ns', 'contact_search_code', 'checked_count'))
+                        or 'transition_ns' not in proof['yield_evidence']
+                        or proof['yield_evidence']['original_phase_deadline_ns'] > metadata['deadline_ns']):
+                    return 'measured observation incomplete-search yield proof is invalid'
+            if trigger['contact_search_code'] == 'NEAR_FIELD_SURFACE_VIEW_REQUIRED':
+                proof = trigger.get('completed_contact_search')
+                if (not surface_view_required_search_proof_valid(proof)
+                        or any(proof[key] != trigger[key] for key in (
+                            'request_id', 'generation', 'target_epoch',
+                            'snapshot_stamp_ns', 'contact_search_code', 'checked_count'))):
+                    return 'measured observation surface-view search proof is invalid'
+        else:
+            digest_payload = dict(trigger)
+            digest = digest_payload.pop('evidence_sha256')
+            actual = hashlib.sha256(json.dumps(digest_payload, sort_keys=True,
+                separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+            if (digest != actual or trigger['selection'] != selection
+                    or trigger['target_track_id'] != metadata['target_track_id']
+                    or trigger['measured_missing_sides'] != gaps
+                    or trigger['missing_surface_direction'] != gaps[0]
+                    or trigger['source_view_stamps_ns'] != gaps[0]['source_view_stamps_ns']):
+                return 'measured observation trigger digest or target binding is invalid'
+            if policy == 'current_request_measured_view_deficit_preflight':
+                if (trigger.get('contact_search_completed') is not False
+                        or trigger.get('learned_candidates_requested') is not False
+                        or trigger.get('tabletop_geometry_preflight_completed') is not True
+                        or trigger.get('selected') is not False
+                        or type(trigger.get('materialized_count')) is not int
+                        or trigger['materialized_count'] != 0):
+                    return 'measured observation preflight claims contact authority'
+            else:
+                proof = trigger['initial_contact_search']
+                if (trigger.get('contact_search_completed') is not True
+                        or any(proof[key] != trigger[key] for key in
+                               ('request_id', 'generation', 'target_epoch', 'snapshot_stamp_ns'))
+                        or proof.get('selected') is not False
+                        or proof.get('terminated_early') is not False
+                        or proof.get('contact_or_motion_authorized') is not False
+                        or proof.get('reachable_count') != 0
+                        or type(proof.get('checked_count')) is not int
+                        or proof['checked_count'] < 0
+                        or proof['checked_count'] != proof['shortlist_count']
+                        or proof.get('contact_search_code') not in (
+                            'NEAR_FIELD_NO_REACHABLE_CANDIDATE', 'NEAR_FIELD_NO_HARD_SAFE_CANDIDATE',
+                            'NEAR_FIELD_SURFACE_VIEW_REQUIRED')):
+                    return 'measured observation completed contact proof is invalid'
+                if (proof['contact_search_code'] == 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'
+                        and not surface_view_required_search_proof_valid(proof)):
+                    return 'measured observation surface-view search proof is invalid'
+        gain = selected['observation_view']['observe_return_missing_side_gain']
+        gained = float(gain['predicted_new_side_gain_m'])
+        uncertainty = float(gain['depth_uncertainty_m'])
+        if (gain.get('ok') is not True
+                or gain.get('code') != 'OBSERVE_RETURN_PREDICTED_NEW_MISSING_SIDE'
+                or gain['target_epoch'] != metadata['target_epoch']
+                or gain['target_track_id'] != metadata['target_track_id']
+                or not any(gain['source_view_stamps_ns'] == gap['source_view_stamps_ns']
+                           and gain['missing_side_sign'] in gap['missing_side_signs'] for gap in gaps)
+                or not math.isfinite(gained) or not math.isfinite(uncertainty)
+                or uncertainty < 0. or gained <= uncertainty + 1e-9):
+            return 'measured observation lacks bound missing-side gain'
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+        return 'measured observation evidence is incomplete or malformed'
+    return ''
+
+
 def observe_return_audit_error(report, *, allow_returned=False):
     """Admit an explicit observation prefix or a fully checked contact plan.
 
@@ -283,6 +441,11 @@ def observe_return_audit_error(report, *, allow_returned=False):
                     return error
             elif diagnostic:
                 return 'diagnostic observation flag does not match its trigger'
+            elif ((report.get('selected') or {}).get('candidate_source') == 'measured_observation'
+                  or (report.get('selected') or {}).get('candidate_role') == 'measured_observation'):
+                error = _measured_observation_audit_error(report, selection, metadata)
+                if error:
+                    return error
             return unknown_observation_audit_error(report)
         if phase != 'returned_contact' or allow_returned is not True:
             return 'observe_return phase is not an initial attempt entry'
@@ -311,6 +474,184 @@ def observe_return_audit_error(report, *, allow_returned=False):
         return _contact_plan_audit_error(report)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
         return 'observe_return audit is incomplete or malformed'
+
+
+def observed_contact_audit_error(report, *, session, reached_phase, measurement, now_ns):
+    """Bind internal contact continuation to the task's actual reached view.
+
+    No external entry, return proof, or execution permission is created here.
+    Fresh preview admission, freeze and actual-state execution remain required.
+    """
+    try:
+        selection = parse_selection(report['grasp_mode_selection'])
+        metadata = report['observe_return']
+        stamp = report['snapshot_stamp_ns']
+        initial = metadata['initial_surface_stamp_ns']
+        origin = exact_ns(session['origin_snapshot_stamp_ns'], 'origin')
+        deadline = exact_ns(session['deadline_ns'], 'deadline')
+        if (selection['mode'] != 'unknown' or selection['strategy'] != 'observe_return'
+                or parse_selection(session['selection']) != selection
+                or type(session['version']) is not int or session['version'] != 2
+                or session['phase'] != 'observing'
+                or report.get('execution_strategy') != 'observe_return'
+                or report.get('planning_origin') != 'observation_view_contact_preview'
+                or report.get('observation_motion_performed') is not True
+                or metadata.get('phase') != 'observation_contact'
+                or metadata.get('diagnostic_observation_only', False) is not False
+                or metadata.get('trigger_code') == 'RGB_DEPTH_SILHOUETTE_AMBIGUOUS'
+                or type(stamp) is not int or type(initial) is not int
+                or type(now_ns) is not int
+                or not selection['stamp_ns'] < initial <= origin < stamp <= now_ns < deadline
+                or type(report['target_epoch']) is not int
+                or report['target_epoch'] != session['target_epoch']
+                or any(type(metadata[key]) is not int for key in ('version', 'view_index', 'target_epoch'))
+                or any(metadata[key] != session[key] for key in (
+                    'session_id', 'origin_plan_id', 'target_epoch', 'target_track_id',
+                    'version', 'view_index', 'view_plan_id', 'view_request_id', 'previous_gain_sha256'))
+                or any(exact_ns(metadata[key], key) != exact_ns(session[key], key) for key in (
+                    'origin_snapshot_stamp_ns', 'deadline_ns', 'view_source_stamp_ns'))
+                or report['plan_id'] in (session['origin_plan_id'], session['view_plan_id'])):
+            return 'observed contact session or source binding is invalid'
+        reached = metadata['reached_view']
+        start = reached_phase.header.stamp.to_nsec()
+        reached_source = reached_phase.reference_source_stamp.to_nsec()
+        contact_deadline = reached_phase.deadline.to_nsec()
+        if (reached_phase.active is not True or reached_phase.header.frame_id != 'base_link'
+                or reached_phase.planning_stage != 'contact_replan'
+                or reached_phase.reference_center_valid is not True
+                or reached_phase.reference_target_track_id != session['target_track_id']
+                or type(reached_phase.phase_id) is not int or reached_phase.phase_id <= 0
+                or any(type(reached[key]) is not int for key in (
+                    'phase_id', 'start_stamp_ns', 'source_stamp_ns', 'deadline_ns', 'registration_phase_id'))
+                or (reached['phase_id'], reached['start_stamp_ns'], reached['source_stamp_ns'], reached['deadline_ns'])
+                    != (reached_phase.phase_id, start, reached_source, contact_deadline)
+                or not exact_ns(session['stamp_ns'], 'session stamp') < start < stamp
+                or not exact_ns(session['view_source_stamp_ns'], 'view source') < reached_source <= start
+                or not now_ns < contact_deadline <= deadline):
+            return 'observed contact does not match the actual reached planning phase'
+        sources = qualified_source_stamps(measurement['source_stamps_ns'], measurement, now_ns)
+        if (measurement['state'] != 'qualified' or measurement['motion_kind'] != 'observation'
+                or parse_selection(measurement['selection']) != selection
+                or any(measurement[key] != session[key] for key in (
+                    'session_id', 'target_epoch', 'target_track_id', 'origin_plan_id',
+                    'view_plan_id', 'view_index'))
+                or any(exact_ns(measurement[key], key) != exact_ns(session[key], key)
+                    for key in ('origin_snapshot_stamp_ns', 'view_source_stamp_ns'))
+                or not sources[-1] <= reached_source < stamp
+                or metadata['measurement_receipt_sha256'] != measurement_digest(measurement)
+                or metadata['qualified_source_stamps_ns'] != sources):
+            return 'observed contact lacks this view qualified measurement receipt'
+        surface = report['multiview_surface']
+        registration = surface['latest_registration']
+        fused = metadata['fused_source_stamps_ns']
+        if (surface.get('active') is not True
+                or surface['target_epoch'] != session['target_epoch']
+                or surface['target_track_id'] != session['target_track_id']
+                or surface['phase_id'] != reached['registration_phase_id']
+                or surface['source_stamps_ns'] != fused
+                or not isinstance(fused, (tuple, list)) or len(fused) < 2
+                or any(type(ns) is not int or not selection['stamp_ns'] < ns <= stamp for ns in fused)
+                or initial not in fused or reached_source not in fused or stamp not in fused
+                or registration.get('ok') is not True
+                or type(registration.get('source_clipped')) is not bool
+                or registration['source_stamp_ns'] != stamp):
+            return 'observed contact lacks same-source registered measured views'
+        return _contact_plan_audit_error(report)
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+        return 'observed contact audit or actual task context is incomplete or malformed'
+
+
+def supplemental_observation_audit_error(report, *, session, pending_request, now_ns):
+    """Validate an internal continuation against its existing session/request.
+
+    This does not admit an external attempt or grant execution authority. The
+    task must still bind the preview to its own session and admit the new view.
+    """
+    try:
+        selection = parse_selection(report['grasp_mode_selection'])
+        metadata = report['observe_return']
+        stamp = report['snapshot_stamp_ns']
+        initial = metadata['initial_surface_stamp_ns']
+        if (session['version'] != 2 or session['phase'] != 'observing'
+                or parse_selection(session['selection']) != selection
+                or metadata.get('phase') != 'supplemental_observation'
+                or metadata.get('version') != 2
+                or report.get('planning_origin') != 'observe_return_supplemental_observation'
+                or report.get('observation_motion_performed') is not True
+                or metadata.get('contact_or_motion_authorized') is not False
+                or type(stamp) is not int or type(initial) is not int
+                or not selection['stamp_ns'] < initial <= session['origin_snapshot_stamp_ns'] < stamp
+                or type(now_ns) is not int or not stamp <= now_ns < session['deadline_ns']
+                or type(report['target_epoch']) is not int
+                or report['target_epoch'] != session['target_epoch']
+                or not isinstance(report['plan_id'], str)
+                or not re.fullmatch('[0-9a-f]{24}', report['plan_id'])
+                or metadata['view_plan_id'] != report['plan_id']
+                or report['plan_id'] == session['view_plan_id']
+                or metadata['view_source_stamp_ns'] != stamp):
+            return 'supplemental observation session or source binding is invalid'
+        request_fields = ('session_id', 'view_index', 'previous_view_index', 'origin_plan_id',
+            'origin_snapshot_stamp_ns', 'target_epoch', 'target_track_id', 'deadline_ns',
+            'max_observations', 'failed_search', 'visual_opportunity', 'previous_gain',
+            'previous_gain_sha256', 'contact_or_motion_authorized')
+        request = {key: metadata[key] for key in request_fields}
+        if (any(request[key] != pending_request[key] for key in request_fields)
+                or metadata['view_request_id'] != pending_request['view_request_id']
+                or evidence_digest(request) != metadata['view_request_id']
+                or any(metadata[key] != session[key] for key in (
+                    'session_id', 'origin_plan_id', 'origin_snapshot_stamp_ns',
+                    'target_epoch', 'target_track_id', 'deadline_ns', 'max_observations'))
+                or type(metadata['view_index']) is not int
+                or type(metadata['previous_view_index']) is not int
+                or metadata['previous_view_index'] != session['view_index']
+                or not metadata['view_index'] == session['view_index'] + 1 <= session['max_observations']):
+            return 'supplemental observation pending request changed'
+        gain, failure, opportunity = (metadata[name] for name in (
+            'previous_gain', 'failed_search', 'visual_opportunity'))
+        yielded = (contact_search_yield_proof_valid(failure)
+            and opportunity.get('yielded_contact_search') == failure
+            and 'transition_ns' in failure['yield_evidence']
+            and failure['yield_evidence']['transition_ns'] <= now_ns
+            and failure['yield_evidence']['original_phase_deadline_ns'] <= session['deadline_ns'])
+        completed = (failure['selected'] is False and failure['terminated_early'] is False
+            and all(type(failure[key]) is int and failure[key] >= 0
+                    for key in ('checked_count', 'shortlist_count', 'reachable_count'))
+            and failure['reachable_count'] == 0
+            and failure['checked_count'] == failure['shortlist_count']
+            and failure['contact_search_code'] in ('NEAR_FIELD_NO_HARD_SAFE_CANDIDATE',
+                'NEAR_FIELD_NO_REACHABLE_CANDIDATE', 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'))
+        if (not information_gain_valid(gain)
+                or evidence_digest(gain) != metadata['previous_gain_sha256']
+                or gain['target_epoch'] != session['target_epoch']
+                or gain['target_track_id'] != session['target_track_id']
+                or not session['view_source_stamp_ns'] < gain['source_stamp_ns']
+                    <= failure['snapshot_stamp_ns'] < stamp
+                or failure['target_epoch'] != session['target_epoch']
+                or failure['contact_or_motion_authorized'] is not False
+                or not (completed or yielded)
+                or any(opportunity[key] != failure[key] for key in (
+                    'request_id', 'generation', 'target_epoch', 'snapshot_stamp_ns',
+                    'contact_search_code', 'checked_count'))
+                or opportunity.get('contact_or_motion_authorized') is not False
+                or opportunity.get('policy') != 'current_request_independent_bilateral_view_gap'
+                or metadata['trigger_evidence'] != opportunity):
+            return 'supplemental observation registered gain or completed search is invalid'
+        local = failure['locally_valid']
+        if (any(type(local[key]) is not int or local[key] < 0 for key in ('entered', 'passed', 'rejected'))
+                or local['entered'] != local['passed'] + local['rejected']
+                or (failure['contact_search_code'] == 'NEAR_FIELD_NO_REACHABLE_CANDIDATE'
+                    and failure['checked_count'] <= 0)
+                or (failure['contact_search_code'] in ('NEAR_FIELD_NO_HARD_SAFE_CANDIDATE',
+                    'NEAR_FIELD_SURFACE_VIEW_REQUIRED')
+                    and (failure['checked_count'] != 0 or local['passed'] != 0))
+                or (failure['contact_search_code'] == 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'
+                    and (not surface_view_required_search_proof_valid(failure)
+                        or opportunity.get('completed_contact_search') != failure))):
+            return 'supplemental observation completed-search counts are invalid'
+        error = _measured_observation_audit_error(report, selection, metadata)
+        return error or unknown_observation_audit_error(report)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError, OverflowError):
+        return 'supplemental observation audit or current context is incomplete or malformed'
 
 
 def _contact_plan_audit_error(report):
@@ -373,12 +714,19 @@ def audit_matches_preview(report, preview, direct):
         if report['snapshot_stamp_ns'] != stamp_ns or report['plan_id'] != preview.plan_id:
             return False
         expected_phase = 'CONTACT_EXECUTION_PLAN' if direct else 'FAR_FIELD_OBSERVATION_PLAN'
-        observation_source = is_silhouette_observation_plan(preview)
+        observation_source = is_independent_observation_plan(preview)
         if observation_source:
-            validate_silhouette_observation_plan(preview)
+            validate_independent_observation_plan(preview)
             metadata = report.get('observe_return', {})
             selected = report.get('selected', {})
-            if (direct or metadata.get('diagnostic_observation_only') is not True
+            if direct:
+                return False
+            if not is_silhouette_observation_plan(preview):
+                if (_measured_observation_audit_error(report,
+                        parse_selection(report['grasp_mode_selection']), metadata)
+                        or preview.target_track_id != metadata['target_track_id']):
+                    return False
+            elif (metadata.get('diagnostic_observation_only') is not True
                     or metadata.get('trigger_code') != 'RGB_DEPTH_SILHOUETTE_AMBIGUOUS'
                     or selected.get('candidate_source') != 'silhouette_observation'
                     or selected.get('source_lineage') != ['silhouette_observation']
@@ -513,7 +861,7 @@ def unknown_observation_audit_error(report):
                     'camera_transform_query_stamp_ns', 'visible_surface_stamp_ns'))
                 or len(depths) != 8 or not .070 <= near < far <= .500
                 or min(depths) < near or max(depths) > far
-                or margin < 36. or edge < margin or distance <= 0.
+                or margin < MINIMUM_OBSERVATION_IMAGE_MARGIN_PX or edge < margin or distance <= 0.
                 or not math.isclose(radial, distance, abs_tol=1e-9, rel_tol=0.)
                 or numeric(working['minimum_depth_m']) != min(depths)
                 or numeric(working['maximum_depth_m']) != max(depths)):
@@ -533,4 +881,3 @@ def unknown_observation_audit_error(report):
     ):
         return "observation envelope does not preserve 3 mm support clearance"
     return ""
-

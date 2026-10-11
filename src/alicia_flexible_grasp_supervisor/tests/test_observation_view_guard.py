@@ -102,9 +102,9 @@ def test_roll_180_has_visible_endpoints_but_invisible_midpath():
     for q in (0., np.pi):
         p = plan(q)
         p.joint_trajectory.points[0] = point(q)
-        assert check(p, desired=point(q), target=target, model=fk('1 0 0'))['ok']
+        assert check(p, desired=point(q), target=target, model=fk('1 0 0'), roi_margin_px=36.)['ok']
     with pytest.raises(ObservationViewError, match='image margin'):
-        check(plan(np.pi), target=target, model=fk('1 0 0'))
+        check(plan(np.pi), target=target, model=fk('1 0 0'), roi_margin_px=36.)
 
 
 def test_full_wrapper_requires_real_support_and_reports_independent_scopes():

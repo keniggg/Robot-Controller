@@ -153,10 +153,15 @@ def generate_tabletop_proposals(
     config,
     fused_surface=None,
     finger_geometry=None,
+    refine_obb_neighbor_angles=False,
 ):
     """Return bounded, category-independent grasp proposals without side effects."""
     try:
         checked_config = _validated_config(config)
+        if type(refine_obb_neighbor_angles) is not bool:
+            raise _InputInvalid("refine_obb_neighbor_angles must be boolean")
+        if refine_obb_neighbor_angles and fused_surface is None:
+            raise _InputInvalid("angular refinement requires current measured fused contact surface")
         points = _finite_points(object_points_base, checked_config)
         center = _finite_vector(obb_center_base, 'obb_center_base')
         rotation = _validated_rotation(R_base_obb)
@@ -188,7 +193,8 @@ def generate_tabletop_proposals(
             'OBB vertical axis does not match support normal',
         )
 
-    angles = _sample_angles(rotation, normal, checked_config)
+    angles = _sample_angles(rotation, normal, checked_config,
+                            refine_neighbors=refine_obb_neighbor_angles)
     proposals = []
     width_valid_count = 0
     contact_valid_count = 0
@@ -940,10 +946,24 @@ def _unit_vector(value, name):
     return np.array(vector, dtype=float, copy=True)
 
 
-def _sample_angles(rotation, normal, config):
+def _sample_angles(rotation, normal, config, refine_neighbors=False):
     basis_x = _plane_basis_x(normal)
     basis_y = np.cross(normal, basis_x)
     candidates = [rotation[:, 0], rotation[:, 1]]
+    if refine_neighbors:
+        # At most four additional directions bridge measured object axes and
+        # the existing world lattice. A nearby lattice angle may collide at
+        # an open grasp while the exact OBB-axis tilt lacks contact margin.
+        # Every midpoint is only a proposal: independently measure bilateral
+        # support and derive its own tilt/height before the original gates.
+        for axis in tuple(candidates):
+            angle = _axis_angle_deg(axis, basis_x, basis_y)
+            lower = np.floor(angle / config.angle_step_deg) * config.angle_step_deg
+            for neighbour in (lower, lower + config.angle_step_deg):
+                if abs(neighbour - angle) < 2.0 * config.angle_dedup_deg:
+                    continue
+                middle = np.deg2rad(0.5 * (angle + neighbour))
+                candidates.append(basis_x * np.cos(middle) + basis_y * np.sin(middle))
     candidates.extend(
         basis_x * np.cos(np.deg2rad(angle_deg))
         + basis_y * np.sin(np.deg2rad(angle_deg))

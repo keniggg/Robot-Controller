@@ -35,3 +35,44 @@ def place_contact_height(*, translation_evidence_limit_m, **geometry):
         **dict(geometry, actual_T_base_tool0=transform, planned_T_base_tool0=transform))
     audit.update(normal_translation_m=float(delta), after=after, reason=after['reason'])
     return (transform if after['ok'] else None), audit
+
+
+def contact_height_window_proposals(*, translation_evidence_limit_m, **geometry):
+    """At most two alternatives inside the original connected contact window.
+
+    The unchanged empirical error interval must fit around every proposal.
+    These are planning poses only: the caller must recheck all four stages,
+    registration displacement, and both nominal and compensated motion paths.
+    """
+    before = evaluate_contact_height_margin(
+        translation_evidence_limit_m=translation_evidence_limit_m, **geometry)
+    if not before.get('ok'):
+        return ()
+    limit = float(translation_evidence_limit_m)
+    intervals = [(lo, hi) for lo, hi in before['allowed_normal_translation_intervals_m']
+                 if lo is not None and hi is not None
+                 and np.isfinite(lo) and np.isfinite(hi)
+                 and lo <= -limit and hi >= limit]
+    if len(intervals) != 1:
+        return ()
+    lo, hi = intervals[0]
+    original = np.array(geometry['actual_T_base_tool0'], dtype=float, copy=True)
+    normal = np.asarray(geometry['support_normal_base'], dtype=float)
+    proposals = []
+    # Interior points retain a quarter of the available placement range as a
+    # proposal reserve, in addition to the entire original evidence interval.
+    for delta in (.75*(hi-limit), .75*(lo+limit)):
+        if abs(delta) <= 1e-9:
+            continue
+        transform = original.copy()
+        transform[:3, 3] += delta*normal
+        after = evaluate_contact_height_margin(
+            translation_evidence_limit_m=limit,
+            **dict(geometry, actual_T_base_tool0=transform,
+                   planned_T_base_tool0=transform))
+        if after.get('ok'):
+            proposals.append((transform, dict(
+                policy='bounded_interior_same_contact_height_window',
+                motion_authorized=False, target_relocated=False,
+                normal_translation_m=float(delta), before=before, after=after)))
+    return tuple(proposals)

@@ -63,7 +63,7 @@ def test_final_stage_retains_freshness_identity_registration_support_and_drift(m
         preview.header.stamp = preview.object_geometry.header.stamp = m.rospy.Time.from_sec(9.)
     if fault == 'track': preview.target_track_id = preview.object_geometry.target_track_id = 'g0-t2'
     if fault == 'registration': preview.refinement_status = 'INVALID_3D'
-    if fault == 'support': preview.object_geometry.support_offset_m = .0041
+    if fault == 'support': preview.object_geometry.support_offset_m = .0071
     if fault == 'drift': node._target_drift_result.return_value = m.PlanValidationResult(False, 'TARGET_DRIFT', 'actual target moved')
     preview.plan_id = sequence.compute_plan_id(preview)
     if fault == 'id': preview.plan_id = 'corrupted'
@@ -73,6 +73,16 @@ def test_final_stage_retains_freshness_identity_registration_support_and_drift(m
     assert result.terminal_for_request is (fault != 'old')
     assert result.code == ('TARGET_DRIFT' if fault == 'drift' else 'FINAL_REFINE_3D_INVALID')
 
+
+
+def test_final_stage_support_warning_band_is_not_a_hard_failure(monkeypatch):
+    # Current policy is diagnostic above 4 mm, hard rejection above 7 mm.
+    node, _, bound, preview, cfg = preview_fixture(monkeypatch)
+    preview.object_geometry.support_offset_m = .0041
+    preview.plan_id = sequence.compute_plan_id(preview)
+    result, candidate = node._copy_near_field_preview_candidate(
+        bound, 9_500_000_000, cfg, preview_stage='final_refinement')
+    assert result.ok and candidate.plan_id == preview.plan_id
 
 def waiting_node(monkeypatch, result):
     node, helper, clock = setup_node(monkeypatch)

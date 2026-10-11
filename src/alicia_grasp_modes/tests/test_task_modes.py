@@ -19,6 +19,8 @@ def configured(monkeypatch):
     params = {module.SELECTION_PARAM: {'mode': 'unknown', 'strategy': 'direct',
                                       'generation': 2, 'stamp_ns': '2000000000'}}
     monkeypatch.setattr(module.rospy, 'get_param', lambda name, default=None: params.get(name, default))
+    monkeypatch.setattr(module.rospy, 'get_master', lambda: types.SimpleNamespace(
+        getParam=lambda name: (1, 'fixture master', deepcopy(params.get(name)))))
     node = module.ModeAwareGraspTaskNode.__new__(module.ModeAwareGraspTaskNode)
     node._initialize_mode_boundary()
     node.active = False

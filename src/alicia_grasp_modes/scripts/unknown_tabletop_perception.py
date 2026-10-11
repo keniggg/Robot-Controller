@@ -5,7 +5,11 @@ import math
 import threading
 import time
 import hashlib
+import gc
+from alicia_grasp_modes.initial_station_identity_completion import (
+    completion_contract, station_from_marker, validate_completion)
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import asdict, fields, replace
 from collections import OrderedDict, deque
 
@@ -18,11 +22,19 @@ from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Bool, Header, String
-from alicia_flexible_grasp_supervisor.msg import ObjectPose
+from alicia_flexible_grasp_supervisor.msg import ObjectPose, NearFieldPlanningPhase, GraspState
+from alicia_grasp_modes.station_compute_wait_producer import (
+    StationComputeWaitProducerMixin, StationComputeDeadline, StationComputeRetired, StationFeedbackBracketGap,
+    ObservationArrivalStationChanged)
+from alicia_grasp_modes.contact_station_producer import ContactStationProducerMixin
+from alicia_grasp_modes.feedback_bracket_gap import (
+    KIND as FEEDBACK_GAP, InitialFeedbackBracketGap, validate_gap_evidence)
 from alicia_grasp_modes.tabletop import (
     Candidate, Config, TargetTracker, segment_with_support_fallback, _validate_support_plane_update,
-    _matching_candidates)
+    _matching_candidates, _support_offset_diagnostics)
 from alicia_grasp_modes.rgb_instance import refine_candidate
+from alicia_grasp_modes.arrival_fragment_group import (
+    recover_arrival_fragment_group, recover_arrival_matching_fragments)
 from alicia_grasp_modes.metric_ambiguity_identity import metric_seeded_identity_evidence
 from alicia_grasp_modes.acquisition import InitialAcquisition
 from alicia_grasp_modes.loss_observation import first_loss_observation, candidate_loss_observation
@@ -42,6 +54,13 @@ from alicia_grasp_modes.rgb_observation_source import (
     JOINT_NAMES, bracket_feedback, camera_geometry_snapshot, digest,
     empty_observation_interest, measured_support_coverage, require_fresh_source)
 from alicia_grasp_modes.selection import parse_selection
+from alicia_grasp_modes.observe_return_measurement import (
+    REQUEST_TOPIC as MEASUREMENT_REQUEST_TOPIC, ACK_TOPIC as MEASUREMENT_ACK_TOPIC,
+    parse_measurement_request, measurement_ack, STATION_REQUALIFICATION,
+    station_requalification_key)
+from alicia_grasp_modes.observation_arrival_confirmation import ObservationArrivalConfirmation
+from alicia_grasp_modes.observation_appearance import FrozenObservationAppearance
+from alicia_flexible_grasp.robot.observation_view_gateway import _camera_configuration_contract
 from alicia_grasp_modes.rgb_prefix_preflight import validate_prefix_preflight_receipt
 from alicia_flexible_grasp.robot.observation_view_limits import (
     DEFAULT_OBSERVATION_VIEW_PARAMETERS, effective_observation_view_limits)
@@ -155,7 +174,7 @@ class RgbdIngressTiming:
                     scope='subscriber_filter_arrival_before_exact_synchronizer_not_socket_or_exposure')
 
 
-class UnknownTabletopPerception:
+class UnknownTabletopPerception(ContactStationProducerMixin, StationComputeWaitProducerMixin):
     def __init__(self):
         cfg = rospy.get_param('/unknown_perception', {})
         camera = rospy.get_param('/camera', {})
@@ -201,6 +220,18 @@ class UnknownTabletopPerception:
             'rgb_reference_status': rospy.Publisher('/perception/rgb_acquisition/reference_status',
                 String, queue_size=2, latch=True),
         }
+        self._observation_measurement = None
+        self._setup_contact_station_io()
+        self._observation_measurement_status = None
+        self._observation_measurement_seen = deque(maxlen=32)
+        self._observation_measurement_ack_pub = rospy.Publisher(MEASUREMENT_ACK_TOPIC, String,
+            queue_size=8, latch=True)
+        self._observation_measurement_sub = rospy.Subscriber(MEASUREMENT_REQUEST_TOPIC, String,
+            self._observation_measurement_request_cb, queue_size=8)
+        self._station_compute_phase_sub = rospy.Subscriber('/grasp/near_field_phase', NearFieldPlanningPhase,
+            self._station_compute_phase_cb, queue_size=4)
+        self._station_compute_state_sub = rospy.Subscriber('/grasp/state', GraspState,
+            self._station_compute_state_cb, queue_size=4)
         self.selection_sub = rospy.Subscriber('/grasp_mode/selection', String, self.selection, queue_size=1)
         self.rgb_interest_joint_sub = rospy.Subscriber('/alicia_d/accepted_joint_states', JointState,
             self._rgb_interest_joint_cb, queue_size=50)
@@ -244,6 +275,8 @@ class UnknownTabletopPerception:
                 self.last_receive_wall = time.monotonic()
             self.anchor_source_stamp_ns = 0
             self.first_loss = None
+            self._station_compute_registration = None
+            self._station_compute_frame = None
             self.last_good_source_stamp_ns = 0
             self._locked_rgb_hold_reference = None
             self._locked_rgb_hold_status = None
@@ -251,6 +284,11 @@ class UnknownTabletopPerception:
             self._locked_source_status = None
             self._metric_ambiguity_pending = None
             self._metric_ambiguity_status = None
+            self._observation_measurement = None
+            self._observation_measurement_status = None
+            self._contact_station_prepared = None
+            self._contact_station_status = None
+            self._contact_spatial_context = None
             self.tracker.reset()
             self.acquisition.reset()
             self._clear_rgb_acquisition('selection_changed')
@@ -613,6 +651,10 @@ class UnknownTabletopPerception:
         with self.input_lock:
             if stamp_ns != self._rgb_interest_epoch:
                 self._rgb_interest_epoch = stamp_ns
+                self._contact_spatial_context = None
+                measurement = getattr(self, '_observation_measurement', None)
+                if measurement is not None:
+                    measurement['invalidated_reason'] = 'control_reference_epoch_changed'
                 if getattr(self, '_locked_source_pending', None) is not None:
                     self._locked_source_pending['invalidated_reason'] = 'control_reference_epoch_changed'
                 if getattr(self, '_metric_ambiguity_pending', None) is not None:
@@ -643,7 +685,25 @@ class UnknownTabletopPerception:
             if epoch is None or stamp_ns < epoch:
                 return
             self._rgb_interest_feedback.append((int(stamp_ns), q))
+            measurement = getattr(self, '_observation_measurement', None)
+            if (measurement is not None and measurement.get('arrival_q') is not None
+                    and stamp_ns >= measurement['request']['arrival_stamp_ns']
+                    and np.max(np.abs(q-measurement['arrival_q'])) > .004):
+                measurement['invalidated_reason'] = 'movement_after_stationary_arrival'
             hold = getattr(self, '_locked_rgb_hold_reference', None)
+            initial_station = (hold or {}).get('initial_station_current_support')
+            if (initial_station is not None and stamp_ns >= initial_station['source_stamp_ns']
+                    and np.max(np.abs(q-initial_station['q_source'])) > .004):
+                # This origin never rolls forward with successful frames.
+                initial_station['invalidated_reason'] = 'movement_after_initial_acquisition'
+            arrival_retry = (hold or {}).get('observation_arrival_retry')
+            if (arrival_retry is not None and stamp_ns >= arrival_retry['qualified_source_ns']
+                    and np.max(np.abs(q-arrival_retry['arrival_q'])) > .004):
+                self._station_requalification_feedback(stamp_ns, q)
+                # Keep the original arrival station across successful frames;
+                # small successive changes must not move this qualification.
+                arrival_retry['invalidated_reason'] = 'movement_after_qualified_arrival'
+                hold.pop('observation_arrival_retry', None)
             if (hold is not None and stamp_ns >= hold['source_stamp_ns']
                     and np.max(np.abs(q-hold['q_source'])) > .004):
                 # A later return to the old pose cannot hide measured motion.
@@ -657,28 +717,32 @@ class UnknownTabletopPerception:
         # Cached ROS parameters still receive parameter updates; hash the model
         # only when its text changes. No URDF parse or disk I/O occurs here.
         get = rospy.get_param_cached
-        model = get('/robot_description', '')
-        if not isinstance(model, str) or not model.strip():
-            raise ValueError('observation_robot_model_unavailable')
-        if self._rgb_interest_model_cache is None or self._rgb_interest_model_cache[0] != model:
-            self._rgb_interest_model_cache = (model, hashlib.sha256(model.encode()).hexdigest())
-        with self.input_lock:
+        with self._rgb_timing_component('context.model_parameter'):
+            model = get('/robot_description', '')
+            if not isinstance(model, str) or not model.strip():
+                raise ValueError('observation_robot_model_unavailable')
+            if self._rgb_interest_model_cache is None or self._rgb_interest_model_cache[0] != model:
+                self._rgb_interest_model_cache = (model, hashlib.sha256(model.encode()).hexdigest())
+        with self._rgb_timed_input_lock('context.input_lock_wait'):
             epoch = self._rgb_interest_epoch
-        tool_camera = transform_matrix(self.buffer.lookup_transform(
-            'tool0', self.camera_frame, stamp, rospy.Duration(.1)))
-        current_tool_camera = transform_matrix(self.buffer.lookup_transform(
-            'tool0', self.camera_frame, rospy.Time(0), rospy.Duration(.1)))
+        with self._rgb_timing_component('context.source_tf'):
+            tool_camera = transform_matrix(self.buffer.lookup_transform(
+                'tool0', self.camera_frame, stamp, rospy.Duration(.1)))
+        with self._rgb_timing_component('context.latest_tf'):
+            current_tool_camera = transform_matrix(self.buffer.lookup_transform(
+                'tool0', self.camera_frame, rospy.Time(0), rospy.Duration(.1)))
         if not np.array_equal(tool_camera, current_tool_camera):
             raise ValueError('observation_camera_mount_changed')
         # rospy's cached parameter values can be mutable shared dictionaries.
         # Freeze every nested value now: an in-place parameter update must not
         # rewrite the context attributed to an already acquired image.
-        return deepcopy(dict(epoch_ns=epoch, selection=parse_selection(get('/grasp_mode/selection')),
-            camera=camera_geometry_snapshot(get('/camera')),
-            perception=get('/unknown_perception', {}), handeye=get('/handeye', {}),
-            model_sha256=self._rgb_interest_model_cache[1], tool_camera=tool_camera.tolist(),
-            observation_view_parameters={key: get('/grasp_6d/remote/' + key, value)
-                for key, value in DEFAULT_OBSERVATION_VIEW_PARAMETERS.items()}))
+        with self._rgb_timing_component('context.parameter_snapshot'):
+            return deepcopy(dict(epoch_ns=epoch, selection=parse_selection(get('/grasp_mode/selection')),
+                camera=camera_geometry_snapshot(get('/camera')),
+                perception=get('/unknown_perception', {}), handeye=get('/handeye', {}),
+                model_sha256=self._rgb_interest_model_cache[1], tool_camera=tool_camera.tolist(),
+                observation_view_parameters={key: get('/grasp_6d/remote/' + key, value)
+                    for key, value in DEFAULT_OBSERVATION_VIEW_PARAMETERS.items()}))
 
     def _rgb_bracketed_feedback(self, stamp_ns, epoch):
         """Await the trailing real sample without renewing the image lifetime.
@@ -690,7 +754,7 @@ class UnknownTabletopPerception:
         deadline = time.monotonic()+.12
         for attempt in range(7):
             require_fresh_source(stamp_ns, rospy.Time.now().to_nsec(), min(self.max_age, .8))
-            with self.input_lock:
+            with self._rgb_timed_input_lock('feedback.input_lock_wait'):
                 if epoch != self._rgb_interest_epoch:
                     raise ValueError('observation_control_reference_epoch_changed')
                 feedback = tuple(self._rgb_interest_feedback)
@@ -714,7 +778,8 @@ class UnknownTabletopPerception:
                             span_ns=None if before is None or after is None else after[0]-before[0],
                             maximum_span_ns=200_000_000, bracket_qualified=False)
                     raise
-                time.sleep(min(.02, max(0., deadline-time.monotonic())))
+                with self._rgb_timing_component('feedback.trailing_sample_wait'):
+                    time.sleep(min(.02, max(0., deadline-time.monotonic())))
 
     def _update_initial_rgb_interest(self, source, depth, intrinsics, transform, segmentation, camera):
         """Expose bounded weak evidence only; do not mutate the target tracker."""
@@ -1174,7 +1239,9 @@ class UnknownTabletopPerception:
             ingress_to_processing_sec=(None if not ingress else
                 max(0., started-ingress['ingress_monotonic_sec'])),
             max_frame_age_sec=self.max_age, stage='input_age_check', failed_stage=None,
-            stage_wall_sec={}, stage_thread_cpu_sec={}, stage_end_elapsed_sec={})
+            stage_wall_sec={}, stage_thread_cpu_sec={}, stage_end_elapsed_sec={},
+            decode_components={}, rgb_components={}, segmentation_components={})
+        self._processing_timing_thread_ident = threading.get_ident()
         self._processing_stage_started = (started, self._processing_timing['processing_start_thread_cpu_sec'])
 
     def _frame_timing_stage(self, stage):
@@ -1191,6 +1258,119 @@ class UnknownTabletopPerception:
         timing['stage'] = stage
         self._processing_stage_started = (wall, cpu)
 
+    @contextmanager
+    def _decode_timing_component(self, name):
+        """Measure existing decode work without changing its errors or authority."""
+        timing = getattr(self, '_processing_timing', None)
+        if timing is None:
+            yield
+            return
+        wall, cpu = time.monotonic(), time.thread_time()
+        completed = False
+        try:
+            yield
+            completed = True
+        finally:
+            # A selection reset must not attach old work to a newer frame.
+            if getattr(self, '_processing_timing', None) is timing:
+                timing['decode_components'][name] = dict(
+                    wall_sec=max(0., time.monotonic()-wall),
+                    thread_cpu_sec=max(0., time.thread_time()-cpu),
+                    completed=completed)
+
+    @contextmanager
+    def _rgb_timing_component(self, name):
+        """Nested numeric evidence only; repeated calls retain separate records.
+
+        Only the processing thread records against its frame. In particular,
+        source-context calls made by ROS callbacks cannot pollute this timing.
+        The optional finish callback measures lock acquisition without counting
+        work performed while holding the lock. Nested durations overlap.
+        """
+        timing = getattr(self, '_processing_timing', None)
+        if (timing is None or getattr(self, '_processing_timing_thread_ident', None)
+                != threading.get_ident()):
+            yield lambda: None
+            return
+        wall, cpu, process_cpu = time.monotonic(), time.thread_time(), time.process_time()
+        stage = timing['stage']
+        finished = False
+        def finish(completed=True):
+            nonlocal finished
+            if finished:
+                return
+            finished = True
+            if getattr(self, '_processing_timing', None) is timing:
+                timing.setdefault('rgb_components', {}).setdefault(name, []).append(dict(
+                    stage=stage,
+                    start_elapsed_sec=max(0., wall-timing['processing_start_monotonic_sec']),
+                    wall_sec=max(0., time.monotonic()-wall),
+                    thread_cpu_sec=max(0., time.thread_time()-cpu),
+                    process_cpu_sec=max(0., time.process_time()-process_cpu),
+                    completed=completed))
+        completed = False
+        try:
+            yield finish
+            completed = True
+        finally:
+            finish(completed)
+
+    @contextmanager
+    def _rgb_timed_input_lock(self, name):
+        # Retain the original context-manager acquire/release and exceptions.
+        with self._rgb_timing_component(name) as acquired:
+            with self.input_lock:
+                acquired()
+                yield
+
+    @contextmanager
+    def _segmentation_timing_component(self, name):
+        """Observe existing segmentation work; GC deltas are process-wide counts.
+
+        Counts neither attribute a collection to this thread nor measure its
+        duration. No GC setting, source deadline, or acceptance rule changes.
+        """
+        timing = getattr(self, '_processing_timing', None)
+        if (timing is None or getattr(self, '_processing_timing_thread_ident', None)
+                != threading.get_ident()):
+            yield lambda: None
+            return
+        wall, cpu, process_cpu = time.monotonic(), time.thread_time(), time.process_time()
+        counts = gc.get_stats()
+        stage = timing['stage']
+        finished = False
+        def finish(completed=True):
+            nonlocal finished
+            if finished:
+                return
+            finished = True
+            if getattr(self, '_processing_timing', None) is timing:
+                wall_end, cpu_end, process_end = time.monotonic(), time.thread_time(), time.process_time()
+                current = gc.get_stats()
+                timing.setdefault('segmentation_components', {}).setdefault(name, []).append(dict(
+                    stage=stage,
+                    start_elapsed_sec=max(0., wall-timing['processing_start_monotonic_sec']),
+                    wall_sec=max(0., wall_end-wall), thread_cpu_sec=max(0., cpu_end-cpu),
+                    process_cpu_sec=max(0., process_end-process_cpu), completed=completed,
+                    gc_counts_scope='process_wide_counts_not_duration_or_thread_attribution',
+                    gc_generation_deltas=[dict(generation=index, **{
+                        key: after[key]-before[key]
+                        for key in ('collections', 'collected', 'uncollectable')})
+                        for index, (before, after) in enumerate(zip(counts, current))]))
+        completed = False
+        try:
+            yield finish
+            completed = True
+        finally:
+            finish(completed)
+
+    @contextmanager
+    def _segmentation_timed_lock(self):
+        with self._segmentation_timing_component('station_lock_wait') as acquired:
+            with self.lock:
+                acquired()
+                yield
+
     def _source_timing_status(self, source):
         timing = getattr(self, '_processing_timing', None)
         if timing is None or timing['source_stamp_ns'] != source[0].header.stamp.to_nsec():
@@ -1198,6 +1378,11 @@ class UnknownTabletopPerception:
         result = dict(timing)
         for key in ('stage_wall_sec', 'stage_thread_cpu_sec', 'stage_end_elapsed_sec'):
             result[key] = dict(timing[key])
+        result['decode_components'] = {
+            name: dict(component) for name, component in timing['decode_components'].items()}
+        result['rgb_components'] = {name: [dict(component) for component in components]
+            for name, components in timing.get('rgb_components', {}).items()}
+        result['segmentation_components'] = deepcopy(timing.get('segmentation_components', {}))
         wall, cpu = time.monotonic(), time.thread_time()
         stage = timing['stage']
         old_wall, old_cpu = self._processing_stage_started
@@ -1230,6 +1415,10 @@ class UnknownTabletopPerception:
                        label='unknown_small', confidence_kind='geometry_quality',
                        semantic_probability=None, target_locked=self.tracker.anchor is not None,
                        target_lost=self.tracker.lost)
+        payload['support_plane_consistency_policy'] = dict(
+            support_max_local_shift_m=float(self.config.support_max_local_shift_m),
+            support_local_shift_warning_m=float(self.config.support_local_shift_warning_m),
+            support_max_normal_change_deg=float(self.config.support_max_normal_change_deg))
         with self.input_lock:
             interest = deepcopy(getattr(self, '_rgb_observation_interest', None))
         if interest is not None:
@@ -1246,12 +1435,35 @@ class UnknownTabletopPerception:
         ambiguity = getattr(self, '_metric_ambiguity_status', None)
         if ambiguity is not None:
             payload['metric_ambiguity_hold'] = deepcopy(ambiguity)
+        measurement = getattr(self, '_observation_measurement_status', None)
+        if getattr(self, '_contact_station_status', None) is not None:
+            payload['contact_station_retirement'] = deepcopy(self._contact_station_status)
+        if measurement is not None:
+            payload['observation_measurement'] = deepcopy(measurement)
+        reference = getattr(self, '_locked_rgb_hold_reference', None)
+        marker = (reference or {}).get('initial_station_current_support')
+        if marker is not None and not marker.get('invalidated_reason'):
+            template = marker.get('identity_template')
+            if template is not None:
+                payload['initial_station_identity_template'] = deepcopy(template['provenance'])
+            if (state == 'ready' and source is not None
+                    and reference['source_stamp_ns'] == source[0].header.stamp.to_nsec()
+                    and self._initial_station_selection_matches()
+                    and rospy.get_param_cached('/gui/joint_direct_mode', False) is not True
+                    and self.first_loss is None and not self.tracker.lost):
+                payload['initial_station_measurement'] = dict(
+                    version=1, state='qualified', source_stamp_ns=reference['source_stamp_ns'],
+                    station_source_stamp_ns=marker['source_stamp_ns'], epoch_ns=marker['epoch_ns'],
+                    source_id=marker['source_id'], q_station_rad=marker['q_source'].tolist(),
+                    refined_mask_sha256=reference['refined_mask_sha256'],
+                    metric_geometry_authority=False, motion_authorized=False)
         if self.first_loss is not None:
             payload['first_loss'] = self.first_loss
         if self.tracker.anchor is not None:
             payload.update(anchor_source_stamp_ns=self.anchor_source_stamp_ns,
                            anchor_position_base=self.tracker.anchor.position_base.tolist(),
                            anchor_extent_m=self.tracker.anchor.extent_m.tolist(),
+                           reference_object_height_m=getattr(self.tracker.anchor, 'metrics', {}).get('median_height_m'),
                            reference_support_plane_base=self.tracker.plane_base.tolist(),
                            reference_support_footprint_base=self.tracker.anchor.support_footprint_base.tolist())
         if source is not None:
@@ -1283,6 +1495,43 @@ class UnknownTabletopPerception:
                            position_base=candidate.position_base.tolist())
         if elapsed is not None:
             payload['processing_seconds'] = float(elapsed)
+        # Publish warning-band evidence on the existing recorded status topic.
+        # Pending arrival frames have no publishable candidate yet; their
+        # independently measured support is carried by the measurement audit.
+        audits = []
+        if candidate is not None:
+            audits.append(('geometry_metrics', candidate.metrics, payload.get('source_stamp_ns')))
+        for name in ('rgb_acquisition_handoff', 'rgb_identity_hold', 'source_qualification',
+                     'metric_ambiguity_hold', 'observation_measurement'):
+            record = payload.get(name) or {}
+            audit = record.get('support_audit')
+            if isinstance(audit, dict):
+                audits.append((name, audit, audit.get('source_stamp_ns',
+                    audit.get('current_support_source_stamp_ns', record.get('source_stamp_ns')))))
+                for member in audit.get('support_member_audits', ()):
+                    member_audit = member.get('audit')
+                    if isinstance(member_audit, dict):
+                        audits.append((name+'.member_'+str(member.get('member_index')), member_audit,
+                            member_audit.get('current_support_source_stamp_ns', record.get('source_stamp_ns'))))
+        warnings = []
+        for kind, audit, stamp in audits:
+            shift = audit.get('support_reference_max_distance_m')
+            if (not isinstance(shift, (int, float)) or isinstance(shift, bool)
+                    or not np.isfinite(shift) or shift < 0.):
+                continue
+            diagnostics = _support_offset_diagnostics(shift, self.config)
+            if diagnostics['support_reference_distance_warning']:
+                warnings.append(dict(diagnostics, audit_kind=kind, source_stamp_ns=stamp,
+                    support_reference_max_distance_m=float(shift),
+                    code='SUPPORT_PLANE_LOCAL_SHIFT_WARNING'))
+        if warnings:
+            payload['support_plane_warnings'] = warnings
+            largest = max(warnings, key=lambda item: item['support_reference_max_distance_m'])
+            rospy.logwarn_throttle(3., 'Unknown support offset warning generation=%s source=%s '
+                'distance=%.6f m warning=%.6f m hard=%.6f m', self.generation,
+                largest['source_stamp_ns'], largest['support_reference_max_distance_m'],
+                largest['support_reference_warning_distance_m'], largest['support_reference_hard_distance_m'])
+        self._station_compute_status(payload, source)
         self.pubs['detector_status'].publish(String(data=json.dumps(payload, sort_keys=True)))
 
     def _initial_visual_insufficiency(self, reason, source, depth, intrinsics,
@@ -1304,44 +1553,51 @@ class UnknownTabletopPerception:
         tracker = self.tracker if tracker is None else tracker
         try:
             stamp_ns = source[0].header.stamp.to_nsec()
-            context = self._rgb_interest_source_context(source[0].header.stamp)
+            with self._rgb_timing_component('hold.context_initial'):
+                context = self._rgb_interest_source_context(source[0].header.stamp)
             epoch = context['epoch_ns']
             if (context['perception'] != self._rgb_interest_config
                     or context['selection']['generation'] != self.generation
                     or context['selection']['stamp_ns'] != self.selection_ns):
                 return None
-            records, (q, before, after) = self._rgb_bracketed_feedback(stamp_ns, epoch)
-            rgb = self.bridge.imgmsg_to_cv2(source[0], desired_encoding='bgr8')
-            raw_depth = self.bridge.imgmsg_to_cv2(source[1], desired_encoding='passthrough')
+            with self._rgb_timing_component('hold.feedback'):
+                records, (q, before, after) = self._rgb_bracketed_feedback(stamp_ns, epoch)
+            with self._rgb_timing_component('hold.bridge_conversion'):
+                rgb = self.bridge.imgmsg_to_cv2(source[0], desired_encoding='bgr8')
+                raw_depth = self.bridge.imgmsg_to_cv2(source[1], desired_encoding='passthrough')
             if (rgb.shape != (camera['height'], camera['width'], 3)
                     or raw_depth.shape != rgb.shape[:2]
                     or source[1].header.stamp.to_nsec() != stamp_ns):
                 return None
-            mask = _mask(candidate.mask, rgb.shape[:2])
-            rgb_valid = rectification_rgb_valid_mask(camera, rgb.shape[:2])
-            if rgb_valid is not None and np.any((mask > 0) & ~rgb_valid):
-                return None
-            histogram, contour = _appearance(rgb, mask)
+            with self._rgb_timing_component('hold.mask_rgb_validity'):
+                mask = _mask(candidate.mask, rgb.shape[:2])
+                rgb_valid = rectification_rgb_valid_mask(camera, rgb.shape[:2])
+                if rgb_valid is not None and np.any((mask > 0) & ~rgb_valid):
+                    return None
+            with self._rgb_timing_component('hold.appearance'):
+                histogram, contour = _appearance(rgb, mask)
             def immutable(array):
                 value = np.ascontiguousarray(array)
                 return np.frombuffer(value.tobytes(), dtype=value.dtype).reshape(value.shape)
-            reference = dict(source_stamp_ns=stamp_ns, source_id=digest(context),
-                epoch_ns=epoch, generation=self.generation, selection_ns=self.selection_ns,
-                config_sha256=digest(asdict(self.config)), image_shape=rgb.shape[:2],
-                source_rgb_sha256=hashlib.sha256(np.ascontiguousarray(rgb).tobytes()).hexdigest(),
-                source_depth_sha256=hashlib.sha256(np.ascontiguousarray(raw_depth).tobytes()).hexdigest(),
-                refined_mask_sha256=hashlib.sha256(mask.tobytes()).hexdigest(),
-                bgr=immutable(rgb), mask=immutable(mask), histogram=immutable(histogram), contour=immutable(contour),
-                q_source=immutable(q), accepted_before=before, accepted_after=after,
-                anchor_fingerprint=_candidate_fingerprint(tracker.anchor),
-                last_fingerprint=_candidate_fingerprint(tracker.last),
-                reference_plane=immutable(tracker.plane_base),
-                reference_footprint=immutable(tracker.anchor.support_footprint_base),
-                pose_invalidated=False)
+            with self._rgb_timing_component('hold.hash_copy_fingerprints'):
+                reference = dict(source_stamp_ns=stamp_ns, source_id=digest(context),
+                    epoch_ns=epoch, generation=self.generation, selection_ns=self.selection_ns,
+                    config_sha256=digest(asdict(self.config)), image_shape=rgb.shape[:2],
+                    source_rgb_sha256=hashlib.sha256(np.ascontiguousarray(rgb).tobytes()).hexdigest(),
+                    source_depth_sha256=hashlib.sha256(np.ascontiguousarray(raw_depth).tobytes()).hexdigest(),
+                    refined_mask_sha256=hashlib.sha256(mask.tobytes()).hexdigest(),
+                    bgr=immutable(rgb), mask=immutable(mask), histogram=immutable(histogram), contour=immutable(contour),
+                    q_source=immutable(q), accepted_before=before, accepted_after=after,
+                    anchor_fingerprint=_candidate_fingerprint(tracker.anchor),
+                    last_fingerprint=_candidate_fingerprint(tracker.last),
+                    reference_plane=immutable(tracker.plane_base),
+                    reference_footprint=immutable(tracker.anchor.support_footprint_base),
+                    pose_invalidated=False)
             require_fresh_source(stamp_ns, rospy.Time.now().to_nsec(), min(self.max_age, .8))
-            if digest(self._rgb_interest_source_context(source[0].header.stamp)) != reference['source_id']:
-                return None
-            with self.input_lock:
+            with self._rgb_timing_component('hold.context_recheck'):
+                if digest(self._rgb_interest_source_context(source[0].header.stamp)) != reference['source_id']:
+                    return None
+            with self._rgb_timed_input_lock('hold.input_lock_wait'):
                 if epoch != self._rgb_interest_epoch:
                     return None
                 relevant = [values for ns, values in self._rgb_interest_feedback if ns >= stamp_ns]
@@ -1351,6 +1607,335 @@ class UnknownTabletopPerception:
         except (ValueError, KeyError, TypeError, AttributeError, cv2.error,
                 tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
             return None
+
+    @staticmethod
+    def _initial_station_template_provenance(reference):
+        return dict(version=1, role='immutable_initial_acquired_rgb_identity',
+            source_stamp_ns=reference['source_stamp_ns'], source_id=reference['source_id'],
+            generation=reference['generation'], selection_stamp_ns=reference['selection_ns'],
+            epoch_ns=reference['epoch_ns'], image_shape=list(reference['image_shape']),
+            source_rgb_sha256=reference['source_rgb_sha256'],
+            refined_mask_sha256=reference['refined_mask_sha256'])
+
+    def _initial_station_identity_template(self, source, reference):
+        """A fixed appearance baseline, never a fresh metric/source reference."""
+        self._require_initial_station_support_reference(source, reference)
+        marker = reference['initial_station_current_support']
+        template = marker['identity_template']
+        provenance = template['provenance']
+        expected = dict(version=1, role='immutable_initial_acquired_rgb_identity',
+            source_stamp_ns=marker['source_stamp_ns'], source_id=marker['source_id'],
+            generation=self.generation, selection_stamp_ns=self.selection_ns,
+            epoch_ns=marker['epoch_ns'], image_shape=list(reference['image_shape']),
+            source_rgb_sha256=hashlib.sha256(template['bgr'].tobytes()).hexdigest(),
+            refined_mask_sha256=hashlib.sha256(template['mask'].tobytes()).hexdigest())
+        if (provenance != expected or marker['source_stamp_ns'] != self.anchor_source_stamp_ns
+                or template['bgr'].shape != tuple(reference['image_shape']) + (3,)
+                or template['mask'].shape != tuple(reference['image_shape'])
+                or template['bgr'].flags.writeable or template['mask'].flags.writeable):
+            raise ValueError('initial_station_identity_template_changed')
+        return template
+
+    def _initial_station_selection_matches(self):
+        try:
+            return self.mode == 'unknown' and parse_selection(
+                rospy.get_param_cached('/grasp_mode/selection')) == dict(
+                    mode='unknown', strategy='observe_return',
+                    generation=self.generation, stamp_ns=self.selection_ns)
+        except (ValueError, TypeError, KeyError):
+            return False
+
+    def _initial_station_support_reference(self, source, expected=None):
+        """Current-table preference at the original measured, stationary pose.
+
+        This supplies neither an RGB retry nor identity/geometry authority.
+        Every new frame still needs the original independent support audit.
+        """
+        reference = getattr(self, '_locked_rgb_hold_reference', None)
+        marker = (reference or {}).get('initial_station_current_support')
+        if marker is None:
+            return None
+        if (getattr(self, '_observation_measurement', None) is not None
+                or getattr(self, '_metric_ambiguity_pending', None) is not None):
+            return None
+        try:
+            if (expected is not None and reference is not expected
+                    or marker.get('invalidated_reason') or not self._initial_station_selection_matches()
+                    or self.first_loss is not None
+                    or rospy.get_param_cached('/gui/joint_direct_mode', False) is True
+                    or reference['source_id'] != marker['source_id']
+                    or reference['epoch_ns'] != marker['epoch_ns']
+                    or reference['anchor_fingerprint'] != marker['anchor_fingerprint']
+                    or not np.array_equal(reference['reference_plane'], marker['reference_plane'])):
+                raise ValueError('initial_station_binding_changed')
+            self._qualify_support_gap_source(source, reference)
+            with self.input_lock:
+                values = [q for ns, q in self._rgb_interest_feedback
+                          if ns >= reference['source_stamp_ns']]
+                if (self._locked_rgb_hold_reference is not reference
+                        or reference.get('initial_station_current_support') is not marker
+                        or marker.get('invalidated_reason') or not values
+                        or np.max(np.abs(reference['q_source']-marker['q_source'])) > .004
+                        or any(np.max(np.abs(q-marker['q_source'])) > .004 for q in values)):
+                    raise ValueError('initial_station_pose_changed')
+            return reference
+        except (ValueError, KeyError, TypeError, AttributeError, tf2_ros.LookupException,
+                tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as exc:
+            if str(exc) == 'accepted_feedback_does_not_bracket_source':
+                evidence = getattr(exc, 'accepted_feedback_evidence', None)
+                try:
+                    self._validate_initial_feedback_gap(source, reference, evidence)
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    pass
+                else:
+                    # Reject this source without permanently revoking its still
+                    # fresh station. The outer process publishes false geometry
+                    # and a separately typed, non-authorizing pending receipt.
+                    raise InitialFeedbackBracketGap(reference, evidence) from exc
+            marker['invalidated_reason'] = str(exc)
+            timing = getattr(self, '_processing_timing', None)
+            if timing is not None:
+                timing['initial_station_invalidated_reason'] = str(exc)
+            return None
+
+    def _validate_initial_feedback_gap(self, source, reference, evidence):
+        marker = reference['initial_station_current_support']
+        pending = getattr(self, '_locked_source_pending', None)
+        if (self._locked_rgb_hold_reference is not reference or marker.get('invalidated_reason')
+                or not self._initial_station_selection_matches() or self.first_loss is not None
+                or self.tracker.lost or reference['pose_invalidated']
+                or rospy.get_param_cached('/gui/joint_direct_mode', False) is True
+                or getattr(self, '_observation_measurement', None) is not None
+                or getattr(self, '_metric_ambiguity_pending', None) is not None
+                or reference.get('observation_arrival_retry') is not None
+                or (pending is not None and pending.get('kind') != FEEDBACK_GAP)
+                or (self.generation, self.selection_ns, self._rgb_interest_epoch) !=
+                   (reference['generation'], reference['selection_ns'], reference['epoch_ns'])
+                or self.last_good_source_stamp_ns != reference['source_stamp_ns']
+                or reference['source_id'] != marker['source_id']
+                or reference['epoch_ns'] != marker['epoch_ns']
+                or digest(asdict(self.config)) != reference['config_sha256']
+                or _candidate_fingerprint(self.tracker.anchor) != reference['anchor_fingerprint']
+                or _candidate_fingerprint(self.tracker.last) != reference['last_fingerprint']
+                or marker['anchor_fingerprint'] != reference['anchor_fingerprint']
+                or not np.array_equal(self.tracker.plane_base, reference['reference_plane'])
+                or not np.array_equal(marker['reference_plane'], reference['reference_plane'])
+                or digest(self._rgb_interest_source_context(source[0].header.stamp)) != reference['source_id']):
+            raise ValueError('feedback_gap_station_changed')
+        ns = source[0].header.stamp.to_nsec()
+        if (source[1].header.stamp.to_nsec() != ns
+                or pending is not None and ns <= pending['last_unqualified_source_stamp_ns']):
+            raise ValueError('feedback_gap_source_changed')
+        with self.input_lock:
+            validate_gap_evidence(evidence, ns, reference['source_stamp_ns'], reference['epoch_ns'],
+                marker['q_source'], rospy.Time.now().to_nsec(), min(self.max_age, .8))
+            seen = [q for stamp, q in self._rgb_interest_feedback if stamp >= reference['source_stamp_ns']]
+            if (not seen or self._locked_rgb_hold_reference is not reference
+                    or self._rgb_interest_epoch != reference['epoch_ns'] or reference['pose_invalidated']
+                    or np.max(np.abs(reference['q_source']-marker['q_source'])) > .004
+                    or any(np.max(np.abs(q-marker['q_source'])) > .004 for q in seen)):
+                raise ValueError('feedback_gap_measured_pose_changed')
+
+    def _publish_initial_feedback_gap(self, source, error):
+        with self.input_lock:
+            reference = error.reference
+            self._validate_initial_feedback_gap(source, reference, error.evidence)
+            ns = source[0].header.stamp.to_nsec()
+            pending = getattr(self, '_locked_source_pending', None)
+            self._arrival_frame_completion = None  # Never use a 2x completion allowance for this wait.
+            self._locked_source_pending = dict(kind=FEEDBACK_GAP,
+                reference_source_stamp_ns=reference['source_stamp_ns'], source_id=reference['source_id'],
+                first_unqualified_source_stamp_ns=ns if pending is None else pending['first_unqualified_source_stamp_ns'],
+                last_unqualified_source_stamp_ns=ns, feedback_gap_source_stamp_ns=ns,
+                feedback_gap_evidence=deepcopy(error.evidence))
+            self._locked_source_status = dict(self._locked_source_pending,
+                state='pending_feedback_bracket', source_stamp_ns=ns, source_qualified=False,
+                identity_verified=False, support_measurement_available=False, metric_geometry_authority=False,
+                motion_authorized=False, reference_refreshed=False, maximum_hold_seconds=min(self.max_age, .8))
+            self.unavailable('accepted_feedback_bracket_pending_revalidation', source[0].header.stamp,
+                             source, lose=False)
+
+    def _require_initial_station_support_reference(self, source, reference):
+        if (reference is not None and
+                self._initial_station_support_reference(source, expected=reference) is not reference):
+            raise ValueError('initial_station_current_support_invalidated')
+
+    def _observation_arrival_retry_reference(self, source, camera, expected=None, check_last=True):
+        """Qualify only the third same-frame RGB crop at an acknowledged station.
+
+        This marker supplies no mask, geometry or recovery permission. Its
+        session deadline and measured arrival joints never advance with frames.
+        """
+        reference = getattr(self, '_locked_rgb_hold_reference', None)
+        marker = (reference or {}).get('observation_arrival_retry')
+        if marker is None:
+            return None
+        try:
+            stamp_ns = source[0].header.stamp.to_nsec()
+            now_ns = rospy.Time.now().to_nsec()
+            if (expected is not None and reference is not expected
+                    or marker.get('invalidated_reason') or reference['pose_invalidated']
+                    or self.tracker.lost or self.first_loss is not None
+                    or self.tracker.anchor is None or self.mode != 'unknown'
+                    or self.last_good_source_stamp_ns != reference['source_stamp_ns']
+                    or not reference['source_stamp_ns'] < stamp_ns < marker['session_deadline_ns']
+                    or now_ns >= marker['session_deadline_ns']
+                    or time.monotonic() >= marker['session_deadline_monotonic']
+                    or (self.generation, self.selection_ns, self._rgb_interest_epoch) !=
+                       (reference['generation'], reference['selection_ns'], marker['epoch_ns'])
+                    or reference['source_id'] != marker['source_id']
+                    or digest(asdict(self.config)) != marker['config_sha256']
+                    or _candidate_fingerprint(self.tracker.anchor) != marker['anchor_fingerprint']
+                    or not np.array_equal(self.tracker.plane_base, marker['reference_plane'])
+                    or (check_last and _candidate_fingerprint(self.tracker.last) != reference['last_fingerprint'])
+                    or rospy.get_param_cached('/gui/joint_direct_mode', False) is True
+                    or digest(_camera_configuration_contract(camera)) != marker['camera_configuration_sha256']):
+                raise ValueError('observation_arrival_station_changed')
+            self._require_arrival_frame_reference_lifetime(reference, marker, stamp_ns, now_ns)
+            require_fresh_source(stamp_ns, now_ns, min(self.max_age, .8))
+            if (source[1].header.stamp.to_nsec() != stamp_ns
+                    or digest(self._rgb_interest_source_context(source[0].header.stamp)) != marker['source_id']):
+                raise ValueError('observation_arrival_source_changed')
+            feedback, (q, before, after) = self._rgb_bracketed_feedback(stamp_ns, marker['epoch_ns'])
+            positions = [q, before[1], after[1]] + [values for ns, values in feedback
+                if ns >= marker['qualified_source_ns']]
+            with self.input_lock:
+                positions.extend(values for ns, values in self._rgb_interest_feedback
+                    if ns >= marker['qualified_source_ns'])
+                if (self._locked_rgb_hold_reference is not reference
+                        or reference.get('observation_arrival_retry') is not marker
+                        or marker.get('invalidated_reason') or reference['pose_invalidated']
+                        or self._rgb_interest_epoch != marker['epoch_ns']
+                        or rospy.get_param_cached('/gui/joint_direct_mode', False) is True
+                        or any(np.max(np.abs(np.asarray(values)-marker['arrival_q'])) > .004
+                               for values in positions)):
+                    raise ValueError('observation_arrival_station_changed_during_processing')
+            require_fresh_source(stamp_ns, rospy.Time.now().to_nsec(), min(self.max_age, .8))
+            return reference
+        except (StationComputeDeadline, StationComputeRetired):
+            raise
+        except (ValueError, KeyError, TypeError, AttributeError, tf2_ros.LookupException,
+                tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as exc:
+            if str(exc) == 'accepted_feedback_does_not_bracket_source':
+                evidence = getattr(exc, 'accepted_feedback_evidence', None)
+                try:
+                    registration = self._station_compute_validate_feedback_gap(source, reference, evidence)
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    pass
+                else:
+                    raise StationFeedbackBracketGap(registration, evidence) from exc
+            marker['invalidated_reason'] = str(exc)
+            timing = getattr(self, '_processing_timing', None)
+            if timing is not None:
+                timing['arrival_station_invalidated_reason'] = str(exc)
+            with self.input_lock:
+                reference.pop('observation_arrival_retry', None)
+            return None
+
+    def _begin_arrival_frame_completion(self, source, reference):
+        # Preserve the existing arrival-only diagnostic/testing interface.
+        self._begin_station_frame_completion(source, reference, 'observation_arrival_retry')
+
+    def _begin_station_frame_completion(self, source, reference, marker_kind):
+        """Admit one normal frame while BOTH reference and input are fresh.
+
+        This is an in-process completion allowance, not a pending identity
+        receipt or a renewal of old geometry. The fixed station is rechecked
+        by its phase-specific marker gate before and after expensive stages.
+        Initial and acknowledged-arrival stations share these clock rules;
+        only the latter has a motion lease and a session deadline.
+        """
+        if (reference is None or getattr(self, '_arrival_frame_completion', None) is not None
+                or getattr(self, '_locked_source_pending', None) is not None
+                or getattr(self, '_metric_ambiguity_pending', None) is not None
+                or getattr(self, '_observation_measurement', None) is not None
+                or self.first_loss is not None or self.tracker.lost):
+            return
+        if marker_kind not in ('observation_arrival_retry', 'initial_station_current_support'):
+            raise ValueError('invalid_station_frame_completion_kind')
+        marker = (self._require_observation_arrival_marker(reference)
+                  if marker_kind == 'observation_arrival_retry' else reference[marker_kind])
+        source_ns = source[0].header.stamp.to_nsec()
+        now_ns = rospy.Time.now().to_nsec()
+        monotonic_now = time.monotonic()
+        timing = self._processing_timing
+        start_ns = timing['processing_start_ros_ns']
+        maximum = min(self.max_age, .8)
+        maximum_ns = round(maximum*1e9)
+        if not (reference['source_stamp_ns'] < source_ns <= start_ns <= now_ns
+                < reference['source_stamp_ns']+maximum_ns):
+            # No timely admission: retain the phase's original rejection or
+            # non-retry tracking behavior, never manufacture a completion.
+            return
+        require_fresh_source(reference['source_stamp_ns'], now_ns, maximum)
+        require_fresh_source(source_ns, now_ns, maximum)
+        if not self._initial_station_selection_matches():
+            return
+        deadline = min(source_ns+maximum_ns, reference['source_stamp_ns']+2*maximum_ns)
+        if marker_kind == 'observation_arrival_retry':
+            deadline = min(deadline, marker['session_deadline_ns'])
+        completion_monotonic = monotonic_now+(deadline-now_ns)*1e-9
+        if marker_kind == 'observation_arrival_retry':
+            completion_monotonic = min(completion_monotonic, marker['session_deadline_monotonic'])
+        token = dict(reference=reference, marker=marker, marker_kind=marker_kind,
+            reference_source_stamp_ns=reference['source_stamp_ns'], source_stamp_ns=source_ns,
+            qualified_entry_ns=now_ns, processing_start_ns=start_ns,
+            geometry_deadline_ns=reference['source_stamp_ns']+maximum_ns,
+            completion_deadline_ns=deadline, maximum_frame_age_ns=maximum_ns,
+            completion_monotonic=completion_monotonic)
+        if marker_kind == 'observation_arrival_retry':
+            token.update(lease_id=marker['lease_id'], session_deadline_ns=marker['session_deadline_ns'])
+        self._arrival_frame_completion = token
+        diagnostic_key = ('arrival_frame_completion' if marker_kind == 'observation_arrival_retry'
+                          else 'station_frame_completion')
+        timing[diagnostic_key] = dict(
+            (key, value) for key, value in token.items() if key not in ('reference', 'marker'))
+        timing[diagnostic_key].update(
+            reference_age_at_entry_sec=(now_ns-reference['source_stamp_ns'])*1e-9,
+            source_age_at_entry_sec=(now_ns-source_ns)*1e-9,
+            used_past_geometry_deadline=False, reference_refreshed=False,
+            metric_geometry_authority=False, motion_authorized=False)
+
+    def _require_arrival_frame_reference_lifetime(self, reference, marker, source_ns, now_ns):
+        if self._station_compute_reference_lifetime(reference, marker, source_ns, now_ns):
+            return
+        self._require_station_frame_reference_lifetime(
+            reference, marker, source_ns, now_ns, 'observation_arrival_retry')
+
+    def _require_station_frame_reference_lifetime(self, reference, marker, source_ns, now_ns, marker_kind):
+        token = getattr(self, '_arrival_frame_completion', None)
+        if token is None:
+            require_fresh_source(reference['source_stamp_ns'], now_ns, min(self.max_age, .8))
+            return
+        maximum_ns = round(min(self.max_age, .8)*1e9)
+        deadline = min(source_ns+maximum_ns, reference['source_stamp_ns']+2*maximum_ns)
+        if marker_kind == 'observation_arrival_retry':
+            deadline = min(deadline, marker['session_deadline_ns'])
+            if (token.get('lease_id') != marker['lease_id']
+                    or token.get('session_deadline_ns') != marker['session_deadline_ns']):
+                raise ValueError('arrival_frame_completion_binding_changed_or_expired')
+        if (token['reference'] is not reference or token['marker'] is not marker
+                or token['marker_kind'] != marker_kind
+                or token['reference_source_stamp_ns'] != reference['source_stamp_ns']
+                or token['source_stamp_ns'] != source_ns
+                or token['maximum_frame_age_ns'] != maximum_ns
+                or not reference['source_stamp_ns'] < source_ns <= token['processing_start_ns']
+                   <= token['qualified_entry_ns'] < token['geometry_deadline_ns']
+                or token['geometry_deadline_ns'] != reference['source_stamp_ns']+maximum_ns
+                or token['completion_deadline_ns'] != deadline
+                or not token['qualified_entry_ns'] <= now_ns < token['completion_deadline_ns']
+                or time.monotonic() >= token['completion_monotonic']
+                or getattr(self, '_locked_source_pending', None) is not None
+                or getattr(self, '_metric_ambiguity_pending', None) is not None
+                or getattr(self, '_observation_measurement', None) is not None):
+            raise ValueError('arrival_frame_completion_binding_changed_or_expired')
+        require_fresh_source(source_ns, now_ns, min(self.max_age, .8))
+        timing = getattr(self, '_processing_timing', None)
+        if (timing is not None and timing.get('source_stamp_ns') == source_ns
+                and now_ns >= token['geometry_deadline_ns']):
+            diagnostic_key = ('arrival_frame_completion' if marker_kind == 'observation_arrival_retry'
+                              else 'station_frame_completion')
+            timing[diagnostic_key]['used_past_geometry_deadline'] = True
 
     def _locked_rgb_shrinking_fragment(self, candidate, reference, source, camera):
         """Validate native fragment geometry before the separate RGB audit.
@@ -1468,6 +2053,41 @@ class UnknownTabletopPerception:
             maximum_rgb_boundary_margin_px=1, minimum_boundary_interior_pixels=25,
             minimum_boundary_joint_retention_fraction=.85, candidate_mask_modified=False)
 
+    def _require_support_reference_lifetime(self, reference, source_stamp_ns=None):
+        pending = getattr(self, '_locked_source_pending', None)
+        contract = (pending or {}).get('identity_completion')
+        now_ns = rospy.Time.now().to_nsec()
+        if contract is None:
+            token = getattr(self, '_arrival_frame_completion', None)
+            marker = reference.get('initial_station_current_support')
+            if (pending is None and source_stamp_ns is not None and marker is not None
+                    and token is not None and token.get('marker_kind') == 'initial_station_current_support'):
+                self._require_station_frame_reference_lifetime(
+                    reference, marker, source_stamp_ns, now_ns, 'initial_station_current_support')
+                return
+            require_fresh_source(reference['source_stamp_ns'], now_ns, min(self.max_age, .8))
+            return
+        marker = reference.get('initial_station_current_support')
+        if (pending.get('kind') != 'support_measurement_gap' or marker is None
+                or marker.get('invalidated_reason') or not self._initial_station_selection_matches()
+                or self.first_loss is not None or self.tracker.lost
+                or getattr(self, '_observation_measurement', None) is not None
+                or getattr(self, '_metric_ambiguity_pending', None) is not None
+                or rospy.get_param_cached('/gui/joint_direct_mode', False) is True
+                or reference['source_id'] != marker['source_id']
+                or reference['epoch_ns'] != marker['epoch_ns']
+                or reference['anchor_fingerprint'] != marker['anchor_fingerprint']
+                or not np.array_equal(reference['reference_plane'], marker['reference_plane'])):
+            raise ValueError('identity_completion_initial_station_invalidated')
+        with self.input_lock:
+            measured = [q for ns, q in self._rgb_interest_feedback
+                        if ns >= reference['source_stamp_ns']]
+            if (not measured or np.max(np.abs(reference['q_source']-marker['q_source'])) > .004
+                    or any(np.max(np.abs(q-marker['q_source'])) > .004 for q in measured)):
+                raise ValueError('identity_completion_fixed_pose_changed')
+        validate_completion(contract, reference['source_stamp_ns'], min(self.max_age, .8),
+            marker['identity_template']['provenance'], station_from_marker(marker), now_ns, source_stamp_ns)
+
     def _check_pending_source_reference(self):
         """A waiting input cannot extend or replace the last measured lock."""
         pending = getattr(self, '_locked_source_pending', None)
@@ -1482,7 +2102,7 @@ class UnknownTabletopPerception:
                 or (self.generation, self.selection_ns, self._rgb_interest_epoch) !=
                    (reference['generation'], reference['selection_ns'], reference['epoch_ns'])):
             raise ValueError('pending_source_reference_invalidated')
-        require_fresh_source(reference['source_stamp_ns'], rospy.Time.now().to_nsec(), min(self.max_age, .8))
+        self._require_support_reference_lifetime(reference)
         with self.input_lock:
             newest = max(self._rgb_interest_feedback, key=lambda row: row[0], default=None)
             if newest is None:
@@ -1499,6 +2119,7 @@ class UnknownTabletopPerception:
         self._check_pending_source_reference()
         reference = self._locked_rgb_hold_reference
         stamp_ns = source[0].header.stamp.to_nsec()
+        self._require_support_reference_lifetime(reference, stamp_ns)
         if (new_reference is None or new_reference['source_stamp_ns'] != stamp_ns
                 or new_reference['source_id'] != reference['source_id']):
             raise ValueError('pending_source_new_reference_unavailable')
@@ -1509,6 +2130,7 @@ class UnknownTabletopPerception:
                for values in (q, before[1], after[1])):
             raise ValueError('pending_source_pose_changed_before_commit')
         self._check_pending_source_reference()
+        self._require_support_reference_lifetime(reference, stamp_ns)
         require_fresh_source(stamp_ns, rospy.Time.now().to_nsec(), min(self.max_age, .8))
 
     def _check_metric_ambiguity_reference(self, expected=None):
@@ -1543,7 +2165,7 @@ class UnknownTabletopPerception:
                 raise ValueError('metric_ambiguity_pose_changed')
         return reference
 
-    def _qualify_metric_ambiguity_frame(self, source, result, reference):
+    def _qualify_metric_ambiguity_frame(self, source, result, reference, *, current_fragment_group=False):
         """No pending qualification: current real brackets and all gates must pass."""
         self._check_metric_ambiguity_reference(reference)
         stamp_ns = source[0].header.stamp.to_nsec()
@@ -1558,8 +2180,9 @@ class UnknownTabletopPerception:
                for values in (q, before[1], after[1])):
             raise ValueError('metric_ambiguity_bracket_pose_changed')
         metrics = result.metrics
+        current_fit = current_fragment_group and metrics.get('support_source') == 'current_ring_fit'
         if (metrics.get('support_current_audit_available') is not True
-                or metrics.get('support_source') != 'locked_base_plane'):
+                or (metrics.get('support_source') != 'locked_base_plane' and not current_fit)):
             raise ValueError('metric_ambiguity_current_support_unavailable')
         for key, maximum in (('support_reference_angle_deg', self.config.support_max_normal_change_deg),
                              ('support_reference_max_distance_m', self.config.support_max_local_shift_m)):
@@ -1571,7 +2194,10 @@ class UnknownTabletopPerception:
         quadrants = metrics['support_current_audit_quadrants']
         ratio = metrics['support_current_audit_inlier_ratio']
         residual = metrics['support_current_audit_residual_m']
-        if (not np.array_equal(result.plane_base, reference['reference_plane'])
+        if current_fit:
+            _validate_support_plane_update(reference['reference_plane'], result.plane_base,
+                self.tracker.anchor.position_base, self.config, reference['reference_footprint'])
+        if ((not current_fit and not np.array_equal(result.plane_base, reference['reference_plane']))
                 or not all(np.isfinite(value) for value in (quadrants, ratio, residual))
                 or quadrants not in (3, 4) or not self.config.support_min_ratio <= ratio <= 1.
                 or not 0. <= residual <= self.config.support_threshold_m):
@@ -1579,7 +2205,33 @@ class UnknownTabletopPerception:
         self._check_metric_ambiguity_reference(reference)
         require_fresh_source(stamp_ns, rospy.Time.now().to_nsec(), min(self.max_age, .8))
 
-    def _metric_ambiguity_transition(self, source, result, camera, depth, intrinsics, transform):
+    def _arrival_rgb_spatial_kwargs(self, reference, unique=True):
+        if reference is None:
+            return {}
+        marker = self._require_observation_arrival_marker(reference)
+        return dict(observation_arrival_retry=True,
+                    observation_spatial_reference=marker.get('spatial_reference') if unique else None)
+
+    def _check_recovery_arrival_reference(self, source, camera, reference):
+        """The same acknowledged station must cover recovery RGB work too."""
+        if (reference is not None and self._observation_arrival_retry_reference(
+                source, camera, expected=reference) is not reference):
+            raise ValueError('observation_arrival_station_invalidated_during_recovery')
+
+    def _qualified_fragment_pair(self, source, result, camera, arrival_reference, pair):
+        if pair is None:
+            return False
+        if (arrival_reference is None or not isinstance(pair, tuple) or len(pair) != 2
+                or len(result.candidates) != 1 or result.candidates[0] is not pair[0]
+                or not all(isinstance(candidate, Candidate) for candidate in pair)
+                or pair[0].metrics.get('observation_fragment_group') is None
+                or pair[0].metrics['observation_fragment_group'] is not pair[1].metrics.get('observation_fragment_group')):
+            raise ValueError('observation_fragment_recovery_pair_invalid')
+        self._check_recovery_arrival_reference(source, camera, arrival_reference)
+        return True
+
+    def _metric_ambiguity_transition(self, source, result, camera, depth, intrinsics, transform,
+                                     arrival_retry_reference=None, pre_refined=None):
         """Return a staged UNIQUE recovery, or publish only a bounded ambiguity hold."""
         reference = self._check_metric_ambiguity_reference()
         pending = getattr(self, '_metric_ambiguity_pending', None)
@@ -1594,14 +2246,22 @@ class UnknownTabletopPerception:
             result.candidates, self.tracker.anchor, self.tracker.last, self.config)]
         if not matches or (pending is None and len(matches) < 2):
             raise ValueError('metric_ambiguity_metric_state_invalid')
-        self._qualify_metric_ambiguity_frame(source, result, reference)
+        grouped = self._qualified_fragment_pair(source, result, camera, arrival_retry_reference, pre_refined)
+        self._qualify_metric_ambiguity_frame(source, result, reference, current_fragment_group=grouped)
+        self._check_recovery_arrival_reference(source, camera, arrival_retry_reference)
         rgb = self.bridge.imgmsg_to_cv2(source[0], desired_encoding='bgr8')
-        refined, identity = metric_seeded_identity_evidence(rgb, matches,
+        refined, identity = metric_seeded_identity_evidence(rgb, [pre_refined[1]] if grouped else matches,
             reference['bgr'], reference['mask'], minimum_quality=self.minimum_quality,
             rgb_valid=rectification_rgb_valid_mask(camera, depth.shape),
-            refine=lambda candidate: refine_candidate(rgb, depth, intrinsics, transform,
-                candidate, self.config, **_rgb_source_kwargs(camera, depth.shape)))
-        self._qualify_metric_ambiguity_frame(source, result, reference)
+            refine=lambda candidate: (pre_refined[1] if grouped and candidate is pre_refined[1] else refine_candidate(rgb, depth, intrinsics, transform,
+                candidate, self.config,
+                **self._arrival_rgb_spatial_kwargs(arrival_retry_reference, unique=len(matches) == 1),
+                **_rgb_source_kwargs(camera, depth.shape))))
+        self._check_recovery_arrival_reference(source, camera, arrival_retry_reference)
+        self._qualify_metric_ambiguity_frame(source, result, reference, current_fragment_group=grouped)
+        if grouped:
+            identity.update(native_role='final_current_rgb_instance',
+                observation_fragment_group=pre_refined[1].metrics['observation_fragment_group'])
         status = dict(identity, source_stamp_ns=stamp_ns,
             reference_source_stamp_ns=reference['source_stamp_ns'], source_id=reference['source_id'],
             reference_refreshed=False, maximum_hold_seconds=min(self.max_age, .8),
@@ -1611,6 +2271,7 @@ class UnknownTabletopPerception:
                 'support_reference_footprint_vertices')})
         if len(matches) > 1:
             with self.input_lock:
+                self._check_recovery_arrival_reference(source, camera, arrival_retry_reference)
                 self._check_metric_ambiguity_reference(reference)
                 require_fresh_source(stamp_ns, rospy.Time.now().to_nsec(), min(self.max_age, .8))
                 self._metric_ambiguity_pending = dict(reference_source_stamp_ns=reference['source_stamp_ns'],
@@ -1677,7 +2338,7 @@ class UnknownTabletopPerception:
                 or (pending is not None and stamp_ns <= pending['last_unqualified_source_stamp_ns'])):
             raise ValueError('support_gap_source_reference_invalidated')
         now_ns = rospy.Time.now().to_nsec()
-        require_fresh_source(reference['source_stamp_ns'], now_ns, min(self.max_age, .8))
+        self._require_support_reference_lifetime(reference, stamp_ns)
         require_fresh_source(stamp_ns, now_ns, min(self.max_age, .8))
         if (reference['pose_invalidated'] or digest(asdict(self.config)) != reference['config_sha256']
                 or _candidate_fingerprint(self.tracker.anchor) != reference['anchor_fingerprint']
@@ -1699,7 +2360,7 @@ class UnknownTabletopPerception:
                 raise ValueError('support_gap_source_changed_during_processing')
             now_ns = rospy.Time.now().to_nsec()
             require_fresh_source(int(newest[0]), now_ns, min(self.max_age, .8))
-            require_fresh_source(reference['source_stamp_ns'], now_ns, min(self.max_age, .8))
+            self._require_support_reference_lifetime(reference, stamp_ns)
             require_fresh_source(stamp_ns, now_ns, min(self.max_age, .8))
 
     def _hold_missing_current_support(self, source, camera, reason, result=None):
@@ -1730,6 +2391,8 @@ class UnknownTabletopPerception:
                     self.tracker.anchor.position_base, self.config, reference['reference_footprint'])
             else:
                 raise ValueError('support_gap_support_provenance_invalid')
+        if self._station_compute_publish_support_gap(source, reference, reason):
+            return
         self._publish_unverified_support_pending(source, reference, reason)
 
     def _publish_unverified_support_pending(self, source, reference, reason, support_audit=None):
@@ -1742,12 +2405,26 @@ class UnknownTabletopPerception:
         self._qualify_support_gap_source(source, reference)
         stamp_ns = source[0].header.stamp.to_nsec()
         pending = getattr(self, '_locked_source_pending', None)
+        if pending is not None and pending.get('kind') == FEEDBACK_GAP:
+            raise ValueError('feedback_gap_requires_full_current_measurement')
         with self.input_lock:
             self._qualify_support_gap_source(source, reference)
+            completion = None
+            if pending is not None and pending.get('identity_completion') is not None:
+                completion = deepcopy(pending['identity_completion'])
+            elif reference.get('initial_station_current_support') is not None:
+                template = self._initial_station_identity_template(source, reference)
+                # Enrollment, unlike later completion, still needs fresh old
+                # geometry and cannot be obtained after the original cutoff.
+                require_fresh_source(reference['source_stamp_ns'], rospy.Time.now().to_nsec(), min(self.max_age, .8))
+                completion = completion_contract(reference['source_stamp_ns'], min(self.max_age, .8),
+                    template['provenance'], station_from_marker(reference['initial_station_current_support']))
             self._locked_source_pending = dict(kind='support_measurement_gap',
                 reference_source_stamp_ns=reference['source_stamp_ns'], source_id=reference['source_id'],
                 first_unqualified_source_stamp_ns=(stamp_ns if pending is None else
                     pending['first_unqualified_source_stamp_ns']), last_unqualified_source_stamp_ns=stamp_ns)
+            if completion is not None:
+                self._locked_source_pending['identity_completion'] = completion
             self._locked_source_status = dict(self._locked_source_pending,
                 state='pending_current_support' if support_audit is None else 'pending_unique_measured_geometry',
                 reason=reason, source_stamp_ns=stamp_ns, source_qualified=True,
@@ -1757,7 +2434,8 @@ class UnknownTabletopPerception:
                 elapsed_since_measured_sec=(rospy.Time.now().to_nsec()-reference['source_stamp_ns'])*1e-9)
             self.unavailable('support_measurement_pending_revalidation', source[0].header.stamp, source, lose=False)
 
-    def _support_gap_recovery(self, source, result, camera, depth, intrinsics, transform):
+    def _support_gap_recovery(self, source, result, camera, depth, intrinsics, transform,
+                              arrival_retry_reference=None, pre_refined=None):
         """Stage original unique metric tracking, with like-for-like RGB identity.
 
         The current independent support fit and native RGB-D refinement must
@@ -1808,12 +2486,31 @@ class UnknownTabletopPerception:
             raise ValueError('support_gap_recovery_'+reason)
         if not self.rgb_instance_refinement:
             raise ValueError('support_gap_recovery_requires_rgb_refinement')
+        self._check_recovery_arrival_reference(source, camera, arrival_retry_reference)
+        grouped = self._qualified_fragment_pair(source, result, camera, arrival_retry_reference, pre_refined)
+        initial_reference = (self._initial_station_support_reference(source, expected=reference)
+            if reference.get('initial_station_current_support') is not None else None)
+        if reference.get('initial_station_current_support') is not None and initial_reference is None:
+            raise ValueError('initial_station_identity_template_unqualified')
+        template = (self._initial_station_identity_template(source, initial_reference)
+            if initial_reference is not None else None)
+        identity_reference = reference if template is None else template
         rgb = self.bridge.imgmsg_to_cv2(source[0], desired_encoding='bgr8')
-        refined, identity = metric_seeded_identity_evidence(rgb, [candidate],
-            reference['bgr'], reference['mask'], minimum_quality=self.minimum_quality,
+        refined, identity = metric_seeded_identity_evidence(rgb, [pre_refined[1]] if grouped else [candidate],
+            identity_reference['bgr'], identity_reference['mask'], minimum_quality=self.minimum_quality,
             rgb_valid=rectification_rgb_valid_mask(camera, depth.shape),
-            refine=lambda measured: refine_candidate(rgb, depth, intrinsics, transform,
-                measured, self.config, **_rgb_source_kwargs(camera, depth.shape)))
+            refine=lambda measured: (pre_refined[1] if grouped and measured is pre_refined[1] else refine_candidate(rgb, depth, intrinsics, transform,
+                measured, self.config,
+                **self._arrival_rgb_spatial_kwargs(arrival_retry_reference),
+                **_rgb_source_kwargs(camera, depth.shape))))
+        if grouped:
+            identity.update(native_role='final_current_rgb_instance',
+                observation_fragment_group=pre_refined[1].metrics['observation_fragment_group'])
+        self._check_recovery_arrival_reference(source, camera, arrival_retry_reference)
+        if template is not None:
+            if self._initial_station_identity_template(source, initial_reference) is not template:
+                raise ValueError('initial_station_identity_template_replaced')
+            identity['identity_template_source'] = deepcopy(template['provenance'])
         self._qualify_support_gap_source(source, reference)
         self._locked_source_status = dict(self._locked_source_pending,
             state='qualified_unique_measured_recovery', source_stamp_ns=source[0].header.stamp.to_nsec(),
@@ -1863,6 +2560,9 @@ class UnknownTabletopPerception:
                 # never becomes an object mask or candidate geometry.
                 seen_pixels |= pixels
                 fragments.append(fragment)
+            # This is now identity-only waiting, not a normal measured frame.
+            # Its original non-renewable reference window remains independent.
+            self._arrival_frame_completion = None
             stamp_ns = source[0].header.stamp.to_nsec()
             self._check_pending_source_reference()
             if pending is not None and stamp_ns <= pending['last_unqualified_source_stamp_ns']:
@@ -1996,8 +2696,362 @@ class UnknownTabletopPerception:
             self._locked_rgb_hold_status['reason'] = str(exc)
             return False
 
+    def _measurement_ack(self, request, accepted, reason='OK', qualified=False, stamps=None):
+        self._observation_measurement_ack_pub.publish(String(data=json.dumps(
+            measurement_ack(request, 'unknown', accepted=accepted, reason=reason,
+                            qualified=qualified, source_stamps_ns=stamps), sort_keys=True)))
+
+    def _measurement_status(self, pending, state, reason='', qualified=False):
+        self._observation_measurement_status = dict(request=deepcopy(pending['request']),
+            state=state, reason=str(reason), qualified=bool(qualified),
+            source_stamps_ns=list(pending.get('qualified_stamps',
+                pending['confirmation'].source_stamps_ns)),
+            metric_geometry_authority=False, motion_authorized=False,
+            measurement_evaluated=state in ('qualified','completed'),
+            exact_tf_consumed=state in ('qualified','completed'))
+        if pending.get('support_audit') is not None:
+            self._observation_measurement_status['support_audit'] = deepcopy(pending['support_audit'])
+        appearance = getattr(pending['confirmation'], 'last_appearance_evidence', None)
+        if appearance:
+            self._observation_measurement_status['appearance_identity'] = deepcopy(appearance)
+
+    def _observation_appearance_source_deadline(self, source, phase_deadline):
+        # Capture the remaining original source lifetime before any lazy
+        # reference/ORB work. Completion cannot start a fresh time allowance.
+        remaining = min(self.max_age, .8) - (rospy.Time.now()-source[0].header.stamp).to_sec()
+        return min(phase_deadline, time.monotonic()+remaining)
+
+    def _observation_marker_appearance_context(self, source, marker, check_current):
+        def record(evidence):
+            timing = getattr(self, '_processing_timing', None)
+            if timing is not None:
+                rows = timing.setdefault('observation_appearance_identity', [])
+                rows.append(deepcopy(evidence))
+                del rows[:-20]
+        return dict(reference=marker.get('fragment_appearance_reference'),
+            source_ns=source[0].header.stamp.to_nsec(), check_current=check_current, record=record,
+            deadline_monotonic=self._observation_appearance_source_deadline(
+                source, marker['session_deadline_monotonic']))
+
+    def _check_measurement_binding(self, pending):
+        request = pending['request']
+        if request.get(STATION_REQUALIFICATION) is not None:
+            if rospy.Time.now().to_nsec() >= request[STATION_REQUALIFICATION]['deadline_ns']:
+                raise ValueError('STATION_REQUALIFICATION_EXPIRED')
+        if (pending.get('invalidated_reason') or self.tracker.lost or self.first_loss is not None
+                or self.tracker.anchor is not pending['anchor']
+                or _candidate_fingerprint(self.tracker.anchor) != pending['anchor_fingerprint']
+                or _candidate_fingerprint(self.tracker.last) != pending['last_fingerprint']
+                or not np.array_equal(self.tracker.plane_base, pending['plane'])
+                or self.generation != request['selection']['generation']
+                or self.selection_ns != request['selection']['stamp_ns']
+                or self._rgb_interest_epoch != request['control_epoch_ns']
+                or digest(asdict(self.config)) != pending['config_sha256']):
+            raise ValueError(pending.get('invalidated_reason') or 'observation_measurement_identity_changed')
+        if rospy.get_param_cached('/gui/joint_direct_mode', False) is True:
+            raise ValueError('observation_measurement_manual_control')
+        now = rospy.Time.now().to_nsec()
+        deadline = (request['capture_deadline_ns'] if request['state']=='requalifying'
+                    else request['deadline_ns'])
+        if now >= deadline or time.monotonic() >= pending['deadline_monotonic']:
+            raise ValueError('observation_measurement_deadline_exceeded')
+        stamp = rospy.Time(pending['reference_stamp_ns']//10**9,pending['reference_stamp_ns']%10**9)
+        if (digest(self._rgb_interest_source_context(stamp)) != pending['source_id']
+                or digest(_camera_configuration_contract(rospy.get_param_cached('/camera')))
+                   != pending['camera_configuration_sha256']):
+            raise ValueError('observation_measurement_configuration_changed')
+
+    def _revoke_observation_measurement(self, pending, reason, source=None):
+        self._measurement_status(pending, 'revoked', reason)
+        self._measurement_ack(pending['request'], False, reason)
+        self._observation_measurement = None
+        self.unavailable('observation_measurement_rejected: '+str(reason),
+                         None if source is None else source[0].header.stamp, source)
+
+    def _observation_measurement_request_cb(self, message):
+        # The task waits for both owners' receipts before submitting motion.
+        # This callback freezes only a fresh, already acquired metric identity.
+        request = None
+        with self.lock:
+            pending = getattr(self, '_observation_measurement', None)
+            try:
+                if len(message.data) > 32768:
+                    raise ValueError('observation_measurement_request_too_large')
+                offered = json.loads(message.data)
+                previous = None if pending is None else pending['request']
+                admission = getattr(self, '_station_requalification_admission', None)
+                if previous is None and admission is not None and offered.get('state') == 'revoked':
+                    previous = admission['request']
+                request = parse_measurement_request(offered,
+                    rospy.get_param_cached('/grasp_mode/selection'), rospy.Time.now().to_nsec(), previous)
+                if request['state'] == 'executing':
+                    seen = getattr(self, '_observation_measurement_seen', ())
+                    reference = getattr(self, '_locked_rgb_hold_reference', None)
+                    restation = None
+                    if request.get(STATION_REQUALIFICATION) is not None:
+                        if getattr(self, '_station_requalification_hold', None) is None:
+                            self._station_requalification_queue(request)
+                            return
+                        restation = self._station_requalification_check(request)
+                        reference = restation['reference']
+                    if (pending is not None or request['lease_id'] in seen or self.mode!='unknown'
+                            or self.tracker.anchor is None or self.tracker.lost or self.first_loss is not None
+                            or reference is None or (reference['pose_invalidated'] and restation is None)
+                            or getattr(self, '_locked_source_pending', None) is not None
+                            or getattr(self, '_metric_ambiguity_pending', None) is not None
+                            or getattr(self, '_rgb_acquisition_active', None) is not None
+                            or not self.anchor_source_stamp_ns <= request['origin_snapshot_stamp_ns']
+                            <= request['view_source_stamp_ns'] <= self.last_good_source_stamp_ns
+                            or reference['source_stamp_ns'] != self.last_good_source_stamp_ns):
+                        raise ValueError('observation_measurement_fresh_locked_identity_required')
+                    if restation is None:
+                        require_fresh_source(reference['source_stamp_ns'],rospy.Time.now().to_nsec(),min(self.max_age,.8))
+                    pending = dict(request=request, anchor=self.tracker.anchor,
+                        anchor_fingerprint=_candidate_fingerprint(self.tracker.anchor),
+                        last_fingerprint=_candidate_fingerprint(self.tracker.last),
+                        plane=self.tracker.plane_base.copy(), source_id=reference['source_id'],
+                        reference_stamp_ns=reference['source_stamp_ns'],config_sha256=digest(asdict(self.config)),
+                        camera_configuration_sha256=digest(_camera_configuration_contract(rospy.get_param_cached('/camera'))),
+                        deadline_monotonic=time.monotonic()+(request['deadline_ns']-rospy.Time.now().to_nsec())*1e-9,
+                        confirmation=ObservationArrivalConfirmation(self.config,self.tracker.anchor,
+                            self.tracker.last,self.tracker.plane_base,reference['histogram'],
+                            reference['contour'],self.minimum_quality),arrival_q=None)
+                    pending['session_deadline_monotonic'] = pending['deadline_monotonic']
+                    if restation is not None:
+                        pending['deadline_monotonic'] = min(pending['deadline_monotonic'],
+                            restation['monotonic_deadline'], time.monotonic()+(
+                                request[STATION_REQUALIFICATION]['deadline_ns']-rospy.Time.now().to_nsec())*1e-9)
+                    self._check_measurement_binding(pending)
+                    # Only this validated executing transition may bind the
+                    # actual pre-motion image. Features remain lazy, so the
+                    # unchanged histogram-success path does not run ORB.
+                    pending['confirmation'].appearance_reference = FrozenObservationAppearance(
+                        reference['bgr'], reference['mask'], rectification_rgb_valid_mask(
+                            rospy.get_param_cached('/camera'), reference['image_shape']),
+                        reference['source_stamp_ns'], reference['histogram'], reference['contour'])
+                    self._check_measurement_binding(pending)
+                    if restation is None:
+                        require_fresh_source(reference['source_stamp_ns'],rospy.Time.now().to_nsec(),min(self.max_age,.8))
+                    else:
+                        self._station_requalification_check(request)
+                    if (self._locked_rgb_hold_reference is not reference
+                            or (reference['pose_invalidated'] and restation is None)
+                            or reference['source_stamp_ns'] != self.last_good_source_stamp_ns):
+                        raise ValueError('observation_measurement_reference_changed_during_freeze')
+                    self._observation_measurement = pending
+                    if restation is not None:
+                        restation['new_lease'] = request['lease_id']
+                        used = getattr(self, '_station_requalification_used', set())
+                        used.add(station_requalification_key(request[STATION_REQUALIFICATION]['parent_contract']))
+                        self._station_requalification_used = used
+                    if not hasattr(self, '_observation_measurement_seen'):
+                        self._observation_measurement_seen=deque(maxlen=32)
+                    self._observation_measurement_seen.append(request['lease_id'])
+                    # The static same-view cache cannot be transported through motion.
+                    self._locked_rgb_hold_reference = None
+                    self._arrival_frame_completion = None
+                    self._station_compute_registration = None
+                    self._measurement_status(pending,'executing')
+                    self._measurement_ack(request,True)
+                elif request['state'] == 'requalifying':
+                    self._check_measurement_binding(pending)
+                    pending['request']=request
+                    pending['deadline_monotonic']=min(pending['deadline_monotonic'],
+                        time.monotonic()+(request['capture_deadline_ns']-rospy.Time.now().to_nsec())*1e-9)
+                    pending['confirmation'].clear()
+                    self._measurement_status(pending,'requalifying')
+                    self._measurement_ack(request,True)
+                elif request['state'] == 'qualified':
+                    self._check_measurement_binding(pending)
+                    if request['source_stamps_ns'] != pending.get('qualified_stamps'):
+                        raise ValueError('observation_measurement_completion_sources_changed')
+                    require_fresh_source(request['source_stamps_ns'][-1],rospy.Time.now().to_nsec(),min(self.max_age,.8))
+                    hold = self._locked_rgb_hold_reference
+                    if (hold is None or hold['source_stamp_ns'] != request['source_stamps_ns'][-1]
+                            or pending['arrival_q'] is None):
+                        raise ValueError('observation_measurement_qualified_station_unavailable')
+                    hold['observation_arrival_retry'] = dict(
+                        measurement_binding=deepcopy({key: request[key] for key in (
+                            'selection', 'lease_id', 'session_id', 'view_plan_id', 'view_index',
+                            'target_epoch', 'target_track_id', 'control_epoch_ns')}),
+                        lease_id=request['lease_id'], qualified_source_ns=hold['source_stamp_ns'],
+                        qualified_source_stamps_ns=list(request['source_stamps_ns']),
+                        arrival_q=np.array(pending['arrival_q'], copy=True),
+                        epoch_ns=request['control_epoch_ns'], source_id=hold['source_id'],
+                        config_sha256=hold['config_sha256'],
+                        camera_configuration_sha256=pending['camera_configuration_sha256'],
+                        anchor_fingerprint=hold['anchor_fingerprint'],
+                        reference_plane=np.array(pending['plane'], copy=True),
+                        spatial_reference=pending['confirmation'].spatial_reference,
+                        fragment_histogram=pending['confirmation'].histogram,
+                        fragment_contour=pending['confirmation'].contour,
+                        fragment_appearance_reference=pending['confirmation'].appearance_reference,
+                        session_deadline_ns=request['deadline_ns'],
+                        session_deadline_monotonic=pending['session_deadline_monotonic'])
+                    pending['request']=request
+                    self._measurement_status(pending,'completed',qualified=True)
+                    self._measurement_ack(request,True,qualified=True,stamps=request['source_stamps_ns'])
+                    self._observation_measurement=None
+                    if request.get(STATION_REQUALIFICATION) is not None:
+                        self._station_requalification_hold['finalizing'] = True
+                else:
+                    admission = getattr(self, '_station_requalification_admission', None)
+                    if pending is None and admission is not None:
+                        parse_measurement_request(request, request['selection'], rospy.Time.now().to_nsec(),
+                            admission['request'])
+                        self._station_requalification_admission = None
+                        self._station_requalification_hold = None
+                        self._measurement_ack(request,False,request.get('reason','task_revoked'))
+                        self.unavailable('observation_measurement_rejected: task_revoked')
+                    else:
+                        self._revoke_observation_measurement(pending,request.get('reason','task_revoked'))
+            except (ValueError, KeyError, TypeError, AttributeError, tf2_ros.LookupException,
+                    tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as exc:
+                if getattr(self, '_observation_measurement', None) is not None and request is not None:
+                    self._revoke_observation_measurement(pending,str(exc))
+                elif request is not None:
+                    self._measurement_ack(request,False,str(exc))
+                else:
+                    rospy.logwarn('Unknown measurement receipt rejected: %s',exc)
+
+    def _process_observation_measurement(self, source):
+        pending = getattr(self, '_observation_measurement', None)
+        if pending is None:
+            return False
+        try:
+            self._check_measurement_binding(pending)
+        except (ValueError, KeyError, TypeError, AttributeError, tf2_ros.LookupException,
+                tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as exc:
+            self._revoke_observation_measurement(pending,str(exc),source)
+            return True
+        request=pending['request']
+        if pending.get('qualified_stamps'):
+            # Receipt waiting never renews this measured source, even when the
+            # image stream stops and the timer has no new pair to consume.
+            try:
+                require_fresh_source(pending['qualified_stamps'][-1],rospy.Time.now().to_nsec(),min(self.max_age,.8))
+            except ValueError as exc:
+                self._revoke_observation_measurement(pending,str(exc),source)
+            return True
+        if request['state']=='executing' or source is None:
+            self._measurement_status(pending,request['state'],'waiting_for_stationary_measurements')
+            self.status('pending','observation_measurement_pending',source)
+            return True
+        color,depth_message=source
+        source_ns=color.header.stamp.to_nsec()
+        if source_ns<=request['arrival_stamp_ns']:
+            self._measurement_status(pending,'requalifying','waiting_for_post_arrival_source')
+            self.status('pending','observation_measurement_pending',source)
+            return True
+        try:
+            require_fresh_source(source_ns,rospy.Time.now().to_nsec(),min(self.max_age,.8))
+            if (source_ns!=depth_message.header.stamp.to_nsec()
+                    or color.header.frame_id!=self.camera_frame or depth_message.header.frame_id!=self.camera_frame
+                    or (color.width,color.height)!=(depth_message.width,depth_message.height)):
+                raise ValueError('observation_measurement_rgbd_binding_invalid')
+            camera=rospy.get_param('/camera',{})
+            require_rectified_source_after_activation(camera,source_ns)
+            if camera.get('align_depth_to_color') is not True:
+                raise ValueError('aligned_depth_required')
+            intrinsics=[float(camera[k]) for k in ('fx','fy','cx','cy')]
+            array=self.bridge.imgmsg_to_cv2(depth_message,desired_encoding='passthrough')
+            if depth_message.encoding in ('16UC1','mono16'):
+                scale=float(camera['depth_scale'])
+                if not np.isfinite(scale) or scale<=0:raise ValueError('invalid_runtime_depth_scale')
+                depth=np.asarray(array,dtype=np.float32)*scale
+            elif depth_message.encoding=='32FC1':depth=np.asarray(array,dtype=np.float32)
+            else:raise ValueError('unsupported_depth_encoding')
+            wait=exact_tf_wait_budget((rospy.Time.now()-color.header.stamp).to_sec(),self.max_age,self.tf_wait)
+            transform=transform_matrix(self.buffer.lookup_transform(self.base_frame,self.camera_frame,
+                color.header.stamp,rospy.Duration(wait)))
+            feedback,(q,before,after)=self._rgb_bracketed_feedback(source_ns,request['control_epoch_ns'])
+            settle_start=request['settle']['stationary_window_start_ns']
+            stationary=[(ns,values) for ns,values in feedback if settle_start<=ns<=after[0]]
+            if (len(stationary)<3 or stationary[-1][0]-stationary[0][0]<250_000_000
+                    or stationary[0][0]-settle_start>200_000_000
+                    or any(b[0]-a[0]>200_000_000 for a,b in zip(stationary,stationary[1:]))):
+                raise ValueError('observation_measurement_stationary_feedback_incomplete')
+            if any(np.max(np.abs(values-q))>.004 for _,values in stationary):
+                pending['invalidated_reason']='movement_after_stationary_arrival'
+                raise ValueError(pending['invalidated_reason'])
+            pending['arrival_q']=np.array(q,copy=True)
+            result=segment_with_support_fallback(depth,intrinsics,transform,self.config,
+                anchor=pending['anchor'],last=pending['confirmation'].last,
+                reference_plane_base=pending['plane'],prefer_current_support=True)
+            pending['support_audit'] = dict(
+                ((key, value) for key, value in result.metrics.items()
+                 if key.startswith('support_reference_') or key.startswith('support_current_audit_')),
+                source_stamp_ns=source_ns)
+            rgb=self.bridge.imgmsg_to_cv2(color,desired_encoding='bgr8')
+            def check_appearance_source():
+                self._check_measurement_binding(pending)
+                require_fresh_source(source_ns,rospy.Time.now().to_nsec(),min(self.max_age,.8))
+            confirmed,candidate,staged,evidence=pending['confirmation'].observe(
+                result,rgb,depth,intrinsics,transform,source_ns,
+                appearance_deadline_monotonic=self._observation_appearance_source_deadline(source,pending['deadline_monotonic']),
+                appearance_check_current=check_appearance_source,**_rgb_source_kwargs(camera,depth.shape))
+            self._check_measurement_binding(pending)
+            require_fresh_source(source_ns,rospy.Time.now().to_nsec(),min(self.max_age,.8))
+            if not confirmed:
+                self._measurement_status(pending,'requalifying',evidence['reason'])
+                self.status('pending','observation_measurement_pending',source)
+                return True
+            stamps=pending['confirmation'].source_stamps_ns
+            # Each historical confirmation passed freshness before and after
+            # its own audit. Only this final frame supplies current geometry;
+            # the fixed capture window bounds the earlier identity evidence.
+            hold=self._prepare_locked_rgb_hold_reference(source,candidate,camera,tracker=staged)
+            if hold is None:raise ValueError('observation_measurement_new_rgb_reference_required')
+            with self.input_lock:
+                self._check_measurement_binding(pending)
+                seen=[values for ns,values in self._rgb_interest_feedback if ns>=settle_start]
+                if not seen or any(np.max(np.abs(values-q))>.004 for values in seen):
+                    pending['invalidated_reason']='movement_after_stationary_arrival'
+                    raise ValueError(pending['invalidated_reason'])
+                require_fresh_source(source_ns,rospy.Time.now().to_nsec(),min(self.max_age,.8))
+                self.tracker.last=staged.last
+                pending['last_fingerprint']=_candidate_fingerprint(self.tracker.last)
+                pending['qualified_stamps']=list(stamps)
+                self._locked_rgb_hold_reference=hold
+                self.last_shape=depth.shape
+                self._measurement_status(pending,'qualified',qualified=True)
+                self._publish_measurement_candidate(source,candidate)
+                self.last_good_source_stamp_ns=source_ns
+                self.status('ready','observation_measurement_requalified',source,candidate)
+                self._measurement_ack(request,True,qualified=True,stamps=stamps)
+        except (ValueError, KeyError, TypeError, AttributeError, cv2.error,tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,tf2_ros.ExtrapolationException) as exc:
+            pending['confirmation'].clear(preserve_appearance=True)
+            if pending.get('invalidated_reason'):
+                self._revoke_observation_measurement(pending,str(exc),source)
+            else:
+                self._measurement_status(pending,'requalifying',str(exc))
+                self.status('pending','observation_measurement_pending',source)
+        return True
+
+    def _publish_measurement_candidate(self, source, candidate):
+        color=source[0]
+        obj=ObjectPose();obj.header.stamp=color.header.stamp;obj.header.frame_id=self.base_frame
+        obj.header.seq=color.header.seq
+        obj.detected,obj.label,obj.confidence=True,'unknown_small',candidate.quality
+        obj.u,obj.v=[int(round(v)) for v in candidate.center_uv]
+        obj.bbox_x,obj.bbox_y,obj.bbox_width,obj.bbox_height=candidate.bbox
+        obj.depth_m=candidate.depth_m
+        for name,point,frame in (('pose_camera',candidate.position_camera,self.camera_frame),
+                                 ('pose_base',candidate.position_base,self.base_frame)):
+            pose=PoseStamped();pose.header.stamp=color.header.stamp;pose.header.frame_id=frame
+            pose.header.seq=color.header.seq
+            pose.pose.position.x,pose.pose.position.y,pose.pose.position.z=point
+            pose.pose.orientation.w=1.
+            setattr(obj,name,pose);self.pubs['object_'+name].publish(pose)
+        mask=self.bridge.cv2_to_imgmsg(candidate.mask,encoding='mono8');mask.header=color.header
+        self.pubs['object_mask'].publish(mask);self.pubs['object'].publish(obj)
+        self.pubs['object_detected'].publish(Bool(data=True));self.pubs['raw_object_detected'].publish(Bool(data=True))
+
     def unavailable(self, reason, stamp=None, source=None, lose=True, candidate_evidence=None,
                     preserve_rgb_interest=False):
+        if reason not in ('processing_deadline_pending', 'station_accepted_feedback_bracket_pending_revalidation'):
+            self._station_compute_registration = None
         # RGB interest is a separate weak observation channel. Any other
         # perception failure retires it; preservation is an explicit initial
         # acquisition path, never a reason-string whitelist or target recovery.
@@ -2038,6 +3092,7 @@ class UnknownTabletopPerception:
             rospy.logwarn('Unknown target first loss generation=%s source=%s anchor=%s reason=%s',
                           self.generation, source_ns, self.anchor_source_stamp_ns, reason)
         if lose:
+            self._station_compute_registration = None
             self._locked_rgb_hold_reference = None
             self._locked_source_pending = None
             self._metric_ambiguity_pending = None
@@ -2064,13 +3119,29 @@ class UnknownTabletopPerception:
                 ingress = getattr(self, '_latest_frame_timing', None)
                 self._latest_frame_timing = None
                 self._processing_timing = None
+                self._arrival_frame_completion = None
+                self._station_compute_frame = None
                 self._locked_rgb_hold_status = None
                 self._locked_source_status = None
                 self._metric_ambiguity_status = None
                 generation = self.generation
+                contact_station_version = getattr(self, '_contact_station_version', 0)
                 receive_wall = self.last_receive_wall
                 if source is not None:
                     self.last_consumed_ns = source[0].header.stamp.to_nsec()
+            if self._station_requalification_admission_tick(source):
+                return
+            try:
+                self._station_requalification_finalizing_check()
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                self._station_requalification_hold = None
+                self.unavailable('station_requalification_rejected: '+str(exc),
+                    None if source is None else source[0].header.stamp, source)
+                return
+            if self._process_observation_measurement(source):
+                return
+            if self._station_requalification_wait(source):
+                return
             if getattr(self, '_metric_ambiguity_pending', None) is not None:
                 try:
                     reference = self._check_metric_ambiguity_reference()
@@ -2104,6 +3175,8 @@ class UnknownTabletopPerception:
                         None if source is None else source[0].header.stamp, source)
                     return
             if source is None:
+                if self._station_compute_idle_wait():
+                    return
                 if time.monotonic() - receive_wall > self.max_age:
                     self.unavailable('exact_rgbd_stream_stale')
                 return
@@ -2117,27 +3190,44 @@ class UnknownTabletopPerception:
             age = (rospy.Time.now() - color.header.stamp).to_sec()
             if not (0 <= age <= self.max_age):
                 raise ValueError('source_frame_stale_or_future')
+            self._station_compute_begin_frame(source)
             if (color.header.frame_id != self.camera_frame
                     or depth_message.header.frame_id != self.camera_frame):
                 raise ValueError('aligned_rgbd_frame_mismatch')
             if (color.width, color.height) != (depth_message.width, depth_message.height):
                 raise ValueError('unaligned_rgbd_dimensions')
+            # Record timely entry BEFORE decode, dynamic TF or the phase's
+            # context/feedback qualification can wait. This token supplies no
+            # station, identity or geometry authority: the unchanged complete
+            # source and marker checks must still pass before segmentation.
+            with self.lock:
+                entry_reference = getattr(self, '_locked_rgb_hold_reference', None)
+                if (entry_reference or {}).get('observation_arrival_retry') is not None:
+                    self._begin_station_frame_completion(
+                        source, entry_reference, 'observation_arrival_retry')
+                elif (entry_reference or {}).get('initial_station_current_support') is not None:
+                    self._begin_station_frame_completion(
+                        source, entry_reference, 'initial_station_current_support')
             self._frame_timing_stage('decode')
-            camera = rospy.get_param('/camera', {})
-            require_rectified_source_after_activation(camera, color.header.stamp.to_nsec())
+            with self._decode_timing_component('camera_parameter_read'):
+                camera = rospy.get_param('/camera', {})
+            with self._decode_timing_component('rectified_source_validation'):
+                require_rectified_source_after_activation(camera, color.header.stamp.to_nsec())
             if not bool(camera.get('align_depth_to_color', False)):
                 raise ValueError('aligned_depth_required')
             intrinsics = [float(camera[name]) for name in ('fx', 'fy', 'cx', 'cy')]
-            array = self.bridge.imgmsg_to_cv2(depth_message, desired_encoding='passthrough')
-            if depth_message.encoding in ('16UC1', 'mono16'):
-                scale = float(camera['depth_scale'])
-                if not np.isfinite(scale) or scale <= 0:
-                    raise ValueError('invalid_runtime_depth_scale')
-                depth = np.asarray(array, dtype=np.float32) * scale
-            elif depth_message.encoding == '32FC1':
-                depth = np.asarray(array, dtype=np.float32)
-            else:
-                raise ValueError('unsupported_depth_encoding')
+            with self._decode_timing_component('cv_bridge_conversion'):
+                array = self.bridge.imgmsg_to_cv2(depth_message, desired_encoding='passthrough')
+            with self._decode_timing_component('float32_depth_scale'):
+                if depth_message.encoding in ('16UC1', 'mono16'):
+                    scale = float(camera['depth_scale'])
+                    if not np.isfinite(scale) or scale <= 0:
+                        raise ValueError('invalid_runtime_depth_scale')
+                    depth = np.asarray(array, dtype=np.float32) * scale
+                elif depth_message.encoding == '32FC1':
+                    depth = np.asarray(array, dtype=np.float32)
+                else:
+                    raise ValueError('unsupported_depth_encoding')
             self._frame_timing_stage('before_tf')
             wait = exact_tf_wait_budget(
                 (rospy.Time.now() - color.header.stamp).to_sec(), self.max_age, self.tf_wait)
@@ -2151,30 +3241,82 @@ class UnknownTabletopPerception:
                 (rospy.Time.now() - color.header.stamp).to_sec(), self.max_age, self.tf_wait)
             self._frame_timing_stage('segmentation')
             exact_transform = transform_matrix(transform)
+            # Qualify the fixed station before choosing this frame's support
+            # model. Existing metric ambiguity holds keep their original
+            # segmentation until a genuinely unique frame recovers them.
+            with self._segmentation_timed_lock(), self._segmentation_timing_component('station_qualification'):
+                if self._contact_station_frame_retired(contact_station_version):
+                    return
+                arrival_retry_reference = self._observation_arrival_retry_reference(source, camera)
+                contact_spatial_context = (self._contact_spatial_reference(source, camera)
+                    if arrival_retry_reference is None else None)
+                initial_station_reference = (self._initial_station_support_reference(source)
+                    if arrival_retry_reference is None else None)
+                completion = getattr(self, '_arrival_frame_completion', None)
+                if (completion is not None and completion['reference'] is not
+                        (arrival_retry_reference if completion['marker_kind'] == 'observation_arrival_retry'
+                         else initial_station_reference)):
+                    # Failed qualification cannot turn a completion allowance
+                    # into a fallback to an unqualified old-plane frame.
+                    raise ValueError('station_frame_completion_qualification_failed')
+                initial_marker = (getattr(self, '_locked_rgb_hold_reference', None) or {}).get(
+                    'initial_station_current_support')
+                if (arrival_retry_reference is None and initial_marker is not None
+                        and initial_station_reference is None
+                        and getattr(self, '_metric_ambiguity_pending', None) is None):
+                    # Missing qualification cannot switch this established
+                    # station back to old-plane geometry, nor claim the
+                    # qualified support-gap receipt without real brackets.
+                    raise ValueError('initial_station_current_support_invalidated')
+                current_support_kwargs = ({'prefer_current_support': True}
+                    if (arrival_retry_reference is not None or initial_station_reference is not None)
+                    and getattr(self, '_metric_ambiguity_pending', None) is None else {})
             support_gap_reason = None
             try:
-                result = segment_with_support_fallback(
-                    depth, intrinsics, exact_transform, self.config,
-                    anchor=anchor, last=last, reference_plane_base=plane)
+                with self._segmentation_timing_component('segment_with_support_fallback'):
+                    result = segment_with_support_fallback(
+                        depth, intrinsics, exact_transform, self.config,
+                        anchor=anchor, last=last, reference_plane_base=plane,
+                        **current_support_kwargs)
             except ValueError as exc:
                 if anchor is None or str(exc) not in _SUPPORT_MEASUREMENT_GAPS:
                     raise
                 support_gap_reason, result = str(exc), None
             self._frame_timing_stage('post_segment')
+            if support_gap_reason is not None:
+                self._arrival_frame_completion = None
             with self.lock:
                 if generation != self.generation or self.mode != 'unknown':
                     return
+                if self._contact_station_frame_retired(contact_station_version):
+                    return
+                # A task freeze may have arrived while this frame was fitting.
+                # Never publish that in-flight pre-motion measurement afterward.
+                if self._process_observation_measurement(source):
+                    return
+                self._check_recovery_arrival_reference(source, camera, arrival_retry_reference)
+                self._require_initial_station_support_reference(source, initial_station_reference)
                 exact_tf_wait_budget(
                     (rospy.Time.now() - color.header.stamp).to_sec(), self.max_age, self.tf_wait)
                 self._frame_timing_stage('tracking')
                 self.last_shape = depth.shape
                 if (support_gap_reason is not None or (self.tracker.anchor is not None
                         and result.metrics.get('support_current_audit_available') is False)):
+                    self._arrival_frame_completion = None
                     self._hold_missing_current_support(source, camera,
                         support_gap_reason if result is None else result.metrics.get('support_current_audit_reason'),
                         result)
                     return
                 initial_refined = None
+                # Check the previous publishable frame before choose() changes
+                # tracker.last. The post-refinement check uses the same marker.
+                if (arrival_retry_reference is None
+                        and self._observation_arrival_retry_reference(source, camera) is not None):
+                    # A qualification arriving during segmentation belongs to
+                    # the next frame, never retroactively to this old-plane fit.
+                    self.unavailable('observation_station_changed_during_segmentation',
+                                     color.header.stamp, source, lose=False)
+                    return
                 handoff_pair = None
                 if self.tracker.anchor is None and getattr(self, '_rgb_acquisition_active', None) is not None:
                     handoff_pair = self._process_rgb_handoff(source, depth, intrinsics,
@@ -2213,12 +3355,49 @@ class UnknownTabletopPerception:
                         self._initial_visual_insufficiency(detail, source, depth, intrinsics,
                             transform_matrix(transform), result, camera)
                         return
+                fragment_pair = None
+                if arrival_retry_reference is not None and not self.tracker.lost:
+                    matches = _matching_candidates(result.candidates,
+                        self.tracker.anchor, self.tracker.last, self.config)
+                    recovery = (recover_arrival_fragment_group if not matches else
+                                recover_arrival_matching_fragments if len(matches) > 1 else None)
+                    marker = self._require_observation_arrival_marker(arrival_retry_reference)
+                    if recovery is not None and marker.get('spatial_reference') is not None:
+                        self._check_recovery_arrival_reference(source, camera, arrival_retry_reference)
+                        rejection = None
+                        try:
+                            result, fragment_pair = recovery(result,
+                                self.bridge.imgmsg_to_cv2(color, desired_encoding='bgr8'), depth,
+                                intrinsics, exact_transform, self.config, self.tracker.anchor,
+                                self.tracker.last, marker['spatial_reference'],
+                                marker['fragment_histogram'], marker['fragment_contour'],
+                                self.minimum_quality,
+                                appearance_context=self._observation_marker_appearance_context(source,marker,
+                                    lambda: self._check_recovery_arrival_reference(source,camera,arrival_retry_reference)),
+                                **_rgb_source_kwargs(camera, depth.shape))
+                        except ValueError as exc:
+                            if len(matches) <= 1 or not str(exc).startswith('matching_fragment'):
+                                raise
+                            # Failure of this optional same-instance proposal
+                            # preserves the original multi-candidate hold/reject.
+                            rejection = str(exc)
+                        timing = getattr(self, '_processing_timing', None)
+                        if len(matches) > 1 and timing is not None:
+                            timing['matching_fragment_proposal'] = dict(
+                                original_metric_matches=len(matches),
+                                accepted=fragment_pair is not None, reason=rejection,
+                                metric_geometry_authority=False, motion_authorized=False)
+                        self._check_recovery_arrival_reference(source, camera, arrival_retry_reference)
+                        exact_tf_wait_budget((rospy.Time.now()-color.header.stamp).to_sec(), self.max_age, self.tf_wait)
+                        if fragment_pair is not None:
+                            initial_refined = fragment_pair[1]
                 was_lost = self.tracker.lost
                 support_recovery = None
-                if (getattr(self, '_locked_source_pending', None) or {}).get('kind') == 'support_measurement_gap':
+                if (getattr(self, '_locked_source_pending', None) or {}).get('kind') in ('support_measurement_gap', FEEDBACK_GAP):
                     self._frame_timing_stage('support_gap_measured_revalidation')
                     support_recovery = self._support_gap_recovery(source, result, camera,
-                        depth, intrinsics, exact_transform)
+                        depth, intrinsics, exact_transform,
+                        arrival_retry_reference=arrival_retry_reference, pre_refined=fragment_pair)
                     if support_recovery is None:
                         return
                     initial_refined = support_recovery[1]
@@ -2233,9 +3412,11 @@ class UnknownTabletopPerception:
                     and len(_matching_candidates(metric_candidates,
                         self.tracker.anchor, self.tracker.last, self.config)) > 1)
                 if ambiguity_pending is not None or ambiguity_entry:
+                    self._arrival_frame_completion = None
                     self._frame_timing_stage('metric_ambiguity_rgb_identity')
                     ambiguity_recovery = self._metric_ambiguity_transition(source, result, camera,
-                        depth, intrinsics, transform_matrix(transform))
+                        depth, intrinsics, transform_matrix(transform),
+                        arrival_retry_reference=arrival_retry_reference, pre_refined=fragment_pair)
                     if ambiguity_recovery is None:
                         return
                     initial_refined = ambiguity_recovery[1]
@@ -2262,6 +3443,14 @@ class UnknownTabletopPerception:
                             identity_verified=False, metric_geometry_authority=False, motion_authorized=False)
                         self.unavailable('source_qualification_rejected: '+reason, color.header.stamp, source)
                         return
+                station_tracker = None
+                if ((initial_station_reference is not None or fragment_pair is not None
+                        or getattr(self, '_arrival_frame_completion', None) is not None
+                        or getattr(self, '_station_compute_frame', None) is not None) and pending_recovery is None
+                        and ambiguity_recovery is None and handoff_pair is None):
+                    station_tracker = TargetTracker(self.config)
+                    station_tracker.anchor, station_tracker.last = self.tracker.anchor, self.tracker.last
+                    station_tracker.plane_base = self.tracker.plane_base.copy()
                 if handoff_pair is not None:
                     with self.input_lock:
                         if (self._rgb_acquisition_active is None or self.tracker.lost
@@ -2281,7 +3470,8 @@ class UnknownTabletopPerception:
                 elif support_recovery is not None:
                     candidate, reason = support_recovery[0].last, 'tracked'
                 else:
-                    choice_tracker = self.tracker if pending_recovery is None else pending_recovery
+                    choice_tracker = (pending_recovery if pending_recovery is not None else
+                                      station_tracker if station_tracker is not None else self.tracker)
                     candidate, reason = choice_tracker.choose(result, depth.shape)
                 if candidate is not None and self.anchor_source_stamp_ns == 0:
                     self.anchor_source_stamp_ns = color.header.stamp.to_nsec()
@@ -2299,11 +3489,17 @@ class UnknownTabletopPerception:
                 elif self.rgb_instance_refinement:
                     try:
                         self._frame_timing_stage('rgb_refinement')
-                        candidate = refine_candidate(
-                            self.bridge.imgmsg_to_cv2(color, desired_encoding='bgr8'),
-                            depth, intrinsics, transform_matrix(transform), candidate, self.config,
-                            **_rgb_source_kwargs(camera, depth.shape))
+                        with self._rgb_timing_component('refine'):
+                            candidate = refine_candidate(
+                                self.bridge.imgmsg_to_cv2(color, desired_encoding='bgr8'),
+                                depth, intrinsics, transform_matrix(transform), candidate, self.config,
+                                **self._arrival_rgb_spatial_kwargs(arrival_retry_reference),
+                                **({'contact_spatial_reference': contact_spatial_context['spatial_reference']}
+                                   if contact_spatial_context is not None else {}),
+                                **_rgb_source_kwargs(camera, depth.shape))
                     except ValueError as exc:
+                        if isinstance(exc, ObservationArrivalStationChanged):
+                            raise
                         # A failed RGB-D ownership estimate must not publish
                         # the contaminated depth proposal as an accepted mask.
                         # Keep identity while withholding this frame; fresh
@@ -2311,10 +3507,13 @@ class UnknownTabletopPerception:
                         self.unavailable('rgb_depth_refinement_rejected: ' + str(exc),
                                          color.header.stamp, source, lose=False)
                         return
-                staged_tracker = (ambiguity_recovery[0] if ambiguity_recovery is not None else pending_recovery)
-                hold_reference = (self._prepare_locked_rgb_hold_reference(source, candidate, camera)
-                    if staged_tracker is None else
-                    self._prepare_locked_rgb_hold_reference(source, candidate, camera, tracker=staged_tracker))
+                self._station_compute_recovery_evidence(source, result, candidate, camera)
+                staged_tracker = (ambiguity_recovery[0] if ambiguity_recovery is not None else
+                                  pending_recovery if pending_recovery is not None else station_tracker)
+                with self._rgb_timing_component('hold.total'):
+                    hold_reference = (self._prepare_locked_rgb_hold_reference(source, candidate, camera)
+                        if staged_tracker is None else
+                        self._prepare_locked_rgb_hold_reference(source, candidate, camera, tracker=staged_tracker))
                 self._frame_timing_stage('post_refine')
                 exact_tf_wait_budget(
                     (rospy.Time.now() - color.header.stamp).to_sec(), self.max_age, self.tf_wait)
@@ -2325,8 +3524,62 @@ class UnknownTabletopPerception:
                     if (hold_reference is None or hold_reference['source_stamp_ns'] != color.header.stamp.to_nsec()
                             or hold_reference['source_id'] != reference['source_id']):
                         raise ValueError('metric_ambiguity_new_reference_unavailable')
-                    self._qualify_metric_ambiguity_frame(source, result, reference)
+                    grouped = self._qualified_fragment_pair(source, result, camera,
+                        arrival_retry_reference, fragment_pair)
+                    self._qualify_metric_ambiguity_frame(source, result, reference, current_fragment_group=grouped)
+                if arrival_retry_reference is not None:
+                    if (hold_reference is None or self._observation_arrival_retry_reference(
+                            source, camera, expected=arrival_retry_reference, check_last=False) is None):
+                        raise ValueError('observation_arrival_station_invalidated_before_publish')
+                if initial_station_reference is not None:
+                    self._require_initial_station_support_reference(source, initial_station_reference)
+                    if (hold_reference is None
+                            or hold_reference['source_id'] != initial_station_reference['source_id']):
+                        raise ValueError('initial_station_new_reference_unavailable')
                 with self.input_lock:
+                    if contact_spatial_context is not None:
+                        self._contact_spatial_reference(source, camera, expected=contact_spatial_context)
+                    self._station_compute_commit_check(source, camera, result, candidate)
+                    completion = getattr(self, '_arrival_frame_completion', None)
+                    if completion is not None:
+                        if completion['marker_kind'] == 'observation_arrival_retry':
+                            if self._observation_arrival_retry_reference(source, camera,
+                                    expected=arrival_retry_reference) is not arrival_retry_reference:
+                                raise ValueError('observation_arrival_station_invalidated_at_commit')
+                        elif (initial_station_reference is None or
+                                self._initial_station_support_reference(source,
+                                    expected=initial_station_reference) is not initial_station_reference):
+                            raise ValueError('initial_station_current_support_invalidated')
+                        require_fresh_source(color.header.stamp.to_nsec(), rospy.Time.now().to_nsec(), min(self.max_age, .8))
+                    self._require_initial_station_support_reference(source, initial_station_reference)
+                    if initial_station_reference is not None:
+                        hold_reference['initial_station_current_support'] = (
+                            initial_station_reference['initial_station_current_support'])
+                    elif (reason == 'acquired' and hold_reference is not None
+                            and self._initial_station_selection_matches()
+                            and rospy.get_param_cached('/gui/joint_direct_mode', False) is not True):
+                        # Only the original three-frame acquisition creates
+                        # this station. Neither tracking nor a return re-arms it.
+                        hold_reference['initial_station_current_support'] = dict(
+                            source_stamp_ns=hold_reference['source_stamp_ns'],
+                            q_source=hold_reference['q_source'], source_id=hold_reference['source_id'],
+                            epoch_ns=hold_reference['epoch_ns'],
+                            anchor_fingerprint=hold_reference['anchor_fingerprint'],
+                            reference_plane=hold_reference['reference_plane'], invalidated_reason='',
+                            identity_template=dict(
+                                provenance=self._initial_station_template_provenance(hold_reference),
+                                bgr=hold_reference['bgr'], mask=hold_reference['mask']))
+                    if arrival_retry_reference is not None:
+                        marker = arrival_retry_reference.get('observation_arrival_retry')
+                        if (self._locked_rgb_hold_reference is not arrival_retry_reference
+                                or marker is None or marker.get('invalidated_reason')
+                                or arrival_retry_reference['pose_invalidated']
+                                or self._rgb_interest_epoch != marker['epoch_ns']
+                                or rospy.get_param_cached('/gui/joint_direct_mode', False) is True
+                                or time.monotonic() >= marker['session_deadline_monotonic']
+                                or rospy.Time.now().to_nsec() >= marker['session_deadline_ns']):
+                            raise ValueError('observation_arrival_station_invalidated_at_commit')
+                        hold_reference['observation_arrival_retry'] = marker
                     if ambiguity_recovery is not None:
                         self._check_metric_ambiguity_reference(ambiguity_recovery[2])
                         require_fresh_source(color.header.stamp.to_nsec(), rospy.Time.now().to_nsec(), min(self.max_age, .8))
@@ -2338,12 +3591,22 @@ class UnknownTabletopPerception:
                         # Callback invalidation and measured publication share
                         # this commit lock. Refinement never mutated live last.
                         self._check_pending_source_reference()
+                        self._require_support_reference_lifetime(self._locked_rgb_hold_reference,
+                                                                 color.header.stamp.to_nsec())
                         require_fresh_source(color.header.stamp.to_nsec(), rospy.Time.now().to_nsec(), min(self.max_age, .8))
                         self.tracker.last = pending_recovery.last
                         self._locked_source_pending = None
                         if support_recovery is not None:
                             self._locked_source_status.update(state='recovered_unique_measured_frame',
                                 measurement_republished=True)
+                            if self._locked_source_status.get('kind') == FEEDBACK_GAP:
+                                self._locked_source_status['requalified_accepted_feedback'] = deepcopy([
+                                    hold_reference['accepted_before'], hold_reference['accepted_after']])
+                    if station_tracker is not None:
+                        if fragment_pair is not None:
+                            require_fresh_source(color.header.stamp.to_nsec(),
+                                rospy.Time.now().to_nsec(), min(self.max_age, .8))
+                        self.tracker.last = station_tracker.last
                     self._frame_timing_stage('publish')
                     # Frame identity remains that of the RGB-D source, including mask.
                     obj = ObjectPose()
@@ -2389,6 +3652,28 @@ class UnknownTabletopPerception:
                 self._frame_timing_stage('failure_publish')
             with self.lock:
                 if generation == self.generation and self.mode == 'unknown':
+                    if self._contact_station_frame_retired(contact_station_version):
+                        return
+                    if self._station_requalification_wait(source, exc):
+                        return
+                    if self._station_compute_retired_frame(source, exc):
+                        return
+                    if isinstance(exc, StationFeedbackBracketGap):
+                        try:
+                            self._station_compute_publish_feedback_gap(source, exc)
+                            return
+                        except (ValueError, KeyError, TypeError, AttributeError) as rejection:
+                            exc = rejection
+                    if self._station_compute_timeout(source, exc):
+                        return
+                    if self._process_observation_measurement(source):
+                        return
+                    if isinstance(exc, InitialFeedbackBracketGap):
+                        try:
+                            self._publish_initial_feedback_gap(source, exc)
+                            return
+                        except (ValueError, KeyError, TypeError, AttributeError) as rejection:
+                            exc = rejection
                     pending = getattr(self, '_locked_source_pending', None)
                     if pending is not None:
                         self._locked_source_status = dict(pending, state='rejected', reason=str(exc),
@@ -2404,6 +3689,10 @@ class UnknownTabletopPerception:
                         tf2_ros.ExtrapolationException)) else 'perception_failure: ') + str(exc)
                     self.unavailable(reason, color.header.stamp, source)
                     rospy.logwarn_throttle(3.0, 'Unknown perception unavailable: %s', reason)
+        finally:
+            self._arrival_frame_completion = None
+            self._station_compute_frame = None
+            self._processing_timing_thread_ident = None
 
 
 if __name__ == '__main__':

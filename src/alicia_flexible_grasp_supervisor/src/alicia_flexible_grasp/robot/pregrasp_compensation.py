@@ -14,7 +14,7 @@ and must demonstrate the same measured response and progress as every step.
 It never enables repeated integration into a stalled joint or probes Joint5.
 """
 from copy import deepcopy
-from itertools import product
+from itertools import combinations, product
 import math
 
 import numpy as np
@@ -32,6 +32,97 @@ def pose_matrix(values):
     result = quaternion_matrix(values[3:])
     result[:3, 3] = values[:3]
     return result
+
+
+def remaining_budget_guide(fk, residual, measured, expected_counts, initial_counts, *,
+                           maximum_steps, steps, maximum_step_counts, maximum_total_counts,
+                           held_axes, response_gains, tolerances, cost=None):
+    """Conditional endpoint heuristic, never a path or response proof.
+
+    Looking only four counts ahead can spend an axis in the wrong
+    direction and strand the later steps at another axis's total bound.
+    Search the remaining ORIGINAL box, then execute only a small improving
+    step toward that guide. Recompute after every actual response.
+    """
+    sdk = np.asarray(expected_counts)
+    origin = np.asarray(initial_counts)
+    reach = (maximum_steps-steps)*maximum_step_counts
+    low = np.maximum(origin-maximum_total_counts-sdk, -reach)
+    high = np.minimum(origin+maximum_total_counts-sdk, reach)
+    delta = np.zeros(6, dtype=int)
+    best_position = residual(measured)[0]
+    contact_mode = cost is not None
+    best = cost(measured) if contact_mode else best_position
+    # Fixed work bound; coordinate search is not a global reachability test.
+    for _ in range(8):
+        changed = False
+        for axis in range(6):
+            if axis in held_axes:
+                continue
+            chosen = delta[axis]
+            for value in range(int(low[axis]), int(high[axis])+1, 2):
+                trial = delta.copy()
+                trial[axis] = value
+                target = sdk+trial
+                if np.any(target < 0) or np.any(target > 4095):
+                    continue
+                try:
+                    command = (target-2048)*Q
+                    fk(command)
+                    predicted = measured+trial*response_gains*Q
+                    if np.any(abs(command-predicted) > .035):
+                        continue
+                    position, angle = residual(predicted)
+                    merit = cost(predicted) if contact_mode else position
+                except ValueError:
+                    continue
+                if (angle <= tolerances[1] and merit < best-1e-9
+                        and (not contact_mode or position <= tolerances[0])):
+                    chosen, best, best_position = value, merit, position
+            if chosen != delta[axis]:
+                delta[axis], changed = chosen, True
+        if not changed:
+            break
+    # A coordinate minimum can miss two jointly improving integer changes.
+    # Preserve every already-qualified guide and the separate contact merit
+    # policy. This one finite neighbourhood adds at most 96 endpoint checks
+    # for the four free axes; it never enlarges the original remaining box.
+    if not contact_mode and best_position > tolerances[0]:
+        centre = delta.copy()
+        selected, selected_key = None, None
+        free = [axis for axis in range(6) if axis not in held_axes]
+        for left, right in combinations(free, 2):
+            for dl, dr in product((-2, -1, 1, 2), repeat=2):
+                trial = centre.copy()
+                trial[left] += dl
+                trial[right] += dr
+                if np.any(trial < low) or np.any(trial > high):
+                    continue
+                target = sdk+trial
+                if np.any(target < 0) or np.any(target > 4095):
+                    continue
+                try:
+                    command = (target-2048)*Q
+                    fk(command)
+                    predicted = measured+trial*response_gains*Q
+                    if np.any(abs(command-predicted) > .035):
+                        continue
+                    position, angle = residual(predicted)
+                except ValueError:
+                    continue
+                if (not math.isfinite(position) or not math.isfinite(angle)
+                        or position > tolerances[0] or angle > tolerances[1]
+                        or not position < best_position-1e-6):
+                    continue
+                # Prefer margin in both unchanged hard gates, rather than
+                # buying a smaller position norm at the angle boundary.
+                ratios = position/tolerances[0], angle/tolerances[1]
+                key = max(ratios), sum(ratios), tuple(trial)
+                if selected_key is None or key < selected_key:
+                    selected, selected_key = (trial, position), key
+        if selected is not None:
+            delta, best_position = selected
+    return delta, best_position
 
 
 class PregraspCompensation:
@@ -193,53 +284,12 @@ class PregraspCompensation:
                 and self._cost(predicted) < previous_cost-1e-4)
 
     def _remaining_budget_guide(self, measured):
-        """Conditional endpoint heuristic, never a path or response proof.
-
-        Looking only four counts ahead can spend an axis in the wrong
-        direction and strand the later steps at another axis's total bound.
-        Search the remaining ORIGINAL box, then execute only a small improving
-        step toward that guide. Recompute after every actual response.
-        """
-        sdk = np.asarray(self.expected)
-        origin = np.asarray(self.initial_counts)
-        reach = (self.MAX_STEPS-self.steps)*self.MAX_STEP_COUNTS
-        low = np.maximum(origin-self.MAX_TOTAL_COUNTS-sdk, -reach)
-        high = np.minimum(origin+self.MAX_TOTAL_COUNTS-sdk, reach)
-        delta = np.zeros(6, dtype=int)
-        best_position = self.residual(measured)[0]
-        contact_mode = self.endpoint_acceptance is not None
-        best = self._cost(measured) if contact_mode else best_position
-        # Fixed work bound; coordinate search is not a global reachability test.
-        for _ in range(8):
-            changed = False
-            for axis in range(6):
-                if axis in self.held_axes:
-                    continue
-                chosen = delta[axis]
-                for value in range(int(low[axis]), int(high[axis])+1, 2):
-                    trial = delta.copy()
-                    trial[axis] = value
-                    target = sdk+trial
-                    if np.any(target < 0) or np.any(target > 4095):
-                        continue
-                    try:
-                        command = (target-2048)*Q
-                        self.fk(command)
-                        predicted = measured+trial*self.response_gains*Q
-                        if np.any(abs(command-predicted) > .035):
-                            continue
-                        position, angle = self.residual(predicted)
-                        merit = self._cost(predicted) if contact_mode else position
-                    except ValueError:
-                        continue
-                    if (angle <= self.tolerances[1] and merit < best-1e-9
-                            and (not contact_mode or position <= self.tolerances[0])):
-                        chosen, best, best_position = value, merit, position
-                if chosen != delta[axis]:
-                    delta[axis], changed = chosen, True
-            if not changed:
-                break
-        return delta, best_position
+        return remaining_budget_guide(self.fk, self.residual, measured,
+            self.expected, self.initial_counts, maximum_steps=self.MAX_STEPS,
+            steps=self.steps, maximum_step_counts=self.MAX_STEP_COUNTS,
+            maximum_total_counts=self.MAX_TOTAL_COUNTS, held_axes=self.held_axes,
+            response_gains=self.response_gains, tolerances=self.tolerances,
+            cost=self._cost if self.endpoint_acceptance is not None else None)
 
     def _guided_step(self, measured, actual, guide, position):
         choices = []

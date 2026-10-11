@@ -4,6 +4,7 @@ Samples the actual Noetic polynomial and stationary desired-state bridge. This
 is NOT a continuous visibility proof, an occlusion test, a collision check, or
 an assurance about tracking/calibration. All existing motion checks still apply.
 """
+from alicia_flexible_grasp.robot.observation_view_limits import MINIMUM_OBSERVATION_IMAGE_MARGIN_PX
 from copy import deepcopy
 import math
 import time
@@ -92,7 +93,7 @@ def _target_projection(corners, transform, k, width, height, margin, near, far):
 
 def validate_observation_target_trajectory(
         plan, fk, tool_from_camera, target_corners_base, intrinsics,
-        image_width, image_height, controller_desired, *, roi_margin_px=36.,
+        image_width, image_height, controller_desired, *, roi_margin_px=MINIMUM_OBSERVATION_IMAGE_MARGIN_PX,
         minimum_depth_m=.070, maximum_depth_m=.500, max_time_step_sec=.05,
         max_joint_span_rad=.02, max_samples=16384, max_depth=20,
         max_seconds=5., clock=time.monotonic):
@@ -214,7 +215,7 @@ def validate_observation_target_trajectory(
 
 def validate_observation_support_projection(
         transform_base_camera, measured_support_points_base, target_center_base,
-        intrinsics, image_width, image_height, *, roi_margin_px=36.,
+        intrinsics, image_width, image_height, *, roi_margin_px=MINIMUM_OBSERVATION_IMAGE_MARGIN_PX,
         minimum_depth_m=.070, maximum_depth_m=.500, target_corners_base=None):
     """Predict endpoint support coverage from actual measured points only.
 

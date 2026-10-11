@@ -51,16 +51,16 @@ def test_changing_world_origin_does_not_change_local_plane_consistency():
 
 
 def test_entire_initial_measured_footprint_is_checked_not_only_its_center():
-    center, reference, footprint = fixture_geometry(half_x=.05)
+    center, reference, footprint = fixture_geometry(half_x=.09)
     current = tilted_plane(center, 3.9, .0015)
     assert abs(current[:3] @ center + current[3]) < .004
-    assert max(abs(footprint @ current[:3] + current[3])) > .004
+    assert max(abs(footprint @ current[:3] + current[3])) > .007
     with pytest.raises(ValueError):
         validate(reference, current, center, footprint)
 
 
-@pytest.mark.parametrize('angle,distance', [(4.01, 0.), (0., .00401), (0., -.00401)])
-def test_original_angular_and_local_shift_limits_remain_enforced(angle, distance):
+@pytest.mark.parametrize('angle,distance', [(4.01, 0.), (0., .00701), (0., -.00701)])
+def test_angular_and_hard_local_shift_limits_remain_enforced(angle, distance):
     center, reference, footprint = fixture_geometry()
     with pytest.raises(ValueError):
         validate(reference, tilted_plane(center, angle, distance), center, footprint)

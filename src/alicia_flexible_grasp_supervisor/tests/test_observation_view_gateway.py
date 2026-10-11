@@ -72,7 +72,7 @@ def test_changed_projection_or_binding_blocks_submission(monkeypatch, mutation):
     if mutation == 'runtime_profile': params['/camera']['runtime_profile'] = {'source':'simulation'}
     if mutation == 'depth_scale': params['/camera']['depth_scale'] = .001
     if mutation == 'calibration_config': params['/handeye']['translation_xyz'] = [0., 0., .01]
-    if mutation == 'margin': params['/grasp_6d/remote/camera_visibility_margin_px'] = 20
+    if mutation == 'margin': params['/grasp_6d/remote/observation_camera_visibility_margin_px'] = 20
     if mutation == 'plan_id': audit['plan_id'] = 'another-plan'
     if mutation == 'missing_audit': audit = None
     with pytest.raises(ObservationPathError):
@@ -149,10 +149,10 @@ def test_all_unknown_observation_sources_require_visibility(source):
 
 
 @pytest.mark.parametrize('key,value', [
-    ('camera_visibility_margin_px', 20.),
+    ('observation_camera_visibility_margin_px', 20.),
     ('camera_visibility_min_depth_m', .02),
     ('camera_visibility_max_depth_m', .8),
-    ('camera_visibility_margin_px', True),
+    ('observation_camera_visibility_margin_px', True),
     ('camera_visibility_max_depth_m', float('nan')),
 ])
 def test_weakened_or_invalid_limits_rejected_before_projection(monkeypatch, key, value):
@@ -168,7 +168,8 @@ def test_weakened_or_invalid_limits_rejected_before_projection(monkeypatch, key,
 
 def test_tighter_limits_are_used_and_bound_to_submission(monkeypatch):
     gateway, scene, params, transform, calls = configured(monkeypatch)
-    for key, value in [('margin_px', 50.), ('min_depth_m', .10), ('max_depth_m', .40)]:
+    params['/grasp_6d/remote/observation_camera_visibility_margin_px'] = 50.
+    for key, value in [('min_depth_m', .10), ('max_depth_m', .40)]:
         params['/grasp_6d/remote/camera_visibility_' + key] = value
     seen = []
     def project(*args, **limits):
@@ -177,8 +178,8 @@ def test_tighter_limits_are_used_and_bound_to_submission(monkeypatch):
     monkeypatch.setattr(view, 'validate_observation_target_trajectory', project)
     audit = gateway._unknown_observation_view_audit(scene, None, None, None)
     assert seen == [dict(roi_margin_px=50., minimum_depth_m=.10, maximum_depth_m=.40)]
-    assert audit['configuration']['requested_visibility_limits_snapshot']['camera_visibility_margin_px'] == 50.
+    assert audit['configuration']['requested_visibility_limits_snapshot']['observation_camera_visibility_margin_px'] == 50.
     gateway._revalidate_unknown_observation_view(scene, audit)
-    params['/grasp_6d/remote/camera_visibility_margin_px'] = 51.
+    params['/grasp_6d/remote/observation_camera_visibility_margin_px'] = 51.
     with pytest.raises(ObservationPathError, match='CONFIGURATION_CHANGED'):
         gateway._revalidate_unknown_observation_view(scene, audit)

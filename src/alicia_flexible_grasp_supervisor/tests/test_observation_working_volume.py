@@ -124,7 +124,7 @@ def test_missing_or_mismatched_source_binding_cannot_be_used(updates):
     dict(intrinsics=[True, 400., 320., 240.]), dict(intrinsics=[400., 400., 640., 240.]),
     dict(intrinsics=[400., float('nan'), 320., 240.]), dict(intrinsics=np.eye(4)),
     dict(intrinsics=[[400., 1., 320.], [0., 400., 240.], [0., 0., 1.]]),
-    dict(roi_margin_px=35.99), dict(roi_margin_px=float('inf')), dict(roi_margin_px=240.),
+    dict(roi_margin_px=23.99), dict(roi_margin_px=float('inf')), dict(roi_margin_px=240.),
     dict(minimum_depth_m=.06999), dict(maximum_depth_m=.50001),
     dict(minimum_depth_m=.5), dict(maximum_depth_m=False),
     dict(base_from_camera=np.eye(3)), dict(base_from_camera=np.zeros((4, 4))),

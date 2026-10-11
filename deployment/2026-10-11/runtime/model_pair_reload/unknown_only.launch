@@ -1,0 +1,3 @@
+<launch>
+  <node pkg="alicia_grasp_modes" type="unknown_tabletop_perception.py" name="unknown_tabletop_perception" output="screen"/>
+</launch>

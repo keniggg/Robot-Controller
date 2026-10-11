@@ -1,0 +1,22 @@
+{
+  "reviewed": true,
+  "blocking_findings": [],
+  "reviewer": "root independent of consumer implementation",
+  "recorded_ns": 1791727505988118176,
+  "source_sha256": {
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_reacquisition.py": "9239301cc2a8dafc0fe7aadb796a3e8d7e6c874462ee732341d9505c27828153",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_wait_task.py": "5ab98f30954376788cf2888db9ded99ee677d2b6988bec3a1fa1c20cbb822467",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_wait_remote.py": "a3cfb38bee9aafb7e808660f29a25244a01f9fc5763e85f251866076bacf8831",
+    "src/alicia_grasp_modes/tests/test_station_support_gap_consumers.py": "aa7c57eff3f1483ba5da3509462af70246538cb8af8ec50be61d0a107c94c617"
+  },
+  "checks": [
+    "Strict receipt derives original parent geometry deadline; no extension to station identity deadline",
+    "Original binding, identity, actual object/mask gates remain and recovery parent chain is checked",
+    "Both consumers quarantine motion geometry on rejected support and clear hold only on a full new join",
+    "Fixed monotonic deadline survives duplicate pending; post-original-gate expiry cannot commit new geometry",
+    "Tests cover all six message orders, late old notices, omitted/tampered recovery, owner/epoch/phase and source-clock boundaries"
+  ],
+  "limitations": [
+    "Review and offline callback tests do not prove live robot grasp success"
+  ]
+}

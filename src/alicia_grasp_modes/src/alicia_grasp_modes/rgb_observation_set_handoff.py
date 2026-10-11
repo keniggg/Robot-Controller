@@ -3,8 +3,9 @@
 A set is not a target, and its envelope is only for view projection/ranking.
 Every original mask owns its original ray volume and appearance reference;
 there is no union mask, merged measured geometry, or image-centre reselection.
-The existing single-interest association retains the raw 4 mm / 4 degree
-support test. All members must associate uniquely before a set is returned.
+The single-interest association retains the raw 4 degree normal check and
+7 mm hard offset limit, with warnings above 4 mm. All members must associate
+uniquely before a set is returned.
 Measured target selection and its original three-frame confirmation remain
 separate caller responsibilities. This module has no I/O or motion authority.
 """

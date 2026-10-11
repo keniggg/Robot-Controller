@@ -6,6 +6,7 @@ from types import MethodType
 from unittest.mock import Mock
 
 import pytest
+import numpy as np
 
 from test_unknown_tf_alignment import prepared, module
 
@@ -119,4 +120,122 @@ def test_selection_change_during_segmentation_discards_old_timing_without_affect
     n.process(None)
     n.pubs['object'].publish.assert_not_called()
     n.pubs['detector_status'].publish.assert_not_called()
+    assert n._processing_timing is None
+
+
+DECODE_COMPONENTS = ('camera_parameter_read', 'rectified_source_validation',
+                     'cv_bridge_conversion', 'float32_depth_scale')
+
+
+def instrument_decode(monkeypatch, encoding='32FC1', failed_component=None):
+    n, clock, calls, segment, raw = with_status(monkeypatch, delay=0.)
+    color, old_depth = n.latest
+    values = np.full((20, 20), 3000, np.uint16) if encoding != '32FC1' else np.full((20, 20), .3, np.float32)
+    depth_message = n.bridge.cv2_to_imgmsg(values, encoding=encoding)
+    depth_message.header = old_depth.header
+    n.latest = (color, depth_message)
+    wall, cpu, visited = [100.], [20.], []
+    monkeypatch.setattr(module.time, 'monotonic', lambda: wall[0])
+    monkeypatch.setattr(module.time, 'thread_time', lambda: cpu[0])
+    delays = {name: (.01 * (index+1), .001 * (index+1))
+              for index, name in enumerate(DECODE_COMPONENTS)}
+
+    def elapsed(name):
+        visited.append(name)
+        wall[0] += delays[name][0]
+        cpu[0] += delays[name][1]
+        if name == failed_component:
+            raise ValueError('decode_component_failure')
+
+    original_param = module.rospy.get_param
+    def get_param(*args):
+        elapsed('camera_parameter_read')
+        return dict(original_param(*args), depth_scale=.0001)
+    monkeypatch.setattr(module.rospy, 'get_param', get_param)
+    original_validation = module.require_rectified_source_after_activation
+    def validate(*args):
+        elapsed('rectified_source_validation')
+        return original_validation(*args)
+    monkeypatch.setattr(module, 'require_rectified_source_after_activation', validate)
+    original_bridge = n.bridge.imgmsg_to_cv2
+    decoded = [None]
+    def convert(message, **kwargs):
+        if message is not depth_message:
+            return original_bridge(message, **kwargs)
+        assert kwargs == {'desired_encoding': 'passthrough'}
+        elapsed('cv_bridge_conversion')
+        decoded[0] = original_bridge(message, **kwargs)
+        return decoded[0]
+    monkeypatch.setattr(n.bridge, 'imgmsg_to_cv2', convert)
+    original_array = module.np.asarray
+    def asarray(value, *args, **kwargs):
+        if value is decoded[0] and kwargs.get('dtype') is np.float32:
+            elapsed('float32_depth_scale')
+        return original_array(value, *args, **kwargs)
+    monkeypatch.setattr(module.np, 'asarray', asarray)
+    return n, segment, delays, visited
+
+
+@pytest.mark.parametrize('encoding', ['16UC1', 'mono16', '32FC1'])
+def test_decode_components_separate_wall_and_cpu_without_repeating_reads_or_changing_depth(monkeypatch, encoding):
+    n, segment, delays, visited = instrument_decode(monkeypatch, encoding)
+    pair = n.latest
+    n.process(None)
+    result = status(n)
+    timing = result['frame_timing']
+    assert result['state'] == 'ready' and timing['failed_stage'] is None
+    assert visited == list(DECODE_COMPONENTS)
+    assert timing['stage'] == 'publish'
+    assert timing['stage_wall_sec']['decode'] == pytest.approx(.1)
+    assert timing['stage_thread_cpu_sec']['decode'] == pytest.approx(.01)
+    for name, (wall, cpu) in delays.items():
+        component = timing['decode_components'][name]
+        assert component == dict(wall_sec=pytest.approx(wall),
+                                 thread_cpu_sec=pytest.approx(cpu), completed=True)
+    measured_depth = segment.call_args[0][0]
+    assert measured_depth.dtype == np.float32
+    np.testing.assert_allclose(measured_depth, .3)
+    assert n.pubs['object'].publish.call_args[0][0].header.stamp.to_nsec() == 10_000_000_000
+    # A published/queried diagnostic cannot mutate the in-flight measurements.
+    snapshot = n._source_timing_status(pair)
+    snapshot['decode_components']['camera_parameter_read']['wall_sec'] = 999.
+    assert n._processing_timing['decode_components']['camera_parameter_read']['wall_sec'] == pytest.approx(.01)
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize('failed_component', DECODE_COMPONENTS)
+def test_decode_failure_keeps_finished_components_and_original_failure_stage(monkeypatch, failed_component):
+    n, segment, delays, visited = instrument_decode(monkeypatch, failed_component=failed_component)
+    n.process(None)
+    result = status(n)
+    timing = result['frame_timing']
+    index = DECODE_COMPONENTS.index(failed_component)
+    assert visited == list(DECODE_COMPONENTS[:index+1])
+    assert set(timing['decode_components']) == set(visited)
+    assert timing['failed_stage'] == 'decode'
+    assert timing['stage'] == 'failure_publish'
+    assert result['first_loss']['reason'] == 'perception_failure: decode_component_failure'
+    for name in visited:
+        component = timing['decode_components'][name]
+        assert component['completed'] is (name != failed_component)
+        assert component['wall_sec'] == pytest.approx(delays[name][0])
+        assert component['thread_cpu_sec'] == pytest.approx(delays[name][1])
+    segment.assert_not_called()
+    assert not n.pubs['object'].publish.call_args[0][0].detected
+    n.pubs['object_pose_base'].publish.assert_not_called()
+    json.dumps(result, allow_nan=False)
+
+
+def test_decode_component_does_not_repopulate_reset_or_replacement_timing(monkeypatch):
+    n, *_ = with_status(monkeypatch)
+    old = {'decode_components': {}}
+    replacement = {'decode_components': {}}
+    n._processing_timing = old
+    with n._decode_timing_component('camera_parameter_read'):
+        n._processing_timing = replacement
+    assert old == replacement == {'decode_components': {}}
+    n._processing_timing = None
+    with pytest.raises(ValueError, match='original_error'):
+        with n._decode_timing_component('camera_parameter_read'):
+            raise ValueError('original_error')
     assert n._processing_timing is None

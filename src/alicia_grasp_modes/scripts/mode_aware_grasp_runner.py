@@ -15,7 +15,8 @@ from std_msgs.msg import String
 from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan
 from alicia_flexible_grasp_supervisor.srv import StartGrasp, TriggerZero
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
-    plan_id_matches_content, is_silhouette_observation_plan, validate_silhouette_observation_plan)
+    plan_id_matches_content, is_silhouette_observation_plan,
+    is_independent_observation_plan, validate_independent_observation_plan)
 from alicia_grasp_modes.selection import SELECTION_PARAM, STRATEGIES, parse_selection
 from alicia_grasp_modes.runner_contract import (
     selection_audit_error, direct_audit_error, audit_matches_preview,
@@ -89,9 +90,9 @@ class ModeAwareGraspRunner(original.FreshPreviewRunner):
             self.condition.notify_all()
 
     def _preview_shape_matches_strategy(self, message):
-        if is_silhouette_observation_plan(message):
+        if is_independent_observation_plan(message):
             try:
-                validate_silhouette_observation_plan(message)
+                validate_independent_observation_plan(message)
             except (AttributeError, TypeError, ValueError, OverflowError):
                 return False
             return bool(self.selection and self.selection['mode'] == 'unknown'
@@ -179,6 +180,7 @@ class ModeAwareGraspRunner(original.FreshPreviewRunner):
             return bool(
                 candidate.valid and self._preview_shape_matches_strategy(candidate)
                 and is_silhouette_observation_plan(candidate) == is_silhouette_observation_plan(initial)
+                and is_independent_observation_plan(candidate) == is_independent_observation_plan(initial)
                 and candidate.model_choice == self.expected_model
                 and candidate.diagnostic == initial.diagnostic
                 and (same_plan or (initial_track and candidate.target_track_id == initial_track))

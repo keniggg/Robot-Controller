@@ -3,9 +3,37 @@ from collections.abc import Mapping
 import math
 
 import numpy as np
+from alicia_flexible_grasp.grasp.gripper_geometry import insufficient_measured_common_height
 
 
-def bounded_bilateral_view_gaps(diagnostics, geometry, config):
+def _normalized_observation_deficits(table, include_thin):
+    """Preserve absent-side rows and measured positive-but-thin directions.
+
+    A thin profile is not a contact rejection by itself. Only callers with a
+    completed unsuccessful contact search can use these as observation input.
+    """
+    rows = table.get('surface_evidence_rejections', ())
+    if not isinstance(rows, (tuple, list)):
+        return ()
+    result = list(rows)
+    if not include_thin:
+        return tuple(result)
+    profiles = table.get('contact_boundary_profiles', ())
+    if not isinstance(profiles, (tuple, list)):
+        return tuple(result)
+    required = table.get('required_contact_patch_overlap_m')
+    for profile in profiles:
+        if (not isinstance(profile, Mapping)
+                or profile.get('contact_height_bounds_source') != 'fused_measured_bilateral_surface'
+                or not insufficient_measured_common_height(profile.get('contact_height_bounds_m'), required)):
+            continue
+        result.append(dict(profile, failure_code='BILATERAL_SURFACE_EVIDENCE_MISSING',
+            observation_deficit='insufficient_measured_common_height',
+            required_contact_patch_overlap_m=float(required)))
+    return tuple(result)
+
+
+def bounded_bilateral_view_gaps(diagnostics, geometry, config, *, include_thin=False):
     """Require a missing measured side and a whole-OBB open-aperture fit.
 
     Local contact-band fits can coexist with body collisions at other angles.
@@ -38,9 +66,9 @@ def bounded_bilateral_view_gaps(diagnostics, geometry, config):
         basis_x = reference - normal * np.dot(reference, normal)
         basis_x /= np.linalg.norm(basis_x)
         basis_y = np.cross(normal, basis_x)
-        rows = table.get('surface_evidence_rejections', ())
-        if not isinstance(rows, (tuple, list)):
+        if type(include_thin) is not bool:
             return ()
+        rows = _normalized_observation_deficits(table, include_thin)
         result = []
         for row in rows:
             if not isinstance(row, Mapping) or row.get('failure_code') != 'BILATERAL_SURFACE_EVIDENCE_MISSING':
@@ -59,7 +87,11 @@ def bounded_bilateral_view_gaps(diagnostics, geometry, config):
             required = width + 2. * clearance
             if required > limit:
                 continue
-            result.append(dict(failure_code='BILATERAL_SURFACE_EVIDENCE_MISSING',
+            detail = ({'observation_deficit': row['observation_deficit'],
+                'contact_height_bounds_m': list(row['contact_height_bounds_m']),
+                'required_contact_patch_overlap_m': row['required_contact_patch_overlap_m']}
+                if row.get('observation_deficit') == 'insufficient_measured_common_height' else {})
+            result.append(dict(failure_code='BILATERAL_SURFACE_EVIDENCE_MISSING', **detail,
                 angle_deg=angle, jaw_axis_base=jaw.tolist(), whole_obb_width_m=width,
                 required_open_width_m=required, max_inner_gap_m=limit,
                 opening_fit_clearance_each_side_m=clearance,
@@ -71,17 +103,18 @@ def bounded_bilateral_view_gaps(diagnostics, geometry, config):
 
 
 def measured_bilateral_view_gaps(diagnostics, geometry, config, surface,
-                                  finger_geometry, initial_camera_origin):
+                                  finger_geometry, initial_camera_origin, *, include_thin=False):
     """Annotate aperture-fitting directions using only retained measured points.
 
-    Use the contact evaluator's exact masks, including its footprint, robust
-    jaw bands and common-height filtering. These are observation proposals,
+    Use the contact evaluator's independent footprint and robust jaw bands to
+    choose a missing side. The original common-height result still determines
+    whether observation is needed; intersected masks cannot rank side quality. These are observation proposals,
     never proof that an unseen surface exists or will be graspable.
     """
     from alicia_flexible_grasp.grasp.gripper_geometry import (
-        _bilateral_surface_measurement, _MEASURED_SURFACE_TRIM_FRACTION)
+        _bilateral_surface_measurement_details, _MEASURED_SURFACE_TRIM_FRACTION)
     try:
-        gaps = bounded_bilateral_view_gaps(diagnostics, geometry, config)
+        gaps = bounded_bilateral_view_gaps(diagnostics, geometry, config, include_thin=include_thin)
         center = np.asarray(geometry.center_base, dtype=float)
         normal = np.asarray(geometry.support_normal_base, dtype=float)
         camera = np.asarray(initial_camera_origin, dtype=float)
@@ -95,13 +128,23 @@ def measured_bilateral_view_gaps(diagnostics, geometry, config, surface,
         result = []
         for gap in gaps:
             jaw = np.asarray(gap['jaw_axis_base'])
-            counts, lower, upper, masks = _bilateral_surface_measurement(
+            counts, lower, upper, _contact_masks, side_masks = _bilateral_surface_measurement_details(
                 surface, center, jaw, -normal, finger_geometry, minimum, normal)
             if lower is not None and upper is not None:
-                continue  # The retained measurement no longer has this gap.
-            side_counts = (0, 0) if counts is None else counts[:2]
+                required = diagnostics['tabletop_geometry'].get('required_contact_patch_overlap_m')
+                if not include_thin or not insufficient_measured_common_height((lower, upper), required):
+                    continue  # Sufficient or invalid current evidence is not a thin-height gap.
+            elif gap.get('observation_deficit') == 'insufficient_measured_common_height':
+                # This explicitly bound thin-height opportunity must still be
+                # positive and measurable in the current registered surface.
+                continue
+            # Counts/heights below describe each side before intersection;
+            # they select an observation direction and never certify contact.
+            masks = side_masks if isinstance(side_masks, tuple) else (None, None)
+            side_counts = tuple(int(np.count_nonzero(mask)) if mask is not None else 0
+                                for mask in masks)
             heights = []
-            for mask in (masks if isinstance(masks, tuple) else (None, None)):
+            for mask in masks:
                 values = support_height[mask] if mask is not None else ()
                 quantiles = np.quantile(values, (_MEASURED_SURFACE_TRIM_FRACTION,
                     1. - _MEASURED_SURFACE_TRIM_FRACTION)) if len(values) else (0., 0.)
@@ -114,11 +157,13 @@ def measured_bilateral_view_gaps(diagnostics, geometry, config, surface,
                 weakest = min(heights)
                 missing = tuple(sign for sign, height in zip((-1, 1), heights)
                                 if height <= weakest + 1e-9)
-            result.append(dict(gap, missing_side_signs=list(missing),
+            result.append(dict(gap, measured_common_height_m=(None if lower is None or upper is None else float(upper-lower)),
+                missing_side_signs=list(missing),
                 negative_measured_points=int(side_counts[0]), positive_measured_points=int(side_counts[1]),
                 negative_measured_height_m=heights[0], positive_measured_height_m=heights[1],
                 minimum_points_per_side=int(minimum), target_center_base_m=center.tolist(),
-                missing_side_policy='insufficient_samples_or_weakest_common_height',
+                missing_side_policy='insufficient_samples_or_weakest_independent_height',
+                side_measurement_basis='before_common_support_intersection',
                 object_height_m=float(geometry.size_xyz_m[2]),
                 initial_camera_origin_base_m=camera.tolist(),
                 source_view_stamps_ns=list(surface.view_stamps_ns),

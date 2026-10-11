@@ -7,6 +7,19 @@ SELECTION_PARAM = '/grasp_mode/selection'
 STRATEGIES = ('two_stage', 'direct', 'observe_return')
 
 
+def read_authoritative_selection(master):
+    """Read the master directly at a reset barrier, bypassing rospy's cache.
+
+    Once get_param_cached has subscribed, ordinary get_param also reads that
+    process-local cache. Its asynchronous update is not a reset acknowledgement.
+    MasterProxy.getParam supplies caller_id itself; it takes only the key here.
+    """
+    code, message, value = master.getParam(SELECTION_PARAM)
+    if type(code) is not int or code != 1:
+        raise ValueError('authoritative mode selection unavailable: %s' % message)
+    return parse_selection(value)
+
+
 def validate_mode_strategy(mode, strategy):
     if mode not in ('carton', 'unknown'):
         raise ValueError('mode must be carton or unknown')

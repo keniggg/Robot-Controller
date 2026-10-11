@@ -1,0 +1,5 @@
+{
+  "mount_point": "/media/zhuyupei/SanStand",
+  "archive_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records",
+  "ros_log_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log"
+}

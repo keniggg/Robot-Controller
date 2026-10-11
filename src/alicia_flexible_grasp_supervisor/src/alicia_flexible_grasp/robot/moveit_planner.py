@@ -641,6 +641,61 @@ class MoveItPlanner:
             return float('-inf')
         return value - now_sec
 
+    def _plan_joint_from_start_state(self, start_state, canonical_goal,
+                                    planning_time_limit_sec=None):
+        """Read-only fresh collision plan to an exact, caller-audited endpoint.
+
+        No IK fallback, trajectory endpoint editing or executable cache. The
+        caller separately owns physical pose, following and scene contracts.
+        """
+        self._last_pose_plan = None
+        previous_tolerance, previous_time = None, None
+        try:
+            names = tuple(self.manipulator.get_active_joints())
+            canonical = tuple('Joint%d' % i for i in range(1, 7))
+            goal = tuple(float(v) for v in canonical_goal)
+            if (set(names) != set(canonical) or len(names) != 6 or len(goal) != 6
+                    or not all(math.isfinite(v) for v in goal)):
+                raise ValueError('EXACT_SEQUENCE_JOINT_TARGET_INVALID')
+            target = dict(zip(canonical, goal))
+            previous_tolerance = float(self.manipulator.get_goal_joint_tolerance())
+            if not math.isfinite(previous_tolerance) or previous_tolerance < 0:
+                previous_tolerance = None
+                raise ValueError('EXACT_SEQUENCE_JOINT_TOLERANCE_INVALID')
+            if planning_time_limit_sec is not None:
+                limit = float(planning_time_limit_sec)
+                if not math.isfinite(limit) or limit <= 0:
+                    raise ValueError('EXACT_SEQUENCE_DEADLINE_EXPIRED')
+                previous_time = self.manipulator.get_planning_time()
+                self.manipulator.set_planning_time(limit)
+            self.manipulator.set_start_state(deepcopy(start_state))
+            self.manipulator.set_goal_joint_tolerance(0.)
+            self.manipulator.set_joint_value_target(target)
+            result = self.manipulator.plan()
+            if not self._plan_success(result):
+                raise ValueError('EXACT_SEQUENCE_JOINT_PLAN_FAILED')
+            plan = self._executable_plan(result)
+            tr = plan.joint_trajectory
+            if (len(tr.joint_names) != 6 or set(tr.joint_names) != set(canonical)
+                    or len(tr.points) < 2
+                    or getattr(getattr(plan, 'multi_dof_joint_trajectory', None), 'points', [])
+                    or any(len(p.positions) != 6 or not all(math.isfinite(v) for v in p.positions)
+                           for p in tr.points)):
+                raise ValueError('EXACT_SEQUENCE_JOINT_PATH_INVALID')
+            endpoint = dict(zip(tr.joint_names, tr.points[-1].positions))
+            if max(abs(endpoint[n]-target[n]) for n in canonical) > 1e-12:
+                raise ValueError('EXACT_SEQUENCE_JOINT_GOAL_CHANGED')
+            return plan, 'exact joint endpoint planned from supplied current state'
+        except Exception as exc:
+            return None, str(exc)
+        finally:
+            if previous_tolerance is not None:
+                self.manipulator.set_goal_joint_tolerance(previous_tolerance)
+            if previous_time is not None:
+                self.manipulator.set_planning_time(previous_time)
+            self._last_pose_plan = None
+            self._clear_targets()
+
     def check_pose_sequence(
         self,
         targets,
@@ -649,6 +704,9 @@ class MoveItPlanner:
         deadline_sec=0.0,
         stage_validator=None,
         start_state_override=None,
+        pregrasp_planner=None,
+        approach_planner=None,
+        stage_state_transform=None,
     ):
         """Plan a collision-aware pose sequence without moving or caching it."""
 
@@ -726,7 +784,12 @@ class MoveItPlanner:
                         % stage_name,
                     )
                 pose = getattr(target, 'pose', target)
-                if bool(use_linear):
+                if (index == 0 and str(stage_name) == 'pregrasp'
+                        and not use_linear and pregrasp_planner is not None):
+                    plan, reason = pregrasp_planner(start_state, target)
+                elif index == 1 and str(stage_name) == 'approach' and approach_planner is not None:
+                    plan, reason = approach_planner(start_state, target)
+                elif bool(use_linear):
                     plan, reason = self._plan_cartesian_from_start_state(
                         start_state,
                         target,
@@ -805,6 +868,8 @@ class MoveItPlanner:
                         metrics.get('hardware_limiting_joint', '') or ''
                     )
                 next_state = self._robot_state_after_plan(start_state, plan)
+                if next_state is not None and stage_state_transform is not None:
+                    next_state = stage_state_transform(str(stage_name), next_state)
                 if next_state is None:
                     return (
                         False,

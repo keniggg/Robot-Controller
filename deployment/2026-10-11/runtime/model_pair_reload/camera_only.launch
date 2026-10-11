@@ -1,0 +1,3 @@
+<launch>
+  <node pkg="alicia_flexible_grasp_supervisor" type="camera_node.py" name="supervisor_camera" output="screen" launch-prefix="/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/tools/with_local_realsense_sdk.sh"/>
+</launch>

@@ -5,6 +5,9 @@ No publishers, services, motion, or enable commands. Sensor messages are kept
 at their original source stamps; a keyframe is recorded only when RGB, depth,
 mask and detection all agree exactly. This avoids a full-rate RGB bag rolling
 away the very source frames needed to replay a grasp.
+
+During a new observation-measurement handoff, a separate bag-only 5 Hz stream
+also retains exact RGB-D pairs without requiring detection or a mask.
 """
 
 import argparse
@@ -43,6 +46,132 @@ SOURCES = {
     '/perception/object_mask': Image,
     '/perception/object': ObjectPose,
 }
+
+MEASUREMENT_REQUEST_TOPIC = '/grasp_mode/observe_return_measurement_request'
+OBSERVATION_RGBD_TOPICS = {
+    '/supervisor/camera/color/image_raw': '/experiment/observation_rgbd/color',
+    '/supervisor/camera/depth/image_raw': '/experiment/observation_rgbd/depth',
+}
+
+
+class ObservationRgbdWindow:
+    """Bounded diagnostic sampling only; messages never become execution input.
+
+    The caller owns the existing bag lock. Neither callbacks nor this class
+    create a sensor message, change its header, or fill a missing component.
+    """
+    _BINDING = ('lease_id', 'selection', 'session_id', 'target_epoch', 'target_track_id',
+        'origin_plan_id', 'origin_snapshot_stamp_ns', 'view_plan_id', 'view_source_stamp_ns',
+        'view_index', 'plan_sha256', 'control_epoch_ns', 'deadline_ns', 'motion_kind')
+
+    def __init__(self, minimum_stamp_ns):
+        self.minimum_stamp_ns = int(minimum_stamp_ns)
+        self.request = None
+        self.pending = OrderedDict()
+        self.seen_leases = set()
+        self.last_request_stamp_ns = 0
+        self.last_pair_stamp_ns = 0
+        self.last_pair_wall = float('-inf')
+        self.deadline_ns = 0
+        self.deadline_wall = 0.
+        self.count = 0
+
+    def _close(self):
+        self.request = None
+        self.pending.clear()
+
+    def active(self, now_ns, now_wall):
+        if self.request is not None and (now_ns >= self.deadline_ns
+                or now_wall >= self.deadline_wall or now_ns < self.request['stamp_ns']):
+            self._close()
+        return self.request is not None
+
+    def update_request(self, data, now_ns, now_wall):
+        self.active(now_ns, now_wall)
+        try:
+            request = json.loads(data)
+            if (not isinstance(request, dict) or type(request.get('version')) is not int
+                    or request['version'] != 1 or any(key not in request for key in self._BINDING)
+                    or request.get('metric_geometry_authority') is not False
+                    or request.get('motion_authorized') is not False):
+                return False
+            stamp, deadline = request['stamp_ns'], request['deadline_ns']
+            selected = request['selection']
+            if (type(stamp) is not int or type(deadline) is not int
+                    or not self.minimum_stamp_ns <= stamp <= now_ns
+                    or stamp <= self.last_request_stamp_ns
+                    or not isinstance(selected, dict) or selected.get('mode') != 'unknown'
+                    or selected.get('strategy') != 'observe_return'
+                    or not isinstance(request.get('lease_id'), str) or not request['lease_id']
+                    or not isinstance(request.get('request_id'), str) or not request['request_id']):
+                return False
+            state = request.get('state')
+            if self.request is not None:
+                if any(request[key] != self.request[key] for key in self._BINDING):
+                    return False
+                if state in ('qualified', 'revoked'):
+                    self.last_request_stamp_ns = stamp
+                    self._close()
+                    return True
+                if state != 'requalifying' or self.request['state'] != 'executing':
+                    return False
+            elif state != 'executing' or request['lease_id'] in self.seen_leases:
+                return False
+            if not stamp <= now_ns < deadline or deadline-stamp > 600_000_000_000:
+                return False
+            cutoff = deadline
+            if state == 'requalifying':
+                arrival, capture = request.get('arrival_stamp_ns'), request.get('capture_deadline_ns')
+                if (type(arrival) is not int or type(capture) is not int
+                        or not 0 < arrival <= stamp <= now_ns < capture <= deadline
+                        or capture-arrival > 10_000_000_000):
+                    return False
+                cutoff = capture
+            local_deadline = now_wall + (cutoff-now_ns)*1e-9
+            if self.request is not None:
+                local_deadline = min(local_deadline, self.deadline_wall)
+            self.request = request
+            self.seen_leases.add(request['lease_id'])
+            self.deadline_ns, self.deadline_wall = cutoff, local_deadline
+            self.last_request_stamp_ns = stamp
+            # A transition cannot pair a pre-transition component with a later
+            # source. Source matching below is still exact integer nanoseconds.
+            self.pending.clear()
+            return True
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+
+    def offer(self, topic, message, now_ns, now_wall):
+        if topic not in OBSERVATION_RGBD_TOPICS or not self.active(now_ns, now_wall):
+            return None
+        stamp = message.header.stamp.to_nsec()
+        if (type(stamp) is not int or not self.request['stamp_ns'] <= stamp <= now_ns
+                or stamp >= self.deadline_ns or stamp-self.last_pair_stamp_ns < 200_000_000
+                or now_wall-self.last_pair_wall < .2):
+            return None
+        for key in tuple(self.pending):
+            if now_wall-self.pending[key]['received'] > 1.:
+                self.pending.pop(key)
+        entry = self.pending.setdefault(stamp, dict(received=now_wall, messages={}))
+        entry['messages'].setdefault(topic, message)
+        while len(self.pending) > 16:
+            self.pending.popitem(last=False)
+        if len(entry['messages']) != 2:
+            return None
+        self.pending.pop(stamp, None)
+        original = entry['messages']
+        color, depth = [original[key] for key in OBSERVATION_RGBD_TOPICS]
+        if ((color.width, color.height, color.header.frame_id)
+                != (depth.width, depth.height, depth.header.frame_id)):
+            return None
+        self.last_pair_stamp_ns, self.last_pair_wall = stamp, now_wall
+        self.count += 1
+        metadata = dict(schema_version=1, recording_scope='diagnostic_only',
+            execution_source=False, metric_geometry_authority=False, motion_authorized=False,
+            pairing='exact_original_header_stamp_ns', source_stamp_ns=stamp,
+            original_topics={destination: source for source, destination in OBSERVATION_RGBD_TOPICS.items()},
+            measurement_request=self.request, sample_rate_limit_hz=5., pair_count=self.count)
+        return [(destination, original[source]) for source, destination in OBSERVATION_RGBD_TOPICS.items()], metadata
 
 
 def camera_runtime_metadata_snapshot(parameters, read_interval, previous_content=None,
@@ -276,6 +405,7 @@ def main():
     outcome = {'started_at': utc_now(), 'active_seen': False,
                'minimum_stamp_ns': rospy.Time.now().to_nsec(), 'interrupted': False,
                'bag_closed': False, 'stop_reason': 'duration_elapsed'}
+    observation_rgbd = ObservationRgbdWindow(outcome['minimum_stamp_ns'])
     signal_event = threading.Event()
     previous_handlers = {}
 
@@ -295,6 +425,14 @@ def main():
             if state['closed'] or stamp in written:
                 return
             now = time.monotonic()
+            sampled = observation_rgbd.offer(topic, message, rospy.Time.now().to_nsec(), now)
+            if sampled is not None:
+                images, receipt = sampled
+                received = rospy.Time.now()
+                for name, original_message in images:
+                    bag.write(name, original_message, received)
+                bag.write('/experiment/observation_rgbd/metadata',
+                          String(data=json.dumps(receipt, sort_keys=True, allow_nan=False)), received)
             entry = pending.setdefault(stamp, {'received': now, 'messages': {}})
             entry['messages'][topic] = message
             if len(entry['messages']) == len(SOURCES):
@@ -320,6 +458,8 @@ def main():
             if state['closed']:
                 return
             bag.write(topic, message, rospy.Time.now())
+            if topic == MEASUREMENT_REQUEST_TOPIC:
+                observation_rgbd.update_request(message.data, rospy.Time.now().to_nsec(), time.monotonic())
             if isinstance(message, GraspState):
                 observe_task_state(outcome, {
                     'stamp_ns': message.header.stamp.to_nsec(),
@@ -409,6 +549,13 @@ def main():
         ('/perception/unknown/detector_status', String),
         ('/grasp_mode/observe_return_session', String),
         ('/grasp_mode/observe_return_ack', String),
+        ('/grasp_mode/observe_return_measurement_request', String),
+        ('/grasp_mode/observe_return_measurement_ack', String),
+        ('/grasp_mode/contact_station_retirement_request', String),
+        ('/grasp_mode/contact_station_retirement_ack', String),
+        ('/grasp_mode/initial_preflight_request', String),
+        ('/grasp_mode/initial_preflight_ack', String),
+        ('/grasp_mode/initial_preflight_attempt', String),
         ('/rosout_agg', Log),
         ('/grasp/state', GraspState), ('/grasp/near_field_phase', NearFieldPlanningPhase),
         ('/grasp_6d/plan_enriched', Grasp6DPlan),
@@ -479,6 +626,7 @@ def main():
             outcome['closed_files'] = [output.name] + sorted(state['audit_files'])
         outcome['finished_at'] = utc_now()
         outcome['keyframe_count'] = state['count']
+        outcome['observation_rgbd_pair_count'] = observation_rgbd.count
         atomic_json(record_dir / 'recorder_outcome.json', outcome)
         print('KEYFRAME_RECORDING_FINISHED count=%d path=%s' % (
             state['count'], output), flush=True)

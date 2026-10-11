@@ -71,7 +71,7 @@ def conservative_silhouette_observation_geometry(
     immutable original-request binding remain caller-owned. The additional
     support check covers the expanded collision envelope projected onto the
     original support. These are model vertices, not measured support samples;
-    this does not replace perception's fixed-anchor 4 mm gate.
+    this does not replace perception's fixed-anchor support gate (7 mm by default).
     All dimensions, including the combined envelope, retain existing limits.
     ``object_points_base`` contains only the fresh measured points, unchanged.
     """

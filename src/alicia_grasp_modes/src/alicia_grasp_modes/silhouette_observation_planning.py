@@ -1,4 +1,4 @@
-"""Independent, non-contact camera-view planning for one diagnostic prefix.
+"""Independent, non-contact camera-view planning for bound observation prefixes.
 
 This path has no grasp candidate, inferred object width, contact gate, or
 historical grasp tracker. It reuses the original observation envelope, strict
@@ -17,22 +17,28 @@ import numpy as np
 
 from alicia_flexible_grasp.vision.rgbd_snapshot import retained_exact_source
 
-from .runner_contract import observe_return_audit_error
+from .runner_contract import observe_return_audit_error, supplemental_observation_audit_error
 from .observe_return_visual import diversified_observation_checks
 from .observation_view_utility import information_motion_rank
 from .observation_support_schedule import (
     ObservationSupportSchedule, support_schedule_priority)
 from .silhouette_observation_order import (
-    POLICY as DIAGNOSTIC_ORDER_POLICY, endpoint_schedule_metrics, transform_fingerprint)
+    POLICY as DIAGNOSTIC_ORDER_POLICY, COVERAGE_POLICY, INFORMATION_COVERAGE_POLICY,
+    diagnostic_coverage_indices, ObservationCheckSchedule,
+    endpoint_schedule_metrics, transform_fingerprint, rigid_transform)
 from .silhouette_observation_view_source import (
     measured_view_source, camera_parameters, array_fingerprint)
+from .observation_arrival_projection import (
+    capture_arrival_projection, validate_arrival_projection, arrival_projection_camera_signature)
 from alicia_flexible_grasp.robot.observation_view_guard import (
     validate_observation_view_trajectory)
 from alicia_flexible_grasp.robot.observation_view_limits import (
-    DEFAULT_OBSERVATION_VIEW_PARAMETERS, effective_observation_view_limits)
+    DEFAULT_OBSERVATION_VIEW_PARAMETERS, effective_observation_view_limits,
+    read_observation_view_parameters)
 
 
 SOURCE = 'silhouette_observation'
+MEASURED_SOURCE = 'measured_observation'
 INFORMATION_ORDER_POLICY = 'measured_support_witness_then_bounded_information_utility_and_ik_motion_proxy'
 
 
@@ -72,9 +78,22 @@ class SilhouetteObservationPlanningMixin:
             and self._observe_return_phase == 'observation_prefix'
             and not self._observe_return_paused)
 
+    def _independent_observation_planning_active(self):
+        return bool(self._diagnostic_observation_planning_active()
+            or (self._unknown_observation_planning_active()
+                and not self._observe_return_diagnostic_observation_only
+                and self._observe_return_trigger == 'BILATERAL_SURFACE_EVIDENCE_MISSING'))
+
+    def _independent_observation_source(self):
+        return SOURCE if self._diagnostic_observation_planning_active() else MEASURED_SOURCE
+
+    def _independent_observation_role(self):
+        return ('diagnostic_observation' if self._diagnostic_observation_planning_active()
+                else 'measured_observation')
+
     def _make_observation_sequence(self, grasp_pose, geometry, insertion_axis_base,
             snapshot=None, observation_reference_pose=None, observation_camera_distance_m=None):
-        if not self._diagnostic_observation_planning_active():
+        if not self._independent_observation_planning_active():
             return super()._make_observation_sequence(grasp_pose, geometry, insertion_axis_base,
                 snapshot=snapshot, observation_reference_pose=observation_reference_pose,
                 observation_camera_distance_m=observation_camera_distance_m)
@@ -88,14 +107,18 @@ class SilhouetteObservationPlanningMixin:
             geometry.center_base, self._tool_from_camera_matrix(), selected, minimum, maximum)
         # Retain the original measured noise model, but never build hypothetical
         # approach/grasp/lift poses for an observation-only candidate.
-        uncertainty = max(float(profile.depth_uncertainty_m)
-            for profile in self._adaptive_stage_profiles(geometry, snapshot))
+        profiles = self._adaptive_stage_profiles(geometry, snapshot)
+        if self._diagnostic_observation_planning_active():
+            uncertainty = max(float(profile.depth_uncertainty_m) for profile in profiles)
+        else:
+            from .observation_information_uncertainty import observation_information_uncertainty_m
+            uncertainty = observation_information_uncertainty_m(profiles)
         if not math.isfinite(uncertainty) or uncertainty < 0.:
             raise original.CandidateContractError('OBSERVATION_VIEW_GEOMETRY_INVALID',
                 'diagnostic observation requires finite live depth uncertainty')
         audit = dict(audit, nominal_camera_target_distance_m=nominal,
             orientation_source='frozen_snapshot_current_tool0',
-            candidate_role='diagnostic_observation', contact_geometry_checked=False)
+            candidate_role=self._independent_observation_role(), contact_geometry_checked=False)
         if observation_camera_distance_m is not None:
             audit['selection_rule'] = 'bounded_camera_target_distance_search'
         return SimpleNamespace(pregrasp=pose,
@@ -113,7 +136,8 @@ class SilhouetteObservationPlanningMixin:
             return report
         # No grasp tracker or contact candidate was consulted. Keep the shared
         # publication counters while identifying their independent source.
-        report['source_counts'] = {SOURCE:dict(generated=1,
+        source = local_funnel.get('independent_observation_source', SOURCE)
+        report['source_counts'] = {source:dict(generated=1,
             locally_valid=int(report['stage_counts']['locally_valid']['passed']),
             stable=int(report['stage_counts']['stable']['passed']),
             preview=int(report['stage_counts']['preview']['passed']),
@@ -125,12 +149,19 @@ class SilhouetteObservationPlanningMixin:
     def _activate_far_field_observation_variant(self, runtime, variant, attempted_count):
         super()._activate_far_field_observation_variant(runtime, variant, attempted_count)
         if runtime.get('diagnostic_observation_seed') is not None:
+            if not self._diagnostic_observation_planning_active():
+                runtime['observation_orientation_search'].update(
+                    candidate_role=self._independent_observation_role(),
+                    contact_candidate_yaw_used=False)
+                return
             directed = (runtime['observation_view'].get('orientation_source')
                 == 'measured_silhouette_ambiguity_geodesic')
             runtime['observation_orientation_search'].update(
-                policy='measured_silhouette_ambiguity_and_existing_camera_view_search',
+                policy=('measured_silhouette_ambiguity_and_existing_camera_view_search'
+                    if self._diagnostic_observation_planning_active()
+                    else 'measured_missing_side_and_existing_camera_view_search'),
                 object_yaw_used=directed, measured_target_geometry_direction_used=directed,
-                contact_candidate_yaw_used=False, candidate_role='diagnostic_observation')
+                contact_candidate_yaw_used=False, candidate_role=self._independent_observation_role())
 
     @staticmethod
     def _observation_information_utility(variant):
@@ -164,12 +195,12 @@ class SilhouetteObservationPlanningMixin:
             self._unknown_observation_support_schedule = cache
         return cache[1]
 
-    def _order_unknown_observation_checks(self, variants):
+    def _order_unknown_observation_checks(self, variants, *, defer_endpoint_hints=False):
         """Schedule only this request's frozen views; retain all strict checks."""
         original = self._observe_return_original
         try:
             runtime = getattr(self, '_active_unknown_observation_check_runtime', None)
-            if runtime is None and self._diagnostic_observation_planning_active():
+            if runtime is None and self._independent_observation_planning_active():
                 runtime = self._stable_variant_runtime[(0, 0)]
             if not isinstance(runtime, dict):
                 raise ValueError('candidate-bound observation runtime unavailable')
@@ -223,8 +254,16 @@ class SilhouetteObservationPlanningMixin:
                         metrics['information_geometry_rank'], sort_key)
                 rows.append((sort_key, index, variant, metrics))
             ordered = sorted(rows, key=lambda row: (row[0], row[1]))
-            hints, hint_report = self._observation_endpoint_search_hints(
-                tuple(row[2] for row in ordered), prepared)
+            if defer_endpoint_hints:
+                # Geometry-qualified FK views may enter the original strict
+                # loop before advisory IK searches. No hint budget is spent
+                # or reset here; a fallback uses the same prepared cache.
+                hints, hint_report = {}, dict(status='deferred_until_first_fk_check',
+                    execution_authority=False, candidates_removed=0,
+                    maximum_start_budget_sec=3., maximum_queries=96)
+            else:
+                hints, hint_report = self._observation_endpoint_search_hints(
+                    tuple(row[2] for row in ordered), prepared)
             def endpoint_priority(row):
                 hint = hints.get(transform_fingerprint(
                     original.pose_matrix(row[2]['sequence'].pregrasp)), {})
@@ -283,7 +322,55 @@ class SilhouetteObservationPlanningMixin:
                 comparison_timing_policy=('shared_eight_seconds_after_first_qualified_view'
                     if information_driven else 'legacy_tilt_budget'),
                 proves_joint_motion_or_path_visibility=False, claims_global_optimum=False)
-            return tuple(row[2] for row in ordered)
+            original_order = tuple(row[2] for row in ordered)
+            if (len(original_order) > 1
+                    and (information_driven or not any(
+                        row[3]['endpoint_ik_hint'].get('status') == 'endpoint_found'
+                        for row in ordered))
+                    and all(v.get('camera_target_distance_m') is not None for v in original_order)):
+                mount = rigid_transform(self._tool_from_camera_matrix())
+                order = diagnostic_coverage_indices(
+                    [v['camera_target_distance_m'] for v in original_order],
+                    [(original.pose_matrix(v['sequence'].pregrasp) @ mount)[:3, 0]
+                     for v in original_order],
+                    self.grasp_config.get('observation_camera_target_nominal_distance_m', .26))
+                positive_hint_first = None
+                if information_driven:
+                    # One promising endpoint may lead, but an IK hint never
+                    # replaces the full-path incumbent. After a failed first
+                    # check, spread the remaining work across view families.
+                    best_support_priority = support_schedule_priority(ordered[0][3]['measured_support_schedule'])
+                    positive_hint_first = next((index for index, row in enumerate(ordered)
+                        if (row[3]['endpoint_ik_hint'].get('status') == 'endpoint_found'
+                            and row[3]['predicted_information_utility'] > 0.
+                            and support_schedule_priority(row[3]['measured_support_schedule'])
+                                == best_support_priority)), None)
+                    if positive_hint_first is not None:
+                        order = (positive_hint_first, *(index for index in order
+                            if index != positive_hint_first))
+                    # Retain zero-information candidates without spending the
+                    # first-path budget on them before positive-gain views.
+                    positive_gain = tuple(index for index in order
+                        if ordered[index][3]['predicted_information_utility'] > 0.)
+                    zero_gain = tuple(index for index in order
+                        if ordered[index][3]['predicted_information_utility'] <= 0.)
+                    order = tuple(sorted(positive_gain + zero_gain, key=lambda index: (
+                        support_schedule_priority(ordered[index][3]['measured_support_schedule']),
+                        ordered[index][3]['predicted_information_utility'] <= 0.)))
+                coverage = dict(policy=(INFORMATION_COVERAGE_POLICY if information_driven else COVERAGE_POLICY),
+                    execution_authority=False,
+                    candidates_removed=0, full_path_incumbent_found=False,
+                    distance_direction_order=list(order), dispatched_original_indices=[],
+                    positive_hint_first_original_index=positive_hint_first,
+                    original_strict_check_budget_unchanged=True,
+                    after_incumbent_policy=scheduling_policy)
+                runtime['unknown_observation_scheduling']['first_incumbent_coverage'] = coverage
+
+                return ObservationCheckSchedule(original_order, order, coverage,
+                    validate=lambda: self._require_unknown_observation_prepared(prepared),
+                    qualified=lambda: runtime.get('_observation_qualified_incumbent_ticket')
+                        is prepared.ticket)
+            return original_order
         except (KeyError, AttributeError, TypeError, ValueError, OverflowError) as exc:
             raise original.CandidateContractError(self._observation_contract_code('REFERENCE_INVALID'), str(exc))
 
@@ -358,21 +445,45 @@ class SilhouetteObservationPlanningMixin:
                     reference = np.asarray(source['base_from_tool'])
                     camera_origin = reference.dot(np.asarray(source['tool_from_camera']))[:3, 3]
                     distance = float(np.linalg.norm(np.asarray(source['center_base']) - camera_origin))
+                    probe_priorities = {}
                     def information_probe_priority(variant):
                         metrics = endpoint_schedule_metrics(reference,
                             original.pose_matrix(variant['sequence'].pregrasp),
                             variant['observation_envelope'].minimum_support_clearance_m)
-                        return (support_schedule_priority(support_schedule.evaluate(
+                        priority = (support_schedule_priority(support_schedule.evaluate(
                             original.pose_matrix(variant['sequence'].pregrasp))),
                             self._observation_information_geometry(metrics,
                                 self._observation_information_utility(variant), distance)['information_geometry_rank'])
-                    # Stable sort keeps dispersed roll/distance order only for
-                    # equal predicted benefit/cost; nominal distance cannot
-                    # erase the information ranking before the bounded probes.
+                        probe_priorities[id(variant)] = priority
+                        return priority
                     probe_order = tuple(sorted(probe_order, key=information_probe_priority))
                     report.update(probe_order_policy='measured_support_witness_then_information_motion_rank_then_roll_distance_ties',
                         measured_support_schedule=support_schedule.report(),
                         information_prediction_only=True, motion_proxy_is_duration=False)
+                    if (len(probe_order) > 1 and all(
+                            v.get('camera_target_distance_m') is not None for v in probe_order)):
+                        # An endpoint hint is advisory, not a full-path
+                        # incumbent. After the best information-ranked probe,
+                        # expose other distance/direction families within the
+                        # SAME start/count budget instead of exhausting it on
+                        # the many rolls of one high-utility tilt direction.
+                        mount = rigid_transform(source['tool_from_camera'])
+                        coverage = diagnostic_coverage_indices(
+                            [v['camera_target_distance_m'] for v in probe_order],
+                            [(original.pose_matrix(v['sequence'].pregrasp) @ mount)[:3, 0]
+                             for v in probe_order],
+                            self.grasp_config.get('observation_camera_target_nominal_distance_m', .26))
+                        coverage = (0, *(index for index in coverage if index != 0))
+                        # Preserve measured-support strata and keep zero-gain
+                        # views behind useful views within the same stratum.
+                        coverage = sorted(coverage, key=lambda index: (
+                            probe_priorities[id(probe_order[index])][0],
+                            self._observation_information_utility(probe_order[index]) <= 0.))
+                        probe_order = tuple(probe_order[index] for index in coverage)
+                        report.update(
+                            probe_order_policy='measured_support_then_best_information_then_distance_direction_coverage',
+                            best_information_probe_first=True,
+                            coverage_changes_poses=False, coverage_extends_budget=False)
                 for variant in probe_order:
                     self._require_unknown_observation_prepared(prepared)
                     remaining = deadline - clock()
@@ -471,9 +582,7 @@ class SilhouetteObservationPlanningMixin:
             self._active_unknown_observation_check_runtime = previous
 
     def _observation_view_limit_configuration(self):
-        requested = {key:self._observe_return_original.rospy.get_param(
-            '/grasp_6d/remote/' + key, default)
-            for key,default in DEFAULT_OBSERVATION_VIEW_PARAMETERS.items()}
+        requested = read_observation_view_parameters(self._observe_return_original.rospy.get_param)
         return dict(requested_visibility_limits_snapshot=deepcopy(requested),
             effective_visibility_limits=effective_observation_view_limits(requested))
 
@@ -491,9 +600,24 @@ class SilhouetteObservationPlanningMixin:
                     max_inference_latency_sec=self.planning_snapshot_max_inference_latency_sec)
             if sample is None:
                 raise ValueError('exact original RGB-D sample unavailable')
-            return dict(sample=sample, intrinsics=deepcopy(self._camera_intrinsics()),
+            captured = dict(sample=sample, intrinsics=deepcopy(self._camera_intrinsics()),
                 tool_from_camera=np.array(self._tool_from_camera_matrix(), copy=True),
                 view_limits=self._observation_view_limit_configuration())
+            if not self._diagnostic_observation_planning_active():
+                from .unknown_pending_identity import reference_binding
+                status = deepcopy(self._unknown_identity_status.get(snapshot.stamp_ns))
+                if status is None:
+                    raise ValueError('same-source arrival projection receipt unavailable')
+                reference = (getattr(self, '_measurement_remote_reference', None)
+                             or getattr(self, '_unknown_identity_reference', None))
+                if (reference is None or reference.get('binding') != reference_binding(status, self._mode_selection)):
+                    raise ValueError('arrival projection frozen target binding changed')
+                camera = original.rospy.get_param('/camera', {})
+                if any(camera.get(key) != value for key, value in camera_parameters(captured['intrinsics']).items()):
+                    raise ValueError('arrival projection camera differs from snapshot intrinsics')
+                captured['arrival_projection'] = capture_arrival_projection(
+                    status, self._mode_selection, snapshot.stamp_ns, camera)
+            return captured
         except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
             raise original.CandidateContractError(self._observation_contract_code('VIEW_SOURCE_INVALID'), str(exc))
 
@@ -510,6 +634,9 @@ class SilhouetteObservationPlanningMixin:
                 raise ValueError('original observation visibility configuration unavailable')
             source['view_limits'] = deepcopy(limits)
             source['audit']['view_limits'] = deepcopy(limits)
+            if not self._diagnostic_observation_planning_active():
+                source['arrival_projection'] = captured['arrival_projection']
+                source['audit']['arrival_projection'] = original._thaw_request_evidence(captured['arrival_projection']['audit'])
             self._diagnostic_observation_view_source = original._freeze_request_evidence(source)
             self._diagnostic_observation_view_prepared = prepared
             self._require_diagnostic_observation_view_source(prepared)
@@ -533,6 +660,17 @@ class SilhouetteObservationPlanningMixin:
                 or array_fingerprint(source['points_base']) != source['audit']['support_points_sha256']
                 or array_fingerprint(source['corners_base']) != source['audit']['conservative_target_corners_sha256']):
             raise ValueError('observation view request, camera, handeye or source points changed')
+        if not self._diagnostic_observation_planning_active():
+            contract = source['arrival_projection']
+            audit = contract['audit']
+            if (audit != source['audit']['arrival_projection']
+                    or audit['source_stamp_ns'] != prepared.snapshot.stamp_ns
+                    or audit['camera_signature'] != arrival_projection_camera_signature(
+                        self._observe_return_original.rospy.get_param('/camera', {}))
+                    or array_fingerprint(contract['prism_base']) != audit['prism_sha256']
+                    or array_fingerprint(contract['rgb_valid']) != audit['rgb_valid_sha256']
+                    or array_fingerprint(contract['invalid_integral']) != audit['invalid_integral_sha256']):
+                raise ValueError('arrival projection source, geometry or RGB validity changed')
         return source
 
     def _diagnostic_observation_view_evaluation(self, prepared, result, target):
@@ -565,6 +703,11 @@ class SilhouetteObservationPlanningMixin:
             [camera[k] for k in ('fx', 'fy', 'cx', 'cy')],
             camera['width'], camera['height'], hold,
             **source['view_limits']['effective_visibility_limits'])
+        if source.get('arrival_projection') is not None:
+            report['arrival_projection_endpoint'] = validate_arrival_projection(
+                source['arrival_projection'], report['target_trajectory']['endpoint_transform_base_camera'],
+                [camera[k] for k in ('fx', 'fy', 'cx', 'cy')], camera['width'], camera['height'],
+                **source['view_limits']['effective_visibility_limits'])
         if original.rospy.get_param('/robot_description', '') != description:
             raise ValueError('FK model changed during candidate visibility qualification')
         self._require_diagnostic_observation_view_source(prepared)
@@ -623,10 +766,25 @@ class SilhouetteObservationPlanningMixin:
     def _require_diagnostic_observation_prepared(self, prepared):
         original = self._observe_return_original
         self._require_unknown_observation_prepared(prepared)
-        if not self._diagnostic_observation_planning_active():
+        if not self._independent_observation_planning_active():
             raise original.CandidateContractError('SILHOUETTE_OBSERVATION_CONTEXT_INVALID',
-                'independent source requires its diagnostic observation prefix')
+                'independent source requires its bound observation prefix')
         identity = self._current_stream_target_identity()
+        if not self._diagnostic_observation_planning_active():
+            gaps = self._observe_return_view_gaps
+            if (not gaps or any(gap.get('target_epoch') != identity.epoch
+                    or gap.get('target_track_id') != identity.track_id
+                    or not gap.get('source_view_stamps_ns')
+                    or any(type(ns) is not int or not 0 < ns <= prepared.snapshot.stamp_ns
+                           for ns in gap['source_view_stamps_ns']) for gap in gaps)
+                    or prepared.candidates or prepared.tabletop_candidates
+                    or prepared.graspnet_input is not None
+                    or prepared.remote_diagnostics.get('candidate_role') != MEASURED_SOURCE
+                    or prepared.remote_diagnostics.get('contact_candidates_requested') is not False
+                    or prepared.remote_diagnostics.get('contact_geometry_checked') is not False):
+                raise original.CandidateContractError('UNKNOWN_OBSERVATION_CONTEXT_INVALID',
+                    'independent measured view lacks bound missing-side evidence or contains contact candidates')
+            return
         envelope = original._thaw_request_evidence(prepared.remote_diagnostics).get('silhouette_observation_envelope', {})
         if (envelope.get('fresh_request_id') != prepared.ticket.request_id
                 or envelope.get('fresh_generation') != prepared.ticket.generation
@@ -642,7 +800,7 @@ class SilhouetteObservationPlanningMixin:
         started = time.perf_counter()
         self._require_stream_ticket_current(ticket)
         snapshot, input_config = ticket.payload
-        if (not self._diagnostic_observation_planning_active()
+        if (not self._independent_observation_planning_active()
                 or not isinstance(snapshot, original.SnapshotResult) or not snapshot.ok
                 or not bool(snapshot.object_msg.detected)):
             raise original.CandidateContractError('SILHOUETTE_OBSERVATION_CONTEXT_INVALID',
@@ -662,7 +820,7 @@ class SilhouetteObservationPlanningMixin:
             raw_candidate_convention=self.candidate_frame_convention)
         prepared = original.PreparedPrediction(ticket=ticket,snapshot=snapshot,stamp=stamp,
             geometry=geometry,pose_estimator=estimator,graspnet_input=None,candidates=(),
-            remote_diagnostics=dict(candidate_role='diagnostic_observation',
+            remote_diagnostics=dict(candidate_role=self._independent_observation_role(),
                 contact_candidates_requested=False,contact_geometry_checked=False,
                 remote_grasp_inference_required=False),remote_performance={},tabletop_candidates=(),
             request_invalidation_generation=revision,graspnet_input_config=input_config,
@@ -677,12 +835,14 @@ class SilhouetteObservationPlanningMixin:
     def _accept_diagnostic_observation_prediction(self, prepared):
         original = self._observe_return_original
         self._require_diagnostic_observation_prepared(prepared)
+        source = self._independent_observation_source()
         if not self._activate_prepared_geometry(prepared):
             raise original.StreamResultCancelled('GEOMETRY_STALE')
         identity = prepared.snapshot.target_identity
         seed = ObservationPlanningSeed(prepared.ticket.request_id,prepared.ticket.generation,
             identity.epoch,identity.track_id,prepared.snapshot.stamp_ns,prepared.snapshot.stamp_sec,
-            str(getattr(prepared.snapshot.object_msg,'label','') or ''))
+            str(getattr(prepared.snapshot.object_msg,'label','') or ''),
+            candidate_source=source, source_lineage=(source,))
         reference = self._frozen_observation_reference_pose(prepared)
         transform = original.pose_matrix(reference)
         passing,rejected = self._far_field_observation_variants(reference,prepared.geometry,
@@ -700,10 +860,16 @@ class SilhouetteObservationPlanningMixin:
         with self._stream_condition:
             self._require_stream_ticket_current_locked(prepared.ticket)
             self._stable_variant_runtime = {(seed.track_id,seed.variant_index):runtime}
-        result = (self._check_moveit_stable_candidate(seed) if passing else
+        checker = self._check_moveit_stable_candidate
+        if source == MEASURED_SOURCE:
+            # Retain the normal per-request comparison deadline and source
+            # reserve. A preceding request cannot donate an old incumbent or
+            # its expired comparison clock to this independent seed.
+            checker, _continuing = self._far_field_observation_search()
+        result = (checker(seed) if passing else
             original.MoveItResult(reachable=False,joint_path_cost=0.,joint_max_delta_rad=0.,
                 reason='no original endpoint-CAD and measured-information-gain observation passed',
-                failure_code='SILHOUETTE_OBSERVATION_NO_SAFE_VIEW'))
+                failure_code=self._observation_contract_code('NO_SAFE_VIEW')))
         self._require_diagnostic_observation_prepared(prepared)
         checked = bool(passing)
         selected = None
@@ -716,15 +882,17 @@ class SilhouetteObservationPlanningMixin:
             reachable=(selected,) if selected else (),configured_top_n=1,shortlist_count=int(bool(passing)),
             terminated_early=False,termination_reason='')
         local=dict(input_count=1,stage_counts=dict(locally_valid=self._funnel_stage(1,int(bool(passing)))),
-            source_counts={SOURCE:dict(generated=1,locally_valid=int(bool(passing)),stable=0,preview=0,promoted=0)},
+            source_counts={source:dict(generated=1,locally_valid=int(bool(passing)),stable=0,preview=0,promoted=0)},
             rejection_counts={},snapshot_evidence=dict(source_stamp_ns=list(prepared.snapshot.sample_stamp_ns),
                 unique_source_frames=len(prepared.snapshot.sample_stamp_ns),near_field=False),
-            independent_camera_view_seed=True,grasp_tracker_used=False,contact_geometry_checked=False)
+            independent_camera_view_seed=True, independent_observation_source=source,
+            grasp_tracker_used=False,contact_geometry_checked=False)
         moveit=dict(stage_counts=dict(moveit_reachable=self._funnel_stage(int(checked),int(bool(selected)))),
-            rejection_counts={} if selected else {result.failure_code or 'SILHOUETTE_OBSERVATION_NO_SAFE_VIEW':1})
+            rejection_counts={} if selected else {result.failure_code or self._observation_contract_code('NO_SAFE_VIEW'):1})
         if selected is None:
             runtime['diagnostic_observation_failure']=asdict(result)
-            status='SILHOUETTE_OBSERVATION_NO_SAFE_VIEW'
+            status=(result.failure_code if result.failure_code == 'OBSERVATION_REFERENCE_UNAVAILABLE'
+                    else self._observation_contract_code('NO_SAFE_VIEW'))
             funnel=self._merge_pipeline_funnel(local,moveit,stable_count=int(bool(passing)))
             self._finalize_streaming_gate_audit(prepared,selection,funnel,status,
                 lifecycle_commit_callback=lambda:self._observe_execution_candidate_invalid(ticket=prepared.ticket))
@@ -741,7 +909,7 @@ class SilhouetteObservationPlanningMixin:
         plan.object_geometry=original.geometry_estimate_to_message(prepared.geometry,
             snapshot=prepared.snapshot,stamp=prepared.stamp,label=seed.target_label)
         plan.target_track_id=identity.track_id;plan.model_choice='unknown_tabletop'
-        plan.candidate_source=SOURCE;plan.candidate_source_lineage=[SOURCE]
+        plan.candidate_source=source;plan.candidate_source_lineage=[source]
         plan.score=selected.final_score;plan.has_candidate_model_width=False
         plan.candidate_width_m=0.;plan.required_open_width_m=0.
         plan.refinement_status='NOT_EVALUATED';plan.fused_view_count=0
@@ -756,7 +924,7 @@ class SilhouetteObservationPlanningMixin:
         runtime['diagnostic_observation_plan']=deepcopy(plan)
         self._publish_preview_plan(plan,legacy,ticket=prepared.ticket,proposal_metadata=metadata,
             commit_callback=lambda:setattr(self,'_latest_streaming_audit',dict(
-                request_id=prepared.ticket.request_id,plan_id=plan.plan_id,candidate_source=SOURCE,
+                request_id=prepared.ticket.request_id,plan_id=plan.plan_id,candidate_source=source,
                 contact_geometry_checked=False,strict_sequence_stages=['observation'])))
         funnel,_decision=self._finalize_promotion_transaction(prepared,selection,proposal,local,moveit,1,
             'PREVIEW_READY',None,stable_candidates=(seed,))
@@ -766,13 +934,14 @@ class SilhouetteObservationPlanningMixin:
             base_report=None,promotion_decision=None,execution_authority=False):
         original=self._observe_return_original
         self._require_diagnostic_observation_prepared(prepared)
+        source = self._independent_observation_source()
         runtime=self._stable_variant_runtime.get((0,0),{})
         selected=selection.selected
         evaluation=None;plan=runtime.get('diagnostic_observation_plan')
         if selected is not None:
             result=selected.moveit_result
-            evaluation=dict(candidate_source=SOURCE,source_index=0,variant_index=0,source_lineage=[SOURCE],
-                selected=True,candidate_role='diagnostic_observation',contact_geometry_checked=False,
+            evaluation=dict(candidate_source=source,source_index=0,variant_index=0,source_lineage=[source],
+                selected=True,candidate_role=self._independent_observation_role(),contact_geometry_checked=False,
                 required_open_width_m=0.,opening_role='no_contact_width_or_gripper_action_claim',
                 tracking=dict(track_id=0,hit_count=1,window_count=1,hit_request_ids=[prepared.ticket.request_id],
                     policy='current_fused_rgbd_snapshot_only_no_grasp_tracker'),
@@ -786,6 +955,10 @@ class SilhouetteObservationPlanningMixin:
                 observation_envelope=deepcopy(runtime.get('observation_envelope',{})),
                 observation_orientation_search=deepcopy(runtime.get('observation_orientation_search',{})),
                 moveit_input_joint_state=deepcopy(runtime.get('moveit_input_joint_state',{})))
+            if source == MEASURED_SOURCE:
+                measured = self._require_diagnostic_observation_view_source(prepared)
+                evaluation['observation_source_binding'] = dict(measured['binding'])
+                evaluation['observation_source_audit'] = original._thaw_request_evidence(measured['audit'])
         promotes=bool(execution_authority and promotion_decision is not None and promotion_decision.promote)
         promotion=(None if promotion_decision is None else dict(promote=bool(promotion_decision.promote),
             code=promotion_decision.code,reason=promotion_decision.reason))
@@ -805,10 +978,69 @@ class SilhouetteObservationPlanningMixin:
                 reachable_count=len(selection.reachable),terminated_early=False,
                 ranking_scope='qualified_checked_observation_views_only',global_time_optimality_claimed=False),
             diagnostic_observation_failure=deepcopy(runtime.get('diagnostic_observation_failure')))
+        if selected is None:
+            # Failed searches need the same per-view evidence as selected
+            # searches. Copy existing request-local diagnostics only: do not
+            # repeat source validation, query ROS, or grant plan authority.
+            expected = dict(request_id=prepared.ticket.request_id,
+                generation=prepared.ticket.generation, target_epoch=prepared.ticket.target_epoch,
+                target_track_id=prepared.snapshot.target_identity.track_id,
+                snapshot_stamp_ns=prepared.snapshot.stamp_ns)
+            captured = getattr(self, '_diagnostic_observation_view_source', None)
+            captured_prepared = getattr(self, '_diagnostic_observation_view_prepared', None)
+            binding = (original._thaw_request_evidence(captured.get('binding', {}))
+                if captured is not None else {})
+            same_source = captured_prepared is prepared and binding == expected
+            source_evidence = dict(available=captured is not None,
+                prepared_identity_matches=captured_prepared is prepared,
+                binding_matches_current_request=binding == expected,
+                expected_binding=expected, captured_binding=binding,
+                captured_audit=(original._thaw_request_evidence(captured.get('audit', {}))
+                    if captured is not None else {}),
+                source_validation_repeated=False, execution_authority=False)
+            cache = getattr(self, '_joint_space_observation_cache', None)
+            same_cache = (same_source and isinstance(cache, dict)
+                and cache.get('prepared') is prepared and cache.get('source') is captured)
+            fk_search = dict(available=bool(same_cache), execution_authority=False)
+            if same_cache:
+                fk_search.update(audit=deepcopy(cache.get('audit', {})),
+                    used_sec=cache.get('used_sec'),
+                    cached_inputs_validated=cache.get('key') is not None,
+                    candidates=deepcopy(cache.get('candidates', ())))
+            elif cache is not None:
+                fk_search['reason'] = 'cache does not belong to this prepared source binding'
+            candidates = []
+            for index, variant in enumerate(runtime.get('observation_variants', ())):
+                pose = variant['sequence'].pregrasp
+                candidates.append(dict(candidate_index=index,
+                    search_family=variant.get('search_family', 'camera_orientation_lattice'),
+                    camera_roll_offset_deg=variant.get('camera_roll_offset_deg', 0.),
+                    camera_tilt_offset_deg=variant.get('camera_tilt_offset_deg', 0.),
+                    camera_target_distance_m=variant.get('camera_target_distance_m'),
+                    preference_index=variant.get('preference_index'),
+                    frame_id=pose.header.frame_id, source_stamp_ns=pose.header.stamp.to_nsec(),
+                    base_from_tool=original.pose_matrix(pose).tolist(),
+                    observation_view=deepcopy(variant.get('observation_view', {})),
+                    observation_side_evidence=deepcopy(variant.get('observation_side_evidence', {})),
+                    observation_envelope=(asdict(variant['observation_envelope'])
+                        if variant.get('observation_envelope') is not None else None)))
+            report['observation_failure_diagnostics'] = dict(execution_authority=False,
+                source=source_evidence, joint_space_fk_search=fk_search,
+                observation_candidates=candidates,
+                observation_orientation_search=deepcopy(runtime.get('observation_orientation_search', {})),
+                observation_endpoint_rejections=deepcopy(runtime.get('observation_endpoint_rejections', ())),
+                unknown_observation_scheduling=deepcopy(runtime.get('unknown_observation_scheduling', {})),
+                moveit_input_joint_state=deepcopy(runtime.get('moveit_input_joint_state', {})))
         self._observe_return_audit(report,prepared)
         if selected is not None:
-            error=observe_return_audit_error(report)
+            if report.get('observe_return', {}).get('phase') == 'supplemental_observation':
+                error = supplemental_observation_audit_error(report,
+                    session=self._observe_return_session,
+                    pending_request=self._observe_return_pending_supplement,
+                    now_ns=int(self._ros_source_clock_ns()))
+            else:
+                error=observe_return_audit_error(report)
             if error:
-                raise original.CandidateContractError('SILHOUETTE_OBSERVATION_AUDIT_INVALID',error)
+                raise original.CandidateContractError(self._observation_contract_code('AUDIT_INVALID'),error)
         summary=dict(status=status,pipeline_funnel=deepcopy(funnel),promotion=promotion)
         return report,summary,evaluation

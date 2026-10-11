@@ -6,6 +6,7 @@ An enclosing box is collision geometry, not proof of contact or free space.
 """
 from dataclasses import replace
 import hashlib
+import itertools
 import json
 from numbers import Real
 
@@ -63,9 +64,11 @@ def enclose_registered_surface(geometry, surface, *, max_size_m=.6,
                                max_height_m=.5, expected_identity=None):
     """Return an outward-only OBB and exact union of admitted measurements.
 
-    Keep the original center, axes and support plane. Enclose every distinct
-    input point and all eight corners of the original box by increasing only
-    its half extents. Exact duplicates are one spatial sample; no quantization,
+    Keep the original axes, support plane and support-normal center. Enclose
+    every distinct input point and the original box. The two tangent intervals
+    use their full minimum/maximum bounds; their midpoint may move within the
+    support plane. Height retains the original symmetric outward enclosure.
+    Exact duplicates are one spatial sample; no quantization,
     outlier trimming, percentile fitting, synthetic points or TF changes occur.
     ``max_size_m`` bounds each OBB dimension and ``max_height_m`` additionally
     bounds axis 2, matching ``estimate_object_geometry``. Invalid/oversize
@@ -117,27 +120,51 @@ def enclose_registered_surface(geometry, surface, *, max_size_m=.6,
     _, first_indices = np.unique(combined, axis=0, return_index=True)
     points = combined[np.sort(first_indices)]
     with np.errstate(over='ignore', invalid='ignore'):
-        measured_half_extent = np.max(np.abs((points - center) @ axes), axis=0)
-        expanded_size = 2. * np.maximum(.5 * size, measured_half_extent)
-    if not np.all(np.isfinite(expanded_size)) or np.any(expanded_size <= 0.):
+        local = (points - center) @ axes
+        lower = np.minimum(-.5 * size, np.min(local, axis=0))
+        upper = np.maximum(.5 * size, np.max(local, axis=0))
+        shift = np.zeros(3)
+        shift[:2] = .5 * lower[:2] + .5 * upper[:2]
+        new_center = center + axes @ shift
+        expanded_size = upper - lower
+        expanded_size[2] = 2. * max(.5 * size[2], float(np.max(np.abs(local[:, 2]))))
+    if (not np.all(np.isfinite(expanded_size)) or np.any(expanded_size <= 0.)
+            or not np.all(np.isfinite(new_center)) or not np.all(np.isfinite(shift))):
         raise ValueError('FUSED_SCENE_GEOMETRY_INVALID: nonfinite enclosure')
     if np.any(expanded_size > maximum) or expanded_size[2] > height_maximum:
         raise ValueError('FUSED_SCENE_GEOMETRY_OVERSIZE: enclosure exceeds caller bounds')
-    result = replace(geometry, size_xyz_m=expanded_size, object_points_base=points)
+    # Corners constrain only the collision envelope, never the measured point
+    # set or contact evidence. Recheck the realized finite-precision result.
+    signs = np.asarray(tuple(itertools.product((-1., 1.), repeat=3)))
+    with np.errstate(over='ignore', invalid='ignore'):
+        old_corners = (signs * (.5 * size)) @ axes.T + center
+        enclosed = np.vstack((points, old_corners))
+        residual = np.abs((enclosed - new_center) @ axes)
+        realized_shift = (new_center - center) @ axes
+    if (not np.all(np.isfinite(residual))
+            or not np.allclose(realized_shift, shift, rtol=0., atol=1e-12)
+            or np.any(residual > .5 * expanded_size + 1e-12)):
+        raise ValueError('FUSED_SCENE_GEOMETRY_INVALID: enclosure containment lost')
+    result = replace(geometry, center_base=new_center,
+                     size_xyz_m=expanded_size, object_points_base=points)
     source_counts = [0] * len(validated_surface.view_stamps_ns)
     for sources in validated_surface.view_sources:
         for index in sources:
             source_counts[index] += 1
     audit = dict(
-        schema_version=1, policy='registered_measured_surface_outward_enclosure_v1',
+        schema_version=2, policy='registered_measured_surface_tangent_enclosure_v2',
         target_epoch=identity.epoch, target_track_id=identity.track_id,
         expected_identity_checked=expected_identity is not None,
         coordinate_contract='caller_current_snapshot_registered_surface',
         source='accepted_measured_current_raw_and_registered_fused_points',
         registration_performed=False, tf_modified=False, synthetic_points_added=0,
         contact_or_motion_authorized=False, original_obb_corner_count=8,
-        original_obb_preserved=True, center_preserved=True, axes_preserved=True,
-        support_plane_preserved=True, center_base_m=center.tolist(),
+        original_obb_preserved=True,
+        center_preserved=bool(np.array_equal(new_center, center)), axes_preserved=True,
+        support_plane_preserved=True, height_center_preserved=True,
+        height_extent_policy='symmetric_outward_from_original_support_normal_center',
+        center_base_m=new_center.tolist(), old_center_base_m=center.tolist(),
+        center_shift_base_m=(new_center-center).tolist(), center_shift_obb_m=shift.tolist(),
         axes_base=axes.tolist(), support_normal_base=normal.tolist(),
         support_offset_m=offset, old_size_xyz_m=size.tolist(),
         new_size_xyz_m=expanded_size.tolist(), expanded=bool(np.any(expanded_size > size)),

@@ -576,12 +576,13 @@ def test_near_field_surface_registers_same_track_and_populates_plan_and_audit():
 
 
 @pytest.mark.parametrize('kind', ['rejected', 'legacy'])
-def test_surface_audit_omits_unavailable_post_registration_support_diagnostic(kind):
+def test_surface_audit_omits_unavailable_post_registration_support_diagnostic(kind, monkeypatch):
+    monkeypatch.setattr(remote_node.rospy, 'logwarn_throttle', lambda *args: None)
     node = streaming_node(start_worker=False)
     seed_measured_reference_surface(node)
     moving = measured_observation(node, stamp_sec=20.1)
     if kind == 'rejected':
-        moving = dataclasses.replace(moving, support_offset_m=.005)
+        moving = dataclasses.replace(moving, support_offset_m=.00701)
     result = node._register_near_field_surface(moving)
     if kind == 'rejected':
         assert result.code == 'SUPPORT_OFFSET_MISMATCH'
@@ -591,6 +592,43 @@ def test_surface_audit_omits_unavailable_post_registration_support_diagnostic(ki
         node._latest_registration_evidence = dataclasses.replace(evidence,
             result=dataclasses.replace(result, support_consistency_audit=None))
     assert 'support_consistency_audit' not in node._multiview_surface_audit()['latest_registration']
+
+
+@pytest.mark.parametrize('separation, accepted, warning', [
+    (.004, True, False), (.00401, True, True), (.0057, True, True),
+    (.007, True, True), (.00701, False, True),
+])
+def test_support_offset_warning_reaches_real_registration_audit_and_plan(
+        monkeypatch, separation, accepted, warning):
+    node = streaming_node(start_worker=False)
+    reference = seed_measured_reference_surface(node)
+    moving = dataclasses.replace(
+        measured_observation(node, stamp_sec=20.1,
+            points=measured_surface_points() + [0., 0., separation]),
+        support_offset_m=-separation,
+    )
+    warnings = []
+    monkeypatch.setattr(remote_node.rospy, 'logwarn_throttle',
+                        lambda *args: warnings.append(args))
+    result = node._register_near_field_surface(moving)
+    plan = bound_surface_plan(moving)
+    node._apply_registration_evidence_to_plan(plan, moving)
+    audit = node._multiview_surface_audit()['latest_registration']
+    assert result.ok is accepted, result.code
+    assert audit['support_offset_diagnostic'] == dict(
+        warning_flag=warning, measured_m=pytest.approx(separation),
+        warning_threshold_m=.004, hard_limit_m=.007)
+    assert bool(warnings) is warning
+    if warning:
+        assert 'SUPPORT_OFFSET_DIAGNOSTIC_REQUIRED' in warnings[0][1]
+    if accepted:
+        assert plan.refinement_status == 'VALID_3D'
+        assert node._near_field_fused_surface.view_stamps_ns == (
+            reference.stamp_ns, moving.stamp_ns)
+    else:
+        assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+        assert plan.refinement_status == 'INVALID_3D'
+        assert node._near_field_fused_surface.view_stamps_ns == (reference.stamp_ns,)
 
 
 @pytest.mark.parametrize('base_shift', [[0.0, 0.0, 0.0], [-0.126, -0.402, 0.047]])
@@ -1004,11 +1042,12 @@ def test_registration_metrics_cannot_attach_to_another_snapshot_or_lifecycle(mis
     assert plan.fused_view_count == 0
 
 
-def test_rejected_near_view_publishes_invalid_metrics_without_fusing_points():
+def test_rejected_near_view_publishes_invalid_metrics_without_fusing_points(monkeypatch):
+    monkeypatch.setattr(remote_node.rospy.Time, 'now', lambda: remote_node.rospy.Time(20, 100_000_000))
     node = streaming_node(start_worker=False)
     seed_measured_reference_surface(node)
     original = node._near_field_fused_surface
-    observation = dataclasses.replace(measured_observation(node, stamp_sec=20.1), support_offset_m=0.005)
+    observation = dataclasses.replace(measured_observation(node, stamp_sec=20.1), support_offset_m=0.00701)
     result = node._register_near_field_surface(observation)
     plan = bound_surface_plan(observation)
     assert node._apply_registration_evidence_to_plan(plan, observation)

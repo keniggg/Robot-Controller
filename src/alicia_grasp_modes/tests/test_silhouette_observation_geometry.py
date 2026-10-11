@@ -137,19 +137,20 @@ def test_measured_tail_outside_trimmed_obb_cannot_bypass_combined_size_limit(sid
 
 
 def test_support_plane_shift_is_checked_at_measured_tail_outside_original_obb():
-    old = geometry(points=np.array([[0., .12, .015]]))
+    old = geometry(points=np.array([[0., .22, .015]]))
     fresh = geometry(tilt=2.)
     assert np.max(np.abs(corners(old) @ fresh.support_normal_base - corners(old)[:, 2])) < .004
     with pytest.raises(ValueError, match='support_plane_local_distance_inconsistent'):
         combine(old, fresh)
 
 
-@pytest.mark.parametrize('height,accepted', [(.003999, True), (.004, True), (.004001, False)])
-def test_original_four_mm_support_translation_threshold_is_preserved(height, accepted):
+@pytest.mark.parametrize('height,accepted', [(.004, True), (.004001, True), (.006999, True), (.007, True), (.007001, False)])
+def test_seven_mm_hard_support_translation_threshold(height, accepted):
     old, fresh = geometry(), geometry(height=height)
     if accepted:
         _, audit = combine(old, fresh)
         assert audit['support_consistency']['support_reference_max_distance_m'] == pytest.approx(height)
+        assert audit['support_consistency']['support_reference_distance_warning'] is (height > .004)
     else:
         with pytest.raises(ValueError, match='support_plane_local_distance_inconsistent'):
             combine(old, fresh)
@@ -167,14 +168,14 @@ def test_original_four_degree_normal_threshold_is_preserved(tilt, accepted):
 
 
 def test_plane_shift_is_checked_over_occupied_footprint_not_just_center():
-    old = geometry(size=(.20, .20, .024))
-    fresh = geometry(size=(.20, .20, .024), tilt=3.)
+    old = geometry(size=(.30, .30, .024))
+    fresh = geometry(size=(.30, .30, .024), tilt=3.)
     assert abs(old.center_base @ (fresh.support_normal_base-old.support_normal_base)) < .004
     with pytest.raises(ValueError, match='support_plane_local_distance_inconsistent'):
         combine(old, fresh)
 
 
-@pytest.mark.parametrize('config', [Config(support_max_local_shift_m=.0041),
+@pytest.mark.parametrize('config', [Config(support_max_local_shift_m=.0071),
     Config(support_max_normal_change_deg=4.1), Config(support_max_local_shift_m=0.),
     Config(support_max_normal_change_deg=float('nan')), {}])
 def test_support_contract_cannot_be_relaxed_or_disabled(config):

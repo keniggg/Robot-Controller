@@ -56,7 +56,9 @@ except ImportError as exc:
         def _rgb_acquisition_revoke_event(self):
             pass
 from alicia_flexible_grasp.robot.observation_view_gateway import ObservationViewGateway
+from alicia_flexible_grasp.robot.observation_compensation_gateway import ObservationCompensationGateway
 from alicia_flexible_grasp.robot.contact_sequence_precheck import ContactSequencePrecheckGateway
+from alicia_flexible_grasp.robot.contact_pregrasp_gateway import ContactPregraspGateway
 from alicia_flexible_grasp.robot.contact_linear_compensation import ContactLinearCompensationGateway
 from alicia_flexible_grasp.robot.lift_linear_gateway import LiftLinearCompensationGateway
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -90,7 +92,7 @@ except Exception:
     SwitchControllerRequest = None
     ListControllers = None
 
-class MotionGateway(RgbAcquisitionGateway, ObservationViewGateway, ContactSequencePrecheckGateway, LiftLinearCompensationGateway, PregraspCompensationGateway, ContactLinearCompensationGateway, ObserveReturnGateway):
+class MotionGateway(ObservationCompensationGateway, RgbAcquisitionGateway, ObservationViewGateway, ContactPregraspGateway, ContactSequencePrecheckGateway, LiftLinearCompensationGateway, PregraspCompensationGateway, ContactLinearCompensationGateway, ObserveReturnGateway):
     def __init__(self):
         cfg = rospy.get_param('/robot', {})
         self._initialize_observation_view_tf()
@@ -180,6 +182,11 @@ class MotionGateway(RgbAcquisitionGateway, ObservationViewGateway, ContactSequen
                       self.handle_endpoint_feedback_correction)
         rospy.Service('/supervisor/compensate_pregrasp', CompensatePregrasp,
                       self.handle_compensate_pregrasp)
+        self._observation_compensation_measurement_sub = rospy.Subscriber(
+            '/grasp_mode/observe_return_measurement_request', String,
+            self._observation_compensation_measurement_cb, queue_size=8)
+        rospy.Service('/supervisor/compensate_observation_endpoint', CompensatePregrasp,
+                      self.handle_compensate_observation)
         rospy.Service('/supervisor/capture_observe_return_origin', CompensatePregrasp,
                       self.handle_capture_observe_return_origin)
         rospy.Service('/supervisor/return_observe_return_origin', CompensatePregrasp,
@@ -214,6 +221,8 @@ class MotionGateway(RgbAcquisitionGateway, ObservationViewGateway, ContactSequen
                           self.handle_rgb_acquisition_pose_strict)
         rospy.Service('/supervisor/check_contact_sequence', CheckContactSequence,
                       self.handle_contact_sequence_precheck)
+        rospy.Service('/supervisor/move_contact_pregrasp', CompensatePregrasp,
+                      self.handle_contact_pregrasp)
         rospy.Service(
             '/supervisor/check_pose_sequence_strict',
             CheckPoseSequence,
@@ -422,7 +431,12 @@ class MotionGateway(RgbAcquisitionGateway, ObservationViewGateway, ContactSequen
                         and msg.target_track_id != compensation['scene'].track_id):
                     raise ObservationPathError('contact compensation target track changed')
                 self._observation_contexts.ingest(msg)
+                if self._observation_contexts.blocked or not self._observation_contexts.active:
+                    self._contact_pregrasp_receipts = {}
+                else:
+                    self._capture_contact_pregrasp_plan(msg)
             except Exception as exc:
+                self._contact_pregrasp_receipts = {}
                 self._observation_contexts.clear()
                 rospy.logwarn('Rejected committed observation geometry: %s', exc)
 
@@ -444,6 +458,7 @@ class MotionGateway(RgbAcquisitionGateway, ObservationViewGateway, ContactSequen
             if terminal:
                 self._revoke_observation_task()
             if not bool(msg.active):
+                self._contact_pregrasp_receipts = {}
                 # A real inactive message is the only way to release the
                 # terminal/disconnect latch; reconnecting alone is not enough.
                 self._observation_contexts.set_active(False)
@@ -460,6 +475,7 @@ class MotionGateway(RgbAcquisitionGateway, ObservationViewGateway, ContactSequen
             condition.notify_all()  # caller holds the context RLock
 
     def _revoke_observation_task(self):
+        self._contact_pregrasp_receipts = {}
         self._observation_contexts.clear()
         self._observation_contexts.set_active(False)
         self._observation_task_requires_inactive = True
@@ -922,7 +938,9 @@ class MotionGateway(RgbAcquisitionGateway, ObservationViewGateway, ContactSequen
                 tighter['command_derivative_bounds'] = contract['command_derivative_bounds']
                 result = tighter
             if not result['ok']:
-                raise ObservationPathError(str(result))
+                error = ObservationPathError(str(result))
+                error.candidate_path_rejection = deepcopy(result)
+                raise error
             audit = result['continuous_path']
             audit['execution_tracking_contract'] = result['execution_tracking_contract']
             audit['command_derivative_bounds'] = result['command_derivative_bounds']

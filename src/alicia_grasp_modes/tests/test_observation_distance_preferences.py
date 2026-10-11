@@ -89,7 +89,7 @@ def test_production_intrinsics_and_cached_orientation_specific_views(monkeypatch
     camera = mode.original.CameraIntrinsics(640, 480, *K, .0001)
     node._camera_intrinsics = lambda: camera
     node._observation_view_limit_configuration = lambda: {'effective_visibility_limits': {
-        'roi_margin_px': 36., 'minimum_depth_m': .070, 'maximum_depth_m': .500}}
+        'roi_margin_px': 24., 'minimum_depth_m': .070, 'maximum_depth_m': .500}}
     snapshot = NS(stamp_ns=prepared.stamp.to_nsec())
     # The profile builder uses depth statistics only when a full snapshot is
     # provided. Retain the same existing profile in this camera-only regression.

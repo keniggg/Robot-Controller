@@ -1,0 +1,7 @@
+<launch>
+  <include file="/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/resume_modes.launch"/>
+  <!-- Preserve the latest measured-station consumer settings after full restart. -->
+  <param name="/unknown_perception/detect_hz" type="double" value="6.0"/>
+  <param name="/alicia_d_driver_node/software_temperature_monitoring_enabled" type="bool" value="false"/>
+  <param name="/alicia_d_driver_node/temperature_poll_rate_hz" type="double" value="0.0"/>
+</launch>

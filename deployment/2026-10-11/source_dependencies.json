@@ -1,0 +1,1105 @@
+{
+  "schema": 1,
+  "source_worktree": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade",
+  "files": [
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/accepted_tf_handoff.py",
+      "bytes": 6364,
+      "sha256": "87e2f48f4ec8f8a76f2f1ac33ec019b20384616d244b88f5b4563d4c47965674",
+      "mode": "100644",
+      "git_blob": "8aea2b66b2bd9cd54a57134bf80e9d37793b1059",
+      "snapshot_path": "deployment/2026-10-11/runtime/accepted_tf_handoff.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/accepted_tf_handoff.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/benchmark_gen33_allocator.py",
+      "bytes": 5192,
+      "sha256": "b602c96c32b408af5f12f0d3800d772d60b1770a167f8294baa1dddd7593156a",
+      "mode": "100644",
+      "git_blob": "aae664a8066bc3a50df40d827817ab05aea0aad8",
+      "snapshot_path": "deployment/2026-10-11/runtime/benchmark_gen33_allocator.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/benchmark_gen33_allocator.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/alicia_expanded_metric_candidate.urdf",
+      "bytes": 13864,
+      "sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+      "mode": "100644",
+      "git_blob": "b9fc4410687433f423b6d59915c60d51f3a3e994",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_models/expanded_metric_20260929/alicia_expanded_metric_candidate.urdf",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/alicia_expanded_metric_candidate.urdf",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/candidate_parameters.launch",
+      "bytes": 466,
+      "sha256": "4fe1fdf65ff3ea5b1f2b66f0a019feaf8cfba15769844a180ee2d96f74ca38cf",
+      "mode": "100644",
+      "git_blob": "c6abdd5f55762e87b80c47ac5c30ff90216a93b4",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_models/expanded_metric_20260929/candidate_parameters.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/candidate_parameters.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/d405_expanded_metric_candidate_eye_on_hand.yaml",
+      "bytes": 597,
+      "sha256": "637701accca5eb5042075c213c5e00e9b189d3cd7788d916c8c06bf89f7b1a0c",
+      "mode": "100644",
+      "git_blob": "26bd9458b50f9806b0726e6c805a2792c2d26792",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_models/expanded_metric_20260929/d405_expanded_metric_candidate_eye_on_hand.yaml",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/d405_expanded_metric_candidate_eye_on_hand.yaml",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/handeye_candidate_config.yaml",
+      "bytes": 722,
+      "sha256": "f0c0748ec65e90d24d02f206222a9d84c69c77f5e4ca8b442444665b4a32fa62",
+      "mode": "100644",
+      "git_blob": "0bead081ec988f1ecb43034df6d3e7f134218458",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_models/expanded_metric_20260929/handeye_candidate_config.yaml",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/handeye_candidate_config.yaml",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/staging_manifest.json",
+      "bytes": 1138,
+      "sha256": "3d8effefee8bd21412929b4296e10e5a0f808f53bbe0f2b2ff48013c4725b13b",
+      "mode": "100644",
+      "git_blob": "ed60da174239a3e2adcd461c06dd6376ddb1e21e",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_models/expanded_metric_20260929/staging_manifest.json",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/staging_manifest.json",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/README.md",
+      "bytes": 3824,
+      "sha256": "71e2eeb54666038bb61dc62919815986cb3bea6b0bff3ed10d401c393ead08aa",
+      "mode": "100644",
+      "git_blob": "66c8dadc2d94985bb8aa42aedfa2bf9829532b00",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_simulation/README.md",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/README.md",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/candidate_absolute_meshdir.xml",
+      "bytes": 7610,
+      "sha256": "dc9e8bbc1a6764485cfd9412d68f5470713ef53a8ee0f8304cdb233ac96457cc",
+      "mode": "100644",
+      "git_blob": "eb876d34709cd2ffebc7ec27bb83775b109af06d",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_simulation/candidate_absolute_meshdir.xml",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/candidate_absolute_meshdir.xml",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/pins.json",
+      "bytes": 11725,
+      "sha256": "a2af11e88da0b7fd0e289ec84f216dca97754f67a27505fa311ef1a1f0f321c8",
+      "mode": "100644",
+      "git_blob": "b6b4a3186dc102b9f8cbfbb28ab7430b6923b26f",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_simulation/pins.json",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/pins.json",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/run_candidate.py",
+      "bytes": 13001,
+      "sha256": "25f82fb9a8cd7ead124955b80edb05879658331358d3fdda3dda093e04cf2ae8",
+      "mode": "100644",
+      "git_blob": "405dac659b0ea3a0d40e899fcfdddf954fd08076",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_simulation/run_candidate.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/run_candidate.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/simulation_manifest.json",
+      "bytes": 1421,
+      "sha256": "b9a642e51e83f7da591a2188020255e590ce05f1d1d05f4c66ef0b820a891d73",
+      "mode": "100644",
+      "git_blob": "9aba9ac590dff020a3dbdbd0157ac5a03d619ff3",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_simulation/simulation_manifest.json",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/simulation_manifest.json",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/start_candidate.sh",
+      "bytes": 397,
+      "sha256": "f781bab7329eca0defcf3242df7f0bab38da1b08eb717e9b9bac5e9baf4e23c3",
+      "mode": "100644",
+      "git_blob": "1cf03b5d3a609834cad2a0ca4ad0f7b825d5722c",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_simulation/start_candidate.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/start_candidate.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/test_candidate_simulation.py",
+      "bytes": 7683,
+      "sha256": "1710775db41637b0ceb7c45bf009a072733dd5f4426fa83baf2dabc96c18c570",
+      "mode": "100644",
+      "git_blob": "da0646c1bc69da5c5bddc80bdc55bd8fc62c4fce",
+      "snapshot_path": "deployment/2026-10-11/runtime/candidate_simulation/test_candidate_simulation.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_simulation/test_candidate_simulation.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/capture_alignment_receipt_20261008.py",
+      "bytes": 5830,
+      "sha256": "6775393a94906ed9bf150f909b3149c86d3821bdc6ab3413835da0fd78174fff",
+      "mode": "100644",
+      "git_blob": "9b0da0bffb1fdd9783847b624c1e18916ea0cf1d",
+      "snapshot_path": "deployment/2026-10-11/runtime/capture_alignment_receipt_20261008.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/capture_alignment_receipt_20261008.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/d405_carton_depth_baseline.json",
+      "bytes": 3180,
+      "sha256": "7aed2729b3deb31ce746ae84e3908ae66ca91e98676e7779ac19d5c1da6753d0",
+      "mode": "100644",
+      "git_blob": "0576fef1f7e8cf5dae38feb4aa7a049241135271",
+      "snapshot_path": "deployment/2026-10-11/runtime/d405_carton_depth_baseline.json",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/d405_carton_depth_baseline.json",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/expanded_metric_mjcf_review/four_body_offset_candidate_NOT_FOR_DEPLOYMENT.xml",
+      "bytes": 7616,
+      "sha256": "ab750b2a71a58d847edb825636211660d965172a63f784184f3ce202fa65d0bb",
+      "mode": "100644",
+      "git_blob": "3291869e76df4c0ab5aef59c81e254bd960065aa",
+      "snapshot_path": "deployment/2026-10-11/runtime/expanded_metric_mjcf_review/four_body_offset_candidate_NOT_FOR_DEPLOYMENT.xml",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/expanded_metric_mjcf_review/four_body_offset_candidate_NOT_FOR_DEPLOYMENT.xml",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/experiment_storage.json",
+      "bytes": 222,
+      "sha256": "a7dc9e5050a6d7f5abb678c73251528b6cf18560781de4311982574baba4dab3",
+      "mode": "100644",
+      "git_blob": "5788cfb80395994f47243453022c6c50ffed638d",
+      "snapshot_path": "deployment/2026-10-11/runtime/experiment_storage.json",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/experiment_storage.json",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/export_gen33_segmentation_sources.py",
+      "bytes": 4379,
+      "sha256": "9e5ecb6fe9da80cb4f5389beb8e2b247b4e33e1f147b2abbfb42b350f7b4b5e4",
+      "mode": "100644",
+      "git_blob": "254847a92c77a55b61aabab6ebabfc934206d252",
+      "snapshot_path": "deployment/2026-10-11/runtime/export_gen33_segmentation_sources.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/export_gen33_segmentation_sources.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/finalize_source_snapshot_20261008.py",
+      "bytes": 6413,
+      "sha256": "bba4f34f94d81189982639961ce9bfaf900e3af1f9634a5cff7e803855d101b7",
+      "mode": "100644",
+      "git_blob": "925cc85e767b7ebabb368ffd9b533e53db18c1ae",
+      "snapshot_path": "deployment/2026-10-11/runtime/finalize_source_snapshot_20261008.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/finalize_source_snapshot_20261008.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_latest_no_skin_20261010.launch",
+      "bytes": 2687,
+      "sha256": "28ec4d2ba5138b48fb4f44b9824c586448e718d31a567701c395b1c0ae3645ed",
+      "mode": "100644",
+      "git_blob": "cb68a323f1efc80fc42c6fa16ded722b3cdfda93",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_latest_no_skin_20261010.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_latest_no_skin_20261010.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_latest_restart_20261009.launch",
+      "bytes": 481,
+      "sha256": "859dbd9de8b379daf50050a7829f7442ea745fef96b9b62722d1ec2d44a7454c",
+      "mode": "100644",
+      "git_blob": "2df788d8b0d40f6b7a95a8eae45225318038dc56",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_latest_restart_20261009.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_latest_restart_20261009.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/README.md",
+      "bytes": 9345,
+      "sha256": "6369e1f998dbbe922ec5a7aebb9579061e243db4681513330e126ef8629a13bf",
+      "mode": "100644",
+      "git_blob": "8a2e07da78ead273281310336b690c472017efb4",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/README.md",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/README.md",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/alicia-candidate-simulation.service",
+      "bytes": 741,
+      "sha256": "bf93925fe8f353f8a6f853c57f7d648e494578a52e1e3ce9c3dc49079c377f17",
+      "mode": "100644",
+      "git_blob": "aa468a2c8d7bc67036876ac5f63cfe37a4f248e5",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/alicia-candidate-simulation.service",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/alicia-candidate-simulation.service",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/candidate_pair_and_simulation.launch",
+      "bytes": 340,
+      "sha256": "04e4d86d82afbd4272f0e1a21fcf3e03208d0f5e8a3b9186d826ff494989e6e0",
+      "mode": "100644",
+      "git_blob": "6bcc8a85d2b431173fe80f39ee3e2ac3a6f584ab",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/candidate_pair_and_simulation.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/candidate_pair_and_simulation.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/candidate_simulation_startup.py",
+      "bytes": 9646,
+      "sha256": "dab922722b43e85ab7723ba4c44b88f53d31498e4ef206d6f8f7c43a07542dfd",
+      "mode": "100644",
+      "git_blob": "f3f00116e9f3ae236243de93a272f7d6480f5438",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/candidate_simulation_startup.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/candidate_simulation_startup.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/cold_start_handoff.py",
+      "bytes": 3359,
+      "sha256": "260379aa7066464b80cf38759321c2cced76234d5af256eee5dd469f07de11e1",
+      "mode": "100644",
+      "git_blob": "87805e0c796832535b836aed7e3ff8a531e5015a",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/cold_start_handoff.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/cold_start_handoff.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/legacy_owner_commands.json",
+      "bytes": 4576,
+      "sha256": "222516cbb33265d9d3ceea636e273c963a61ed56d772ae9d84e2d19a284dfb26",
+      "mode": "100644",
+      "git_blob": "6ede9d9f6e3259db716517b6eb57f8a0f1ab6547",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/legacy_owner_commands.json",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/legacy_owner_commands.json",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/original_resume_modes.launch",
+      "bytes": 1730,
+      "sha256": "15398f0f582b40f9d18d09b99dd63e37203cade17871686a891982f71c69a809",
+      "mode": "100644",
+      "git_blob": "a97a8e17ddcf0564199f05defa5b36fa2739ce25",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/original_resume_modes.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/original_resume_modes.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/original_start_ros.sh",
+      "bytes": 645,
+      "sha256": "d16971e5f28b89973ed781a66f8802dad313ed08e0f75798df25648d9579f648",
+      "mode": "100644",
+      "git_blob": "8343f436811b9691d9fc06925fc457712d3f489a",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/original_start_ros.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/original_start_ros.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/owner_extension_evidence.json",
+      "bytes": 134,
+      "sha256": "6fb549862be0507e26c8c8af8f11ecd2e092d724100d44c2f0595ef09542d648",
+      "mode": "100644",
+      "git_blob": "f3d0223738ed0b462d0d3aa515ee713b96ee3c0a",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/owner_extension_evidence.json",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/owner_extension_evidence.json",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/resume_modes.staged.launch",
+      "bytes": 1797,
+      "sha256": "5fde91608eca2fb40956c5b8d1e14960aa46d44a09fe9f96eb0491964b9edb17",
+      "mode": "100644",
+      "git_blob": "5a92d1a0b9a18ff55681dc58bd8067e9755495ba",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/resume_modes.staged.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/resume_modes.staged.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/staging_manifest.json",
+      "bytes": 10953,
+      "sha256": "65bb3fc1bdaacc78b61b9a6799dd09bfd51cc6d7c6bb501d0f7fdcc8171ba570",
+      "mode": "100644",
+      "git_blob": "0bf1659d7dff37bf867cc909926215be9bef2e55",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/staging_manifest.json",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/staging_manifest.json",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/start_ros.staged.sh",
+      "bytes": 1118,
+      "sha256": "2fa616e35c47da743b2719361fb3f51eea0d9eb5489da3af0d43debc8253d620",
+      "mode": "100644",
+      "git_blob": "367d57ff7c6d4e506092ea21513e4d653527ddaa",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/start_ros.staged.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/start_ros.staged.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/test_cold_start_handoff.py",
+      "bytes": 6910,
+      "sha256": "9d579feab3958914802824fa82bbc93996a53295a2a2ec23d5778635b617deb5",
+      "mode": "100644",
+      "git_blob": "ec0e6f4b0c340424f4a541c2018a40f855e68422",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/test_cold_start_handoff.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/test_cold_start_handoff.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/test_full_startup_candidate.py",
+      "bytes": 11565,
+      "sha256": "7655839790852cdbe0dbf227ec8bed5d0ba818f6636bc7225b6a40e822c332eb",
+      "mode": "100644",
+      "git_blob": "c2a2091c80f581016fc6fc6c2d1cc2d952c81c83",
+      "snapshot_path": "deployment/2026-10-11/runtime/full_startup_candidate/test_full_startup_candidate.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/test_full_startup_candidate.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/load_observation_measurement_consumers_20261008.py",
+      "bytes": 6285,
+      "sha256": "dd970ac9d857694f456a8cdee82bcea34770c80e430dd45f4c4d27da175e7b89",
+      "mode": "100644",
+      "git_blob": "1ac32f3a3a6421fa0960c490836663abdb1ad951",
+      "snapshot_path": "deployment/2026-10-11/runtime/load_observation_measurement_consumers_20261008.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/load_observation_measurement_consumers_20261008.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/camera_only.launch",
+      "bytes": 242,
+      "sha256": "40160a8f29f4e3f0c856945eb48cabce9f4fd0a0c007ed45f8e0b673893dd6a2",
+      "mode": "100644",
+      "git_blob": "d87930bac86a347cba5b6588ddaffe2a13f41859",
+      "snapshot_path": "deployment/2026-10-11/runtime/model_pair_reload/camera_only.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/camera_only.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/carton_only.launch",
+      "bytes": 753,
+      "sha256": "928a9da4fcdf0b862a6ac1e140788f4f1b297a6726b749093986f42597af65a1",
+      "mode": "100644",
+      "git_blob": "a6f4da07db93e44f8d1141a1cad0f094ef91c2bb",
+      "snapshot_path": "deployment/2026-10-11/runtime/model_pair_reload/carton_only.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/carton_only.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/compute_consumers.launch",
+      "bytes": 351,
+      "sha256": "1b45937a2f349162a477b6b1f6514ad44320f81ee110eb1f0d55634abc7614c7",
+      "mode": "100644",
+      "git_blob": "c0dc0cf002c61c69e32d254f85b50faf6636085a",
+      "snapshot_path": "deployment/2026-10-11/runtime/model_pair_reload/compute_consumers.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/compute_consumers.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/perception_consumers.launch",
+      "bytes": 1461,
+      "sha256": "109c4d9228544cd954963bbcec713cdade80a8189fb8aa094405d302522a8031",
+      "mode": "100644",
+      "git_blob": "6e03bb5caa325aaf3817203532d67732d320dcc5",
+      "snapshot_path": "deployment/2026-10-11/runtime/model_pair_reload/perception_consumers.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/perception_consumers.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/remote_only.launch",
+      "bytes": 133,
+      "sha256": "77f0c05a7a24d32fd7b4ed4b4f7be2f2600d3dd604e5da3dd105a6b5507fda25",
+      "mode": "100644",
+      "git_blob": "733ac4621ab016e000fc351efd7847e2977d8e53",
+      "snapshot_path": "deployment/2026-10-11/runtime/model_pair_reload/remote_only.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/remote_only.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/start_consumers.sh",
+      "bytes": 496,
+      "sha256": "04ace95afeb3b4926afb204698d64d96c33781588cedeccdbe8cf0e8ef095360",
+      "mode": "100644",
+      "git_blob": "a917f27d8240bbf8350d8ce643b60b8054b72bbf",
+      "snapshot_path": "deployment/2026-10-11/runtime/model_pair_reload/start_consumers.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/start_consumers.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/unknown_only.launch",
+      "bytes": 143,
+      "sha256": "e91a4fdd9c8201bb24ab824001d076a30ce53af4c440c514ee54a58fe00fc5bb",
+      "mode": "100644",
+      "git_blob": "e0557757354d01c1d32b6fd7a5ee827e69102c50",
+      "snapshot_path": "deployment/2026-10-11/runtime/model_pair_reload/unknown_only.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/model_pair_reload/unknown_only.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/observation_measurement_consumers_20261008.launch",
+      "bytes": 1388,
+      "sha256": "754b569058b0bff7d8dc82b4f7064a24e0f66174d98282dbbb4231453df0dd5c",
+      "mode": "100644",
+      "git_blob": "0708ed2c2ccb9e425f9b73bc31842afee66c2485",
+      "snapshot_path": "deployment/2026-10-11/runtime/observation_measurement_consumers_20261008.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/observation_measurement_consumers_20261008.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/pending_identity_remote_20261006.launch",
+      "bytes": 149,
+      "sha256": "3ef6d93936e57ecf376e037be4873bdcb79f9d3a82c06007ebd7ae4386f0e549",
+      "mode": "100644",
+      "git_blob": "489b33be5aa071b7dbb040e7b8fcc71baa0ea77d",
+      "snapshot_path": "deployment/2026-10-11/runtime/pending_identity_remote_20261006.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/pending_identity_remote_20261006.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/plan_source_snapshot_20261011.py",
+      "bytes": 20021,
+      "sha256": "258e098b64b4b28c0a442e75ec7ef81f90d2da4239ce9b7c90fb0ba1b0934afe",
+      "mode": "100644",
+      "git_blob": "ae85c1c3fc0fa79ac7f3e992562a9e3eb9ce04cb",
+      "snapshot_path": "deployment/2026-10-11/runtime/plan_source_snapshot_20261011.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/plan_source_snapshot_20261011.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/prepare_source_snapshot_20261008.py",
+      "bytes": 4115,
+      "sha256": "bf9f4d9ad4665b038b47b5099dc6571c8511af59a36960d36faba5df09aaab29",
+      "mode": "100644",
+      "git_blob": "21a1178ff3975d5a6e02ef650a6e88d6a9dbca6d",
+      "snapshot_path": "deployment/2026-10-11/runtime/prepare_source_snapshot_20261008.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/prepare_source_snapshot_20261008.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/prepare_source_snapshot_20261011.py",
+      "bytes": 15360,
+      "sha256": "62d493de5c93f2867b27cdff5fb95a0ba88c281341a33bb923229846e7b0f730",
+      "mode": "100644",
+      "git_blob": "a04657914eb2384046ed1a67c598e92fe3e98787",
+      "snapshot_path": "deployment/2026-10-11/runtime/prepare_source_snapshot_20261011.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/prepare_source_snapshot_20261011.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/realsense-2.56.5/install_manifest.json",
+      "bytes": 2249,
+      "sha256": "4954e62a68994405f56dfa0e89285a4c45f01b3b0b04934d49e09afc8b850037",
+      "mode": "100644",
+      "git_blob": "b8fb2b149ac4ac620014a8f31f033d59b5115e67",
+      "snapshot_path": "deployment/2026-10-11/runtime/realsense-2.56.5/install_manifest.json",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/realsense-2.56.5/install_manifest.json",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/reload_dedicated_observation_consumers_20261009.py",
+      "bytes": 7061,
+      "sha256": "70fe42d815ceed2c16389abd626fda58db07b0b19e9a0edd4c9af5c6bb48f8c9",
+      "mode": "100644",
+      "git_blob": "c59a6c35150e504405e6ba27d71d7c3b3aae26be",
+      "snapshot_path": "deployment/2026-10-11/runtime/reload_dedicated_observation_consumers_20261009.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/reload_dedicated_observation_consumers_20261009.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/reload_idle_contact_gateway_gen14_20261010.py",
+      "bytes": 6225,
+      "sha256": "eaa9253d33a4295a159768141d80a964d2bcb85605fecdd5739883f374d708cc",
+      "mode": "100644",
+      "git_blob": "1ead9c4d51a72425105bf2f0933222886d69f3cf",
+      "snapshot_path": "deployment/2026-10-11/runtime/reload_idle_contact_gateway_gen14_20261010.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/reload_idle_contact_gateway_gen14_20261010.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen12_arrival_identity.py",
+      "bytes": 9746,
+      "sha256": "910c664d7b31160b985c3a8f00ba51851b21011ff4e25ad7e2e56e7b49322b84",
+      "mode": "100644",
+      "git_blob": "19380e4ec5f9cc05a8b0d99bfafe8e782b56020e",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen12_arrival_identity.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen12_arrival_identity.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen12_arrival_spatial_support.py",
+      "bytes": 10255,
+      "sha256": "2d0043bb96ee83f6a8470c5ad4cb1bed1186a188b09e6c52f018ef8d2a20c7d7",
+      "mode": "100644",
+      "git_blob": "19acc16aeee3c2d979dec1e4c62b6ddd6467103d",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen12_arrival_spatial_support.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen12_arrival_spatial_support.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen21_gen22_integrated_appearance_20261010.py",
+      "bytes": 11086,
+      "sha256": "f45071cb282dcfd9695a83f475337cc8d2de0cbaae263977e4a7a85c13d1a986",
+      "mode": "100644",
+      "git_blob": "f3d787c86bb7123728a228b71d22fddeb888ff6f",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen21_gen22_integrated_appearance_20261010.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen21_gen22_integrated_appearance_20261010.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen21_spatial_rgb.py",
+      "bytes": 2644,
+      "sha256": "11937b2752664c3871dbac23b798b1d7c75bbf370d746b80c6b9d79144c8fc7a",
+      "mode": "100644",
+      "git_blob": "a32b35d4d5d61e58bdeb3a4d6a7403ba330c143b",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen21_spatial_rgb.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen21_spatial_rgb.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen22_fragment_group.py",
+      "bytes": 2795,
+      "sha256": "04e9a4dc4cac7c8447921402e8afee3fef2206124d3ba0e3fb4a49ad05fe2a39",
+      "mode": "100644",
+      "git_blob": "e7b4298f7e206fab521e807953ae7832261cc80f",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen22_fragment_group.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen22_fragment_group.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen23_observed_background.py",
+      "bytes": 2198,
+      "sha256": "3ca2933df6097a0c96abc29197c1ceca9f3b0bb541c2945e5935c37e2575f702",
+      "mode": "100644",
+      "git_blob": "e24a63e3369b6c5cbe362637326aa456f5feffde",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen23_observed_background.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen23_observed_background.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen24_station_frame_clock.py",
+      "bytes": 6327,
+      "sha256": "b8985d08eede576848b63d003554a695d5916903664e4abbc649cb4366ab1e49",
+      "mode": "100644",
+      "git_blob": "1a48268d73b0df2ca8f2753b2899e8e6028b4e42",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen24_station_frame_clock.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen24_station_frame_clock.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen25_arrival_projection_gate.py",
+      "bytes": 5085,
+      "sha256": "39a23ec07e619c6928d2fbb37e7f93beb6a28dc54c4198151d3ff5511b87dc97",
+      "mode": "100644",
+      "git_blob": "3e399ee75335335395d278372433dd7f2cd746dc",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen25_arrival_projection_gate.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen25_arrival_projection_gate.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen25_prism_fk.py",
+      "bytes": 6479,
+      "sha256": "6728b30d1e5141a8c3a8d34828207366ce42dc38ba7252d74365e899a7317a0c",
+      "mode": "100644",
+      "git_blob": "946b2d307e48b6acf439674b8c23107ee5553318",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen25_prism_fk.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen25_prism_fk.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen26_rgb_refine_timing.py",
+      "bytes": 6849,
+      "sha256": "e6cc73232bdb892fb6a412640cace9d83356862478b5bdea06f87ca1d842e1e0",
+      "mode": "100644",
+      "git_blob": "b07e54fa085be1730eb0d03968d2d349d04a3e5e",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen26_rgb_refine_timing.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen26_rgb_refine_timing.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen28_fragment_timing.py",
+      "bytes": 6290,
+      "sha256": "3d577ca3f171bb71c02edf67ee793b855f30ab7a3a7a20d015bd800324c01664",
+      "mode": "100644",
+      "git_blob": "9e6c5f8e4597a05126df2976e1d63316e131dd4f",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen28_fragment_timing.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen28_fragment_timing.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen29_exposure_tiers_production.py",
+      "bytes": 9842,
+      "sha256": "81eeed441e64b06675108cfbab4241ad98d167df3b3a1eb1aaaa4b4a8803d688",
+      "mode": "100644",
+      "git_blob": "3df9acf9edd91403603c136f272a28028891a5bf",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen29_exposure_tiers_production.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen29_exposure_tiers_production.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen32_arrival_matching.py",
+      "bytes": 6541,
+      "sha256": "fb31a204ed4223675d921f88dff3ff54acafc44938c373b053a378b4477ead6b",
+      "mode": "100644",
+      "git_blob": "32a3d0a69bb90d6f68c30e590f2fae044de8105d",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen32_arrival_matching.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen32_arrival_matching.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen32_matching_fragments.py",
+      "bytes": 2923,
+      "sha256": "194ccd2edb8fc5d95044e3010c5a490efe16733d520333135795297d67a6d935",
+      "mode": "100644",
+      "git_blob": "847b36985683b41acb19fbe10cc575df7ed5ce84",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen32_matching_fragments.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen32_matching_fragments.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen33_segmentation_resource_timing.py",
+      "bytes": 7368,
+      "sha256": "f31bc47a709e947466e3c587fbfe279f768cfaaee5981a0518f3e7956c699b57",
+      "mode": "100644",
+      "git_blob": "fbe70717c9422e34fa0410f79e32988ee63d4e8f",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen33_segmentation_resource_timing.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen33_segmentation_resource_timing.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen33_segmentation_timing.py",
+      "bytes": 7133,
+      "sha256": "4dc33a2c4d5bfb7179dd3e912d2c948c8b51e6d69f6708a68a1825c6820bdd40",
+      "mode": "100644",
+      "git_blob": "086c093b3189fd6c7c20253edb0e519f7faa6d36",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen33_segmentation_timing.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen33_segmentation_timing.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen6_arrival_rgb_boundary.py",
+      "bytes": 13268,
+      "sha256": "e6a87810b4f1d5585312b8ffd1bcbb3652dc0f8a55143908c138e3609a198dc9",
+      "mode": "100644",
+      "git_blob": "cc38bb2bea6f83a676bda0a4df94ef32df7ef1e6",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen6_arrival_rgb_boundary.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen6_arrival_rgb_boundary.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen6_arrival_rgb_boundary_counterfactual.py",
+      "bytes": 13656,
+      "sha256": "8eaf53730f444da9b9ebdad0a93a288eb06484ca2d9b241be18b808475d0b2e0",
+      "mode": "100644",
+      "git_blob": "f43cfbc7b653188e66837c2a574a842076353a43",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen6_arrival_rgb_boundary_counterfactual.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen6_arrival_rgb_boundary_counterfactual.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen6_arrival_station.py",
+      "bytes": 9876,
+      "sha256": "8b73b9fc1a76268cf4f3a881d2fb2c6979c84e860118dc1b8fe918dc97be275e",
+      "mode": "100644",
+      "git_blob": "29f1072234a9a446ce8cbcb6fa9c32b367cf7f8e",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_gen6_arrival_station.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen6_arrival_station.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_initial_preflight_remote_gen3_20261009.py",
+      "bytes": 12245,
+      "sha256": "7c549ee8bf801af903996b5e55fbd2e1342dd95aa2d9ba2ab074fc2cfb266e44",
+      "mode": "100644",
+      "git_blob": "46c87b1a78b8bc7a25f8abde203a63baf7341fdd",
+      "snapshot_path": "deployment/2026-10-11/runtime/replay_initial_preflight_remote_gen3_20261009.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_initial_preflight_remote_gen3_20261009.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/run_reboot_realigned_grasp_20261010.py",
+      "bytes": 9766,
+      "sha256": "6c2c526403318f25f79824b73386ed2b1b46b34621f953abe86668bee8803453",
+      "mode": "100644",
+      "git_blob": "66f8d92947c6aac70943d970499c1cb130ca74a7",
+      "snapshot_path": "deployment/2026-10-11/runtime/run_reboot_realigned_grasp_20261010.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/run_reboot_realigned_grasp_20261010.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/seal_gen16_feedback_pending_integration_20261010.py",
+      "bytes": 8303,
+      "sha256": "6dacd23011c49a2e2bffa08c768627e23fc61702c548add7b02e518c8b7149f9",
+      "mode": "100644",
+      "git_blob": "07f11bac7da6660a04208d420bb80d7a3b64dc53",
+      "snapshot_path": "deployment/2026-10-11/runtime/seal_gen16_feedback_pending_integration_20261010.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/seal_gen16_feedback_pending_integration_20261010.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/seal_gen18_station_registration_reacquire_20261011.py",
+      "bytes": 6275,
+      "sha256": "39830479eddac74d45f888bce9993ef2a76e656075ca05ee568902eddf3f0a4c",
+      "mode": "100644",
+      "git_blob": "b5ba8f7cccaaf2cd91ddec97d80d454ee00b75c8",
+      "snapshot_path": "deployment/2026-10-11/runtime/seal_gen18_station_registration_reacquire_20261011.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/seal_gen18_station_registration_reacquire_20261011.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/seal_gen19_support_station_handoff_20261011.py",
+      "bytes": 6545,
+      "sha256": "8b8263e1242a20ab306a5095042e68192ad843592fe30217137355be000fc830",
+      "mode": "100644",
+      "git_blob": "a2fc5c646e602fa166edc297ef8095eeb5f18e63",
+      "snapshot_path": "deployment/2026-10-11/runtime/seal_gen19_support_station_handoff_20261011.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/seal_gen19_support_station_handoff_20261011.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_accepted_tf_20260929.sh",
+      "bytes": 570,
+      "sha256": "fb946465cff8f646382bbc5bc802fe2a6c59a504b219ee3e08643879d9e0b068",
+      "mode": "100644",
+      "git_blob": "768cf15f8059fe2e763b726c942400c1984d2572",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_accepted_tf_20260929.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_accepted_tf_20260929.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_contact_precheck_remote_20260930.sh",
+      "bytes": 751,
+      "sha256": "409b8e3f43373683b9477f1c5503646fbcb82425524c1dd680f911fa8f7b97ef",
+      "mode": "100644",
+      "git_blob": "84f70bf0226c51286b62607d3d549db714f1fb38",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_contact_precheck_remote_20260930.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_contact_precheck_remote_20260930.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_full_latest_no_skin_20261010.sh",
+      "bytes": 486,
+      "sha256": "90ffb10d16b09a2f9e0bab4e8180737a3bd9ecb8766ee2da2d4803c908eb1d8b",
+      "mode": "100644",
+      "git_blob": "35d1664474f3943dd098eb76312c969a696b2bf3",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_full_latest_no_skin_20261010.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_full_latest_no_skin_20261010.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_full_latest_restart_20261009.sh",
+      "bytes": 486,
+      "sha256": "28f03eb3804ce44deb45df7d80aef4e98df1003d3f10fe0bd318ead78123829d",
+      "mode": "100644",
+      "git_blob": "7e105aa9e876da533f6ed523e788200f40f921b8",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_full_latest_restart_20261009.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_full_latest_restart_20261009.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_information_observation_remote_20261002.sh",
+      "bytes": 811,
+      "sha256": "4cd34652d67270c8695a0911bce8212fc4b96ec00c5a751c038814ce596cc8b4",
+      "mode": "100644",
+      "git_blob": "7f6efe5c59142c5be83a7813742a237d19afd4ca",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_information_observation_remote_20261002.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_information_observation_remote_20261002.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_observation_latency_20261006.sh",
+      "bytes": 325,
+      "sha256": "fac05deddc6fbd8f0c6f2fbd3fe8cedcf3fcef94172bd905af72d5ae27bac898",
+      "mode": "100644",
+      "git_blob": "bf215124762fe962870f03718e0c44ec15ac857c",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_observation_latency_20261006.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_observation_latency_20261006.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_observation_margin_task_20261002.sh",
+      "bytes": 749,
+      "sha256": "f42414567722c0e5dd3d5b7d86d5093059265c7eae7c7db1d177d53001ea0c56",
+      "mode": "100644",
+      "git_blob": "f3c42ce26daf5fe7a2c5c6ac608e83dddf18a28f",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_observation_margin_task_20261002.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_observation_margin_task_20261002.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_observation_measurement_consumers_20261008.sh",
+      "bytes": 396,
+      "sha256": "ff541ef102e1eec6ed5076b57fc3d959eac4db608195b64d0fc96ffa5cac5384",
+      "mode": "100644",
+      "git_blob": "5095e37e138b068d78aa5d18590673ec095e37c2",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_observation_measurement_consumers_20261008.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_observation_measurement_consumers_20261008.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_pending_identity_20261006.sh",
+      "bytes": 326,
+      "sha256": "4c00e4d9c9c2e29c2418e311340a5d1a86a67cfd8c6e10505cd408f28955d817",
+      "mode": "100644",
+      "git_blob": "090bfdd5d973bf37a1900d1646d1410365dbb6f5",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_pending_identity_20261006.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_pending_identity_20261006.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_perception_stage_timing_20260930.sh",
+      "bytes": 792,
+      "sha256": "a5c7b6888271cb092f6d29a3878b35f0216c0acdb80bccb4e0a05cc63fb963d7",
+      "mode": "100755",
+      "git_blob": "71ac22d838ccb4a1198b6c1dbbc31774e34ecf40",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_perception_stage_timing_20260930.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_perception_stage_timing_20260930.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_plan_bound_observation_task_20260930.sh",
+      "bytes": 792,
+      "sha256": "6faae3b3f4caffd5a9d62c927718fc0bb161b2f5b3e5c2ef5d88fc1abb53116b",
+      "mode": "100644",
+      "git_blob": "cf0ee3beb85b38981df578e8385acb8f60a42cb8",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_plan_bound_observation_task_20260930.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_plan_bound_observation_task_20260930.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_postmove_task_20260929.sh",
+      "bytes": 740,
+      "sha256": "4b790b925508e7a3494040194023cc379c53297059c104cd289a4fea0ee43c1b",
+      "mode": "100644",
+      "git_blob": "7c4c2ea6230ff4253d8dff7f10b4559cdb7e245b",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_postmove_task_20260929.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_postmove_task_20260929.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_support_fit_20261006.sh",
+      "bytes": 325,
+      "sha256": "fac05deddc6fbd8f0c6f2fbd3fe8cedcf3fcef94172bd905af72d5ae27bac898",
+      "mode": "100644",
+      "git_blob": "bf215124762fe962870f03718e0c44ec15ac857c",
+      "snapshot_path": "deployment/2026-10-11/runtime/start_support_fit_20261006.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/start_support_fit_20261006.sh",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/support_fit_perception_20261006.launch",
+      "bytes": 289,
+      "sha256": "dc9ee70c252a21091c546c2b82dcd9d2abc901913ec82695785d479b5c97b2e8",
+      "mode": "100644",
+      "git_blob": "4c7d75563637ce635095e74c912f64e64e41e87e",
+      "snapshot_path": "deployment/2026-10-11/runtime/support_fit_perception_20261006.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/support_fit_perception_20261006.launch",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/trace_gen21_arrival_rgb.py",
+      "bytes": 6332,
+      "sha256": "cae15199297bda6bbf0b6765cf21525abdbedb4dae7b7d0b6f66d5a0001cecb5",
+      "mode": "100644",
+      "git_blob": "12e4e76478a04b3e3b329c7ffe73cdd0f97eafa4",
+      "snapshot_path": "deployment/2026-10-11/runtime/trace_gen21_arrival_rgb.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/trace_gen21_arrival_rgb.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/trace_gen23_rgb_valid_crop.py",
+      "bytes": 5804,
+      "sha256": "b55ee27db36c85eb57b2ce292e76008823914cb4a5e4b2c58f0dc607c49f49b7",
+      "mode": "100644",
+      "git_blob": "3b7cd647fc912f9f4d448186a979123acbc78a23",
+      "snapshot_path": "deployment/2026-10-11/runtime/trace_gen23_rgb_valid_crop.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/trace_gen23_rgb_valid_crop.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/verify_gen22_appearance_combined_20261010.py",
+      "bytes": 6181,
+      "sha256": "d459c3f553bc7b24f26f7d26bf79389fd1247b79ab5eecbc78cc9a846c306fd2",
+      "mode": "100644",
+      "git_blob": "fcaf859410c6bc0d40987ed2fed108066ab857b2",
+      "snapshot_path": "deployment/2026-10-11/runtime/verify_gen22_appearance_combined_20261010.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/verify_gen22_appearance_combined_20261010.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/watch_station_compute_20261009.py",
+      "bytes": 10693,
+      "sha256": "b2d29dc235227ac879ead194aacb558dd53bd45614027d762c400fc16814bf24",
+      "mode": "100644",
+      "git_blob": "03894f7351beb20fd30ed425e0f4eee4f880f75d",
+      "snapshot_path": "deployment/2026-10-11/runtime/watch_station_compute_20261009.py",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/watch_station_compute_20261009.py",
+      "category": "runtime source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/AGENTS.md",
+      "bytes": 3212,
+      "sha256": "4d85340310d4067f3ff095bc5b83b96ad5ddc97d47d002e6aeebcb7c7263e76d",
+      "mode": "100644",
+      "git_blob": "d4c44c94f4c21198a69ae09d106e922e7f2871c3",
+      "snapshot_path": "AGENTS.md",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/AGENTS.md",
+      "category": "fixed external source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/.ros/easy_handeye/d405_cc200_auto_20260927_validated_eye_on_hand.yaml",
+      "bytes": 519,
+      "sha256": "6ab0e8c902fe87bad1935a69b72044930b79ce1b239728cfce6dda8e94533468",
+      "mode": "100644",
+      "git_blob": "487486dd84dab1ec108a050a7a685d1b99f5387e",
+      "snapshot_path": "deployment/2026-10-11/external_config/d405_cc200_auto_20260927_validated_eye_on_hand.yaml",
+      "restore_to": "/home/zhuyupei/.ros/easy_handeye/d405_cc200_auto_20260927_validated_eye_on_hand.yaml",
+      "category": "fixed external source/configuration"
+    },
+    {
+      "source": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/grasp_repair_resume_20260928T120606Z/expanded_metric_mjcf_review_20260929/server_source_contract.json",
+      "bytes": 2776,
+      "sha256": "6ba87f00d27d43878660bf477531b9000fa49ea1edd2500407a248f2d4bea7db",
+      "mode": "100755",
+      "git_blob": "11e540a509d8ec6b1c871ef4ed7f3bd427bf188e",
+      "snapshot_path": "deployment/2026-10-11/external_config/server_source_contract.json",
+      "restore_to": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/grasp_repair_resume_20260928T120606Z/expanded_metric_mjcf_review_20260929/server_source_contract.json",
+      "category": "fixed external source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/.config/systemd/user/alicia-candidate-simulation.service",
+      "bytes": 741,
+      "sha256": "bf93925fe8f353f8a6f853c57f7d648e494578a52e1e3ce9c3dc49079c377f17",
+      "mode": "100644",
+      "git_blob": "aa468a2c8d7bc67036876ac5f63cfe37a4f248e5",
+      "snapshot_path": "deployment/2026-10-11/external_config/alicia-candidate-simulation.service",
+      "restore_to": "/home/zhuyupei/.config/systemd/user/alicia-candidate-simulation.service",
+      "category": "fixed external source/configuration"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/start_ros.sh",
+      "bytes": 1118,
+      "sha256": "2fa616e35c47da743b2719361fb3f51eea0d9eb5489da3af0d43debc8253d620",
+      "mode": "100644",
+      "git_blob": "367d57ff7c6d4e506092ea21513e4d653527ddaa",
+      "snapshot_path": "deployment/2026-10-11/historical_root_entries/.ros_log/ros_live_20260922_session/start_ros.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/start_ros.sh",
+      "category": "historical entry only; current no-skin startup supersedes this; do not auto-run"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/start_camera_sdk.sh",
+      "bytes": 847,
+      "sha256": "cc2fe2a9bf7e71407ae385b12e014eb8d48c838fb3bb7caddfe12331f096ed3e",
+      "mode": "100755",
+      "git_blob": "ae938f1cab693a454f9dfcf7b4003707d0961a74",
+      "snapshot_path": "deployment/2026-10-11/historical_root_entries/.ros_log/ros_live_20260922_session/start_camera_sdk.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/start_camera_sdk.sh",
+      "category": "historical entry only; current no-skin startup supersedes this; do not auto-run"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/resume_modes.launch",
+      "bytes": 1835,
+      "sha256": "1382755e65c2b43e34c8617191a5c386eb663ba50a7224fe11d5df4554be7bcf",
+      "mode": "100644",
+      "git_blob": "5a8ccb83603c132e8aa6493c367a3d7ce2ef9910",
+      "snapshot_path": "deployment/2026-10-11/historical_root_entries/.ros_log/ros_live_20260922_session/resume_modes.launch",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.ros_log/ros_live_20260922_session/resume_modes.launch",
+      "category": "historical entry only; current no-skin startup supersedes this; do not auto-run"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.ros_log/unknown_grasp_20260923/sanstand_storage.sh",
+      "bytes": 1188,
+      "sha256": "396ba458333d47354434241805892b8b4703b8598f10c6f35e6d9ea7a5a50b73",
+      "mode": "100644",
+      "git_blob": "2317051d130d709d66415298860416e02352819c",
+      "snapshot_path": "deployment/2026-10-11/historical_root_entries/.ros_log/unknown_grasp_20260923/sanstand_storage.sh",
+      "restore_to": "/home/zhuyupei/alicia_wa_full/.ros_log/unknown_grasp_20260923/sanstand_storage.sh",
+      "category": "historical entry only; current no-skin startup supersedes this; do not auto-run"
+    }
+  ],
+  "metadata": [
+    {
+      "source": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/gen19_support_station_handoff_compute_deployment/result.json",
+      "snapshot_path": "deployment/2026-10-11/verification_metadata/00_result.json",
+      "sha256": "f092adea4a5d1ea792dc3cb5980b5218cdfae683dcc807785a06b04baaef9165"
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/gen19_support_station_handoff_20261011/delivery.json",
+      "snapshot_path": "deployment/2026-10-11/verification_metadata/01_delivery.json",
+      "sha256": "77e02c06991847aedc8c6e06ff6f5432ad08dc78d482032dcf2bf50885356221"
+    },
+    {
+      "source": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/verification/gen19_support_station_handoff_sealed/deployment_sources.json",
+      "snapshot_path": "deployment/2026-10-11/verification_metadata/02_deployment_sources.json",
+      "sha256": "821c7af9e0e0eda125f09c725616f653609930d067f0e5874ef661d45b1efa23"
+    },
+    {
+      "source": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/verification/gen19_support_station_handoff_sealed/integration_result.json",
+      "snapshot_path": "deployment/2026-10-11/verification_metadata/03_integration_result.json",
+      "sha256": "63ce5dc294dc6a349e6ee8d9fdcfeff2499da08b95fd53ea9b2d4146072b5a09"
+    },
+    {
+      "source": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/verification/gen19_support_station_handoff/final_integrated_r1_manifest.json",
+      "snapshot_path": "deployment/2026-10-11/verification_metadata/04_final_integrated_r1_manifest.json",
+      "sha256": "9ff513c8d3284a653049e9477d2b2197795bdac702870674559fe9fb761f82c7"
+    },
+    {
+      "source": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/gen19_analysis/root_consumer_review.json",
+      "snapshot_path": "deployment/2026-10-11/verification_metadata/05_root_consumer_review.json",
+      "sha256": "fbe6b576c62b4140a3cf06be35cd9e48ae69bdc40cab6cc4c83ca8fbe6dc1ecc"
+    },
+    {
+      "source": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/gen19_analysis/observation_audit_support_gap_producer_review.json",
+      "snapshot_path": "deployment/2026-10-11/verification_metadata/06_observation_audit_support_gap_producer_review.json",
+      "sha256": "883563a0ae3593115313dbf8ebd2c2cd65e7b040b94b2f46d8de91aae5eefef3"
+    }
+  ],
+  "excluded_binary_models": [
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/carton_model/best.pt",
+      "bytes": 6255978,
+      "sha256": "d2d1efeca09d9f4ce41b7079f583b52338e9a69ece3ce01be7ae6a62fa6d6744",
+      "mode": "100755",
+      "git_blob": "ba8dbc716cdfbaa34e26f4346343b347cdc6c4a9",
+      "restore_to": "carton_model/best.pt",
+      "acquisition": "Preserve existing local file or recover the same path from historical repository commit after verifying this SHA256; no model download performed.",
+      "historical_commit": "14ab345051e888b9bc8d88f3cff36271147a4f7f",
+      "included_in_new_source_tree": false
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/carton_segment_model/best.pt",
+      "bytes": 23852788,
+      "sha256": "8aa5ff5112ac9912471323feaba61d3ecc955b91959233d57ba6c41857853ef6",
+      "mode": "100755",
+      "git_blob": "4743f2d6b35fc6b17be490069b4d6b795fcf37fe",
+      "restore_to": "carton_segment_model/best.pt",
+      "acquisition": "Preserve existing local file or recover the same path from historical repository commit after verifying this SHA256; no model download performed.",
+      "historical_commit": "14ab345051e888b9bc8d88f3cff36271147a4f7f",
+      "included_in_new_source_tree": false
+    },
+    {
+      "source": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/yolov8n.pt",
+      "bytes": 6549796,
+      "sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+      "mode": "100644",
+      "git_blob": "0db4ca4b4d25d68a4497220353592645ca4f71bf",
+      "restore_to": "yolov8n.pt",
+      "acquisition": "Preserve existing local file or recover the same path from historical repository commit after verifying this SHA256; no model download performed.",
+      "historical_commit": "14ab345051e888b9bc8d88f3cff36271147a4f7f",
+      "included_in_new_source_tree": false
+    }
+  ],
+  "external_packages": [
+    "ROS Noetic / MoveIt and Python 3.8 environment",
+    "RealSense SDK 2.56.5 with Python bindings: runtime/realsense-2.56.5/install_manifest.json",
+    "MuJoCo 3.2.3 wheel/native runtime: runtime/candidate_simulation/pins.json",
+    "Existing GraspNet server/CUDA/WSL runtime; project server source is included, external environment/weights are not"
+  ],
+  "automatic_restore_or_ros_start": false
+}

@@ -125,6 +125,7 @@ def diagnostic_node(monkeypatch):
     from cv_bridge import CvBridge
     from unittest.mock import Mock
     n = node()
+    n.config = module.Config()
     n.base_frame, n.camera_frame = 'base_link', 'camera_link'
     n.bridge, n.last_shape = CvBridge(), (4, 4)
     n.anchor_source_stamp_ns, n.last_good_source_stamp_ns = 120, 130
@@ -205,6 +206,8 @@ def rgb_interest_node(monkeypatch):
             generation=n.generation, stamp_ns=n.selection_ns), '/handeye': {}, '/unknown_perception': {}}
     monkeypatch.setattr(module.rospy, 'get_param', lambda key, default=None: parameters.get(key, default))
     monkeypatch.setattr(module.rospy, 'get_param_cached', lambda key, default=None: parameters.get(key, default))
+    monkeypatch.setattr(module.rospy, 'get_master', lambda: types.SimpleNamespace(
+        getParam=lambda key: (1, 'fixture master', parameters.get(key))))
     monkeypatch.setattr(module.rospy, 'logwarn_throttle', Mock())
     transform = np.array([[0., -1., 0., .1], [0., 0., 1., -.2],
                           [-1., 0., 0., .4], [0., 0., 0., 1.]])

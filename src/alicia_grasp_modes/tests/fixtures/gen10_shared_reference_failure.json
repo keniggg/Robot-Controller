@@ -1,0 +1,92 @@
+{
+  "checked_results": [
+    {
+      "camera_roll_offset_deg": 15.0,
+      "camera_target_distance_m": 0.18786988369696572,
+      "camera_tilt_offset_deg": 45.0,
+      "checked": true,
+      "execution_duration_lower_bound_sec": null,
+      "failure_code": "MOVEIT_UNREACHABLE",
+      "reachable": false,
+      "reason": "OBSERVATION_PREVIEW_PATH_UNAVAILABLE: driver reference has no fresh actuation epoch: UNCONFIRMED:CONFIRMED_FEEDBACK_STALE speed_profile=observation joint_limit_rad_s=0.080 observation_velocity_scaling=0.300 observation_acceleration_scaling=0.200",
+      "search_family": "camera_orientation_lattice"
+    },
+    {
+      "camera_roll_offset_deg": 30.0,
+      "camera_target_distance_m": 0.18786988369696572,
+      "camera_tilt_offset_deg": 45.0,
+      "checked": true,
+      "execution_duration_lower_bound_sec": null,
+      "failure_code": "MOVEIT_UNREACHABLE",
+      "reachable": false,
+      "reason": "OBSERVATION_PREVIEW_PATH_UNAVAILABLE: driver reference has no fresh actuation epoch: UNCONFIRMED:CONFIRMED_FEEDBACK_STALE speed_profile=observation joint_limit_rad_s=0.080 observation_velocity_scaling=0.300 observation_acceleration_scaling=0.200",
+      "search_family": "camera_orientation_lattice"
+    },
+    {
+      "camera_roll_offset_deg": 45.0,
+      "camera_target_distance_m": 0.18786988369696572,
+      "camera_tilt_offset_deg": 45.0,
+      "checked": true,
+      "execution_duration_lower_bound_sec": null,
+      "failure_code": "MOVEIT_UNREACHABLE",
+      "reachable": false,
+      "reason": "OBSERVATION_PREVIEW_PATH_UNAVAILABLE: driver reference has no fresh actuation epoch: UNCONFIRMED:CONFIRMED_FEEDBACK_STALE speed_profile=observation joint_limit_rad_s=0.080 observation_velocity_scaling=0.300 observation_acceleration_scaling=0.200",
+      "search_family": "camera_orientation_lattice"
+    },
+    {
+      "camera_roll_offset_deg": 60.0,
+      "camera_target_distance_m": 0.18786988369696575,
+      "camera_tilt_offset_deg": 45.0,
+      "checked": true,
+      "execution_duration_lower_bound_sec": null,
+      "failure_code": "MOVEIT_UNREACHABLE",
+      "reachable": false,
+      "reason": "OBSERVATION_PREVIEW_PATH_UNAVAILABLE: driver reference has no fresh actuation epoch: UNCONFIRMED:CONFIRMED_FEEDBACK_STALE speed_profile=observation joint_limit_rad_s=0.080 observation_velocity_scaling=0.300 observation_acceleration_scaling=0.200",
+      "search_family": "camera_orientation_lattice"
+    },
+    {
+      "camera_roll_offset_deg": 15.0,
+      "camera_target_distance_m": 0.18694689521617455,
+      "camera_tilt_offset_deg": 45.0,
+      "checked": true,
+      "execution_duration_lower_bound_sec": null,
+      "failure_code": "MOVEIT_UNREACHABLE",
+      "reachable": false,
+      "reason": "OBSERVATION_PREVIEW_PATH_UNAVAILABLE: driver reference has no fresh actuation epoch: UNCONFIRMED:CONFIRMED_FEEDBACK_STALE speed_profile=observation joint_limit_rad_s=0.080 observation_velocity_scaling=0.300 observation_acceleration_scaling=0.200",
+      "search_family": "camera_orientation_lattice"
+    },
+    {
+      "camera_roll_offset_deg": 30.0,
+      "camera_target_distance_m": 0.18694689521617455,
+      "camera_tilt_offset_deg": 45.0,
+      "checked": true,
+      "execution_duration_lower_bound_sec": null,
+      "failure_code": "MOVEIT_UNREACHABLE",
+      "reachable": false,
+      "reason": "OBSERVATION_PREVIEW_PATH_UNAVAILABLE: driver reference has no fresh actuation epoch: UNCONFIRMED:CONFIRMED_FEEDBACK_STALE speed_profile=observation joint_limit_rad_s=0.080 observation_velocity_scaling=0.300 observation_acceleration_scaling=0.200",
+      "search_family": "camera_orientation_lattice"
+    }
+  ],
+  "limitations": [
+    "Exact original failure rows; no original path is asserted unreachable by this fixture.",
+    "Offline service responses exercise original Mode acceptance; no robot command is sent."
+  ],
+  "original_configured_candidates": 168,
+  "request": {
+    "generation": 3,
+    "grasp_mode_selection": {
+      "generation": 10,
+      "mode": "unknown",
+      "stamp_ns": 1791607482880896091,
+      "strategy": "observe_return"
+    },
+    "planning_origin": "observe_return_observation_prefix",
+    "request_id": 2,
+    "snapshot_stamp_ns": 1791607495356619119,
+    "target_epoch": 4
+  },
+  "source_audit": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20261010T044441.309012Z_081c1da83cbe47cc9da10a94a4578168/keyframes_audits/40934f6bbbaca8f6d676298dbedd8f397a4f8a74c81f6083bf60c67e8e2056ee.json",
+  "source_audit_sha256": "40934f6bbbaca8f6d676298dbedd8f397a4f8a74c81f6083bf60c67e8e2056ee",
+  "source_record": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20261010T044441.309012Z_081c1da83cbe47cc9da10a94a4578168",
+  "version": 1
+}

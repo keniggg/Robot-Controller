@@ -5,14 +5,14 @@ from alicia_flexible_grasp.robot.observation_view_limits import effective_observ
 
 def test_shared_defaults_and_tighter_values():
     assert effective_observation_view_limits({})==dict(
-        roi_margin_px=36.,minimum_depth_m=.070,maximum_depth_m=.500)
+        roi_margin_px=24.,minimum_depth_m=.070,maximum_depth_m=.500)
     assert effective_observation_view_limits(dict(camera_visibility_margin_px=48,
         camera_visibility_min_depth_m=.09,camera_visibility_max_depth_m=.40))==dict(
         roi_margin_px=48.,minimum_depth_m=.09,maximum_depth_m=.40)
 
 
 @pytest.mark.parametrize('key,value',[
-    ('camera_visibility_margin_px',35.999),('camera_visibility_min_depth_m',.06999),
+    ('camera_visibility_margin_px',23.999),('camera_visibility_min_depth_m',.06999),
     ('camera_visibility_max_depth_m',.50001)])
 def test_looser_than_original_limits_are_rejected(key,value):
     with pytest.raises(ValueError,match='cannot relax'):

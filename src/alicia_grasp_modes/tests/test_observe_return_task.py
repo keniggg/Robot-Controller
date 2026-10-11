@@ -48,6 +48,10 @@ def context(monkeypatch, tmp_path):
     node._mode_ready = True
     node.active = True
     node._validate_bound_plan_locked = lambda *a: types.SimpleNamespace(ok=True, code='BOUND', reason='')
+    # This fixture isolates the existing session/return contract with fake
+    # plans and services. Real measurement handoff transport is exercised in
+    # test_observe_return_measurement, including a separate ordinary return.
+    node._observation_measurement_scope = lambda plan: False
     states, publications, gateways, replans = [], [], [], []
     node.set_state = lambda *a, **kw: states.append(a)
     node._set_near_field_active = lambda *a, **kw: replans.append((a, kw))
@@ -107,7 +111,7 @@ def reach_return(c):
     candidate.plan_id = 'd'*24
     candidate.header.stamp = at_ns(23000000000)
     c.now[0] = 24000000000
-    result = c.node._before_near_field_contact_freeze(candidate, c.plan, {})
+    result = c.node._before_near_field_contact_freeze(candidate, c.plan, {'unknown_observe_return_return_to_origin': True})
     return candidate, result
 
 
@@ -249,9 +253,9 @@ def test_pre_return_contact_triggers_return_and_is_never_frozen(context):
     # Replaying the pre-return snapshot cannot be mistaken for permission to freeze.
     report, fresh = returned_evidence(c)
     c.node._observe_return_audit_cb(audit_reference(c.tmp_path, report))
-    assert c.node._before_near_field_contact_freeze(fresh, c.plan, {}) is None
+    assert c.node._before_near_field_contact_freeze(fresh, c.plan, {'unknown_observe_return_return_to_origin': True}) is None
     candidate.plan_id = fresh.plan_id
-    assert c.node._before_near_field_contact_freeze(candidate, c.plan, {}) == {'failed':True}
+    assert c.node._before_near_field_contact_freeze(candidate, c.plan, {'unknown_observe_return_return_to_origin': True}) == {'failed':True}
 
 
 @pytest.mark.parametrize('mutation', ['no_feedback', 'no_action_completion', 'no_submission',
@@ -279,7 +283,7 @@ def test_failed_or_foreign_return_proof_never_releases_a_contact_candidate(conte
     c.transport['return_proof'] = proof
     _, _, candidate = evidence('initial_contact')
     c.now[0] = 24000000000
-    result = c.node._before_near_field_contact_freeze(candidate, c.plan, {})
+    result = c.node._before_near_field_contact_freeze(candidate, c.plan, {'unknown_observe_return_return_to_origin': True})
     assert result == {'failed':True}
     assert c.states[-1][0] == base.GraspStages.FAILED
     assert not c.replans
@@ -324,7 +328,7 @@ def test_only_fresh_same_session_epoch_contact_can_freeze_after_return(context, 
     elif mutation == 'physical_gate_failed':
         report['selected']['moveit']['collision_free'] = False
     c.node._observe_return_audit_cb(audit_reference(c.tmp_path, report))
-    assert c.node._before_near_field_contact_freeze(plan, c.plan, {}) == {'failed':True}
+    assert c.node._before_near_field_contact_freeze(plan, c.plan, {'unknown_observe_return_return_to_origin': True}) == {'failed':True}
     assert c.states[-1][0] == base.GraspStages.FAILED
     assert len(c.gateways) == 2  # No retry motion or close after failed handoff.
 

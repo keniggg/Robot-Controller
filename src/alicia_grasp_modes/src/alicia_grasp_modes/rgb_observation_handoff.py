@@ -26,7 +26,7 @@ from alicia_grasp_modes.rgb_observation_volume import (
     _intrinsics, _transform)
 from alicia_grasp_modes.tabletop import (
     Candidate, Config, _measured_support_footprint, _plane_axes,
-    _validate_support_plane_update)
+    _validate_support_plane_update, _support_offset_diagnostics)
 
 
 def _array(value, shape=None, dtype=float):
@@ -352,6 +352,7 @@ def _raw_support_audit(reference, frame):
         support_consistency_domain_vertices_base_m=tuple(map(tuple, domain)),
         support_consistency_domain_derived=True,
         support_coverage_is_vertex_measurement=False)
+    audit.update(_support_offset_diagnostics(shift, Config()))
     try:
         _validate_support_plane_update(original, current, footprint.mean(axis=0), Config(), footprint)
         audit['support_original_ring_rejection'] = ''

@@ -41,7 +41,7 @@ def test_high_information_can_precede_smaller_joint_delta(configured, monkeypatc
     node, _, variants, runtime = scheduler_context(configured, monkeypatch, tmp_path, [(0.01, .1), (.2, .8)])
     monkeypatch.setattr(node, '_observation_endpoint_search_hints', lambda *_:
         (hints_for(variants, [.01, .5]), dict(execution_authority=False)))
-    result = node._order_unknown_observation_checks(tuple(variants))
+    result = tuple(node._order_unknown_observation_checks(tuple(variants)))
     assert result == (variants[1], variants[0])
     for variant in result:
         audit = variant['observation_view']
@@ -59,7 +59,7 @@ def test_equal_utility_prefers_smaller_ik_motion_and_retains_unknown(configured,
         [(.01, .8), (.2, .8), (.3, .95)])
     monkeypatch.setattr(node, '_observation_endpoint_search_hints', lambda *_:
         (hints_for(variants, [.5, .1, None]), {}))
-    result = node._order_unknown_observation_checks(tuple(variants))
+    result = tuple(node._order_unknown_observation_checks(tuple(variants)))
     assert result == (variants[1], variants[0], variants[2])
     assert result[-1]['observation_view']['check_scheduling_metrics']['endpoint_ik_hint'] == {}
 
@@ -68,12 +68,12 @@ def test_unknown_ik_uses_frozen_geometry_cost_and_keeps_utility_evidence(configu
     node, prepared, variants, _ = scheduler_context(configured, monkeypatch, tmp_path, [(.01, .1), (.2, .8)])
     variants[1]['sequence'].observation_view_audit.pop('information_utility')
     monkeypatch.setattr(node, '_observation_endpoint_search_hints', lambda *_: ({}, {}))
-    result = node._order_unknown_observation_checks(tuple(variants))
-    assert result == (variants[1], variants[0])
-    metrics = result[0]['observation_view']['check_scheduling_metrics']
+    result = tuple(node._order_unknown_observation_checks(tuple(variants)))
+    assert result == (variants[0], variants[1])
+    metrics = variants[1]['observation_view']['check_scheduling_metrics']
     assert metrics['current_camera_target_distance_m'] == pytest.approx(.28)
     assert metrics['geometric_motion_proxy'] == pytest.approx(.2)
-    assert result[0]['observation_view']['information_utility']['utility'] == .8
+    assert variants[1]['observation_view']['information_utility']['utility'] == .8
     assert result[0]['observation_view']['check_scheduling_reference']['snapshot_stamp_ns'] == prepared.snapshot.stamp_ns
 
 
@@ -90,7 +90,7 @@ def test_missing_or_invalid_information_never_calls_ik(configured, monkeypatch, 
 def test_zero_utility_is_retained_at_tail_and_audit_is_strict_json(configured, monkeypatch, tmp_path):
     node, _, variants, runtime = scheduler_context(configured, monkeypatch, tmp_path, [(.01, 0.), (.2, .8)])
     monkeypatch.setattr(node, '_observation_endpoint_search_hints', lambda *_: ({}, {}))
-    result = node._order_unknown_observation_checks(tuple(variants))
+    result = tuple(node._order_unknown_observation_checks(tuple(variants)))
     assert result == (variants[1], variants[0])
     assert result[-1]['observation_view']['check_scheduling_metrics']['information_motion_rank'][0] is None
     json.dumps([v['observation_view'] for v in result], allow_nan=False)
@@ -117,7 +117,7 @@ def test_probe_budget_tries_information_first_instead_of_nominal_distance(config
     assert calls[0].ik_request.pose_stamped == variants[1]['sequence'].pregrasp
     assert calls[0].ik_request.avoid_collisions is True
     assert report['maximum_start_budget_sec'] == 3. and report['maximum_queries'] == 96
-    assert report['probe_order_policy'] == 'measured_support_witness_then_information_motion_rank_then_roll_distance_ties'
+    assert report['probe_order_policy'] == 'measured_support_then_best_information_then_distance_direction_coverage'
     assert report['information_prediction_only'] is True and report['motion_proxy_is_duration'] is False
     assert report['candidates_removed'] == 0 and report['status'] == 'budget_exhausted'
     assert next(iter(hints.values()))['status'] == 'unknown'

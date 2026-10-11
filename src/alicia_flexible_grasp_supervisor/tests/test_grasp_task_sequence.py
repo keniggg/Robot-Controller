@@ -424,14 +424,51 @@ class GraspTaskSequenceTest(unittest.TestCase):
     def test_refinement_support_offset_disagreement_rejects_rehashed_preview(self):
         bound = self._rich_plan(stamp_sec=9.0)
         preview = self._mark_valid_3d(self._rich_plan(stamp_sec=9.95))
-        preview.object_geometry.support_offset_m = 0.00401
+        preview.object_geometry.support_offset_m = 0.00701
         preview.plan_id = compute_plan_id(preview)
         result, candidate = self._accept_refinement_preview(bound, preview)
         self.assertEqual(result.code, 'FINAL_REFINE_3D_INVALID')
         self.assertIsNone(candidate)
 
+    def test_refinement_support_offset_warning_is_logged_without_rejecting_preview(self):
+        for separation, accepted, warning in (
+                (.004, True, False), (.00401, True, True),
+                (.0057, True, True), (.007, True, True), (.00701, False, False)):
+            with self.subTest(separation=separation):
+                bound = self._rich_plan(stamp_sec=9.0)
+                preview = self._mark_valid_3d(self._rich_plan(stamp_sec=9.95))
+                preview.object_geometry.support_offset_m = separation
+                preview.plan_id = compute_plan_id(preview)
+                wire = io.BytesIO()
+                preview.serialize(wire)
+                preview = Grasp6DPlan().deserialize(wire.getvalue())
+                refinement = grasp_task_node.validate_final_refinement_execution(bound, preview)
+                self.assertEqual(refinement.ok, accepted, refinement.reason)
+                if warning:
+                    self.assertEqual(refinement.code, 'FINAL_REFINE_3D_VALID')
+                    marker, payload = refinement.reason.split(': ', 1)
+                    self.assertEqual(marker, 'SUPPORT_OFFSET_DIAGNOSTIC_REQUIRED')
+                    diagnostic = json.loads(payload)
+                    self.assertTrue(diagnostic['warning_flag'])
+                    self.assertAlmostEqual(diagnostic['measured_m'], separation)
+                    self.assertEqual(diagnostic['warning_threshold_m'], .004)
+                    self.assertEqual(diagnostic['hard_limit_m'], .007)
+                elif accepted:
+                    self.assertEqual(refinement.reason, '')
+                with mock.patch.object(grasp_task_node.rospy, 'logwarn_throttle') as log:
+                    result, candidate = self._accept_refinement_preview(bound, preview)
+                self.assertEqual(result.ok, accepted, result.reason)
+                self.assertEqual(log.called, warning)
+                if accepted:
+                    self.assertIsNotNone(candidate)
+                    self.assertEqual(candidate.plan_id, preview.plan_id)
+                    self.assertFalse(getattr(result, 'terminal_for_request', False))
+                else:
+                    self.assertEqual(result.code, 'FINAL_REFINE_3D_INVALID')
+                    self.assertIsNone(candidate)
+
     def test_refinement_compares_plane_separation_at_target_not_base_origin(self):
-        for separation_m in (0.0, 0.00401):
+        for separation_m in (0.0, 0.00701):
             with self.subTest(separation_m=separation_m):
                 bound = self._rich_plan(stamp_sec=9.0)
                 preview = self._mark_valid_3d(self._rich_plan(stamp_sec=9.95))
@@ -507,7 +544,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         angle = math.radians(4.0)
         preview.object_geometry.support_normal_base.x = math.sin(angle)
         preview.object_geometry.support_normal_base.z = math.cos(angle)
-        preview.object_geometry.support_offset_m = 0.004
+        preview.object_geometry.support_offset_m = 0.007
         preview.plan_id = compute_plan_id(preview)
         wire = io.BytesIO()
         preview.serialize(wire)
@@ -556,7 +593,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             {'minimum_overlap_fraction': 0.29}, {'maximum_rmse_m': 0.005},
             {'maximum_translation_m': 0.026}, {'maximum_yaw_deg': 11.0},
             {'maximum_support_normal_angle_deg': 4.1},
-            {'maximum_support_offset_delta_m': 0.005},
+            {'maximum_support_offset_delta_m': 0.00701},
             {'maximum_rmse_m': float('nan')}, {'maximum_yaw_deg': float('inf')},
             {'minimum_inliers': True}, {'minimum_inliers': 80.5},
             {'maximum_translation_m': -0.01}, {'maximum_rmse_m': '0.004'},

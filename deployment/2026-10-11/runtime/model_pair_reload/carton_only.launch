@@ -1,0 +1,10 @@
+<launch><node pkg="alicia_flexible_grasp_supervisor" type="perception_node.py" name="perception_node" output="screen">
+    <remap from="/perception/object" to="/perception/carton/object" />
+    <remap from="/perception/object_mask" to="/perception/carton/object_mask" />
+    <remap from="/perception/object_pose_camera" to="/perception/carton/object_pose_camera" />
+    <remap from="/perception/object_pose_base" to="/perception/carton/object_pose_base" />
+    <remap from="/perception/object_detected" to="/perception/carton/object_detected" />
+    <remap from="/perception/raw_object_detected" to="/perception/carton/raw_object_detected" />
+    <remap from="/perception/detector_status" to="/perception/carton/detector_status" />
+  </node>
+  </launch>

@@ -1,0 +1,40 @@
+{
+    "ros.distro": "noetic",
+    "ROS2.distro": "noetic",
+    "python.autoComplete.extraPaths": [
+        "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/zhuyupei/alicia_wa_full/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "cmake.sourceDirectory": "/home/zhuyupei/alicia_wa_full/src/easy_handeye/easy_handeye",
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/devel/**": true,
+        "**/install/**": true,
+        "**/.ros_log/**": true,
+        "**/.pytest_cache/**": true,
+        "**/__pycache__/**": true,
+        "**/.runtime/**": true
+    },
+    "search.exclude": {
+        "**/build/**": true,
+        "**/devel/**": true,
+        "**/install/**": true,
+        "**/.ros_log/**": true,
+        "**/.pytest_cache/**": true,
+        "**/__pycache__/**": true,
+        "**/.runtime/**": true
+    },
+    "extensions.experimental.affinity": {
+        "SunYingkai.codex-usage-monitor": 1,
+        "ranch-hand-robotics.rde-ros-2": 2
+    },
+    "codexUsageMonitor.codexHome": "/home/zhuyupei/alicia_wa_full/.runtime/vscode_usage_monitor_empty_statistics",
+    "codexUsageMonitor.refreshIntervalSeconds": 86400,
+    "files.exclude": {
+        "**/.runtime/**": true
+    }
+}

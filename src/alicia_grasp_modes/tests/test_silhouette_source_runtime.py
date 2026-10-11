@@ -213,7 +213,7 @@ def test_observation_envelope_does_not_replace_freshness_identity_or_original_su
     elif fault=='same_stamp':snapshot.stamp_ns=p.snapshot.stamp_ns
     elif fault=='fresh_identity':snapshot.target_identity=None
     elif fault=='support_shift':
-        bad=replace(fresh,support_offset_m=.0041)
+        bad=replace(fresh,support_offset_m=.0071)
         monkeypatch.setattr(base.RemoteGrasp6DNode,'_prepare_snapshot_geometry',lambda *_:(bad,depth,transform))
     actual,_,_=node._prepare_snapshot_geometry(snapshot,None)
     assert not actual.ok and actual.failure_code=='SILHOUETTE_OBSERVATION_ENVELOPE_INVALID'

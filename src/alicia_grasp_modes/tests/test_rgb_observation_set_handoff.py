@@ -90,7 +90,7 @@ def test_second_member_plane_disagreement_remains_visible_when_first_member_pass
     assert audit['support_failing_member_indices'] == (1,)
     members = audit['support_member_audits']
     assert tuple(row['member_index'] for row in members) == (0, 1)
-    assert members[1]['audit']['support_reference_max_distance_m'] > .004
+    assert members[1]['audit']['support_reference_max_distance_m'] > .007
     assert members[1]['reason'].startswith('support_inconsistent:')
     assert members[0]['audit'] == dict(result.member_associations[0].support_audit)
 
@@ -148,7 +148,7 @@ def test_empty_proposals_still_audit_all_support_and_project_independent_members
     assert dict(result.support_audit)['support_alignment_applied'] is False
 
 
-@pytest.mark.parametrize('height', [-.0041, .0041, .020])
+@pytest.mark.parametrize('height', [-.0071, .0071, .020])
 def test_even_empty_proposals_cannot_hide_raw_support_height_failure(height):
     ref, regs, _, _ = fixture()
     current = frame(STAMP+100_000_000, regions=regs, plane=(0., 0., 1., height))

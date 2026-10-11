@@ -14,10 +14,13 @@ import rospy
 from std_srvs.srv import Trigger, TriggerResponse
 from std_msgs.msg import String
 
-from alicia_grasp_modes.selection import SELECTION_PARAM, parse_selection
+from alicia_grasp_modes.selection import (SELECTION_PARAM, parse_selection,
+                                        read_authoritative_selection)
 from alicia_grasp_modes.observation_policy import observation_config
 from alicia_grasp_modes.runner_contract import unknown_target_loss_reason
 from alicia_grasp_modes.observe_return_task import ObserveReturnTask
+from alicia_grasp_modes.station_compute_wait_task import StationComputeWaitTaskMixin
+from alicia_grasp_modes.initial_preflight_task import InitialPreflightTaskMixin
 from alicia_grasp_modes.observe_return_session import exact_ns
 from alicia_grasp_modes.target_mass import mass_config_from_ros
 from alicia_grasp_modes.support_observation import (
@@ -62,11 +65,15 @@ def execution_config(config, strategy, entry_phase=None):
     return selected
 
 
-class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
+class ModeAwareGraspTaskNode(InitialPreflightTaskMixin, StationComputeWaitTaskMixin, ObserveReturnTask, original.GraspTaskNode):
+    _station_task_result = staticmethod(original.PlanValidationResult)
+
     def __init__(self):
         self._initialize_mode_boundary()
         super().__init__()
         self._setup_observe_return_io()
+        self._setup_station_compute_task_io()
+        self._setup_initial_preflight_io()
         self._unknown_support_sub = rospy.Subscriber(
             '/perception/unknown/detector_status', String,
             self._unknown_support_status_cb, queue_size=20)
@@ -74,7 +81,9 @@ class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
             '/grasp_mode/reset_task', Trigger, self.reset_mode_cb)
 
     def _initialize_mode_boundary(self):
+        self._initialize_initial_preflight()
         self._initialize_observe_return_state()
+        self._reset_station_compute_task()
         self._mode_task_lock = threading.RLock()
         # Independent lock: the detector callback never takes the execution
         # lock held across a synchronous trajectory service. Its positive
@@ -140,7 +149,16 @@ class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
 
     def accepted_joint_cb(self, message):
         super().accepted_joint_cb(message)
+        self._initial_preflight_feedback(message)
         self._refresh_unknown_support_sources()
+        if self._station_task_record is not None:
+            self._station_compute_task_tick()
+
+    def following_epoch_cb(self, message):
+        super().following_epoch_cb(message)
+        self._initial_preflight_epoch()
+        if self._station_task_record is not None:
+            self._station_compute_task_tick()
 
     def following_sdk_cb(self, message):
         super().following_sdk_cb(message)
@@ -153,6 +171,8 @@ class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
             return
         if not isinstance(status, dict):
             return
+        self._initial_preflight_status(status)
+        self._station_compute_task_status(status)
         self._refresh_unknown_support_sources()
         selected = self._mode_bound_selection or self._mode_selection
         # Independent diagnostic latch: do not change active trajectory or
@@ -219,13 +239,16 @@ class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
     def _read_selection(self):
         return parse_selection(rospy.get_param(SELECTION_PARAM, None))
 
+    def _read_reset_selection(self):
+        return read_authoritative_selection(rospy.get_master())
+
     def reset_mode_cb(self, _request):
         try:
             with self._mode_task_lock, self._start_guard(), self._grasp6d_plan_guard():
                 if (self._mode_start_reserved or bool(getattr(self, 'active', False))
                         or bool(getattr(self, '_start_inflight', False))):
                     raise RuntimeError('cannot reset grasp strategy during execution')
-                selected = self._read_selection()
+                selected = self._read_reset_selection()
                 previous = self._mode_selection
                 if previous is not None:
                     if selected['generation'] < previous['generation']:
@@ -234,6 +257,8 @@ class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
                         if selected != previous:
                             raise ValueError('selection changed without a new generation')
                         if self._mode_ready:
+                            if self._read_reset_selection() != selected:
+                                raise RuntimeError('mode selection changed during task reset')
                             return TriggerResponse(True, json.dumps(dict(selected, ready=True)))
                     elif selected['stamp_ns'] <= previous['stamp_ns']:
                         raise ValueError('new generation requires a newer source cutoff')
@@ -260,7 +285,11 @@ class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
                     self._unknown_support_diagnostics.clear()
                     self._unknown_support_qualified_sources.clear()
                 self._clear_observe_return_attempt()
+                self._reset_station_compute_task()
                 self._mode_selection = selected
+                self._initial_preflight_selection(selected)
+                if self._read_reset_selection() != selected:
+                    raise RuntimeError('mode selection changed during task reset')
                 self._mode_ready = True
                 return TriggerResponse(True, json.dumps(dict(selected, ready=True), sort_keys=True))
         except Exception as exc:
@@ -292,11 +321,15 @@ class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
     def obj_cb(self, msg):
         with self._mode_task_lock:
             if self._admit_source(msg):
+                if self._station_compute_task_object(msg):
+                    return
                 return super().obj_cb(msg)
 
     def target_geometry_cb(self, msg):
         with self._mode_task_lock:
             if self._admit_source(msg):
+                if self._station_compute_task_geometry(msg):
+                    return
                 return super().target_geometry_cb(msg)
 
     def grasp6d_plan_cb(self, msg):
@@ -323,12 +356,18 @@ class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
             self._clear_observe_return_attempt()
             self._mode_start_reserved = True
             self._mode_bound_selection = dict(self._mode_selection)
+        result = None
         try:
-            return super().start_cb(req)
+            self._initial_preflight_begin(req)
+            result = super().start_cb(req)
+            return result
         finally:
-            with self._mode_task_lock:
-                self._mode_start_reserved = False
-                self._mode_bound_selection = None
+            try:
+                self._initial_preflight_finish(result)
+            finally:
+                with self._mode_task_lock:
+                    self._mode_start_reserved = False
+                    self._mode_bound_selection = None
 
     def _mujoco_config_for_plan(self, plan, config):
         selected = self._mode_bound_selection or self._mode_selection
@@ -417,13 +456,18 @@ class ModeAwareGraspTaskNode(ObserveReturnTask, original.GraspTaskNode):
             self.set_state(original.GraspStages.FAILED, 'DIRECT_CONTACT_PLAN_REQUIRED')
             return False
         observation_source = original.is_silhouette_observation_plan(plan)
-        if observation_source and selected['strategy'] != 'observe_return':
+        if original.is_independent_observation_plan(plan) and selected['strategy'] != 'observe_return':
             self.set_state(original.GraspStages.FAILED, 'DIAGNOSTIC_OBSERVATION_STRATEGY_REQUIRED')
             return False
         if selected['strategy'] == 'observe_return':
             self._observe_return_entry_phase = original._plan_phase(plan)
             if self._observe_return_entry_phase == original._FAR_FIELD_OBSERVATION_PLAN:
                 try:
+                    if (not observation_source and self._gripper_position_reached(open_position,
+                            self._cfg_float(gripper_cfg, 'open_skip_tolerance_m', 0.001))):
+                        if self._initial_preflight_arm(plan, self._strategy_config(gcfg)):
+                            move_pose = self._initial_preflight_wrap_move(move_pose)
+                            strict_execute_pose = self._initial_preflight_wrap_strict(strict_execute_pose)
                     self._begin_observe_return(plan, self._strategy_config(gcfg))
                     if self._diagnostic_observation_only():
                         observation = original.observation_plan_pose(plan)

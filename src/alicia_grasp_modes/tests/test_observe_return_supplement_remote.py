@@ -1,5 +1,6 @@
 """Supplemental observation needs completed current search and real new evidence."""
 from copy import deepcopy
+from dataclasses import replace
 from types import SimpleNamespace as NS
 import json
 
@@ -33,9 +34,15 @@ def continuation(configured,monkeypatch):
         max_observations=3,view_index=1,view_plan_id='origin',view_source_stamp_ns=stamp-2,
         view_request_id='initial',previous_gain_sha256='0'*64)
     node._observe_return_step_gain=gained(identity,stamp)
-    node._latest_registration_evidence=NS(identity=identity,stamp_ns=stamp,result=NS(ok=True))
+    surface, reference = node._active_multiview_surface()
+    node._latest_target_observation = base.TargetObservation(identity, stamp, 'base_link',
+        reference.points_base, reference.support_normal_base, reference.support_offset_m,
+        (12, 12, 10, 10), (480, 640), 12, 'instance_mask')
+    node._latest_registration_evidence = base.RegistrationEvidence(identity, stamp,
+        base.RegistrationResult(True, 'REGISTERED', np.eye(4), 100, .8, .001, 0., 0.), False)
     node._active_gate_audit_report['grasp_mode_selection']=deepcopy(node._mode_selection)
-    p.remote_diagnostics['tabletop_geometry']['adaptive_stage_profiles']=[dict(depth_uncertainty_m=.001)]
+    p.remote_diagnostics['tabletop_geometry']['adaptive_stage_profiles']=[
+        dict(depth_uncertainty_m=.001, execution_position_error_m=0.)]
     monkeypatch.setattr(node,'_require_stream_ticket_current_locked',lambda ticket:None)
     return node,p
 
@@ -76,8 +83,10 @@ def test_error_alone_or_missing_current_evidence_never_prepares_new_view(configu
     elif fault=='expired':node._observe_return_session['deadline_ns']=p.snapshot.stamp_ns
     elif fault=='v1':node._observe_return_session['version']=1
     elif fault=='diagnostic':node._observe_return_diagnostic_observation_only=True
-    elif fault=='registration':node._latest_registration_evidence.result.ok=False
-    elif fault=='foreign_registration':node._latest_registration_evidence.stamp_ns-=1
+    elif fault=='registration':node._latest_registration_evidence=replace(
+        node._latest_registration_evidence,result=replace(node._latest_registration_evidence.result,ok=False))
+    elif fault=='foreign_registration':node._latest_registration_evidence=replace(
+        node._latest_registration_evidence,stamp_ns=p.snapshot.stamp_ns-1)
     elif fault=='missing_noise':p.remote_diagnostics['tabletop_geometry']['adaptive_stage_profiles']=[]
     before=node._active_multiview_surface()[0]
     assert not node._observe_return_prepare_supplement(p,code)

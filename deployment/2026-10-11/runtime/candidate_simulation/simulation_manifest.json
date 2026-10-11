@@ -1,0 +1,21 @@
+{
+  "candidate_model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "candidate_handeye_sha256": "637701accca5eb5042075c213c5e00e9b189d3cd7788d916c8c06bf89f7b1a0c",
+  "candidate_pair_sha256": "841ca1491fb2e05bced1a1f962749a496a9c4b9944d2833eefa2c3f1b02c3789",
+  "model_xml_sha256": "dc9e8bbc1a6764485cfd9412d68f5470713ef53a8ee0f8304cdb233ac96457cc",
+  "server_url": "http://127.0.0.1:8002",
+  "status": "reviewed_velocity_reference_v2_pending_load",
+  "health_bindings": {
+    "digital_twin.model_xml_sha256": "dc9e8bbc1a6764485cfd9412d68f5470713ef53a8ee0f8304cdb233ac96457cc",
+    "digital_twin.source_sha256": "5342482a2ccdff1e555bb914f6a049727892aec7a769f5c907faaff59621fb59",
+    "digital_twin.candidate_model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+    "digital_twin.candidate_handeye_sha256": "637701accca5eb5042075c213c5e00e9b189d3cd7788d916c8c06bf89f7b1a0c",
+    "digital_twin.candidate_pair_sha256": "841ca1491fb2e05bced1a1f962749a496a9c4b9944d2833eefa2c3f1b02c3789",
+    "digital_twin.mujoco": "3.2.3",
+    "digital_twin.compiled_model_xml_sha256": "dc9e8bbc1a6764485cfd9412d68f5470713ef53a8ee0f8304cdb233ac96457cc",
+    "digital_twin.compiled_gripper_contract_passed": true,
+    "digital_twin.max_snapshot_age_sec": 120.0,
+    "digital_twin.ros_sync_joint_states": false,
+    "digital_twin.prescribed_arm_velocity_reference_version": 2
+  }
+}

@@ -7,6 +7,9 @@ uses the ordinary proof-bound action executor. A successful RPC means only
 an observation move and measured settling. New 3-D target acceptance and RGB
 association remain an explicit subsequent handoff.
 """
+from alicia_flexible_grasp.robot.observation_view_limits import (
+    DEFAULT_OBSERVATION_VIEW_PARAMETERS, read_observation_view_parameters,
+)
 from collections import OrderedDict, deque
 from copy import deepcopy
 from dataclasses import asdict, fields
@@ -54,8 +57,7 @@ REQUEST_PARAM = '/rgb_acquisition/request'
 LEDGER_PARAM = '/rgb_acquisition/ledger'
 STATUS_PARAM = '/rgb_acquisition/status'
 SERVICE = '/supervisor/plan_and_execute_rgb_acquisition_pose_strict'
-VIEW_DEFAULTS = dict(camera_visibility_margin_px=36., camera_visibility_min_depth_m=.070,
-                     camera_visibility_max_depth_m=.500)
+VIEW_DEFAULTS = dict(DEFAULT_OBSERVATION_VIEW_PARAMETERS)
 
 
 def _error(message):
@@ -587,8 +589,7 @@ class RgbAcquisitionGateway:
             selection=parse_selection(get('/grasp_mode/selection')),
             camera=camera, perception=deepcopy(get('/unknown_perception', {})), handeye=handeye,
             model_sha256=hashlib.sha256(get('/robot_description', '').encode()).hexdigest(),
-            tool_camera=tool.tolist(), observation_view_parameters={key:
-                get('/grasp_6d/remote/'+key, value) for key, value in VIEW_DEFAULTS.items()})
+            tool_camera=tool.tolist(), observation_view_parameters=read_observation_view_parameters(get))
 
     def _rgb_require_owner(self, episode, *, moving=False):
         if self._manual_control_active():

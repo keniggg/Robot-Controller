@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "base": {
+    "head": "5900419e7ad1061a854d46d7e7fc95a826926041",
+    "branch": "master",
+    "index_sha256": "8cc72efb38897e34a9dc0663dfa3325cccf47cec7d805b2b55756adfd1881678"
+  },
+  "files": [
+    {
+      "path": ".vscode/settings.json",
+      "status": " M",
+      "former_path": null,
+      "root_head": "5900419e7ad1061a854d46d7e7fc95a826926041",
+      "restore_policy": "Only overlay a separate checkout of the root base commit; never replace WORK current code",
+      "source": "/home/zhuyupei/alicia_wa_full/.vscode/settings.json",
+      "bytes": 1376,
+      "sha256": "69e807bb842beb3c0fcd3b48ba9bf241d717f832f2b62d3cd814a059a993603f",
+      "mode": "100644",
+      "git_blob": "6be0aad5933c50dee055b795715669faffa6d390",
+      "snapshot_path": "deployment/2026-10-11/root_workspace_overlay/.vscode/settings.json",
+      "worktree_file_sha256": "f6ee8b1b68d3f8ce190a5a000ae12d58ef53a5b4a980ebcf6b2639403b2563e6"
+    },
+    {
+      "path": "AGENTS.md",
+      "status": "??",
+      "former_path": null,
+      "root_head": "5900419e7ad1061a854d46d7e7fc95a826926041",
+      "restore_policy": "Only overlay a separate checkout of the root base commit; never replace WORK current code",
+      "source": "/home/zhuyupei/alicia_wa_full/AGENTS.md",
+      "bytes": 3212,
+      "sha256": "4d85340310d4067f3ff095bc5b83b96ad5ddc97d47d002e6aeebcb7c7263e76d",
+      "mode": "100644",
+      "git_blob": "d4c44c94f4c21198a69ae09d106e922e7f2871c3",
+      "snapshot_path": "deployment/2026-10-11/root_workspace_overlay/AGENTS.md",
+      "worktree_file_sha256": null
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-21-carton-and-unknown-grasp-modes.md",
+      "status": "??",
+      "former_path": null,
+      "root_head": "5900419e7ad1061a854d46d7e7fc95a826926041",
+      "restore_policy": "Only overlay a separate checkout of the root base commit; never replace WORK current code",
+      "source": "/home/zhuyupei/alicia_wa_full/docs/superpowers/plans/2026-09-21-carton-and-unknown-grasp-modes.md",
+      "bytes": 10839,
+      "sha256": "a2bf50620e5d3dcce0d7cde8dddd4dc1c3825a74df422af81314f121cc41b6f2",
+      "mode": "100644",
+      "git_blob": "e43df44faaa82f2ca726c13570ca01b0c2c3b521",
+      "snapshot_path": "deployment/2026-10-11/root_workspace_overlay/docs/superpowers/plans/2026-09-21-carton-and-unknown-grasp-modes.md",
+      "worktree_file_sha256": "a2bf50620e5d3dcce0d7cde8dddd4dc1c3825a74df422af81314f121cc41b6f2"
+    }
+  ],
+  "policy": "Apply only in a separate ROOT-base checkout; never overlay old root versions onto current WORK sources.",
+  "unsaved_editor_buffers_captured": false
+}

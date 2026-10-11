@@ -103,7 +103,7 @@ def test_supported_view_without_ik_hint_precedes_unproven_high_utility_hint(conf
     node, _, variants, runtime = scheduler_context(configured, monkeypatch, tmp_path, [(1.1, .99), (.01, .1)])
     monkeypatch.setattr(node, '_observation_endpoint_search_hints', lambda *_:
         (hints_for(variants, [.01, None]), {}))
-    result = node._order_unknown_observation_checks(tuple(variants))
+    result = tuple(node._order_unknown_observation_checks(tuple(variants)))
     assert result == (variants[1], variants[0])
     rows = [v['observation_view']['check_scheduling_metrics']['measured_support_schedule'] for v in result]
     assert [r['status'] for r in rows] == ['sufficient', 'unknown']
@@ -143,7 +143,7 @@ def test_cached_support_hint_cannot_bypass_source_revalidation(configured, monke
         matrix = np.eye(4); matrix[0, 3] = .001
         monkeypatch.setattr(node, '_tool_from_camera_matrix', lambda: matrix)
     elif change == 'limits':
-        configured[1]['/grasp_6d/remote/camera_visibility_margin_px'] = 40.
+        configured[1]['/grasp_6d/remote/observation_camera_visibility_margin_px'] = 40.
     elif change == 'prepared':
         node._diagnostic_observation_view_prepared = object()
     else:

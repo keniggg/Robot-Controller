@@ -11,6 +11,7 @@ import numpy as np
 from .contact_linear_compensation import compensate_cartesian_path
 from .endpoint_correction import CorrectionStep, sdk_counts
 from .pregrasp_compensation import PregraspCompensation
+from .held_axes_prediction import predict_held_axes_endpoint
 from .stationary_following import SDK_QUANTUM_RAD as Q
 
 
@@ -66,25 +67,15 @@ class PregraspFeedforward:
             raise ValueError('PREGRASP_FEEDFORWARD_ALREADY_PROPOSED')
         c = self.contract
         actual = np.asarray(self.initial['accepted_positions_rad'], dtype=float)
-        position, angle = c.residual(actual)
-        if position > .025 or angle > c.tolerances[1]:
-            raise ValueError('PREGRASP_OUTSIDE_LOCAL_CAPTURE_RANGE')
-        guide, _ = c._remaining_budget_guide(actual)
-        target = np.asarray(c.initial_counts) + guide
-        if (not np.any(guide) or max(abs(guide)) > c.MAX_TOTAL_COUNTS
-                or any(guide[axis] != 0 for axis in c.HELD_AXES)
-                or np.any(target < 0) or np.any(target > 4095)):
-            raise ValueError('PREGRASP_HELD_AXES_GUIDE_INVALID')
-        offset = np.asarray(self.initial['sdk_positions_rad']) - actual
-        command = (target - 2048)*Q
-        predicted = command - offset
-        c.fk(command)
-        predicted_position, predicted_angle = c.residual(predicted)
-        if (max(abs(command-predicted)) > .035
-                or predicted_position > c.tolerances[0]
-                or predicted_angle > c.tolerances[1]
-                or predicted_position >= position - 1e-6):
-            raise ValueError('PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL')
+        target, prediction = predict_held_axes_endpoint(c.fk,
+            self.initial['sdk_positions_rad'], actual, c.goal_values,
+            position_tolerance_m=c.tolerances[0], orientation_tolerance_rad=c.tolerances[1],
+            guide_provider=c._remaining_budget_guide)
+        guide = target-np.asarray(c.initial_counts)
+        offset = np.asarray(self.initial['sdk_positions_rad'])-actual
+        position, angle = prediction['position_error_m'], prediction['orientation_error_rad']
+        predicted_position = prediction['predicted_position_error_m']
+        predicted_angle = prediction['predicted_orientation_error_rad']
         self.step = CorrectionStep(c.initial_counts, tuple(target.tolist()),
             tuple(sdk_counts(actual).tolist()), self.initial['sdk_stamp_ns'],
             self.initial['accepted_stamp_ns'])

@@ -5,7 +5,7 @@ import time
 
 import rospy
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Header, String
 from alicia_flexible_grasp_supervisor.srv import SetJointCommand
 from gui.widgets.camera_widget import CameraWidget
 from gui.theme import metric_chip, panel
@@ -357,6 +357,7 @@ class JointControlWidget(QtWidgets.QWidget):
     control_mode_signal = QtCore.pyqtSignal(bool)
     feedback_ready_signal = QtCore.pyqtSignal(bool, float)
     actuation_status_signal = QtCore.pyqtSignal(str, float)
+    control_reference_epoch_signal = QtCore.pyqtSignal(object)
     pose_target_changed = QtCore.pyqtSignal()
 
     def __init__(
@@ -390,6 +391,8 @@ class JointControlWidget(QtWidgets.QWidget):
         self._display_sync_required = True
         self._display_sync_manual = False
         self._display_sync_after_sec = 0.0
+        self._display_control_reference_epoch_ns = None
+        self._display_feedback_recovery = None
         self._pending_direct_publish = False
         self._pending_direct_edits = {}
         self._active_direct_slider_index = None
@@ -481,6 +484,9 @@ class JointControlWidget(QtWidgets.QWidget):
         actions = QtWidgets.QGridLayout()
         actions.setSpacing(10)
         sync_btn = QtWidgets.QPushButton('同步当前关节')
+        sync_btn.setToolTip(
+            '按新鲜实测角同步显示；手动直控下若驱动编码器反馈未就绪，'
+            '点击将请求一次正向使能以重新采集反馈，不发送或重放关节目标')
         self.plan_btn = QtWidgets.QPushButton('规划当前目标')
         self.exec_btn = QtWidgets.QPushButton('执行规划目标')
         add_btn = QtWidgets.QPushButton('添加示教点')
@@ -527,6 +533,7 @@ class JointControlWidget(QtWidgets.QWidget):
         self.state_signal.connect(self.update_current_state)
         self.feedback_ready_signal.connect(self._apply_feedback_ready)
         self.actuation_status_signal.connect(self._apply_actuation_status)
+        self.control_reference_epoch_signal.connect(self._apply_control_reference_epoch)
         self._subscriber = rospy.Subscriber('/joint_states', JointState, self._emit_if_alive, queue_size=1)
         self.control_mode_signal.connect(self._apply_remote_control_mode)
         self._mode_subscriber = rospy.Subscriber('/gui/joint_direct_mode', Bool, self._control_mode_cb, queue_size=1)
@@ -542,6 +549,9 @@ class JointControlWidget(QtWidgets.QWidget):
             self._feedback_ready_cb,
             queue_size=1,
         )
+        self._reference_epoch_subscriber = rospy.Subscriber(
+            '/alicia_d/control_reference_epoch', Header,
+            self._control_reference_epoch_cb, queue_size=1)
         self.destroyed.connect(lambda *_: self._shutdown_ros())
         self.direct_timer = QtCore.QTimer(self)
         self.direct_timer.timeout.connect(self.flush_direct_publish)
@@ -599,7 +609,8 @@ class JointControlWidget(QtWidgets.QWidget):
             except Exception:
                 pass
             self._subscriber_unregistered = True
-        for name in ('_actuation_subscriber', '_feedback_subscriber', '_mode_subscriber'):
+        for name in ('_actuation_subscriber', '_feedback_subscriber', '_mode_subscriber',
+                     '_reference_epoch_subscriber'):
             subscriber = self.__dict__.get(name, None)
             marker = name + '_unregistered'
             if subscriber is None or self.__dict__.get(marker, False):
@@ -853,6 +864,29 @@ class JointControlWidget(QtWidgets.QWidget):
         if self.__dict__.get('_alive', False):
             self.feedback_ready_signal.emit(bool(msg.data), rospy.Time.now().to_sec())
 
+    def _control_reference_epoch_cb(self, msg):
+        if self.__dict__.get('_alive', False):
+            self.control_reference_epoch_signal.emit(msg)
+
+    def _apply_control_reference_epoch(self, msg):
+        if not self.__dict__.get('_alive', False):
+            return
+        try:
+            epoch_ns = msg.stamp.to_nsec()
+            if (msg.frame_id != 'sdk_reference_epoch' or epoch_ns <= 0 or
+                    epoch_ns > rospy.Time.now().to_nsec()):
+                return
+        except (AttributeError, TypeError, ValueError):
+            return
+        previous = self.__dict__.get('_display_control_reference_epoch_ns')
+        if previous is not None and epoch_ns <= previous:
+            return
+        self._display_control_reference_epoch_ns = epoch_ns
+        recovery = self.__dict__.get('_display_feedback_recovery')
+        if recovery is not None and epoch_ns > recovery['requested_stamp_ns']:
+            recovery['epoch_ns'] = epoch_ns
+            self._require_display_sync(epoch_ns * 1e-9)
+
     def _apply_actuation_status(self, status, received_sec):
         # Qt slots serialize display resets with manual command admission.
         if not self.__dict__.get('_alive', False):
@@ -914,6 +948,13 @@ class JointControlWidget(QtWidgets.QWidget):
             if (not math.isfinite(stamp) or stamp <= 0.0 or
                     stamp <= self._display_sync_after_sec or not 0.0 <= now - stamp <= 1.0):
                 return False
+            recovery = self.__dict__.get('_display_feedback_recovery')
+            if recovery is not None:
+                epoch_ns = recovery['epoch_ns']
+                if (epoch_ns is None or
+                        epoch_ns != self.__dict__.get('_display_control_reference_epoch_ns') or
+                        self.current_state.header.stamp.to_nsec() <= epoch_ns):
+                    return False
             values = dict(zip(self.current_state.name, self.current_state.position))
             return all(name in values and math.isfinite(float(values[name])) for name in self.names)
         except (AttributeError, TypeError, ValueError):
@@ -934,6 +975,7 @@ class JointControlWidget(QtWidgets.QWidget):
         self._refresh_sliders_from_feedback()
         self._display_sync_required = False
         self._display_sync_manual = False
+        self._display_feedback_recovery = None
         self.status.setText('已按新鲜实测角同步滑条；没有发送运动，请重新操作目标关节')
         return True
 
@@ -1018,8 +1060,31 @@ class JointControlWidget(QtWidgets.QWidget):
             self._syncing_sliders = False
 
     def sync_current_state(self):
-        if not self._sync_display_after_reset(explicit=True):
-            self.status.setText('尚不能同步：请松开滑条，并等待恢复后的新鲜完整关节反馈')
+        if self._sync_display_after_reset(explicit=True):
+            return
+        if self.__dict__.get('_display_feedback_recovery') is not None:
+            self.status.setText('已请求一次正向使能；等待新控制参考代次和新鲜完整关节反馈，不重发使能或旧目标')
+            return
+        if (self.__dict__.get('_alive', False) and self.realtime_direct.isChecked() and
+                not any(slider.isSliderDown() for slider in self.sliders) and
+                self.__dict__.get('_display_actuation_status') ==
+                'UNCONFIRMED:ENCODER_FEEDBACK_NOT_READY' and
+                not self._fresh_complete_display_feedback()):
+            requested = rospy.Time.now()
+            # Mark the attempt before publishing. Repeated clicks, callbacks,
+            # and slider releases may not repeat torque-on or replay a goal.
+            self._display_feedback_recovery = dict(
+                requested_stamp_ns=requested.to_nsec(), epoch_ns=None)
+            self._require_display_sync(requested.to_sec())
+            self._display_sync_manual = False
+            try:
+                self.enable_pub.publish(Bool(data=False))
+            except Exception as exc:
+                self.status.setText('正向使能请求未完成；旧目标已丢弃，继续等待新反馈：%s' % exc)
+                return
+            self.status.setText('已请求一次正向使能以重新采集编码器反馈；等待新代次实测角，仅同步显示')
+            return
+        self.status.setText('尚不能同步：请松开滑条，并等待恢复后的新鲜完整关节反馈')
 
     def add_waypoint(self):
         self.waypoints.append(self.positions())

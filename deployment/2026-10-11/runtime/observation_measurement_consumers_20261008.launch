@@ -1,0 +1,19 @@
+<launch>
+  <!-- User-authorized support offset policy: diagnose above 4 mm, reject above 7 mm. -->
+  <arg name="support_max_local_shift_m" default="0.007"/>
+  <arg name="support_local_shift_warning_m" default="0.004"/>
+  <param name="/unknown_perception/support_max_local_shift_m" type="double" value="$(arg support_max_local_shift_m)"/>
+  <param name="/unknown_perception/support_local_shift_warning_m" type="double" value="$(arg support_local_shift_warning_m)"/>
+  <param name="/grasp_6d/remote/multiview/maximum_support_offset_delta_m" type="double" value="$(arg support_max_local_shift_m)"/>
+  <!-- Give same-station recovery another fresh sample without extending its deadline. -->
+  <param name="/unknown_perception/detect_hz" type="double" value="6.0"/>
+  <node pkg="alicia_grasp_modes" type="unknown_tabletop_perception.py" name="unknown_tabletop_perception" output="screen">
+    <!-- Reuse anonymous allocation pages across frames; never cache frame data. -->
+    <env name="MALLOC_TRIM_THRESHOLD_" value="-1"/>
+    <env name="MALLOC_MMAP_THRESHOLD_" value="33554432"/>
+  </node>
+  <node pkg="alicia_grasp_modes" type="mode_aware_remote_grasp6d.py" name="remote_grasp6d_node" output="screen"/>
+  <node pkg="alicia_grasp_modes" type="mode_aware_grasp_task.py" name="grasp_task_node" output="screen">
+    <remap from="/grasp/start" to="/grasp/internal_start"/>
+  </node>
+</launch>

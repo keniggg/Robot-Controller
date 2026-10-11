@@ -10,6 +10,7 @@ and returned TF timestamps record that binding; this function cannot verify a TF
 lookup. Passing this geometric check does not certify measured depth quality,
 information sufficiency, occlusion, collision safety or grasp success.
 """
+from alicia_flexible_grasp.robot.observation_view_limits import MINIMUM_OBSERVATION_IMAGE_MARGIN_PX
 from copy import deepcopy
 import itertools
 import math
@@ -164,7 +165,7 @@ def _validate_working_volume_geometry(
 
 def validate_planned_observation_working_volume(
         target_corners_base, planned_base_from_camera, intrinsics, image_width, image_height,
-        *, snapshot_stamp_ns, roi_margin_px=36., minimum_depth_m=.070, maximum_depth_m=.500):
+        *, snapshot_stamp_ns, roi_margin_px=MINIMUM_OBSERVATION_IMAGE_MARGIN_PX, minimum_depth_m=.070, maximum_depth_m=.500):
     """Check a proposed endpoint against geometry frozen in one source snapshot.
 
     The supplied transform is a derived future camera pose, not a TF measurement.
@@ -190,7 +191,7 @@ def validate_planned_observation_working_volume(
 
 def validate_observation_working_volume(
         target_corners_base, base_from_camera, intrinsics, image_width, image_height,
-        *, source_stamp_ns, camera_transform_stamp_ns, roi_margin_px=36.,
+        *, source_stamp_ns, camera_transform_stamp_ns, roi_margin_px=MINIMUM_OBSERVATION_IMAGE_MARGIN_PX,
         minimum_depth_m=.070, maximum_depth_m=.500,
         visible_surface_points_base=None, visible_surface_stamp_ns=None,
         camera_transform_stamp_tolerance_ns=0):

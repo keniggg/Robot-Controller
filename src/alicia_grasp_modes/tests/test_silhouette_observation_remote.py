@@ -277,6 +277,6 @@ def test_runner_rejects_observation_without_its_actual_conservative_collision_ge
     elif fault=='points_changed':report['replay_geometry']['object_points_sha256']='0'*64
     elif fault=='synthetic_points':envelope['measured_points']['synthetic_points_added']=8
     elif fault=='digest':envelope['original']['geometry_sha256']='0'*64
-    elif fault=='loose_support':envelope['support_consistency']['maximum_local_shift_m']=.005
+    elif fault=='loose_support':envelope['support_consistency']['maximum_local_shift_m']=.00701
     elif fault=='anchor_changed':envelope['perception_reference']['anchor_source_stamp_ns']+=1
     assert observe_return_audit_error(report)

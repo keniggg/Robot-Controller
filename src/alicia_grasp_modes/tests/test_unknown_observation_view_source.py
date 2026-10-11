@@ -10,6 +10,8 @@ import pytest
 from test_remote_modes import configured, base
 from test_silhouette_observation_view_source import view_context, encoded_result
 from alicia_grasp_modes.silhouette_observation_planning import INFORMATION_ORDER_POLICY as POLICY
+from alicia_grasp_modes.observation_arrival_projection import capture_arrival_projection
+from alicia_grasp_modes.unknown_pending_identity import reference_binding
 
 
 def generic_context(configured,monkeypatch,tmp_path):
@@ -17,9 +19,22 @@ def generic_context(configured,monkeypatch,tmp_path):
     node._observe_return_diagnostic_observation_only=False
     # A normal missing-side view has no silhouette diagnosis or envelope.
     prepared=replace(prepared,remote_diagnostics={})
+    ns=prepared.snapshot.stamp_ns;selection=node._mode_selection
+    status=dict(mode='unknown',generation=selection['generation'],selection_stamp_ns=selection['stamp_ns'],
+        source_stamp_ns=ns,state='ready',target_locked=True,target_lost=False,first_loss=None,
+        exact_rgbd=True,projection_frame_convention='ros_camera_link',color_stamp_ns=ns,
+        depth_stamp_ns=ns,tf_lookup_stamp_ns=ns,color_frame_id='camera_link',depth_frame_id='camera_link',
+        anchor_source_stamp_ns=ns,anchor_position_base=[.28,0.,0.],anchor_extent_m=[.02,.02,.02],
+        reference_support_plane_base=[-1.,0.,0.,.3],reference_object_height_m=.02,
+        reference_support_footprint_base=[[.3,-.01,-.01],[.3,.01,-.01],[.3,.01,.01],[.3,-.01,.01]])
+    configured[1]['/camera']=vars(camera).copy()
+    node._unknown_identity_status={ns:status}
+    node._unknown_identity_reference={'binding':reference_binding(status,selection)}
+    node._measurement_remote_reference=None
+    arrival=capture_arrival_projection(status,selection,ns,configured[1]['/camera'])
     node._bind_diagnostic_observation_view_source(prepared,
         dict(sample=sample,intrinsics=camera,tool_from_camera=np.eye(4),
-        view_limits=node._observation_view_limit_configuration()))
+        view_limits=node._observation_view_limit_configuration(),arrival_projection=arrival))
     return node,prepared,sample,camera,fk
 
 
@@ -87,7 +102,8 @@ def test_regular_prepare_captures_original_before_inference_and_binds_final_prep
     order=[]
     monkeypatch.setattr(node,'_capture_diagnostic_observation_view_source',lambda ticket:order.append('capture') or
         dict(sample=sample,intrinsics=camera,tool_from_camera=np.eye(4),
-        view_limits=node._observation_view_limit_configuration()))
+        view_limits=node._observation_view_limit_configuration(),arrival_projection=
+            node._diagnostic_observation_view_source['arrival_projection']))
     def predict(_node,ticket):
         assert order==['capture'];order.append('predict')
         return prepared
@@ -153,7 +169,7 @@ def test_real_worker_pending_requests_do_not_replace_active_accept_cloud():
 
 
 @pytest.mark.parametrize('key,value',[
-    ('camera_visibility_margin_px',40.),('camera_visibility_min_depth_m',.09),
+    ('observation_camera_visibility_margin_px',40.),('camera_visibility_min_depth_m',.09),
     ('camera_visibility_max_depth_m',.45)])
 def test_candidate_visibility_limit_change_invalidates_frozen_request(configured,monkeypatch,tmp_path,key,value):
     node,prepared,_,_,fk=generic_context(configured,monkeypatch,tmp_path)
@@ -161,11 +177,11 @@ def test_candidate_visibility_limit_change_invalidates_frozen_request(configured
     configured[1]['/grasp_6d/remote/'+key]=value
     outcome,report=node._observation_following_support_evaluation(prepared,result,target)
     assert not outcome.reachable and outcome.failure_code=='UNKNOWN_OBSERVATION_PATH_VIEW_INVALID'
-    assert report['measured_source']['view_limits']['effective_visibility_limits']['roi_margin_px']==36.
+    assert report['measured_source']['view_limits']['effective_visibility_limits']['roi_margin_px']==24.
 
 
 def test_tighter_source_limits_reach_real_candidate_guard(configured,monkeypatch,tmp_path):
-    configured[1].update({'/grasp_6d/remote/camera_visibility_margin_px':40.,
+    configured[1].update({'/grasp_6d/remote/observation_camera_visibility_margin_px':40.,
         '/grasp_6d/remote/camera_visibility_min_depth_m':.09,
         '/grasp_6d/remote/camera_visibility_max_depth_m':.4})
     node,prepared,_,_,fk=generic_context(configured,monkeypatch,tmp_path)
@@ -175,7 +191,7 @@ def test_tighter_source_limits_reach_real_candidate_guard(configured,monkeypatch
     assert report['target_trajectory']['minimum_camera_depth_m']==.09
     assert report['target_trajectory']['maximum_camera_depth_m']==.4
     source=report['source']['view_limits']
-    assert source['requested_visibility_limits_snapshot']['camera_visibility_margin_px']==40.
+    assert source['requested_visibility_limits_snapshot']['observation_camera_visibility_margin_px']==40.
     assert source['effective_visibility_limits']['roi_margin_px']==40.
 
 

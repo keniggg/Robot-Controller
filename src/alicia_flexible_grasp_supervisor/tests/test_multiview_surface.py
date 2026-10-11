@@ -22,6 +22,7 @@ from alicia_flexible_grasp.vision.multiview_surface import (  # noqa: E402
     append_registered_view,
     fused_surface_from_view,
     register_surface_view,
+    support_offset_diagnostic,
     surface_view_from_observation,
 )
 from alicia_flexible_grasp.vision import multiview_surface  # noqa: E402
@@ -176,7 +177,7 @@ def test_registers_partial_measured_views_deterministically_with_provenance():
         ),
         (
             lambda reference, moving: dataclasses.replace(
-                moving, support_offset_m=0.0041
+                moving, support_offset_m=0.0071
             ),
             'SUPPORT_OFFSET_MISMATCH',
         ),
@@ -230,19 +231,89 @@ def test_registration_rejects_overlap_below_thirty_percent():
     assert result.overlap_fraction < 0.30
 
 
-def test_registration_rejects_rmse_above_four_millimeters():
+@pytest.mark.parametrize('support_offset_m', [0.0, 0.0055])
+def test_registration_rejects_rmse_above_four_millimeters(support_offset_m):
     reference_points, _moving_points = rectangular_prism_views()
     candidate = reference_points[:120].copy()
     candidate[::2, 2] += 0.005
     candidate[1::2, 2] -= 0.005
     reference = view(reference_points, 1_000_000_000)
-    moving = view(candidate, 1_100_000_000)
+    moving = view(candidate, 1_100_000_000, offset=support_offset_m)
 
     result = register_surface_view(reference, moving)
 
     assert result.ok is False
     assert result.code == 'RMSE_EXCEEDED'
     assert result.rmse_m > 0.004
+
+
+@pytest.mark.parametrize('separation_m,warning', [
+    (0.0, False),
+    (0.004, False),
+    (float(np.float32(0.004)), False),
+    (float(np.nextafter(np.float32(0.004), np.float32(np.inf))), True),
+    (0.0055, True),
+    (0.007, True),
+])
+def test_support_warning_does_not_reject_registered_measured_fusion(separation_m, warning):
+    reference, moving = registered_pair(offset=separation_m)
+    config = RegistrationConfig()
+    before = fused_surface_from_view(reference)
+    result, fused = append_registered_view(before, reference, moving, config)
+    assert result.ok and result.code == 'REGISTERED'
+    assert fused.view_stamps_ns == (reference.stamp_ns, moving.stamp_ns)
+    assert result.support_plane_separation_m == separation_m
+    diagnostic = support_offset_diagnostic(result.support_plane_separation_m,
+                                           config.maximum_support_offset_delta_m)
+    assert diagnostic == dict(warning_flag=warning, measured_m=separation_m,
+                              warning_threshold_m=0.004, hard_limit_m=0.007)
+    assert json.loads(json.dumps(diagnostic)) == diagnostic
+    assert result.rmse_m <= 0.004
+    assert result.support_normal_angle_deg <= 4.0
+
+
+def test_support_warning_does_not_override_stricter_historical_configuration():
+    reference, moving = registered_pair(offset=0.0041)
+    stored = dataclasses.asdict(RegistrationConfig(maximum_support_offset_delta_m=0.004))
+    config = RegistrationConfig(**stored)
+    result = register_surface_view(reference, moving, config)
+    assert not result.ok and result.code == 'SUPPORT_OFFSET_MISMATCH'
+    diagnostic = support_offset_diagnostic(result.support_plane_separation_m,
+                                           config.maximum_support_offset_delta_m)
+    assert diagnostic['warning_flag'] is True
+    assert diagnostic['hard_limit_m'] == 0.004
+    assert set(stored) == {
+        'correspondence_max_m', 'minimum_inliers', 'minimum_overlap_fraction',
+        'maximum_rmse_m', 'maximum_translation_m', 'maximum_yaw_deg',
+        'maximum_support_normal_angle_deg', 'maximum_support_offset_delta_m',
+        'maximum_iterations',
+    }
+
+
+@pytest.mark.parametrize('hard_limit_m', [0.0, 0.003, 0.004, 0.007])
+def test_support_diagnostic_accepts_stricter_hard_limits_without_deciding_acceptance(hard_limit_m):
+    diagnostic = support_offset_diagnostic(0.004, hard_limit_m)
+    assert diagnostic['warning_flag'] is False
+    assert diagnostic['hard_limit_m'] == hard_limit_m
+
+
+@pytest.mark.parametrize('argument', ['separation_m', 'hard_limit_m'])
+@pytest.mark.parametrize('bad', [True, np.bool_(False), float('nan'), float('inf'), -0.001, '0.004'])
+def test_support_offset_diagnostic_rejects_invalid_measurements_and_limits(argument, bad):
+    values = dict(separation_m=0.0055, hard_limit_m=0.007)
+    values[argument] = bad
+    with pytest.raises(ValueError):
+        support_offset_diagnostic(**values)
+
+
+def test_warning_band_keeps_original_normal_gate():
+    reference, moving = registered_pair(offset=0.0055)
+    moving = dataclasses.replace(moving, support_normal_base=(
+        0., np.sin(np.deg2rad(4.01)), np.cos(np.deg2rad(4.01))))
+    result = register_surface_view(reference, moving)
+    assert not result.ok and result.code == 'SUPPORT_NORMAL_MISMATCH'
+    assert RegistrationConfig().maximum_support_normal_angle_deg == 4.0
+    assert RegistrationConfig().maximum_rmse_m == 0.004
 
 
 @pytest.mark.parametrize(
@@ -313,12 +384,19 @@ def recorded_observation_recovery_pair():
     return views[0], views[1], RegistrationConfig(**fixture['config'])
 
 
-def test_recorded_coarse_overshoot_is_refined_before_final_motion_bounds():
+def test_recorded_coarse_overshoot_is_refined_before_final_motion_bounds(monkeypatch):
     reference, moving, config = recorded_observation_recovery_pair()
     basis = multiview_surface._support_basis(reference.support_normal_base)
     coarse = multiview_surface._initial_support_transform(
         reference.points_base, moving.points_base, basis)
     assert abs(multiview_surface._yaw_degrees(coarse[:3, :3], basis)) > 11.8
+
+    # This regression exercises refinement of the PCA seed, not which seed
+    # wins. An identical extra candidate is not a strict cost improvement.
+    original_initializer = multiview_surface._initial_support_transform
+    monkeypatch.setattr(multiview_surface, '_initial_support_transform',
+        lambda reference, moving, basis, **kwargs:
+        original_initializer(reference, moving, basis))
 
     result = register_surface_view(reference, moving, config)
 
@@ -331,8 +409,14 @@ def test_recorded_coarse_overshoot_is_refined_before_final_motion_bounds():
     assert result.support_plane_separation_m < config.maximum_support_offset_delta_m
 
 
-def test_recorded_recovery_still_rejects_final_out_of_bound_correction():
+def test_recorded_recovery_still_rejects_final_out_of_bound_correction(monkeypatch):
     reference, moving, config = recorded_observation_recovery_pair()
+    # Retain the original PCA branch's finite-iteration and final-bound
+    # assertions even when a new, better translation seed is available.
+    original_initializer = multiview_surface._initial_support_transform
+    monkeypatch.setattr(multiview_surface, '_initial_support_transform',
+        lambda reference, moving, basis, **kwargs:
+        original_initializer(reference, moving, basis))
     # Five updates are deliberately insufficient: final yaw remains > 10 deg.
     result = register_surface_view(
         reference, moving, dataclasses.replace(config, maximum_iterations=5))
@@ -552,7 +636,7 @@ def test_fusion_retains_only_real_connected_measurements_and_rejection_is_atomic
     assert np.count_nonzero(
         retained_distances > RegistrationConfig().correspondence_max_m
     ) > 0
-    rejected = dataclasses.replace(moving, stamp_ns=moving.stamp_ns + 1, support_offset_m=0.005)
+    rejected = dataclasses.replace(moving, stamp_ns=moving.stamp_ns + 1, support_offset_m=0.008)
     failure, unchanged = append_registered_view(fused, reference, rejected)
     assert failure.code == 'SUPPORT_OFFSET_MISMATCH'
     assert unchanged is fused
@@ -722,7 +806,7 @@ def test_correspondence_bound_is_exact(outside):
 @pytest.mark.parametrize('outside', [False, True])
 def test_support_offset_bound_is_exact(outside):
     reference, moving = registered_pair()
-    delta = np.nextafter(0.004, np.inf) if outside else 0.004
+    delta = np.nextafter(0.007, np.inf) if outside else 0.007
     result = register_surface_view(reference, dataclasses.replace(moving, support_offset_m=delta))
     assert result.ok is (not outside)
     if outside:
@@ -734,11 +818,11 @@ def test_support_plane_gate_uses_target_local_separation_for_tilted_fit():
     points = points + np.asarray([-0.12, -0.38, 0.06])
     anchor = np.median(points, axis=0)
     reference_normal = np.asarray([0.0, 0.0, 1.0])
-    angle = np.deg2rad(0.9)
+    angle = np.deg2rad(1.3)
     moving_normal = np.asarray([0.0, np.sin(angle), np.cos(angle)])
     reference_offset = -float(np.dot(reference_normal, anchor))
     moving_offset = -float(np.dot(moving_normal, anchor))
-    assert abs(reference_offset - moving_offset) > 0.004
+    assert abs(reference_offset - moving_offset) > 0.007
     reference = view(
         points,
         1_000_000_000,
@@ -759,7 +843,7 @@ def test_support_plane_gate_uses_target_local_separation_for_tilted_fit():
     assert result.support_plane_separation_m == pytest.approx(0.0, abs=1e-12)
 
 
-def test_support_plane_gate_rejects_target_local_separation_over_bound():
+def test_explicit_stricter_support_plane_gate_rejects_target_local_separation_over_bound():
     points, _other_view = rectangular_prism_views()
     points = points + np.asarray([-0.12, -0.38, 0.06])
     anchor = np.median(points, axis=0)
@@ -781,7 +865,8 @@ def test_support_plane_gate_rejects_target_local_separation_over_bound():
         offset=moving_offset,
     )
 
-    result = register_surface_view(reference, moving)
+    result = register_surface_view(reference, moving, RegistrationConfig(
+        maximum_support_offset_delta_m=0.004))
 
     assert not result.ok
     assert result.code == 'SUPPORT_OFFSET_MISMATCH'
@@ -966,7 +1051,7 @@ def test_source_support_never_changes_on_rejected_registration(fault):
     if fault == 'repeat_stamp': candidate = moving
     elif fault == 'older_stamp': candidate = reference
     elif fault == 'identity': candidate = dataclasses.replace(candidate, identity=TargetTrackIdentity.from_stream(4, 8))
-    elif fault == 'support': candidate = dataclasses.replace(candidate, support_offset_m=.005)
+    elif fault == 'support': candidate = dataclasses.replace(candidate, support_offset_m=.008)
     failure, unchanged = append_registered_view(fused, reference, candidate)
     assert not failure.ok and unchanged is fused
     assert multiview_surface.surface_provenance_audit(unchanged) == before
@@ -1018,7 +1103,7 @@ def test_voxel_source_sets_do_not_hide_invalid_source_timestamps():
             FusedTargetSurface(IDENTITY, np.zeros((2, 3)), np.asarray([0, 1]), stamps, ((0,), (0, 1)))
 
 
-def test_support_audit_exposes_object_only_shift_without_changing_fusion(monkeypatch):
+def test_support_audit_exposes_object_only_shift_without_changing_stricter_fusion(monkeypatch):
     reference, moving = registered_pair()
     # The object's apparent height changes, while the measured support does
     # not. Existing ICP can match the target exactly without agreeing with
@@ -1026,7 +1111,8 @@ def test_support_audit_exposes_object_only_shift_without_changing_fusion(monkeyp
     moving = dataclasses.replace(
         moving, points_base=moving.points_base + [0., 0., .006])
     surface = fused_surface_from_view(reference)
-    result, fused = append_registered_view(surface, reference, moving)
+    config = RegistrationConfig(maximum_support_offset_delta_m=.004)
+    result, fused = append_registered_view(surface, reference, moving, config)
     audit = result.support_consistency_audit
     assert result.ok and result.code == 'REGISTERED'
     assert result.support_plane_separation_m == 0.
@@ -1035,7 +1121,7 @@ def test_support_audit_exposes_object_only_shift_without_changing_fusion(monkeyp
     assert audit.raw_plane_separation_m == 0.
     assert audit.transformed_plane_separation_m == pytest.approx(.005, abs=1e-12)
     assert audit.transformed_maximum_footprint_separation_m == pytest.approx(.005, abs=1e-12)
-    assert audit.transformed_plane_separation_m > RegistrationConfig().maximum_support_offset_delta_m
+    assert audit.transformed_plane_separation_m > config.maximum_support_offset_delta_m
     assert audit.correspondence_count == result.inlier_count
     assert audit.diagnostic_only is True
     assert audit.transform_semantics == 'moving_snapshot_base_estimate_to_phase_reference'
@@ -1043,7 +1129,7 @@ def test_support_audit_exposes_object_only_shift_without_changing_fusion(monkeyp
     # The diagnostic does not become a new acceptance/fusion gate, including
     # when its corrected discrepancy exceeds the existing raw support bound.
     monkeypatch.setattr(multiview_surface, '_support_consistency_audit', lambda *_: None)
-    without_audit, original_fusion = append_registered_view(surface, reference, moving)
+    without_audit, original_fusion = append_registered_view(surface, reference, moving, config)
     assert without_audit.support_consistency_audit is None
     for attribute in dataclasses.fields(result):
         if attribute.name not in ('support_consistency_audit', 'transform_base'):
@@ -1160,9 +1246,9 @@ def test_support_audit_normalizes_plane_equations_and_parallel_angle():
 
 
 @pytest.mark.parametrize('outside', [False, True])
-def test_support_audit_keeps_raw_four_millimeter_acceptance_boundary(outside):
+def test_support_audit_keeps_raw_seven_millimeter_acceptance_boundary(outside):
     reference, moving = registered_pair()
-    offset = np.nextafter(.004, np.inf) if outside else .004
+    offset = np.nextafter(.007, np.inf) if outside else .007
     moving = dataclasses.replace(moving, support_offset_m=offset)
     result = register_surface_view(reference, moving)
     assert result.support_plane_separation_m == offset

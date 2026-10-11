@@ -1,0 +1,77 @@
+{
+  "schema": "frozen_patch_delivery/v1",
+  "ready": true,
+  "delivery_ready": true,
+  "source_frozen": true,
+  "stage": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/gen19_support_station_handoff_20261011",
+  "files": {
+    "src/alicia_grasp_modes/scripts/unknown_tabletop_perception.py": "bc35401372deffe1d21bd392047fe56ca2f91a95d24f2a75cd5a9985123d3037",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_wait_producer.py": "4a01eca596fee08fffa6a4ac9772e6d1692fe5c0397e8d684025bf76a0f770e2",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_reacquisition.py": "9239301cc2a8dafc0fe7aadb796a3e8d7e6c874462ee732341d9505c27828153",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_wait_remote.py": "a3cfb38bee9aafb7e808660f29a25244a01f9fc5763e85f251866076bacf8831",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_wait_task.py": "5ab98f30954376788cf2888db9ded99ee677d2b6988bec3a1fa1c20cbb822467"
+  },
+  "test_files": {
+    "src/alicia_grasp_modes/tests/test_station_support_gap_producer.py": "fdc951bae345734002c48c71d61d015d34d9db058ab90cb3147e9ff5d6b81bde",
+    "src/alicia_grasp_modes/tests/test_station_support_gap_three_owners.py": "28a5c74039fcf5732ec94290ee6df280e19b3e635a6ff162d2c228f91a549639",
+    "src/alicia_grasp_modes/tests/fixtures/gen19_support_gap_messages.json": "8015edbd2c4b0baf09382349a56385cc505945acb6d902b48fed3a878302516b",
+    "src/alicia_grasp_modes/tests/test_station_support_gap_consumers.py": "aa7c57eff3f1483ba5da3509462af70246538cb8af8ec50be61d0a107c94c617"
+  },
+  "base_sha256": {
+    "src/alicia_grasp_modes/scripts/unknown_tabletop_perception.py": "9450f64b1e0d7041eca9cf3dbce451c940d9915d338e6902590336de4647b1f9",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_wait_producer.py": "6e78f54f74f87613a217c4872d0838163433eb0278dbbbc1b1268ccf48129930",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_reacquisition.py": "df96c71b594d990124c6bfc42671a1bde07cd60d37473612b782a3117b93e994",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_wait_remote.py": "02ebbbe7e02fb8f0525200d8f9b64c6a4bd4449583abf2a67a2ecebe783db25b",
+    "src/alicia_grasp_modes/src/alicia_grasp_modes/station_compute_wait_task.py": "bec35b6310f2c7d8956d2162b2f760704b5a4b17812c00454ea7f53f6c676dea",
+    "src/alicia_grasp_modes/tests/test_station_support_gap_producer.py": null,
+    "src/alicia_grasp_modes/tests/test_station_support_gap_three_owners.py": null,
+    "src/alicia_grasp_modes/tests/fixtures/gen19_support_gap_messages.json": null,
+    "src/alicia_grasp_modes/tests/test_station_support_gap_consumers.py": null
+  },
+  "test_scope": [
+    "src/alicia_grasp_modes/tests/test_station_support_gap_producer.py",
+    "src/alicia_grasp_modes/tests/test_station_support_gap_three_owners.py",
+    "src/alicia_grasp_modes/tests/test_station_support_gap_consumers.py",
+    "src/alicia_grasp_modes/tests/test_station_compute_reacquisition.py",
+    "src/alicia_grasp_modes/tests/test_station_compute_wait_task.py",
+    "src/alicia_grasp_modes/tests/test_station_compute_wait_remote.py",
+    "src/alicia_grasp_modes/tests/test_arrival_feedback_gap_late_consumers.py",
+    "src/alicia_grasp_modes/tests/test_station_compute_wait_producer.py",
+    "src/alicia_grasp_modes/tests/test_support_measurement_hold.py"
+  ],
+  "verification": [
+    {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/verification/gen19_support_station_handoff/producer_final_r2_manifest.json",
+      "passed": 19,
+      "note": "Final producer 12 plus real three-owner callback 7, including final ROS/monotonic commit expiry."
+    },
+    {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/verification/gen19_support_station_handoff/producer_r2_manifest.json",
+      "passed": 86,
+      "note": "Producer 10 and original producer/support-hold 76 before additional final commit guard; final guard covered by producer_final_r2."
+    },
+    {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/verification/gen19_support_station_handoff/consumer_related_r1.xml",
+      "passed": 279,
+      "note": "73 consumer plus original four scopes, unchanged final production."
+    },
+    {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/verification/gen19_support_station_handoff/consumer_final_r1.xml",
+      "passed": 75,
+      "note": "Final consumer 75 including final short-deadline crossing; same production."
+    }
+  ],
+  "baseline": {
+    "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/verification/gen19_support_station_handoff/baseline_r1_manifest.json",
+    "failed": 2,
+    "passed": 0,
+    "method": "AST loads immutable original _hold_missing_current_support into the same class. Both actual producer pixel-processing positive cases emit unqualified unavailable instead of the station identity-only envelope; no original source file is modified."
+  },
+  "cause": "GEN19 support absence recovered 0.268 s later within the old 0.8 s geometry deadline, but producer dropped the enrolled station parent and emitted generic unavailable. Task and remote rejected this unqualified notification as target loss.",
+  "change": "After existing support absence/conflict/source checks, a locally registered stationary producer emits the existing typed station envelope plus a strictly bound short support-gap receipt. Consumers withdraw geometry, preserve identity only until the minimum original geometry/identity/phase/session deadline and original monotonic cap, and require complete fresh support/RGB/identity recovery with a three-topic join. Initial unregistered support handling is unchanged.",
+  "limitations": [
+    "Original GEN19 messages and metadata are preserved byte-for-byte. Actual GEN19 terminated before next READY and did not perform the new successful recovery join.",
+    "End-to-end producer tests use synthetic RGB-D and ROS transport with actual segmentation, support/RGB verification, station registration, callbacks and joins. They prove the software handoff, not physical grasp.",
+    "No support threshold, 0.8 s cap, collision check, actuator limit, phase/session deadline or motion authorization is relaxed. New valid current measurements subsequently use original fresh-measurement contracts; expired gap authority cannot be revived."
+  ]
+}

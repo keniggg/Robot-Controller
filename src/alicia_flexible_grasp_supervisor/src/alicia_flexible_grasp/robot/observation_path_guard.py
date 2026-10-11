@@ -21,7 +21,7 @@ from alicia_flexible_grasp.grasp.gripper_geometry import (
 )
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     plan_id_matches_content, pose_values, stamp_nanoseconds,
-    validate_plan_header_binding, validate_rich_geometry, is_silhouette_observation_plan,
+    validate_plan_header_binding, validate_rich_geometry, is_independent_observation_plan,
 )
 
 # Computational limits only. A six-dimensional uncertainty proof needs more
@@ -100,7 +100,7 @@ class FrozenObservationScene:
 
     @classmethod
     def _from_plan_phase(cls, plan, phase):
-        expected_poses = 1 if is_silhouette_observation_plan(plan) else 4
+        expected_poses = 1 if is_independent_observation_plan(plan) else 4
         if (getattr(plan, 'valid', False) is not True
                 or str(plan.diagnostic) != phase
                 or len(plan.poses) != expected_poses or not plan_id_matches_content(plan)):
@@ -823,9 +823,15 @@ def validate_observation_trajectory(plan, scene, fk, gripper, opening,
             clearance = float(np.min(_box_corners(center, transform[:3, :3], size) @ scene.normal + scene.offset))
             minimum, local_min = min(minimum, clearance), min(local_min, clearance)
             if clearance < gripper.support_clearance_m - 1e-9:
-                raise ObservationPathError('support clearance %.9fm at %s/%s' % (clearance, label, name))
+                error = ObservationPathError('support clearance %.9fm at %s/%s' % (clearance, label, name))
+                error.candidate_rejection_code = 'SUPPORT_CLEARANCE_COLLISION'
+                error.candidate_rejection_at_start = label in ('dropped-start', 'bridge-start')
+                raise error
             if _obb_overlap(center, transform[:3, :3], size, scene.center, scene.rotation, scene.size):
-                raise ObservationPathError('target OBB collision at %s/%s' % (label, name))
+                error = ObservationPathError('target OBB collision at %s/%s' % (label, name))
+                error.candidate_rejection_code = 'TARGET_OBB_COLLISION'
+                error.candidate_rejection_at_start = label in ('dropped-start', 'bridge-start')
+                raise error
             if (clearance - displacement < gripper.support_clearance_m
                     or _obb_overlap(center, transform[:3, :3], size + 2.*displacement,
                                     scene.center, scene.rotation, scene.size)):

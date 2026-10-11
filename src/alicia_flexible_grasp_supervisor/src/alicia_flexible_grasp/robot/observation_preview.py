@@ -103,6 +103,9 @@ def qualify_candidate_path(plan, hold, scene, fk, gripper, opening, errors, *, p
             max_seconds=FOLLOWING_PATH_MAX_SECONDS)
     except ObservationPathError as exc:
         report['reason'] = str(exc)
+        if hasattr(exc, 'candidate_rejection_code'):
+            report['candidate_rejection_code'] = exc.candidate_rejection_code
+            report['candidate_rejection_at_start'] = exc.candidate_rejection_at_start
         return report
     report.update(ok=True, failure_location='', reason='')
     return report

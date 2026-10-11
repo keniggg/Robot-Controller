@@ -280,6 +280,7 @@ class PregraspCompensationGateway:
 
     def _run_pregrasp_feedforward(self, context, sample, planner, req, episode_param):
         """One complete correction, never appended to a spent small-step episode."""
+        from .held_axes_prediction import HeldAxesPredictionError
         index = context.get('pose_index', 0)
         evidence = dict(plan_id=context['scene'].plan_id, epoch_ns=context['epoch'],
             fixed_goal_pose_index=index, execution_requested=bool(req.execute),
@@ -287,6 +288,8 @@ class PregraspCompensationGateway:
         if index == 1:
             evidence['execution_policy'] = 'held_axes_approach'
         recovery = None
+        submission_started = False
+        candidate_path_rejection = None
         try:
             validate = lambda:self._validate_pregrasp_context(context)
             def validate_measured_result(result_sample):
@@ -333,19 +336,80 @@ class PregraspCompensationGateway:
             evidence.update(model_sha256=fk.model_sha256,
                 sdk_stamp_ns=sample['sdk_stamp_ns'], accepted_stamp_ns=sample['accepted_stamp_ns'])
             position, angle = recovery.contract.residual(sample['accepted_positions_rad'])
-            if position <= recovery.contract.tolerances[0] and angle <= recovery.contract.tolerances[1]:
+            held_axes = (True if index == 1 else
+                         cfg.get('unknown_pregrasp_held_axes_feedforward_enabled', False))
+            if type(held_axes) is not bool:
+                raise ObservationPathError('PREGRASP_HELD_AXES_CONFIG_INVALID')
+            # The active unknown pose0 route already has a finite, held-axis
+            # guide. A 10 mm acceptance allowance must not skip that guide
+            # while the original 6 mm preference can still improve the pose.
+            # This preference never changes the measured hard acceptance or
+            # grants a second correction episode.
+            preference = recovery.contract.tolerances[0]
+            prefer_precision = (index == 0 and held_axes
+                                and context['plan'].model_choice == 'unknown_tabletop')
+            if prefer_precision:
+                value = cfg.get('unknown_pregrasp_position_preference_m', .006)
+                if (isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not math.isfinite(value) or not 0. < value <= .006):
+                    raise ObservationPathError('PREGRASP_PRECISION_PREFERENCE_INVALID')
+                preference = min(float(value), preference)
+                evidence.update(position_preference_m=preference,
+                                position_acceptance_m=recovery.contract.tolerances[0],
+                                precision_preference_is_hard_gate=False)
+            hard_satisfied = (position <= recovery.contract.tolerances[0]
+                              and angle <= recovery.contract.tolerances[1])
+            def optional_no_motion(outcome, **details):
+                if not prefer_precision or not hard_satisfied or submission_started:
+                    raise ObservationPathError('PREGRASP_PREFERENCE_NOOP_NOT_ALLOWED')
+                fresh = self._endpoint_following_snapshot(fk, context['epoch'], context,
+                                                         context_validator=validate)
+                recovery.contract._validate(fresh)
+                if max(abs(np.asarray(fresh['accepted_positions_rad'])-
+                           sample['accepted_positions_rad'])) > Q+1e-12:
+                    raise ObservationPathError('PREGRASP_PREFERENCE_START_CHANGED')
+                final_position, final_angle = recovery.contract.residual(fresh['accepted_positions_rad'])
+                if (final_position > recovery.contract.tolerances[0]
+                        or final_angle > recovery.contract.tolerances[1]):
+                    raise ObservationPathError('PREGRASP_PREFERENCE_HARD_ACCEPTANCE_CHANGED')
+                validate_measured_result(fresh)
+                evidence.update(code='PREGRASP_MEASURED_CONVERGED',
+                    position_error_m=final_position, orientation_error_rad=final_angle,
+                    initial_sdk_stamp_ns=sample['sdk_stamp_ns'],
+                    initial_accepted_stamp_ns=sample['accepted_stamp_ns'],
+                    sdk_stamp_ns=fresh['sdk_stamp_ns'],
+                    accepted_stamp_ns=fresh['accepted_stamp_ns'],
+                    precision_preference_outcome=outcome, steps_completed=0,
+                    no_motion_submitted=True, **details)
+                return CompensatePregraspResponse(True, json.dumps(evidence))
+            if position <= preference and angle <= recovery.contract.tolerances[1]:
                 evidence.update(code='PREGRASP_MEASURED_CONVERGED', position_error_m=position,
                     orientation_error_rad=angle, steps_completed=0)
                 validate_measured_result(sample)
                 return CompensatePregraspResponse(True, json.dumps(evidence))
             if position > .025 or angle > recovery.contract.tolerances[1]:
                 raise ObservationPathError('PREGRASP_OUTSIDE_LOCAL_CAPTURE_RANGE')
-            held_axes = (True if index == 1 else
-                         cfg.get('unknown_pregrasp_held_axes_feedforward_enabled', False))
-            if type(held_axes) is not bool:
-                raise ObservationPathError('PREGRASP_HELD_AXES_CONFIG_INVALID')
             if held_axes:
-                step, report = recovery.propose_held_axes()
+                try:
+                    step, report = recovery.propose_held_axes()
+                except HeldAxesPredictionError as exc:
+                    # Only a completed, finite guide can justify no movement.
+                    # Malformed/binding/capture failures and any submitted
+                    # action failure remain failures through the outer handler.
+                    delta = np.asarray(exc.evidence.get('proposed_delta_counts', []))
+                    finite_guide = (delta.shape == (6,) and np.all(np.isfinite(delta))
+                        and np.all(delta == np.rint(delta))
+                        and max(abs(delta)) <= recovery.contract.MAX_TOTAL_COUNTS
+                        and all(delta[i] == 0 for i in recovery.contract.HELD_AXES))
+                    no_improvement = (str(exc) == 'PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL'
+                        or (str(exc) == 'PREGRASP_HELD_AXES_GUIDE_INVALID'
+                            and finite_guide and not np.any(delta)))
+                    if not (prefer_precision and finite_guide and no_improvement
+                            and position <= recovery.contract.tolerances[0]
+                            and angle <= recovery.contract.tolerances[1]):
+                        raise
+                    return optional_no_motion('finite_guide_no_qualified_improvement',
+                        preference_guide_rejection=str(exc), held_axes_prediction=deepcopy(exc.evidence))
             else:
                 start = deepcopy(planner.robot.get_current_state())
                 values = dict(zip(ARM_NAMES, sample['accepted_positions_rad']))
@@ -366,8 +430,20 @@ class PregraspCompensationGateway:
             # axes, tracking/stop reserve and 60-second episode remain checked.
             planner.strict_execution_max_joint_velocity_rad_s = velocity_cap
             planner.strict_collinear_timing_enabled = True
-            planner.observation_path_validator = lambda tr:self._validate_pregrasp_step_path(
-                context, step, tr, planner, feedforward=True)
+            def validate_path(tr):
+                nonlocal candidate_path_rejection
+                try:
+                    return self._validate_pregrasp_step_path(context, step, tr, planner, feedforward=True)
+                except ObservationPathError as exc:
+                    rejection = getattr(exc, 'candidate_path_rejection', None)
+                    if (isinstance(rejection, dict) and rejection.get('ok') is False
+                            and rejection.get('failure_location') == 'path'
+                            and rejection.get('candidate_rejection_at_start') is False
+                            and rejection.get('candidate_rejection_code') in
+                                ('TARGET_OBB_COLLISION', 'SUPPORT_CLEARANCE_COLLISION')):
+                        candidate_path_rejection = deepcopy(rejection)
+                    raise
+            planner.observation_path_validator = validate_path
             if req.execute:
                 ok, message = self._ensure_trajectory_controllers_started()
                 if not ok:
@@ -379,6 +455,10 @@ class PregraspCompensationGateway:
                 if getattr(planner, 'observation_trajectory_executor', None) is None:
                     planner.observation_trajectory_executor = ContractedTrajectoryExecutor.connect()
             def before_execute():
+                nonlocal submission_started
+                # Conservative boundary: even a failing pre-submit callback
+                # forbids turning this attempt into a successful no-op.
+                submission_started = True
                 validate()
                 if self._pregrasp_reference() != step.baseline_counts:
                     raise ObservationPathError('PREGRASP_REFERENCE_CHANGED')
@@ -397,6 +477,12 @@ class PregraspCompensationGateway:
                 start_joint_positions=[(v-2048)*Q for v in step.baseline_counts],
                 before_execute=before_execute if req.execute else None)
             if not ok:
+                if (prefer_precision and hard_satisfied and not submission_started
+                        and (message == 'JOINT_PROBE_FAILED: JOINT_PROBE_PLAN_FAILED'
+                             or candidate_path_rejection is not None)):
+                    return optional_no_motion('unsubmitted_improvement_path_rejected',
+                        preference_path_rejection=(candidate_path_rejection or
+                            {'candidate_rejection_code': 'JOINT_PROBE_PLAN_FAILED'}))
                 if 'authority_rejection' in context:
                     evidence['authority_rejection'] = deepcopy(context['authority_rejection'])
                 raise ObservationPathError('PREGRASP_FEEDFORWARD_PATH_REJECTED: '+message)
@@ -414,6 +500,8 @@ class PregraspCompensationGateway:
             rospy.loginfo('Pregrasp feedforward measured result: %s', json.dumps(evidence))
             return CompensatePregraspResponse(ok, json.dumps(evidence))
         except Exception as exc:
+            if isinstance(exc, HeldAxesPredictionError):
+                evidence['held_axes_prediction'] = deepcopy(exc.evidence)
             evidence.update(code=str(exc), success=False, post_command_feedback_valid=False)
             rospy.logwarn('Pregrasp feedforward stopped: %s', json.dumps(evidence))
             return CompensatePregraspResponse(False, json.dumps(evidence))

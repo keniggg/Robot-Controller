@@ -16,7 +16,10 @@ _CANONICAL_PREFIX = b'ALICIA_GRASP6D_PLAN_V2\x00'
 _PLAN_ID_PATTERN = re.compile(r'^[0-9a-f]{24}$')
 SUPPORTED_GEOMETRY_SOURCE_MODES = frozenset(('instance_mask', 'bbox_depth'))
 SILHOUETTE_OBSERVATION_SOURCE = 'silhouette_observation'
-SUPPORTED_CANDIDATE_SOURCES = frozenset(('graspnet', 'tabletop_geometry', SILHOUETTE_OBSERVATION_SOURCE))
+MEASURED_OBSERVATION_SOURCE = 'measured_observation'
+INDEPENDENT_OBSERVATION_SOURCES = frozenset((
+    SILHOUETTE_OBSERVATION_SOURCE, MEASURED_OBSERVATION_SOURCE))
+SUPPORTED_CANDIDATE_SOURCES = frozenset(('graspnet', 'tabletop_geometry')) | INDEPENDENT_OBSERVATION_SOURCES
 GRIPPER_MAX_OPEN_WIDTH_M = 0.050
 
 
@@ -247,7 +250,7 @@ def validate_candidate_source(source, lineage):
         item not in SUPPORTED_CANDIDATE_SOURCES for item in items
     ):
         raise ValueError('candidate source lineage is inconsistent')
-    if SILHOUETTE_OBSERVATION_SOURCE in items and items != (SILHOUETTE_OBSERVATION_SOURCE,):
+    if INDEPENDENT_OBSERVATION_SOURCES.intersection(items) and items != (canonical,):
         raise ValueError('observation source cannot have contact candidate lineage')
     return canonical, items
 
@@ -256,10 +259,14 @@ def is_silhouette_observation_plan(plan):
     return getattr(plan, 'candidate_source', None) == SILHOUETTE_OBSERVATION_SOURCE
 
 
-def validate_silhouette_observation_plan(plan):
-    """An inert single-view request; this never certifies contact feasibility."""
-    if not is_silhouette_observation_plan(plan):
-        raise ValueError('silhouette observation source required')
+def is_independent_observation_plan(plan):
+    return getattr(plan, 'candidate_source', None) in INDEPENDENT_OBSERVATION_SOURCES
+
+
+def validate_independent_observation_plan(plan):
+    """One observation pose with no present or future contact authority."""
+    if not is_independent_observation_plan(plan):
+        raise ValueError('independent observation source required')
     validate_candidate_source(plan.candidate_source, plan.candidate_source_lineage)
     if (getattr(plan, 'diagnostic', '') != 'FAR_FIELD_OBSERVATION_PLAN'
             or getattr(plan, 'model_choice', '') != 'unknown_tabletop'
@@ -273,13 +280,19 @@ def validate_silhouette_observation_plan(plan):
     validate_finite_pose(plan.poses[0], 'observation pose')
 
 
+def validate_silhouette_observation_plan(plan):
+    if not is_silhouette_observation_plan(plan):
+        raise ValueError('silhouette observation source required')
+    validate_independent_observation_plan(plan)
+
+
 def validate_candidate_model_width(plan):
     source, _lineage = validate_candidate_source(
         plan.candidate_source,
         plan.candidate_source_lineage,
     )
-    if source == SILHOUETTE_OBSERVATION_SOURCE:
-        validate_silhouette_observation_plan(plan)
+    if source in INDEPENDENT_OBSERVATION_SOURCES:
+        validate_independent_observation_plan(plan)
     present = bool(plan.has_candidate_model_width)
     width = float(plan.candidate_width_m)
     if not math.isfinite(width) or width < 0.0:
@@ -309,7 +322,7 @@ def canonical_plan_bytes(plan):
     candidate_width = validate_candidate_model_width(plan)
     candidate_width_value = float(plan.candidate_width_m)
     poses = list(getattr(plan, 'poses', ()) or ())
-    expected_poses = 1 if is_silhouette_observation_plan(plan) else 4
+    expected_poses = 1 if is_independent_observation_plan(plan) else 4
     if len(poses) != expected_poses:
         raise ValueError('rich plan has an invalid pose count for its source')
 

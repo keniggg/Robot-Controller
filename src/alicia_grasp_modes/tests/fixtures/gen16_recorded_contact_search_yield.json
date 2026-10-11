@@ -1,0 +1,2129 @@
+{
+  "schema": 1,
+  "purpose": "GEN16 measured failure evidence and bounded-gap input; not original failed trajectory replay",
+  "provenance": {
+    "record_dir": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261011T113712.131215Z_6bfa27d92a2944fbb1b445f2c8ebdd6f",
+    "audit_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261011T113712.131215Z_6bfa27d92a2944fbb1b445f2c8ebdd6f/keyframes_audits/87c4f588d028eb67065a14ea82b7f71ee63ffe5056db5aa7d32798dd0009b10a.json",
+    "audit_sha256": "87c4f588d028eb67065a14ea82b7f71ee63ffe5056db5aa7d32798dd0009b10a",
+    "receipt_bundle_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/gen16_analysis/contact_path_replay_inputs/req13_rejected_contact_inputs.json",
+    "receipt_bundle_sha256": "715d57c05dba69eb5bc8714540034dd83fd3e286dafbb6df231b40ef61fe40c2",
+    "closed_bag_verification_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/gen16_analysis/contact_path_replay_inputs/closed_bag_receipt_verification.json",
+    "closed_bag_verification_sha256": "148e9ed78a1ed8dbfd1b798dbc38a1e08546efa79c69e71f34f8cae1c132e5c7"
+  },
+  "request": {
+    "request_id": 13,
+    "generation": 7,
+    "target_epoch": 4,
+    "snapshot_stamp_ns": 1791718687000939369,
+    "grasp_mode_selection": {
+      "generation": 16,
+      "mode": "unknown",
+      "stamp_ns": 1791718633818063497,
+      "strategy": "observe_return"
+    }
+  },
+  "target_track_id": "g1-t4",
+  "original_moveit_selection": {
+    "aperture_metric": "max_measured_band_and_frozen_obb_projected_width",
+    "checked_count": 3,
+    "comparison_budget_after_incumbent_sec": 8.0,
+    "configured_top_n": 24,
+    "global_time_optimality_claimed": false,
+    "motion_metric": "strict_sequence_hardware_duration_lower_bound",
+    "optimality_scope": "checked_hard_safe_candidates_only",
+    "physical_aperture_and_gates_unchanged": true,
+    "policy": "CHECKED_HARDWARE_DURATION_THEN_JOINT_MOTION",
+    "publication_reserve_sec": 2.0,
+    "ranking_order": [
+      "execution_duration_lower_bound_sec",
+      "joint_max_delta_rad",
+      "joint_path_cost",
+      "aperture_width_m"
+    ],
+    "reachable_count": 0,
+    "shortlist_count": 30,
+    "terminated_early": true,
+    "termination_reason": "NEAR_FIELD_DIRECT_TIMEOUT",
+    "unchecked_tail_is_not_rejected": true
+  },
+  "original_outcome": {
+    "code": "NEAR_FIELD_DIRECT_TIMEOUT",
+    "preview_valid": false,
+    "reason": "NEAR_FIELD_DIRECT_TIMEOUT",
+    "valid_plan": false
+  },
+  "original_selected": null,
+  "original_near_field_context": {
+    "deadline_ns": 1791718775960620880,
+    "phase_id": 1,
+    "registration_phase_id": 4,
+    "source_stamp_ns": 1791718685596134185,
+    "start_stamp_ns": 1791718685960620880
+  },
+  "session": {
+    "session_id": "7f980e2575a230ae36e16d92a637b1ff02f0dc8b3fa403ece5a9a34709ce4c4b",
+    "deadline_ns": 1791719248163973569,
+    "view_index": 1,
+    "max_observations": 3,
+    "origin_plan_id": "7150b311c4cd326432912ce1",
+    "origin_snapshot_stamp_ns": 1791718641126366138,
+    "source_stamps_ns": [
+      1791718635125082254,
+      1791718685596134185,
+      1791718687000939369
+    ]
+  },
+  "recorded_contact_receipts": [
+    {
+      "ros_stamp_ns": 1791718710026530000,
+      "log_line": 116,
+      "receipt_sha256": "8a845c5e3d00c55854f741d0034a5b4e3bb18c008e31a53f8ac5218547e4219a",
+      "operation": "final_registered_strict_sequence",
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "plan_id": "8eeb5e01b3afb71612d162ee",
+      "source_stamp_ns": 1791718687000939369,
+      "target_track_id": "g1-t4",
+      "poses_xyz_xyzw": [
+        [
+          -0.09792884561928962,
+          -0.36342944289096607,
+          0.07406567793991982,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ],
+        [
+          -0.10475679119597256,
+          -0.3598740612251405,
+          0.05396722140762104,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ],
+        [
+          -0.09564185160164591,
+          -0.3673399232975518,
+          0.018725354116000594,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ],
+        [
+          -0.09755159205094455,
+          -0.3640745004101142,
+          0.06493695505088726,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ]
+      ],
+      "contact_height_bounds_m": [
+        -0.011536657941864275,
+        -0.009536608418440035
+      ],
+      "minimum_contact_overlap_m": 0.002,
+      "precheck": {
+        "selection": {
+          "generation": 16,
+          "mode": "unknown",
+          "stamp_ns": "1791718633818063497",
+          "strategy": "observe_return"
+        },
+        "plan_id": "8eeb5e01b3afb71612d162ee",
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 12-end/left_finger",
+        "success": false,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0540002749788737,
+            -0.3957670432744954,
+            0.9249904150950417,
+            -0.1902136176978195,
+            -1.1412817061869172,
+            0.019941750242513337
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791718701378714791,
+          "accepted_tool_position_m": [
+            -0.12653509287940537,
+            -0.31553466659070806,
+            0.08200027759582187
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791714150182559125,
+          "joint_error_sdk_counts": [
+            4.999999999999657,
+            -12.999999999999993,
+            -12.999999999999993,
+            4.000000000000004,
+            1.9999999999999207,
+            4.000000000000003
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791718701378714791,
+          "orientation_error_rad": 0.03940346737894185,
+          "position_error_m": 0.013297249287585475,
+          "position_error_vector_m": [
+            0.004580680321090075,
+            0.005343836516230327,
+            -0.011281738239295125
+          ],
+          "sdk_positions_rad": [
+            -2.0616701789183014,
+            -0.3758252930319821,
+            0.944932165337555,
+            -0.19634954084936207,
+            -1.1443496677626883,
+            0.013805827090970769
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1791718701375276009,
+          "sdk_tool_position_m": [
+            -0.13111577320049544,
+            -0.3208785031069384,
+            0.093282015835117
+          ],
+          "stamp_sec": 1791718701.3880427,
+          "stationary_window_end_ns": 1791718701375276009,
+          "stationary_window_start_ns": 1791718701075276009
+        },
+        "opening_m": 0.04980000000000001,
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "execution_authorized": false,
+        "hardware_response_verified": false,
+        "real_grasp_success": false
+      },
+      "original_failed_trajectory_recorded": false,
+      "precheck_sha256": "2e51481f3991cbca70af7fc8a63f95e6c21eee1ad27e65459dd36dd8cc0d6344"
+    },
+    {
+      "ros_stamp_ns": 1791718718454352000,
+      "log_line": 117,
+      "receipt_sha256": "31fb1db66eadbda1003abc90625f89992a42164f416837b44e1fd4f4b7bf5a44",
+      "operation": "final_registered_height_window_strict_sequence",
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "plan_id": "eb690da282e151bd71deb7d4",
+      "source_stamp_ns": 1791718687000939369,
+      "target_track_id": "g1-t4",
+      "poses_xyz_xyzw": [
+        [
+          -0.09795075570920617,
+          -0.3633919941076527,
+          0.0745955728373174,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ],
+        [
+          -0.1047787012858891,
+          -0.35983661244182713,
+          0.054497116305018606,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ],
+        [
+          -0.09566376169156246,
+          -0.3673024745142384,
+          0.019255249013398163,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ],
+        [
+          -0.0975735021408611,
+          -0.36403705162680083,
+          0.06546684994828483,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ]
+      ],
+      "contact_height_bounds_m": [
+        -0.011536657941864275,
+        -0.009536608418440035
+      ],
+      "minimum_contact_overlap_m": 0.002,
+      "precheck": {
+        "selection": {
+          "generation": 16,
+          "mode": "unknown",
+          "stamp_ns": "1791718633818063497",
+          "strategy": "observe_return"
+        },
+        "plan_id": "eb690da282e151bd71deb7d4",
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 12-end/left_finger",
+        "success": false,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0540002749788737,
+            -0.3957670432744954,
+            0.9249904150950417,
+            -0.1902136176978195,
+            -1.1412817061869172,
+            0.019941750242513337
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791718710278515276,
+          "accepted_tool_position_m": [
+            -0.12653509287940537,
+            -0.31553466659070806,
+            0.08200027759582187
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791714150182559125,
+          "joint_error_sdk_counts": [
+            4.999999999999657,
+            -12.999999999999993,
+            -12.999999999999993,
+            4.000000000000004,
+            1.9999999999999207,
+            4.000000000000003
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791718710278515276,
+          "orientation_error_rad": 0.03940346737894185,
+          "position_error_m": 0.013297249287585475,
+          "position_error_vector_m": [
+            0.004580680321090075,
+            0.005343836516230327,
+            -0.011281738239295125
+          ],
+          "sdk_positions_rad": [
+            -2.0616701789183014,
+            -0.3758252930319821,
+            0.944932165337555,
+            -0.19634954084936207,
+            -1.1443496677626883,
+            0.013805827090970769
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1791718710294167441,
+          "sdk_tool_position_m": [
+            -0.13111577320049544,
+            -0.3208785031069384,
+            0.093282015835117
+          ],
+          "stamp_sec": 1791718710.3275788,
+          "stationary_window_end_ns": 1791718710278515276,
+          "stationary_window_start_ns": 1791718709978515276
+        },
+        "opening_m": 0.04980000000000001,
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "execution_authorized": false,
+        "hardware_response_verified": false,
+        "real_grasp_success": false
+      },
+      "original_failed_trajectory_recorded": false,
+      "precheck_sha256": "d8a99ef53183cdd37962504ebae7ddcc8a7c08a2a00e0a6461ba42a369ec0e60"
+    },
+    {
+      "ros_stamp_ns": 1791718726605849000,
+      "log_line": 118,
+      "receipt_sha256": "4ef88f7c87a748bc15901152f99de7bbed56dbd737d0cd9402f587aaf9ccc8a9",
+      "operation": "final_registered_height_window_strict_sequence",
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "plan_id": "d1a175fa77e9332db1d7c907",
+      "source_stamp_ns": 1791718687000939369,
+      "target_track_id": "g1-t4",
+      "poses_xyz_xyzw": [
+        [
+          -0.09781388508710784,
+          -0.36362593373494073,
+          0.07128536076015189,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ],
+        [
+          -0.10464183066379078,
+          -0.36007055206911515,
+          0.05118690422785312,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ],
+        [
+          -0.09552689106946413,
+          -0.36753641414152644,
+          0.01594503693623267,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ],
+        [
+          -0.09743663151876276,
+          -0.36427099125408885,
+          0.06215663787111933,
+          0.2776065638357116,
+          0.9471720874809847,
+          -0.06272125061738072,
+          0.1478704741766745
+        ]
+      ],
+      "contact_height_bounds_m": [
+        -0.011536657941864275,
+        -0.009536608418440035
+      ],
+      "minimum_contact_overlap_m": 0.002,
+      "precheck": {
+        "selection": {
+          "generation": 16,
+          "mode": "unknown",
+          "stamp_ns": "1791718633818063497",
+          "strategy": "observe_return"
+        },
+        "plan_id": "d1a175fa77e9332db1d7c907",
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 11-end/left_finger",
+        "success": false,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0540002749788737,
+            -0.3957670432744954,
+            0.9249904150950417,
+            -0.1902136176978195,
+            -1.1412817061869172,
+            0.019941750242513337
+          ],
+          "accepted_sample_count": 4,
+          "accepted_stamp_ns": 1791718718478741121,
+          "accepted_tool_position_m": [
+            -0.12653509287940537,
+            -0.31553466659070806,
+            0.08200027759582187
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791714150182559125,
+          "joint_error_sdk_counts": [
+            4.999999999999657,
+            -12.999999999999993,
+            -12.999999999999993,
+            4.000000000000004,
+            1.9999999999999207,
+            4.000000000000003
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791718718478741121,
+          "orientation_error_rad": 0.03940346737894185,
+          "position_error_m": 0.013297249287585475,
+          "position_error_vector_m": [
+            0.004580680321090075,
+            0.005343836516230327,
+            -0.011281738239295125
+          ],
+          "sdk_positions_rad": [
+            -2.0616701789183014,
+            -0.3758252930319821,
+            0.944932165337555,
+            -0.19634954084936207,
+            -1.1443496677626883,
+            0.013805827090970769
+          ],
+          "sdk_sample_count": 5,
+          "sdk_stamp_ns": 1791718718534133409,
+          "sdk_tool_position_m": [
+            -0.13111577320049544,
+            -0.3208785031069384,
+            0.093282015835117
+          ],
+          "stamp_sec": 1791718718.5530744,
+          "stationary_window_end_ns": 1791718718478741121,
+          "stationary_window_start_ns": 1791718718178741121
+        },
+        "opening_m": 0.04980000000000001,
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "execution_authorized": false,
+        "hardware_response_verified": false,
+        "real_grasp_success": false
+      },
+      "original_failed_trajectory_recorded": false,
+      "precheck_sha256": "4f85e50ff50b98a9a1d9f5d8e8444df81b3ad76df9860d5868f5a32a7a04b64a"
+    },
+    {
+      "ros_stamp_ns": 1791718735498408000,
+      "log_line": 121,
+      "receipt_sha256": "1323abe13316b1e3ad9ade06cf1264ab73b6035f1462ffdae1b17b2227539c8d",
+      "operation": "final_registered_strict_sequence",
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "plan_id": "2846e25a7e265c1c82b8b360",
+      "source_stamp_ns": 1791718687000939369,
+      "target_track_id": "g1-t4",
+      "poses_xyz_xyzw": [
+        [
+          -0.09868971965475326,
+          -0.36306499002988357,
+          0.07448213715469865,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ],
+        [
+          -0.1046226121945796,
+          -0.3599057949394621,
+          0.05468423282976709,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ],
+        [
+          -0.09640272563710955,
+          -0.3669754704364694,
+          0.019141813330779432,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ],
+        [
+          -0.09831246608640819,
+          -0.3637100475490318,
+          0.0653534142656661,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ]
+      ],
+      "contact_height_bounds_m": [
+        -0.011315003961112752,
+        -0.009186013952332704
+      ],
+      "minimum_contact_overlap_m": 0.002,
+      "precheck": {
+        "selection": {
+          "generation": 16,
+          "mode": "unknown",
+          "stamp_ns": "1791718633818063497",
+          "strategy": "observe_return"
+        },
+        "plan_id": "2846e25a7e265c1c82b8b360",
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 13-end/left_finger",
+        "success": false,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0540002749788737,
+            -0.3957670432744954,
+            0.9249904150950417,
+            -0.1902136176978195,
+            -1.1412817061869172,
+            0.019941750242513337
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791718726878469458,
+          "accepted_tool_position_m": [
+            -0.12653509287940537,
+            -0.31553466659070806,
+            0.08200027759582187
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791714150182559125,
+          "joint_error_sdk_counts": [
+            4.999999999999657,
+            -12.999999999999993,
+            -12.999999999999993,
+            4.000000000000004,
+            1.9999999999999207,
+            4.000000000000003
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791718726878469458,
+          "orientation_error_rad": 0.03940346737894185,
+          "position_error_m": 0.013297249287585475,
+          "position_error_vector_m": [
+            0.004580680321090075,
+            0.005343836516230327,
+            -0.011281738239295125
+          ],
+          "sdk_positions_rad": [
+            -2.0616701789183014,
+            -0.3758252930319821,
+            0.944932165337555,
+            -0.19634954084936207,
+            -1.1443496677626883,
+            0.013805827090970769
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1791718726894161943,
+          "sdk_tool_position_m": [
+            -0.13111577320049544,
+            -0.3208785031069384,
+            0.093282015835117
+          ],
+          "stamp_sec": 1791718726.9133441,
+          "stationary_window_end_ns": 1791718726878469458,
+          "stationary_window_start_ns": 1791718726578469458
+        },
+        "opening_m": 0.04980000000000001,
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "execution_authorized": false,
+        "hardware_response_verified": false,
+        "real_grasp_success": false
+      },
+      "original_failed_trajectory_recorded": false,
+      "precheck_sha256": "c52c9e06bb4023655f2c959cf53652b773eb5f5eea9295ff0d4e242bbfd633e0"
+    },
+    {
+      "ros_stamp_ns": 1791718743489214000,
+      "log_line": 122,
+      "receipt_sha256": "4ad9bc1da1f1b74be059815d9dcb30159af2612ad990435a0619240005100509",
+      "operation": "final_registered_height_window_strict_sequence",
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "plan_id": "eb9fbba20b0b8a0cd00c09f5",
+      "source_stamp_ns": 1791718687000939369,
+      "target_track_id": "g1-t4",
+      "poses_xyz_xyzw": [
+        [
+          -0.09874473940657917,
+          -0.36297095012534963,
+          0.07581278827752254,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ],
+        [
+          -0.10467763194640552,
+          -0.3598117550349282,
+          0.05601488395259099,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ],
+        [
+          -0.09645774538893546,
+          -0.36688143053193545,
+          0.02047246445360333,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ],
+        [
+          -0.0983674858382341,
+          -0.36361600764449786,
+          0.06668406538848999,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ]
+      ],
+      "contact_height_bounds_m": [
+        -0.011315003961112752,
+        -0.009186013952332704
+      ],
+      "minimum_contact_overlap_m": 0.002,
+      "precheck": {
+        "selection": {
+          "generation": 16,
+          "mode": "unknown",
+          "stamp_ns": "1791718633818063497",
+          "strategy": "observe_return"
+        },
+        "plan_id": "eb9fbba20b0b8a0cd00c09f5",
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 13-end/left_finger",
+        "success": false,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0540002749788737,
+            -0.3957670432744954,
+            0.9249904150950417,
+            -0.1902136176978195,
+            -1.1412817061869172,
+            0.019941750242513337
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791718735679042038,
+          "accepted_tool_position_m": [
+            -0.12653509287940537,
+            -0.31553466659070806,
+            0.08200027759582187
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791714150182559125,
+          "joint_error_sdk_counts": [
+            4.999999999999657,
+            -12.999999999999993,
+            -12.999999999999993,
+            4.000000000000004,
+            1.9999999999999207,
+            4.000000000000003
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791718735679042038,
+          "orientation_error_rad": 0.03940346737894185,
+          "position_error_m": 0.013297249287585475,
+          "position_error_vector_m": [
+            0.004580680321090075,
+            0.005343836516230327,
+            -0.011281738239295125
+          ],
+          "sdk_positions_rad": [
+            -2.0616701789183014,
+            -0.3758252930319821,
+            0.944932165337555,
+            -0.19634954084936207,
+            -1.1443496677626883,
+            0.013805827090970769
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1791718735634167530,
+          "sdk_tool_position_m": [
+            -0.13111577320049544,
+            -0.3208785031069384,
+            0.093282015835117
+          ],
+          "stamp_sec": 1791718735.6982079,
+          "stationary_window_end_ns": 1791718735634167530,
+          "stationary_window_start_ns": 1791718735334167530
+        },
+        "opening_m": 0.04980000000000001,
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "execution_authorized": false,
+        "hardware_response_verified": false,
+        "real_grasp_success": false
+      },
+      "original_failed_trajectory_recorded": false,
+      "precheck_sha256": "8a7084a4e7060a9b895eea1339810f54d77d8cee23746c732b1f724e589126de"
+    },
+    {
+      "ros_stamp_ns": 1791718751982125000,
+      "log_line": 123,
+      "receipt_sha256": "3fc6fd5b32d3b258dc794a754e5a70c3fafda77c3c8d2652dcdf71f3a59f2e2a",
+      "operation": "final_registered_height_window_strict_sequence",
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "plan_id": "1c9ae8b22cd0fafb3a6a4977",
+      "source_stamp_ns": 1791718687000939369,
+      "target_track_id": "g1-t4",
+      "poses_xyz_xyzw": [
+        [
+          -0.09854165135357873,
+          -0.3633180687597008,
+          0.07090110952963849,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ],
+        [
+          -0.10447454389340508,
+          -0.36015887366927934,
+          0.05110320520470694,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ],
+        [
+          -0.09625465733593502,
+          -0.3672285491662866,
+          0.01556078570571928,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ],
+        [
+          -0.09816439778523366,
+          -0.363963126278849,
+          0.06177238664060595,
+          0.2869094535034009,
+          0.9465344380899217,
+          -0.05960423930765972,
+          0.1349179663971094
+        ]
+      ],
+      "contact_height_bounds_m": [
+        -0.011315003961112752,
+        -0.009186013952332704
+      ],
+      "minimum_contact_overlap_m": 0.002,
+      "precheck": {
+        "selection": {
+          "generation": 16,
+          "mode": "unknown",
+          "stamp_ns": "1791718633818063497",
+          "strategy": "observe_return"
+        },
+        "plan_id": "1c9ae8b22cd0fafb3a6a4977",
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 11-end/left_finger",
+        "success": false,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0540002749788737,
+            -0.3957670432744954,
+            0.9249904150950417,
+            -0.1902136176978195,
+            -1.1412817061869172,
+            0.019941750242513337
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791718743578604209,
+          "accepted_tool_position_m": [
+            -0.12653509287940537,
+            -0.31553466659070806,
+            0.08200027759582187
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791714150182559125,
+          "joint_error_sdk_counts": [
+            4.999999999999657,
+            -12.999999999999993,
+            -12.999999999999993,
+            4.000000000000004,
+            1.9999999999999207,
+            4.000000000000003
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791718743578604209,
+          "orientation_error_rad": 0.03940346737894185,
+          "position_error_m": 0.013297249287585475,
+          "position_error_vector_m": [
+            0.004580680321090075,
+            0.005343836516230327,
+            -0.011281738239295125
+          ],
+          "sdk_positions_rad": [
+            -2.0616701789183014,
+            -0.3758252930319821,
+            0.944932165337555,
+            -0.19634954084936207,
+            -1.1443496677626883,
+            0.013805827090970769
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1791718743554185889,
+          "sdk_tool_position_m": [
+            -0.13111577320049544,
+            -0.3208785031069384,
+            0.093282015835117
+          ],
+          "stamp_sec": 1791718743.610586,
+          "stationary_window_end_ns": 1791718743554185889,
+          "stationary_window_start_ns": 1791718743254185889
+        },
+        "opening_m": 0.04980000000000001,
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "execution_authorized": false,
+        "hardware_response_verified": false,
+        "real_grasp_success": false
+      },
+      "original_failed_trajectory_recorded": false,
+      "precheck_sha256": "15a24af96e109d9d6133b72e8ebf55a7a5bfca44aff0a0138ef18d5debc414a0"
+    },
+    {
+      "ros_stamp_ns": 1791718760379793000,
+      "log_line": 126,
+      "receipt_sha256": "9007f7258b79fe577e44d01cb713de77cb589c511b2932df90bdd8955bea72df",
+      "operation": "final_registered_strict_sequence",
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "plan_id": "f97a52a9aac02e67bf6796da",
+      "source_stamp_ns": 1791718687000939369,
+      "target_track_id": "g1-t4",
+      "poses_xyz_xyzw": [
+        [
+          -0.0987721288197239,
+          -0.3631579587255528,
+          0.07450721588049979,
+          0.29536950640410903,
+          0.9439145785410533,
+          -0.0602286422058626,
+          0.13473913226044287
+        ],
+        [
+          -0.10461502499185696,
+          -0.35988566428820906,
+          0.05470733467532497,
+          0.29536950640410903,
+          0.9439145785410533,
+          -0.0602286422058626,
+          0.13473913226044287
+        ],
+        [
+          -0.09648513480208018,
+          -0.3670684391321386,
+          0.019166892056580558,
+          0.29536950640410903,
+          0.9439145785410533,
+          -0.0602286422058626,
+          0.13473913226044287
+        ],
+        [
+          -0.09839487525137883,
+          -0.36380301624470096,
+          0.06537849299146722,
+          0.29536950640410903,
+          0.9439145785410533,
+          -0.0602286422058626,
+          0.13473913226044287
+        ]
+      ],
+      "contact_height_bounds_m": [
+        -0.011373179564976403,
+        -0.008716940060273121
+      ],
+      "minimum_contact_overlap_m": 0.002,
+      "precheck": {
+        "selection": {
+          "generation": 16,
+          "mode": "unknown",
+          "stamp_ns": "1791718633818063497",
+          "strategy": "observe_return"
+        },
+        "plan_id": "f97a52a9aac02e67bf6796da",
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 13-end/left_finger",
+        "success": false,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0540002749788737,
+            -0.3957670432744954,
+            0.9249904150950417,
+            -0.1902136176978195,
+            -1.1412817061869172,
+            0.019941750242513337
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791718752178566702,
+          "accepted_tool_position_m": [
+            -0.12653509287940537,
+            -0.31553466659070806,
+            0.08200027759582187
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791714150182559125,
+          "joint_error_sdk_counts": [
+            4.999999999999657,
+            -12.999999999999993,
+            -12.999999999999993,
+            4.000000000000004,
+            1.9999999999999207,
+            4.000000000000003
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791718752178566702,
+          "orientation_error_rad": 0.03940346737894185,
+          "position_error_m": 0.013297249287585475,
+          "position_error_vector_m": [
+            0.004580680321090075,
+            0.005343836516230327,
+            -0.011281738239295125
+          ],
+          "sdk_positions_rad": [
+            -2.0616701789183014,
+            -0.3758252930319821,
+            0.944932165337555,
+            -0.19634954084936207,
+            -1.1443496677626883,
+            0.013805827090970769
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1791718752154201942,
+          "sdk_tool_position_m": [
+            -0.13111577320049544,
+            -0.3208785031069384,
+            0.093282015835117
+          ],
+          "stamp_sec": 1791718752.2626731,
+          "stationary_window_end_ns": 1791718752154201942,
+          "stationary_window_start_ns": 1791718751854201942
+        },
+        "opening_m": 0.04980000000000001,
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "execution_authorized": false,
+        "hardware_response_verified": false,
+        "real_grasp_success": false
+      },
+      "original_failed_trajectory_recorded": false,
+      "precheck_sha256": "253be20c7eabcfdbcc22e87c37e51df1505cfa0292f4f7073404cd81772bd646"
+    },
+    {
+      "ros_stamp_ns": 1791718769195816000,
+      "log_line": 127,
+      "receipt_sha256": "9ac319800015a7fa7f62851c2413f7c3aa5955d6252f602c9cc1f6d5bf0275d9",
+      "operation": "final_registered_height_window_strict_sequence",
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "plan_id": "b8881c52260d181524219397",
+      "source_stamp_ns": 1791718687000939369,
+      "target_track_id": "g1-t4",
+      "poses_xyz_xyzw": [
+        [
+          -0.09882801587618056,
+          -0.36306243642166275,
+          0.07585884274098982,
+          0.29536950640410903,
+          0.9439145785410533,
+          -0.0602286422058626,
+          0.13473913226044287
+        ],
+        [
+          -0.10467091204831362,
+          -0.359790141984319,
+          0.056058961535815,
+          0.29536950640410903,
+          0.9439145785410533,
+          -0.0602286422058626,
+          0.13473913226044287
+        ],
+        [
+          -0.09654102185853684,
+          -0.36697291682824856,
+          0.020518518917070586,
+          0.29536950640410903,
+          0.9439145785410533,
+          -0.0602286422058626,
+          0.13473913226044287
+        ],
+        [
+          -0.09845076230783549,
+          -0.3637074939408109,
+          0.06673011985195726,
+          0.29536950640410903,
+          0.9439145785410533,
+          -0.0602286422058626,
+          0.13473913226044287
+        ]
+      ],
+      "contact_height_bounds_m": [
+        -0.011373179564976403,
+        -0.008716940060273121
+      ],
+      "minimum_contact_overlap_m": 0.002,
+      "precheck": {
+        "selection": {
+          "generation": 16,
+          "mode": "unknown",
+          "stamp_ns": "1791718633818063497",
+          "strategy": "observe_return"
+        },
+        "plan_id": "b8881c52260d181524219397",
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 13-end/left_finger",
+        "success": false,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0540002749788737,
+            -0.3957670432744954,
+            0.9249904150950417,
+            -0.1902136176978195,
+            -1.1412817061869172,
+            0.019941750242513337
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791718760578602918,
+          "accepted_tool_position_m": [
+            -0.12653509287940537,
+            -0.31553466659070806,
+            0.08200027759582187
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791714150182559125,
+          "joint_error_sdk_counts": [
+            4.999999999999657,
+            -12.999999999999993,
+            -12.999999999999993,
+            4.000000000000004,
+            1.9999999999999207,
+            4.000000000000003
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791718760578602918,
+          "orientation_error_rad": 0.03940346737894185,
+          "position_error_m": 0.013297249287585475,
+          "position_error_vector_m": [
+            0.004580680321090075,
+            0.005343836516230327,
+            -0.011281738239295125
+          ],
+          "sdk_positions_rad": [
+            -2.0616701789183014,
+            -0.3758252930319821,
+            0.944932165337555,
+            -0.19634954084936207,
+            -1.1443496677626883,
+            0.013805827090970769
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1791718760594169678,
+          "sdk_tool_position_m": [
+            -0.13111577320049544,
+            -0.3208785031069384,
+            0.093282015835117
+          ],
+          "stamp_sec": 1791718760.6034763,
+          "stationary_window_end_ns": 1791718760578602918,
+          "stationary_window_start_ns": 1791718760278602918
+        },
+        "opening_m": 0.04980000000000001,
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "execution_authorized": false,
+        "hardware_response_verified": false,
+        "real_grasp_success": false
+      },
+      "original_failed_trajectory_recorded": false,
+      "precheck_sha256": "5e67cc7b6deeaf110862725095529909f8b491a8a84a1f1a2807309bf5043f89"
+    }
+  ],
+  "geometry": {
+    "axes_base": [
+      [
+        -0.8382898437298377,
+        -0.5436652159344831,
+        -0.041210082289606854
+      ],
+      [
+        0.5403362503883474,
+        -0.8384959467655221,
+        0.0704363810402834
+      ],
+      [
+        -0.07284829727361818,
+        0.036778801512593065,
+        0.9966646604267816
+      ]
+    ],
+    "size_xyz_m": [
+      0.06533842085740099,
+      0.04028114280668715,
+      0.020793082970134286
+    ],
+    "center_base": [
+      -0.1093875464012833,
+      -0.3614878100560595,
+      0.012679359930999444
+    ],
+    "support_normal_base": [
+      -0.041210082289606854,
+      0.0704363810402834,
+      0.9966646604267816
+    ],
+    "support_offset_m": 0.018617827179824853
+  },
+  "remote_diagnostics": {
+    "tabletop_geometry": {
+      "plan_phase": "CONTACT_EXECUTION_PLAN",
+      "contact_execution_gate_deferred": false,
+      "surface_evidence_rejections": [
+        {
+          "angle_deg": 29.999999999999996,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.023111322319824056,
+          "positive_reach_m": 0.023111322319824056
+        },
+        {
+          "angle_deg": 34.99999999999999,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02222766384553752,
+          "positive_reach_m": 0.02222766384553752
+        },
+        {
+          "angle_deg": 39.999999999999986,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02156476108253899,
+          "positive_reach_m": 0.02156476108253899
+        },
+        {
+          "angle_deg": 44.999999999999986,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02109319713232208,
+          "positive_reach_m": 0.02109319713232208
+        },
+        {
+          "angle_deg": 59.999999999999986,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02066757038755596,
+          "positive_reach_m": 0.02066757038755596
+        },
+        {
+          "angle_deg": 64.99999999999999,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02083676500195896,
+          "positive_reach_m": 0.02083676500195896
+        },
+        {
+          "angle_deg": 70.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.021167445020369834,
+          "positive_reach_m": 0.021167445020369834
+        },
+        {
+          "angle_deg": 74.99999999999999,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.021672858326086872,
+          "positive_reach_m": 0.021672858326086872
+        },
+        {
+          "angle_deg": 80.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.022374260092574566,
+          "positive_reach_m": 0.022374260092574566
+        },
+        {
+          "angle_deg": 85.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.023303217682642218,
+          "positive_reach_m": 0.023303217682642218
+        },
+        {
+          "angle_deg": 90.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.024505375006887126,
+          "positive_reach_m": 0.024505375006887126
+        }
+      ],
+      "contact_boundary_profiles": [
+        {
+          "angle_deg": 55.00000000000001,
+          "boundary_tilts_deg": [
+            5.3632049461458084,
+            12.61177965031925,
+            15.013396391767811,
+            20.176859964154993
+          ],
+          "branches": [
+            {
+              "contact_patch_overlap_m": 0.0020003127599775,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.004807697423551637,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 19.86035435449269,
+              "minimum_observed_safe_tilt_deg": 5.3632049461458084,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": -1.0,
+              "variant_index": 0
+            },
+            {
+              "contact_patch_overlap_m": 0.0020001785817410026,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.00305937706705303,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 20.176859964154993,
+              "minimum_observed_safe_tilt_deg": 9.84993281938063,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": 1.0,
+              "variant_index": 0
+            },
+            {
+              "contact_patch_overlap_m": 0.0020001785817410026,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.00305937706705303,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 20.176859964154993,
+              "minimum_observed_safe_tilt_deg": 9.84993281938063,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": -1.0,
+              "variant_index": 1
+            },
+            {
+              "contact_patch_overlap_m": 0.002000312759977486,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.004807697423551637,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 19.86035435449269,
+              "minimum_observed_safe_tilt_deg": 5.3632049461458084,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": 1.0,
+              "variant_index": 1
+            }
+          ],
+          "contact_height_bounds_m": [
+            0.008629821037277854,
+            0.009542090800326164
+          ],
+          "contact_height_bounds_source": "fused_measured_bilateral_surface",
+          "materialization_tilts_deg": [
+            5.3632049461458084,
+            8.140703153386411,
+            12.61177965031925,
+            15.013396391767811,
+            16.281406306772823,
+            20.176859964154993,
+            24.422109460159234,
+            32.562812613545645
+          ],
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02065328093179568,
+          "positive_reach_m": 0.02065328093179568,
+          "proposal_source_index": 0
+        },
+        {
+          "angle_deg": 56.017471610441156,
+          "boundary_tilts_deg": [
+            5.816349555269857,
+            12.627927895710183,
+            16.10377560747255,
+            20.131148007971426
+          ],
+          "branches": [
+            {
+              "contact_patch_overlap_m": 0.0020008954137385633,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.0040700659627638264,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 19.439506236150507,
+              "minimum_observed_safe_tilt_deg": 5.816349555269857,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": -1.0,
+              "variant_index": 0
+            },
+            {
+              "contact_patch_overlap_m": 0.0020001167136203674,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.0026981997458533774,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 20.131148007971426,
+              "minimum_observed_safe_tilt_deg": 12.076403206973676,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": 1.0,
+              "variant_index": 0
+            },
+            {
+              "contact_patch_overlap_m": 0.002000116713620395,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.0026981997458533774,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 20.131148007971426,
+              "minimum_observed_safe_tilt_deg": 12.076403206973676,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": -1.0,
+              "variant_index": 1
+            },
+            {
+              "contact_patch_overlap_m": 0.002000895413738591,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.0040700659627638264,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 19.439506236150507,
+              "minimum_observed_safe_tilt_deg": 5.816349555269857,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": 1.0,
+              "variant_index": 1
+            }
+          ],
+          "contact_height_bounds_m": [
+            0.008637083700323985,
+            0.009542090800326164
+          ],
+          "contact_height_bounds_source": "fused_measured_bilateral_surface",
+          "materialization_tilts_deg": [
+            5.816349555269857,
+            8.140703153386411,
+            12.627927895710183,
+            16.10377560747255,
+            16.281406306772823,
+            20.131148007971426,
+            24.422109460159234,
+            32.562812613545645
+          ],
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.020643747532808693,
+          "positive_reach_m": 0.020643747532808693,
+          "proposal_source_index": 1
+        },
+        {
+          "angle_deg": 50.0,
+          "boundary_tilts_deg": [
+            4.085754518450711,
+            12.74568586979176,
+            12.974245650709594,
+            21.40561722113281
+          ],
+          "branches": [
+            {
+              "contact_patch_overlap_m": 0.002000891258247704,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.007938792491240387,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 21.40561722113281,
+              "minimum_observed_safe_tilt_deg": 4.085754518450711,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": -1.0,
+              "variant_index": 0
+            },
+            {
+              "contact_patch_overlap_m": 0.0020003290874297808,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.006275315502943596,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 20.773599739986114,
+              "minimum_observed_safe_tilt_deg": 5.174891561433075,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": 1.0,
+              "variant_index": 0
+            },
+            {
+              "contact_patch_overlap_m": 0.0020003290874298155,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.006275315502943596,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 20.773599739986114,
+              "minimum_observed_safe_tilt_deg": 5.174891561433075,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": -1.0,
+              "variant_index": 1
+            },
+            {
+              "contact_patch_overlap_m": 0.002000891258247683,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.007938792491240387,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 21.40561722113281,
+              "minimum_observed_safe_tilt_deg": 4.085754518450711,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 5,
+              "tilt_polarity": 1.0,
+              "variant_index": 1
+            }
+          ],
+          "contact_height_bounds_m": [
+            0.008527869452200774,
+            0.00942664520030358
+          ],
+          "contact_height_bounds_source": "fused_measured_bilateral_surface",
+          "materialization_tilts_deg": [
+            4.085754518450711,
+            8.140703153386411,
+            12.74568586979176,
+            12.974245650709594,
+            16.281406306772823,
+            21.40561722113281,
+            24.422109460159234,
+            32.562812613545645
+          ],
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.0207933469827483,
+          "positive_reach_m": 0.0207933469827483,
+          "proposal_source_index": 2
+        },
+        {
+          "angle_deg": 57.03494322088231,
+          "boundary_tilts_deg": [
+            14.189090573196761,
+            17.144964783371062,
+            20.100838993545363
+          ],
+          "branches": [
+            {
+              "contact_patch_overlap_m": 0.0020005504939142795,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.002211563133937687,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 20.100838993545363,
+              "minimum_observed_safe_tilt_deg": 14.189090573196761,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": -1.0,
+              "variant_index": 0
+            },
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": 0.0,
+              "maximum_observed_tilt_deg": 24.422109460159234,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 1,
+              "tilt_polarity": 1.0,
+              "variant_index": 0
+            },
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": 0.0,
+              "maximum_observed_tilt_deg": 24.422109460159234,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 1,
+              "tilt_polarity": -1.0,
+              "variant_index": 1
+            },
+            {
+              "contact_patch_overlap_m": 0.0020005504939142067,
+              "interior_probe_count": 0,
+              "maximum_observed_contact_patch_overlap_m": 0.002211563133937687,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": 20.100838993545363,
+              "minimum_observed_safe_tilt_deg": 14.189090573196761,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": 1.0,
+              "variant_index": 1
+            }
+          ],
+          "contact_height_bounds_m": [
+            0.00872459532137812,
+            0.009565057595073846
+          ],
+          "contact_height_bounds_source": "fused_measured_bilateral_surface",
+          "materialization_tilts_deg": [
+            8.140703153386411,
+            14.189090573196761,
+            16.281406306772823,
+            17.144964783371062,
+            20.100838993545363,
+            24.422109460159234,
+            32.562812613545645
+          ],
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02064057140334357,
+          "positive_reach_m": 0.02064057140334357,
+          "proposal_source_index": 3
+        },
+        {
+          "angle_deg": 58.51747161044115,
+          "boundary_tilts_deg": [],
+          "branches": [
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": null,
+              "maximum_observed_tilt_deg": null,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 0,
+              "tilt_polarity": -1.0,
+              "variant_index": 0
+            },
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": 0.001640476717344748,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": 1.0,
+              "variant_index": 0
+            },
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": 0.001640476717344748,
+              "maximum_observed_tilt_deg": 16.281406306772823,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 4,
+              "tilt_polarity": -1.0,
+              "variant_index": 1
+            },
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": null,
+              "maximum_observed_tilt_deg": null,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 0,
+              "tilt_polarity": 1.0,
+              "variant_index": 1
+            }
+          ],
+          "contact_height_bounds_m": [
+            0.008712468937226806,
+            0.009411952178213237
+          ],
+          "contact_height_bounds_source": "fused_measured_bilateral_surface",
+          "materialization_tilts_deg": [
+            8.140703153386411,
+            16.281406306772823,
+            24.422109460159234,
+            32.562812613545645
+          ],
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.020647315499183305,
+          "positive_reach_m": 0.020647315499183305,
+          "proposal_source_index": 4
+        },
+        {
+          "angle_deg": 25.0,
+          "boundary_tilts_deg": [],
+          "branches": [
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": 0.0016370071020926722,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 3,
+              "tilt_polarity": -1.0,
+              "variant_index": 0
+            },
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": 0.0016370071020926722,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 2,
+              "tilt_polarity": 1.0,
+              "variant_index": 0
+            },
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": 0.0016370071020926722,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 2,
+              "tilt_polarity": -1.0,
+              "variant_index": 1
+            },
+            {
+              "interior_probe_count": 4,
+              "maximum_observed_contact_patch_overlap_m": 0.0016370071020926722,
+              "maximum_observed_tilt_deg": 0.0,
+              "maximum_safe_tilt_deg": null,
+              "required_contact_patch_overlap_m": 0.002,
+              "sample_count": 3,
+              "tilt_polarity": 1.0,
+              "variant_index": 1
+            }
+          ],
+          "contact_height_bounds_m": [
+            0.0072755316688470776,
+            0.008566209196641795
+          ],
+          "contact_height_bounds_source": "fused_measured_bilateral_surface",
+          "materialization_tilts_deg": [
+            8.140703153386411,
+            16.281406306772823,
+            24.422109460159234,
+            32.562812613545645
+          ],
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.024258385372263238,
+          "positive_reach_m": 0.024258385372263238,
+          "proposal_source_index": 8
+        }
+      ],
+      "required_contact_patch_overlap_m": 0.002,
+      "adaptive_stage_profiles": [
+        {
+          "approach_offset_m": 0.03715925766875164,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.016366174698617352,
+          "execution_position_error_m": 0.013366174698617353,
+          "lateral_sweep_m": 0.0,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.046366174698617355,
+          "object_height_m": 0.020793082970134286,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.05552543236736899,
+          "tilt_deg": 0.0
+        },
+        {
+          "approach_offset_m": 0.03715925766875164,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.016366174698617352,
+          "execution_position_error_m": 0.013366174698617353,
+          "lateral_sweep_m": 0.005261918590548264,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.046366174698617355,
+          "object_height_m": 0.020793082970134286,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.05552543236736899,
+          "tilt_deg": 8.140703153386411
+        },
+        {
+          "approach_offset_m": 0.03715925766875164,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.016366174698617352,
+          "execution_position_error_m": 0.013366174698617353,
+          "lateral_sweep_m": 0.0104177917477954,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.046366174698617355,
+          "object_height_m": 0.020793082970134286,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.05552543236736899,
+          "tilt_deg": 16.281406306772823
+        },
+        {
+          "approach_offset_m": 0.03715925766875164,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.016366174698617352,
+          "execution_position_error_m": 0.013366174698617353,
+          "lateral_sweep_m": 0.01536371121212142,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.046366174698617355,
+          "object_height_m": 0.020793082970134286,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.05552543236736899,
+          "tilt_deg": 24.422109460159234
+        },
+        {
+          "approach_offset_m": 0.03715925766875164,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.016366174698617352,
+          "execution_position_error_m": 0.013366174698617353,
+          "lateral_sweep_m": 0.020000000000000004,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.046366174698617355,
+          "object_height_m": 0.020793082970134286,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.05552543236736899,
+          "tilt_deg": 32.562812613545645
+        }
+      ],
+      "materialized_count": 32
+    }
+  },
+  "tabletop_geometry_config": {
+    "max_inner_gap_m": 0.05,
+    "opening_fit_clearance_each_side_m": 0.0005
+  },
+  "recorded_actual_gain": null,
+  "limitations": [
+    "Original failed MoveIt trajectories and collision penetration depths are not recorded.",
+    "Prior actual information-gain object is not serialized for GEN16; aggregate fused counts cannot manufacture it.",
+    "Current 7 bounded gaps can be recomputed from these exact measured diagnostics/geometry. Exact fused point/vote arrays required to recompute measured side masks are absent.",
+    "Any positive early-yield scheduling and information-gain transport test is a controlled counterfactual, explicitly separate from GEN16 actual wall-clock execution."
+  ],
+  "recorded_locally_valid": {
+    "entered": 44,
+    "passed": 32,
+    "rejected": 12
+  },
+  "original_family_indices": [
+    {
+      "stable_evaluation_index": 23,
+      "track_id": 12,
+      "variant_index": 1,
+      "plan_id": "8eeb5e01b3afb71612d162ee",
+      "sequence": {
+        "available": true,
+        "kind": "near_field_contact",
+        "reason": "",
+        "stages": [
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": false,
+            "position_m": [
+              -0.10539208563150101,
+              -0.3618943814933104,
+              0.07062808181162357
+            ],
+            "quaternion_xyzw": [
+              0.2771695914685219,
+              0.9473002987409183,
+              -0.06268208821036311,
+              0.1478854874155277
+            ],
+            "stage": "pregrasp",
+            "stamp_ns": 1791718687000939369
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.11222412711067575,
+              -0.35834618226365755,
+              0.05052974790002627
+            ],
+            "quaternion_xyzw": [
+              0.2771695914685219,
+              0.9473002987409183,
+              -0.06268208821036311,
+              0.1478854874155277
+            ],
+            "stage": "approach",
+            "stamp_ns": 1791718687000939369
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.10310387799447573,
+              -0.36580539200496487,
+              0.015287845616149529
+            ],
+            "quaternion_xyzw": [
+              0.2771695914685219,
+              0.9473002987409183,
+              -0.06268208821036311,
+              0.1478854874155277
+            ],
+            "stage": "grasp",
+            "stamp_ns": 1791718687000939369
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.10501463186926004,
+              -0.3625395264565127,
+              0.06149937337743583
+            ],
+            "quaternion_xyzw": [
+              0.2771695914685219,
+              0.9473002987409183,
+              -0.06268208821036311,
+              0.1478854874155277
+            ],
+            "stage": "lift",
+            "stamp_ns": 1791718687000939369
+          }
+        ]
+      },
+      "family_sha256": "eb7eed3eb3bc4e31ce4854c1d1dbcc1274583f76f5065b52ae5608e862c69e8d"
+    },
+    {
+      "stable_evaluation_index": 10,
+      "track_id": 6,
+      "variant_index": 0,
+      "plan_id": "2846e25a7e265c1c82b8b360",
+      "sequence": {
+        "available": true,
+        "kind": "near_field_contact",
+        "reason": "",
+        "stages": [
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": false,
+            "position_m": [
+              -0.10615327417537274,
+              -0.3615306033197334,
+              0.07104455618595593
+            ],
+            "quaternion_xyzw": [
+              0.28647314367996174,
+              0.9466666916711848,
+              -0.05957116916100138,
+              0.1349317925295788
+            ],
+            "stage": "pregrasp",
+            "stamp_ns": 1791718687000939369
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.11208988871827928,
+              -0.35837775961084,
+              0.05124675510897126
+            ],
+            "quaternion_xyzw": [
+              0.28647314367996174,
+              0.9466666916711848,
+              -0.05957116916100138,
+              0.1349317925295788
+            ],
+            "stage": "approach",
+            "stamp_ns": 1791718687000939369
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.10386506653834746,
+              -0.3654416138313879,
+              0.015704319990481892
+            ],
+            "quaternion_xyzw": [
+              0.28647314367996174,
+              0.9466666916711848,
+              -0.05957116916100138,
+              0.1349317925295788
+            ],
+            "stage": "grasp",
+            "stamp_ns": 1791718687000939369
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.10577582041313176,
+              -0.36217574828293575,
+              0.06191584775176819
+            ],
+            "quaternion_xyzw": [
+              0.28647314367996174,
+              0.9466666916711848,
+              -0.05957116916100138,
+              0.1349317925295788
+            ],
+            "stage": "lift",
+            "stamp_ns": 1791718687000939369
+          }
+        ]
+      },
+      "family_sha256": "cabbd8d415de44ac5d68289ec98b2b6a2ae23cc80be5ee0a90b02bb2b901d2ac"
+    },
+    {
+      "stable_evaluation_index": 17,
+      "track_id": 9,
+      "variant_index": 1,
+      "plan_id": "f97a52a9aac02e67bf6796da",
+      "sequence": {
+        "available": true,
+        "kind": "near_field_contact",
+        "reason": "",
+        "stages": [
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": false,
+            "position_m": [
+              -0.10623559741231747,
+              -0.3616236459821529,
+              0.0710696428151084
+            ],
+            "quaternion_xyzw": [
+              0.29493438185515386,
+              0.9440506734113673,
+              -0.06019577160727089,
+              0.1347534990709614
+            ],
+            "stage": "pregrasp",
+            "stamp_ns": 1791718687000939369
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.11208231890401649,
+              -0.35835762095216533,
+              0.051269855679787174
+            ],
+            "quaternion_xyzw": [
+              0.29493438185515386,
+              0.9440506734113673,
+              -0.06019577160727089,
+              0.1347534990709614
+            ],
+            "stage": "approach",
+            "stamp_ns": 1791718687000939369
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.10394738977529219,
+              -0.3655346564938074,
+              0.01572940661963436
+            ],
+            "quaternion_xyzw": [
+              0.29493438185515386,
+              0.9440506734113673,
+              -0.06019577160727089,
+              0.1347534990709614
+            ],
+            "stage": "grasp",
+            "stamp_ns": 1791718687000939369
+          },
+          {
+            "frame_id": "base_link",
+            "linear_from_prior_state": true,
+            "position_m": [
+              -0.1058581436500765,
+              -0.36226879094535525,
+              0.06194093438092066
+            ],
+            "quaternion_xyzw": [
+              0.29493438185515386,
+              0.9440506734113673,
+              -0.06019577160727089,
+              0.1347534990709614
+            ],
+            "stage": "lift",
+            "stamp_ns": 1791718687000939369
+          }
+        ]
+      },
+      "family_sha256": "d3b7c0ba81cf4a61402fb2444271e8d3c78b0e2ebe768f5b60a13a6f55b56f7f"
+    }
+  ]
+}

@@ -47,13 +47,14 @@ def inside(points, g):
                   <= g.size_xyz_m / 2. + 1e-12)
 
 
-def test_historical_surface_outside_current_box_is_enclosed_without_moving_center():
+def test_historical_surface_encloses_original_box_with_tangent_midpoint():
     g = geometry()
     history = np.array([[.15, -.3, .04], [.2, -.265, .04], [.2, -.3, .068]])
     s = surface(history, [0, 0, 1])
     output, audit = enclose_registered_surface(g, s, expected_identity=IDENTITY)
-    np.testing.assert_allclose(output.size_xyz_m, [.1, .07, .056])
-    for key in ('center_base', 'axes_base', 'support_normal_base'):
+    np.testing.assert_allclose(output.size_xyz_m, [.08, .055, .056])
+    np.testing.assert_allclose(output.center_base, [.19, -.2925, .04])
+    for key in ('axes_base', 'support_normal_base'):
         np.testing.assert_array_equal(getattr(output, key), getattr(g, key))
     assert output.support_offset_m == g.support_offset_m
     assert inside(corners(g), output) and inside(history, output)
@@ -84,8 +85,8 @@ def test_enclosure_uses_original_rotated_axes_and_local_center(center, angle):
     local = np.array([[-.04, .015, .012], [.03, -.026, .004]])
     fused = surface(local @ axes.T + g.center_base)
     output, _ = enclose_registered_surface(g, fused)
-    np.testing.assert_allclose(output.size_xyz_m, [.08, .052, .03])
-    np.testing.assert_array_equal(output.center_base, g.center_base)
+    np.testing.assert_allclose(output.size_xyz_m, [.07, .046, .03])
+    np.testing.assert_allclose(output.center_base, g.center_base + axes @ [-.005, -.003, 0.], atol=1e-15)
     np.testing.assert_array_equal(output.axes_base, axes)
     assert inside(corners(g), output) and inside(fused.points_base, output)
 
@@ -94,7 +95,7 @@ def test_raw_admitted_extrema_are_not_dropped_even_if_original_obb_was_percentil
     raw = np.array([[.2, -.3, .04], [.235, -.3, .04]])
     g = geometry(points=raw)
     output, _ = enclose_registered_surface(g, surface([[.2, -.3, .04]]))
-    assert output.size_xyz_m[0] == pytest.approx(.07)
+    assert output.size_xyz_m[0] == pytest.approx(.065)
     assert inside(raw, output)
     np.testing.assert_array_equal(output.object_points_base, raw)
 
@@ -165,8 +166,8 @@ def test_foreign_valid_identity_cannot_borrow_snapshot_binding():
 
 
 @pytest.mark.parametrize('point,kwargs', [
-    ([.501, -.3, .04], {}), ([.2, -.3, .291], {}),
-    ([.301, -.3, .04], {'max_size_m': .2}),
+    ([.801, -.3, .04], {}), ([.2, -.3, .291], {}),
+    ([.401, -.3, .04], {'max_size_m': .2}),
     ([.2, -.3, .141], {'max_height_m': .2}),
 ])
 def test_output_exceeding_existing_dimension_policy_is_rejected(point, kwargs):
@@ -224,11 +225,12 @@ def test_full_3d_rotation_preserves_support_frame_and_original_corner_enclosure(
     local = np.array([[.055, -.035, .022], [-.045, .015, -.028]])
     s = surface(local @ axes.T + g.center_base)
     output, audit = enclose_registered_surface(g, s)
-    np.testing.assert_allclose(output.size_xyz_m, [.11, .07, .056])
+    np.testing.assert_allclose(output.size_xyz_m, [.10, .055, .056])
     np.testing.assert_array_equal(output.support_normal_base, g.support_normal_base)
     assert output.support_offset_m == g.support_offset_m
     assert inside(corners(g), output) and inside(s.points_base, output)
-    assert audit['center_preserved'] and audit['support_plane_preserved']
+    assert not audit['center_preserved'] and audit['support_plane_preserved']
+    assert abs(float((output.center_base-g.center_base) @ g.support_normal_base)) < 1e-15
 
 
 def test_finite_inputs_whose_coordinate_difference_overflows_are_rejected():

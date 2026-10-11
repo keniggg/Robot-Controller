@@ -144,7 +144,7 @@ def test_false_audit_never_hides_positive_contradiction_or_unrelated_failures(mo
             raise ValueError(fault)
         result=original(*args,**kwargs)
         assert result.metrics['support_current_audit_available'] is False
-        if fault=='positive_shift':result.metrics['support_reference_max_distance_m']=.0041
+        if fault=='positive_shift':result.metrics['support_reference_max_distance_m']=.0071
         elif fault=='positive_angle':result.metrics['support_reference_angle_deg']=4.1
         elif fault=='nan_angle':result.metrics['support_reference_angle_deg']=float('nan')
         elif fault=='wrong_plane':result.plane_base[3]+=.0041
@@ -308,7 +308,7 @@ def test_support_recovery_rejects_new_visual_or_support_contradiction(monkeypatc
         segment=module.segment_with_support_fallback
         def changed(*args,**kwargs):
             result=segment(*args,**kwargs)
-            field,value=dict(support_shift=('support_reference_max_distance_m',.0041),
+            field,value=dict(support_shift=('support_reference_max_distance_m',.0071),
                 support_ratio=('support_current_audit_inlier_ratio',n.config.support_min_ratio-.01),
                 support_quadrants=('support_current_audit_quadrants',2),
                 support_residual=('support_current_audit_residual_m',n.config.support_threshold_m+.0001),

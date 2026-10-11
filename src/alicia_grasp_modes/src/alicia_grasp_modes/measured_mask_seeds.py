@@ -50,6 +50,10 @@ def _side_seed_colour_evidence(bgr, core, support, heights, upper_height, side_c
     lit = intensity > 60.
     background = (cv2.erode(support.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0) & lit
     report = dict(support_colour_demoted_side_pixels=0,
+                  support_colour_candidate_demotions=0,
+                  support_colour_demotion_minimum_pixels=25,
+                  support_colour_qualified_regions=0,
+                  support_colour_demotion_evidence='none',
                   support_colour_reference_pixels=int(np.count_nonzero(background)))
     if np.count_nonzero(background) < 25 or np.count_nonzero(top & lit) < 25:
         return core, report
@@ -73,17 +77,40 @@ def _side_seed_colour_evidence(bgr, core, support, heights, upper_height, side_c
     top_distance = distance(top & lit, query)
     ambiguous_side = ((support_distance < .08)
                       & (top_distance > support_distance + .04))
-    # Isolated coloured edge pixels must not alter the entire colour model.
-    # Require a substantial contradictory region before demoting any seed.
-    if np.count_nonzero(ambiguous_side) < max(25, .1 * np.count_nonzero(core)):
+    # Preserve the established strong relative-evidence case. Below that
+    # fraction, a substantial CURRENT connected region remains contradictory
+    # even when unrelated upper-face area grows. Scattered weak evidence must
+    # not be summed to activate this extra case; never join or enlarge it.
+    # Demotion supplies no background label or physical contour.
+    report['support_colour_candidate_demotions'] = int(np.count_nonzero(ambiguous_side))
+    if np.count_nonzero(ambiguous_side) < 25:
         return core, report
+    contradictory = np.zeros_like(core, dtype=np.uint8)
+    contradictory[side] = ambiguous_side
+    count, components, stats, _ = cv2.connectedComponentsWithStats(contradictory, connectivity=8)
+    qualified = [index for index in range(1, count) if stats[index, cv2.CC_STAT_AREA] >= 25]
+    if np.count_nonzero(ambiguous_side) >= .1 * np.count_nonzero(core):
+        demoted = contradictory.astype(bool)
+        report['support_colour_demotion_evidence'] = 'established_relative_evidence'
+    else:
+        if not qualified:
+            return core, report
+        demoted = np.isin(components, qualified)
+        report['support_colour_demotion_evidence'] = 'current_connected_region'
     result = core.copy()
-    result[side] = ~ambiguous_side
-    report['support_colour_demoted_side_pixels'] = int(np.count_nonzero(ambiguous_side))
+    result[demoted] = False
+    report['support_colour_qualified_regions'] = len(qualified)
+    report['support_colour_demoted_side_pixels'] = int(np.count_nonzero(demoted))
     return result, report
 
 
 def confidence_labels(seed, points, depth, heights, plane_normal, config, *, bgr=None):
+    return _confidence_labels(seed, points, depth, heights, plane_normal, config,
+                              bgr=bgr, local_fit=local_surface_normals)
+
+
+def _confidence_labels(seed, points, depth, heights, plane_normal, config, *, bgr, local_fit):
+    """Same label rules; a call-local owner may reuse identical local fits."""
     valid = (np.isfinite(depth) & (depth >= config.depth_min_m)
              & (depth <= config.depth_max_m) & np.all(np.isfinite(points), axis=-1))
     measured = (seed & valid & (heights >= config.foreground_min_m)
@@ -91,7 +118,7 @@ def confidence_labels(seed, points, depth, heights, plane_normal, config, *, bgr
     if np.count_nonzero(measured) < config.min_object_points:
         raise ValueError('rgb_seed_has_insufficient_measured_foreground')
     core = cv2.erode(measured.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
-    normals, reliable = local_surface_normals(points, depth, valid)
+    normals, reliable = local_fit(points, depth, valid)
     normal = np.asarray(plane_normal, dtype=float)
     normal = normal / np.linalg.norm(normal)
     cosine = np.abs(np.einsum('ijk,k->ij', normals, normal))

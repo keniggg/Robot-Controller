@@ -67,7 +67,7 @@ def test_unqualified_ambiguity_does_not_hold_or_change_live_tracker(monkeypatch,
         original=module.segment_with_support_fallback
         def change_result(*args,**kwargs):
             result=original(*args,**kwargs)
-            if change=='support':result.metrics['support_reference_max_distance_m']=.00401
+            if change=='support':result.metrics['support_reference_max_distance_m']=.00701
             else:result.candidates=result.candidates*9
             return result
         monkeypatch.setattr(module,'segment_with_support_fallback',change_result)

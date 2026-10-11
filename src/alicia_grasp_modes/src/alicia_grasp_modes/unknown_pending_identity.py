@@ -5,6 +5,7 @@ binds its typed receipt to the already observed target and original deadline;
 it never turns a false object or an empty mask into planning geometry.
 """
 from copy import deepcopy
+import hashlib
 import json
 import math
 
@@ -13,11 +14,19 @@ import rospy
 
 from .tabletop import Config
 from .rgb_observation_handoff import HandoffPolicy
+from .observation_recovery_history import ObservationRecoveryHistoryMixin, station_binding
+from .initial_station_identity_completion import station_from_receipt, validate_completion
+from .feedback_bracket_gap import KIND as FEEDBACK_GAP, validate_gap_evidence
+from .rgb_observation_source import bracket_feedback
 
 
 CODE = 'TARGET_MEASUREMENT_PENDING'
 REFERENCE_KEYS = ('anchor_source_stamp_ns', 'anchor_position_base', 'anchor_extent_m',
                   'reference_support_plane_base', 'reference_support_footprint_base')
+
+
+class _TemplateJoinPending(Exception):
+    pass
 
 
 def _positive_int(value):
@@ -53,31 +62,109 @@ def reference_binding(status, selection):
     return json.dumps({key: status[key] for key in REFERENCE_KEYS}, sort_keys=True, allow_nan=False)
 
 
+def initial_station_template(status, selection):
+    """Validate appearance provenance; its historical source is not geometry."""
+    value = status.get('initial_station_identity_template')
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) != {
+            'version', 'role', 'source_stamp_ns', 'source_id', 'generation',
+            'selection_stamp_ns', 'epoch_ns', 'image_shape', 'source_rgb_sha256',
+            'refined_mask_sha256'}
+            or type(value['version']) is not int or value['version'] != 1
+            or value['role'] != 'immutable_initial_acquired_rgb_identity'
+            or selection.get('mode') != 'unknown' or selection.get('strategy') != 'observe_return'
+            or type(value['generation']) is not int or value['generation'] != selection['generation']
+            or type(value['selection_stamp_ns']) is not int or value['selection_stamp_ns'] != selection['stamp_ns']
+            or _positive_int(value['source_stamp_ns']) != status['anchor_source_stamp_ns']
+            or not selection['stamp_ns'] < value['source_stamp_ns'] <= status['source_stamp_ns']
+            or not _positive_int(value['epoch_ns']) <= value['source_stamp_ns']
+            or not isinstance(value['image_shape'], list) or len(value['image_shape']) != 2
+            or any(type(n) is not int or n <= 0 for n in value['image_shape'])):
+        raise ValueError('invalid initial identity template binding')
+    for key in ('source_id', 'source_rgb_sha256', 'refined_mask_sha256'):
+        digest = value[key]
+        if not isinstance(digest, str) or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+            raise ValueError('invalid initial identity template hash')
+    return deepcopy(value)
+
+
+def support_identity_deadline(reference, now_ns, source_ns=None):
+    value = reference.get('identity_completion')
+    if value is None:
+        return reference['deadline_ns']
+    return validate_completion(value, reference['source_ns'], reference['maximum_sec'],
+        reference['identity_template'], station_from_receipt(reference['initial_station_measurement']),
+        now_ns, source_ns)
+
+
 def validate_support_receipt(status, reference, now_ns, *, recovery=False):
     """Require the existing bounded support-gap receipt and immutable anchor."""
     if reference_binding(status, reference['selection']) != reference['binding']:
         raise ValueError('reference changed')
+    template = initial_station_template(status, reference['selection'])
+    if template != reference.get('identity_template'):
+        raise ValueError('initial identity template changed or missing')
     ns = status['source_stamp_ns']
     q = status['source_qualification']
+    kind = q.get('kind')
+    feedback_gap = kind == FEEDBACK_GAP
+    if kind not in ('support_measurement_gap', FEEDBACK_GAP):
+        raise ValueError('unknown pending evidence kind')
+    if reference.get('gap_kind', kind) != kind:
+        raise ValueError('pending evidence kind changed')
+    if feedback_gap:
+        station = reference.get('initial_station_measurement')
+        if (template is None or not isinstance(station, dict)
+                or q.get('identity_completion') is not None):
+            raise ValueError('feedback gap requires original initial station without extended lifetime')
+        gap_ns = q.get('feedback_gap_source_stamp_ns')
+        if gap_ns != q.get('last_unqualified_source_stamp_ns') or (not recovery and gap_ns != ns):
+            raise ValueError('feedback gap rejected source changed')
+        validate_gap_evidence(q.get('feedback_gap_evidence'), gap_ns, reference['source_ns'],
+            station['epoch_ns'], station['q_station_rad'], now_ns, reference['maximum_sec'])
+        if recovery:
+            current = q.get('requalified_accepted_feedback')
+            if not isinstance(current, (tuple, list)) or len(current) != 2:
+                raise ValueError('feedback gap recovery requires current measured bracket')
+            measured, before, after = bracket_feedback(current, ns, station['epoch_ns'])
+            station_q = np.asarray(station['q_station_rad'], dtype=float)
+            if (after[0] > now_ns or before[0] <= gap_ns
+                    or any(np.max(np.abs(np.asarray(v)-station_q)) > .004
+                           for v in (measured, before[1], after[1]))):
+                raise ValueError('feedback gap recovery changed measured station')
+    completion = q.get('identity_completion')
+    established = reference.get('identity_completion')
+    if established is not None and completion != established:
+        raise ValueError('identity completion receipt changed or omitted')
+    if completion is not None:
+        if established is None and (recovery or now_ns >= reference['deadline_ns']):
+            raise ValueError('identity completion was not established before geometry expiry')
+        deadline_ns = support_identity_deadline(dict(reference, identity_completion=completion), now_ns, ns)
+    else:
+        deadline_ns = reference['deadline_ns']
     maximum = q['maximum_hold_seconds']
     if (isinstance(maximum, bool) or not isinstance(maximum, (int, float))
             or not math.isfinite(maximum) or maximum != reference['maximum_sec']
-            or not reference['source_ns'] < ns <= now_ns < reference['deadline_ns']
-            or q.get('kind') != 'support_measurement_gap'
+            or not reference['source_ns'] < ns <= now_ns < deadline_ns
             or q.get('reference_source_stamp_ns') != reference['source_ns']
-            or q.get('source_stamp_ns') != ns or q.get('source_qualified') is not True
+            or q.get('source_stamp_ns') != ns or q.get('source_qualified') is not (recovery or not feedback_gap)
             or q.get('metric_geometry_authority') is not False
             or q.get('motion_authorized') is not False or q.get('reference_refreshed') is not False
             or not isinstance(q.get('source_id'), str) or len(q['source_id']) != 64
             or any(c not in '0123456789abcdef' for c in q['source_id'])
             or (reference.get('source_id') is not None and q['source_id'] != reference['source_id'])):
         raise ValueError('invalid support-gap qualification')
+    if template is not None and template['source_id'] != q['source_id']:
+        raise ValueError('template and fresh geometry source context differ')
     first = _positive_int(q['first_unqualified_source_stamp_ns'])
     last = _positive_int(q['last_unqualified_source_stamp_ns'])
     if not reference['source_ns'] < first <= last <= ns:
         raise ValueError('invalid gap source order')
     if recovery:
         identity = q['rgb_identity']
+        if identity.get('identity_template_source') != template:
+            raise ValueError('recovery identity template source mismatch')
         rows = identity['candidates']
         if (status.get('state') != 'ready' or q.get('state') != 'recovered_unique_measured_frame'
                 or q.get('measurement_republished') is not True or q.get('identity_verified') is not True
@@ -114,6 +201,11 @@ def validate_support_receipt(status, reference, now_ns, *, recovery=False):
             value = rows[0][key]
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lower <= value <= upper:
                 raise ValueError('recovery RGB evidence invalid')
+    elif feedback_gap:
+        if (status.get('state') != 'unavailable' or q.get('state') != 'pending_feedback_bracket'
+                or q.get('identity_verified') is not False or last != ns
+                or q.get('support_measurement_available') is not False):
+            raise ValueError('not a typed non-authorizing feedback gap')
     elif (status.get('state') != 'unavailable'
             or q.get('state') not in ('pending_current_support', 'pending_unique_measured_geometry')
             or q.get('identity_verified') is not False or last != ns
@@ -122,15 +214,29 @@ def validate_support_receipt(status, reference, now_ns, *, recovery=False):
     return q['source_id']
 
 
-class UnknownPendingIdentityMixin:
+class UnknownPendingIdentityMixin(ObservationRecoveryHistoryMixin):
+    def start_streaming(self):
+        # Acquisition topics can precede the runner's request to start inference.
+        # Preserve their exact receive evidence, then bind it only after the
+        # original start created the new stream identity. No frame is replayed
+        # into the new RGB-D buffer and no receive/source lifetime is renewed.
+        changed = super().start_streaming()
+        if changed:
+            with self._stream_condition, self._geometry_state_guard():
+                self._unknown_identity_join_locked()
+        return changed
+
     def _initialize_unknown_pending_identity(self):
+        self._reset_observation_recovery_history()
         self._unknown_identity_reference = None
+        self._unknown_identity_template = None
         self._unknown_identity_pending = None
         self._unknown_identity_retired_selection = None
         self._unknown_identity_objects = {}
         self._unknown_identity_status = {}
         self._unknown_identity_masks = {}
         self._unknown_identity_cancelled_through_ns = 0
+        self._unknown_identity_feedback_gap_sources = set()
         self._unknown_identity_publication_started = False
 
     def _unknown_identity_scope(self):
@@ -158,12 +264,15 @@ class UnknownPendingIdentityMixin:
 
     def _unknown_identity_retire(self, reason):
         """Called with stream->geometry held; retirement cannot later recover."""
+        self._reset_observation_recovery_history()
         self._unknown_identity_pending = None
         self._unknown_identity_retired_selection = deepcopy(self._mode_selection)
         self._unknown_identity_reference = None
+        self._unknown_identity_template = None
         self._unknown_identity_objects.clear()
         self._unknown_identity_status.clear()
         self._unknown_identity_masks.clear()
+        self._unknown_identity_feedback_gap_sources.clear()
         with self._object_lock:
             absent = deepcopy(self.latest_object)
             if absent is not None:
@@ -177,10 +286,15 @@ class UnknownPendingIdentityMixin:
 
     def _unknown_identity_tick_locked(self):
         pending = self._unknown_identity_pending
-        if pending is not None and (not self._unknown_identity_scope()
-                or pending['identity'] != self._current_stream_target_identity()
-                or self._ros_source_clock_ns() >= pending['deadline_ns']):
-            self._unknown_identity_retire('support measurement quarantine expired or context changed')
+        if pending is not None:
+            try:
+                now_ns = self._ros_source_clock_ns()
+                if (not self._unknown_identity_scope()
+                        or pending['identity'] != self._current_stream_target_identity()
+                        or now_ns >= support_identity_deadline(pending, now_ns)):
+                    raise ValueError('support measurement quarantine expired or context changed')
+            except (ValueError, KeyError, TypeError):
+                self._unknown_identity_retire('support measurement quarantine expired or context changed')
         return self._unknown_identity_pending is not None
 
     def _unknown_identity_poll(self):
@@ -207,6 +321,7 @@ class UnknownPendingIdentityMixin:
     def _unknown_identity_quarantine(self, msg, reference):
         ns = msg.header.stamp.to_nsec()
         if self._unknown_identity_pending is None:
+            self._begin_observation_history_gap(reference)
             self._unknown_identity_pending = deepcopy(reference)
             self._unknown_identity_pending['unpaired'] = set()
             self._unknown_identity_pending['source_id'] = None
@@ -237,6 +352,40 @@ class UnknownPendingIdentityMixin:
         self.latest_preview_rich_plan = None
         self._stream_condition.notify_all()
 
+    def _unknown_identity_pin_template(self, status, mask, now_ns, maximum_sec):
+        """Pin only a joined, fresh acquired ObjectPose/mask/ready source.
+
+        The mask hash is checked against received pixels. RGB provenance is
+        the producer's same-source receipt, not a claim of consumer RGB replay.
+        """
+        template = initial_station_template(status, self._mode_selection)
+        pinned = self._unknown_identity_template
+        if pinned is not None:
+            if template != pinned['provenance'] or pinned['identity'] != self._current_stream_target_identity():
+                raise ValueError('initial identity template replaced or omitted')
+            return template
+        if template is None:
+            return None
+        ns = template['source_stamp_ns']
+        acquired = self._unknown_identity_status.get(ns)
+        obj = self._unknown_identity_objects.get(ns)
+        actual_mask = self._unknown_identity_masks.get(ns)
+        if acquired is None or obj is None or actual_mask is None:
+            raise _TemplateJoinPending('initial template source join pending')
+        if (acquired.get('state') != 'ready' or acquired.get('detail') != 'acquired'
+                or not obj.detected or not actual_mask[0]
+                or obj.header.stamp.to_nsec() != ns or acquired.get('source_stamp_ns') != ns
+                or not ns <= now_ns < ns + round(maximum_sec * 1e9)
+                or reference_binding(acquired, self._mode_selection) != reference_binding(status, self._mode_selection)
+                or initial_station_template(acquired, self._mode_selection) != template
+                or actual_mask[1] != acquired['color_frame_id']
+                or actual_mask[2] != template['refined_mask_sha256']
+                or list(actual_mask[3]) != template['image_shape']):
+            raise ValueError('initial template does not match acquired source')
+        self._unknown_identity_template = dict(provenance=deepcopy(template),
+            identity=self._current_stream_target_identity())
+        return template
+
     def _unknown_identity_join_locked(self):
         if self._unknown_identity_pending is None and (not self._unknown_identity_scope()
                 or self._unknown_identity_retired_selection == self._mode_selection):
@@ -250,6 +399,13 @@ class UnknownPendingIdentityMixin:
                     if status is None:
                         continue
                     pending['source_id'] = validate_support_receipt(status, pending, now)
+                    pending['gap_kind'] = status['source_qualification']['kind']
+                    if pending['gap_kind'] == FEEDBACK_GAP:
+                        self._unknown_identity_feedback_gap_sources.add(ns)
+                        while len(self._unknown_identity_feedback_gap_sources) > 64:
+                            self._unknown_identity_feedback_gap_sources.remove(min(self._unknown_identity_feedback_gap_sources))
+                    if status['source_qualification'].get('identity_completion') is not None:
+                        pending['identity_completion'] = deepcopy(status['source_qualification']['identity_completion'])
                     pending['unpaired'].remove(ns)
                 if pending['unpaired'] or pending['source_id'] is None:
                     return
@@ -262,19 +418,22 @@ class UnknownPendingIdentityMixin:
                     validate_support_receipt(status, pending, now, recovery=True)
                     if not mask[0] or mask[1] != status['color_frame_id']:
                         raise ValueError('new measured mask missing')
-                    if self._ros_source_clock_ns() >= pending['deadline_ns']:
+                    if self._ros_source_clock_ns() >= support_identity_deadline(
+                            pending, self._ros_source_clock_ns(), ns):
                         raise ValueError('recovery receipt expired before commit')
                     super().object_cb(obj)
                     if (not getattr(self.latest_object, 'detected', False)
                             or self.latest_object.header.stamp.to_nsec() != ns):
                         raise ValueError('recovery object rejected by original gate')
-                    if self._ros_source_clock_ns() >= pending['deadline_ns']:
+                    if self._ros_source_clock_ns() >= support_identity_deadline(
+                            pending, self._ros_source_clock_ns(), ns):
                         raise ValueError('recovery receipt expired during commit')
                     self._unknown_identity_pending = None
                     # All pre-recovery snapshots remain cancelled, including a
                     # collector that waited through the entire gap.
                     self._unknown_identity_cancelled_through_ns = max(
                         self._unknown_identity_cancelled_through_ns, ns - 1)
+                    self._commit_observation_history_recovery(pending, status, ns)
                     break
             except (ValueError, KeyError, TypeError, OverflowError) as exc:
                 self._unknown_identity_retire('support-gap receipt rejected: ' + str(exc))
@@ -287,10 +446,6 @@ class UnknownPendingIdentityMixin:
         if obj is None or not obj.detected:
             return
         ns = obj.header.stamp.to_nsec()
-        if (self._unknown_identity_reference is not None
-                and self._unknown_identity_reference['source_ns'] == ns
-                and self._unknown_identity_reference['identity'] == self._current_stream_target_identity()):
-            return
         status, mask = self._unknown_identity_status.get(ns), self._unknown_identity_masks.get(ns)
         if status is None or mask is None or not mask[0] or status.get('state') != 'ready':
             return
@@ -307,11 +462,23 @@ class UnknownPendingIdentityMixin:
                 return
             if mask[1] != status['color_frame_id']:
                 return
+            template = self._unknown_identity_pin_template(status, mask, now, maximum)
             self._unknown_identity_reference = dict(source_ns=ns, binding=binding,
                 identity=self._current_stream_target_identity(), selection=deepcopy(self._mode_selection),
                 maximum_sec=maximum, deadline_ns=ns+round(maximum*1e9), support_policy=policy,
-                footprint_vertices=len(status['reference_support_footprint_base']))
-        except (ValueError, KeyError, TypeError, OverflowError):
+                footprint_vertices=len(status['reference_support_footprint_base']),
+                identity_template=template)
+            if status.get('initial_station_measurement') is not None:
+                station_binding(status, self._unknown_identity_reference, mask, now)
+                self._unknown_identity_reference['initial_station_measurement'] = deepcopy(
+                    status['initial_station_measurement'])
+            self._capture_observation_history_ready(status, self._unknown_identity_reference, mask, now)
+        except _TemplateJoinPending:
+            return
+        except (ValueError, KeyError, TypeError, OverflowError) as exc:
+            if (self._unknown_identity_template is not None
+                    or status.get('initial_station_identity_template') is not None):
+                self._unknown_identity_retire('initial template receipt rejected: ' + str(exc))
             return
 
     def _unknown_identity_status_cb(self, status):
@@ -335,13 +502,19 @@ class UnknownPendingIdentityMixin:
             self._unknown_identity_join_locked()
 
     def object_cb(self, msg):
-        if (not hasattr(self, '_stream_condition') or not self.streaming_enabled
+        if (not hasattr(self, '_stream_condition')
                 or (self._mode_selection or {}).get('mode') != 'unknown' or not self._observe_return_selected()):
             return super().object_cb(msg)
         with self._stream_condition, self._geometry_state_guard():
             if not self._selection_is_current():
                 if self._unknown_identity_pending is not None:
                     self._unknown_identity_retire('selection changed during support quarantine')
+                return super().object_cb(msg)
+            if not self.streaming_enabled:
+                self._unknown_identity_cache(self._unknown_identity_objects,
+                    msg.header.stamp.to_nsec(), deepcopy(msg))
+                # The original callback still handles true/false normally.
+                # Inactive collection creates neither a reference nor a pin.
                 return super().object_cb(msg)
             self._unknown_identity_tick_locked()
             if self._unknown_identity_retired_selection == self._mode_selection:
@@ -352,6 +525,13 @@ class UnknownPendingIdentityMixin:
                 super().object_cb(absent)
                 return
             ns = msg.header.stamp.to_nsec()
+            if (not msg.detected and ns in self._unknown_identity_feedback_gap_sources
+                    and self._unknown_identity_pending is None
+                    and getattr(self.latest_object, 'detected', False)
+                    and self.latest_object.header.stamp.to_nsec() > ns):
+                # Only an already validated old feedback-gap tombstone may be
+                # ignored after its complete newer three-topic recovery.
+                return
             self._unknown_identity_cache(self._unknown_identity_objects, ns, deepcopy(msg))
             reference = self._unknown_identity_reference
             if self._unknown_identity_pending is not None:
@@ -371,7 +551,7 @@ class UnknownPendingIdentityMixin:
 
     def mask_cb(self, msg):
         super().mask_cb(msg)
-        if (not hasattr(self, '_stream_condition') or not self.streaming_enabled
+        if (not hasattr(self, '_stream_condition')
                 or (self._mode_selection or {}).get('mode') != 'unknown' or not self._observe_return_selected()):
             return
         with self._stream_condition, self._geometry_state_guard():
@@ -380,6 +560,8 @@ class UnknownPendingIdentityMixin:
                     self._unknown_identity_retire('selection changed during support quarantine')
                 return
             mask = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
+            normalized = np.ascontiguousarray(mask != 0, dtype=np.uint8)
             self._unknown_identity_cache(self._unknown_identity_masks, msg.header.stamp.to_nsec(),
-                (bool(mask.ndim == 2 and np.any(mask)), msg.header.frame_id))
+                (bool(mask.ndim == 2 and np.any(mask)), msg.header.frame_id,
+                 hashlib.sha256(normalized.tobytes()).hexdigest(), normalized.shape))
             self._unknown_identity_join_locked()

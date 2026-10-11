@@ -1,0 +1,5 @@
+<launch>
+  <!-- Reload-only: retain all existing MoveGroup parameters; no hardware include. -->
+  <node pkg="moveit_ros_move_group" type="move_group" name="move_group" respawn="false" output="screen"/>
+  <node pkg="alicia_flexible_grasp_supervisor" type="handeye_transform_node.py" name="handeye_transform" respawn="false" output="screen"/>
+</launch>

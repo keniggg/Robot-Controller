@@ -10,7 +10,7 @@ from std_msgs.msg import Header, String
 from test_unknown_stream import module, rgb_interest_node
 
 
-def locked(monkeypatch):
+def locked(monkeypatch, *, initial_station=False):
     n,clock,feed,joint,params=rgb_interest_node(monkeypatch)
     for _ in range(3):
         feed(target_depth=.35)
@@ -18,6 +18,17 @@ def locked(monkeypatch):
     assert n.tracker.anchor is not None and not n.tracker.lost
     assert n.pubs['object'].publish.call_args[0][0].detected
     assert n._locked_rgb_hold_reference is not None
+    if not initial_station:
+        # This fixture exercises the original RGB hold/pending contract.
+        # The initial-station opt-in has its own process-level test suite.
+        n._locked_rgb_hold_reference.pop('initial_station_current_support', None)
+        # Opt out its published provenance too, so consumer fixtures represent
+        # the same legacy producer rather than a later template disappearance.
+        status_message = n.pubs['detector_status'].publish.call_args[0][0]
+        status = json.loads(status_message.data)
+        status.pop('initial_station_identity_template', None)
+        status.pop('initial_station_measurement', None)
+        status_message.data = json.dumps(status)
     return n,clock,feed,joint,params
 
 
@@ -144,7 +155,7 @@ def test_bad_identity_or_source_evidence_keeps_original_loss_behavior(monkeypatc
         def broken(*a,**kw):
             result=original(*a,**kw)
             if change=='support_audit_missing':result.metrics['support_current_audit_available']=False
-            elif change=='support_shift':result.plane_base[3]+=.0041
+            elif change=='support_shift':result.plane_base[3]+=.0071
             else:result.plane_base[:3]=[0.,np.sin(.08),np.cos(.08)]
             return result
         monkeypatch.setattr(module,'segment_with_support_fallback',broken)
@@ -923,7 +934,7 @@ def test_metric_looking_frame_cannot_bypass_pending_requalification(monkeypatch,
             result=original(*args,**kw)
             assert result.metrics['support_source']=='locked_base_plane'
             if change=='support_missing':result.metrics['support_current_audit_available']=False
-            elif change=='support_shift':result.metrics['support_reference_max_distance_m']=.0041
+            elif change=='support_shift':result.metrics['support_reference_max_distance_m']=.0071
             else:result.metrics['support_reference_max_distance_m']=float('nan')
             return result
         monkeypatch.setattr(module,'segment_with_support_fallback',bad_audit)

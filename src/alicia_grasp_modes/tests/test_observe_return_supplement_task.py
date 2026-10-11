@@ -131,7 +131,7 @@ def test_two_supplements_preserve_original_return_authority_and_deadline(context
     c.now[0]+=1_000_000_000
     _,_,contact=evidence('initial_contact')
     contact.header.stamp=at_ns(c.now[0]-1)
-    handoff=c.node._before_near_field_contact_freeze(contact,current,{})
+    handoff=c.node._before_near_field_contact_freeze(contact,current,{'unknown_observe_return_return_to_origin': True})
     assert handoff.get('retry') is True,c.states
     assert c.gateways[-1]==('/supervisor/return_observe_return_origin',c.plan.plan_id,True)
     assert c.node._observe_return_session['deadline_ns']==original_deadline
@@ -150,7 +150,7 @@ def test_two_supplements_preserve_original_return_authority_and_deadline(context
         report['observe_return'][key]=int(value) if key.endswith('_ns') else value
     report['observe_return']['fused_source_stamps_ns']=[19500000000,24000000000,report['snapshot_stamp_ns']]
     c.now[0]+=2;install(c,fresh,report)
-    assert c.node._before_near_field_contact_freeze(fresh,current,{}) is None,c.states
+    assert c.node._before_near_field_contact_freeze(fresh,current,{'unknown_observe_return_return_to_origin': True}) is None,c.states
 
 
 @pytest.mark.parametrize('fault', ['manual','lost','bound','fourth_view','deadline','no_gain',
@@ -304,7 +304,7 @@ def test_return_submission_revalidates_active_view_after_asynchronous_wait(conte
         validations.append(plan.plan_id)
         return NS(ok=not invalid[0],code='OBSERVE_RETURN_'+fault.upper(),reason='callback during wait')
     c.node._validate_bound_plan_locked=validate
-    assert c.node._before_near_field_contact_freeze(contact,c.plan,{})=={'failed':True}
+    assert c.node._before_near_field_contact_freeze(contact,c.plan,{'unknown_observe_return_return_to_origin': True})=={'failed':True}
     assert not any(name=='/supervisor/return_observe_return_origin' for name,_,_ in c.gateways)
     assert not calls
     if not (boundary=='return_ack' and fault=='expired'):

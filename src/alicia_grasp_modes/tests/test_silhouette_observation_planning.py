@@ -19,8 +19,23 @@ from alicia_grasp_modes.silhouette_observation import silhouette_view_gain
 from alicia_grasp_modes.silhouette_observation_planning import ObservationPlanningSeed
 
 
-def context(configured, monkeypatch, tmp_path):
-    node, initial, simple_snapshot, geometry, depth, transform, calls = observation_context(configured, monkeypatch)
+def context(configured, monkeypatch, tmp_path, ordinary=False):
+    if ordinary:
+        from test_measured_observation_planning import preflight_context
+        node, ticket0, source0, shape, transform, candidates, diagnostics, _ = preflight_context(configured, monkeypatch)
+        assert node._maybe_prepare_observation_from_contact_geometry(
+            ticket0, source0, shape, transform, candidates, diagnostics)
+        initial = NS(ticket=ticket0, snapshot=source0)
+        simple_snapshot = NS(stamp_ns=source0.stamp_ns+100000000)
+        surface = node._observe_return_saved[0]
+        geometry = base.GeometryEstimate(True, '', '', shape.center_base,
+            shape.axes_base, shape.size_xyz_m, shape.support_normal_base, 0., 1.,
+            surface.points_base, 'instance_mask')
+        depth = np.zeros((3, 3)); calls = []
+        monkeypatch.setattr(base.RemoteGrasp6DNode, '_prepare_snapshot_geometry',
+            lambda self, *args: calls.append(args) or (geometry, depth, transform))
+    else:
+        node, initial, simple_snapshot, geometry, depth, transform, calls = observation_context(configured, monkeypatch)
     ns = simple_snapshot.stamp_ns
     stamp = module.rospy.Time(ns // 1000000000, ns % 1000000000)
     msg = base.ObjectPose();msg.header.stamp=stamp;msg.header.frame_id='camera_link'
@@ -39,39 +54,67 @@ def context(configured, monkeypatch, tmp_path):
     monkeypatch.setattr(node,'_capture_geometry_generation',lambda:0)
     node._geometry_invalidation_generation=0
     node._last_geometry_invalidation_code=''
+    if ordinary:
+        node._promotion_now_sec=lambda:12.
+        node._execution_plan_validity_now_sec=lambda:12.
+        node._stream_source_clock=lambda:12.
     node.candidate_frame_convention='graspnet'
     node.grasp_config=dict(observation_camera_target_nominal_distance_m=.26,
         observation_camera_target_min_distance_m=.22,observation_camera_target_max_distance_m=.30)
-    monkeypatch.setattr(node,'_adaptive_stage_profiles',lambda *_:[NS(depth_uncertainty_m=.002)])
+    monkeypatch.setattr(node,'_adaptive_stage_profiles',lambda *_:[
+        NS(depth_uncertainty_m=.002, execution_position_error_m=0.)])
     # Same-source cloud and real path/FOV are covered by dedicated view tests.
     # This fixture isolates the actual single-source promotion transaction.
     monkeypatch.setattr(node,'_capture_diagnostic_observation_view_source',lambda _:None)
     monkeypatch.setattr(node,'_bind_diagnostic_observation_view_source',lambda *_:None)
-    monkeypatch.setattr(node,'_require_diagnostic_observation_view_source',lambda _:None)
+    binding = dict(request_id=ticket.request_id, generation=ticket.generation,
+        target_epoch=ticket.target_epoch, target_track_id=snapshot.target_identity.track_id,
+        snapshot_stamp_ns=ns)
+    unit_source = dict(binding=binding, audit=dict(binding,
+        source_kind='exact_last_raw_rgbd_sample', source_stamp_ns=ns,
+        synthetic_support_points=False, projection_prediction_only=True))
+    monkeypatch.setattr(node,'_require_diagnostic_observation_view_source',lambda _:unit_source if ordinary else None)
     monkeypatch.setattr(node,'_diagnostic_observation_view_evaluation',lambda *_:dict(ok=True))
     monkeypatch.setattr(node,'_frozen_observation_translation_delta_m',lambda *_:.20)
     monkeypatch.setattr(base.RemoteGrasp6DNode,'_observation_following_support_evaluation',
         lambda self,_prepared,result,_target=None:(result,dict(ok=True)))
+    if ordinary:
+        monkeypatch.setattr(base.RemoteGrasp6DNode, '_prepare_and_predict',
+            lambda *_: pytest.fail('ordinary independent view entered contact/WSL prepare'))
     prepared=node._prepare_and_predict(ticket)
     node._require_stream_ticket_current=MethodType(base.RemoteGrasp6DNode._require_stream_ticket_current,node)
     node._require_stream_ticket_current_locked=MethodType(base.RemoteGrasp6DNode._require_stream_ticket_current_locked,node)
     assert prepared.candidates==() and prepared.tabletop_candidates==() and prepared.graspnet_input is None
-    assert prepared.geometry.size_xyz_m[1]>.05
+    if not ordinary:
+        assert prepared.geometry.size_xyz_m[1]>.05
     assert calls and prepared.geometry.object_points_base.shape == geometry.object_points_base.shape
     monkeypatch.setattr(node,'_activate_prepared_geometry',lambda _:True)
-    camera=np.eye(4);camera[:3,3]=[.20,-.05,.15]
+    camera=np.eye(4);camera[:3,3]=[.20,.15 if ordinary else -.05,.15]
     camera[:3,:3]=camera_rotation_toward(prepared.geometry.center_base,camera[:3,3])
     pose=base.make_pose_stamped('base_link',camera[:3,3],base.quaternion_from_matrix(camera),stamp=stamp)
     monkeypatch.setattr(node,'_frozen_observation_reference_pose',lambda _:pose)
-    gain=silhouette_view_gain(node._observe_return_silhouette_evidence,camera,.002)
+    if ordinary:
+        from alicia_grasp_modes.observe_return_visual import missing_side_view_gain
+        gain = missing_side_view_gain(node._observe_return_view_gaps, camera[:3, 3], .002)
+    else:
+        gain=silhouette_view_gain(node._observe_return_silhouette_evidence,camera,.002)
     assert gain['ok'],gain
-    view=dict(working_volume_view(prepared.snapshot.stamp_ns), observe_return_silhouette_gain=gain)
+    view=dict(working_volume_view(prepared.snapshot.stamp_ns), **{
+        'observe_return_missing_side_gain' if ordinary else 'observe_return_silhouette_gain': gain})
+    if ordinary:
+        from alicia_grasp_modes.observation_view_utility import predicted_information_utility
+        view['information_utility'] = predicted_information_utility(
+            gain['predicted_new_side_gain_m'], gain['depth_uncertainty_m'], .3, 500.)
     sequence=NS(pregrasp=pose,observation_view_audit=deepcopy(view))
     variant=dict(sequence=sequence,observation_view=deepcopy(view),
         observation_envelope=base.ObservationEnvelopeResult(True,'','',.020),
         observation_side_evidence={},observation_translation_delta_m=.20,
         camera_roll_offset_deg=0.,camera_tilt_offset_deg=0.,preference_index=0)
     monkeypatch.setattr(node,'_far_field_observation_variants',lambda *_:((variant,),()))
+    if ordinary:
+        # Endpoint ordering/source extraction are covered by dedicated source
+        # and FK tests; this transaction has exactly one eligible view.
+        monkeypatch.setattr(node, '_order_observation_checks', lambda rows: rows)
     node.gate_audit_enabled=True
     node.gate_audit_output_path=str(tmp_path/'planning.json')
     node.mujoco_audit_output_path=str(tmp_path/'mujoco.json')
@@ -85,7 +128,7 @@ def context(configured, monkeypatch, tmp_path):
     checks=[]
     def strict(target,observation=False):
         checks.append((target,observation))
-        result=base.MoveItResult(True,.3,.2,'checked',True,True,True,True)
+        result=base.MoveItResult(True,.3,.2,'checked observation_screened_duration_sec=2.0',True,True,True,True)
         return result,{},{}
     monkeypatch.setattr(node,'_strict_moveit_evaluation',strict)
     monkeypatch.setattr(node,'_commit_strict_moveit_evaluation',lambda _pose,evaluation:evaluation[0])

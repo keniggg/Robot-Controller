@@ -16,7 +16,8 @@
         "**/install/**": true,
         "**/.ros_log/**": true,
         "**/.pytest_cache/**": true,
-        "**/__pycache__/**": true
+        "**/__pycache__/**": true,
+        "**/.runtime/**": true
     },
     "search.exclude": {
         "**/build/**": true,
@@ -24,6 +25,13 @@
         "**/install/**": true,
         "**/.ros_log/**": true,
         "**/.pytest_cache/**": true,
-        "**/__pycache__/**": true
+        "**/__pycache__/**": true,
+        "**/.runtime/**": true
+    },
+    "extensions.experimental.affinity": {
+        "ranch-hand-robotics.rde-ros-2": 2
+    },
+    "files.exclude": {
+        "**/.runtime/**": true
     }
 }

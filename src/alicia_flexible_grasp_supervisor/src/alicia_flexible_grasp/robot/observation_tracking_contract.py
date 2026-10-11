@@ -166,6 +166,9 @@ def qualify_contract_path(plan, hold, scene, fk, gripper, opening, constraints, 
         attempts.append(dict(path_position_tolerance_rad=contract['path_position_tolerance_rad'],
                              ok=report['ok'], failure_location=report.get('failure_location'),
                              reason=report.get('reason', '')))
+        if 'candidate_rejection_code' in report:
+            attempts[-1]['candidate_rejection_code'] = report['candidate_rejection_code']
+            attempts[-1]['candidate_rejection_at_start'] = report['candidate_rejection_at_start']
         if report['ok']:
             report['execution_tracking_contract'] = contract
             report['command_derivative_bounds'] = derivatives

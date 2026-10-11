@@ -190,6 +190,17 @@ def _linear_quantiles(values, fractions):
 
 
 def _bilateral_surface_measurement(
+    fused_surface, contact_center_base, jaw_axis_base, insertion_axis_base,
+    finger_geometry, minimum_points_per_side, support_normal_base=None,
+):
+    # Preserve the contact consumer's original common-height evidence exactly.
+    return _bilateral_surface_measurement_details(
+        fused_surface, contact_center_base, jaw_axis_base, insertion_axis_base,
+        finger_geometry, minimum_points_per_side, support_normal_base,
+    )[:4]
+
+
+def _bilateral_surface_measurement_details(
     fused_surface,
     contact_center_base,
     jaw_axis_base,
@@ -198,6 +209,11 @@ def _bilateral_surface_measurement(
     minimum_points_per_side,
     support_normal_base=None,
 ):
+    """Original contact result plus independent jaw-band masks for view choice.
+
+    The fifth result is observational evidence only. It must not substitute
+    for common-height masks or authorize contact.
+    """
     if not isinstance(fused_surface, FusedTargetSurface):
         raise ValueError('fused_surface must be a FusedTargetSurface')
     center = _readonly_vector(contact_center_base, 'contact_center_base')
@@ -232,7 +248,7 @@ def _bilateral_surface_measurement(
                             rel_tol=0.0, abs_tol=1e-6):
             raise ValueError('support normal must be unit length')
     except (TypeError, ValueError):
-        return None, None, None, None
+        return None, None, None, None, None
 
     # The fixed Alicia semantic mapping is tool Y = jaw, tool Z = insertion,
     # and cross(Y, Z) = tool X.  The configured finger X/Z box dimensions are
@@ -264,7 +280,7 @@ def _bilateral_surface_measurement(
     )
     footprint_indices = np.flatnonzero(footprint)
     if len(footprint_indices) < 2:
-        return None, None, None, footprint
+        return None, None, None, footprint, None
 
     footprint_jaw = jaw_projection[footprint]
     lower, upper = _linear_quantiles(
@@ -276,7 +292,7 @@ def _bilateral_surface_measurement(
     upper = float(upper)
     width = upper - lower
     if not math.isfinite(width) or width <= 1e-9:
-        return None, None, None, footprint
+        return None, None, None, footprint, None
 
     # A measured point can support one side only when it lies within the
     # existing fixed jaw-clearance contract of that robust measured extreme.
@@ -291,6 +307,9 @@ def _bilateral_surface_measurement(
         footprint & (np.abs(jaw_projection - upper) <= side_depth)
         & (jaw_projection > midpoint)
     )
+    # Common-support intersection below mutates its masks in place. Preserve
+    # the independent side footprints before that operation for view selection.
+    side_masks = (negative_mask.copy(), positive_mask.copy())
     negative_count = int(np.count_nonzero(negative_mask))
     positive_count = int(np.count_nonzero(positive_mask))
     negative_views = int(np.unique(
@@ -307,7 +326,7 @@ def _bilateral_surface_measurement(
         width,
     )
     if negative_count < minimum or positive_count < minimum:
-        return counts, None, None, (negative_mask, positive_mask)
+        return counts, None, None, (negative_mask, positive_mask), side_masks
 
     # Require actual common support-normal extent before using insertion
     # coordinates for physical CAD overlap. Top-plane samples cannot acquire
@@ -319,7 +338,7 @@ def _bilateral_surface_measurement(
     support_lower = max(float(negative_support[0]), float(positive_support[0]))
     support_upper = min(float(negative_support[1]), float(positive_support[1]))
     if support_upper - support_lower <= 1e-9:
-        return counts, None, None, (negative_mask, positive_mask)
+        return counts, None, None, (negative_mask, positive_mask), side_masks
     common_support = ((support_projection >= support_lower)
                       & (support_projection <= support_upper))
     negative_mask &= common_support
@@ -332,7 +351,7 @@ def _bilateral_surface_measurement(
         width,
     )
     if counts[0] < minimum or counts[1] < minimum:
-        return counts, None, None, (negative_mask, positive_mask)
+        return counts, None, None, (negative_mask, positive_mask), side_masks
 
     negative_heights = insertion_projection[negative_mask]
     positive_heights = insertion_projection[positive_mask]
@@ -353,12 +372,13 @@ def _bilateral_surface_measurement(
         or not math.isfinite(common_upper)
         or common_upper <= common_lower
     ):
-        return counts, None, None, (negative_mask, positive_mask)
+        return counts, None, None, (negative_mask, positive_mask), side_masks
     return (
         counts,
         common_lower,
         common_upper,
         (negative_mask, positive_mask),
+        side_masks,
     )
 
 
@@ -462,6 +482,26 @@ def bilateral_surface_contact_bounds_m(
     if lower is None or upper is None:
         return None
     return float(lower), float(upper)
+
+
+def insufficient_measured_common_height(bounds_m, required_overlap_m):
+    """Positive but insufficient measured height is an observation deficit.
+
+    This predicate supplies no contact decision: tilt-specific contact still
+    runs the existing measured overlap and CAD checks. Invalid measurements
+    are not evidence that another view is justified.
+    """
+    if (not isinstance(bounds_m, (tuple, list, np.ndarray))
+            or (isinstance(bounds_m, np.ndarray) and bounds_m.shape != (2,))
+            or len(bounds_m) != 2
+            or any(isinstance(value, (bool, np.bool_, str))
+                   or not isinstance(value, (int, float, np.integer, np.floating))
+                   or not np.isfinite(value) for value in bounds_m)
+            or isinstance(required_overlap_m, (bool, np.bool_, str))
+            or not isinstance(required_overlap_m, (int, float, np.integer, np.floating))
+            or not np.isfinite(required_overlap_m) or required_overlap_m <= 0.):
+        return False
+    return 0. < float(bounds_m[1]) - float(bounds_m[0]) < float(required_overlap_m)
 
 
 @dataclass(frozen=True)
