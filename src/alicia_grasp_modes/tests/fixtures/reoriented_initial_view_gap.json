@@ -1,0 +1,156 @@
+{
+  "source_report": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/reoriented_observe_return_grasp_20260930T030005Z/planning_audit_initial.json",
+  "source_sha256": "392d904a0c04b9f0b93883df6edc6ebd79a050de31b3dd03e44bd8608e586768",
+  "scope": "recorded_initial_observation_no_executed_motion",
+  "tabletop_geometry": {
+    "plan_phase": "CONTACT_EXECUTION_PLAN",
+    "contact_execution_gate_deferred": false,
+    "failure_code": "",
+    "materialized_count": 32,
+    "surface_evidence_rejections": [
+      {
+        "angle_deg": 41.816391655457124,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.020015925221975275,
+        "positive_reach_m": 0.020015925221975275
+      },
+      {
+        "angle_deg": 25.00000000000001,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.02088777222023418,
+        "positive_reach_m": 0.02088777222023418
+      },
+      {
+        "angle_deg": 30.000000000000004,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.020438443881422356,
+        "positive_reach_m": 0.020438443881422356
+      },
+      {
+        "angle_deg": 35.00000000000001,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.020154853718249675,
+        "positive_reach_m": 0.020154853718249675
+      },
+      {
+        "angle_deg": 40.000000000000014,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.02002573625598838,
+        "positive_reach_m": 0.02002573625598838
+      },
+      {
+        "angle_deg": 45.00000000000001,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.020046090836779766,
+        "positive_reach_m": 0.020046090836779766
+      },
+      {
+        "angle_deg": 50.0,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.02021670048395814,
+        "positive_reach_m": 0.02021670048395814
+      },
+      {
+        "angle_deg": 55.000000000000014,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.020544206488608753,
+        "positive_reach_m": 0.020544206488608753
+      },
+      {
+        "angle_deg": 60.00000000000001,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.021041752226401367,
+        "positive_reach_m": 0.021041752226401367
+      },
+      {
+        "angle_deg": 65.00000000000001,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.021730315584681664,
+        "positive_reach_m": 0.021730315584681664
+      },
+      {
+        "angle_deg": 70.00000000000001,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.022640992079335863,
+        "positive_reach_m": 0.022640992079335863
+      },
+      {
+        "angle_deg": 75.00000000000001,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.023818720450914297,
+        "positive_reach_m": 0.023818720450914297
+      }
+    ]
+  },
+  "geometry": {
+    "R_base_obb": [
+      [
+        -0.6663450812102395,
+        -0.744837455426711,
+        -0.034661184924666626
+      ],
+      [
+        0.7441069549638023,
+        -0.6672358112364616,
+        0.033184511117674176
+      ],
+      [
+        -0.04784425066209478,
+        -0.003679293014102236,
+        0.9988480317252967
+      ]
+    ],
+    "obb_size_xyz_m": [
+      0.06429981411079998,
+      0.03903185044395056,
+      0.02262633081987237
+    ],
+    "support_normal_base": [
+      -0.034661184924666626,
+      0.033184511117674176,
+      0.9988480317252967
+    ]
+  },
+  "audit": {
+    "request_id": 2,
+    "generation": 3,
+    "target_epoch": 9,
+    "snapshot_stamp_ns": 1790737208988904476,
+    "moveit_selection": {
+      "aperture_metric": "max_measured_band_and_frozen_obb_projected_width",
+      "checked_count": 44,
+      "comparison_budget_after_incumbent_sec": 8.0,
+      "configured_top_n": 24,
+      "global_time_optimality_claimed": false,
+      "motion_metric": "strict_sequence_hardware_duration_lower_bound",
+      "optimality_scope": "checked_hard_safe_candidates_only",
+      "physical_aperture_and_gates_unchanged": true,
+      "policy": "CHECKED_HARDWARE_DURATION_THEN_JOINT_MOTION",
+      "publication_reserve_sec": 2.0,
+      "ranking_order": [
+        "execution_duration_lower_bound_sec",
+        "joint_max_delta_rad",
+        "joint_path_cost",
+        "aperture_width_m"
+      ],
+      "reachable_count": 0,
+      "shortlist_count": 44,
+      "terminated_early": false,
+      "termination_reason": "",
+      "unchecked_tail_is_not_rejected": true
+    },
+    "selected": null
+  }
+}

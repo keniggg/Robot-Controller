@@ -1,0 +1,83 @@
+{
+  "record_id": "20261015T030730.930818Z_2ff7836aaadc4172980c58ba2741d935",
+  "result": "failure_before_contact_pregrasp_submission",
+  "reason": "CONTACT_PREGRASP_EXECUTION_REJECTED: strict cached execute blocked: OBSERVATION_PATH_INVALID: CONTACT_PREGRASP_INSUFFICIENT_EXECUTION_TIME",
+  "plan_id": "ebf0466d14712c960fefe190",
+  "plan_source_ns": 1792033697347306728,
+  "trajectory_sha256": "04e3a3c5277509d2a4f89c20e7db2203cd6cc7aa67c395e7cbbe386ef47bbabf",
+  "final_duration_sec": 135.853162666,
+  "applied_time_scale": 1.5151837967183253,
+  "limiting_joint": "Joint6",
+  "joint_velocity_limits_rad_s": {
+    "Joint1": 0.08,
+    "Joint2": 0.08,
+    "Joint3": 0.02,
+    "Joint4": 0.02,
+    "Joint5": 0.08,
+    "Joint6": 0.02
+  },
+  "start_sdk_rad": [
+    -2.0877478523123574,
+    -0.38196121618352463,
+    0.9526020692769832,
+    -0.20095148321301898,
+    -1.1305438406717176,
+    0.018407769454627694
+  ],
+  "goal_sdk_rad": [
+    -1.923611908008594,
+    -0.5031456984264903,
+    1.0983302441261191,
+    0.015339807878856412,
+    -1.0737865515199487,
+    -1.7748157715836868
+  ],
+  "net_travel_duration_lower_bounds_sec": {
+    "Joint1": 2.0516993037970415,
+    "Joint2": 1.5148060280370703,
+    "Joint3": 7.286408742456795,
+    "Joint4": 10.814564554593769,
+    "Joint5": 0.7094661143971115,
+    "Joint6": 89.66117705191571
+  },
+  "local_compute_cap_sec": 60.0,
+  "controller_goal_time_sec": 8.0,
+  "executor_margin_sec": 2.0,
+  "outer_ros_deadline_ns": 1792034262257087230,
+  "audit_local_monotonic_deadline": 9598.755953906,
+  "source_snapshot_ros_sec": 1792033736.808115,
+  "stage_timings": [
+    {
+      "stage": "moveit_seed",
+      "elapsed_sec": 0.025394221000169637,
+      "completed": true
+    },
+    {
+      "stage": "held_endpoint_selection",
+      "elapsed_sec": 1.5299224569989747,
+      "completed": true
+    },
+    {
+      "stage": "selected_path_validation",
+      "elapsed_sec": 3.4028871819991764,
+      "completed": true
+    },
+    {
+      "stage": "frozen_path_validation",
+      "elapsed_sec": 0.38093636600024183,
+      "completed": true
+    }
+  ],
+  "sources": {
+    "manifest": {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261015T030730.930818Z_2ff7836aaadc4172980c58ba2741d935/manifest.json",
+      "sha256": "953e390213ecccbac7caf5378ef3a78e60ec8fee941bbd542f3f210e5b8c98d4"
+    },
+    "speed_audit": {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen22_restart_20261015T003700Z/core.log",
+      "line": 24708,
+      "log_stamp": 1792033738.640476
+    }
+  },
+  "caveat": "Controller goal_time 8 seconds is repository/live launch configuration; full path audit was not emitted because time admission raised before returning it. Exact remaining seconds at rejection were not recorded. Stage timings sum excludes other service overhead."
+}

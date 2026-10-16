@@ -1,0 +1,6 @@
+float32 contact_threshold_mn
+float32 target_force_mn
+float32 max_force_mn
+---
+bool success
+string message

@@ -1,0 +1,362 @@
+{
+  "record": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261011T012545.114130Z_eeaa272415b840acbb66eb2c6bd76625",
+  "audit": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261011T012545.114130Z_eeaa272415b840acbb66eb2c6bd76625/keyframes_audits/9e8c9caee267df85d8d5d9f308b85dc5d598777b0c1398906fce3181a7c4881f.json",
+  "audit_sha256": "9e8c9caee267df85d8d5d9f308b85dc5d598777b0c1398906fce3181a7c4881f",
+  "plan_id": "952c88e67ff5a28b3b74642a",
+  "frozen_geometry_source_ns": 1791682000370131731,
+  "geometry_center_base_m": [
+    -0.12223770100731272,
+    -0.3647175879834521,
+    0.011886045532587059
+  ],
+  "geometry_size_xyz_m": [
+    0.05649021784591552,
+    0.035122438929299254,
+    0.020661231582546215
+  ],
+  "geometry_axes_base": [
+    [
+      -0.891143157168909,
+      -0.45139068143240124,
+      -0.045938286287386755
+    ],
+    [
+      0.44844290720028956,
+      -0.891648325128958,
+      0.06214678814288589
+    ],
+    [
+      -0.06901327707609531,
+      0.03478098633904374,
+      0.997009253004455
+    ]
+  ],
+  "camera": {
+    "width": 653,
+    "height": 489,
+    "intrinsics": [
+      395.7682800292969,
+      395.6027526855469,
+      324.9961242675781,
+      250.833984375
+    ],
+    "intrinsics_source": "sdk_color_rectified_pinhole_canvas",
+    "rgb_valid_pixels": 315676,
+    "rgb_canvas_pixels": 319317
+  },
+  "planned": {
+    "obb": {
+      "uv_min_px": [
+        121.57339715876597,
+        59.540175527635796
+      ],
+      "uv_max_px": [
+        288.17858423481175,
+        217.81485746914586
+      ],
+      "minimum_image_edge_distance_px": 59.540175527635796,
+      "required_margin_px": 36.0,
+      "passes_36px": true,
+      "minimum_depth_m": 0.14733011399943824,
+      "maximum_depth_m": 0.18811832988757,
+      "background16_box_xyxy": [
+        105,
+        43,
+        306,
+        235
+      ],
+      "background16_inside_canvas": true,
+      "background16_invalid_rgb_pixels": 0
+    },
+    "prism": {
+      "uv_min_px": [
+        121.42983647597109,
+        40.00000000005693
+      ],
+      "uv_max_px": [
+        297.91468022386334,
+        228.33424182865443
+      ],
+      "minimum_image_edge_distance_px": 40.00000000005693,
+      "required_margin_px": 36.0,
+      "passes_36px": true,
+      "minimum_depth_m": 0.1455555751096915,
+      "maximum_depth_m": 0.19020842468565965,
+      "background16_box_xyxy": [
+        105,
+        24,
+        315,
+        246
+      ],
+      "background16_inside_canvas": true,
+      "background16_invalid_rgb_pixels": 0
+    },
+    "base_from_camera": [
+      [
+        0.3716197304096809,
+        0.46284587600740335,
+        -0.8047810081215734,
+        -0.17159609497948913
+      ],
+      [
+        -0.13382010575324815,
+        -0.8311030392079166,
+        -0.5397776556282725,
+        -0.2759125084840767
+      ],
+      [
+        -0.918689803615141,
+        0.3082879064807827,
+        -0.24691620329834688,
+        0.16155328164537391
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "logged_obb": {
+      "actual_arrival_measurement_required": true,
+      "camera_frame_convention": "ros_camera_link_x_forward_y_left_z_up",
+      "camera_transform_source": "planned_camera_pose",
+      "certifies_collision_tracking_calibration_or_occlusion": false,
+      "certifies_grasp_success": false,
+      "certifies_information_sufficiency": false,
+      "certifies_source_freshness_or_tf_lookup": false,
+      "depth_metric": "optical_forward_x",
+      "evidence_kind": "planned_endpoint_geometry",
+      "image_height": 489,
+      "image_width": 653,
+      "kind": "planned_observation_working_volume",
+      "maximum_camera_depth_m": 0.5,
+      "maximum_depth_m": 0.18811832988757,
+      "minimum_camera_depth_m": 0.07,
+      "minimum_depth_m": 0.14733011399943824,
+      "minimum_image_edge_distance_px": 59.540175527635796,
+      "ok": true,
+      "radial_distance_is_acceptance_gate": false,
+      "required_image_margin_px": 36.0,
+      "requires_independent_information_quality_check": true,
+      "snapshot_stamp_ns": 1791682000370131731,
+      "target_center_radial_distance_m": 0.18089465101556665,
+      "target_corner_depths_m": [
+        0.18811832988757,
+        0.1686692866013659,
+        0.18529525330410432,
+        0.16584621001790023,
+        0.16960223386910805,
+        0.15015319058290394,
+        0.16677915728564235,
+        0.14733011399943824
+      ],
+      "target_model_corner_count": 8,
+      "target_uv_max_px": [
+        288.17858423481175,
+        217.81485746914586
+      ],
+      "target_uv_min_px": [
+        121.57339715876597,
+        59.540175527635796
+      ],
+      "visible_surface_points_are_complete_geometry_evidence": false,
+      "visible_surface_points_available": false
+    }
+  },
+  "measured_source_frames": [
+    {
+      "received_ns": 1791682023210608482,
+      "source_ns": 1791682022768042564,
+      "detected": true,
+      "obb_projection": {
+        "uv_min_px": [
+          89.6656365696632,
+          31.139970754524143
+        ],
+        "uv_max_px": [
+          271.0688460944532,
+          205.13751454309445
+        ],
+        "minimum_image_edge_distance_px": 31.139970754524143,
+        "required_margin_px": 36.0,
+        "passes_36px": false,
+        "minimum_depth_m": 0.1345072318991996,
+        "maximum_depth_m": 0.1762141714105625,
+        "background16_box_xyxy": [
+          73,
+          15,
+          289,
+          223
+        ],
+        "background16_inside_canvas": true,
+        "background16_invalid_rgb_pixels": 0
+      },
+      "prism_projection": {
+        "uv_min_px": [
+          89.50597311170202,
+          9.178893744496122
+        ],
+        "uv_max_px": [
+          281.4446687399617,
+          216.46136456700856
+        ],
+        "minimum_image_edge_distance_px": 9.178893744496122,
+        "required_margin_px": 36.0,
+        "passes_36px": false,
+        "minimum_depth_m": 0.1325692992429276,
+        "maximum_depth_m": 0.17823708690227222,
+        "background16_box_xyxy": [
+          73,
+          -7,
+          299,
+          234
+        ],
+        "background16_inside_canvas": false,
+        "background16_invalid_rgb_pixels": null
+      },
+      "base_from_camera": [
+        [
+          0.3834574313249536,
+          0.47046387568100956,
+          -0.7947478468299691,
+          -0.16917922791948958
+        ],
+        [
+          -0.10373917333011615,
+          -0.8331409144180225,
+          -0.5432443286767807,
+          -0.2750680005409557
+        ],
+        [
+          -0.9177137801506812,
+          0.29075755949227794,
+          -0.2706685414296277,
+          0.15142895422789893
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "tool_position_error_mm": 9.332965033702868,
+      "tool_orientation_error_deg": 1.8532702036505049,
+      "accepted_q_before_source": [
+        -2.155243006979326,
+        -0.1564660403643354,
+        0.4479223900626072,
+        -0.4264466590322082,
+        -1.1336118022474888,
+        -0.1718058482431918
+      ],
+      "strict_goal_minus_actual_rad": [
+        -0.003848230797256047,
+        0.025796095123930246,
+        0.008523258626600638,
+        -0.00624381299564053,
+        -0.0025606209699977622,
+        -0.006745917026932807
+      ]
+    },
+    {
+      "received_ns": 1791682023750757217,
+      "source_ns": 1791682023302822113,
+      "detected": true,
+      "obb_projection": {
+        "uv_min_px": [
+          89.66563656966323,
+          31.1399707545238
+        ],
+        "uv_max_px": [
+          271.0688460944532,
+          205.13751454309408
+        ],
+        "minimum_image_edge_distance_px": 31.1399707545238,
+        "required_margin_px": 36.0,
+        "passes_36px": false,
+        "minimum_depth_m": 0.1345072318991997,
+        "maximum_depth_m": 0.1762141714105626,
+        "background16_box_xyxy": [
+          73,
+          15,
+          289,
+          223
+        ],
+        "background16_inside_canvas": true,
+        "background16_invalid_rgb_pixels": 0
+      },
+      "prism_projection": {
+        "uv_min_px": [
+          89.5059731117021,
+          9.178893744495781
+        ],
+        "uv_max_px": [
+          281.4446687399617,
+          216.4613645670082
+        ],
+        "minimum_image_edge_distance_px": 9.178893744495781,
+        "required_margin_px": 36.0,
+        "passes_36px": false,
+        "minimum_depth_m": 0.13256929924292768,
+        "maximum_depth_m": 0.1782370869022723,
+        "background16_box_xyxy": [
+          73,
+          -7,
+          299,
+          234
+        ],
+        "background16_inside_canvas": false,
+        "background16_invalid_rgb_pixels": null
+      },
+      "base_from_camera": [
+        [
+          0.3834574313249536,
+          0.47046387568100956,
+          -0.7947478468299691,
+          -0.1691792279194895
+        ],
+        [
+          -0.10373917333011615,
+          -0.8331409144180225,
+          -0.5432443286767807,
+          -0.2750680005409556
+        ],
+        [
+          -0.9177137801506812,
+          0.29075755949227794,
+          -0.2706685414296277,
+          0.15142895422789904
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "tool_position_error_mm": 9.332965033702877,
+      "tool_orientation_error_deg": 1.8532702036505049,
+      "accepted_q_before_source": [
+        -2.155243006979326,
+        -0.1564660403643354,
+        0.4479223900626072,
+        -0.4264466590322082,
+        -1.1336118022474888,
+        -0.1718058482431918
+      ],
+      "strict_goal_minus_actual_rad": [
+        -0.003848230797256047,
+        0.025796095123930246,
+        0.008523258626600638,
+        -0.00624381299564053,
+        -0.0025606209699977622,
+        -0.006745917026932807
+      ]
+    }
+  ],
+  "source_report": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/gen4_analysis/planned_vs_measured_observation_projection.json",
+  "source_report_sha256": "37119519d253bb3c4c83e8362983607fd229264ef623f725395c280ed06493da",
+  "scope": "Exact recorded GEN4 frozen OBB, camera and image-bound TF. Tests only working-volume geometry. Does not replay RGB, robot tracking or the separate frozen prism approval."
+}

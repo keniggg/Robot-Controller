@@ -1,0 +1,23 @@
+<launch>
+  <arg name="color_topic" default="/supervisor/camera/color/image_raw" />
+  <arg name="output_root" default="$(env HOME)/carton_dataset/raw_rgb" />
+
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/rgb_dataset_camera.yaml" />
+  <param name="/camera/color_topic" value="$(arg color_topic)" />
+
+  <node
+    pkg="alicia_flexible_grasp_supervisor"
+    type="camera_node.py"
+    name="rgb_dataset_camera"
+    output="screen" />
+
+  <node
+    pkg="alicia_flexible_grasp_supervisor"
+    type="rgb_dataset_collector_gui.py"
+    name="rgb_dataset_collector_gui"
+    output="screen"
+    required="true">
+    <param name="color_topic" value="$(arg color_topic)" />
+    <param name="output_root" value="$(arg output_root)" />
+  </node>
+</launch>

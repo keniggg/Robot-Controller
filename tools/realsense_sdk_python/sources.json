@@ -1,0 +1,39 @@
+{
+  "sdk_version": "2.56.5",
+  "source": {
+    "url": "https://codeload.github.com/realsenseai/librealsense/tar.gz/refs/tags/v2.56.5",
+    "sha256": "58b2029eb7179afc7ea893c25be38a65b42c5b6d27330c8c611bc0e0a4ac5a85"
+  },
+  "ubuntu_focal_amd64_core": {
+    "url": "https://librealsense.realsenseai.com/Debian/apt-repo/pool/focal/main/librealsense2_2.56.5-0~realsense.17053_amd64.deb",
+    "sha256": "3d7102572f70ab0221f1c6340ec3f1390e51683672105e092cc787fe87e668ee",
+    "package_version": "2.56.5-0~realsense.17053",
+    "installation": "Extract with dpkg-deb -x only; no global package install."
+  },
+  "dependencies": {
+    "pybind11": {
+      "repository": "https://github.com/pybind/pybind11.git",
+      "commit": "a2e59f0e7065404b44dfe92a28aca47ba1378dc4"
+    },
+    "pybind11-json": {
+      "repository": "https://github.com/pybind/pybind11_json.git",
+      "commit": "32043f433ed987b2c2ce99d689ec337bcbd4ba95"
+    },
+    "nlohmann-json": {
+      "repository": "https://github.com/nlohmann/json.git",
+      "commit": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03"
+    }
+  },
+  "python": "CPython 3.8.10 (locally built bindings; no upstream 2.56.x cp38 wheel)",
+  "binding_compile_flags": "-O1 -g0 -DNDEBUG; no LTO; two low-priority jobs",
+  "upstream_d405_fix": "https://github.com/realsenseai/librealsense/commit/68a6fe3e54229a995ce07bb75206cd45ff757d29",
+  "runtime_layout": {
+    "extension": "pyrealsense2.cpython-38-x86_64-linux-gnu.so",
+    "core": "lib/librealsense2.so.2.56.5",
+    "soname_link": "lib/librealsense2.so.2.56 -> librealsense2.so.2.56.5",
+    "rpath": [
+      "$ORIGIN",
+      "$ORIGIN/lib"
+    ]
+  }
+}

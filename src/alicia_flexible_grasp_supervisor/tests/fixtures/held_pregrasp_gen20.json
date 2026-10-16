@@ -1,0 +1,930 @@
+{
+  "schema": "recorded_gen20_held_pregrasp_v1",
+  "source_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_restart_20261010T002347Z/gen20_analysis/held_same_start_search.json",
+  "source_sha256": "c2f167fb7f0c57df798fbf8cbf39ee65ba51dcd1895080574265c16136990738",
+  "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "model_path": "deployment/2026-10-08/runtime/candidate_models/expanded_metric_20260929/alicia_expanded_metric_candidate.urdf",
+  "cases": [
+    {
+      "plan_id": "babeb76ec5021110e711490f",
+      "source_stamp_ns": 1791622018303965806,
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "selection": {
+        "generation": 20,
+        "mode": "unknown",
+        "stamp_ns": "1791621970669396162",
+        "strategy": "observe_return"
+      },
+      "sample": {
+        "accepted_gripper_opening_m": 0.04975,
+        "accepted_positions_rad": [
+          -1.8913983114629958,
+          -0.3850291777592959,
+          0.9142525495798423,
+          0.11658253987930874,
+          -1.165825398793087,
+          0.08436894333371027
+        ],
+        "accepted_sample_count": 5,
+        "accepted_stamp_ns": 1791622051339974365,
+        "accepted_tool_position_m": [
+          -0.12081427859638796,
+          -0.3081427739681813,
+          0.08075600198394209
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1791611444239070487,
+        "joint_error_sdk_counts": [
+          -2.0000000000000657,
+          -12.999999999999993,
+          -12.999999999999993,
+          -3.9999999999999956,
+          1.0000000000001052,
+          -3.9999999999999956
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1791622051339974365,
+        "orientation_error_rad": 0.039860261171885625,
+        "position_error_m": 0.012980568367322535,
+        "position_error_vector_m": [
+          0.0022261152222641384,
+          0.006621281776659382,
+          -0.010940666971899687
+        ],
+        "sdk_positions_rad": [
+          -1.8883303498872244,
+          -0.3650874275167826,
+          0.9341942998223556,
+          0.1227184630308513,
+          -1.167359379580973,
+          0.09050486648525283
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1791622051300283261,
+        "sdk_tool_position_m": [
+          -0.1230403938186521,
+          -0.3147640557448407,
+          0.09169666895584178
+        ],
+        "stamp_sec": 1791622051.4173281,
+        "stationary_window_end_ns": 1791622051300283261,
+        "stationary_window_start_ns": 1791622051000283261
+      },
+      "poses": [
+        [
+          -0.09982328196710868,
+          -0.3480235082859193,
+          0.07111462363419647,
+          0.9486510549419918,
+          -0.29752173676696897,
+          0.09861990845534335,
+          0.04261579243510989
+        ],
+        [
+          -0.10403959092817805,
+          -0.345580244240846,
+          0.05245764686275232,
+          0.9486510549419918,
+          -0.29752173676696897,
+          0.09861990845534335,
+          0.04261579243510989
+        ],
+        [
+          -0.09807085287879795,
+          -0.35072923144454815,
+          0.016409243646775696,
+          0.9486510549419918,
+          -0.29752173676696897,
+          0.09861990845534335,
+          0.04261579243510989
+        ],
+        [
+          -0.09953866696091541,
+          -0.3484629494129168,
+          0.062229829283440036,
+          0.9486510549419918,
+          -0.29752173676696897,
+          0.09861990845534335,
+          0.04261579243510989
+        ]
+      ],
+      "nominal_command": [
+        -1.9542915237663068,
+        -0.4740000634566631,
+        0.9955535313377811,
+        -0.21475731030398976,
+        -1.0875923786109196,
+        -1.6950487706136335
+      ],
+      "original": {
+        "actual_path_requires_fresh_execution_check": true,
+        "execution_authorized": false,
+        "future_following_verified": false,
+        "hardware_response_verified": false,
+        "nominal_pregrasp_command_rad": [
+          -1.9542915237663068,
+          -0.4740000634566631,
+          0.9955535313377811,
+          -0.21475731030398976,
+          -1.0875923786109196,
+          -1.6950487706136335
+        ],
+        "predicted_approach": {
+          "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "execution_authorized": false,
+          "fixed_goal_pose": [
+            -0.10403959092817805,
+            -0.345580244240846,
+            0.05245764686275232,
+            0.9486510549419918,
+            -0.29752173676696897,
+            0.09861990845534335,
+            0.04261579243510989
+          ],
+          "future_following_verified": false,
+          "globally_optimal": false,
+          "hardware_response_verified": false,
+          "held_joints": [
+            "Joint2",
+            "Joint5"
+          ],
+          "initial_sdk_counts": [
+            772,
+            1739,
+            2719,
+            1902,
+            1339,
+            911
+          ],
+          "maximum_total_counts": 32,
+          "orientation_error_rad": 0.0702097255959332,
+          "orientation_tolerance_rad": 0.08726646259971647,
+          "position_error_m": 0.01619907790004893,
+          "position_tolerance_m": 0.006,
+          "predicted_command_positions_rad": [
+            -1.9634954084936207,
+            -0.4740000634566631,
+            0.9986214929135524,
+            -0.19941750242513334,
+            -1.0875923786109196,
+            -1.6950487706136335
+          ],
+          "predicted_orientation_error_rad": 0.03967296972229589,
+          "predicted_position_error_m": 0.009543418779292117,
+          "predicted_positions_rad": [
+            -1.966563370069392,
+            -0.49394181369917645,
+            0.9786797426710392,
+            -0.20555342557667589,
+            -1.0860583978230338,
+            -1.701184693765176
+          ],
+          "proposed_delta_counts": [
+            -4,
+            0,
+            -20,
+            16,
+            0,
+            32
+          ],
+          "scope": "conditional_held_axes_endpoint_prediction",
+          "sdk_minus_encoder_rad": [
+            0.003067961575771383,
+            0.019941750242513323,
+            0.019941750242513212,
+            0.006135923151542544,
+            -0.0015339807878858025,
+            0.006135923151542544
+          ],
+          "steps_predicted": 1,
+          "success": false,
+          "virtual_start_positions_rad": [
+            -1.9604274469178495,
+            -0.49394181369917645,
+            1.009359358428752,
+            -0.23009711818284614,
+            -1.0860583978230338,
+            -1.7502720789775166
+          ]
+        },
+        "predicted_pregrasp": {
+          "code": "PREGRASP_HELD_AXES_GUIDE_QUALIFIED",
+          "execution_authorized": false,
+          "fixed_goal_pose": [
+            -0.09982328196710868,
+            -0.3480235082859193,
+            0.07111462363419647,
+            0.9486510549419918,
+            -0.29752173676696897,
+            0.09861990845534335,
+            0.04261579243510989
+          ],
+          "future_following_verified": false,
+          "globally_optimal": false,
+          "hardware_response_verified": false,
+          "held_joints": [
+            "Joint2",
+            "Joint5"
+          ],
+          "initial_sdk_counts": [
+            774,
+            1739,
+            2697,
+            1908,
+            1339,
+            943
+          ],
+          "maximum_total_counts": 32,
+          "orientation_error_rad": 0.041164212694057366,
+          "orientation_tolerance_rad": 0.08726646259971647,
+          "position_error_m": 0.013284594951454988,
+          "position_tolerance_m": 0.01,
+          "predicted_command_positions_rad": [
+            -1.9573594853420782,
+            -0.4740000634566631,
+            1.0293011086712651,
+            -0.2239611950313036,
+            -1.0875923786109196,
+            -1.744136155825974
+          ],
+          "predicted_orientation_error_rad": 0.0702097255959332,
+          "predicted_position_error_m": 0.004416314297330278,
+          "predicted_positions_rad": [
+            -1.9604274469178495,
+            -0.49394181369917645,
+            1.009359358428752,
+            -0.23009711818284614,
+            -1.0860583978230338,
+            -1.7502720789775166
+          ],
+          "proposed_delta_counts": [
+            -2,
+            0,
+            22,
+            -6,
+            0,
+            -32
+          ],
+          "scope": "conditional_held_axes_endpoint_prediction",
+          "sdk_minus_encoder_rad": [
+            0.003067961575771383,
+            0.019941750242513323,
+            0.019941750242513323,
+            0.006135923151542544,
+            -0.0015339807878858025,
+            0.006135923151542544
+          ],
+          "steps_predicted": 1,
+          "success": true,
+          "virtual_start_positions_rad": [
+            -1.9573594853420782,
+            -0.49394181369917645,
+            0.9756117810952678,
+            -0.2208932334555323,
+            -1.0860583978230338,
+            -1.701184693765176
+          ]
+        },
+        "scope": "constant_current_bias_held_approach_prediction",
+        "sdk_minus_encoder_rad": [
+          0.003067961575771383,
+          0.019941750242513323,
+          0.019941750242513323,
+          0.006135923151542558,
+          -0.0015339807878858025,
+          0.006135923151542558
+        ],
+        "source_accepted_stamp_ns": 1791622051339974365,
+        "source_sdk_stamp_ns": 1791622051300283261,
+        "success": false
+      }
+    },
+    {
+      "plan_id": "20db0bb5dba0ca9840475805",
+      "source_stamp_ns": 1791622018303965806,
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "selection": {
+        "generation": 20,
+        "mode": "unknown",
+        "stamp_ns": "1791621970669396162",
+        "strategy": "observe_return"
+      },
+      "sample": {
+        "accepted_gripper_opening_m": 0.04975,
+        "accepted_positions_rad": [
+          -1.8913983114629958,
+          -0.3850291777592959,
+          0.9142525495798423,
+          0.11658253987930874,
+          -1.165825398793087,
+          0.08436894333371027
+        ],
+        "accepted_sample_count": 5,
+        "accepted_stamp_ns": 1791622050639978981,
+        "accepted_tool_position_m": [
+          -0.12081427859638796,
+          -0.3081427739681813,
+          0.08075600198394209
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1791611444239070487,
+        "joint_error_sdk_counts": [
+          -2.0000000000000657,
+          -12.999999999999993,
+          -12.999999999999993,
+          -3.9999999999999956,
+          1.0000000000001052,
+          -3.9999999999999956
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1791622050639978981,
+        "orientation_error_rad": 0.039860261171885625,
+        "position_error_m": 0.012980568367322535,
+        "position_error_vector_m": [
+          0.0022261152222641384,
+          0.006621281776659382,
+          -0.010940666971899687
+        ],
+        "sdk_positions_rad": [
+          -1.8883303498872244,
+          -0.3650874275167826,
+          0.9341942998223556,
+          0.1227184630308513,
+          -1.167359379580973,
+          0.09050486648525283
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1791622050560223434,
+        "sdk_tool_position_m": [
+          -0.1230403938186521,
+          -0.3147640557448407,
+          0.09169666895584178
+        ],
+        "stamp_sec": 1791622050.6599977,
+        "stationary_window_end_ns": 1791622050560223434,
+        "stationary_window_start_ns": 1791622050260223434
+      },
+      "poses": [
+        [
+          -0.10022363766418974,
+          -0.347746000881545,
+          0.07102480472421781,
+          0.9494288991428396,
+          -0.29786165007826626,
+          0.09082662527425432,
+          0.04017122137001062
+        ],
+        [
+          -0.10395221451906198,
+          -0.34564041771098736,
+          0.05249172329253114,
+          0.9494288991428396,
+          -0.29786165007826626,
+          0.09082662527425432,
+          0.04017122137001062
+        ],
+        [
+          -0.098471208575879,
+          -0.35045172404017383,
+          0.016319424736797032,
+          0.9494288991428396,
+          -0.29786165007826626,
+          0.09082662527425432,
+          0.04017122137001062
+        ],
+        [
+          -0.09993902265799647,
+          -0.34818544200854246,
+          0.062140010373461375,
+          0.9494288991428396,
+          -0.29786165007826626,
+          0.09082662527425432,
+          0.04017122137001062
+        ]
+      ],
+      "nominal_command": [
+        -1.9481556006147642,
+        -0.47553404424454876,
+        1.000155473701438,
+        -0.19481556006147643,
+        -1.0921943209745766,
+        -1.71038857849249
+      ],
+      "original": {
+        "actual_path_requires_fresh_execution_check": true,
+        "execution_authorized": false,
+        "future_following_verified": false,
+        "hardware_response_verified": false,
+        "nominal_pregrasp_command_rad": [
+          -1.9481556006147642,
+          -0.47553404424454876,
+          1.000155473701438,
+          -0.19481556006147643,
+          -1.0921943209745766,
+          -1.71038857849249
+        ],
+        "predicted_approach": {
+          "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "execution_authorized": false,
+          "fixed_goal_pose": [
+            -0.10395221451906198,
+            -0.34564041771098736,
+            0.05249172329253114,
+            0.9494288991428396,
+            -0.29786165007826626,
+            0.09082662527425432,
+            0.04017122137001062
+          ],
+          "future_following_verified": false,
+          "globally_optimal": false,
+          "hardware_response_verified": false,
+          "held_joints": [
+            "Joint2",
+            "Joint5"
+          ],
+          "initial_sdk_counts": [
+            778,
+            1738,
+            2724,
+            1917,
+            1336,
+            901
+          ],
+          "maximum_total_counts": 32,
+          "orientation_error_rad": 0.06423357980557182,
+          "orientation_tolerance_rad": 0.08726646259971647,
+          "position_error_m": 0.01635062205810291,
+          "position_tolerance_m": 0.006,
+          "predicted_command_positions_rad": [
+            -1.9573594853420782,
+            -0.47553404424454876,
+            1.0032234352772094,
+            -0.1856116753341626,
+            -1.0921943209745766,
+            -1.71038857849249
+          ],
+          "predicted_orientation_error_rad": 0.040284067898862894,
+          "predicted_position_error_m": 0.009592371934846713,
+          "predicted_positions_rad": [
+            -1.9604274469178495,
+            -0.4954757944870621,
+            0.9832816850346959,
+            -0.19174759848570513,
+            -1.0906603401866908,
+            -1.7165245016440325
+          ],
+          "proposed_delta_counts": [
+            -6,
+            0,
+            -22,
+            10,
+            0,
+            32
+          ],
+          "scope": "conditional_held_axes_endpoint_prediction",
+          "sdk_minus_encoder_rad": [
+            0.003067961575771383,
+            0.019941750242513323,
+            0.019941750242513434,
+            0.006135923151542544,
+            -0.0015339807878858025,
+            0.006135923151542544
+          ],
+          "steps_predicted": 1,
+          "success": false,
+          "virtual_start_positions_rad": [
+            -1.9512235621905356,
+            -0.4954757944870621,
+            1.01702926236818,
+            -0.20708740636456155,
+            -1.0906603401866908,
+            -1.765611886856373
+          ]
+        },
+        "predicted_pregrasp": {
+          "code": "PREGRASP_HELD_AXES_GUIDE_QUALIFIED",
+          "execution_authorized": false,
+          "fixed_goal_pose": [
+            -0.10022363766418974,
+            -0.347746000881545,
+            0.07102480472421781,
+            0.9494288991428396,
+            -0.29786165007826626,
+            0.09082662527425432,
+            0.04017122137001062
+          ],
+          "future_following_verified": false,
+          "globally_optimal": false,
+          "hardware_response_verified": false,
+          "held_joints": [
+            "Joint2",
+            "Joint5"
+          ],
+          "initial_sdk_counts": [
+            778,
+            1738,
+            2700,
+            1921,
+            1336,
+            933
+          ],
+          "maximum_total_counts": 32,
+          "orientation_error_rad": 0.04146239887310333,
+          "orientation_tolerance_rad": 0.08726646259971647,
+          "position_error_m": 0.013551944249858396,
+          "position_tolerance_m": 0.01,
+          "predicted_command_positions_rad": [
+            -1.9481556006147642,
+            -0.47553404424454876,
+            1.0369710126106935,
+            -0.200951483213019,
+            -1.0921943209745766,
+            -1.7594759637048305
+          ],
+          "predicted_orientation_error_rad": 0.06423357980557182,
+          "predicted_position_error_m": 0.0044736867906647135,
+          "predicted_positions_rad": [
+            -1.9512235621905356,
+            -0.4954757944870621,
+            1.01702926236818,
+            -0.20708740636456155,
+            -1.0906603401866908,
+            -1.765611886856373
+          ],
+          "proposed_delta_counts": [
+            0,
+            0,
+            24,
+            -4,
+            0,
+            -32
+          ],
+          "scope": "conditional_held_axes_endpoint_prediction",
+          "sdk_minus_encoder_rad": [
+            0.003067961575771383,
+            0.019941750242513323,
+            0.019941750242513323,
+            0.006135923151542544,
+            -0.0015339807878858025,
+            0.006135923151542544
+          ],
+          "steps_predicted": 1,
+          "success": true,
+          "virtual_start_positions_rad": [
+            -1.9512235621905356,
+            -0.4954757944870621,
+            0.9802137234589247,
+            -0.20095148321301898,
+            -1.0906603401866908,
+            -1.7165245016440325
+          ]
+        },
+        "scope": "constant_current_bias_held_approach_prediction",
+        "sdk_minus_encoder_rad": [
+          0.003067961575771383,
+          0.019941750242513323,
+          0.019941750242513323,
+          0.006135923151542558,
+          -0.0015339807878858025,
+          0.006135923151542558
+        ],
+        "source_accepted_stamp_ns": 1791622050639978981,
+        "source_sdk_stamp_ns": 1791622050560223434,
+        "success": false
+      }
+    },
+    {
+      "plan_id": "efaf7540c4953e6b90236db3",
+      "source_stamp_ns": 1791622018303965806,
+      "request": {
+        "generation": 7,
+        "request_id": 13,
+        "target_epoch": 4
+      },
+      "selection": {
+        "generation": 20,
+        "mode": "unknown",
+        "stamp_ns": "1791621970669396162",
+        "strategy": "observe_return"
+      },
+      "sample": {
+        "accepted_gripper_opening_m": 0.04975,
+        "accepted_positions_rad": [
+          -1.8913983114629958,
+          -0.3850291777592959,
+          0.9142525495798423,
+          0.11658253987930874,
+          -1.165825398793087,
+          0.08436894333371027
+        ],
+        "accepted_sample_count": 5,
+        "accepted_stamp_ns": 1791622049440009539,
+        "accepted_tool_position_m": [
+          -0.12081427859638796,
+          -0.3081427739681813,
+          0.08075600198394209
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1791611444239070487,
+        "joint_error_sdk_counts": [
+          -2.0000000000000657,
+          -12.999999999999993,
+          -12.999999999999993,
+          -3.9999999999999956,
+          1.0000000000001052,
+          -3.9999999999999956
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1791622049440009539,
+        "orientation_error_rad": 0.039860261171885625,
+        "position_error_m": 0.012980568367322535,
+        "position_error_vector_m": [
+          0.0022261152222641384,
+          0.006621281776659382,
+          -0.010940666971899687
+        ],
+        "sdk_positions_rad": [
+          -1.8883303498872244,
+          -0.3650874275167826,
+          0.9341942998223556,
+          0.1227184630308513,
+          -1.167359379580973,
+          0.09050486648525283
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1791622049420283946,
+        "sdk_tool_position_m": [
+          -0.1230403938186521,
+          -0.3147640557448407,
+          0.09169666895584178
+        ],
+        "stamp_sec": 1791622049.4714124,
+        "stationary_window_end_ns": 1791622049420283946,
+        "stationary_window_start_ns": 1791622049120283946
+      },
+      "poses": [
+        [
+          -0.09952421056941783,
+          -0.3489599724086284,
+          0.07129790278184275,
+          0.29752173676696897,
+          0.9486510549419918,
+          -0.04261579243510991,
+          0.09861990845534334
+        ],
+        [
+          -0.1037405195304872,
+          -0.346516708363555,
+          0.05264092601039861,
+          0.29752173676696897,
+          0.9486510549419918,
+          -0.04261579243510991,
+          0.09861990845534334
+        ],
+        [
+          -0.09777178148110711,
+          -0.35166569556725724,
+          0.016592522794421985,
+          0.29752173676696897,
+          0.9486510549419918,
+          -0.04261579243510991,
+          0.09861990845534334
+        ],
+        [
+          -0.09923959556322456,
+          -0.3493994135356259,
+          0.06241310843108633,
+          0.29752173676696897,
+          0.9486510549419918,
+          -0.04261579243510991,
+          0.09861990845534334
+        ]
+      ],
+      "nominal_command": [
+        -1.9542915237663068,
+        -0.47553404424454876,
+        0.9986214929135524,
+        -0.21475731030398976,
+        -1.0906603401866908,
+        1.445009902188274
+      ],
+      "original": {
+        "actual_path_requires_fresh_execution_check": true,
+        "execution_authorized": false,
+        "future_following_verified": false,
+        "hardware_response_verified": false,
+        "nominal_pregrasp_command_rad": [
+          -1.9542915237663068,
+          -0.47553404424454876,
+          0.9986214929135524,
+          -0.21475731030398976,
+          -1.0906603401866908,
+          1.445009902188274
+        ],
+        "predicted_approach": {
+          "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "execution_authorized": false,
+          "fixed_goal_pose": [
+            -0.1037405195304872,
+            -0.346516708363555,
+            0.05264092601039861,
+            0.29752173676696897,
+            0.9486510549419918,
+            -0.04261579243510991,
+            0.09861990845534334
+          ],
+          "future_following_verified": false,
+          "globally_optimal": false,
+          "hardware_response_verified": false,
+          "held_joints": [
+            "Joint2",
+            "Joint5"
+          ],
+          "initial_sdk_counts": [
+            774,
+            1738,
+            2721,
+            1904,
+            1337,
+            3022
+          ],
+          "maximum_total_counts": 32,
+          "orientation_error_rad": 0.0342072946858667,
+          "orientation_tolerance_rad": 0.08726646259971647,
+          "position_error_m": 0.016152911687945134,
+          "position_tolerance_m": 0.006,
+          "predicted_command_positions_rad": [
+            -1.9696313316451632,
+            -0.47553404424454876,
+            0.9986214929135524,
+            -0.21475731030398976,
+            -1.0906603401866908,
+            1.445009902188274
+          ],
+          "predicted_orientation_error_rad": 0.0497804285288903,
+          "predicted_position_error_m": 0.009629225358712799,
+          "predicted_positions_rad": [
+            -1.9726992932209346,
+            -0.4954757944870621,
+            0.978679742671039,
+            -0.2208932334555323,
+            -1.089126359398805,
+            1.4388739790367315
+          ],
+          "proposed_delta_counts": [
+            -10,
+            0,
+            -22,
+            4,
+            0,
+            -32
+          ],
+          "scope": "conditional_held_axes_endpoint_prediction",
+          "sdk_minus_encoder_rad": [
+            0.003067961575771383,
+            0.019941750242513323,
+            0.019941750242513434,
+            0.006135923151542544,
+            -0.0015339807878858025,
+            0.006135923151542544
+          ],
+          "steps_predicted": 1,
+          "success": false,
+          "virtual_start_positions_rad": [
+            -1.9573594853420782,
+            -0.4954757944870621,
+            1.012427320004523,
+            -0.22702915660707487,
+            -1.089126359398805,
+            1.4879613642490719
+          ]
+        },
+        "predicted_pregrasp": {
+          "code": "PREGRASP_HELD_AXES_GUIDE_QUALIFIED",
+          "execution_authorized": false,
+          "fixed_goal_pose": [
+            -0.09952421056941783,
+            -0.3489599724086284,
+            0.07129790278184275,
+            0.29752173676696897,
+            0.9486510549419918,
+            -0.04261579243510991,
+            0.09861990845534334
+          ],
+          "future_following_verified": false,
+          "globally_optimal": false,
+          "hardware_response_verified": false,
+          "held_joints": [
+            "Joint2",
+            "Joint5"
+          ],
+          "initial_sdk_counts": [
+            774,
+            1738,
+            2699,
+            1908,
+            1337,
+            2990
+          ],
+          "maximum_total_counts": 32,
+          "orientation_error_rad": 0.04313444421130837,
+          "orientation_tolerance_rad": 0.08726646259971647,
+          "position_error_m": 0.013291813758459227,
+          "position_tolerance_m": 0.01,
+          "predicted_command_positions_rad": [
+            -1.9542915237663068,
+            -0.47553404424454876,
+            1.0323690702470365,
+            -0.22089323345553233,
+            -1.0906603401866908,
+            1.4940972874006144
+          ],
+          "predicted_orientation_error_rad": 0.0342072946858667,
+          "predicted_position_error_m": 0.004478080845401395,
+          "predicted_positions_rad": [
+            -1.9573594853420782,
+            -0.4954757944870621,
+            1.012427320004523,
+            -0.22702915660707487,
+            -1.089126359398805,
+            1.4879613642490719
+          ],
+          "proposed_delta_counts": [
+            0,
+            0,
+            22,
+            -4,
+            0,
+            32
+          ],
+          "scope": "conditional_held_axes_endpoint_prediction",
+          "sdk_minus_encoder_rad": [
+            0.003067961575771383,
+            0.019941750242513323,
+            0.019941750242513323,
+            0.006135923151542544,
+            -0.0015339807878858025,
+            0.006135923151542544
+          ],
+          "steps_predicted": 1,
+          "success": true,
+          "virtual_start_positions_rad": [
+            -1.9573594853420782,
+            -0.4954757944870621,
+            0.9786797426710391,
+            -0.2208932334555323,
+            -1.089126359398805,
+            1.4388739790367315
+          ]
+        },
+        "scope": "constant_current_bias_held_approach_prediction",
+        "sdk_minus_encoder_rad": [
+          0.003067961575771383,
+          0.019941750242513323,
+          0.019941750242513323,
+          0.006135923151542558,
+          -0.0015339807878858025,
+          0.006135923151542558
+        ],
+        "source_accepted_stamp_ns": 1791622049440009539,
+        "source_sdk_stamp_ns": 1791622049420283946,
+        "success": false
+      }
+    }
+  ]
+}

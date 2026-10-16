@@ -1,0 +1,595 @@
+{
+  "limitation": "The rejected final plans and fused 1694-point cloud were not saved; contact bands are algebraically reconstructed from both saved exact contact-interval endpoints and independently cross-checked against every saved numeric margin field. No full measured-surface or executable-path success is claimed.",
+  "rows": [
+    {
+      "geometry": {
+        "actual_T_base_tool0": [
+          [
+            -0.8747061658140561,
+            0.44596045886898467,
+            -0.1897587747964202,
+            -0.11956389803727614
+          ],
+          [
+            0.44414981810783255,
+            0.8942998414284357,
+            0.054394234031322215,
+            -0.3499133981973438
+          ],
+          [
+            0.19395891977852867,
+            -0.03670235341826496,
+            -0.9803228420739315,
+            0.013193259712290194
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "contact_center_base": [
+          -0.11248222284272966,
+          -0.3531666151344342,
+          0.011798137414064217
+        ],
+        "contact_height_axis_base": [
+          -0.1897587747964202,
+          0.054394234031322215,
+          -0.9803228420739315
+        ],
+        "contact_height_bounds_m": [
+          -0.013441940862940642,
+          -0.01097995009247433
+        ],
+        "minimum_contact_overlap_m": 0.002,
+        "opening_width_m": 0.05,
+        "planned_T_base_tool0": [
+          [
+            -0.8747061658140561,
+            0.44596045886898467,
+            -0.1897587747964202,
+            -0.11956389803727614
+          ],
+          [
+            0.44414981810783255,
+            0.8942998414284357,
+            0.054394234031322215,
+            -0.3499133981973438
+          ],
+          [
+            0.19395891977852867,
+            -0.03670235341826496,
+            -0.9803228420739315,
+            0.013193259712290194
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "support_normal_base": [
+          -0.04799710587768983,
+          0.06594048587936752,
+          0.9966685156807948
+        ],
+        "support_offset_m": 0.01594363470512258
+      },
+      "maximum_numeric_reconstruction_error": 4.85722573273506e-17,
+      "original_report": {
+        "algorithm": "finite_nonconvex_patch_piecewise_linear_projection",
+        "allowed_normal_translation_intervals_m": [
+          [
+            -0.002524949958033527,
+            0.003012685512951276
+          ]
+        ],
+        "code": "CONTACT_HEIGHT_NORMAL_MARGIN_INSUFFICIENT",
+        "contact_normal_translation_intervals_m": [
+          [
+            -0.04362152663841985,
+            0.003012685512951276
+          ]
+        ],
+        "covers_entire_normal_translation_interval": false,
+        "diagnostic_only": true,
+        "endpoint_diagnostics": [
+          {
+            "actual_overlap_m": 0.0024619907704663026,
+            "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+            "minimum_contact_overlap_m": 0.002,
+            "minimum_support_clearance_m": 0.002848182344787167,
+            "normal_translation_m": -0.0026767676132463574,
+            "ok": false,
+            "planned_overlap_m": 0.0024619907704663026,
+            "reason": "measured CAD support clearance 0.002848m is below unchanged 0.003000m requirement",
+            "support_clearances_m": [
+              [
+                "left_finger",
+                0.002925656368399093
+              ],
+              [
+                "right_finger",
+                0.002848182344787167
+              ],
+              [
+                "palm",
+                0.03585211231594136
+              ]
+            ]
+          },
+          {
+            "actual_overlap_m": 0.0024619907704663026,
+            "code": "MEASURED_CONTACT_GEOMETRY_OK",
+            "minimum_contact_overlap_m": 0.002,
+            "minimum_support_clearance_m": 0.008201717571279889,
+            "normal_translation_m": 0.0026767676132463574,
+            "ok": true,
+            "planned_overlap_m": 0.0024619907704663026,
+            "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+            "support_clearances_m": [
+              [
+                "left_finger",
+                0.008279191594891815
+              ],
+              [
+                "right_finger",
+                0.008201717571279889
+              ],
+              [
+                "palm",
+                0.04120564754243408
+              ]
+            ]
+          }
+        ],
+        "evaluated": true,
+        "evidence_limit_semantics": "caller_supplied_empirical_translation_evidence",
+        "full_3d_robustness_proven": false,
+        "maximum_symmetric_normal_translation_m": 0.002524949958033527,
+        "minimum_contact_overlap_m": 0.002,
+        "minimum_support_clearance_m": 0.003,
+        "motion_authorized": false,
+        "nominal": {
+          "actual_overlap_m": 0.0024619907704663026,
+          "code": "MEASURED_CONTACT_GEOMETRY_OK",
+          "minimum_contact_overlap_m": 0.002,
+          "minimum_support_clearance_m": 0.005524949958033527,
+          "ok": true,
+          "planned_overlap_m": 0.0024619907704663026,
+          "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+          "support_clearances_m": [
+            [
+              "left_finger",
+              0.005602423981645451
+            ],
+            [
+              "right_finger",
+              0.005524949958033527
+            ],
+            [
+              "palm",
+              0.03852887992918773
+            ]
+          ]
+        },
+        "ok": false,
+        "physical_grip_verified": false,
+        "reason": "support-normal translation evidence limit +/-2.676768 mm; maximum symmetric contact/support margin 2.524950 mm. Registration calibration/evidence must resolve a tighter normal-direction error budget; a historical maximum error is not a certified bound on future error.",
+        "scope": "support_normal_translation_1d_necessary_condition",
+        "support_minimum_normal_translation_m": -0.002524949958033527,
+        "translation_convention": "positive_gripper_translation_along_support_normal",
+        "translation_evidence_limit_m": 0.0026767676132463574,
+        "uncertainty_is_certified_bound": false
+      },
+      "registered_sequence": [
+        [
+          [
+            -0.8747061658140561,
+            0.44596045886898467,
+            -0.1897587747964202,
+            -0.12241010024741064
+          ],
+          [
+            0.44414981810783255,
+            0.8942998414284357,
+            0.054394234031322215,
+            -0.3461782992539696
+          ],
+          [
+            0.19395891977852867,
+            -0.03670235341826496,
+            -0.9803228420739315,
+            0.06962028839658524
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          [
+            -0.8747061658140561,
+            0.44596045886898467,
+            -0.1897587747964202,
+            -0.11217780046936567
+          ],
+          [
+            0.44414981810783255,
+            0.8942998414284357,
+            0.054394234031322215,
+            -0.3520306184424583
+          ],
+          [
+            0.19395891977852867,
+            -0.03670235341826496,
+            -0.9803228420739315,
+            0.05135096897963503
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          [
+            -0.8747061658140561,
+            0.44596045886898467,
+            -0.1897587747964202,
+            -0.11956389803727614
+          ],
+          [
+            0.44414981810783255,
+            0.8942998414284357,
+            0.054394234031322215,
+            -0.3499133981973438
+          ],
+          [
+            0.19395891977852867,
+            -0.03670235341826496,
+            -0.9803228420739315,
+            0.013193259712290194
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          [
+            -0.8747061658140561,
+            0.44596045886898467,
+            -0.1897587747964202,
+            -0.1218610068331515
+          ],
+          [
+            0.44414981810783255,
+            0.8942998414284357,
+            0.054394234031322215,
+            -0.3468988799014409
+          ],
+          [
+            0.19395891977852867,
+            -0.03670235341826496,
+            -0.9803228420739315,
+            0.05873430505835526
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      ],
+      "track_id": 26,
+      "variant_index": 1
+    },
+    {
+      "geometry": {
+        "actual_T_base_tool0": [
+          [
+            -0.8559109781334768,
+            0.42090874518494376,
+            0.3004200821140796,
+            -0.10476743329393651
+          ],
+          [
+            0.38264131789703737,
+            0.9062745707365518,
+            -0.17958848591793716,
+            -0.3569495655737795
+          ],
+          [
+            -0.3478534452159603,
+            -0.03875862050066417,
+            -0.9367474312685754,
+            0.014864051558534937
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "contact_center_base": [
+          -0.11248222284272966,
+          -0.3531666151344342,
+          0.011798137414064217
+        ],
+        "contact_height_axis_base": [
+          0.3004200821140796,
+          -0.17958848591793716,
+          -0.9367474312685754
+        ],
+        "contact_height_bounds_m": [
+          -0.015182610571007775,
+          -0.0036161162621616717
+        ],
+        "minimum_contact_overlap_m": 0.002,
+        "opening_width_m": 0.05,
+        "planned_T_base_tool0": [
+          [
+            -0.8559109781334768,
+            0.42090874518494376,
+            0.3004200821140796,
+            -0.10476743329393651
+          ],
+          [
+            0.38264131789703737,
+            0.9062745707365518,
+            -0.17958848591793716,
+            -0.3569495655737795
+          ],
+          [
+            -0.3478534452159603,
+            -0.03875862050066417,
+            -0.9367474312685754,
+            0.014864051558534937
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "support_normal_base": [
+          -0.04799710587768983,
+          0.06594048587936752,
+          0.9966685156807948
+        ],
+        "support_offset_m": 0.01594363470512258
+      },
+      "maximum_numeric_reconstruction_error": 1.43982048506075e-16,
+      "original_report": {
+        "algorithm": "finite_nonconvex_patch_piecewise_linear_projection",
+        "allowed_normal_translation_intervals_m": [
+          [
+            -0.0024506165441608536,
+            0.002967824662253547
+          ]
+        ],
+        "code": "CONTACT_HEIGHT_NORMAL_MARGIN_INSUFFICIENT",
+        "contact_normal_translation_intervals_m": [
+          [
+            -0.05621365433266503,
+            0.002967824662253547
+          ]
+        ],
+        "covers_entire_normal_translation_interval": false,
+        "diagnostic_only": true,
+        "endpoint_diagnostics": [
+          {
+            "actual_overlap_m": 0.011566494308845997,
+            "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+            "minimum_contact_overlap_m": 0.002,
+            "minimum_support_clearance_m": 0.0027738489309144902,
+            "normal_translation_m": -0.0026767676132463574,
+            "ok": false,
+            "planned_overlap_m": 0.00817727538976191,
+            "reason": "measured CAD support clearance 0.002774m is below unchanged 0.003000m requirement",
+            "support_clearances_m": [
+              [
+                "left_finger",
+                0.002846812301907734
+              ],
+              [
+                "right_finger",
+                0.0027738489309144902
+              ],
+              [
+                "palm",
+                0.056591691449685816
+              ]
+            ]
+          },
+          {
+            "actual_overlap_m": 0.002605810568500235,
+            "code": "MEASURED_CONTACT_GEOMETRY_OK",
+            "minimum_contact_overlap_m": 0.002,
+            "minimum_support_clearance_m": 0.00812738415740721,
+            "normal_translation_m": 0.0026767676132463574,
+            "ok": true,
+            "planned_overlap_m": 0.00817727538976191,
+            "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+            "support_clearances_m": [
+              [
+                "left_finger",
+                0.008200347528400456
+              ],
+              [
+                "right_finger",
+                0.00812738415740721
+              ],
+              [
+                "palm",
+                0.061945226676178536
+              ]
+            ]
+          }
+        ],
+        "evaluated": true,
+        "evidence_limit_semantics": "caller_supplied_empirical_translation_evidence",
+        "full_3d_robustness_proven": false,
+        "maximum_symmetric_normal_translation_m": 0.0024506165441608536,
+        "minimum_contact_overlap_m": 0.002,
+        "minimum_support_clearance_m": 0.003,
+        "motion_authorized": false,
+        "nominal": {
+          "actual_overlap_m": 0.00817727538976191,
+          "code": "MEASURED_CONTACT_GEOMETRY_OK",
+          "minimum_contact_overlap_m": 0.002,
+          "minimum_support_clearance_m": 0.005450616544160854,
+          "ok": true,
+          "planned_overlap_m": 0.00817727538976191,
+          "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+          "support_clearances_m": [
+            [
+              "left_finger",
+              0.005523579915154099
+            ],
+            [
+              "right_finger",
+              0.005450616544160854
+            ],
+            [
+              "palm",
+              0.05926845906293218
+            ]
+          ]
+        },
+        "ok": false,
+        "physical_grip_verified": false,
+        "reason": "support-normal translation evidence limit +/-2.676768 mm; maximum symmetric contact/support margin 2.450617 mm. Registration calibration/evidence must resolve a tighter normal-direction error budget; a historical maximum error is not a certified bound on future error.",
+        "scope": "support_normal_translation_1d_necessary_condition",
+        "support_minimum_normal_translation_m": -0.0024506165441608536,
+        "translation_convention": "positive_gripper_translation_along_support_normal",
+        "translation_evidence_limit_m": 0.0026767676132463574,
+        "uncertainty_is_certified_bound": false
+      },
+      "registered_sequence": [
+        [
+          [
+            -0.8559109781334768,
+            0.42090874518494376,
+            0.3004200821140796,
+            -0.107613635504071
+          ],
+          [
+            0.38264131789703737,
+            0.9062745707365518,
+            -0.17958848591793716,
+            -0.3532144666304053
+          ],
+          [
+            -0.3478534452159603,
+            -0.03875862050066417,
+            -0.9367474312685754,
+            0.07129108024283
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          [
+            -0.8559109781334768,
+            0.42090874518494376,
+            0.3004200821140796,
+            -0.11646086902693396
+          ],
+          [
+            0.38264131789703737,
+            0.9062745707365518,
+            -0.17958848591793716,
+            -0.3499593324186262
+          ],
+          [
+            -0.3478534452159603,
+            -0.03875862050066417,
+            -0.9367474312685754,
+            0.05132564829503407
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          [
+            -0.8559109781334768,
+            0.42090874518494376,
+            0.3004200821140796,
+            -0.10476743329393651
+          ],
+          [
+            0.38264131789703737,
+            0.9062745707365518,
+            -0.17958848591793716,
+            -0.3569495655737795
+          ],
+          [
+            -0.3478534452159603,
+            -0.03875862050066417,
+            -0.9367474312685754,
+            0.014864051558534937
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          [
+            -0.8559109781334768,
+            0.42090874518494376,
+            0.3004200821140796,
+            -0.10706454208981186
+          ],
+          [
+            0.38264131789703737,
+            0.9062745707365518,
+            -0.17958848591793716,
+            -0.35393504727787656
+          ],
+          [
+            -0.3478534452159603,
+            -0.03875862050066417,
+            -0.9367474312685754,
+            0.0604050969046
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      ],
+      "track_id": 29,
+      "variant_index": 0
+    }
+  ],
+  "schema": 1,
+  "scope": "R4 original analytic boundary reconstruction, not raw fused-cloud replay",
+  "source_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20261013T094326.672604Z_0b39e4a7c8514b43b66ae320b8aaeea8/keyframes_audits/9e12828cc1e87b1d0ab9cdc2ff824ec9b1863d544266c9857599a9c5b7b48105.json",
+  "source_sha256": "9e12828cc1e87b1d0ab9cdc2ff824ec9b1863d544266c9857599a9c5b7b48105"
+}

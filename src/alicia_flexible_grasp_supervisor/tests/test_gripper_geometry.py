@@ -1,0 +1,2013 @@
+#!/usr/bin/env python3
+import pathlib
+import struct
+import sys
+import warnings
+import xml.etree.ElementTree as ET
+from dataclasses import fields
+
+import numpy as np
+import pytest
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+for path in (ROOT, ROOT / 'src'):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from alicia_flexible_grasp.grasp import gripper_geometry  # noqa: E402
+from alicia_flexible_grasp.grasp.gripper_geometry import (  # noqa: E402
+    ANALYTICAL_FINGER_BOX_PADDING_XYZ_M,
+    ANALYTICAL_FINGER_CONTACT_PATCH_TOOL_XZ_M,
+    ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M,
+    ANALYTICAL_PALM_CENTER_TOOL_XYZ_M,
+    ANALYTICAL_PALM_SIZE_XYZ_M,
+    BilateralSurfaceEvidence,
+    CandidateGateResult,
+    GRIPPER_CONTRACT_TOLERANCE_M,
+    GripperGeometry,
+    _carried_obb_pose,
+    _bilateral_surface_measurement,
+    _linear_quantiles,
+    candidate_rank_key,
+    bilateral_contact_height_bounds_m,
+    bilateral_surface_contact_bounds_m,
+    contact_height_axis_base,
+    evaluate_candidate,
+    evaluate_bilateral_surface_evidence,
+    evaluate_bilateral_surface_evidence_and_bounds,
+    evaluate_explicit_candidate,
+    evaluate_open_gripper_observation_envelope,
+    finger_contact_patch_height_intervals_m,
+    finger_contact_patch_margin_m,
+    finger_contact_patch_overlap_m,
+    gripper_box_centers,
+    gripper_contract_mismatch_reason,
+    projected_cloud_width_m,
+    required_open_width_m,
+)
+from alicia_flexible_grasp.vision.multiview_surface import (  # noqa: E402
+    SurfaceView,
+    append_registered_view,
+    fused_surface_from_view,
+)
+from alicia_flexible_grasp.vision.target_observation import (  # noqa: E402
+    TargetTrackIdentity,
+)
+
+
+GRIPPER = GripperGeometry(
+    max_inner_gap_m=0.050,
+    jaw_clearance_each_side_m=0.002,
+    finger_size_xyz_m=np.array([0.0434, 0.0286, 0.0600]),
+    palm_size_xyz_m=np.array([0.1175, 0.1550, 0.0774]),
+    support_clearance_m=0.003,
+)
+
+
+@pytest.mark.parametrize('values,fractions,expected', [
+    ([7.0], [0.0, 0.05, 0.5, 0.95, 1.0], [7.0] * 5),
+    ([4.0, 0.0], [0.0, 0.25, 0.5, 0.75, 1.0], [0., 1., 2., 3., 4.]),
+    ([2.0, -2.0, 2.0, -2.0], [0.0, 0.5, 1.0], [-2., 0., 2.]),
+    ([-1e308, 1e308], [0.0, 0.25, 0.5, 0.75, 1.0],
+     [-1e308, -5e307, 0.0, 5e307, 1e308]),
+])
+def test_linear_quantiles_are_warning_free_finite_and_order_invariant(
+    values, fractions, expected,
+):
+    # Catches deprecated NumPy keywords and subtraction overflow in interpolation.
+    for ordered in (values, values[::-1]):
+        with warnings.catch_warnings(record=True) as emitted:
+            warnings.simplefilter('always')
+            actual = _linear_quantiles(ordered, fractions)
+        assert not emitted, [str(item.message) for item in emitted]
+        assert np.all(np.isfinite(actual))
+        np.testing.assert_allclose(actual, expected, rtol=1e-15, atol=0.0)
+
+
+def measured_surface_fixture(include_negative=True, include_positive=True,
+                             reverse_and_duplicate=False, outside_jaw_points=False,
+                             width_m=0.035, many_outside_jaw_points=False):
+    identity = TargetTrackIdentity.from_stream(7, 11)
+    xs = np.linspace(-0.020, 0.020, 17)
+    ys = np.linspace(-0.5 * width_m, 0.5 * width_m, 15)
+    zs = np.linspace(0.0, 0.021, 15)
+    top = np.asarray([(x, y, 0.021) for x in xs for y in ys])
+    negative = np.asarray(
+        [(x, -0.5 * width_m, z) for x in xs for z in zs[:-1]]
+    )
+    positive = np.asarray(
+        [(x, 0.5 * width_m, z) for x in xs for z in zs[:-1]]
+    )
+    reference_points = np.vstack(
+        (top, negative) if include_negative else (top,)
+    )
+    moving_points = np.vstack(
+        (top, positive) if include_positive else (top,)
+    )
+    if outside_jaw_points:
+        outliers = np.asarray([
+            (x, y, z) for x in (-0.020, 0.020)
+            for y in (-0.021, 0.021)
+            for z in (0.0075, 0.010, 0.0125)
+        ])
+        reference_points = np.vstack((reference_points, outliers))
+        moving_points = np.vstack((moving_points, outliers))
+    if many_outside_jaw_points:
+        # Deliberately overwhelm a trimmed statistic with samples that are
+        # physically outside the maximum jaw travel.  A robust extreme alone
+        # must not turn these points into near-side support.
+        outliers = np.asarray([
+            (x, y, z) for x in np.linspace(-0.020, 0.020, 17)
+            for y in (-0.100, 0.100)
+            for z in np.linspace(0.0, 0.021, 15)
+        ])
+        reference_points = np.vstack((reference_points, outliers))
+        moving_points = np.vstack((moving_points, outliers))
+    if reverse_and_duplicate:
+        reference_points = np.repeat(reference_points[::-1], 2, axis=0)
+        moving_points = np.repeat(moving_points[::-1], 2, axis=0)
+    reference = SurfaceView(
+        identity, 1_000_000_000, reference_points,
+        np.array([0.0, 0.0, 1.0]), 0.0, 12,
+    )
+    if not include_positive:
+        return fused_surface_from_view(reference), reference
+    moving = SurfaceView(
+        identity, 1_100_000_000, moving_points,
+        np.array([0.0, 0.0, 1.0]), 0.0, 12,
+    )
+    registration, fused = append_registered_view(
+        fused_surface_from_view(reference), reference, moving
+    )
+    assert registration.ok
+    return fused, reference
+
+
+def test_bilateral_surface_evidence_interface_is_frozen_and_exact():
+    fused, reference = measured_surface_fixture()
+
+    evidence = evaluate_bilateral_surface_evidence(
+        fused,
+        np.array([0.0, 0.0, 0.0105]),
+        np.array([0.0, 1.0, 0.0]),
+        np.array([0.0, 0.0, -1.0]),
+        GRIPPER,
+        support_normal_base=reference.support_normal_base,
+    )
+
+    assert isinstance(evidence, BilateralSurfaceEvidence)
+    assert evidence.__dataclass_params__.frozen is True
+    assert [item.name for item in fields(BilateralSurfaceEvidence)] == [
+        'ok',
+        'code',
+        'negative_jaw_points',
+        'positive_jaw_points',
+        'negative_view_count',
+        'positive_view_count',
+        'measured_width_m',
+        'contact_height_m',
+    ]
+    assert evidence.ok is True
+    assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_OK'
+    assert evidence.negative_jaw_points >= 12
+    assert evidence.positive_jaw_points >= 12
+    assert evidence.negative_view_count >= 1
+    assert evidence.positive_view_count >= 1
+    assert evidence.measured_width_m == pytest.approx(0.035, abs=0.0025)
+    assert abs(evidence.contact_height_m) < 0.003
+
+
+def test_bilateral_authorization_requires_support_normal():
+    # An insertion direction alone cannot distinguish a tilted top plane.
+    fused, _reference = measured_surface_fixture()
+    evidence = evaluate_bilateral_surface_evidence(
+        fused, [0.0, 0.0, 0.0105], [0.0, 1.0, 0.0],
+        [0.0, 0.0, -1.0], GRIPPER,
+    )
+    assert not evidence.ok
+    assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+@pytest.mark.parametrize('case,expected_ok', [
+    ('bilateral', True),
+    ('tilted', True),
+    ('reversed_jaw', True),
+    ('top_only', False),
+    ('one_sided', False),
+    ('insufficient_points', False),
+    ('outside_footprint', False),
+    ('missing_normal', False),
+    ('invalid_normal', False),
+])
+def test_combined_bilateral_result_matches_existing_contract_with_one_measurement(
+    case, expected_ok, monkeypatch,
+):
+    fused, reference = measured_surface_fixture(
+        include_negative=case != 'top_only',
+        include_positive=case not in ('top_only', 'one_sided'),
+    )
+    tilt = np.deg2rad(35.0 if case == 'tilted' else 0.0)
+    values = dict(
+        fused_surface=fused,
+        contact_center_base=[0.1 if case == 'outside_footprint' else 0., 0., 0.0105],
+        jaw_axis_base=[0., -1. if case == 'reversed_jaw' else 1., 0.],
+        insertion_axis_base=[np.sin(tilt), 0., -np.cos(tilt)],
+        finger_geometry=GRIPPER,
+        minimum_points_per_side=10_000 if case == 'insufficient_points' else 12,
+        support_normal_base=(
+            None if case == 'missing_normal'
+            else [0., 0., 2.] if case == 'invalid_normal'
+            else reference.support_normal_base
+        ),
+    )
+    expected_evidence = evaluate_bilateral_surface_evidence(**values)
+    expected_bounds = bilateral_surface_contact_bounds_m(**values)
+    calls = []
+
+    def measure_once(*args, **kwargs):
+        calls.append(1)
+        return _bilateral_surface_measurement(*args, **kwargs)
+
+    monkeypatch.setattr(gripper_geometry, '_bilateral_surface_measurement', measure_once)
+    evidence, bounds = evaluate_bilateral_surface_evidence_and_bounds(**values)
+
+    assert len(calls) == 1
+    assert evidence == expected_evidence
+    assert bounds == expected_bounds
+    assert evidence.ok is expected_ok
+    if expected_ok:
+        assert isinstance(bounds, tuple)
+        assert bounds[0] < bounds[1]
+        assert evidence.contact_height_m == 0.5 * (bounds[0] + bounds[1])
+        assert evidence.measured_width_m == pytest.approx(0.035, abs=0.0025)
+    else:
+        assert bounds is None
+        assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+        assert evidence.contact_height_m == 0.0
+
+
+def test_points_beyond_robust_jaw_band_cannot_count_as_contact_support():
+    records = []
+    for outliers in (False, True):
+        fused, reference = measured_surface_fixture(outside_jaw_points=outliers)
+        evidence = evaluate_bilateral_surface_evidence(
+            fused, [0., 0., 0.0105], [0., 1., 0.], [0., 0., -1.], GRIPPER,
+            support_normal_base=reference.support_normal_base,
+        )
+        assert evidence.ok
+        records.append(evidence)
+    # Added samples are 3.5 mm beyond the measured 35 mm jaw span, outside
+    # the fixed 2 mm contact band, and cannot inflate its supporting count.
+    assert records[1].measured_width_m == records[0].measured_width_m
+    assert records[1].negative_jaw_points == records[0].negative_jaw_points
+
+
+def test_arbitrarily_far_jaw_extremes_are_bounded_by_physical_gap():
+    baseline, reference = measured_surface_fixture()
+    polluted, polluted_reference = measured_surface_fixture(
+        many_outside_jaw_points=True,
+    )
+    kwargs = dict(
+        contact_center_base=[0., 0., 0.0105],
+        jaw_axis_base=[0., 1., 0.],
+        insertion_axis_base=[0., 0., -1.],
+        finger_geometry=GRIPPER,
+    )
+    clean = evaluate_bilateral_surface_evidence(
+        baseline, support_normal_base=reference.support_normal_base, **kwargs
+    )
+    far = evaluate_bilateral_surface_evidence(
+        polluted,
+        support_normal_base=polluted_reference.support_normal_base,
+        **kwargs
+    )
+    assert clean.ok and far.ok
+    assert far.measured_width_m == pytest.approx(clean.measured_width_m)
+    assert far.negative_jaw_points == clean.negative_jaw_points
+    assert far.positive_jaw_points == clean.positive_jaw_points
+
+
+def test_narrow_target_cannot_count_one_sample_for_both_jaws():
+    fused, reference = measured_surface_fixture(include_positive=False, width_m=0.0015)
+    counts, _, _, masks = _bilateral_surface_measurement(
+        fused, [0., 0., 0.0105], [0., 1., 0.], [0., 0., -1.], GRIPPER, 12,
+        support_normal_base=reference.support_normal_base,
+    )
+    assert counts is not None
+    negative, positive = masks
+    assert not np.any(negative & positive)
+
+
+def test_disjoint_jaw_support_heights_cannot_authorize_contact():
+    fused, reference = measured_surface_fixture()
+    points = np.array(fused.points_base, copy=True)
+    # Keep each jaw's measured surface substantial, but separate their
+    # support-normal spans so no common physical insertion interval exists.
+    negative = points[:, 1] < -0.010
+    positive = points[:, 1] > 0.010
+    points[negative, 2] = np.linspace(0.000, 0.006, negative.sum())
+    points[positive, 2] = np.linspace(0.015, 0.021, positive.sum())
+    disjoint = type(fused)(
+        fused.identity, points, fused.view_indices, fused.view_stamps_ns
+    )
+    evidence = evaluate_bilateral_surface_evidence(
+        disjoint, [0., 0., 0.0105], [0., 1., 0.], [0., 0., -1.], GRIPPER,
+        support_normal_base=reference.support_normal_base,
+    )
+    assert not evidence.ok
+    assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+@pytest.mark.parametrize('normal', [None, [0., 0., 0.], [0., 0., 2.],
+                                  [0., 0., float('nan')], [0., 1.]])
+def test_invalid_support_normal_cannot_authorize_bilateral_surface(normal):
+    fused, _ = measured_surface_fixture()
+    evidence = evaluate_bilateral_surface_evidence(
+        fused, [0., 0., 0.0105], [0., 1., 0.], [0., 0., -1.], GRIPPER,
+        support_normal_base=normal,
+    )
+    assert not evidence.ok
+
+
+@pytest.mark.parametrize('tilt_deg', [0., 35., -35.])
+@pytest.mark.parametrize('jaw_sign', [1., -1.])
+def test_measured_bilateral_surface_is_order_duplicate_and_axis_sign_invariant(
+    tilt_deg, jaw_sign,
+):
+    tilt = np.deg2rad(tilt_deg)
+    evidence_by_order = []
+    for duplicated in (False, True):
+        fused, reference = measured_surface_fixture(reverse_and_duplicate=duplicated)
+        evidence = evaluate_bilateral_surface_evidence(
+            fused, [0., 0., 0.0105], [0., jaw_sign, 0.],
+            [np.sin(tilt), 0., -np.cos(tilt)], GRIPPER,
+            support_normal_base=reference.support_normal_base,
+        )
+        assert evidence.ok
+        assert evidence.measured_width_m == pytest.approx(0.035, abs=0.0025)
+        assert evidence.negative_jaw_points >= 12
+        assert evidence.positive_jaw_points >= 12
+        evidence_by_order.append(evidence)
+    assert evidence_by_order[0] == evidence_by_order[1]
+
+
+@pytest.mark.parametrize(
+    'surface_factory',
+    [
+        lambda: measured_surface_fixture(False, False)[0],
+        lambda: measured_surface_fixture(True, False)[0],
+    ],
+)
+def test_top_only_and_one_sided_measured_surfaces_fail_closed(surface_factory):
+    evidence = evaluate_bilateral_surface_evidence(
+        surface_factory(),
+        np.array([0.0, 0.0, 0.0105]),
+        np.array([0.0, 1.0, 0.0]),
+        np.array([0.0, 0.0, -1.0]),
+        GRIPPER,
+        support_normal_base=[0.0, 0.0, 1.0],
+    )
+
+    assert evidence.ok is False
+    assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+def test_sparse_or_outside_physical_finger_footprint_does_not_count():
+    fused, _reference = measured_surface_fixture()
+    sparse = type(fused)(
+        fused.identity,
+        fused.points_base[::40],
+        fused.view_indices[::40],
+        fused.view_stamps_ns,
+    )
+    outside_points = np.array(fused.points_base, copy=True)
+    outside_points[:, 0] += 0.050
+    outside = type(fused)(
+        fused.identity,
+        outside_points,
+        fused.view_indices,
+        fused.view_stamps_ns,
+    )
+
+    for surface in (sparse, outside):
+        evidence = evaluate_bilateral_surface_evidence(
+            surface,
+            np.array([0.0, 0.0, 0.0105]),
+            np.array([0.0, 1.0, 0.0]),
+            np.array([0.0, 0.0, -1.0]),
+            GRIPPER,
+            support_normal_base=_reference.support_normal_base,
+        )
+        assert evidence.ok is False
+        assert evidence.code == 'BILATERAL_SURFACE_EVIDENCE_MISSING'
+
+
+@pytest.mark.parametrize(
+    'override',
+    [
+        {'fused_surface': object()},
+        {'jaw_axis_base': [0.0, 2.0, 0.0]},
+        {'insertion_axis_base': [0.0, 1.0, 0.0]},
+        {'finger_geometry': object()},
+        {'minimum_points_per_side': True},
+        {'minimum_points_per_side': 0},
+    ],
+)
+@pytest.mark.parametrize('evaluate', [
+    evaluate_bilateral_surface_evidence,
+    bilateral_surface_contact_bounds_m,
+    evaluate_bilateral_surface_evidence_and_bounds,
+])
+def test_bilateral_surface_evidence_strictly_validates_contract(override, evaluate):
+    fused, _reference = measured_surface_fixture()
+    values = {
+        'fused_surface': fused,
+        'contact_center_base': [0.0, 0.0, 0.0105],
+        'jaw_axis_base': [0.0, 1.0, 0.0],
+        'insertion_axis_base': [0.0, 0.0, -1.0],
+        'finger_geometry': GRIPPER,
+        'minimum_points_per_side': 12,
+        'support_normal_base': _reference.support_normal_base,
+    }
+    values.update(override)
+
+    with pytest.raises(ValueError):
+        evaluate(**values)
+
+
+CONSERVATIVE_CONTRACT_FIELDS = (
+    ('jaw_clearance', 'jaw_clearance_each_side_m', None),
+    ('support_clearance', 'support_clearance_m', None),
+    ('finger_x', 'finger_size_xyz_m', 0),
+    ('finger_y', 'finger_size_xyz_m', 1),
+    ('finger_z', 'finger_size_xyz_m', 2),
+    ('palm_x', 'palm_size_xyz_m', 0),
+    ('palm_y', 'palm_size_xyz_m', 1),
+    ('palm_z', 'palm_size_xyz_m', 2),
+)
+
+
+def gripper_with_contract_delta(field, index, delta_m):
+    values = {
+        'max_inner_gap_m': GRIPPER.max_inner_gap_m,
+        'jaw_clearance_each_side_m': GRIPPER.jaw_clearance_each_side_m,
+        'finger_size_xyz_m': np.array(GRIPPER.finger_size_xyz_m, copy=True),
+        'palm_size_xyz_m': np.array(GRIPPER.palm_size_xyz_m, copy=True),
+        'support_clearance_m': GRIPPER.support_clearance_m,
+    }
+    if index is None:
+        values[field] = float(values[field]) + float(delta_m)
+    else:
+        values[field][index] += float(delta_m)
+    return GripperGeometry(**values)
+
+
+def fixed_contract_reason(
+    gripper,
+    physical_open_width_m=0.0499375,
+    tolerance_m=GRIPPER_CONTRACT_TOLERANCE_M,
+):
+    return gripper_contract_mismatch_reason(
+        gripper,
+        remote_max_inner_gap_m=0.050,
+        physical_open_width_m=physical_open_width_m,
+        twin_model_name='Alicia_D_v5_6_gripper_50mm',
+        twin_max_inner_gap_m=0.050,
+        tolerance_m=tolerance_m,
+        tool_jaw_axis='y',
+        tool_finger_length_axis='z',
+    )
+
+
+def transform(center, rotation):
+    output = np.eye(4, dtype=float)
+    output[:3, :3] = np.asarray(rotation, dtype=float)
+    output[:3, 3] = np.asarray(center, dtype=float)
+    return output
+
+
+def rotation_about_y(angle):
+    cosine = float(np.cos(angle))
+    sine = float(np.sin(angle))
+    return np.array(
+        [[cosine, 0.0, sine], [0.0, 1.0, 0.0], [-sine, 0.0, cosine]],
+        dtype=float,
+    )
+
+
+def rotation_from_rpy(values):
+    roll, pitch, yaw = np.asarray(values, dtype=float)
+    cr, sr = np.cos(roll), np.sin(roll)
+    cp, sp = np.cos(pitch), np.sin(pitch)
+    cy, sy = np.cos(yaw), np.sin(yaw)
+    return np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ],
+        dtype=float,
+    )
+
+
+def xml_vector(element, attribute):
+    return np.asarray(
+        [float(value) for value in element.attrib[attribute].split()],
+        dtype=float,
+    )
+
+
+def binary_stl_vertices(path):
+    data = path.read_bytes()
+    assert len(data) >= 84
+    triangle_count = struct.unpack_from('<I', data, 80)[0]
+    assert len(data) == 84 + triangle_count * 50
+    vertices = []
+    for index in range(triangle_count):
+        values = struct.unpack_from('<12fH', data, 84 + index * 50)
+        vertices.extend(np.asarray(values[3:12], dtype=float).reshape(3, 3))
+    return np.asarray(vertices, dtype=float)
+
+
+def finger_cad_vertices_tool(robot, urdf_path, joint_name, joint_position):
+    joint = robot.find("./joint[@name='%s']" % joint_name)
+    joint_origin = joint.find('origin')
+    joint_xyz = xml_vector(joint_origin, 'xyz')
+    joint_rotation = rotation_from_rpy(xml_vector(joint_origin, 'rpy'))
+    joint_axis = xml_vector(joint.find('axis'), 'xyz')
+    link = robot.find(
+        "./link[@name='%s']" % joint.find('child').attrib['link']
+    )
+    collision = link.find('collision')
+    collision_origin = collision.find('origin')
+    collision_rotation = rotation_from_rpy(
+        xml_vector(collision_origin, 'rpy')
+    )
+    mesh_path = (
+        urdf_path.parent
+        / collision.find('geometry/mesh').attrib['filename']
+    ).resolve()
+    vertices_link6 = (
+        joint_rotation
+        @ (
+            collision_rotation @ binary_stl_vertices(mesh_path).T
+            + xml_vector(collision_origin, 'xyz').reshape(3, 1)
+            + float(joint_position) * joint_axis.reshape(3, 1)
+        )
+    ).T + joint_xyz
+
+    tool_joint = robot.find("./joint[@name='Grasp2tool']")
+    tool_origin = tool_joint.find('origin')
+    tool_rotation = rotation_from_rpy(xml_vector(tool_origin, 'rpy'))
+    return (
+        tool_rotation.T
+        @ (
+            vertices_link6 - xml_vector(tool_origin, 'xyz')
+        ).T
+    ).T
+
+
+def candidate_fixture(**overrides):
+    rotation = rotation_about_y(np.pi * 0.5)
+    center = np.array([0.0, 0.0, 0.080])
+    depth = 0.030
+    tool0 = center + depth * rotation[:, 2]
+    values = {
+        'gripper': GRIPPER,
+        'candidate_center_base': center,
+        'candidate_tool0_base': tool0,
+        'candidate_depth_m': depth,
+        'R_base_tool': rotation,
+        'candidate_width_m': 0.012,
+        'obb_center_base': center,
+        'R_base_obb': np.eye(3),
+        # A 30 mm GraspNet insertion keeps the physical palm clear of this
+        # 40 mm approach-axis extent while the 40 mm jaw cross-section remains
+        # the quantity exercised by the width gates below.
+        'obb_size_xyz_m': np.array([0.040, 0.040, 0.060]),
+        'support_normal_base': np.array([0.0, 0.0, 1.0]),
+        'support_offset_m': 0.0,
+        'pregrasp_T_base_tool': transform(np.array([-0.050, 0.0, 0.080]), rotation),
+        'approach_T_base_tool': transform(np.array([0.010, 0.0, 0.080]), rotation),
+        'grasp_T_base_tool': transform(tool0, rotation),
+        'lift_T_base_tool': transform(np.array([0.030, 0.0, 0.130]), rotation),
+        'tool_jaw_axis': 'y',
+        'tool_finger_length_axis': 'z',
+        'motion_cost': 0.0,
+    }
+    aliases = {
+        'center_base': 'candidate_center_base',
+        'pregrasp_center_base': 'pregrasp_T_base_tool',
+        'approach_center_base': 'approach_T_base_tool',
+        'grasp_center_base': 'grasp_T_base_tool',
+        'lift_center_base': 'lift_T_base_tool',
+    }
+    for key, value in overrides.items():
+        target = aliases.get(key, key)
+        if target.endswith('_T_base_tool') and np.asarray(value).shape == (3,):
+            values[target] = transform(value, rotation)
+        else:
+            values[target] = value
+    if (
+        (
+            'candidate_center_base' in overrides
+            or 'center_base' in overrides
+            or 'candidate_depth_m' in overrides
+        )
+        and 'candidate_tool0_base' not in overrides
+    ):
+        values['candidate_tool0_base'] = (
+            np.asarray(values['candidate_center_base'], dtype=float)
+            + float(values['candidate_depth_m'])
+            * np.asarray(values['R_base_tool'], dtype=float)[:, 2]
+        )
+    if (
+        (
+            'candidate_center_base' in overrides
+            or 'center_base' in overrides
+            or 'candidate_tool0_base' in overrides
+            or 'candidate_depth_m' in overrides
+        )
+        and 'grasp_T_base_tool' not in overrides
+    ):
+        values['grasp_T_base_tool'] = transform(
+            values['candidate_tool0_base'],
+            values['R_base_tool'],
+        )
+    return values
+
+
+def explicit_carton_fixture(**overrides):
+    rotation = np.diag([-1.0, 1.0, -1.0])
+    contact_center = np.array([0.0, 0.0, 0.0055])
+    tool0 = np.array([0.0004, -0.0003, 0.0034])
+    xs = (-0.0255, 0.0255)
+    ys = (-0.0175, 0.0175)
+    zs = (0.0, 0.011)
+    target_points = np.asarray(
+        [(x, y, z) for x in xs for y in ys for z in zs],
+        dtype=float,
+    )
+    values = {
+        'gripper': GRIPPER,
+        'candidate_center_base': contact_center,
+        'candidate_tool0_base': tool0,
+        'R_base_tool': rotation,
+        'required_open_width_m': 0.039,
+        'target_points_base': target_points,
+        'obb_center_base': contact_center,
+        'R_base_obb': np.eye(3),
+        'obb_size_xyz_m': np.array([0.051, 0.035, 0.011]),
+        'support_normal_base': np.array([0.0, 0.0, 1.0]),
+        'support_offset_m': 0.0,
+        'pregrasp_T_base_tool': transform(
+            tool0 + np.array([0.0, 0.0, 0.080]),
+            rotation,
+        ),
+        'approach_T_base_tool': transform(
+            tool0 + np.array([0.0, 0.0, 0.020]),
+            rotation,
+        ),
+        'grasp_T_base_tool': transform(tool0, rotation),
+        'lift_T_base_tool': transform(
+            tool0 + np.array([0.0, 0.0, 0.050]),
+            rotation,
+        ),
+        'tool_jaw_axis': 'y',
+        'tool_finger_length_axis': 'z',
+        'motion_cost': 0.0,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_gripper_contract_defensively_copies_readonly_arrays():
+    finger = np.array([0.0434, 0.0286, 0.0600])
+    palm = np.array([0.1175, 0.1550, 0.0774])
+    geometry = GripperGeometry(0.050, 0.002, finger, palm, 0.003)
+    finger[:] = 1.0
+    palm[:] = 1.0
+
+    np.testing.assert_allclose(geometry.finger_size_xyz_m, [0.0434, 0.0286, 0.0600])
+    np.testing.assert_allclose(geometry.palm_size_xyz_m, [0.1175, 0.1550, 0.0774])
+    assert not geometry.finger_size_xyz_m.flags.writeable
+    assert not geometry.palm_size_xyz_m.flags.writeable
+    with pytest.raises(ValueError):
+        geometry.finger_size_xyz_m[0] = 0.1
+
+
+@pytest.mark.parametrize(
+    'kwargs',
+    [
+        {'max_inner_gap_m': 0.0},
+        {'jaw_clearance_each_side_m': -0.001},
+        {'finger_size_xyz_m': [0.04, np.nan, 0.06]},
+        {'palm_size_xyz_m': [0.1, 0.1]},
+        {'support_clearance_m': -0.001},
+    ],
+)
+def test_gripper_contract_rejects_invalid_physical_values(kwargs):
+    values = {
+        'max_inner_gap_m': 0.050,
+        'jaw_clearance_each_side_m': 0.002,
+        'finger_size_xyz_m': [0.0434, 0.0286, 0.0600],
+        'palm_size_xyz_m': [0.1175, 0.1550, 0.0774],
+        'support_clearance_m': 0.003,
+    }
+    values.update(kwargs)
+    with pytest.raises(ValueError):
+        GripperGeometry(**values)
+
+
+def test_projected_carton_width_includes_both_clearances():
+    required = required_open_width_m(
+        obb_size_xyz_m=np.array([0.20, 0.040, 0.10]),
+        R_base_obb=np.eye(3),
+        jaw_axis_base=np.array([0.0, 1.0, 0.0]),
+        clearance_each_side_m=0.002,
+    )
+    assert required == pytest.approx(0.044)
+
+
+def test_projected_cloud_width_includes_both_clearances():
+    points = np.array(
+        [[0.0, -0.0175, 0.0], [0.0, 0.0175, 0.0]],
+        dtype=float,
+    )
+
+    required = projected_cloud_width_m(
+        points,
+        jaw_axis=np.array([0.0, 1.0, 0.0]),
+        clearance_each_side_m=0.002,
+    )
+
+    assert required == pytest.approx(0.039)
+
+
+def test_projected_cloud_width_can_trim_sparse_depth_outliers():
+    points = np.zeros((102, 3), dtype=float)
+    points[:100, 1] = np.linspace(-0.019, 0.019, 100)
+    points[100:, 1] = (-0.030, 0.030)
+
+    required = projected_cloud_width_m(
+        points,
+        jaw_axis=np.array([0.0, 1.0, 0.0]),
+        clearance_each_side_m=0.0005,
+        trim_fraction=0.01,
+    )
+
+    assert required < 0.041
+    assert required > 0.038
+
+
+def test_explicit_candidate_uses_same_trimmed_width_contract_as_proposal():
+    fixture = explicit_carton_fixture()
+    points = np.tile(
+        np.asarray(fixture['target_points_base'], dtype=float),
+        (100, 1),
+    )
+    points = np.concatenate(
+        (points, [[0.0, -0.030, 0.0055], [0.0, 0.030, 0.0055]]),
+        axis=0,
+    )
+    fixture['target_points_base'] = points
+    fixture['required_open_width_m'] = projected_cloud_width_m(
+        points,
+        jaw_axis=np.array([0.0, 1.0, 0.0]),
+        clearance_each_side_m=0.002,
+        trim_fraction=0.01,
+    )
+
+    result = evaluate_explicit_candidate(
+        **fixture,
+        width_projection_trim_fraction=0.01,
+    )
+
+    assert result.failure_code != 'GRIPPER_WIDTH_INVALID'
+    assert result.failed_gate != 'jaw_width'
+    assert result.required_open_width_m == pytest.approx(
+        fixture['required_open_width_m']
+    )
+
+
+def test_explicit_candidate_never_requires_or_fabricates_graspnet_depth():
+    result = evaluate_explicit_candidate(**explicit_carton_fixture())
+
+    assert result.ok
+    assert result.required_open_width_m == pytest.approx(0.039, abs=5e-4)
+
+
+def test_explicit_candidate_fails_closed_when_width_disagrees_with_cloud():
+    result = evaluate_explicit_candidate(
+        **explicit_carton_fixture(required_open_width_m=0.030)
+    )
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_WIDTH_INVALID'
+    assert result.failed_gate == 'jaw_width'
+
+
+def test_tool_y_is_opposing_jaw_motion_and_finger_length_is_tool_z():
+    rotation = rotation_about_y(np.pi * 0.5)
+    boxes = gripper_box_centers(
+        center_base=np.array([0.0, 0.0, 0.080]),
+        R_base_tool=rotation,
+        required_open_width_m=0.044,
+        gripper=GRIPPER,
+        tool_jaw_axis='y',
+        tool_finger_length_axis='z',
+    )
+
+    jaw_axis = rotation[:, 1]
+    finger_axis = rotation[:, 2]
+    left_delta = boxes['left_finger'] - boxes['grasp_center']
+    right_delta = boxes['right_finger'] - boxes['grasp_center']
+    pair_center = 0.5 * (boxes['left_finger'] + boxes['right_finger'])
+    assert np.dot(left_delta, jaw_axis) > 0.0
+    assert np.dot(right_delta, jaw_axis) < 0.0
+    assert np.dot(
+        boxes['left_finger'] - pair_center,
+        jaw_axis,
+    ) == pytest.approx(
+        -np.dot(boxes['right_finger'] - pair_center, jaw_axis)
+    )
+    np.testing.assert_allclose(
+        pair_center,
+        np.array([0.0, 0.0, 0.080])
+        + rotation @ ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M,
+        atol=1e-9,
+    )
+    np.testing.assert_allclose(
+        boxes['left_finger'],
+        [-0.0302, 0.0366, 0.0796],
+        atol=1e-9,
+    )
+    np.testing.assert_allclose(
+        boxes['right_finger'],
+        [-0.0302, -0.0360, 0.0796],
+        atol=1e-9,
+    )
+    np.testing.assert_allclose(
+        boxes['palm'],
+        np.array([0.0, 0.0, 0.080])
+        + rotation @ ANALYTICAL_PALM_CENTER_TOOL_XYZ_M,
+        atol=1e-9,
+    )
+    np.testing.assert_allclose(finger_axis, [1.0, 0.0, 0.0], atol=1e-9)
+    assert GRIPPER.finger_size_xyz_m[2] == pytest.approx(0.060)
+
+
+def test_real_urdf_and_stl_define_tool_y_jaws_and_tool_z_finger_length():
+    urdf_path = (
+        ROOT.parents[1]
+        / 'src/arm-mujoco/synriard/urdf/Alicia_D_v5_6'
+        / 'Alicia_D_v5_6_gripper_50mm.urdf'
+    )
+    robot = ET.parse(str(urdf_path)).getroot()
+    tool_joint = robot.find("./joint[@name='Grasp2tool']")
+    assert tool_joint.find('parent').attrib['link'] == 'Link6'
+    assert tool_joint.find('child').attrib['link'] == 'tool0'
+    np.testing.assert_allclose(
+        xml_vector(tool_joint.find('origin'), 'rpy'),
+        np.zeros(3),
+        atol=1e-12,
+    )
+
+    finger_data = []
+    for joint_name, link_name, open_limit, closed_limit in (
+        ('left_finger', 'Link7', 'upper', 'lower'),
+        ('right_finger', 'Link8', 'lower', 'upper'),
+    ):
+        joint = robot.find("./joint[@name='%s']" % joint_name)
+        assert joint.find('parent').attrib['link'] == 'Link6'
+        assert joint.find('child').attrib['link'] == link_name
+        joint_origin = joint.find('origin')
+        origin_xyz = xml_vector(joint_origin, 'xyz')
+        joint_rotation = rotation_from_rpy(xml_vector(joint_origin, 'rpy'))
+        joint_axis = xml_vector(joint.find('axis'), 'xyz')
+        limits = joint.find('limit').attrib
+        open_q = float(limits[open_limit])
+        closed_q = float(limits[closed_limit])
+        assert open_q == pytest.approx(0.0)
+        closed_delta = joint_rotation @ joint_axis * (closed_q - open_q)
+
+        link = robot.find("./link[@name='%s']" % link_name)
+        collision = link.find('collision')
+        collision_origin = collision.find('origin')
+        collision_rotation = rotation_from_rpy(
+            xml_vector(collision_origin, 'rpy')
+        )
+        mesh_filename = collision.find('geometry/mesh').attrib['filename']
+        mesh_path = (urdf_path.parent / mesh_filename).resolve()
+        vertices_link = binary_stl_vertices(mesh_path)
+        vertices_link6 = (
+            joint_rotation
+            @ (
+                collision_rotation @ vertices_link.T
+                + xml_vector(collision_origin, 'xyz').reshape(3, 1)
+            )
+        ).T + origin_xyz
+        envelope = np.ptp(vertices_link6, axis=0)
+        finger_data.append((origin_xyz, closed_delta, envelope))
+
+    left_origin, left_delta, left_envelope = finger_data[0]
+    right_origin, right_delta, right_envelope = finger_data[1]
+    np.testing.assert_allclose(left_delta, -right_delta, atol=2e-7)
+    assert left_delta[1] > 0.0
+    assert right_delta[1] < 0.0
+    assert np.linalg.norm(
+        (right_origin + right_delta) - (left_origin + left_delta)
+    ) < np.linalg.norm(
+        right_origin - left_origin,
+    )
+    np.testing.assert_allclose(
+        left_envelope,
+        [0.0434, 0.0286, 0.0600],
+        atol=5e-4,
+    )
+    np.testing.assert_allclose(right_envelope, left_envelope, atol=2e-5)
+    assert int(np.argmax(left_envelope)) == 2
+    assert left_envelope[2] == pytest.approx(0.0600, abs=5e-4)
+
+
+def _active_urdf_finger_vertices_at_public_position(
+    robot,
+    urdf_path,
+    joint_name,
+    public_position_m,
+):
+    joint = robot.find("./joint[@name='%s']" % joint_name)
+    joint_origin = joint.find('origin')
+    joint_rotation = rotation_from_rpy(xml_vector(joint_origin, 'rpy'))
+    joint_axis = xml_vector(joint.find('axis'), 'xyz')
+    joint_position = float(public_position_m)
+    mimic = joint.find('mimic')
+    if mimic is not None:
+        joint_position = (
+            float(mimic.attrib.get('multiplier', '1')) * joint_position
+            + float(mimic.attrib.get('offset', '0'))
+        )
+
+    link_name = joint.find('child').attrib['link']
+    collision = robot.find("./link[@name='%s']/collision" % link_name)
+    collision_origin = collision.find('origin')
+    collision_rotation = rotation_from_rpy(
+        xml_vector(collision_origin, 'rpy')
+    )
+    mesh_filename = collision.find('geometry/mesh').attrib['filename']
+    mesh_prefix = 'package://alicia_d_descriptions/'
+    assert mesh_filename.startswith(mesh_prefix)
+    mesh_path = urdf_path.parents[1] / mesh_filename[len(mesh_prefix):]
+    vertices_link = binary_stl_vertices(mesh_path)
+    return (
+        joint_rotation
+        @ (
+            collision_rotation @ vertices_link.T
+            + xml_vector(collision_origin, 'xyz').reshape(3, 1)
+            + joint_axis.reshape(3, 1) * joint_position
+        )
+    ).T + xml_vector(joint_origin, 'xyz')
+
+
+def test_active_moveit_gripper_uses_real_driver_public_open_direction():
+    """The public prismatic value grows toward the measured open posture."""
+
+    workspace = ROOT.parents[1]
+    urdf_path = (
+        workspace
+        / 'src/real-arm/alicia_d_descriptions/urdf/alicia_duo_with_gripper.urdf'
+    )
+    robot = ET.parse(str(urdf_path)).getroot()
+    right_joint = robot.find("./joint[@name='right_finger']")
+    limits = right_joint.find('limit').attrib
+    assert float(limits['lower']) == pytest.approx(0.0)
+    assert float(limits['upper']) == pytest.approx(0.05)
+
+    def inner_gap(public_position_m):
+        left = _active_urdf_finger_vertices_at_public_position(
+            robot,
+            urdf_path,
+            'left_finger',
+            public_position_m,
+        )
+        right = _active_urdf_finger_vertices_at_public_position(
+            robot,
+            urdf_path,
+            'right_finger',
+            public_position_m,
+        )
+        return float(np.min(left[:, 1]) - np.max(right[:, 1]))
+
+    closed_gap_m = inner_gap(0.0)
+    open_gap_m = inner_gap(0.05)
+    assert closed_gap_m == pytest.approx(0.0, abs=5e-6)
+    assert open_gap_m == pytest.approx(0.100, abs=5e-6)
+    assert open_gap_m > closed_gap_m
+
+    legacy_contract = {
+        'left_finger': {
+            'origin': np.array([-0.0002, 0.050502, 0.13118]),
+            'axis': np.array([0.0, 0.0, 1.0]),
+            'position': lambda public: public - 0.05,
+        },
+        'right_finger': {
+            'origin': np.array([-0.0002, -0.050498, 0.13118]),
+            'axis': np.array([0.0, 0.0, -1.0]),
+            'position': lambda public: 0.05 - public,
+        },
+    }
+    for public_position_m in (0.0, 0.0125, 0.025, 0.05):
+        for joint_name, legacy in legacy_contract.items():
+            joint = robot.find("./joint[@name='%s']" % joint_name)
+            rotation = rotation_from_rpy(
+                xml_vector(joint.find('origin'), 'rpy')
+            )
+            current_position = public_position_m
+            mimic = joint.find('mimic')
+            if mimic is not None:
+                current_position = (
+                    float(mimic.attrib.get('multiplier', '1'))
+                    * current_position
+                    + float(mimic.attrib.get('offset', '0'))
+                )
+            current_translation = (
+                xml_vector(joint.find('origin'), 'xyz')
+                + rotation @ xml_vector(joint.find('axis'), 'xyz')
+                * current_position
+            )
+            legacy_translation = (
+                legacy['origin']
+                + rotation @ legacy['axis']
+                * legacy['position'](public_position_m)
+            )
+            np.testing.assert_allclose(
+                current_translation,
+                legacy_translation,
+                atol=1e-12,
+            )
+
+    srdf_path = (
+        workspace
+        / 'src/real-arm/alicia_d_moveit/config/alicia_d_descriptions.srdf'
+    )
+    semantic = ET.parse(str(srdf_path)).getroot()
+    named_positions = {
+        state.attrib['name']: float(
+            state.find("joint[@name='right_finger']").attrib['value']
+        )
+        for state in semantic.findall("group_state[@group='hand']")
+    }
+    assert named_positions['open'] == pytest.approx(0.05)
+    assert named_positions['close'] == pytest.approx(0.0)
+
+
+def test_active_moveit_finger_pair_center_matches_analytical_tool0_contract():
+    workspace = ROOT.parents[1]
+    urdf_path = (
+        workspace
+        / 'src/real-arm/alicia_d_descriptions/urdf/alicia_duo_with_gripper.urdf'
+    )
+    robot = ET.parse(str(urdf_path)).getroot()
+    centers = []
+    for joint_name in ('left_finger', 'right_finger'):
+        vertices = _active_urdf_finger_vertices_at_public_position(
+            robot,
+            urdf_path,
+            joint_name,
+            0.0,
+        )
+        centers.append(0.5 * (np.min(vertices, axis=0) + np.max(vertices, axis=0)))
+    tool_origin = xml_vector(
+        robot.find("./joint[@name='Grasp2tool']/origin"),
+        'xyz',
+    )
+    pair_center_tool = 0.5 * (centers[0] + centers[1]) - tool_origin
+
+    np.testing.assert_allclose(
+        pair_center_tool,
+        ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M,
+        atol=GRIPPER_CONTRACT_TOLERANCE_M,
+    )
+
+
+@pytest.mark.parametrize(
+    'opening_width_m,joint_positions',
+    [
+        (0.050, {'left_finger': 0.0, 'right_finger': 0.0}),
+        (0.0, {'left_finger': -0.025, 'right_finger': 0.025}),
+    ],
+    ids=('fully_open', 'fully_closed'),
+)
+def test_analytical_finger_boxes_cover_both_cad_fingers_on_all_six_faces(
+    opening_width_m,
+    joint_positions,
+):
+    urdf_path = (
+        ROOT.parents[1]
+        / 'src/arm-mujoco/synriard/urdf/Alicia_D_v5_6'
+        / 'Alicia_D_v5_6_gripper_50mm.urdf'
+    )
+    robot = ET.parse(str(urdf_path)).getroot()
+    boxes = gripper_box_centers(
+        center_base=np.zeros(3, dtype=float),
+        R_base_tool=np.eye(3, dtype=float),
+        required_open_width_m=opening_width_m,
+        gripper=GRIPPER,
+        tool_jaw_axis='y',
+        tool_finger_length_axis='z',
+    )
+    analytical_size = (
+        GRIPPER.finger_size_xyz_m + ANALYTICAL_FINGER_BOX_PADDING_XYZ_M
+    )
+    analytical_half = 0.5 * analytical_size
+
+    # The URDF's left finger occupies tool -Y, whereas the analytical names
+    # denote the positive/negative jaw sides rather than the URDF link names.
+    for joint_name, box_name in (
+        ('left_finger', 'right_finger'),
+        ('right_finger', 'left_finger'),
+    ):
+        cad_vertices = finger_cad_vertices_tool(
+            robot,
+            urdf_path,
+            joint_name,
+            joint_positions[joint_name],
+        )
+        cad_min = np.min(cad_vertices, axis=0)
+        cad_max = np.max(cad_vertices, axis=0)
+        analytical_min = boxes[box_name] - analytical_half
+        analytical_max = boxes[box_name] + analytical_half
+
+        assert np.all(
+            cad_min - analytical_min >= GRIPPER_CONTRACT_TOLERANCE_M
+        )
+        assert np.all(
+            analytical_max - cad_max >= GRIPPER_CONTRACT_TOLERANCE_M
+        )
+
+
+def test_analytical_palm_box_covers_link6_cad_aabb_with_contract_tolerance():
+    urdf_path = (
+        ROOT.parents[1]
+        / 'src/arm-mujoco/synriard/urdf/Alicia_D_v5_6'
+        / 'Alicia_D_v5_6_gripper_50mm.urdf'
+    )
+    robot = ET.parse(str(urdf_path)).getroot()
+    link = robot.find("./link[@name='Link6']")
+    collision = link.find('collision')
+    collision_origin = collision.find('origin')
+    mesh_path = (
+        urdf_path.parent
+        / collision.find('geometry/mesh').attrib['filename']
+    ).resolve()
+    vertices_link6 = (
+        rotation_from_rpy(xml_vector(collision_origin, 'rpy'))
+        @ binary_stl_vertices(mesh_path).T
+    ).T + xml_vector(collision_origin, 'xyz')
+
+    tool_joint = robot.find("./joint[@name='Grasp2tool']")
+    tool_origin = tool_joint.find('origin')
+    R_link6_tool = rotation_from_rpy(xml_vector(tool_origin, 'rpy'))
+    vertices_tool = (
+        R_link6_tool.T
+        @ (
+            vertices_link6
+            - xml_vector(tool_origin, 'xyz')
+        ).T
+    ).T
+    cad_min = np.min(vertices_tool, axis=0)
+    cad_max = np.max(vertices_tool, axis=0)
+    analytical_half = 0.5 * ANALYTICAL_PALM_SIZE_XYZ_M
+    analytical_min = ANALYTICAL_PALM_CENTER_TOOL_XYZ_M - analytical_half
+    analytical_max = ANALYTICAL_PALM_CENTER_TOOL_XYZ_M + analytical_half
+
+    assert np.all(
+        cad_min - analytical_min >= GRIPPER_CONTRACT_TOLERANCE_M
+    )
+    assert np.all(
+        analytical_max - cad_max >= GRIPPER_CONTRACT_TOLERANCE_M
+    )
+
+
+def test_palm_tool_x_offset_is_included_in_support_collision_check():
+    rotation = rotation_about_y(-np.pi * 0.5)
+    center = np.array([0.0, 0.0, 0.100])
+    depth = 0.030
+    tool0 = center + depth * rotation[:, 2]
+    args = candidate_fixture(
+        R_base_tool=rotation,
+        candidate_center_base=center,
+        candidate_tool0_base=tool0,
+        candidate_depth_m=depth,
+        obb_center_base=center,
+        pregrasp_T_base_tool=transform(
+            tool0 - 0.080 * rotation[:, 2],
+            rotation,
+        ),
+        approach_T_base_tool=transform(
+            tool0 - 0.020 * rotation[:, 2],
+            rotation,
+        ),
+        grasp_T_base_tool=transform(tool0, rotation),
+        lift_T_base_tool=transform(
+            tool0 + np.array([0.0, 0.0, 0.050]),
+            rotation,
+        ),
+    )
+
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert result.failed_gate == 'static_envelope'
+    assert 'palm enters support clearance' in result.failure_reason
+    assert result.support_clearance_m < GRIPPER.support_clearance_m
+
+
+def test_valid_40_mm_cross_section_passes():
+    result = evaluate_candidate(**candidate_fixture())
+
+    assert result.ok
+    assert result.failure_code == ''
+    assert result.required_open_width_m == pytest.approx(0.044)
+    assert result.support_clearance_m >= GRIPPER.support_clearance_m
+    assert result.jaw_alignment == pytest.approx(1.0)
+
+
+def test_contact_approach_rotation_must_match_live_candidate():
+    args = candidate_fixture()
+    args['approach_T_base_tool'] = transform(
+        args['approach_T_base_tool'][:3, 3],
+        rotation_about_y(np.pi * 0.45),
+    )
+
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failed_gate == 'transform'
+    assert 'approach/grasp rotation' in result.failure_reason
+
+
+def test_safe_free_space_stage_rotations_are_checked_and_accepted():
+    args = candidate_fixture()
+    contact_rotation = np.asarray(args['R_base_tool'], dtype=float)
+    args['pregrasp_T_base_tool'] = transform(
+        args['pregrasp_T_base_tool'][:3, 3],
+        rotation_from_rpy((np.deg2rad(-15.0), 0.0, 0.0))
+        @ contact_rotation,
+    )
+    args['lift_T_base_tool'] = transform(
+        args['lift_T_base_tool'][:3, 3],
+        rotation_from_rpy((np.deg2rad(-35.0), 0.0, 0.0))
+        @ contact_rotation,
+    )
+
+    result = evaluate_candidate(**args)
+
+    assert result.ok
+    assert result.passed_gate_count == 6
+
+
+def test_rotating_pregrasp_sweep_collision_is_rejected_between_safe_endpoints():
+    args = candidate_fixture()
+    contact_rotation = np.asarray(args['R_base_tool'], dtype=float)
+    args['pregrasp_T_base_tool'] = transform(
+        args['pregrasp_T_base_tool'][:3, 3],
+        rotation_from_rpy((np.deg2rad(-30.0), 0.0, 0.0))
+        @ contact_rotation,
+    )
+
+    result = evaluate_candidate(**args)
+
+    # Static endpoint checks run before the swept-envelope gate, so reaching
+    # this failure proves both endpoints were safe and an interpolated pose was
+    # the collision.
+    assert not result.ok
+    assert result.failed_gate == 'swept_envelope'
+    assert 'segment 0 analytical sweep' in result.failure_reason
+    assert 'finger intrudes into target OBB' in result.failure_reason
+
+
+def test_carried_target_obb_uses_full_rigid_tool_transform():
+    grasp_rotation = rotation_about_y(np.pi * 0.5)
+    lift_rotation = rotation_from_rpy((0.35, -0.20, 0.40))
+    grasp = transform(np.array([0.10, -0.20, 0.30]), grasp_rotation)
+    lift = transform(np.array([0.16, -0.12, 0.42]), lift_rotation)
+    obb_center = np.array([0.12, -0.23, 0.34])
+    obb_rotation = rotation_from_rpy((-0.10, 0.15, -0.25))
+
+    carried_center, carried_rotation = _carried_obb_pose(
+        lift,
+        grasp,
+        obb_center,
+        obb_rotation,
+    )
+
+    relative_center_at_grasp = (
+        grasp_rotation.T @ (obb_center - grasp[:3, 3])
+    )
+    np.testing.assert_allclose(
+        lift_rotation.T @ (carried_center - lift[:3, 3]),
+        relative_center_at_grasp,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        lift_rotation.T @ carried_rotation,
+        grasp_rotation.T @ obb_rotation,
+        atol=1e-12,
+    )
+
+
+def observation_envelope_fixture(**overrides):
+    values = {
+        'gripper': GRIPPER,
+        'T_base_tool0': transform(
+            np.array([0.0, 0.0, 0.200]),
+            np.eye(3),
+        ),
+        'opening_width_m': 0.0499375,
+        'support_normal_base': np.array([0.0, 0.0, 1.0]),
+        'support_offset_m': 0.0,
+        'obb_center_base': np.array([0.400, 0.0, 0.050]),
+        'R_base_obb': np.eye(3),
+        'obb_size_xyz_m': np.array([0.040, 0.040, 0.040]),
+        'tool_jaw_axis': 'y',
+        'tool_finger_length_axis': 'z',
+    }
+    values.update(overrides)
+    return values
+
+
+def test_open_gripper_observation_envelope_accepts_safe_live_endpoint():
+    result = evaluate_open_gripper_observation_envelope(
+        **observation_envelope_fixture()
+    )
+
+    assert result.ok
+    assert result.failure_code == ''
+    assert result.minimum_support_clearance_m >= GRIPPER.support_clearance_m
+
+
+def test_open_gripper_observation_envelope_rejects_support_collision():
+    result = evaluate_open_gripper_observation_envelope(
+        **observation_envelope_fixture(
+            T_base_tool0=transform(
+                np.array([0.0, 0.0, 0.100]),
+                np.eye(3),
+            )
+        )
+    )
+
+    assert not result.ok
+    assert result.failure_code == 'OBSERVATION_SUPPORT_COLLISION'
+    assert 'support clearance' in result.failure_reason
+
+
+def test_open_gripper_observation_envelope_rejects_target_collision():
+    tool_transform = transform(
+        np.array([0.0, 0.0, 0.200]),
+        np.eye(3),
+    )
+    palm_center = (
+        tool_transform[:3, :3].dot(ANALYTICAL_PALM_CENTER_TOOL_XYZ_M)
+        + tool_transform[:3, 3]
+    )
+    result = evaluate_open_gripper_observation_envelope(
+        **observation_envelope_fixture(
+            T_base_tool0=tool_transform,
+            obb_center_base=palm_center,
+            obb_size_xyz_m=np.array([0.030, 0.030, 0.030]),
+        )
+    )
+
+    assert not result.ok
+    assert result.failure_code == 'OBSERVATION_TARGET_COLLISION'
+    assert 'target OBB' in result.failure_reason
+
+
+def test_real_contact_patch_distinguishes_interior_from_tapered_tip_miss():
+    pair_center = np.asarray(
+        ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M,
+        dtype=float,
+    )
+    interior_center = pair_center + np.array([0.005945, 0.0, 0.027606])
+    tapered_tip_miss = pair_center + np.array([0.012635, 0.0, 0.027976])
+
+    interior_margin = finger_contact_patch_margin_m(
+        interior_center,
+        np.zeros(3),
+        np.eye(3),
+    )
+    miss_margin = finger_contact_patch_margin_m(
+        tapered_tip_miss,
+        np.zeros(3),
+        np.eye(3),
+    )
+
+    assert interior_margin == pytest.approx(0.001113, abs=2e-6)
+    assert miss_margin == pytest.approx(-0.004991, abs=2e-6)
+
+
+def test_contact_patch_boundary_is_the_link7_link8_inner_face_contract():
+    polygon = np.asarray(
+        ANALYTICAL_FINGER_CONTACT_PATCH_TOOL_XZ_M,
+        dtype=float,
+    )
+
+    assert polygon.shape == (26, 2)
+    assert np.min(polygon[:, 0]) == pytest.approx(-0.0211573)
+    assert np.max(polygon[:, 0]) == pytest.approx(0.0211573)
+    assert np.min(polygon[:, 1]) == pytest.approx(-0.0295)
+    assert np.max(polygon[:, 1]) == pytest.approx(0.0295)
+
+
+def test_contact_patch_height_intersection_preserves_continuous_length():
+    center = np.asarray(
+        ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M,
+        dtype=float,
+    )
+
+    intervals = finger_contact_patch_height_intervals_m(
+        center,
+        np.zeros(3),
+        np.eye(3),
+        np.array([0.0, 0.0, 1.0]),
+        -0.010,
+        0.010,
+    )
+    overlap = finger_contact_patch_overlap_m(
+        center,
+        np.zeros(3),
+        np.eye(3),
+        np.array([0.0, 0.0, 1.0]),
+        -0.010,
+        0.010,
+    )
+
+    assert len(intervals) == 1
+    assert intervals[0] == pytest.approx((-0.010, 0.010))
+    assert overlap == pytest.approx(0.020)
+
+
+def test_bilateral_contact_height_uses_common_support_on_both_jaw_sides():
+    points = np.asarray(
+        [
+            [-0.020, 0.0, -0.010],
+            [-0.020, 0.0, 0.008],
+            [0.020, 0.0, -0.006],
+            [0.020, 0.0, 0.012],
+        ],
+        dtype=float,
+    )
+
+    bounds = bilateral_contact_height_bounds_m(
+        points,
+        np.zeros(3),
+        np.array([1.0, 0.0, 0.0]),
+        np.array([0.0, 0.0, 1.0]),
+        0.12,
+    )
+
+    assert bounds == pytest.approx((-0.006, 0.008))
+
+
+def test_bilateral_contact_height_projects_support_into_tilted_jaw_plane():
+    root_half = np.sqrt(0.5)
+    jaw = np.array([0.0, root_half, root_half])
+    support = np.array([0.0, 0.0, 1.0])
+    height = contact_height_axis_base(jaw, support)
+    points = np.asarray(
+        [
+            side * 0.020 * jaw + level * height
+            for side in (-1.0, 1.0)
+            for level in (-0.006, 0.008)
+        ],
+        dtype=float,
+    )
+
+    bounds = bilateral_contact_height_bounds_m(
+        points,
+        np.zeros(3),
+        jaw,
+        support,
+        0.12,
+    )
+
+    assert np.dot(height, jaw) == pytest.approx(0.0, abs=1e-12)
+    assert np.linalg.norm(height) == pytest.approx(1.0)
+    assert bounds == pytest.approx((-0.006, 0.008))
+
+
+def test_physical_gate_rejects_insufficient_continuous_contact_overlap():
+    center = np.array([0.0, 0.0, 0.080])
+    local_contact = np.array([0.012635, 0.0, 0.027976])
+    tool0 = (
+        center
+        - ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M
+        - local_contact
+    )
+    points = np.asarray(
+        [
+            [x, y, z]
+            for x in (-0.020, 0.020)
+            for y in (-0.020, 0.020)
+            for z in (0.060, 0.100)
+        ],
+        dtype=float,
+    )
+    result = evaluate_explicit_candidate(
+        gripper=GRIPPER,
+        candidate_center_base=center,
+        candidate_tool0_base=tool0,
+        R_base_tool=np.eye(3),
+        required_open_width_m=0.044,
+        target_points_base=points,
+        obb_center_base=center,
+        R_base_obb=np.eye(3),
+        obb_size_xyz_m=np.array([0.040, 0.040, 0.040]),
+        support_normal_base=np.array([0.0, 0.0, 1.0]),
+        support_offset_m=0.0,
+        pregrasp_T_base_tool=transform(
+            tool0 + np.array([0.0, 0.0, 0.080]),
+            np.eye(3),
+        ),
+        approach_T_base_tool=transform(
+            tool0 + np.array([0.0, 0.0, 0.020]),
+            np.eye(3),
+        ),
+        grasp_T_base_tool=transform(tool0, np.eye(3)),
+        lift_T_base_tool=transform(
+            tool0 + np.array([0.0, 0.0, 0.050]),
+            np.eye(3),
+        ),
+    )
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_CONTACT_PATCH_MISS'
+    assert result.failed_gate == 'finger_reach'
+    assert 'continuous bilateral target/CAD contact overlap' in result.failure_reason
+
+
+@pytest.mark.parametrize('depth_m', [0.01, 0.02, 0.03, 0.04])
+def test_geometry_accepts_each_graspnet_depth_relation_before_physical_gates(depth_m):
+    result = evaluate_candidate(
+        **candidate_fixture(
+            candidate_depth_m=depth_m,
+            obb_size_xyz_m=np.array([0.020, 0.040, 0.060]),
+        )
+    )
+
+    assert result.failed_gate != 'transform'
+
+
+def test_geometry_fails_closed_when_tool0_or_grasp_transform_drifts_from_depth():
+    wrong_tool0 = candidate_fixture()
+    wrong_tool0['candidate_tool0_base'] = (
+        np.asarray(wrong_tool0['candidate_tool0_base'], dtype=float)
+        + np.array([0.30, 0.0, 0.0])
+    )
+    tool0_result = evaluate_candidate(**wrong_tool0)
+
+    wrong_transform = candidate_fixture()
+    wrong_transform['grasp_T_base_tool'] = np.array(
+        wrong_transform['grasp_T_base_tool'],
+        copy=True,
+    )
+    wrong_transform['grasp_T_base_tool'][:3, 3] += np.array([0.30, 0.0, 0.0])
+    transform_result = evaluate_candidate(**wrong_transform)
+
+    assert tool0_result.failed_gate == 'transform'
+    assert tool0_result.failure_code == 'TOOL0_INCONSISTENT'
+    assert transform_result.failed_gate == 'transform'
+    assert transform_result.failure_code == 'TOOL0_INCONSISTENT'
+
+
+@pytest.mark.parametrize(
+    'depth_m,expected_code',
+    [
+        (None, 'DEPTH_INVALID'),
+        (False, 'DEPTH_INVALID'),
+        (float('nan'), 'DEPTH_INVALID'),
+        (float('inf'), 'DEPTH_INVALID'),
+        (0.001, 'DEPTH_OUT_OF_RANGE'),
+        (0.50, 'DEPTH_OUT_OF_RANGE'),
+    ],
+)
+def test_geometry_rejects_invalid_graspnet_depth_domain(depth_m, expected_code):
+    args = candidate_fixture()
+    args['candidate_depth_m'] = depth_m
+    result = evaluate_candidate(**args)
+
+    assert result.failed_gate == 'transform'
+    assert result.failure_code == expected_code
+
+
+def test_51_mm_required_opening_is_rejected_even_when_model_width_is_small():
+    args = candidate_fixture(obb_size_xyz_m=np.array([0.080, 0.047, 0.060]))
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_TOO_NARROW'
+    assert result.required_open_width_m == pytest.approx(0.051)
+
+
+def test_opening_fit_clearance_allows_near_limit_narrow_side_without_shrinking_collision_contract():
+    args = candidate_fixture(
+        obb_size_xyz_m=np.array([0.040, 0.049, 0.060]),
+        approach_center_base=np.array([-0.050, 0.0, 0.080]),
+        opening_fit_clearance_each_side_m=0.0005,
+    )
+
+    result = evaluate_candidate(**args)
+
+    assert result.ok
+    assert result.required_open_width_m == pytest.approx(0.050)
+    assert GRIPPER.jaw_clearance_each_side_m == pytest.approx(0.002)
+    assert fixed_contract_reason(GRIPPER) == ''
+
+
+def test_opening_fit_clearance_does_not_permit_actual_width_above_physical_limit():
+    args = candidate_fixture(
+        obb_size_xyz_m=np.array([0.040, 0.0492, 0.060]),
+        opening_fit_clearance_each_side_m=0.0005,
+    )
+
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_TOO_NARROW'
+    assert result.required_open_width_m == pytest.approx(0.0502)
+
+
+def test_collision_contract_still_rejects_relaxed_jaw_safety_clearance():
+    relaxed_collision_envelope = GripperGeometry(
+        max_inner_gap_m=0.050,
+        jaw_clearance_each_side_m=0.0005,
+        finger_size_xyz_m=np.array([0.0434, 0.0286, 0.0600]),
+        palm_size_xyz_m=np.array([0.1175, 0.1550, 0.0774]),
+        support_clearance_m=0.003,
+    )
+
+    assert 'below fixed analytical' in fixed_contract_reason(
+        relaxed_collision_envelope
+    )
+
+
+def test_exactly_50_mm_required_opening_remains_inside_physical_limit():
+    args = candidate_fixture(obb_size_xyz_m=np.array([0.040, 0.046, 0.060]))
+
+    result = evaluate_candidate(**args)
+
+    assert result.ok
+    assert result.required_open_width_m == pytest.approx(0.050)
+
+
+def test_fixed_50_mm_limit_cannot_be_bypassed_by_config_tolerance():
+    configured_above_physical_limit = GripperGeometry(
+        max_inner_gap_m=0.0504,
+        jaw_clearance_each_side_m=0.002,
+        finger_size_xyz_m=np.array([0.0434, 0.0286, 0.0600]),
+        palm_size_xyz_m=np.array([0.1175, 0.1550, 0.0774]),
+        support_clearance_m=0.003,
+    )
+    args = candidate_fixture(
+        gripper=configured_above_physical_limit,
+        obb_size_xyz_m=np.array([0.080, 0.0463, 0.060]),
+    )
+
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_TOO_NARROW'
+    assert result.required_open_width_m == pytest.approx(0.0503)
+
+
+def test_model_width_is_diagnostic_not_a_physical_bypass_or_rejection():
+    narrow_model = evaluate_candidate(**candidate_fixture(candidate_width_m=0.001))
+    wide_model = evaluate_candidate(**candidate_fixture(candidate_width_m=0.090))
+
+    assert narrow_model.ok
+    assert wide_model.ok
+    assert narrow_model.required_open_width_m == pytest.approx(0.044)
+    assert wide_model.required_open_width_m == pytest.approx(0.044)
+
+
+def test_center_below_support_or_outside_obb_is_rejected_with_stable_codes():
+    below = candidate_fixture(center_base=np.array([0.0, 0.0, -0.004]))
+    outside = candidate_fixture(center_base=np.array([0.30, 0.0, 0.080]))
+
+    assert evaluate_candidate(**below).failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert evaluate_candidate(**outside).failure_code == 'CENTER_OUTSIDE_OBB'
+
+
+def test_jaw_line_that_misses_obb_is_rejected():
+    args = candidate_fixture(center_base=np.array([0.022, 0.0, 0.080]))
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert result.failed_gate == 'jaw_width'
+
+
+def test_one_sided_finger_reach_is_rejected():
+    args = candidate_fixture(center_base=np.array([0.0, 0.008, 0.080]))
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert result.failed_gate == 'finger_reach'
+
+
+def test_palm_sweep_through_tilted_plane_is_rejected():
+    normal = np.array([0.20, 0.0, 0.98], dtype=float)
+    normal /= np.linalg.norm(normal)
+    obb_rotation = np.column_stack(
+        (np.array([normal[2], 0.0, -normal[0]]), [0.0, 1.0, 0.0], normal)
+    )
+    args = candidate_fixture(
+        R_base_obb=obb_rotation,
+        support_normal_base=normal,
+        support_offset_m=0.0,
+        pregrasp_center_base=np.array([-0.080, 0.0, -0.010]),
+    )
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert result.failed_gate in ('static_envelope', 'swept_envelope')
+
+
+def test_support_plane_requires_unit_normal_aligned_with_obb_positive_z():
+    center = np.array([0.0, 0.0, 0.200])
+    common = {
+        'center_base': center,
+        'obb_center_base': center,
+        'pregrasp_center_base': np.array([-0.080, 0.0, 0.200]),
+        'approach_center_base': np.array([-0.020, 0.0, 0.200]),
+        'lift_center_base': np.array([0.0, 0.0, 0.250]),
+    }
+    unit = evaluate_candidate(
+        **candidate_fixture(
+            **common,
+            support_normal_base=np.array([0.0, 0.0, 1.0]),
+            support_offset_m=-0.050,
+        )
+    )
+    scaled_equivalent = evaluate_candidate(
+        **candidate_fixture(
+            **common,
+            support_normal_base=np.array([0.0, 0.0, 0.1]),
+            support_offset_m=-0.005,
+        )
+    )
+    reversed_equivalent = evaluate_candidate(
+        **candidate_fixture(
+            **common,
+            support_normal_base=np.array([0.0, 0.0, -1.0]),
+            support_offset_m=0.050,
+        )
+    )
+
+    assert unit.ok
+    assert not scaled_equivalent.ok
+    assert scaled_equivalent.failed_gate == 'transform'
+    assert not reversed_equivalent.ok
+    assert reversed_equivalent.failed_gate == 'transform'
+
+
+def test_palm_intrusion_into_non_grasp_region_is_rejected():
+    args = candidate_fixture(
+        obb_size_xyz_m=np.array([0.160, 0.040, 0.060]),
+    )
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert result.failed_gate == 'static_envelope'
+    assert 'palm intrudes' in result.failure_reason
+
+
+def test_intermediate_palm_sweep_collision_is_detected_between_safe_endpoints():
+    args = candidate_fixture(
+        pregrasp_center_base=np.array([-0.100, 0.0, 0.080]),
+        approach_center_base=np.array([0.300, 0.0, 0.080]),
+    )
+    result = evaluate_candidate(**args)
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert result.failed_gate == 'swept_envelope'
+    assert 'palm intrudes' in result.failure_reason
+
+
+def test_nonfinite_or_left_handed_transform_fails_closed():
+    nonfinite = candidate_fixture()
+    nonfinite['candidate_center_base'] = np.array([0.0, np.nan, 0.080])
+    left_handed = candidate_fixture()
+    left_handed['R_base_tool'] = np.diag([1.0, 1.0, -1.0])
+
+    assert evaluate_candidate(**nonfinite).failed_gate == 'transform'
+    assert evaluate_candidate(**left_handed).failed_gate == 'transform'
+    assert evaluate_candidate(**left_handed).failure_code == 'GRIPPER_SWEEP_COLLISION'
+
+
+def test_extreme_finite_coordinates_return_a_finite_failed_result():
+    result = evaluate_candidate(
+        **candidate_fixture(center_base=np.array([1.0e308, 0.0, 0.080]))
+    )
+
+    assert not result.ok
+    assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert result.failed_gate == 'transform'
+    assert np.all(
+        np.isfinite(
+            [
+                result.required_open_width_m,
+                result.center_distance_m,
+                result.support_clearance_m,
+                result.jaw_alignment,
+                result.motion_cost,
+                result.geometry_cost,
+            ]
+        )
+    )
+
+
+def test_candidate_result_rejects_nonfinite_costs():
+    with pytest.raises(ValueError):
+        CandidateGateResult(
+            ok=True,
+            failure_code='',
+            failure_reason='',
+            required_open_width_m=0.044,
+            center_distance_m=0.0,
+            support_clearance_m=0.010,
+            jaw_alignment=1.0,
+            motion_cost=np.nan,
+            geometry_cost=0.0,
+            failed_gate='',
+            passed_gate_count=6,
+        )
+
+
+def test_geometry_rank_precedes_motion_and_model_score():
+    geometry_best = CandidateGateResult(
+        True, '', '', 0.044, 0.001, 0.010, 1.0, 10.0, 0.001, '', 6
+    )
+    motion_best = CandidateGateResult(
+        True, '', '', 0.044, 0.002, 0.010, 1.0, 0.0, 0.002, '', 6
+    )
+    same_geometry_slow = CandidateGateResult(
+        True, '', '', 0.044, 0.001, 0.010, 1.0, 2.0, 0.001, '', 6
+    )
+    same_geometry_fast = CandidateGateResult(
+        True, '', '', 0.044, 0.001, 0.010, 1.0, 1.0, 0.001, '', 6
+    )
+
+    assert candidate_rank_key(geometry_best, model_score=0.1) < candidate_rank_key(
+        motion_best, model_score=0.99
+    )
+    assert candidate_rank_key(same_geometry_fast, model_score=0.1) < candidate_rank_key(
+        same_geometry_slow, model_score=0.99
+    )
+
+
+@pytest.mark.parametrize(
+    '_name,field,index',
+    CONSERVATIVE_CONTRACT_FIELDS,
+    ids=[item[0] for item in CONSERVATIVE_CONTRACT_FIELDS],
+)
+def test_conservative_envelope_accepts_only_float_epsilon_shrink(
+    _name,
+    field,
+    index,
+):
+    gripper = gripper_with_contract_delta(field, index, -0.5e-9)
+
+    assert fixed_contract_reason(gripper) == ''
+
+
+@pytest.mark.parametrize(
+    '_name,field,index',
+    CONSERVATIVE_CONTRACT_FIELDS,
+    ids=[item[0] for item in CONSERVATIVE_CONTRACT_FIELDS],
+)
+def test_conservative_envelope_rejects_shrink_beyond_float_epsilon(
+    _name,
+    field,
+    index,
+):
+    gripper = gripper_with_contract_delta(field, index, -2.0e-9)
+
+    assert 'below fixed analytical' in fixed_contract_reason(gripper)
+
+
+@pytest.mark.parametrize(
+    '_name,field,index',
+    CONSERVATIVE_CONTRACT_FIELDS,
+    ids=[item[0] for item in CONSERVATIVE_CONTRACT_FIELDS],
+)
+def test_conservative_envelope_accepts_growth_at_contract_tolerance(
+    _name,
+    field,
+    index,
+):
+    gripper = gripper_with_contract_delta(
+        field,
+        index,
+        GRIPPER_CONTRACT_TOLERANCE_M,
+    )
+
+    assert fixed_contract_reason(gripper) == ''
+
+
+@pytest.mark.parametrize(
+    '_name,field,index',
+    CONSERVATIVE_CONTRACT_FIELDS,
+    ids=[item[0] for item in CONSERVATIVE_CONTRACT_FIELDS],
+)
+def test_conservative_envelope_rejects_growth_beyond_contract_tolerance(
+    _name,
+    field,
+    index,
+):
+    gripper = gripper_with_contract_delta(
+        field,
+        index,
+        GRIPPER_CONTRACT_TOLERANCE_M + 2.0e-9,
+    )
+
+    assert 'conservative growth tolerance' in fixed_contract_reason(gripper)
+
+
+@pytest.mark.parametrize(
+    'physical_open_width_m',
+    [0.0499375, 0.0495, 0.0505],
+    ids=('measured_49_9375_mm', 'lower_boundary', 'upper_boundary'),
+)
+def test_physical_open_gap_retains_independent_symmetric_half_mm_tolerance(
+    physical_open_width_m,
+):
+    assert fixed_contract_reason(
+        GRIPPER,
+        physical_open_width_m=physical_open_width_m,
+        tolerance_m=0.0,
+    ) == ''
+
+
+@pytest.mark.parametrize('physical_open_width_m', [0.049499998, 0.050500002])
+def test_physical_open_gap_rejects_values_outside_symmetric_half_mm_tolerance(
+    physical_open_width_m,
+):
+    assert 'physical open width' in fixed_contract_reason(
+        GRIPPER,
+        physical_open_width_m=physical_open_width_m,
+        tolerance_m=0.0,
+    )
+
+
+def test_conservative_growth_tolerance_cannot_exceed_fixed_half_mm_limit():
+    reason = fixed_contract_reason(
+        GRIPPER,
+        tolerance_m=GRIPPER_CONTRACT_TOLERANCE_M + 2.0e-9,
+    )
+
+    assert 'contract tolerance' in reason
+    assert 'exceeds fixed' in reason
+
+
+def test_fixed_analytical_contract_rejects_configured_envelope_mismatch():
+    matching = gripper_contract_mismatch_reason(
+        GRIPPER,
+        remote_max_inner_gap_m=0.050,
+        physical_open_width_m=0.050,
+        twin_model_name='Alicia_D_v5_6_gripper_50mm',
+        twin_max_inner_gap_m=0.050,
+        tool_jaw_axis='y',
+        tool_finger_length_axis='z',
+    )
+    wrong_finger = GripperGeometry(
+        0.050,
+        0.002,
+        np.array([0.0434, 0.0300, 0.0600]),
+        np.array([0.1175, 0.1550, 0.0774]),
+        0.003,
+    )
+
+    assert matching == ''
+    assert 'finger box' in gripper_contract_mismatch_reason(
+        wrong_finger,
+        0.050,
+        0.050,
+        'Alicia_D_v5_6_gripper_50mm',
+        0.050,
+    )
+    assert 'fixed +Y jaw and +Z finger' in gripper_contract_mismatch_reason(
+        GRIPPER,
+        0.050,
+        0.050,
+        'Alicia_D_v5_6_gripper_50mm',
+        0.050,
+        tool_jaw_axis='x',
+    )

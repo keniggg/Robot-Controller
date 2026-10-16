@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+import copy
+import importlib.util
+import pathlib
+import sys
+import unittest
+from unittest.mock import Mock
+
+import numpy as np
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+CAMERA_NODE = ROOT / 'scripts' / 'camera_node.py'
+SRC_DIR = ROOT / 'src'
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+
+def load_camera_node():
+    spec = importlib.util.spec_from_file_location('camera_node_under_test', str(CAMERA_NODE))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakePublisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, msg):
+        self.messages.append(msg)
+
+
+class FakeBridge:
+    def cv2_to_imgmsg(self, cv_img, encoding):
+        return type('FakeImage', (), {
+            'image': cv_img,
+            'encoding': encoding,
+            'header': type('FakeHeader', (), {'stamp': None, 'frame_id': ''})(),
+        })()
+
+
+class FakeRate:
+    def __init__(self, rospy):
+        self.rospy = rospy
+
+    def sleep(self):
+        self.rospy.sleep_count += 1
+        if self.rospy.sleep_count >= 1:
+            self.rospy.shutdown = True
+
+
+class FakeRospy:
+    def __init__(self, camera_cfg=None, perception_cfg=None):
+        self.shutdown = False
+        self.shutdown_after_stamp = False
+        self.sleep_count = 0
+        self.publishers = []
+        self.params = {}
+        self.errors = []
+        self.warnings = []
+        self.infos = []
+        self.time_values = ['now']
+        self.time_calls = 0
+
+        def now():
+            index = min(self.time_calls, len(self.time_values) - 1)
+            self.time_calls += 1
+            if self.shutdown_after_stamp:
+                self.shutdown = True
+            return self.time_values[index]
+
+        self.Time = type('FakeTime', (), {'now': staticmethod(now)})
+        self.camera_cfg = {
+            'width': 4,
+            'height': 3,
+            'fps': 30,
+            'simulate': False,
+            'fallback_to_simulation': True,
+            'read_failure_limit': 1,
+            # Legacy synchronous path remains covered; separate integration
+            # tests below exercise the production asynchronous default.
+            'async_publication_enabled': False,
+        }
+        if camera_cfg:
+            self.camera_cfg.update(camera_cfg)
+        self.perception_cfg = {
+            'depth_min_m': 0.03,
+            'depth_max_m': 2.0,
+        }
+        if perception_cfg:
+            self.perception_cfg.update(perception_cfg)
+
+    def get_param(self, name, default=None):
+        return {
+            '/camera': self.camera_cfg,
+            '/perception': self.perception_cfg,
+        }.get(name, default)
+
+    def set_param(self, name, value):
+        self.params[name] = copy.deepcopy(value)
+        if name == '/camera':
+            self.camera_cfg = copy.deepcopy(value)
+
+    def Publisher(self, *args, **kwargs):
+        pub = FakePublisher()
+        self.publishers.append(pub)
+        return pub
+
+    def Rate(self, hz):
+        return FakeRate(self)
+
+    def is_shutdown(self):
+        return self.shutdown
+
+    def loginfo(self, *args):
+        self.infos.append(args)
+
+    def logwarn(self, *args):
+        self.warnings.append(args)
+
+    def logwarn_throttle(self, *args):
+        self.warnings.append(args)
+
+    def logerr(self, *args):
+        self.errors.append(args)
+
+
+def fake_runtime_profile(width, height, fx=4., fy=4.):
+    return dict(source='realsense_active_profile', schema_version=1,
+                geometry_intrinsics=dict(width=width, height=height, fx=fx, fy=fy, cx=1.5, cy=1.),
+                geometry_intrinsics_source='sdk_active_color_profile',
+                device=dict(serial_number='test-runtime-device', firmware_version='test-firmware'))
+
+
+class FailingThenSimulatedCamera:
+    created = []
+
+    def __init__(
+        self,
+        width,
+        height,
+        fps,
+        align_depth_to_color,
+        simulate=False,
+        depth_filter_cfg=None,
+    ):
+        self.width = int(width)
+        self.height = int(height)
+        self.simulate = bool(simulate)
+        self.runtime_profile = fake_runtime_profile(self.width, self.height)
+        self.depth_scale = 0.0001
+        self.depth_filter_cfg = dict(depth_filter_cfg or {})
+        self.started = False
+        self.stopped = False
+        FailingThenSimulatedCamera.created.append(self)
+
+    def start(self):
+        self.started = True
+        return True
+
+    def stop(self):
+        self.stopped = True
+
+    def read(self):
+        if not self.simulate:
+            raise RuntimeError('Frame did not arrive within 5000')
+        color = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        depth = np.ones((self.height, self.width), dtype=np.uint16)
+        return color, depth
+
+
+class FailingThenRestartedCamera:
+    created = []
+
+    def __init__(
+        self,
+        width,
+        height,
+        fps,
+        align_depth_to_color,
+        simulate=False,
+        depth_filter_cfg=None,
+    ):
+        self.width = int(width)
+        self.height = int(height)
+        self.simulate = bool(simulate)
+        self.runtime_profile = fake_runtime_profile(self.width, self.height)
+        self.depth_scale = 0.0001
+        self.depth_filter_cfg = dict(depth_filter_cfg or {})
+        self.index = len(FailingThenRestartedCamera.created)
+        self.started = False
+        self.stopped = False
+        FailingThenRestartedCamera.created.append(self)
+
+    def start(self):
+        self.started = True
+        return True
+
+    def stop(self):
+        self.stopped = True
+
+    def read(self):
+        if self.index == 0:
+            raise RuntimeError('Frame did not arrive within 5000')
+        if self.simulate:
+            raise AssertionError('unexpected simulated camera')
+        color = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        depth = np.ones((self.height, self.width), dtype=np.uint16)
+        return color, depth
+
+
+class StartupFailThenRestartedCamera:
+    created = []
+
+    def __init__(
+        self,
+        width,
+        height,
+        fps,
+        align_depth_to_color,
+        simulate=False,
+        depth_filter_cfg=None,
+    ):
+        self.width = int(width)
+        self.height = int(height)
+        self.simulate = bool(simulate)
+        self.runtime_profile = fake_runtime_profile(self.width, self.height)
+        self.depth_scale = 0.0001
+        self.depth_filter_cfg = dict(depth_filter_cfg or {})
+        self.index = len(StartupFailThenRestartedCamera.created)
+        self.started = False
+        self.stopped = False
+        StartupFailThenRestartedCamera.created.append(self)
+
+    def start(self):
+        self.started = True
+        if self.index == 0:
+            raise RuntimeError('Device or resource busy')
+        return True
+
+    def stop(self):
+        self.stopped = True
+
+    def read(self):
+        color = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        depth = np.ones((self.height, self.width), dtype=np.uint16)
+        return color, depth
+
+
+class CameraWithDepthScale:
+    created = []
+
+    def __init__(
+        self,
+        width,
+        height,
+        fps,
+        align_depth_to_color,
+        simulate=False,
+        depth_filter_cfg=None,
+    ):
+        self.width = int(width)
+        self.height = int(height)
+        self.simulate = bool(simulate)
+        self.runtime_profile = fake_runtime_profile(self.width, self.height)
+        self.depth_scale = 0.0001
+        self.depth_filter_cfg = dict(depth_filter_cfg or {})
+        self.depth_scale = 0.0001
+        self.started = False
+        CameraWithDepthScale.created.append(self)
+
+    def start(self):
+        self.started = True
+        return True
+
+    def stop(self):
+        pass
+
+
+class SinglePairCamera(CameraWithDepthScale):
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        SinglePairCamera.created.append(self)
+
+    def read(self):
+        color = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        depth = np.ones((self.height, self.width), dtype=np.uint16)
+        return color, depth
+
+
+class CameraNodeRecoveryTest(unittest.TestCase):
+    def projection_node(self):
+        module = load_camera_node()
+        target = {'fx': 438.6, 'fy': 438.4, 'cx': 317.8, 'cy': 245.4}
+        correction = {
+            'enabled': True,
+            'device_serial': 'test-device',
+            'sdk_intrinsics': target,
+            'measured_intrinsics': dict(target, fx=398.4, fy=399.0),
+        }
+        fake_rospy = FakeRospy(dict(target, color_projection_correction=correction))
+        module.rospy = fake_rospy
+        module.RealSenseManager = Mock()
+        node = module.CameraNode.__new__(module.CameraNode)
+        node.cfg = fake_rospy.camera_cfg
+        node.width, node.height, node.fps = 640, 480, 30
+        node.stream_width, node.stream_height = 640, 480
+        node.align_depth_to_color = True
+        return module, node, correction
+
+    def test_projection_configuration_reaches_camera_manager(self):
+        module, node, correction = self.projection_node()
+
+        camera = node._make_camera(False)
+
+        self.assertIs(camera, module.RealSenseManager.return_value)
+        arguments = module.RealSenseManager.call_args.kwargs
+        self.assertEqual(arguments['color_projection_cfg'], correction)
+        self.assertTrue(arguments['align_depth_to_color'])
+        self.assertFalse(arguments['simulate'])
+
+    def test_projection_rejects_downstream_intrinsics_mismatch_before_opening_device(self):
+        module, node, _ = self.projection_node()
+        node.cfg['fx'] = 398.4
+
+        with self.assertRaisesRegex(ValueError, 'camera/fx must match'):
+            node._make_camera(False)
+
+        module.RealSenseManager.assert_not_called()
+
+    def test_camera_node_publishes_runtime_depth_scale_param(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = CameraWithDepthScale
+
+        module.CameraNode()
+
+        self.assertEqual(fake_rospy.params['/camera']['depth_scale'], 0.0001)
+
+    def test_active_sdk_intrinsics_replace_stale_yaml_before_first_frame_and_preserve_other_config(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(dict(fx=99., fy=98., cx=97., cy=96., depth_scale=.001,
+                                  fallback_to_simulation=False, frame_id='camera_link',
+                                  color_topic='/unchanged/rgb', custom_setting={'keep': True}))
+        module.rospy, module.CvBridge = fake_rospy, FakeBridge
+        module.RealSenseManager = SinglePairCamera
+        node = module.CameraNode()
+        runtime = fake_rospy.params['/camera']
+        self.assertEqual([runtime[k] for k in ('fx', 'fy', 'cx', 'cy')], [4., 4., 1.5, 1.])
+        self.assertEqual(runtime['depth_scale'], .0001)
+        self.assertEqual(runtime['intrinsics_source'], 'sdk_active_color_profile')
+        self.assertEqual(runtime['runtime_profile']['device']['serial_number'], 'test-runtime-device')
+        self.assertEqual(runtime['custom_setting'], {'keep': True})
+        self.assertEqual(runtime['color_topic'], '/unchanged/rgb')
+        self.assertEqual(runtime['frame_id'], 'camera_link')
+        self.assertFalse(any(pub.messages for pub in fake_rospy.publishers))
+        self.assertEqual(len(fake_rospy.params), 1)
+        fake_rospy.shutdown_after_stamp = True
+        node.spin()
+        self.assertEqual(node.pub_color.messages[0].header.frame_id, 'camera_link')
+
+    def test_recovery_refreshes_runtime_geometry_before_next_frame(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(dict(fallback_to_simulation=False))
+        module.rospy, module.CvBridge = fake_rospy, FakeBridge
+
+        class ChangedCamera(SinglePairCamera):
+            next_fx = 4.
+
+            def start(self):
+                self.runtime_profile = fake_runtime_profile(self.width, self.height, fx=self.next_fx)
+                return super().start()
+
+        module.RealSenseManager = ChangedCamera
+        node = module.CameraNode()
+        ChangedCamera.next_fx = 4.25
+        self.assertTrue(node._recover_from_read_error(RuntimeError('temporary disconnect')))
+        self.assertEqual(fake_rospy.params['/camera']['fx'], 4.25)
+        self.assertFalse(any(pub.messages for pub in fake_rospy.publishers))
+
+    def test_simulation_preserves_configured_intrinsics_and_identifies_its_source(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(dict(simulate=True, fx=99., fy=98., cx=97., cy=96.))
+        module.rospy, module.CvBridge = fake_rospy, FakeBridge
+        module.RealSenseManager = SinglePairCamera
+        module.CameraNode()
+        runtime = fake_rospy.params['/camera']
+        self.assertEqual([runtime[k] for k in ('fx', 'fy', 'cx', 'cy')], [99., 98., 97., 96.])
+        self.assertEqual(runtime['intrinsics_source'], 'configured_simulation')
+        self.assertEqual(runtime['runtime_profile']['source'], 'simulation')
+
+    def test_missing_real_geometry_does_not_publish_frames_using_unverified_yaml(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(dict(fallback_to_simulation=False))
+        module.rospy, module.CvBridge = fake_rospy, FakeBridge
+
+        class NoProfileCamera(SinglePairCamera):
+            def start(self):
+                self.runtime_profile = {}
+                return super().start()
+
+        module.RealSenseManager = NoProfileCamera
+        node = module.CameraNode()
+        self.assertFalse(node._camera_started)
+        self.assertFalse(fake_rospy.params)
+        self.assertFalse(any(pub.messages for pub in fake_rospy.publishers))
+        self.assertTrue(any('no active SDK geometry profile' in str(item) for item in fake_rospy.errors))
+
+    def test_camera_node_passes_filter_and_perception_depth_limits(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy(
+            camera_cfg={'depth_filter': {
+                'spatial_magnitude': 1,
+                'depth_min_m': 0.05,
+            }},
+            perception_cfg={'depth_min_m': 0.04, 'depth_max_m': 1.5},
+        )
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = CameraWithDepthScale
+
+        module.CameraNode()
+
+        self.assertEqual(CameraWithDepthScale.created[-1].depth_filter_cfg, {
+            'spatial_magnitude': 1,
+            'depth_min_m': 0.05,
+            'depth_max_m': 1.5,
+        })
+
+    def test_published_color_and_depth_share_one_acquisition_stamp(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        fake_rospy.shutdown_after_stamp = True
+        fake_rospy.time_values = ['pair-stamp', 'separate-stamp']
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        node.spin()
+
+        self.assertEqual(node.pub_color.messages[-1].header.stamp, 'pair-stamp')
+        self.assertEqual(node.pub_depth.messages[-1].header.stamp, 'pair-stamp')
+        self.assertEqual(fake_rospy.time_calls, 1)
+
+    def test_depth_preview_is_downsampled_without_changing_full_depth(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({
+            'fallback_to_simulation': False,
+            'depth_preview_topic': '/depth/preview',
+            'depth_preview_width': 2,
+            'depth_preview_height': 2,
+        })
+        fake_rospy.shutdown_after_stamp = True
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        node.spin()
+
+        full_depth = node.pub_depth.messages[-1]
+        preview = node.pub_depth_preview.messages[-1]
+        self.assertEqual(full_depth.image.shape, (3, 4))
+        self.assertEqual(preview.image.shape, (2, 2))
+        self.assertEqual(full_depth.image.dtype, np.uint16)
+        self.assertEqual(preview.image.dtype, np.uint16)
+        self.assertEqual(preview.header.stamp, full_depth.header.stamp)
+
+    def test_real_camera_does_not_sleep_after_blocking_frame_acquisition(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        blocking_read = node.cam.read
+
+        def read_one_frame_then_shutdown():
+            frame_pair = blocking_read()
+            fake_rospy.shutdown = True
+            return frame_pair
+
+        node.cam.read = read_one_frame_then_shutdown
+        node.spin()
+
+        self.assertEqual(fake_rospy.sleep_count, 0)
+
+    def test_real_camera_limits_ros_publications_without_sleeping(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({
+            'fallback_to_simulation': False,
+            'fps': 30,
+            'publish_fps': 15,
+        })
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        frame_pair = node.cam.read()
+        read_count = [0]
+        monotonic_times = iter((0.0, 0.01, 0.07))
+
+        def read_three_hardware_frames():
+            read_count[0] += 1
+            if read_count[0] >= 3:
+                fake_rospy.shutdown = True
+            return frame_pair
+
+        node.cam.read = read_three_hardware_frames
+        node._monotonic = lambda: next(monotonic_times)
+        node.spin()
+
+        self.assertEqual(len(node.pub_color.messages), 2)
+        self.assertEqual(len(node.pub_depth.messages), 2)
+        self.assertEqual(fake_rospy.sleep_count, 0)
+
+    def test_30_fps_input_schedules_20_fps_without_quantizing_to_15(self):
+        module = load_camera_node()
+        node = module.CameraNode.__new__(module.CameraNode)
+        node.publish_fps = 20.0
+        node._publish_period_sec = 1.0 / node.publish_fps
+        node._last_publish_monotonic = None
+        hardware_frame_times = iter(index / 30.0 for index in range(30))
+        node._monotonic = lambda: next(hardware_frame_times)
+
+        decisions = [node._publication_is_due() for _ in range(30)]
+
+        self.assertEqual(sum(decisions), 20)
+
+    def test_simulated_camera_keeps_rate_sleep(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({
+            'simulate': True,
+            'fallback_to_simulation': False,
+        })
+        SinglePairCamera.created = []
+        CameraWithDepthScale.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = SinglePairCamera
+
+        node = module.CameraNode()
+        fake_rospy.shutdown_after_stamp = True
+        node.spin()
+
+        self.assertEqual(fake_rospy.sleep_count, 1)
+
+    def test_read_timeout_falls_back_without_exiting(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy()
+        fake_rospy.shutdown_after_stamp = True
+        FailingThenSimulatedCamera.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = FailingThenSimulatedCamera
+
+        node = module.CameraNode()
+        node.spin()
+
+        self.assertGreaterEqual(len(FailingThenSimulatedCamera.created), 2)
+        self.assertTrue(FailingThenSimulatedCamera.created[0].stopped)
+        self.assertTrue(FailingThenSimulatedCamera.created[-1].simulate)
+        self.assertEqual(len(fake_rospy.publishers[0].messages), 1)
+        self.assertEqual(len(fake_rospy.publishers[1].messages), 1)
+
+    def test_read_timeout_restarts_real_camera_when_fallback_disabled(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        fake_rospy.shutdown_after_stamp = True
+        FailingThenRestartedCamera.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = FailingThenRestartedCamera
+
+        node = module.CameraNode()
+        node.spin()
+
+        self.assertGreaterEqual(len(FailingThenRestartedCamera.created), 2)
+        self.assertTrue(FailingThenRestartedCamera.created[0].stopped)
+        self.assertFalse(any(cam.simulate for cam in FailingThenRestartedCamera.created))
+        self.assertEqual(len(fake_rospy.publishers[0].messages), 1)
+        self.assertEqual(len(fake_rospy.publishers[1].messages), 1)
+
+    def test_startup_device_busy_keeps_node_alive_and_retries_real_camera(self):
+        module = load_camera_node()
+        fake_rospy = FakeRospy({'fallback_to_simulation': False})
+        fake_rospy.shutdown_after_stamp = True
+        StartupFailThenRestartedCamera.created = []
+        module.rospy = fake_rospy
+        module.CvBridge = FakeBridge
+        module.RealSenseManager = StartupFailThenRestartedCamera
+
+        node = module.CameraNode()
+        node.spin()
+
+        self.assertGreaterEqual(len(StartupFailThenRestartedCamera.created), 2)
+        self.assertTrue(StartupFailThenRestartedCamera.created[0].started)
+        self.assertTrue(StartupFailThenRestartedCamera.created[0].stopped)
+        self.assertEqual(len(fake_rospy.publishers[0].messages), 1)
+        self.assertEqual(len(fake_rospy.publishers[1].messages), 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

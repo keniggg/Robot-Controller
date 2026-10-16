@@ -1,0 +1,11 @@
+string command
+---
+bool success
+string message
+uint32 sample_count
+geometry_msgs/Vector3 tcp_translation
+geometry_msgs/Vector3 fixed_point
+float64 rms_error_m
+float64 max_error_m
+float64 orientation_span_deg
+string result_file

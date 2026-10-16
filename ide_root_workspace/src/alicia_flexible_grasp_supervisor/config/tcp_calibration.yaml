@@ -1,0 +1,14 @@
+tcp_calibration:
+  base_frame: "base_link"
+  reference_frame: "Grasp_base"
+  result_directory: "~/alicia_wa_full/calibration_results"
+  min_samples: 8
+  min_orientation_separation_deg: 20.0
+  min_new_sample_separation_deg: 5.0
+  joint_state_topic: "/joint_states"
+  joint_state_max_age_sec: 1.0
+  settle_window_sec: 0.4
+  settle_max_joint_range_rad: 0.003
+  tf_timeout_sec: 0.3
+  good_rms_error_m: 0.003
+  good_max_error_m: 0.005

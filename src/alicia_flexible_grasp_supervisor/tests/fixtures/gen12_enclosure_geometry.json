@@ -1,0 +1,116 @@
+{
+  "scope": "Exact raw OBB and recorded accepted point union enclosure/reach replay only. Original full fused provenance was not recorded/recovered; no reconstructed fused contact claims.",
+  "selection": {
+    "generation": 12,
+    "mode": "unknown",
+    "stamp_ns": 1791700283094620704,
+    "strategy": "observe_return"
+  },
+  "request_id": 19,
+  "snapshot_stamp_ns": 1791700329164701700,
+  "audit_sha256": "0ee6e13c49f6619b855c2c2922e1aa83872b903e13f8ff86441bc6c025626bfb",
+  "reconstructed_inputs_sha256": "0481ac831f025a8c8119b19e71543dc3afd266fc4fc638d74ffb2b6276dccacb",
+  "raw_prefix_exact": true,
+  "raw_point_count": 860,
+  "recorded_union_point_count": 2379,
+  "unrecovered_original_fused_point_count": 1606,
+  "recorded_obb_size_xyz_m": [
+    0.06634269957528072,
+    0.04910501999371796,
+    0.022716436783437412
+  ],
+  "recorded_reach_rejections": [
+    {
+      "angle_deg": 34.99999999999999,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.028377498699510572,
+      "positive_reach_m": 0.028377498699510572,
+      "proposal_source_index": 0
+    },
+    {
+      "angle_deg": 40.0,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.02722655587701518,
+      "positive_reach_m": 0.02722655587701518,
+      "proposal_source_index": 1
+    },
+    {
+      "angle_deg": 30.000000000000004,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.029865577162339403,
+      "positive_reach_m": 0.029865577162339403,
+      "proposal_source_index": 2
+    },
+    {
+      "angle_deg": 25.0,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.03177290539745185,
+      "positive_reach_m": 0.03177290539745185,
+      "proposal_source_index": 3
+    },
+    {
+      "angle_deg": 45.0,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.02635585669754306,
+      "positive_reach_m": 0.02635585669754306,
+      "proposal_source_index": 4
+    },
+    {
+      "angle_deg": 20.0,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.034219663587257365,
+      "positive_reach_m": 0.034219663587257365,
+      "proposal_source_index": 5
+    },
+    {
+      "angle_deg": 15.000000000000002,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.037386337954646874,
+      "positive_reach_m": 0.037386337954646874,
+      "proposal_source_index": 6
+    },
+    {
+      "angle_deg": 10.0,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.041554265782340956,
+      "positive_reach_m": 0.041554265782340956,
+      "proposal_source_index": 7
+    },
+    {
+      "angle_deg": 5.0,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.03950068960281344,
+      "positive_reach_m": 0.03950068960281344,
+      "proposal_source_index": 8
+    },
+    {
+      "angle_deg": 150.0,
+      "failed_gate": "finger_reach",
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "maximum_side_reach_m": 0.025,
+      "negative_reach_m": 0.03372543428123616,
+      "positive_reach_m": 0.03372543428123616,
+      "proposal_source_index": 9
+    }
+  ],
+  "contact_authorized": false,
+  "path_authorized": false
+}

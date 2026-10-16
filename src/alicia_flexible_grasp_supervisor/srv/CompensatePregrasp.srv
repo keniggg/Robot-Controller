@@ -1,0 +1,6 @@
+# Frozen contact plan: only poses[0] may be compensated, with no goal rewrite.
+alicia_flexible_grasp_supervisor/Grasp6DPlan plan
+bool execute
+---
+bool success
+string message

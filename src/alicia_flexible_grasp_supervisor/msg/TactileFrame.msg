@@ -1,0 +1,12 @@
+std_msgs/Header header
+string skin_name
+float32[] values
+uint32 rows
+uint32 cols
+float32 total_force_mn
+float32 max_force_mn
+uint32 max_index
+float32 center_x
+float32 center_y
+bool contact
+bool valid

@@ -1,0 +1,7 @@
+safety:
+  enable_force_stop: true
+  max_total_force_mn: 4500.0
+  joint_state_timeout_sec: 1.0
+  tactile_timeout_sec: 1.0
+  camera_timeout_sec: 2.0
+  stop_on_camera_lost_during_grasp: true

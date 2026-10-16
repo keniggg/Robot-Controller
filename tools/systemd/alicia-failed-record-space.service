@@ -1,0 +1,14 @@
+[Unit]
+Description=Maintain SanStand space from verified closed failed recordings
+ConditionPathIsMountPoint=/media/zhuyupei/SanStand
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+WorkingDirectory=/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade
+Environment=PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/tools/maintain_failed_record_space.py --apply
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=null
+StandardError=journal

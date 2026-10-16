@@ -1,0 +1,389 @@
+{
+  "source_audit": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20261011T003714.176499Z_8cd314e96edb4eba8d04c92b93166af5/keyframes_audits/9e3458796c4d2cce6f5414ef1f1ed1beecf2eb35ed3697d5924b84f78637ca26.json",
+  "source_sha256": "9e3458796c4d2cce6f5414ef1f1ed1beecf2eb35ed3697d5924b84f78637ca26",
+  "request_id": 40,
+  "stamp_ns": 1791679099959357976,
+  "limitation": "Exact recorded membership and IK hint states. Test rank is recorded soft rank, not a fabricated reconstruction of unsaved runtime aperture ranking. No path reachability claim.",
+  "candidates": [
+    {
+      "track_id": 1,
+      "variant_index": 0,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -2.0833553553192456,
+      "recorded_orientation_delta_rad": 1.631885890089853,
+      "recorded_translation_delta_m": 0.09448121810256452
+    },
+    {
+      "track_id": 1,
+      "variant_index": 1,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -2.0833553553192456,
+      "recorded_orientation_delta_rad": 1.5701007304128678,
+      "recorded_translation_delta_m": 0.0936449137616844
+    },
+    {
+      "track_id": 2,
+      "variant_index": 0,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.93382077428692,
+      "recorded_orientation_delta_rad": 1.564810621341452,
+      "recorded_translation_delta_m": 0.09492306571202443
+    },
+    {
+      "track_id": 2,
+      "variant_index": 1,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.9338207742869202,
+      "recorded_orientation_delta_rad": 1.6306754571717474,
+      "recorded_translation_delta_m": 0.09406137715896888
+    },
+    {
+      "track_id": 4,
+      "variant_index": 0,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.9250550735437384,
+      "recorded_orientation_delta_rad": 1.5951629876134281,
+      "recorded_translation_delta_m": 0.09403315530938344
+    },
+    {
+      "track_id": 4,
+      "variant_index": 1,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.925055073543737,
+      "recorded_orientation_delta_rad": 1.598362230807297,
+      "recorded_translation_delta_m": 0.09488120644777318
+    },
+    {
+      "track_id": 6,
+      "variant_index": 0,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7728675840966102,
+      "recorded_orientation_delta_rad": 1.633804949988504,
+      "recorded_translation_delta_m": 0.09049867821122566
+    },
+    {
+      "track_id": 6,
+      "variant_index": 1,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7728675840966102,
+      "recorded_orientation_delta_rad": 1.6448804607465624,
+      "recorded_translation_delta_m": 0.09135403107747596
+    },
+    {
+      "track_id": 7,
+      "variant_index": 0,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7580980933113222,
+      "recorded_orientation_delta_rad": 1.6329222795635654,
+      "recorded_translation_delta_m": 0.09522650839029287
+    },
+    {
+      "track_id": 7,
+      "variant_index": 1,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7580980933113222,
+      "recorded_orientation_delta_rad": 1.5500380293707743,
+      "recorded_translation_delta_m": 0.09439665975125709
+    },
+    {
+      "track_id": 8,
+      "variant_index": 0,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7430746501734926,
+      "recorded_orientation_delta_rad": 1.6670760587507873,
+      "recorded_translation_delta_m": 0.09046997795702554
+    },
+    {
+      "track_id": 8,
+      "variant_index": 1,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7430746501734926,
+      "recorded_orientation_delta_rad": 1.6103999464862948,
+      "recorded_translation_delta_m": 0.09134151974924837
+    },
+    {
+      "track_id": 9,
+      "variant_index": 0,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7421121106778106,
+      "recorded_orientation_delta_rad": 1.599722244695132,
+      "recorded_translation_delta_m": 0.09536100591293867
+    },
+    {
+      "track_id": 9,
+      "variant_index": 1,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7421121106778108,
+      "recorded_orientation_delta_rad": 1.5844630623783849,
+      "recorded_translation_delta_m": 0.09451746165100057
+    },
+    {
+      "track_id": 11,
+      "variant_index": 0,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7334943281506336,
+      "recorded_orientation_delta_rad": 1.6189205557456228,
+      "recorded_translation_delta_m": 0.09462946895111937
+    },
+    {
+      "track_id": 11,
+      "variant_index": 1,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7334943281506334,
+      "recorded_orientation_delta_rad": 1.5665961553240175,
+      "recorded_translation_delta_m": 0.09548573751893767
+    },
+    {
+      "track_id": 12,
+      "variant_index": 0,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7318835104480823,
+      "recorded_orientation_delta_rad": 1.5759502719448522,
+      "recorded_translation_delta_m": 0.09121686674241165
+    },
+    {
+      "track_id": 12,
+      "variant_index": 1,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.7318835104480823,
+      "recorded_orientation_delta_rad": 1.7004120466897543,
+      "recorded_translation_delta_m": 0.09032966806816269
+    },
+    {
+      "track_id": 13,
+      "variant_index": 0,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.5445189631175966,
+      "recorded_orientation_delta_rad": 1.6533247373152338,
+      "recorded_translation_delta_m": 0.08993421518610183
+    },
+    {
+      "track_id": 13,
+      "variant_index": 1,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.5445189631175966,
+      "recorded_orientation_delta_rad": 1.6516811414731773,
+      "recorded_translation_delta_m": 0.09079037150839123
+    },
+    {
+      "track_id": 14,
+      "variant_index": 0,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.5382597565215381,
+      "recorded_orientation_delta_rad": 1.6354440445107994,
+      "recorded_translation_delta_m": 0.09591404422364072
+    },
+    {
+      "track_id": 14,
+      "variant_index": 1,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.5382597565215377,
+      "recorded_orientation_delta_rad": 1.5395819153763584,
+      "recorded_translation_delta_m": 0.09509194092630735
+    },
+    {
+      "track_id": 15,
+      "variant_index": 0,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.4089342339151891,
+      "recorded_orientation_delta_rad": 1.604437545917054,
+      "recorded_translation_delta_m": 0.09656657565841037
+    },
+    {
+      "track_id": 15,
+      "variant_index": 1,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.4089342339151896,
+      "recorded_orientation_delta_rad": 1.5698487406755344,
+      "recorded_translation_delta_m": 0.0957378712758696
+    },
+    {
+      "track_id": 17,
+      "variant_index": 0,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.4016415859737477,
+      "recorded_orientation_delta_rad": 1.6656504538908392,
+      "recorded_translation_delta_m": 0.089677123567291
+    },
+    {
+      "track_id": 17,
+      "variant_index": 1,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.4016415859737472,
+      "recorded_orientation_delta_rad": 1.6564374770883594,
+      "recorded_translation_delta_m": 0.09053326699429459
+    },
+    {
+      "track_id": 18,
+      "variant_index": 0,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.3853836340187098,
+      "recorded_orientation_delta_rad": 1.6376486606593315,
+      "recorded_translation_delta_m": 0.09653407550811488
+    },
+    {
+      "track_id": 18,
+      "variant_index": 1,
+      "proposal_source_index": 2,
+      "angle_deg": 54.05467711065981,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.385383634018707,
+      "recorded_orientation_delta_rad": 1.5340309560440053,
+      "recorded_translation_delta_m": 0.09572039770997752
+    },
+    {
+      "track_id": 19,
+      "variant_index": 0,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.398347311850503,
+      "recorded_orientation_delta_rad": 1.5865016818969175,
+      "recorded_translation_delta_m": 0.09015131690083969
+    },
+    {
+      "track_id": 19,
+      "variant_index": 1,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.3983473118505032,
+      "recorded_orientation_delta_rad": 1.7291235284502806,
+      "recorded_translation_delta_m": 0.08926161529483358
+    },
+    {
+      "track_id": 20,
+      "variant_index": 0,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.38514877418752,
+      "recorded_orientation_delta_rad": 1.603939307537221,
+      "recorded_translation_delta_m": 0.09599943265615293
+    },
+    {
+      "track_id": 20,
+      "variant_index": 1,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.38514877418752,
+      "recorded_orientation_delta_rad": 1.5721461736359201,
+      "recorded_translation_delta_m": 0.09683862526475111
+    },
+    {
+      "track_id": 21,
+      "variant_index": 0,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.3686422077969542,
+      "recorded_orientation_delta_rad": 1.6051500123777598,
+      "recorded_translation_delta_m": 0.0967359653020506
+    },
+    {
+      "track_id": 21,
+      "variant_index": 1,
+      "proposal_source_index": 1,
+      "angle_deg": 52.02733855532992,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.3686422077969538,
+      "recorded_orientation_delta_rad": 1.568424189432769,
+      "recorded_translation_delta_m": 0.09590965358243533
+    },
+    {
+      "track_id": 23,
+      "variant_index": 0,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.3562828419294732,
+      "recorded_orientation_delta_rad": 1.5879059596693434,
+      "recorded_translation_delta_m": 0.09008116013020478
+    },
+    {
+      "track_id": 23,
+      "variant_index": 1,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.3562828419294732,
+      "recorded_orientation_delta_rad": 1.7325358508186772,
+      "recorded_translation_delta_m": 0.08919143646429843
+    },
+    {
+      "track_id": 24,
+      "variant_index": 0,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.3426231247187779,
+      "recorded_orientation_delta_rad": 1.6024468895636925,
+      "recorded_translation_delta_m": 0.09618840967948981
+    },
+    {
+      "track_id": 24,
+      "variant_index": 1,
+      "proposal_source_index": 0,
+      "angle_deg": 50.00000000000001,
+      "endpoint_priority": 0,
+      "recorded_soft_rank": -1.3426231247187779,
+      "recorded_orientation_delta_rad": 1.5729899978319453,
+      "recorded_translation_delta_m": 0.09702492422647421
+    }
+  ]
+}

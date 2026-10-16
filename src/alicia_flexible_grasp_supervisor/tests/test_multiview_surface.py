@@ -1,0 +1,1260 @@
+#!/usr/bin/env python3
+import dataclasses
+import json
+import pathlib
+import subprocess
+import sys
+
+import numpy as np
+import pytest
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+for path in (ROOT, ROOT / 'src'):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+
+from alicia_flexible_grasp.vision.multiview_surface import (  # noqa: E402
+    FusedTargetSurface,
+    RegistrationConfig,
+    SurfaceView,
+    append_registered_view,
+    fused_surface_from_view,
+    register_surface_view,
+    support_offset_diagnostic,
+    surface_view_from_observation,
+)
+from alicia_flexible_grasp.vision import multiview_surface  # noqa: E402
+from alicia_flexible_grasp.vision.target_observation import (  # noqa: E402
+    TargetObservation,
+    TargetTrackIdentity,
+)
+
+
+IDENTITY = TargetTrackIdentity.from_stream(3, 7)
+
+
+def test_registration_runs_with_documented_system_numpy():
+    script = '''
+import runpy
+import numpy as np
+tests = runpy.run_path(%r)
+reference, moving = tests['registered_pair']()
+result = tests['register_surface_view'](reference, moving)
+assert result.ok, result.code
+assert result.inlier_count >= 80
+assert result.rmse_m <= 0.004
+print(np.__version__, result.code)
+''' % str(pathlib.Path(__file__).resolve())
+    result = subprocess.run(
+        ['/usr/bin/python3', '-s', '-c', script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'REGISTERED' in result.stdout
+
+
+def rectangular_prism_views():
+    """Return generic top/front and top/side measured surface samples."""
+
+    xs = np.linspace(-0.040, 0.040, 17)
+    ys = np.linspace(-0.025, 0.025, 13)
+    zs = np.linspace(0.004, 0.034, 9)
+    top = np.asarray([(x, y, 0.034) for x in xs for y in ys])
+    front = np.asarray([(x, -0.025, z) for x in xs for z in zs[:-1]])
+    side = np.asarray([(0.040, y, z) for y in ys for z in zs[:-1]])
+    return np.vstack((top, front)), np.vstack((top, side))
+
+
+def opposing_side_views(extra_moving_points=()):
+    """Return a shared top plus measured negative/positive opposing faces."""
+
+    xs = np.linspace(-0.040, 0.040, 17)
+    ys = np.linspace(-0.025, 0.025, 15)
+    zs = np.linspace(0.004, 0.034, 15)
+    top = np.asarray([(x, y, 0.034) for x in xs for y in ys])
+    negative = np.asarray([(x, -0.025, z) for x in xs for z in zs[:-1]])
+    positive = np.asarray([(x, 0.025, z) for x in xs for z in zs[:-1]])
+    moving = np.vstack((top, positive, np.asarray(extra_moving_points).reshape(-1, 3)))
+    return view(np.vstack((top, negative)), 1_000_000_000), view(
+        moving, 1_100_000_000
+    )
+
+
+def transform_points_inverse(points, yaw_deg=3.0, translation=(0.003, -0.002, 0.001)):
+    yaw = np.deg2rad(float(yaw_deg))
+    rotation = np.asarray(
+        [
+            [np.cos(yaw), -np.sin(yaw), 0.0],
+            [np.sin(yaw), np.cos(yaw), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    translation = np.asarray(translation, dtype=float)
+    return (np.asarray(points) - translation).dot(rotation)
+
+
+def view(points, stamp_ns, identity=IDENTITY, normal=(0.0, 0.0, 1.0), offset=0.0, edge=12):
+    return SurfaceView(
+        identity=identity,
+        stamp_ns=stamp_ns,
+        points_base=points,
+        support_normal_base=normal,
+        support_offset_m=offset,
+        edge_clearance_px=edge,
+    )
+
+
+def registered_pair(**moving_kwargs):
+    reference_points, moving_aligned = rectangular_prism_views()
+    reference = view(reference_points, 1_000_000_000)
+    moving = view(
+        transform_points_inverse(moving_aligned),
+        1_100_000_000,
+        **moving_kwargs
+    )
+    return reference, moving
+
+
+def test_registers_partial_measured_views_deterministically_with_provenance():
+    reference, moving = registered_pair()
+
+    first_result = register_surface_view(reference, moving)
+    second_result = register_surface_view(reference, moving)
+    first_result, first_surface = append_registered_view(
+        fused_surface_from_view(reference), reference, moving
+    )
+    second_result, second_surface = append_registered_view(
+        fused_surface_from_view(reference), reference, moving
+    )
+
+    assert first_result.ok is True
+    assert first_result.code == 'REGISTERED'
+    assert first_result.inlier_count >= 80
+    assert first_result.overlap_fraction >= 0.30
+    assert first_result.rmse_m <= 0.004
+    assert np.linalg.norm(first_result.transform_base[:3, 3]) <= 0.025
+    assert np.array_equal(first_result.transform_base, second_result.transform_base)
+    assert np.array_equal(first_surface.points_base, second_surface.points_base)
+    assert np.array_equal(first_surface.view_indices, second_surface.view_indices)
+    assert first_surface.view_stamps_ns == (1_000_000_000, 1_100_000_000)
+    assert set(first_surface.view_indices.tolist()) == {0, 1}
+    assert len(first_surface.points_base) < len(reference.points_base) + first_result.inlier_count
+    for array in (
+        reference.points_base,
+        reference.support_normal_base,
+        first_result.transform_base,
+        first_surface.points_base,
+        first_surface.view_indices,
+    ):
+        assert array.flags.writeable is False
+        with pytest.raises(ValueError):
+            array.setflags(write=True)
+
+
+@pytest.mark.parametrize(
+    ('mutate', 'expected_code'),
+    [
+        (
+            lambda reference, moving: dataclasses.replace(
+                moving, identity=TargetTrackIdentity.from_stream(3, 8)
+            ),
+            'IDENTITY_MISMATCH',
+        ),
+        (
+            lambda reference, moving: dataclasses.replace(
+                moving, stamp_ns=reference.stamp_ns
+            ),
+            'STAMP_NOT_MONOTONIC',
+        ),
+        (
+            lambda reference, moving: dataclasses.replace(
+                moving,
+                support_normal_base=(0.0, np.sin(np.deg2rad(5.0)), np.cos(np.deg2rad(5.0))),
+            ),
+            'SUPPORT_NORMAL_MISMATCH',
+        ),
+        (
+            lambda reference, moving: dataclasses.replace(
+                moving, support_offset_m=0.0071
+            ),
+            'SUPPORT_OFFSET_MISMATCH',
+        ),
+    ],
+)
+def test_registration_rejects_mixed_identity_stamp_and_support(mutate, expected_code):
+    reference, moving = registered_pair()
+
+    result = register_surface_view(reference, mutate(reference, moving))
+
+    assert result.ok is False
+    assert result.code == expected_code
+
+
+def test_registration_rejects_fewer_than_eighty_inliers():
+    reference_points, _moving_points = rectangular_prism_views()
+    reference = view(reference_points, 1_000_000_000)
+    moving = view(
+        transform_points_inverse(reference_points[:79]),
+        1_100_000_000,
+    )
+
+    result = register_surface_view(reference, moving)
+
+    assert result.ok is False
+    assert result.code == 'INLIERS_INSUFFICIENT'
+    assert result.inlier_count < 80
+
+
+def test_registration_rejects_overlap_below_thirty_percent():
+    reference_points, _moving_points = rectangular_prism_views()
+    outliers = np.column_stack(
+        (
+            np.linspace(0.20, 0.28, 81),
+            np.linspace(-0.20, 0.20, 81),
+            np.linspace(0.08, 0.16, 81),
+        )
+    )
+    candidate = np.vstack((reference_points[:29], outliers))
+    reference = view(reference_points, 1_000_000_000)
+    moving = view(candidate, 1_100_000_000)
+
+    result = register_surface_view(
+        reference,
+        moving,
+        RegistrationConfig(minimum_inliers=20),
+    )
+
+    assert result.ok is False
+    assert result.code == 'OVERLAP_INSUFFICIENT'
+    assert result.overlap_fraction < 0.30
+
+
+@pytest.mark.parametrize('support_offset_m', [0.0, 0.0055])
+def test_registration_rejects_rmse_above_four_millimeters(support_offset_m):
+    reference_points, _moving_points = rectangular_prism_views()
+    candidate = reference_points[:120].copy()
+    candidate[::2, 2] += 0.005
+    candidate[1::2, 2] -= 0.005
+    reference = view(reference_points, 1_000_000_000)
+    moving = view(candidate, 1_100_000_000, offset=support_offset_m)
+
+    result = register_surface_view(reference, moving)
+
+    assert result.ok is False
+    assert result.code == 'RMSE_EXCEEDED'
+    assert result.rmse_m > 0.004
+
+
+@pytest.mark.parametrize('separation_m,warning', [
+    (0.0, False),
+    (0.004, False),
+    (float(np.float32(0.004)), False),
+    (float(np.nextafter(np.float32(0.004), np.float32(np.inf))), True),
+    (0.0055, True),
+    (0.007, True),
+])
+def test_support_warning_does_not_reject_registered_measured_fusion(separation_m, warning):
+    reference, moving = registered_pair(offset=separation_m)
+    config = RegistrationConfig()
+    before = fused_surface_from_view(reference)
+    result, fused = append_registered_view(before, reference, moving, config)
+    assert result.ok and result.code == 'REGISTERED'
+    assert fused.view_stamps_ns == (reference.stamp_ns, moving.stamp_ns)
+    assert result.support_plane_separation_m == separation_m
+    diagnostic = support_offset_diagnostic(result.support_plane_separation_m,
+                                           config.maximum_support_offset_delta_m)
+    assert diagnostic == dict(warning_flag=warning, measured_m=separation_m,
+                              warning_threshold_m=0.004, hard_limit_m=0.007)
+    assert json.loads(json.dumps(diagnostic)) == diagnostic
+    assert result.rmse_m <= 0.004
+    assert result.support_normal_angle_deg <= 4.0
+
+
+def test_support_warning_does_not_override_stricter_historical_configuration():
+    reference, moving = registered_pair(offset=0.0041)
+    stored = dataclasses.asdict(RegistrationConfig(maximum_support_offset_delta_m=0.004))
+    config = RegistrationConfig(**stored)
+    result = register_surface_view(reference, moving, config)
+    assert not result.ok and result.code == 'SUPPORT_OFFSET_MISMATCH'
+    diagnostic = support_offset_diagnostic(result.support_plane_separation_m,
+                                           config.maximum_support_offset_delta_m)
+    assert diagnostic['warning_flag'] is True
+    assert diagnostic['hard_limit_m'] == 0.004
+    assert set(stored) == {
+        'correspondence_max_m', 'minimum_inliers', 'minimum_overlap_fraction',
+        'maximum_rmse_m', 'maximum_translation_m', 'maximum_yaw_deg',
+        'maximum_support_normal_angle_deg', 'maximum_support_offset_delta_m',
+        'maximum_iterations',
+    }
+
+
+@pytest.mark.parametrize('hard_limit_m', [0.0, 0.003, 0.004, 0.007])
+def test_support_diagnostic_accepts_stricter_hard_limits_without_deciding_acceptance(hard_limit_m):
+    diagnostic = support_offset_diagnostic(0.004, hard_limit_m)
+    assert diagnostic['warning_flag'] is False
+    assert diagnostic['hard_limit_m'] == hard_limit_m
+
+
+@pytest.mark.parametrize('argument', ['separation_m', 'hard_limit_m'])
+@pytest.mark.parametrize('bad', [True, np.bool_(False), float('nan'), float('inf'), -0.001, '0.004'])
+def test_support_offset_diagnostic_rejects_invalid_measurements_and_limits(argument, bad):
+    values = dict(separation_m=0.0055, hard_limit_m=0.007)
+    values[argument] = bad
+    with pytest.raises(ValueError):
+        support_offset_diagnostic(**values)
+
+
+def test_warning_band_keeps_original_normal_gate():
+    reference, moving = registered_pair(offset=0.0055)
+    moving = dataclasses.replace(moving, support_normal_base=(
+        0., np.sin(np.deg2rad(4.01)), np.cos(np.deg2rad(4.01))))
+    result = register_surface_view(reference, moving)
+    assert not result.ok and result.code == 'SUPPORT_NORMAL_MISMATCH'
+    assert RegistrationConfig().maximum_support_normal_angle_deg == 4.0
+    assert RegistrationConfig().maximum_rmse_m == 0.004
+
+
+@pytest.mark.parametrize(
+    ('yaw_deg', 'translation', 'expected_code'),
+    [
+        (0.0, (0.0, 0.0, 0.026), 'TRANSLATION_BOUND_EXCEEDED'),
+        (10.5, (0.0, 0.0, 0.0), 'YAW_BOUND_EXCEEDED'),
+    ],
+)
+def test_registration_rejects_corrections_outside_bounds(
+    yaw_deg, translation, expected_code
+):
+    reference_points, _moving_points = rectangular_prism_views()
+    reference = view(reference_points, 1_000_000_000)
+    moving = view(
+        transform_points_inverse(
+            reference_points,
+            yaw_deg=yaw_deg,
+            translation=translation,
+        ),
+        1_100_000_000,
+    )
+
+    result = register_surface_view(
+        reference,
+        moving,
+        RegistrationConfig(correspondence_max_m=0.040),
+    )
+
+    assert result.ok is False
+    assert result.code == expected_code
+
+
+@pytest.mark.parametrize('noise_m', [0.0, 0.0002])
+def test_partial_stationary_footprint_does_not_inherit_spurious_pca_yaw(noise_m):
+    points = np.asarray([(x, y, .025)
+                         for x in np.linspace(-.025, .025, 21)
+                         for y in np.linspace(-.022, .022, 19)])
+    # The same measured top loses one corner; its density axis rotates even
+    # though the object has not moved. Both footprints retain their full span.
+    moving_points = points[~((points[:, 0] > .004) & (points[:, 1] > .004))]
+    moving_points = moving_points + np.random.RandomState(7).normal(
+        0.0, noise_m, moving_points.shape)
+    reference = view(points, 1_000_000_000)
+    moving = view(moving_points, 1_100_000_000)
+    basis = multiview_surface._support_basis(reference.support_normal_base)
+    coarse = multiview_surface._initial_support_transform(
+        reference.points_base, moving.points_base, basis)
+    assert abs(multiview_surface._yaw_degrees(coarse[:3, :3], basis)) > 10.
+
+    result = register_surface_view(reference, moving)
+
+    assert result.ok, result.code
+    assert result.inlier_count == len(moving_points)
+    assert result.overlap_fraction == 1.0
+    assert result.rmse_m < .0005
+    assert result.maximum_point_displacement_m < .0001
+    assert abs(multiview_surface._yaw_degrees(result.transform_base[:3, :3], basis)) < .1
+
+
+def recorded_observation_recovery_pair():
+    fixture = json.loads((ROOT / 'tests/fixtures/grasp_registration_recovery_20260911.json').read_text())
+    views = []
+    for name in ('reference', 'moving'):
+        data = dict(fixture[name])
+        data['identity'] = TargetTrackIdentity(**data['identity'])
+        views.append(SurfaceView(**data))
+    return views[0], views[1], RegistrationConfig(**fixture['config'])
+
+
+def test_recorded_coarse_overshoot_is_refined_before_final_motion_bounds(monkeypatch):
+    reference, moving, config = recorded_observation_recovery_pair()
+    basis = multiview_surface._support_basis(reference.support_normal_base)
+    coarse = multiview_surface._initial_support_transform(
+        reference.points_base, moving.points_base, basis)
+    assert abs(multiview_surface._yaw_degrees(coarse[:3, :3], basis)) > 11.8
+
+    # This regression exercises refinement of the PCA seed, not which seed
+    # wins. An identical extra candidate is not a strict cost improvement.
+    original_initializer = multiview_surface._initial_support_transform
+    monkeypatch.setattr(multiview_surface, '_initial_support_transform',
+        lambda reference, moving, basis, **kwargs:
+        original_initializer(reference, moving, basis))
+
+    result = register_surface_view(reference, moving, config)
+
+    assert result.ok, result.code
+    assert abs(multiview_surface._yaw_degrees(result.transform_base[:3, :3], basis)) == pytest.approx(8.0392835125, abs=1e-6)
+    assert result.maximum_point_displacement_m < config.maximum_translation_m
+    assert result.inlier_count >= config.minimum_inliers
+    assert result.overlap_fraction >= config.minimum_overlap_fraction
+    assert result.rmse_m <= config.maximum_rmse_m
+    assert result.support_plane_separation_m < config.maximum_support_offset_delta_m
+
+
+def test_recorded_recovery_still_rejects_final_out_of_bound_correction(monkeypatch):
+    reference, moving, config = recorded_observation_recovery_pair()
+    # Retain the original PCA branch's finite-iteration and final-bound
+    # assertions even when a new, better translation seed is available.
+    original_initializer = multiview_surface._initial_support_transform
+    monkeypatch.setattr(multiview_surface, '_initial_support_transform',
+        lambda reference, moving, basis, **kwargs:
+        original_initializer(reference, moving, basis))
+    # Five updates are deliberately insufficient: final yaw remains > 10 deg.
+    result = register_surface_view(
+        reference, moving, dataclasses.replace(config, maximum_iterations=5))
+    assert not result.ok
+    assert result.code == 'YAW_BOUND_EXCEEDED'
+    basis = multiview_surface._support_basis(reference.support_normal_base)
+    assert abs(multiview_surface._yaw_degrees(result.transform_base[:3, :3], basis)) > 10.
+    # Final measured-point displacement retains the same hard bound too.
+    result = register_surface_view(
+        reference, moving, dataclasses.replace(config, maximum_translation_m=.010))
+    assert not result.ok
+    assert result.code == 'TRANSLATION_BOUND_EXCEEDED'
+
+
+def test_recorded_overshoot_never_bypasses_support_plane_consistency():
+    reference, moving, config = recorded_observation_recovery_pair()
+    moving = dataclasses.replace(moving, support_offset_m=moving.support_offset_m + .010)
+    result = register_surface_view(reference, moving, config)
+    assert not result.ok
+    assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+
+
+@pytest.mark.parametrize('shift', [(0., 0., 0.), (-.126, -.402, .047), (.5, .5, .047)])
+def test_registration_bounds_measured_motion_independently_of_base_origin(shift):
+    points, _ = rectangular_prism_views()
+    shift = np.asarray(shift)
+    reference = view(points + shift, 1_000_000_000, offset=-shift[2])
+    moving = view(
+        transform_points_inverse(points, yaw_deg=3.5, translation=(-.001, 0., 0.))
+        + shift,
+        1_100_000_000,
+        offset=-shift[2],
+    )
+
+    result = register_surface_view(reference, moving)
+
+    assert result.ok, result.code
+    assert result.inlier_count == len(points)
+    assert result.maximum_point_displacement_m == pytest.approx(0.003535787058871823)
+    if np.any(shift):
+        assert np.linalg.norm(result.transform_base[:3, 3]) > 0.025
+
+
+def test_registration_rejects_excess_measured_motion_with_zero_raw_translation():
+    points, _ = rectangular_prism_views()
+    points = points + [-.126, -.402, .047]
+    reference = view(points, 1_000_000_000, offset=-.047)
+    moving = view(
+        transform_points_inverse(points, yaw_deg=3.5, translation=(0., 0., 0.)),
+        1_100_000_000,
+        offset=-.047,
+    )
+    original = fused_surface_from_view(reference)
+
+    result, fused = append_registered_view(original, reference, moving)
+
+    assert not result.ok
+    assert result.code == 'TRANSLATION_BOUND_EXCEEDED'
+    assert fused is original
+    assert np.linalg.norm(result.transform_base[:3, 3]) < 1e-12
+    assert result.maximum_point_displacement_m == pytest.approx(0.027981344972193543)
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_pure_translation_preserves_exact_twenty_five_millimeter_bound(outside):
+    points, _ = rectangular_prism_views()
+    points = points[points[:, 2] == 0.034] - [0., 0., 0.034]
+    displacement = np.nextafter(0.025, np.inf) if outside else 0.025
+    reference = view(points, 1_000_000_000)
+    moving = view(points - [0., 0., displacement], 1_100_000_000)
+
+    result = register_surface_view(
+        reference, moving, RegistrationConfig(correspondence_max_m=0.040)
+    )
+
+    assert result.ok is (not outside), result.code
+    assert result.maximum_point_displacement_m == displacement
+    if outside:
+        assert result.code == 'TRANSLATION_BOUND_EXCEEDED'
+
+
+@pytest.mark.parametrize('bad_value', [True, -0.001, float('nan'), float('inf'), '0.001'])
+def test_registration_result_rejects_invalid_measured_displacement(bad_value):
+    result = register_surface_view(*registered_pair())
+    with pytest.raises(ValueError):
+        dataclasses.replace(result, maximum_point_displacement_m=bad_value)
+
+
+@pytest.mark.parametrize('points,transform', [
+    (np.empty((0, 3)), np.eye(4)),
+    (np.zeros(3), np.eye(4)),
+    (np.full((1, 3), np.nan), np.eye(4)),
+    (np.full((1, 3), np.inf), np.eye(4)),
+    (np.zeros((1, 3)), np.eye(3)),
+    (np.zeros((1, 3)), np.full((4, 4), np.nan)),
+    (np.zeros((1, 3)), np.diag([2., 1., 1., 1.])),
+    (np.zeros((1, 3)), np.diag([-1., 1., 1., 1.])),
+    (np.zeros((1, 3)), np.diag([1., 1., 1., 2.])),
+])
+def test_maximum_point_displacement_rejects_invalid_inputs(points, transform):
+    helper = getattr(multiview_surface, 'maximum_point_displacement_m', None)
+    assert callable(helper)
+    with pytest.raises(ValueError):
+        helper(points, transform)
+
+
+def test_maximum_point_displacement_consumer_recomputes_from_measured_points():
+    reference, moving = registered_pair()
+    result = register_surface_view(reference, moving)
+    helper = getattr(multiview_surface, 'maximum_point_displacement_m', None)
+    assert callable(helper)
+    expected = np.max(np.linalg.norm(
+        moving.points_base.dot(result.transform_base[:3, :3].T)
+        + result.transform_base[:3, 3] - moving.points_base,
+        axis=1,
+    ))
+    assert result.maximum_point_displacement_m == pytest.approx(expected)
+    defaulted = dataclasses.replace(result, maximum_point_displacement_m=0.)
+    assert helper(moving.points_base, defaulted.transform_base) == (
+        result.maximum_point_displacement_m
+    )
+
+
+def target_observation(points, bbox):
+    x, y, width, height = bbox
+    return TargetObservation(
+        identity=IDENTITY,
+        stamp_ns=1_100_000_000,
+        frame_id='base_link',
+        points_base=points,
+        support_normal_base=(0.0, 0.0, 1.0),
+        support_offset_m=0.0,
+        bbox_xywh=bbox,
+        image_shape_hw=(480, 640),
+        edge_clearance_px=min(x, y, 640 - x - width, 480 - y - height),
+        source_kind='instance_mask',
+        source_label='diagnostic-only',
+    )
+
+
+def test_bottom_clipped_bbox_is_diagnostic_and_registration_uses_only_3d_evidence():
+    reference_points, moving_aligned = rectangular_prism_views()
+    measured = transform_points_inverse(moving_aligned)
+    reference = view(reference_points, 1_000_000_000)
+    clipped = surface_view_from_observation(
+        target_observation(measured, (232, 364, 115, 116))
+    )
+    other_bbox = surface_view_from_observation(
+        target_observation(measured, (12, 12, 115, 116))
+    )
+
+    clipped_result = register_surface_view(reference, clipped)
+    other_result = register_surface_view(reference, other_bbox)
+
+    assert clipped.is_clipped is True
+    assert other_bbox.is_clipped is False
+    assert clipped_result.ok is True
+    assert np.array_equal(clipped_result.transform_base, other_result.transform_base)
+
+
+@pytest.mark.parametrize(
+    ('field', 'bad_value'),
+    [
+        ('correspondence_max_m', True),
+        ('correspondence_max_m', float('nan')),
+        ('minimum_inliers', 80.0),
+        ('minimum_overlap_fraction', 0.0),
+        ('maximum_rmse_m', -0.001),
+        ('maximum_translation_m', float('inf')),
+        ('maximum_yaw_deg', 181.0),
+        ('maximum_support_normal_angle_deg', -1.0),
+        ('maximum_support_offset_delta_m', '0.004'),
+        ('maximum_iterations', 0),
+    ],
+)
+def test_registration_config_fails_closed_without_coercion(field, bad_value):
+    with pytest.raises(ValueError):
+        RegistrationConfig(**{field: bad_value})
+
+
+def test_fused_surface_rejects_mixed_or_nonmonotonic_provenance():
+    reference, moving = registered_pair()
+    surface = fused_surface_from_view(reference)
+
+    for invalid in (
+        dataclasses.replace(moving, identity=TargetTrackIdentity.from_stream(4, 7)),
+        dataclasses.replace(moving, stamp_ns=reference.stamp_ns),
+    ):
+        result, unchanged = append_registered_view(surface, reference, invalid)
+        assert result.ok is False
+        assert unchanged is surface
+
+    with pytest.raises(ValueError):
+        FusedTargetSurface(
+            identity=IDENTITY,
+            points_base=np.zeros((2, 3)),
+            view_indices=np.asarray([0, 2]),
+            view_stamps_ns=(1_000_000_000, 1_100_000_000),
+        )
+
+
+def test_fusion_retains_only_real_connected_measurements_and_rejection_is_atomic():
+    reference, moving = registered_pair()
+    original = fused_surface_from_view(reference)
+    result, fused = append_registered_view(original, reference, moving)
+    assert result.ok
+    transformed = moving.points_base.dot(result.transform_base[:3, :3].T) + result.transform_base[:3, 3]
+    distances = np.linalg.norm(transformed[:, None] - reference.points_base[None, :], axis=2).min(axis=1)
+    assert np.count_nonzero(distances > RegistrationConfig().correspondence_max_m) > 0
+    for point, index in zip(fused.points_base, fused.view_indices):
+        measured = reference.points_base if index == 0 else transformed
+        assert np.any(np.all(measured == point, axis=1))
+    retained_moving = fused.points_base[fused.view_indices == 1]
+    retained_distances = np.linalg.norm(
+        retained_moving[:, None] - reference.points_base[None, :], axis=2
+    ).min(axis=1)
+    assert np.count_nonzero(
+        retained_distances > RegistrationConfig().correspondence_max_m
+    ) > 0
+    rejected = dataclasses.replace(moving, stamp_ns=moving.stamp_ns + 1, support_offset_m=0.008)
+    failure, unchanged = append_registered_view(fused, reference, rejected)
+    assert failure.code == 'SUPPORT_OFFSET_MISMATCH'
+    assert unchanged is fused
+    assert original.view_stamps_ns == (reference.stamp_ns,)
+
+
+def test_fusion_keeps_newly_measured_opposing_face_from_real_append_boundary():
+    reference, moving = opposing_side_views()
+
+    result, fused = append_registered_view(
+        fused_surface_from_view(reference), reference, moving
+    )
+
+    assert result.ok
+    assert result.inlier_count == 255
+    assert result.overlap_fraction == pytest.approx(255.0 / 493.0)
+    moving_points = fused.points_base[fused.view_indices == 1]
+    positive_face = moving_points[np.isclose(moving_points[:, 1], 0.025)]
+    assert len(positive_face) > 0
+    assert np.ptp(positive_face[:, 2]) > 0.0
+    transformed = (
+        moving.points_base.dot(result.transform_base[:3, :3].T)
+        + result.transform_base[:3, 3]
+    )
+    for point in positive_face:
+        assert np.any(np.all(transformed == point, axis=1))
+
+
+def test_fusion_excludes_disconnected_cluster_and_is_order_and_repeat_invariant():
+    disconnected = np.asarray([
+        (-0.002, 0.000, 0.010),
+        (0.000, 0.000, 0.012),
+        (0.002, 0.000, 0.014),
+    ])
+    reference, moving = opposing_side_views(disconnected)
+    rng = np.random.RandomState(17)
+    shuffled = dataclasses.replace(
+        moving, points_base=moving.points_base[rng.permutation(len(moving.points_base))]
+    )
+    repeated = dataclasses.replace(
+        moving, points_base=np.repeat(shuffled.points_base, 3, axis=0)
+    )
+
+    surfaces = []
+    results = []
+    for candidate in (moving, shuffled, repeated):
+        result, fused = append_registered_view(
+            fused_surface_from_view(reference), reference, candidate
+        )
+        assert result.ok
+        assert result.inlier_count == 255
+        assert result.overlap_fraction == pytest.approx(255.0 / 496.0)
+        results.append(result)
+        surfaces.append(fused)
+
+    for result in results[1:]:
+        assert result.inlier_count == results[0].inlier_count
+        assert result.overlap_fraction == results[0].overlap_fraction
+        np.testing.assert_array_equal(result.transform_base, results[0].transform_base)
+    for fused in surfaces[1:]:
+        np.testing.assert_array_equal(fused.points_base, surfaces[0].points_base)
+        np.testing.assert_array_equal(fused.view_indices, surfaces[0].view_indices)
+    retained = surfaces[0].points_base[surfaces[0].view_indices == 1]
+    for point in disconnected:
+        assert not np.any(np.all(retained == point, axis=1))
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_fusion_connectivity_bound_is_exact(outside):
+    from alicia_flexible_grasp.vision import multiview_surface as module
+    distance = np.nextafter(0.008, np.inf) if outside else 0.008
+    points = np.asarray([[0.0, 0.0, 0.0], [distance, 0.0, 0.0]])
+
+    connected = module._connected_measurement_mask(
+        points, np.asarray([True, False]), RegistrationConfig()
+    )
+
+    np.testing.assert_array_equal(connected, [True, not outside])
+
+
+@pytest.mark.parametrize('axis', [0, 1, 2])
+@pytest.mark.parametrize('outside', [False, True])
+def test_fusion_connectivity_bound_is_exact_across_signed_zero(axis, outside):
+    from alicia_flexible_grasp.vision import multiview_surface as module
+    radius = RegistrationConfig().correspondence_max_m
+    candidate = np.nextafter(radius, np.inf) if outside else radius
+    points = np.zeros((2, 3))
+    points[0, axis] = np.nextafter(0.0, -np.inf)
+    points[1, axis] = candidate
+    distance = np.linalg.norm(points[1] - points[0])
+
+    connected = module._connected_measurement_mask(
+        points, np.asarray([True, False]), RegistrationConfig()
+    )
+
+    assert distance == candidate
+    assert bool(distance <= radius) is (not outside)
+    np.testing.assert_array_equal(connected, [True, not outside])
+
+
+@pytest.mark.parametrize('origin', [-0.016, -0.008, 0.0, 0.008, 0.016])
+@pytest.mark.parametrize('direction', [-1.0, 1.0])
+def test_fusion_connectivity_matches_exact_distance_across_shifted_bins(
+    origin, direction
+):
+    from alicia_flexible_grasp.vision import multiview_surface as module
+    config = RegistrationConfig()
+    points = np.asarray([
+        [origin, 0.0, 0.0],
+        [origin + direction * config.correspondence_max_m, 0.0, 0.0],
+    ])
+    expected = np.linalg.norm(points[1] - points[0]) <= config.correspondence_max_m
+
+    connected = module._connected_measurement_mask(
+        points, np.asarray([True, False]), config
+    )
+
+    np.testing.assert_array_equal(connected, [True, expected])
+
+
+def test_registration_is_independent_of_point_order_and_support_plane_orientation():
+    reference, moving = registered_pair()
+    baseline = register_surface_view(reference, moving)
+    shuffled = register_surface_view(
+        dataclasses.replace(reference, points_base=reference.points_base[::-1]),
+        dataclasses.replace(moving, points_base=moving.points_base[::-1]),
+    )
+    assert np.array_equal(baseline.transform_base, shuffled.transform_base)
+    angle = np.deg2rad(25.0)
+    tilt = np.array([[1., 0., 0.], [0., np.cos(angle), -np.sin(angle)], [0., np.sin(angle), np.cos(angle)]])
+    normal = tilt[:, 2]
+    tilted = register_surface_view(
+        dataclasses.replace(reference, points_base=reference.points_base.dot(tilt.T), support_normal_base=normal),
+        dataclasses.replace(moving, points_base=moving.points_base.dot(tilt.T), support_normal_base=normal),
+    )
+    assert tilted.ok
+    np.testing.assert_allclose(tilted.transform_base[:3, :3].dot(normal), normal, atol=1e-12)
+    np.testing.assert_allclose(tilted.transform_base[:3, :3], tilt.dot(baseline.transform_base[:3, :3]).dot(tilt.T), atol=1e-8)
+    np.testing.assert_allclose(tilted.transform_base[:3, 3], tilt.dot(baseline.transform_base[:3, 3]), atol=1e-8)
+
+
+def test_chunked_nearest_neighbors_match_full_distances_including_ties(monkeypatch):
+    from alicia_flexible_grasp.vision import multiview_surface as module
+    rng = np.random.default_rng(42)
+    source = rng.normal(size=(19, 3))
+    target = rng.normal(size=(23, 3))
+    target[0] = source[0]
+    target[8] = source[0]
+    monkeypatch.setattr(module, '_NEAREST_NEIGHBOR_CHUNK', 4)
+    monkeypatch.setattr(module, '_NEAREST_NEIGHBOR_TARGET_CHUNK', 5)
+    indices, distances = module._nearest_neighbors(source, target)
+    full = np.linalg.norm(source[:, None] - target[None, :], axis=2)
+    np.testing.assert_array_equal(indices, np.argmin(full, axis=1))
+    np.testing.assert_allclose(distances, np.min(full, axis=1))
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_correspondence_bound_is_exact(outside):
+    from alicia_flexible_grasp.vision.multiview_surface import _registration_correspondences
+    distance = np.nextafter(0.008, np.inf) if outside else 0.008
+    _points, _indices, distances, inliers = _registration_correspondences(
+        np.zeros((1, 3)), np.array([[distance, 0., 0.]]), np.eye(4), RegistrationConfig())
+    assert distances[0] == distance
+    assert bool(inliers[0]) is (not outside)
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_support_offset_bound_is_exact(outside):
+    reference, moving = registered_pair()
+    delta = np.nextafter(0.007, np.inf) if outside else 0.007
+    result = register_surface_view(reference, dataclasses.replace(moving, support_offset_m=delta))
+    assert result.ok is (not outside)
+    if outside:
+        assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+
+
+def test_support_plane_gate_uses_target_local_separation_for_tilted_fit():
+    points, _other_view = rectangular_prism_views()
+    points = points + np.asarray([-0.12, -0.38, 0.06])
+    anchor = np.median(points, axis=0)
+    reference_normal = np.asarray([0.0, 0.0, 1.0])
+    angle = np.deg2rad(1.3)
+    moving_normal = np.asarray([0.0, np.sin(angle), np.cos(angle)])
+    reference_offset = -float(np.dot(reference_normal, anchor))
+    moving_offset = -float(np.dot(moving_normal, anchor))
+    assert abs(reference_offset - moving_offset) > 0.007
+    reference = view(
+        points,
+        1_000_000_000,
+        normal=reference_normal,
+        offset=reference_offset,
+    )
+    moving = view(
+        points,
+        1_100_000_000,
+        normal=moving_normal,
+        offset=moving_offset,
+    )
+
+    result = register_surface_view(reference, moving)
+
+    assert result.ok
+    assert result.code == 'REGISTERED'
+    assert result.support_plane_separation_m == pytest.approx(0.0, abs=1e-12)
+
+
+def test_explicit_stricter_support_plane_gate_rejects_target_local_separation_over_bound():
+    points, _other_view = rectangular_prism_views()
+    points = points + np.asarray([-0.12, -0.38, 0.06])
+    anchor = np.median(points, axis=0)
+    reference_normal = np.asarray([0.0, 0.0, 1.0])
+    angle = np.deg2rad(0.9)
+    moving_normal = np.asarray([0.0, np.sin(angle), np.cos(angle)])
+    reference_offset = -float(np.dot(reference_normal, anchor))
+    moving_offset = -float(np.dot(moving_normal, anchor)) + 0.0041
+    reference = view(
+        points,
+        1_000_000_000,
+        normal=reference_normal,
+        offset=reference_offset,
+    )
+    moving = view(
+        points,
+        1_100_000_000,
+        normal=moving_normal,
+        offset=moving_offset,
+    )
+
+    result = register_surface_view(reference, moving, RegistrationConfig(
+        maximum_support_offset_delta_m=0.004))
+
+    assert not result.ok
+    assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+    assert result.support_plane_separation_m == pytest.approx(0.0041)
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_support_angle_bound_is_exact(outside):
+    reference, moving = registered_pair()
+    moving = dataclasses.replace(moving, support_normal_base=(0., 0.05, np.sqrt(1. - 0.05 ** 2)))
+    angle = float(np.degrees(np.arccos(moving.support_normal_base[2])))
+    # The reported finite angle is the boundary; tightening by one ULP puts
+    # that same physical measurement outside, without trigonometric rounding.
+    bound = np.nextafter(angle, 0.) if outside else angle
+    result = register_surface_view(reference, moving, RegistrationConfig(maximum_support_normal_angle_deg=bound))
+    assert result.ok is (not outside)
+    if outside:
+        assert result.code == 'SUPPORT_NORMAL_MISMATCH'
+
+
+@pytest.mark.parametrize('field,code', [
+    ('maximum_translation_m', 'TRANSLATION_BOUND_EXCEEDED'),
+    ('maximum_yaw_deg', 'YAW_BOUND_EXCEEDED'),
+    ('maximum_rmse_m', 'RMSE_EXCEEDED'),
+    ('minimum_overlap_fraction', 'OVERLAP_INSUFFICIENT'),
+    ('minimum_inliers', 'INLIERS_INSUFFICIENT'),
+])
+@pytest.mark.parametrize('outside', [False, True])
+def test_reported_registration_metric_bound_is_exact(field, code, outside):
+    reference, moving = registered_pair()
+    config = RegistrationConfig()
+    if field in ('maximum_translation_m', 'maximum_yaw_deg'):
+        # One ICP update on a narrow fragment: the reported correction is
+        # also the largest visited correction (no earlier coarse overshoot).
+        moving = dataclasses.replace(moving, points_base=transform_points_inverse(reference.points_base[:100]))
+        config = dataclasses.replace(config, maximum_iterations=1)
+    if field == 'minimum_overlap_fraction':
+        # Narrow measured fragment disables coarse footprint initialization,
+        # so changing the acceptance threshold cannot change the optimizer.
+        points = reference.points_base[:100]
+        moving = dataclasses.replace(moving, points_base=np.vstack((
+            points, points[:20] + [0., 0., 0.1])))
+    baseline = register_surface_view(reference, moving, config)
+    assert baseline.ok
+    values = {
+        'maximum_translation_m': baseline.maximum_point_displacement_m,
+        # For normal +Z the support basis is (-Y, +X, +Z).
+        'maximum_yaw_deg': abs(float(np.degrees(np.arctan2(-baseline.transform_base[0, 1], baseline.transform_base[1, 1])))),
+        'maximum_rmse_m': baseline.rmse_m,
+        'minimum_overlap_fraction': baseline.overlap_fraction,
+        'minimum_inliers': baseline.inlier_count,
+    }
+    bound = values[field]
+    if outside:
+        bound = bound + 1 if field == 'minimum_inliers' else np.nextafter(
+            bound, np.inf if field.startswith('minimum') else 0.)
+    result = register_surface_view(reference, moving, dataclasses.replace(config, **{field: bound}))
+    assert result.ok is (not outside), result.code
+    if outside:
+        assert result.code == code
+
+
+@pytest.mark.parametrize('kind', ['duplicates', 'distinct_many_to_one', 'line'])
+def test_registration_rejects_collapsed_or_repeated_correspondences(kind):
+    reference, moving = registered_pair()
+    if kind == 'duplicates':
+        points = np.repeat(reference.points_base[:1], 80, axis=0)
+    elif kind == 'distinct_many_to_one':
+        offsets = np.array([(x, y, 0.) for x in np.linspace(-0.00001, 0.00001, 5)
+                            for y in np.linspace(-0.00001, 0.00001, 4)])
+        points = np.vstack([offsets + [x, y, 0.034]
+                            for x in (-0.04, 0.04) for y in (-0.025, 0.025)])
+    else:
+        points = np.column_stack((np.linspace(-0.04, 0.04, 80), np.zeros(80), np.full(80, 0.034)))
+        reference = dataclasses.replace(reference, points_base=points)
+    moving = dataclasses.replace(moving, points_base=points)
+    original = fused_surface_from_view(reference)
+    result, fused = append_registered_view(original, reference, moving)
+    assert not result.ok
+    assert result.inlier_count < 80
+    assert fused is original
+
+
+def test_repeated_input_samples_cannot_inflate_authoritative_metrics():
+    reference, moving = registered_pair()
+    baseline, surface = append_registered_view(fused_surface_from_view(reference), reference, moving)
+    repeated = dataclasses.replace(moving, points_base=np.repeat(moving.points_base, 3, axis=0))
+    result, repeated_surface = append_registered_view(fused_surface_from_view(reference), reference, repeated)
+    assert baseline.ok and result.ok
+    assert result.inlier_count == baseline.inlier_count
+    assert result.overlap_fraction == baseline.overlap_fraction
+    np.testing.assert_array_equal(result.transform_base, baseline.transform_base)
+    np.testing.assert_array_equal(repeated_surface.points_base, surface.points_base)
+    np.testing.assert_array_equal(repeated_surface.view_indices, surface.view_indices)
+
+
+@pytest.mark.parametrize('iterations', [1, 2])
+def test_iteration_budget_is_an_exact_integer_limit(monkeypatch, iterations):
+    from alicia_flexible_grasp.vision import multiview_surface as module
+    reference, moving = registered_pair()
+    moving = dataclasses.replace(moving, points_base=transform_points_inverse(reference.points_base[:100]))
+    calls = []
+    rigid_update = module._rigid_update_about_support
+
+    def counted_update(*args):
+        calls.append(1)
+        return rigid_update(*args)
+
+    monkeypatch.setattr(module, '_rigid_update_about_support', counted_update)
+    result = register_surface_view(reference, moving, RegistrationConfig(maximum_iterations=iterations))
+    assert result.ok
+    assert len(calls) == iterations
+    with pytest.raises(ValueError):
+        RegistrationConfig(maximum_iterations=np.nextafter(float(iterations), np.inf))
+
+
+def provenance_stationary_view(stamp_ns=1_000_000_000):
+    # Cell interiors keep numerical ICP ties away from quantization boundaries.
+    points = np.asarray([(0.001 + .005*x, 0.001 + .005*y, .021)
+                         for x in range(10) for y in range(10)])
+    return view(points, stamp_ns)
+
+
+def test_reobserved_voxels_keep_all_sources_and_original_measured_representatives():
+    reference = provenance_stationary_view()
+    original = fused_surface_from_view(reference)
+    result, twice = append_registered_view(original, reference,
+        dataclasses.replace(reference, stamp_ns=reference.stamp_ns + 1))
+    assert result.ok
+    assert len(twice.points_base) == len(original.points_base)
+    assert twice.view_sources == ((0, 1),) * len(twice.points_base)
+    assert np.all(twice.view_support_counts == 2)
+    assert np.all(twice.view_indices == 1)  # Same representative rule as before.
+    expected = reference.points_base.dot(result.transform_base[:3, :3].T) + result.transform_base[:3, 3]
+    assert all(np.any(np.all(expected == point, axis=1)) for point in twice.points_base)
+    result, thrice = append_registered_view(twice, reference,
+        dataclasses.replace(reference, stamp_ns=reference.stamp_ns + 2))
+    assert result.ok
+    assert thrice.view_sources == ((0, 1, 2),) * len(thrice.points_base)
+    assert np.all(thrice.view_support_counts == 3)
+    assert original.view_sources == ((0,),) * len(original.points_base)
+    assert twice.view_sources == ((0, 1),) * len(twice.points_base)
+    audit = multiview_surface.surface_provenance_audit(thrice)
+    assert audit['source_count'] == 3
+    assert audit['multi_source_voxel_count'] == len(thrice.points_base)
+    assert audit['support_count_histogram'] == {'3': len(thrice.points_base)}
+    assert [row['represented_voxel_count'] for row in audit['per_view']] == [0, 0, len(thrice.points_base)]
+    assert all(row['supported_voxel_count'] == len(thrice.points_base) for row in audit['per_view'])
+    assert all(row['exclusive_voxel_count'] == 0 for row in audit['per_view'])
+    assert all(row['shared_voxel_count'] == len(thrice.points_base) for row in audit['per_view'])
+    assert not audit['independent_viewpoint_evidence']
+    assert not audit['uncertainty_reduction_certified']
+    assert not audit['contact_or_motion_authorized']
+
+
+def test_opposing_face_fusion_keeps_unique_new_old_and_shared_voxel_contributions():
+    reference, moving = opposing_side_views()
+    original = fused_surface_from_view(reference)
+    result, fused = append_registered_view(original, reference, moving)
+    assert result.ok
+    kinds = set(fused.view_sources)
+    assert {(0,), (1,), (0, 1)} <= kinds
+    negative = np.isclose(fused.points_base[:, 1], -.025) & (fused.points_base[:, 2] < .030)
+    positive = np.isclose(fused.points_base[:, 1], .025) & (fused.points_base[:, 2] < .030)
+    assert any(negative) and any(positive)
+    assert all(fused.view_sources[index] == (0,) for index in np.flatnonzero(negative))
+    assert all(fused.view_sources[index] == (1,) for index in np.flatnonzero(positive))
+    audit = multiview_surface.surface_provenance_audit(fused)
+    assert all(row['exclusive_voxel_count'] > 0 for row in audit['per_view'])
+    assert all(row['shared_voxel_count'] > 0 for row in audit['per_view'])
+    assert sum(row['supported_voxel_count'] for row in audit['per_view']) == int(np.sum(fused.view_support_counts))
+
+
+@pytest.mark.parametrize('fault', ['repeat_stamp', 'older_stamp', 'identity', 'support'])
+def test_source_support_never_changes_on_rejected_registration(fault):
+    reference = provenance_stationary_view()
+    moving = dataclasses.replace(reference, stamp_ns=reference.stamp_ns + 1)
+    result, fused = append_registered_view(fused_surface_from_view(reference), reference, moving)
+    assert result.ok
+    before = multiview_surface.surface_provenance_audit(fused)
+    candidate = dataclasses.replace(moving, stamp_ns=moving.stamp_ns + 1)
+    if fault == 'repeat_stamp': candidate = moving
+    elif fault == 'older_stamp': candidate = reference
+    elif fault == 'identity': candidate = dataclasses.replace(candidate, identity=TargetTrackIdentity.from_stream(4, 8))
+    elif fault == 'support': candidate = dataclasses.replace(candidate, support_offset_m=.008)
+    failure, unchanged = append_registered_view(fused, reference, candidate)
+    assert not failure.ok and unchanged is fused
+    assert multiview_surface.surface_provenance_audit(unchanged) == before
+
+
+def test_legacy_surface_constructor_and_snapshot_coordinate_replace_preserve_provenance():
+    points = np.asarray([[.001, .001, .01], [.006, .001, .01]])
+    old = FusedTargetSurface(IDENTITY, points, np.asarray([0, 1]), (100, 200))
+    assert old.view_sources == ((0,), (1,))
+    assert old.view_support_counts.tolist() == [1, 1]
+    shared = dataclasses.replace(old, view_sources=((0,), (0, 1)))
+    moved = dataclasses.replace(shared, points_base=shared.points_base + [.1, -.2, .3])
+    assert moved.view_sources == shared.view_sources
+    assert moved.view_support_counts.tolist() == [1, 2]
+    assert multiview_surface.surface_provenance_audit(moved) == multiview_surface.surface_provenance_audit(shared)
+    assert np.allclose(shared.points_base, points)
+    assert np.allclose(moved.points_base, points + [.1, -.2, .3])
+
+
+def test_voxel_source_arrays_cannot_be_mutated_through_constructor_inputs_or_properties():
+    rows = [[0], [0, 1]]
+    surface = FusedTargetSurface(IDENTITY, np.zeros((2, 3)), np.asarray([0, 1]), (100, 200), rows)
+    rows[1].append(2)
+    assert surface.view_sources == ((0,), (0, 1))
+    with pytest.raises(dataclasses.FrozenInstanceError): surface.view_sources = ()
+    with pytest.raises(TypeError): surface.view_sources[1][0] = 1
+    counts = surface.view_support_counts
+    with pytest.raises(ValueError): counts[0] = 4
+    with pytest.raises(ValueError): counts.setflags(write=True)
+    audit = multiview_surface.surface_provenance_audit(surface)
+    audit['per_view'][0]['supported_voxel_count'] = -1
+    assert multiview_surface.surface_provenance_audit(surface)['per_view'][0]['supported_voxel_count'] == 2
+
+
+@pytest.mark.parametrize('sources', [
+    (), ((0,),), ((0,), (1,), (1,)), ((), (1,)),
+    ((0,), (1, 0)), ((0,), (0, 0, 1)), ((0,), (0, 2)),
+    ((0,), (0,)), ((False,), (1,)), ((0,), (1.0,)),
+    ((0,), ('1',)), ((-1, 0), (1,)), 'invalid', ((0,), {1}),
+])
+def test_voxel_source_sets_reject_malformed_or_inconsistent_provenance(sources):
+    with pytest.raises(ValueError):
+        FusedTargetSurface(IDENTITY, np.zeros((2, 3)), np.asarray([0, 1]), (100, 200), sources)
+
+
+def test_voxel_source_sets_do_not_hide_invalid_source_timestamps():
+    for stamps in ((100, 100), (200, 100), (True, 200), (100, 200.0)):
+        with pytest.raises(ValueError):
+            FusedTargetSurface(IDENTITY, np.zeros((2, 3)), np.asarray([0, 1]), stamps, ((0,), (0, 1)))
+
+
+def test_support_audit_exposes_object_only_shift_without_changing_stricter_fusion(monkeypatch):
+    reference, moving = registered_pair()
+    # The object's apparent height changes, while the measured support does
+    # not. Existing ICP can match the target exactly without agreeing with
+    # that support under the same moving-to-reference correction.
+    moving = dataclasses.replace(
+        moving, points_base=moving.points_base + [0., 0., .006])
+    surface = fused_surface_from_view(reference)
+    config = RegistrationConfig(maximum_support_offset_delta_m=.004)
+    result, fused = append_registered_view(surface, reference, moving, config)
+    audit = result.support_consistency_audit
+    assert result.ok and result.code == 'REGISTERED'
+    assert result.support_plane_separation_m == 0.
+    assert result.rmse_m < 1e-12
+    assert result.transform_base[2, 3] == pytest.approx(-.005, abs=1e-12)
+    assert audit.raw_plane_separation_m == 0.
+    assert audit.transformed_plane_separation_m == pytest.approx(.005, abs=1e-12)
+    assert audit.transformed_maximum_footprint_separation_m == pytest.approx(.005, abs=1e-12)
+    assert audit.transformed_plane_separation_m > config.maximum_support_offset_delta_m
+    assert audit.correspondence_count == result.inlier_count
+    assert audit.diagnostic_only is True
+    assert audit.transform_semantics == 'moving_snapshot_base_estimate_to_phase_reference'
+
+    # The diagnostic does not become a new acceptance/fusion gate, including
+    # when its corrected discrepancy exceeds the existing raw support bound.
+    monkeypatch.setattr(multiview_surface, '_support_consistency_audit', lambda *_: None)
+    without_audit, original_fusion = append_registered_view(surface, reference, moving, config)
+    assert without_audit.support_consistency_audit is None
+    for attribute in dataclasses.fields(result):
+        if attribute.name not in ('support_consistency_audit', 'transform_base'):
+            assert getattr(result, attribute.name) == getattr(without_audit, attribute.name)
+    np.testing.assert_array_equal(result.transform_base, without_audit.transform_base)
+    np.testing.assert_array_equal(fused.points_base, original_fusion.points_base)
+    np.testing.assert_array_equal(fused.view_indices, original_fusion.view_indices)
+    assert fused.view_sources == original_fusion.view_sources
+    assert fused.view_stamps_ns == original_fusion.view_stamps_ns
+
+
+def test_support_audit_recovers_consistent_rigid_plane_and_serializes_immutably():
+    # registered_pair uses a +1 mm reference correction in Z. Transform its
+    # support by the inverse too, making target and support one rigid scene.
+    reference, moving = registered_pair(offset=.001)
+    result = register_surface_view(reference, moving)
+    assert result.ok
+    audit = result.support_consistency_audit
+    assert audit.raw_plane_separation_m == pytest.approx(.001)
+    assert audit.raw_maximum_footprint_separation_m == pytest.approx(.001)
+    assert audit.transformed_plane_separation_m == pytest.approx(0., abs=1e-12)
+    assert audit.transformed_maximum_footprint_separation_m == pytest.approx(0., abs=1e-12)
+    assert audit.raw_normal_angle_deg == pytest.approx(0., abs=1e-6)
+    assert audit.transformed_normal_angle_deg == pytest.approx(0., abs=1e-6)
+    assert audit.anchor_base[2] == pytest.approx(0., abs=1e-12)
+    serialized = json.loads(json.dumps(dataclasses.asdict(audit), allow_nan=False))
+    assert serialized['anchor_policy'] == (
+        'final_matched_reference_centroid_projected_to_reference_support')
+    assert serialized['diagnostic_only'] is True
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        audit.raw_plane_separation_m = .1
+    with pytest.raises(TypeError):
+        audit.anchor_base[0] = .1
+
+
+def _reexpress_surface_view(source, transform):
+    normal = transform[:3, :3].dot(source.support_normal_base)
+    return dataclasses.replace(source,
+        points_base=source.points_base.dot(transform[:3, :3].T) + transform[:3, 3],
+        support_normal_base=normal,
+        support_offset_m=source.support_offset_m - float(normal.dot(transform[:3, 3])))
+
+
+@pytest.mark.parametrize('origin', [(0., 0., 0.), (1.3, -2.4, .8), (1e4, -2e4, 3e4)])
+def test_support_audit_is_covariant_under_tilt_and_origin_change(origin):
+    points = np.asarray([[-.03, -.02, .09], [.04, -.01, .08],
+                         [.02, .05, .09], [-.02, .02, .06]])
+    reference = view(points, 100, offset=-.05)
+    moving = view(points, 200,
+        normal=(np.sin(.03), 0., np.cos(.03)), offset=-.048)
+    correction = np.eye(4)
+    correction[:3, :3] = [[1., 0., 0.], [0., np.cos(.01), -np.sin(.01)],
+                          [0., np.sin(.01), np.cos(.01)]]
+    correction[:3, 3] = [.003, -.002, .001]
+    baseline = multiview_surface._support_consistency_audit(
+        reference, moving, correction, points)
+    # Fix the same correspondences; this tests plane/frame mathematics
+    # independently of ICP tie-breaking and its selected correspondence set.
+    rx = np.asarray([[1., 0., 0.], [0., np.cos(.47), -np.sin(.47)],
+                     [0., np.sin(.47), np.cos(.47)]])
+    rz = np.asarray([[np.cos(-.62), -np.sin(-.62), 0.],
+                     [np.sin(-.62), np.cos(-.62), 0.], [0., 0., 1.]])
+    frame = np.eye(4)
+    frame[:3, :3] = rz.dot(rx)
+    frame[:3, 3] = origin
+    changed_reference = _reexpress_surface_view(reference, frame)
+    changed = multiview_surface._support_consistency_audit(
+        changed_reference, _reexpress_surface_view(moving, frame),
+        frame.dot(correction).dot(np.linalg.inv(frame)), changed_reference.points_base)
+    np.testing.assert_allclose(changed.anchor_base,
+        frame[:3, :3].dot(baseline.anchor_base) + frame[:3, 3], atol=2e-11, rtol=0.)
+    for name in ('raw_normal_angle_deg', 'transformed_normal_angle_deg',
+                 'raw_plane_separation_m', 'transformed_plane_separation_m',
+                 'raw_maximum_footprint_separation_m',
+                 'transformed_maximum_footprint_separation_m'):
+        assert getattr(changed, name) == pytest.approx(getattr(baseline, name), abs=2e-11)
+
+
+def test_support_audit_maximum_exposes_planes_crossing_at_local_centroid():
+    points = np.asarray([(x, y, .04) for x in (-.03, .03) for y in (-.02, .02)])
+    reference = view(points, 100)
+    angle = np.deg2rad(2.)
+    moving = view(points, 200, normal=(np.sin(angle), 0., np.cos(angle)))
+    audit = multiview_surface._support_consistency_audit(reference, moving, np.eye(4), points)
+    np.testing.assert_allclose(audit.anchor_base, [0., 0., 0.], atol=1e-12)
+    assert audit.raw_plane_separation_m == pytest.approx(0., abs=1e-12)
+    assert audit.raw_maximum_footprint_separation_m == pytest.approx(.03 * np.sin(angle))
+    assert audit.transformed_maximum_footprint_separation_m == audit.raw_maximum_footprint_separation_m
+    # Unmatched target tails/newly visible sides cannot alter this footprint.
+    larger_view = dataclasses.replace(reference, points_base=np.vstack((points, [1., 2., 3.])))
+    assert multiview_surface._support_consistency_audit(
+        larger_view, moving, np.eye(4), points) == audit
+
+
+def test_support_audit_normalizes_plane_equations_and_parallel_angle():
+    points = np.asarray([[-.03, -.02, .09], [.04, -.01, .08], [.02, .05, .09]])
+    normal = np.asarray([-.22655837913202842, .19995903251431088, .9532511139049401])
+    reference = view(points, 100, normal=normal, offset=-.05)
+    moving = view(points, 200, normal=normal, offset=-.05)
+    baseline = multiview_surface._support_consistency_audit(
+        reference, moving, np.eye(4), points)
+    assert baseline.raw_normal_angle_deg == 0.
+    assert baseline.transformed_normal_angle_deg == 0.
+    # SurfaceView permits small normalization roundoff. Equivalent plane
+    # equations must scale both their normal and offset before distances.
+    scaled = dataclasses.replace(moving,
+        support_normal_base=normal * (1. + 5e-7), support_offset_m=-.05 * (1. + 5e-7))
+    audit = multiview_surface._support_consistency_audit(
+        reference, scaled, np.eye(4), points)
+    assert audit.raw_plane_separation_m == pytest.approx(0., abs=1e-16)
+    assert audit.raw_maximum_footprint_separation_m == pytest.approx(0., abs=1e-16)
+    assert audit.raw_normal_angle_deg == pytest.approx(0., abs=1e-12)
+    assert audit.transformed_plane_separation_m == audit.raw_plane_separation_m
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_support_audit_keeps_raw_seven_millimeter_acceptance_boundary(outside):
+    reference, moving = registered_pair()
+    offset = np.nextafter(.007, np.inf) if outside else .007
+    moving = dataclasses.replace(moving, support_offset_m=offset)
+    result = register_surface_view(reference, moving)
+    assert result.support_plane_separation_m == offset
+    assert result.ok is (not outside)
+    if outside:
+        assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+        assert result.support_consistency_audit is None
+    else:
+        assert result.support_consistency_audit.raw_plane_separation_m == offset

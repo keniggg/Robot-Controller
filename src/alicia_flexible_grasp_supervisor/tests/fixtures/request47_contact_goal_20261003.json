@@ -1,0 +1,1315 @@
+{
+  "source_audit_sha256": "30cd17ea0285042e6b049e06d3202e65e5a104692db80f54ed527d78ebd398ba",
+  "request_id": 47,
+  "selection_generation": 3,
+  "scope": "recorded_requested_endpoint_reconstruction_not_full_trajectory_replay",
+  "geometry": {
+    "R_base_obb": [
+      [
+        -0.9740026743769017,
+        -0.22480985880377333,
+        -0.027916262129280892
+      ],
+      [
+        0.22367363053527692,
+        -0.9738930763032344,
+        0.0387605847710133
+      ],
+      [
+        -0.035901215993496036,
+        0.03150878152594885,
+        0.9988584981752613
+      ]
+    ],
+    "obb_center_base_m": [
+      -0.11174932188899625,
+      -0.3872147696586247,
+      0.011360946594408271
+    ],
+    "obb_size_xyz_m": [
+      0.05421008396368016,
+      0.030656265633502305,
+      0.02035967569101252
+    ],
+    "support_normal_base": [
+      -0.027916262129280892,
+      0.0387605847710133,
+      0.9988584981752613
+    ],
+    "support_offset_m": 0.010720907333685175
+  },
+  "registration": {
+    "code": "REGISTERED",
+    "inlier_count": 849,
+    "ok": true,
+    "overlap_fraction": 0.787569573283859,
+    "raw_translation_m": 0.009130385664744441,
+    "rmse_m": 0.0009090626135827922,
+    "rotation_deg": 1.26165188810369,
+    "snapshot_to_reference_transform": [
+      [
+        0.9997580699537464,
+        0.0219820841717392,
+        -0.0007678136654878324,
+        0.00836573547068683
+      ],
+      [
+        -0.021982840968873082,
+        0.9997578564733719,
+        -0.0009915254438560975,
+        -0.003126441885295658
+      ],
+      [
+        0.0007458319486136377,
+        0.0010081642897618243,
+        0.9999992136694278,
+        0.001898360755844866
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "source_clipped": false,
+    "source_stamp_ns": 1791002303220170497,
+    "support_normal_angle_deg": 1.033745887053959,
+    "support_plane_separation_m": 0.001353628143634449,
+    "translation_m": 0.001921113688753351
+  },
+  "candidates": [
+    {
+      "source_index": 51,
+      "variant_index": 0,
+      "track_id": 1,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11337627626265172,
+            -0.38563363782008425,
+            0.05168588757988374
+          ],
+          "quaternion_xyzw": [
+            0.9533633098629842,
+            0.30087812897371957,
+            0.007480333326442985,
+            0.022689105881340595
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11304128111710035,
+            -0.3860987648373364,
+            0.03969958560178061
+          ],
+          "quaternion_xyzw": [
+            0.9533633098629842,
+            0.30087812897371957,
+            0.007480333326442985,
+            0.022689105881340595
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11224197929954452,
+            -0.38720856262163583,
+            0.011100147418573597
+          ],
+          "quaternion_xyzw": [
+            0.9533633098629842,
+            0.30087812897371957,
+            0.007480333326442985,
+            0.022689105881340595
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11331040293752132,
+            -0.3857251002297378,
+            0.04932890546297831
+          ],
+          "quaternion_xyzw": [
+            0.9533633098629842,
+            0.30087812897371957,
+            0.007480333326442985,
+            0.022689105881340595
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 51,
+      "variant_index": 1,
+      "track_id": 1,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11237719829266729,
+            -0.3856651614616939,
+            0.05171503324699651
+          ],
+          "quaternion_xyzw": [
+            -0.30087812897371957,
+            0.9533633098629842,
+            -0.022689105881340595,
+            0.007480333326442983
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11204220314711592,
+            -0.38613028847894604,
+            0.03972873126889338
+          ],
+          "quaternion_xyzw": [
+            -0.30087812897371957,
+            0.9533633098629842,
+            -0.022689105881340595,
+            0.007480333326442983
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11124290132956009,
+            -0.38724008626324546,
+            0.011129293085686366
+          ],
+          "quaternion_xyzw": [
+            -0.30087812897371957,
+            0.9533633098629842,
+            -0.022689105881340595,
+            0.007480333326442983
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11231132496753689,
+            -0.38575662387134746,
+            0.04935805113009108
+          ],
+          "quaternion_xyzw": [
+            -0.30087812897371957,
+            0.9533633098629842,
+            -0.022689105881340595,
+            0.007480333326442983
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 52,
+      "variant_index": 0,
+      "track_id": 3,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.1132612204451681,
+            -0.38554827753447607,
+            0.051766490991579234
+          ],
+          "quaternion_xyzw": [
+            0.9533428865733639,
+            0.30093109645933913,
+            0.009741488569277637,
+            0.02197542273088064
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11303742878576922,
+            -0.38609138105932966,
+            0.039779784447815256
+          ],
+          "quaternion_xyzw": [
+            0.9533428865733639,
+            0.30093109645933913,
+            0.009741488569277637,
+            0.02197542273088064
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11212692348206091,
+            -0.38712320233602765,
+            0.011180750830269093
+          ],
+          "quaternion_xyzw": [
+            0.9533428865733639,
+            0.30093109645933913,
+            0.009741488569277637,
+            0.02197542273088064
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.1131953471200377,
+            -0.38563973994412964,
+            0.0494095088746738
+          ],
+          "quaternion_xyzw": [
+            0.9533428865733639,
+            0.30093109645933913,
+            0.009741488569277637,
+            0.02197542273088064
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 52,
+      "variant_index": 1,
+      "track_id": 3,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11226225578323866,
+            -0.3855796592520715,
+            0.05179942717254994
+          ],
+          "quaternion_xyzw": [
+            -0.30093109645933913,
+            0.9533428865733639,
+            -0.021975422730880642,
+            0.00974148856927764
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11203846412383978,
+            -0.3861227627769251,
+            0.03981272062878596
+          ],
+          "quaternion_xyzw": [
+            -0.30093109645933913,
+            0.9533428865733639,
+            -0.021975422730880642,
+            0.00974148856927764
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11112795882013146,
+            -0.3871545840536231,
+            0.011213687011239797
+          ],
+          "quaternion_xyzw": [
+            -0.30093109645933913,
+            0.9533428865733639,
+            -0.021975422730880642,
+            0.00974148856927764
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11219638245810826,
+            -0.38567112166172507,
+            0.049442445055644504
+          ],
+          "quaternion_xyzw": [
+            -0.30093109645933913,
+            0.9533428865733639,
+            -0.021975422730880642,
+            0.00974148856927764
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 53,
+      "variant_index": 0,
+      "track_id": 5,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11349439459495356,
+            -0.3857147305299274,
+            0.05171512626212525
+          ],
+          "quaternion_xyzw": [
+            0.9533783701128072,
+            0.3008234689314819,
+            0.005219136003820999,
+            0.023402661396746273
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11304817797773932,
+            -0.38610190601172145,
+            0.03972858531868963
+          ],
+          "quaternion_xyzw": [
+            0.9533783701128072,
+            0.3008234689314819,
+            0.005219136003820999,
+            0.023402661396746273
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11236009763184636,
+            -0.38728965533147897,
+            0.011129386100815111
+          ],
+          "quaternion_xyzw": [
+            0.9533783701128072,
+            0.3008234689314819,
+            0.005219136003820999,
+            0.023402661396746273
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11342852126982315,
+            -0.38580619293958096,
+            0.04935814414521982
+          ],
+          "quaternion_xyzw": [
+            0.9533783701128072,
+            0.3008234689314819,
+            0.005219136003820999,
+            0.023402661396746273
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 53,
+      "variant_index": 1,
+      "track_id": 5,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11249521805690384,
+            -0.385746406428824,
+            0.05174048140440561
+          ],
+          "quaternion_xyzw": [
+            -0.3008234689314818,
+            0.9533783701128072,
+            -0.023402661396746276,
+            0.005219136003821
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.1120490014396896,
+            -0.3861335819106181,
+            0.039753940460969986
+          ],
+          "quaternion_xyzw": [
+            -0.3008234689314818,
+            0.9533783701128072,
+            -0.023402661396746276,
+            0.005219136003821
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11136092109379664,
+            -0.3873213312303756,
+            0.01115474124309547
+          ],
+          "quaternion_xyzw": [
+            -0.3008234689314818,
+            0.9533783701128072,
+            -0.023402661396746276,
+            0.005219136003821
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11242934473177343,
+            -0.3858378688384776,
+            0.04938349928750018
+          ],
+          "quaternion_xyzw": [
+            -0.3008234689314818,
+            0.9533783701128072,
+            -0.023402661396746276,
+            0.005219136003821
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 55,
+      "variant_index": 0,
+      "track_id": 7,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.1136125208483105,
+            -0.3857957913271234,
+            0.05174500651272951
+          ],
+          "quaternion_xyzw": [
+            0.9533880672381131,
+            0.30076711664010963,
+            0.0029579093215269946,
+            0.024116085263070082
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.1130550672765758,
+            -0.38610504199963125,
+            0.03975758307834514
+          ],
+          "quaternion_xyzw": [
+            0.9533880672381131,
+            0.30076711664010963,
+            0.0029579093215269946,
+            0.024116085263070082
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.1124782238852033,
+            -0.38737071612867496,
+            0.011159266351419369
+          ],
+          "quaternion_xyzw": [
+            0.9533880672381131,
+            0.30076711664010963,
+            0.0029579093215269946,
+            0.024116085263070082
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.1135466475231801,
+            -0.38588725373677696,
+            0.04938802439582408
+          ],
+          "quaternion_xyzw": [
+            0.9533880672381131,
+            0.30076711664010963,
+            0.0029579093215269946,
+            0.024116085263070082
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 55,
+      "variant_index": 1,
+      "track_id": 7,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11261326048440312,
+            -0.3858276298131537,
+            0.051766571204496015
+          ],
+          "quaternion_xyzw": [
+            -0.30076711664010963,
+            0.953388067238113,
+            -0.024116085263070075,
+            0.002957909321526995
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11205580691266842,
+            -0.3861368804856616,
+            0.03977914777011164
+          ],
+          "quaternion_xyzw": [
+            -0.30076711664010963,
+            0.953388067238113,
+            -0.024116085263070075,
+            0.002957909321526995
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11147896352129592,
+            -0.3874025546147053,
+            0.01118083104318587
+          ],
+          "quaternion_xyzw": [
+            -0.30076711664010963,
+            0.953388067238113,
+            -0.024116085263070075,
+            0.002957909321526995
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11254738715927272,
+            -0.3859190922228073,
+            0.04940958908759058
+          ],
+          "quaternion_xyzw": [
+            -0.30076711664010963,
+            0.953388067238113,
+            -0.024116085263070075,
+            0.002957909321526995
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 54,
+      "variant_index": 1,
+      "track_id": 8,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11361252084831051,
+            -0.3857957913271234,
+            0.051745006512729556
+          ],
+          "quaternion_xyzw": [
+            0.953388067238113,
+            0.30076711664010974,
+            0.0029579093215269924,
+            0.024116085263070075
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11305506727657581,
+            -0.38610504199963125,
+            0.03975758307834519
+          ],
+          "quaternion_xyzw": [
+            0.953388067238113,
+            0.30076711664010974,
+            0.0029579093215269924,
+            0.024116085263070075
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11247822388520332,
+            -0.38737071612867496,
+            0.011159266351419415
+          ],
+          "quaternion_xyzw": [
+            0.953388067238113,
+            0.30076711664010974,
+            0.0029579093215269924,
+            0.024116085263070075
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11354664752318011,
+            -0.38588725373677696,
+            0.049388024395824126
+          ],
+          "quaternion_xyzw": [
+            0.953388067238113,
+            0.30076711664010974,
+            0.0029579093215269924,
+            0.024116085263070075
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "missing independent sdk_transmitted samples",
+      "recorded_failed_stage": ""
+    },
+    {
+      "source_index": 54,
+      "variant_index": 0,
+      "track_id": 9,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11314583394779963,
+            -0.38546336650011276,
+            0.0518354317643297
+          ],
+          "quaternion_xyzw": [
+            0.9533171003588352,
+            0.30098237109037734,
+            0.012002589012446366,
+            0.021261615960111977
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11303322528679473,
+            -0.3860844697501208,
+            0.039847677133014875
+          ],
+          "quaternion_xyzw": [
+            0.9533171003588352,
+            0.30098237109037734,
+            0.012002589012446366,
+            0.021261615960111977
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11201153698469243,
+            -0.38703829130166434,
+            0.01124969160301956
+          ],
+          "quaternion_xyzw": [
+            0.9533171003588352,
+            0.30098237109037734,
+            0.012002589012446366,
+            0.021261615960111977
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11307996062266923,
+            -0.38555482890976633,
+            0.049478449647424275
+          ],
+          "quaternion_xyzw": [
+            0.9533171003588352,
+            0.30098237109037734,
+            0.012002589012446366,
+            0.021261615960111977
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 54,
+      "variant_index": 1,
+      "track_id": 9,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11214699733136525,
+            -0.3854946166301601,
+            0.051872158362892024
+          ],
+          "quaternion_xyzw": [
+            -0.3009823710903774,
+            0.9533171003588352,
+            -0.021261615960111974,
+            0.01200258901244637
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11203438867036035,
+            -0.38611571988016813,
+            0.0398844037315772
+          ],
+          "quaternion_xyzw": [
+            -0.3009823710903774,
+            0.9533171003588352,
+            -0.021261615960111974,
+            0.01200258901244637
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11101270036825805,
+            -0.3870695414317117,
+            0.011286418201581886
+          ],
+          "quaternion_xyzw": [
+            -0.3009823710903774,
+            0.9533171003588352,
+            -0.021261615960111974,
+            0.01200258901244637
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11208112400623485,
+            -0.3855860790398137,
+            0.0495151762459866
+          ],
+          "quaternion_xyzw": [
+            -0.3009823710903774,
+            0.9533171003588352,
+            -0.021261615960111974,
+            0.01200258901244637
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 55,
+      "variant_index": 0,
+      "track_id": 10,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11214699733136525,
+            -0.3854946166301601,
+            0.05187215836289197
+          ],
+          "quaternion_xyzw": [
+            -0.3009823710903775,
+            0.9533171003588351,
+            -0.021261615960111977,
+            0.012002589012446368
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11203438867036035,
+            -0.38611571988016813,
+            0.039884403731577145
+          ],
+          "quaternion_xyzw": [
+            -0.3009823710903775,
+            0.9533171003588351,
+            -0.021261615960111977,
+            0.012002589012446368
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11101270036825805,
+            -0.3870695414317117,
+            0.01128641820158183
+          ],
+          "quaternion_xyzw": [
+            -0.3009823710903775,
+            0.9533171003588351,
+            -0.021261615960111977,
+            0.012002589012446368
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11208112400623485,
+            -0.3855860790398137,
+            0.049515176245986545
+          ],
+          "quaternion_xyzw": [
+            -0.3009823710903775,
+            0.9533171003588351,
+            -0.021261615960111977,
+            0.012002589012446368
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 57,
+      "variant_index": 0,
+      "track_id": 11,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11050644838334477,
+            -0.38429294717242474,
+            0.05275673204824206
+          ],
+          "quaternion_xyzw": [
+            -0.30152815903367497,
+            0.9523702033319528,
+            -0.011100150007264529,
+            0.04414240348048657
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.1119711989247293,
+            -0.38602470302031483,
+            0.04068447562717248
+          ],
+          "quaternion_xyzw": [
+            -0.30152815903367497,
+            0.9523702033319528,
+            -0.011100150007264529,
+            0.04414240348048657
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.10937215142023757,
+            -0.3858678719739763,
+            0.012170991886931916
+          ],
+          "quaternion_xyzw": [
+            -0.30152815903367497,
+            0.9523702033319528,
+            -0.011100150007264529,
+            0.04414240348048657
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11044057505821436,
+            -0.3843844095820783,
+            0.050399749931336627
+          ],
+          "quaternion_xyzw": [
+            -0.30152815903367497,
+            0.9523702033319528,
+            -0.011100150007264529,
+            0.04414240348048657
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 57,
+      "variant_index": 1,
+      "track_id": 11,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.11150187166757898,
+            -0.3842624483795365,
+            0.052666165449340045
+          ],
+          "quaternion_xyzw": [
+            0.9523702033319528,
+            0.30152815903367497,
+            0.04414240348048657,
+            0.011100150007264529
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11296662220896352,
+            -0.3859942042274266,
+            0.04059390902827047
+          ],
+          "quaternion_xyzw": [
+            0.9523702033319528,
+            0.30152815903367497,
+            0.04414240348048657,
+            0.011100150007264529
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11036757470447178,
+            -0.3858373731810881,
+            0.012080425288029904
+          ],
+          "quaternion_xyzw": [
+            0.9523702033319528,
+            0.30152815903367497,
+            0.04414240348048657,
+            0.011100150007264529
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11143599834244858,
+            -0.38435391078919007,
+            0.050309183332434615
+          ],
+          "quaternion_xyzw": [
+            0.9523702033319528,
+            0.30152815903367497,
+            0.04414240348048657,
+            0.011100150007264529
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "accepted feedback is not stationary",
+      "recorded_failed_stage": ""
+    },
+    {
+      "source_index": 59,
+      "variant_index": 0,
+      "track_id": 13,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.10864891719497559,
+            -0.3829299176829039,
+            0.05379982533963055
+          ],
+          "quaternion_xyzw": [
+            -0.3017319816674302,
+            0.9499677602448255,
+            0.000505232091748699,
+            0.08073915081922022
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11189803462406031,
+            -0.3859273743779413,
+            0.04147289761251522
+          ],
+          "quaternion_xyzw": [
+            -0.3017319816674302,
+            0.9499677602448255,
+            0.000505232091748699,
+            0.08073915081922022
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.10751462023186839,
+            -0.3845048424844555,
+            0.013214085178320406
+          ],
+          "quaternion_xyzw": [
+            -0.3017319816674302,
+            0.9499677602448255,
+            0.000505232091748699,
+            0.08073915081922022
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.10858304386984519,
+            -0.3830213800925575,
+            0.05144284322272512
+          ],
+          "quaternion_xyzw": [
+            -0.3017319816674302,
+            0.9499677602448255,
+            0.000505232091748699,
+            0.08073915081922022
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/left_finger",
+      "recorded_failed_stage": "grasp"
+    },
+    {
+      "source_index": 59,
+      "variant_index": 1,
+      "track_id": 13,
+      "original_stages": [
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": false,
+          "position_m": [
+            -0.10963683133239271,
+            -0.3828977203962225,
+            0.0536482041279822
+          ],
+          "quaternion_xyzw": [
+            -0.9499677602448255,
+            -0.3017319816674301,
+            -0.08073915081922022,
+            0.0005052320917486954
+          ],
+          "stage": "pregrasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.11288594876147744,
+            -0.38589517709125987,
+            0.04132127640086687
+          ],
+          "quaternion_xyzw": [
+            -0.9499677602448255,
+            -0.3017319816674301,
+            -0.08073915081922022,
+            0.0005052320917486954
+          ],
+          "stage": "approach",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.10850253436928552,
+            -0.3844726451977741,
+            0.013062463966672062
+          ],
+          "quaternion_xyzw": [
+            -0.9499677602448255,
+            -0.3017319816674301,
+            -0.08073915081922022,
+            0.0005052320917486954
+          ],
+          "stage": "grasp",
+          "stamp_ns": 1791002303220170497
+        },
+        {
+          "frame_id": "base_link",
+          "linear_from_prior_state": true,
+          "position_m": [
+            -0.10957095800726231,
+            -0.38298918280587607,
+            0.051291222011076776
+          ],
+          "quaternion_xyzw": [
+            -0.9499677602448255,
+            -0.3017319816674301,
+            -0.08073915081922022,
+            0.0005052320917486954
+          ],
+          "stage": "lift",
+          "stamp_ns": 1791002303220170497
+        }
+      ],
+      "recorded_failure": "nominal continuous geometry: target OBB collision at 6-end/right_finger",
+      "recorded_failed_stage": "grasp"
+    }
+  ]
+}

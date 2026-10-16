@@ -1,0 +1,5 @@
+string mode
+string strategy
+---
+bool success
+string message

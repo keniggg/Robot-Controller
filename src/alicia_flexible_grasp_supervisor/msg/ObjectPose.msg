@@ -1,0 +1,13 @@
+std_msgs/Header header
+bool detected
+string label
+float32 confidence
+uint32 u
+uint32 v
+uint32 bbox_x
+uint32 bbox_y
+uint32 bbox_width
+uint32 bbox_height
+float32 depth_m
+geometry_msgs/PoseStamped pose_camera
+geometry_msgs/PoseStamped pose_base

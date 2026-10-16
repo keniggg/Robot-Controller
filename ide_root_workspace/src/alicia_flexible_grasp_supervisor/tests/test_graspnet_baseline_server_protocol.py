@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+import builtins
+import collections.abc
+import importlib.util
+import json
+import pathlib
+import sys
+import threading
+import tempfile
+import types
+import unittest
+import urllib.request
+
+import numpy as np
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[3]
+PKG = ROOT / 'src' / 'alicia_flexible_grasp_supervisor'
+for path in (PKG, PKG / 'src'):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from alicia_flexible_grasp.vision.grasp6d_adapter import CameraIntrinsics
+from alicia_flexible_grasp.vision.remote_grasp6d_client import encode_rgbd_payload
+
+
+SCRIPT = ROOT / 'tools' / 'graspnet_baseline_server.py'
+spec = importlib.util.spec_from_file_location('graspnet_baseline_server', str(SCRIPT))
+server_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(server_module)
+
+
+class GraspNetBaselineServerProtocolTest(unittest.TestCase):
+    def test_installs_torch_six_compat_for_pytorch_2_baseline_imports(self):
+        previous = sys.modules.pop('torch._six', None)
+        try:
+            compat = server_module.install_torch_six_compat()
+            imported = sys.modules['torch._six']
+
+            self.assertIs(compat, imported)
+            self.assertIs(imported.container_abcs, collections.abc)
+            self.assertEqual(imported.string_classes, (str, bytes))
+            self.assertIs(imported.int_classes, int)
+            self.assertEqual(imported.inf, float('inf'))
+            self.assertTrue(imported.nan != imported.nan)
+        finally:
+            if previous is None:
+                sys.modules.pop('torch._six', None)
+            else:
+                sys.modules['torch._six'] = previous
+
+    def test_mock_server_serves_health_and_predict(self):
+        server = server_module.make_server('127.0.0.1', 0, server_module.MockGraspNetBackend())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base_url = 'http://127.0.0.1:%d' % server.server_port
+            health = self._json_get(base_url + '/health')
+            self.assertTrue(health['ok'])
+            self.assertEqual(health['backend'], 'mock')
+            self.assertEqual(health['protocol_version'], 2)
+            self.assertIn('depth_m', health['candidate_fields'])
+            self.assertIn('height_m', health['candidate_fields'])
+
+            payload = encode_rgbd_payload(
+                np.zeros((4, 4, 3), dtype=np.uint8),
+                np.full((4, 4), 1000, dtype=np.uint16),
+                CameraIntrinsics(width=4, height=4, fx=100.0, fy=100.0, cx=2.0, cy=2.0, depth_scale=0.001),
+                max_candidates=3,
+            )
+            response = self._json_post(base_url + '/predict', payload)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2.0)
+
+        self.assertTrue(response['ok'])
+        self.assertEqual(response['protocol_version'], 2)
+        self.assertEqual(len(response['candidates']), 1)
+        self.assertIn('height_m', response['candidates'][0])
+        self.assertIn('depth_m', response['candidates'][0])
+        self.assertIn('translation_m', response['candidates'][0])
+        self.assertIn('rotation_matrix', response['candidates'][0])
+
+    def test_baseline_backend_installs_legacy_baseline_import_paths(self):
+        original_path = list(sys.path)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp) / 'graspnet-baseline'
+                for relative in ('models', 'utils', 'pointnet2', 'knn'):
+                    (root / relative).mkdir(parents=True)
+
+                backend = server_module.GraspNetBaselineBackend(root, pathlib.Path(tmp) / 'checkpoint-rs.tar')
+                backend._install_paths()
+
+                installed = set(sys.path)
+                self.assertIn(str(root), installed)
+                self.assertIn(str(root / 'models'), installed)
+                self.assertIn(str(root / 'utils'), installed)
+                self.assertIn(str(root / 'pointnet2'), installed)
+                self.assertIn(str(root / 'knn'), installed)
+        finally:
+            sys.path[:] = original_path
+
+    def test_fallback_grasp_group_supports_baseline_postprocessing_without_graspnetapi(self):
+        original_import = builtins.__import__
+
+        def blocked_import(name, *args, **kwargs):
+            if name.startswith('graspnetAPI'):
+                raise ImportError('blocked graspnetAPI for fallback test')
+            return original_import(name, *args, **kwargs)
+
+        rows = np.array(
+            [
+                [0.2, 0.04, 0.02, 0.03, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.10, 0.20, 0.30, -1.0],
+                [0.9, 0.05, 0.03, 0.04, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.40, 0.50, 0.60, -1.0],
+            ],
+            dtype=np.float32,
+        )
+        try:
+            builtins.__import__ = blocked_import
+            GraspGroup = server_module._import_grasp_group()
+        finally:
+            builtins.__import__ = original_import
+
+        group = GraspGroup(rows)
+        self.assertEqual(len(group), 2)
+        self.assertEqual(group.translations.shape, (2, 3))
+        self.assertEqual(group.rotation_matrices.shape, (2, 3, 3))
+        self.assertEqual(group.widths.shape, (2,))
+        self.assertEqual(group.heights.shape, (2,))
+        self.assertEqual(group.depths.shape, (2,))
+
+        group.nms()
+        group.sort_by_score()
+        self.assertAlmostEqual(group[0].score, 0.9, places=5)
+        filtered = group[np.array([True, False])]
+        self.assertEqual(len(filtered), 1)
+        response = server_module._grasp_to_response(group[0])
+        np.testing.assert_allclose(response['translation_m'], [0.4, 0.5, 0.6], rtol=1e-6, atol=1e-6)
+        self.assertAlmostEqual(response['height_m'], 0.03, places=6)
+        self.assertAlmostEqual(response['depth_m'], 0.04, places=6)
+        self.assertEqual(len(response['rotation_matrix']), 3)
+
+    def test_fallback_nms_removes_pose_duplicates_but_preserves_orientation_diversity(self):
+        identity = np.eye(3, dtype=np.float32)
+        yaw_90 = np.array(
+            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        )
+
+        def row(score, rotation, translation):
+            return np.asarray(
+                [score, 0.05, 0.02, 0.03]
+                + rotation.reshape(-1).tolist()
+                + list(translation)
+                + [-1.0],
+                dtype=np.float32,
+            )
+
+        group = server_module.FallbackGraspGroup(
+            np.vstack(
+                [
+                    row(0.90, identity, [0.10, 0.20, 0.30]),
+                    row(0.80, identity, [0.105, 0.20, 0.30]),
+                    row(0.70, yaw_90, [0.105, 0.20, 0.30]),
+                    row(0.60, identity, [0.16, 0.20, 0.30]),
+                ]
+            )
+        )
+
+        group.nms(translation_thresh=0.03, rotation_thresh=np.deg2rad(30.0))
+
+        self.assertEqual(len(group), 3)
+        np.testing.assert_allclose(group.scores, [0.90, 0.70, 0.60], atol=1e-6)
+
+    def test_point_sampling_is_repeatable_for_the_same_frame(self):
+        first = server_module._sample_indices(100, 40, seed=7)
+        second = server_module._sample_indices(100, 40, seed=7)
+        different = server_module._sample_indices(100, 40, seed=8)
+
+        np.testing.assert_array_equal(first, second)
+        self.assertFalse(np.array_equal(first, different))
+
+    def test_fallback_grasp_group_handles_empty_predictions(self):
+        group = server_module.FallbackGraspGroup([])
+
+        self.assertEqual(len(group), 0)
+        self.assertEqual(group.translations.shape, (0, 3))
+        self.assertEqual(group.rotation_matrices.shape, (0, 3, 3))
+        self.assertEqual(group.widths.shape, (0,))
+        self.assertIs(group.nms(), group)
+        self.assertIs(group.sort_by_score(), group)
+
+    def test_baseline_backend_load_uses_official_collate_fn_and_constructor(self):
+        created = {}
+
+        class FakeCuda:
+            @staticmethod
+            def is_available():
+                return False
+
+        class FakeTorch(types.SimpleNamespace):
+            def __init__(self):
+                super().__init__(
+                    __version__='2.4.1+cu118',
+                    cuda=FakeCuda(),
+                    version=types.SimpleNamespace(cuda='11.8'),
+                    device=lambda name: name,
+                    load=lambda _path, map_location=None: {'model_state_dict': {'weight': 1}},
+                )
+
+        class FakeGraspNet:
+            def __init__(self, **kwargs):
+                created['kwargs'] = kwargs
+
+            def to(self, device):
+                created['device'] = device
+
+            def load_state_dict(self, state_dict):
+                created['state_dict'] = state_dict
+
+            def eval(self):
+                created['eval'] = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / 'graspnet-baseline'
+            root.mkdir()
+            checkpoint = pathlib.Path(tmp) / 'checkpoint-rs.tar'
+            checkpoint.write_bytes(b'fake checkpoint')
+            modules = {
+                'torch': FakeTorch(),
+                'dataset': types.ModuleType('dataset'),
+                'dataset.graspnet_dataset': types.SimpleNamespace(collate_fn=lambda batch: {'batch': batch}),
+                'models': types.ModuleType('models'),
+                'models.graspnet': types.SimpleNamespace(GraspNet=FakeGraspNet, pred_decode=lambda end_points: []),
+                'utils': types.ModuleType('utils'),
+                'utils.collision_detector': types.SimpleNamespace(ModelFreeCollisionDetector=object),
+                'utils.data_utils': types.SimpleNamespace(CameraInfo=object, create_point_cloud_from_depth_image=lambda depth, camera, organized=True: depth),
+                'graspnetAPI': types.SimpleNamespace(GraspGroup=object),
+            }
+
+            self._with_modules(modules, lambda: server_module.GraspNetBaselineBackend(root, checkpoint, device='cuda:0').load())
+
+        self.assertEqual(created['kwargs']['input_feature_dim'], 0)
+        self.assertFalse('seed_feat_dim' in created['kwargs'])
+        self.assertFalse(hasattr(server_module.GraspNetBaselineBackend, 'minkowski_collate_fn'))
+        self.assertEqual(created['state_dict'], {'weight': 1})
+        self.assertTrue(created['eval'])
+
+    def test_baseline_model_input_contains_only_point_clouds_and_cloud_colors(self):
+        backend = server_module.GraspNetBaselineBackend('/tmp/baseline', '/tmp/checkpoint')
+        backend.num_points = 4
+        backend.CameraInfo = lambda *args: {'camera': args}
+        backend.create_point_cloud_from_depth_image = lambda depth, camera, organized=True: np.dstack(
+            [
+                np.tile(np.arange(depth.shape[1]), (depth.shape[0], 1)),
+                np.tile(np.arange(depth.shape[0]).reshape(-1, 1), (1, depth.shape[1])),
+                depth.astype(np.float32) * 0.001,
+            ]
+        )
+        decoded = {
+            'depth_raw': np.array([[1000, 0], [1200, 1300]], dtype=np.uint16),
+            'color_bgr': np.arange(12, dtype=np.uint8).reshape(2, 2, 3),
+            'intrinsics': {'width': 2, 'height': 2, 'fx': 100.0, 'fy': 100.0, 'cx': 1.0, 'cy': 1.0, 'depth_scale': 0.001},
+            'max_candidates': 1,
+        }
+
+        model_input, scene_points = backend._build_model_input(decoded)
+
+        self.assertEqual(set(model_input.keys()), {'point_clouds', 'cloud_colors'})
+        self.assertEqual(model_input['point_clouds'].shape, (4, 3))
+        self.assertEqual(model_input['cloud_colors'].shape, (4, 3))
+        self.assertFalse('coors' in model_input)
+        self.assertFalse('feats' in model_input)
+        self.assertEqual(scene_points.shape, (3, 3))
+
+    def _json_get(self, url):
+        with urllib.request.urlopen(url, timeout=2.0) as response:
+            return json.loads(response.read().decode('utf-8'))
+
+    def _json_post(self, url, payload):
+        data = json.dumps(payload).encode('utf-8')
+        request = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+        with urllib.request.urlopen(request, timeout=2.0) as response:
+            return json.loads(response.read().decode('utf-8'))
+
+    def _with_modules(self, modules, fn):
+        old = {}
+        missing = object()
+        try:
+            for name, module in modules.items():
+                old[name] = sys.modules.get(name, missing)
+                sys.modules[name] = module
+            return fn()
+        finally:
+            for name, value in old.items():
+                if value is missing:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = value
+
+
+if __name__ == '__main__':
+    unittest.main()

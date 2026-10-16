@@ -1,0 +1,25 @@
+# Current-model hand-eye calibration: 2026-09-27 Tsai-Lenz.
+# 22 training groups, 7 independent validation groups, 1 return pose.
+# CV max 2.677 mm / 0.648 deg; independent max 2.244 mm / 0.591 deg.
+# Evidence: /media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/handeye_auto_20260927T102700Z/final_validation_20260927T110130Z/result.json
+handeye:
+  mode: eye_on_hand
+  base_frame: base_link
+  parent_frame: tool0
+  camera_frame: camera_link
+  child_frame: camera_link
+  calibration_file: /home/zhuyupei/.ros/easy_handeye/d405_cc200_auto_20260927_validated_eye_on_hand.yaml
+  translation_xyz:
+  - -0.08042187082666649
+  - 0.008141452543848241
+  - -0.11500942357111774
+  rotation_xyzw:
+  - 0.004578288114871353
+  - -0.720538213113373
+  - 0.009817082107857342
+  - 0.6933306192720848
+  publish_static_tf: true
+  use_tf: true
+  tf_lookup_latest: true
+  allow_static_fallback: false
+  tf_timeout_sec: 0.2

@@ -1,0 +1,170 @@
+{
+  "scope": "Offline historical regression only; original source timestamp must never be refreshed for execution.",
+  "source_record": "20260923T053213.276238Z_6b02449eb5a646489ca8f4dca1af0729",
+  "payload": {
+    "schema_version": 3,
+    "plan_id": "ad4e5d7dc1c18f1f79202265",
+    "snapshot_stamp_sec": 1790141544.6282203,
+    "model_choice": "unknown_tabletop",
+    "candidate_source": "tabletop_geometry",
+    "candidate_source_lineage": [
+      "tabletop_geometry"
+    ],
+    "joint_names": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6",
+      "right_finger"
+    ],
+    "joint_positions": [
+      -1.8484468494021977,
+      0.3696893698804395,
+      -0.12885438618239384,
+      -0.0015339807878856412,
+      -0.20401944478879028,
+      0.0046019423636569235,
+      0.04975
+    ],
+    "trajectory": [
+      {
+        "position_m": [
+          -0.1063975202285353,
+          -0.4153490871317384,
+          0.11768933892613268
+        ],
+        "quaternion_xyzw": [
+          0.7630159327143367,
+          0.6410936391798802,
+          -0.046751506282052,
+          0.06797005875772044
+        ]
+      },
+      {
+        "position_m": [
+          -0.10620784755287153,
+          -0.4173131110776386,
+          0.10585267409958471
+        ],
+        "quaternion_xyzw": [
+          0.7630159327143367,
+          0.6410936391798802,
+          -0.046751506282052,
+          0.06797005875772044
+        ]
+      },
+      {
+        "position_m": [
+          -0.10592333853937587,
+          -0.42025914699648875,
+          0.08809767685976279
+        ],
+        "quaternion_xyzw": [
+          0.7630159327143367,
+          0.6410936391798802,
+          -0.046751506282052,
+          0.06797005875772044
+        ]
+      },
+      {
+        "position_m": [
+          -0.10644493839745124,
+          -0.4148580811452634,
+          0.12064850513276966
+        ],
+        "quaternion_xyzw": [
+          0.7630159327143367,
+          0.6410936391798802,
+          -0.046751506282052,
+          0.06797005875772044
+        ]
+      }
+    ],
+    "candidate_width_m": null,
+    "required_open_width_m": 0.04,
+    "gripper": {
+      "model_name": "Alicia_D_v5_6_gripper_50mm",
+      "max_inner_gap_m": 0.05,
+      "finger_size_xyz_m": [
+        0.0434,
+        0.0286,
+        0.06
+      ],
+      "palm_size_xyz_m": [
+        0.1175,
+        0.155,
+        0.0774
+      ],
+      "close_target_inner_gap_m": 0.0,
+      "close_settle_sec": 0.8
+    },
+    "object_model": {
+      "type": "obb_box",
+      "pose_base": {
+        "position_m": [
+          -0.105618739046218,
+          -0.41929704021611,
+          0.09180776611619178
+        ],
+        "quaternion_xyzw": [
+          -0.062164115539158606,
+          0.05423333814548808,
+          0.7243167923236891,
+          0.6845140992928875
+        ]
+      },
+      "size_xyz_m": [
+        0.02141093473532407,
+        0.017008015014231694,
+        0.014424484926538339
+      ],
+      "mass_kg": 0.02,
+      "friction": [
+        0.1,
+        0.005,
+        0.0001
+      ]
+    },
+    "support_plane": {
+      "normal_base": [
+        -0.01580605630531441,
+        0.16366866215834408,
+        0.9863887355456626
+      ],
+      "offset_m": -0.016389533986489874
+    }
+  },
+  "recorded_ik_results": [
+    {
+      "iterations": 63,
+      "name": "pregrasp",
+      "orientation_error": 0.017367760700976682,
+      "position_error_m": 0.004815788851390471,
+      "success": true
+    },
+    {
+      "iterations": 4,
+      "name": "approach",
+      "orientation_error": 0.010267850349831582,
+      "position_error_m": 0.004635944254663898,
+      "success": true
+    },
+    {
+      "iterations": 5,
+      "name": "grasp",
+      "orientation_error": 0.002689176851962041,
+      "position_error_m": 0.004246427348481759,
+      "success": true
+    },
+    {
+      "iterations": 6,
+      "name": "lift",
+      "orientation_error": 0.01434988076906738,
+      "position_error_m": 0.004448733085520251,
+      "success": true
+    }
+  ],
+  "recorded_failure": "preloaded grasp did not retain geometrically opposed two-sided contact"
+}

@@ -1,0 +1,20 @@
+[Unit]
+ConditionPathIsMountPoint=/media/zhuyupei/SanStand
+Description=Alicia experiment archive on SanStand
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade
+ExecStartPre=/usr/bin/mountpoint -q /media/zhuyupei/SanStand
+ExecStart=/usr/bin/python3 -u /home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/tools/grasp_archive.py --root "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records" worker --interval 5
+Restart=on-failure
+RestartSec=30
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=append:/media/zhuyupei/SanStand/实验记录/Robot-Controller/maintenance/alicia-grasp-archive.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

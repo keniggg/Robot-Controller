@@ -1,0 +1,23 @@
+{
+  "source_record": "20260925T112846.087636Z_ce68063fc6af4cf7887b318568db7f89",
+  "plan_id": "1525dbe0848ef15361a6299d",
+  "source_stamps_ns": [
+    1790335736555143356,
+    1790335736877095937,
+    1790335737167976617
+  ],
+  "crop_xyxy": [
+    260,
+    230,
+    360,
+    325
+  ],
+  "depth_values_modified": false,
+  "rgb_values_modified": false,
+  "intrinsics": "principal point shifted by crop origin",
+  "support_plane": "offline initial segment() refit per original full RGB-D frame with existing Config thresholds",
+  "transform": "same recorded final snapshot T_base_camera_link for all three stationary frames; not claimed to be exact historical per-frame TF",
+  "mask": "offline measured-depth component before RGB refinement; not the previously published mask",
+  "fixture_sha256": "9de039c815e07a51c3d5220200d9f1540830b0f74a624c31133e536655529ea7",
+  "physical_motion_executed": false
+}

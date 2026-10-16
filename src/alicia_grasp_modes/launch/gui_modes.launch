@@ -1,0 +1,4 @@
+<launch>
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/gui_config.yaml"/>
+  <node pkg="alicia_grasp_modes" type="mode_aware_gui.py" name="alicia_supervisor_gui" output="screen"/>
+</launch>

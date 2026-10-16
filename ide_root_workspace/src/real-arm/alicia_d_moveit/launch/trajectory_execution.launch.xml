@@ -1,0 +1,27 @@
+<launch>
+  <!-- This file summarizes all settings required for trajectory execution  -->
+
+  <!-- Define moveit controller manager plugin: fake, simple, or ros_control -->
+  <arg name="moveit_controller_manager" />
+  <arg name="fake_execution_type" default="interpolate" />
+
+  <!-- Flag indicating whether MoveIt is allowed to load/unload  or switch controllers -->
+  <arg name="moveit_manage_controllers" default="true"/>
+  <param name="moveit_manage_controllers" value="$(arg moveit_manage_controllers)"/>
+
+  <!-- When determining the expected duration of a trajectory, this multiplicative factor is applied to get the allowed duration of execution -->
+  <!-- The SDK executes physical joints at 15 deg/s and can lag MoveIt's nominal
+       timestamps during a multi-joint lift.  This is an execution watchdog only;
+       it does not change the planned grasp pose or joint velocity limits. -->
+  <param name="trajectory_execution/allowed_execution_duration_scaling" value="3.0"/>
+  <!-- Match the ros_control goal_time window. Short corrections can otherwise
+       be cancelled by MoveIt before the 15 deg/s hardware reports completion. -->
+  <param name="trajectory_execution/allowed_goal_duration_margin" value="8.0"/>
+  <!-- Allowed joint-value tolerance for validation that trajectory's first point matches current robot state -->
+  <param name="trajectory_execution/allowed_start_tolerance" value="0.05"/> <!-- real arm feedback can lag by >0.01 rad -->
+
+  <!-- We use pass_all_args=true here to pass fake_execution_type, which is required by fake controllers, but not by real-robot controllers.
+       As real-robot controller_manager.launch files shouldn't be required to define this argument, we use the trick of passing all args. -->
+  <include file="$(dirname)/$(arg moveit_controller_manager)_moveit_controller_manager.launch.xml" pass_all_args="true" />
+
+</launch>

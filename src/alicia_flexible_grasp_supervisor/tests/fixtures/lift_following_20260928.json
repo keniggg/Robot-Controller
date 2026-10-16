@@ -1,0 +1,1680 @@
+{
+  "schema_version": 1,
+  "scope": "exact_historical_lift_inputs_no_new_motion",
+  "source_bag": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20260928T084603.735476Z_0270fad562cf46a9ae14b8c203da5bc1/keyframes.bag",
+  "source_goal_id": "/move_group-3-1790585355.952945109",
+  "goal_receipt": 1790585355.953595,
+  "trajectory": {
+    "header": {
+      "seq": 0,
+      "stamp": {
+        "secs": 0,
+        "nsecs": 0
+      },
+      "frame_id": "base_link"
+    },
+    "joint_names": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "points": [
+      {
+        "positions": [
+          -1.9144080232812801,
+          -0.7439806821245359,
+          1.270136092369311,
+          -0.04295146206079795,
+          -1.1412817061869172,
+          0.1871456561220482
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "accelerations": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 0,
+          "nsecs": 0
+        }
+      },
+      {
+        "positions": [
+          -1.9148313636134215,
+          -0.7376721283070807,
+          1.2715138591362212,
+          -0.042919037357728146,
+          -1.148568583595966,
+          0.18679959175266164
+        ],
+        "velocities": [
+          -0.0007282924742936513,
+          0.010693697446199444,
+          0.0026268097066636078,
+          5.399368107088692e-05,
+          -0.01263468891638863,
+          -0.0005977047629685691
+        ],
+        "accelerations": [
+          -0.0002808916015587016,
+          0.0036459783404541443,
+          0.0017841278124499547,
+          1.545134646095241e-05,
+          -0.005169691559096529,
+          -0.0002375990824370114
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 0,
+          "nsecs": 655882978
+        }
+      },
+      {
+        "positions": [
+          -1.9152562436885914,
+          -0.7315074181488469,
+          1.2731654271052133,
+          -0.042888367945231855,
+          -1.1559853934438402,
+          0.18644980281839285
+        ],
+        "velocities": [
+          -0.0008074560205760294,
+          0.011609509142822274,
+          0.003308119909450392,
+          5.6964588190030094e-05,
+          -0.014159351137479553,
+          -0.0006662850810776447
+        ],
+        "accelerations": [
+          1.3962219546732232e-05,
+          -0.0006053927143513532,
+          0.0005889070557169382,
+          -6.021026761984748e-06,
+          0.0,
+          5.668435321406516e-06
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 1,
+          "nsecs": 179692987
+        }
+      },
+      {
+        "positions": [
+          -1.9156821390654715,
+          -0.7254404230037437,
+          1.2750004881477335,
+          -0.042859024695498356,
+          -1.16348796431723,
+          0.18609755162096506
+        ],
+        "velocities": [
+          -0.000800206545521075,
+          0.01129357248460987,
+          0.0036154789314346365,
+          5.376348216213507e-05,
+          -0.014159351137479553,
+          -0.000663321215473582
+        ],
+        "accelerations": [
+          1.3404530932211484e-05,
+          -0.0005872323173907778,
+          0.0005713378126263319,
+          -6.061503716039014e-06,
+          0.0,
+          5.519697516725272e-06
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 1,
+          "nsecs": 709559845
+        }
+      },
+      {
+        "positions": [
+          -1.9161090633447233,
+          -0.7194719407769898,
+          1.2770196390374868,
+          -0.04283107785489269,
+          -1.1710760954873056,
+          0.1857428596193798
+        ],
+        "velocities": [
+          -0.0007931617858197031,
+          0.010983384767121443,
+          0.003917305352849849,
+          5.0493726595154106e-05,
+          -0.014159351137479553,
+          -0.0006604155809845461
+        ],
+        "accelerations": [
+          1.2889479189883958e-05,
+          -0.0005704854981923216,
+          0.0005551722935046788,
+          -6.1408093667680615e-06,
+          0.0,
+          5.325252861401737e-06
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 2,
+          "nsecs": 245469371
+        }
+      },
+      {
+        "positions": [
+          -1.9165370202690968,
+          -0.7136030086724316,
+          1.2792236204379677,
+          -0.04280461046198759,
+          -1.1787494903987128,
+          0.1853857374165367
+        ],
+        "velocities": [
+          -0.000786308058997331,
+          0.010678515486172145,
+          0.004214024837928331,
+          4.7146552351726476e-05,
+          -0.014159351137479553,
+          -0.0006575822552354158
+        ],
+        "accelerations": [
+          1.2407120556307518e-05,
+          -0.0005547328699688823,
+          0.0005399659312266671,
+          -6.211663771548025e-06,
+          0.0,
+          5.132307472822027e-06
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 2,
+          "nsecs": 787400624
+        }
+      },
+      {
+        "positions": [
+          -1.9169660136030067,
+          -0.7078346954182763,
+          1.2816132454289095,
+          -0.042779704583410176,
+          -1.186507893301411,
+          0.18502619135988416
+        ],
+        "velocities": [
+          -0.0007780111760275558,
+          0.010305196229967263,
+          0.00457746964011171,
+          4.2854968742590066e-05,
+          -0.014159351137479553,
+          -0.0006541715734722827
+        ],
+        "accelerations": [
+          1.7799300383153884e-05,
+          -0.0008043608955759197,
+          0.0007831779483878827,
+          -9.409891753163407e-06,
+          0.0,
+          7.285378451160848e-06
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 3,
+          "nsecs": 335335541
+        }
+      },
+      {
+        "positions": [
+          -1.9173965562889712,
+          -0.7022193792184964,
+          1.2842829464088072,
+          -0.04275728577549319,
+          -1.1943933491677827,
+          0.18466299864566085
+        ],
+        "velocities": [
+          -0.0007715116051742868,
+          0.010009532029363489,
+          0.004865375866187942,
+          3.932716632249799e-05,
+          -0.014159351137479553,
+          -0.0006514920548536333
+        ],
+        "accelerations": [
+          5.670513830835315e-06,
+          -0.0002632193003067243,
+          0.0002563890337307114,
+          -3.3262393988907085e-06,
+          0.0,
+          2.3897440593605104e-06
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 3,
+          "nsecs": 892243540
+        }
+      },
+      {
+        "positions": [
+          -1.9178276361169928,
+          -0.6966562296283816,
+          1.2870471305383178,
+          -0.042735786621786835,
+          -1.2023211132511695,
+          0.1842986044224568
+        ],
+        "velocities": [
+          -0.0007667921830700632,
+          0.009791676368795266,
+          0.0050775750372518,
+          3.66036432789274e-05,
+          -0.014159351137479553,
+          -0.0006495415067557509
+        ],
+        "accelerations": [
+          1.1143409780614262e-05,
+          -0.0005129484550198328,
+          0.0004996260310134511,
+          -6.3773069112821e-06,
+          0.0,
+          4.559856475199809e-06
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 4,
+          "nsecs": 452139539
+        }
+      },
+      {
+        "positions": [
+          -1.918259763658296,
+          -0.6911971364375912,
+          1.289999930947274,
+          -0.04271608947304681,
+          -1.2103334195789595,
+          0.18393177665980767
+        ],
+        "velocities": [
+          -0.0007605924181759812,
+          0.009504935937069543,
+          0.005356897929137104,
+          3.2980490755294115e-05,
+          -0.014159351137479553,
+          -0.0006470132132835017
+        ],
+        "accelerations": [
+          1.0771051682637933e-05,
+          -0.000500574436390617,
+          0.00048767800275583795,
+          -6.428123817512009e-06,
+          0.0,
+          4.377127501003689e-06
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 5,
+          "nsecs": 18006313
+        }
+      },
+      {
+        "positions": [
+          -1.918692943704105,
+          -0.6858433150798781,
+          1.293142499974076,
+          -0.042698275631320365,
+          -1.2184302046388389,
+          0.18356250502725083
+        ],
+        "velocities": [
+          -0.0007545318021565498,
+          0.00922204353387741,
+          0.0056325308989287875,
+          2.929501497820396e-05,
+          -0.014159351137479553,
+          -0.0006445642022937071
+        ],
+        "accelerations": [
+          1.0427896656509157e-05,
+          -0.0004889097688193304,
+          0.00047641405960301744,
+          -6.461745816278834e-06,
+          0.0,
+          4.189330205590136e-06
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 5,
+          "nsecs": 589839370
+        }
+      },
+      {
+        "positions": [
+          -1.9191271794462943,
+          -0.6805960212509005,
+          1.2964760837725287,
+          -0.04268242207461076,
+          -1.2266114582869254,
+          0.18319077241259962
+        ],
+        "velocities": [
+          -0.0006080762678023804,
+          0.007283595211393813,
+          0.004766453327313634,
+          2.1090649291886573e-05,
+          -0.01149095094502642,
+          -0.0005213903946578564
+        ],
+        "accelerations": [
+          0.0003788458734014818,
+          -0.004747987456770672,
+          -0.002648734788017733,
+          -1.6761741377723058e-05,
+          0.007046724892059253,
+          0.0003220983692758215
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 6,
+          "nsecs": 167637997
+        }
+      },
+      {
+        "positions": [
+          -1.9195624756537968,
+          -0.6754565528113733,
+          1.3000020265750802,
+          -0.042668609078550315,
+          -1.234877226271733,
+          0.1828165588343313
+        ],
+        "velocities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "accelerations": [
+          0.0009918289677797148,
+          -0.011710356280288771,
+          -0.008033913804050443,
+          -3.147311965610794e-05,
+          0.01883367690087525,
+          0.0008526512766847689
+        ],
+        "effort": [],
+        "time_from_start": {
+          "secs": 7,
+          "nsecs": 104528952
+        }
+      }
+    ]
+  },
+  "plan": {
+    "header": {
+      "seq": 12920,
+      "stamp": {
+        "secs": 1790585174,
+        "nsecs": 401154994
+      },
+      "frame_id": "base_link"
+    },
+    "valid": true,
+    "poses": [
+      {
+        "position": {
+          "x": -0.13396455819587397,
+          "y": -0.3907614833218876,
+          "z": 0.10779731056109748
+        },
+        "orientation": {
+          "x": 0.7635706340740299,
+          "y": 0.6394479562193407,
+          "z": -0.06559494654767194,
+          "w": 0.06134738017307905
+        }
+      },
+      {
+        "position": {
+          "x": -0.1342251482292269,
+          "y": -0.3928923860215459,
+          "z": 0.0959908993146981
+        },
+        "orientation": {
+          "x": 0.7635706340740299,
+          "y": 0.6394479562193407,
+          "z": -0.06559494654767194,
+          "w": 0.06134738017307905
+        }
+      },
+      {
+        "position": {
+          "x": -0.13462041045529452,
+          "y": -0.3961245332136827,
+          "z": 0.07808296810536597
+        },
+        "orientation": {
+          "x": 0.7635706340740299,
+          "y": 0.6394479562193407,
+          "z": -0.06559494654767194,
+          "w": 0.06134738017307905
+        }
+      },
+      {
+        "position": {
+          "x": -0.133903787863574,
+          "y": -0.39026455078962224,
+          "z": 0.11055059903296428
+        },
+        "orientation": {
+          "x": 0.7635706340740299,
+          "y": 0.6394479562193407,
+          "z": -0.06559494654767194,
+          "w": 0.06134738017307905
+        }
+      }
+    ],
+    "score": -0.03903365880250931,
+    "candidate_width_m": 0.0,
+    "required_open_width_m": 0.015966342762112617,
+    "object_geometry": {
+      "header": {
+        "seq": 0,
+        "stamp": {
+          "secs": 1790585174,
+          "nsecs": 401154994
+        },
+        "frame_id": "base_link"
+      },
+      "valid": true,
+      "label": "unknown_small",
+      "target_track_id": "g1-t4",
+      "source_mode": "instance_mask",
+      "pose_base": {
+        "position": {
+          "x": -0.1342420452601438,
+          "y": -0.39567874872970293,
+          "z": 0.0786283418930963
+        },
+        "orientation": {
+          "x": -0.06371006094709909,
+          "y": 0.06330265555890327,
+          "z": 0.611035457994256,
+          "w": 0.7864918759955869
+        }
+      },
+      "size_xyz_m": {
+        "x": 0.024395860129147778,
+        "y": 0.0167264267389898,
+        "z": 0.015201566083641404
+      },
+      "support_normal_base": {
+        "x": 0.02171583611274331,
+        "y": 0.1775752249715285,
+        "z": 0.9838676038666156
+      },
+      "support_offset_m": 0.00341882579959929,
+      "valid_depth_points": 751,
+      "valid_depth_ratio": 0.9306071996688843,
+      "depth_mad_m": 0.002099999925121665,
+      "fused_frames": 3,
+      "support_inlier_ratio": 0.9796158671379089,
+      "object_point_count": 249,
+      "failure_reason": ""
+    },
+    "model_choice": "unknown_tabletop",
+    "plan_id": "4633378ba5897356469c3a5c",
+    "diagnostic": "CONTACT_EXECUTION_PLAN",
+    "candidate_source": "tabletop_geometry",
+    "candidate_source_lineage": [
+      "tabletop_geometry"
+    ],
+    "has_candidate_model_width": false,
+    "target_track_id": "g1-t4",
+    "refinement_status": "NOT_EVALUATED",
+    "refinement_inlier_count": 0,
+    "refinement_overlap_fraction": 0.0,
+    "refinement_rmse_m": 0.0,
+    "refinement_translation_m": 0.0,
+    "refinement_rotation_deg": 0.0,
+    "refinement_source_clipped": false,
+    "fused_view_count": 0,
+    "contact_geometry_evidence": "{\"contact_center_base\":[-0.1342420452601438,-0.39567874872970293,0.0786283418930963],\"contact_height_axis_base\":[-0.02171583611274333,-0.17757522497152853,-0.983867603866616],\"contact_height_bounds_m\":[-0.0056528782451285495,-0.003125758095808424],\"grasp_tool_pose_base\":[-0.13462041045529452,-0.3961245332136827,0.07808296810536597,0.7635706340740299,0.6394479562193407,-0.06559494654767194,0.06134738017307905],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"schema_version\":1,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}"
+  },
+  "sdk": {
+    "header": {
+      "seq": 23618,
+      "stamp": {
+        "secs": 1790585355,
+        "nsecs": 872049607
+      },
+      "frame_id": "sdk_transmitted"
+    },
+    "name": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "position": [
+      -1.9128740424933948,
+      -0.71790300873048,
+      1.2778059963087391,
+      -0.04141748127291231,
+      -1.13667976382326,
+      0.1932815792735908
+    ],
+    "velocity": [],
+    "effort": []
+  },
+  "accepted": {
+    "header": {
+      "seq": 29615,
+      "stamp": {
+        "secs": 1790585355,
+        "nsecs": 900873674
+      },
+      "frame_id": "sdk_measured"
+    },
+    "name": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6",
+      "right_finger"
+    ],
+    "position": [
+      -1.9144080232812801,
+      -0.7439806821245359,
+      1.270136092369311,
+      -0.04295146206079795,
+      -1.1412817061869172,
+      0.1871456561220482,
+      0.010000000000000002
+    ],
+    "velocity": [],
+    "effort": []
+  },
+  "epoch": {
+    "seq": 0,
+    "stamp": {
+      "secs": 1790582097,
+      "nsecs": 980425
+    },
+    "frame_id": "sdk_reference_epoch"
+  },
+  "final_stationary_window": {
+    "/alicia_d/sdk_command": [
+      {
+        "receipt": 1790585355.1735418,
+        "message": {
+          "header": {
+            "seq": 23612,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 172065655
+            },
+            "frame_id": "sdk_transmitted"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "position": [
+            -1.9128740424933948,
+            -0.71790300873048,
+            1.2778059963087391,
+            -0.04141748127291231,
+            -1.13667976382326,
+            0.1932815792735908
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.2937129,
+        "message": {
+          "header": {
+            "seq": 23613,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 292285031
+            },
+            "frame_id": "sdk_transmitted"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "position": [
+            -1.9128740424933948,
+            -0.71790300873048,
+            1.2778059963087391,
+            -0.04141748127291231,
+            -1.13667976382326,
+            0.1932815792735908
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.420396,
+        "message": {
+          "header": {
+            "seq": 23614,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 413638780
+            },
+            "frame_id": "sdk_transmitted"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "position": [
+            -1.9128740424933948,
+            -0.71790300873048,
+            1.2778059963087391,
+            -0.04141748127291231,
+            -1.13667976382326,
+            0.1932815792735908
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.533121,
+        "message": {
+          "header": {
+            "seq": 23615,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 531654569
+            },
+            "frame_id": "sdk_transmitted"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "position": [
+            -1.9128740424933948,
+            -0.71790300873048,
+            1.2778059963087391,
+            -0.04141748127291231,
+            -1.13667976382326,
+            0.1932815792735908
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.653572,
+        "message": {
+          "header": {
+            "seq": 23616,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 651926666
+            },
+            "frame_id": "sdk_transmitted"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "position": [
+            -1.9128740424933948,
+            -0.71790300873048,
+            1.2778059963087391,
+            -0.04141748127291231,
+            -1.13667976382326,
+            0.1932815792735908
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.755263,
+        "message": {
+          "header": {
+            "seq": 23617,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 753874101
+            },
+            "frame_id": "sdk_transmitted"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "position": [
+            -1.9128740424933948,
+            -0.71790300873048,
+            1.2778059963087391,
+            -0.04141748127291231,
+            -1.13667976382326,
+            0.1932815792735908
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.8739498,
+        "message": {
+          "header": {
+            "seq": 23618,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 872049607
+            },
+            "frame_id": "sdk_transmitted"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "position": [
+            -1.9128740424933948,
+            -0.71790300873048,
+            1.2778059963087391,
+            -0.04141748127291231,
+            -1.13667976382326,
+            0.1932815792735908
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      }
+    ],
+    "/alicia_d/accepted_joint_states": [
+      {
+        "receipt": 1790585355.2050252,
+        "message": {
+          "header": {
+            "seq": 29608,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 201123322
+            },
+            "frame_id": "sdk_measured"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -1.9144080232812801,
+            -0.7439806821245359,
+            1.270136092369311,
+            -0.04295146206079795,
+            -1.1412817061869172,
+            0.1871456561220482,
+            0.027200000000000002
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.3190892,
+        "message": {
+          "header": {
+            "seq": 29609,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 313369333
+            },
+            "frame_id": "sdk_measured"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -1.9144080232812801,
+            -0.7439806821245359,
+            1.270136092369311,
+            -0.04295146206079795,
+            -1.1412817061869172,
+            0.1871456561220482,
+            0.02035
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.4204922,
+        "message": {
+          "header": {
+            "seq": 29610,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 413746305
+            },
+            "frame_id": "sdk_measured"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -1.9144080232812801,
+            -0.7439806821245359,
+            1.270136092369311,
+            -0.04295146206079795,
+            -1.1412817061869172,
+            0.1871456561220482,
+            0.01525
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.5164526,
+        "message": {
+          "header": {
+            "seq": 29611,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 512863053
+            },
+            "frame_id": "sdk_measured"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -1.9144080232812801,
+            -0.7439806821245359,
+            1.270136092369311,
+            -0.04295146206079795,
+            -1.1412817061869172,
+            0.1871456561220482,
+            0.011899999999999999
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.6035426,
+        "message": {
+          "header": {
+            "seq": 29612,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 600836468
+            },
+            "frame_id": "sdk_measured"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -1.9144080232812801,
+            -0.7439806821245359,
+            1.270136092369311,
+            -0.04295146206079795,
+            -1.1412817061869172,
+            0.1871456561220482,
+            0.0103
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.7031653,
+        "message": {
+          "header": {
+            "seq": 29613,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 700870924
+            },
+            "frame_id": "sdk_measured"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -1.9144080232812801,
+            -0.7439806821245359,
+            1.270136092369311,
+            -0.04295146206079795,
+            -1.1412817061869172,
+            0.1871456561220482,
+            0.010050000000000002
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.8040042,
+        "message": {
+          "header": {
+            "seq": 29614,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 800845302
+            },
+            "frame_id": "sdk_measured"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -1.9144080232812801,
+            -0.7439806821245359,
+            1.270136092369311,
+            -0.04295146206079795,
+            -1.1412817061869172,
+            0.1871456561220482,
+            0.010000000000000002
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      },
+      {
+        "receipt": 1790585355.9033792,
+        "message": {
+          "header": {
+            "seq": 29615,
+            "stamp": {
+              "secs": 1790585355,
+              "nsecs": 900873674
+            },
+            "frame_id": "sdk_measured"
+          },
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -1.9144080232812801,
+            -0.7439806821245359,
+            1.270136092369311,
+            -0.04295146206079795,
+            -1.1412817061869172,
+            0.1871456561220482,
+            0.010000000000000002
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      }
+    ]
+  },
+  "robot_description": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<robot name=\"alicia_D_v5_5\">\n  <mujoco>\n    <compiler meshdir=\"../meshes\" discardvisual=\"false\" />\n    <contact>\n      <exclude body1=\"base_link\" body2=\"Link1\"/>\n      <exclude body1=\"Link1\" body2=\"Link2\"/>\n      <exclude body1=\"Link2\" body2=\"Link3\"/>\n      <exclude body1=\"Link3\" body2=\"Link4\"/>\n      <exclude body1=\"Link4\" body2=\"Link5\"/>\n      <exclude body1=\"Link5\" body2=\"Link6\"/>\n      <exclude body1=\"Link6\" body2=\"Link7\"/>\n      <exclude body1=\"Link6\" body2=\"Link8\"/>\n    </contact>\n  </mujoco>\n  <link\n    name=\"base_link\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <link\n    name=\"Link1\">\n    <inertial>\n      <origin\n        xyz=\"-0.000232391087694535 -1.30049454546467E-05 0.00272122513752755\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.193725361315237\" />\n      <inertia\n        ixx=\"0.000258312653055438\"\n        ixy=\"8.79363230651008E-07\"\n        ixz=\"-6.87511809706199E-07\"\n        iyy=\"0.000149233685494123\"\n        iyz=\"-1.07703111237371E-06\"\n        izz=\"0.000339752801671385\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint1\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0 0.1295\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"base_link\" />\n    <child\n      link=\"Link1\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-2.16\"\n      upper=\"2.16\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link2\">\n    <inertial>\n      <origin\n        xyz=\"0.149948141017768 -0.00073733103436536 -0.000614552702572041\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.216765318032361\" />\n      <inertia\n        ixx=\"0.00012827957403101\"\n        ixy=\"-1.18676813578654E-07\"\n        ixz=\"-1.68171130903575E-06\"\n        iyy=\"0.000226231611908606\"\n        iyz=\"-3.50051091633141E-07\"\n        izz=\"0.000143215063853149\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint2\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 -5E-05 0.04287\"\n      rpy=\"1.5708 -1.5708 0\" />\n    <parent\n      link=\"Link1\" />\n    <child\n      link=\"Link2\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.57\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link3\">\n    <inertial>\n      <origin\n        xyz=\"0.055786319810667 0.00248143782929366 0.000269720725052352\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0845575681430802\" />\n      <inertia\n        ixx=\"2.87941478239851E-05\"\n        ixy=\"-2.26498116289353E-06\"\n        ixz=\"-5.38445390787684E-06\"\n        iyy=\"7.61918370068424E-05\"\n        iyz=\"-3.82299515503286E-07\"\n        izz=\"8.043706644056E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint3\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.22367 -0.022592 0\"\n      rpy=\"0 0 -2.3562\" />\n    <parent\n      link=\"Link2\" />\n    <child\n      link=\"Link3\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-0.5\"\n      upper=\"2.35619\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link4\">\n    <inertial>\n      <origin\n        xyz=\"0.000298365504501796 -0.000601368925849056 0.0663740391896737\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0653695953286747\" />\n      <inertia\n        ixx=\"7.03004188086337E-05\"\n        ixy=\"-9.68417851161416E-09\"\n        ixz=\"-7.50131707418093E-07\"\n        iyy=\"6.8747029788813E-05\"\n        iyz=\"4.45271906086873E-08\"\n        izz=\"1.68226189350765E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint4\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.0986 -0.00211 0.0002\"\n      rpy=\"-1.5708 0 -1.5708\" />\n    <parent\n      link=\"Link3\" />\n    <child\n      link=\"Link4\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link5\">\n    <inertial>\n      <origin\n        xyz=\"-0.0110961410990681 0.0308024762289942 -0.000207575403674642\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0463941316397046\" />\n      <inertia\n        ixx=\"1.8425786696003E-05\"\n        ixy=\"2.02919305442313E-06\"\n        ixz=\"-5.09341788606234E-08\"\n        iyy=\"2.39811947218569E-05\"\n        iyz=\"-4.22854804621873E-08\"\n        izz=\"1.63952567717743E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint5\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0.00015 0.12275\"\n      rpy=\"1.5708 0 0\" />\n    <parent\n      link=\"Link4\" />\n    <child\n      link=\"Link5\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.5\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link6\">\n    <inertial>\n      <origin\n        xyz=\"-3.11347120307559E-09 6.19962735608128E-10 -0.00146275616399921\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.000754053623586768\" />\n      <inertia\n        ixx=\"1.9236769291339E-08\"\n        ixy=\"9.19452445636026E-14\"\n        ixz=\"3.52333012571258E-15\"\n        iyy=\"1.92358360258478E-08\"\n        iyz=\"-3.901270498029E-17\"\n        izz=\"3.70123450485896E-08\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6\"\n    type=\"revolute\">\n    <origin\n      xyz=\"-0.00385 0.0573 -0.00035\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Link5\" />\n    <child\n      link=\"Link6\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Grasp_base\">\n    <inertial>\n      <origin\n        xyz=\"-0.0321082111389046 -0.000168822009778203 0.0275474621634362\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.119820573147005\" />\n      <inertia\n        ixx=\"8.23026483118452E-05\"\n        ixy=\"2.1627287972411E-08\"\n        ixz=\"-6.37078693697654E-06\"\n        iyy=\"3.33372461482565E-05\"\n        iyz=\"2.3095070932307E-08\"\n        izz=\"8.59654133961544E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6_to_gripper_base\"\n    type=\"fixed\">\n    <origin\n      xyz=\"0 0 0\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Link6\" />\n    <child\n      link=\"Grasp_base\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n  <link\n    name=\"Link7\">\n    <inertial>\n      <origin\n        xyz=\"2.97087521250461E-08 0.0434087591943518 0.0106596716155943\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0256461121677861\" />\n      <inertia\n        ixx=\"6.46830326573767E-06\"\n        ixy=\"2.39543799544883E-11\"\n        ixz=\"-4.63721293861409E-12\"\n        iyy=\"5.13428741941794E-06\"\n        iyz=\"-1.26432048814187E-06\"\n        izz=\"8.03606347912567E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"left_finger\"\n    type=\"prismatic\">\n    <!--\n      The real SDK and /joint_states public contract is 0 m closed and\n      0.05 m open.  Keep the original CAD poses, but parameterize them in\n      that public direction: right_finger=0 is the centered/closed pose and\n      right_finger=0.05 is the original fully-open pose.\n    -->\n    <origin\n      xyz=\"-0.0002 0.000502 0.131180183660255\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link7\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-0.05\"\n      upper=\"0\"\n      effort=\"5\"\n      velocity=\"10\" />\n    <mimic joint=\"right_finger\" multiplier=\"-1\" offset=\"0\"/>\n  </joint>\n  <link\n    name=\"Link8\">\n    <inertial>\n      <origin\n        xyz=\"-2.97087521250461E-08 -0.0434087591943727 0.0106596716155944\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.025646112167786\" />\n      <inertia\n        ixx=\"6.46830326573761E-06\"\n        ixy=\"2.39543799589352E-11\"\n        ixz=\"4.63721294819601E-12\"\n        iyy=\"5.13428741941793E-06\"\n        iyz=\"1.26432048814186E-06\"\n        izz=\"8.03606347912559E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"right_finger\"\n    type=\"prismatic\">\n    <origin\n      xyz=\"-0.0002 -0.000498 0.131180183660255\"\n      rpy=\"1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link8\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"0\"\n      upper=\"0.05\"\n      effort=\"5\"\n      velocity=\"10\" />\n  </joint>\n  <link\n    name=\"tool0\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <sphere radius=\"0.005\" /> <!-- 定义一个半径为0.02米的小球体 -->\n      </geometry>\n      <material\n        name=\"green_virtual_sphere_material\"> <!-- 可以给材质起个名字 -->\n        <color\n          rgba=\"0 1 0 1\" /> <!-- 绿色 (R G B A)，A为1表示不透明 -->\n      </material>\n    </visual>\n  </link>\n  <joint\n    name=\"Grasp2tool\"\n    type=\"fixed\">\n    <origin\n      xyz=\"-0.0002 -0.0003 0.13118\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"tool0\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n</robot>\n",
+  "parameters": {
+    "robot_description_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+    "/robot": {
+      "execution_goal_tolerance_rad": 0.03,
+      "execution_goal_tolerance_slack_rad": 0.005,
+      "strict_execution_retime_enabled": true,
+      "strict_execution_velocity_scaling": 0.2,
+      "strict_execution_acceleration_scaling": 0.3,
+      "strict_execution_max_joint_velocity_rad_s": 0.08,
+      "unknown_pregrasp_timing": {
+        "enabled": true,
+        "joint_velocity_rad_s": 0.04
+      },
+      "observation_max_joint_velocity_rad_s": 0.08,
+      "unknown_observation_timing": {
+        "enabled": true,
+        "velocity_scaling": 0.3,
+        "acceleration_scaling": 0.2
+      },
+      "observation_tracking_contract_enabled": true,
+      "strict_execution_joint_velocity_limits_rad_s": {
+        "Joint3": 0.02,
+        "Joint4": 0.02,
+        "Joint6": 0.02
+      },
+      "strict_execution_min_duration_sec": 3.0,
+      "strict_execution_start_tolerance_rad": 0.08,
+      "strict_execution_controller_sync_enabled": true,
+      "strict_execution_controller_sync_bridge_duration_sec": 0.02,
+      "strict_execution_controller_sync_duration_sec": 0.3,
+      "strict_execution_controller_sync_timeout_sec": 2.0,
+      "strict_execution_controller_sync_tolerance_rad": 0.035,
+      "strict_execution_controller_sync_max_feedback_age_sec": 0.5,
+      "strict_execution_no_actuation_actual_delta_rad": 0.0030679615757712823,
+      "strict_execution_no_actuation_min_desired_delta_rad": 0.12,
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "arm_joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "gripper_joint_name": "right_finger",
+      "joint_command_topic": "/joint_commands",
+      "joint_state_topic": "/joint_states",
+      "zero_calibrate_topic": "/zero_calibrate",
+      "demonstration_topic": "/demonstration",
+      "gripper_min_m": 0.0,
+      "gripper_max_m": 0.05,
+      "joint_min_rad": [
+        -3.14,
+        -2.5,
+        -2.5,
+        -3.14,
+        -2.5,
+        -3.14
+      ],
+      "joint_max_rad": [
+        3.14,
+        2.5,
+        2.5,
+        3.14,
+        2.5,
+        3.14
+      ],
+      "pose_fallback_enabled": true,
+      "position_only_fallback_enabled": true,
+      "position_only_execute_enabled": false,
+      "orientation_fallback_enabled": true,
+      "planning_time": 2.0,
+      "strict_pose_planning_time": 0.25,
+      "orientation_resolution_step_rad": 0.02,
+      "orientation_resolution_max_candidates": 96,
+      "orientation_resolution_ik_timeout_sec": 0.05,
+      "orientation_resolution_repeatability_tolerance_rad": 1e-06,
+      "cached_plan_position_tolerance_m": 0.002,
+      "cached_plan_orientation_tolerance_rad": 0.02,
+      "cartesian_eef_step_m": 0.003,
+      "cartesian_jump_threshold": 0.0,
+      "cartesian_min_fraction": 0.98,
+      "cartesian_max_segment_m": 0.08,
+      "cartesian_velocity_scaling": 0.2,
+      "cartesian_acceleration_scaling": 0.3,
+      "pregrasp_candidate_orientations_xyzw": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          0.7071,
+          0.0,
+          0.7071
+        ],
+        [
+          0.0,
+          -0.7071,
+          0.0,
+          0.7071
+        ],
+        [
+          0.7071,
+          0.0,
+          0.0,
+          0.7071
+        ],
+        [
+          -0.7071,
+          0.0,
+          0.0,
+          0.7071
+        ]
+      ]
+    },
+    "/grasp": {
+      "use_grasp6d_plan": true,
+      "unknown_lift_after_close_enabled": true,
+      "unknown_pregrasp_joint2_response_probe_enabled": true,
+      "calibration_interlock_active": false,
+      "calibration_interlock_reason": "HAND_EYE_CURRENT_INTRINSICS_CV_AND_INDEPENDENT_VALIDATION_PASSED",
+      "calibration_centering_margin_gate_enabled": true,
+      "handeye_translation_max_error_m": 0.0026767676132463574,
+      "contact_height_registration_margin_enabled": true,
+      "calibration_centering_margin_override": true,
+      "require_actuation_confirmation": true,
+      "auto_confirm_actuation_from_observation": true,
+      "actuation_confirmation_freshness_sec": 2.0,
+      "grasp6d_plan_topic": "/grasp_6d/plan",
+      "grasp6d_enriched_plan_topic": "/grasp_6d/plan_enriched",
+      "pregrasp_distance_m": 0.036,
+      "observation_camera_target_nominal_distance_m": 0.2,
+      "observation_camera_target_min_distance_m": 0.18,
+      "observation_camera_target_max_distance_m": 0.22,
+      "observation_camera_target_range_check_enabled": true,
+      "observation_camera_target_retreat_correction_enabled": true,
+      "tool_approach_axis": "z",
+      "pregrasp_offset_mode": "camera_ray",
+      "final_approach_offset_m": 0.02,
+      "approach_step_m": 0.002,
+      "approach_rate_hz": 10,
+      "lift_height_m": 0.035,
+      "timeout_sec": 25.0,
+      "default_orientation_xyzw": [
+        0.0,
+        0.7071,
+        0.0,
+        0.7071
+      ],
+      "pregrasp_reached_tolerance_m": 0.04,
+      "motion_settle_min_sec": 0.8,
+      "motion_settle_timeout_sec": 5.0,
+      "motion_settle_sample_sec": 0.05,
+      "motion_settle_position_epsilon_rad": 0.0025,
+      "motion_settle_required_samples": 3,
+      "measured_endpoint_check_enabled": true,
+      "measured_endpoint_position_tolerance_m": 0.006,
+      "unknown_measured_endpoint_position_tolerance_m": 0.01,
+      "measured_endpoint_orientation_tolerance_deg": 5.0,
+      "contact_endpoint_precision_enabled": true,
+      "pregrasp_cartesian_compensation_enabled": true,
+      "unknown_pregrasp_feedforward_enabled": true,
+      "unknown_pregrasp_held_axes_feedforward_enabled": true,
+      "unknown_contact_cartesian_compensation_enabled": true,
+      "unknown_approach_held_axes_feedforward_enabled": true,
+      "unknown_contact_joint2_response_probe_enabled": false,
+      "contact_endpoint_precision_service": "/alicia_d_driver_node/set_task_endpoint_precision",
+      "contact_endpoint_precision_service_timeout_sec": 2.0,
+      "observation_endpoint_correction_attempts": 0,
+      "min_object_confidence": 0.5,
+      "max_object_jump_m": 0.12,
+      "object_jump_filter_window_sec": 4.0,
+      "max_locked_target_refine_m": 0.06,
+      "visual_retarget_enabled": false,
+      "visual_retarget_require_start_detection": true,
+      "visual_retarget_min_object_confidence": 0.35,
+      "visual_retarget_require_pregrasp_detection": true,
+      "visual_retarget_after_approach": false,
+      "visual_retarget_require_approach_detection": false,
+      "visual_retarget_timeout_sec": 2.0,
+      "visual_retarget_sample_sec": 0.05,
+      "visual_retarget_required_samples": 3,
+      "visual_retarget_raw_max_age_sec": 0.3,
+      "visual_retarget_max_jitter_m": 0.012,
+      "visual_retarget_max_correction_m": 0.02,
+      "visual_retarget_deadband_m": 0.002,
+      "accept_orientation_fallback": false,
+      "near_field_replan_enabled": true,
+      "near_field_replan_required": true,
+      "near_field_replan_request_stream": true,
+      "near_field_strategy": "single_snapshot_direct",
+      "observation_reuse_position_tolerance_m": 0.025,
+      "unknown_observe_return_session_timeout_sec": 600.0,
+      "near_field_replan_timeout_sec": 90.0,
+      "near_field_replan_poll_sec": 0.05,
+      "near_field_replan_snapshot_slack_sec": 3.0,
+      "near_field_planar_center_anchor_validation_enabled": true,
+      "near_field_planar_center_anchor_validation_required": true,
+      "near_field_planar_center_anchor_max_residual_m": 0.003,
+      "post_lift_visual_verification_enabled": true,
+      "post_lift_visual_verification_timeout_sec": 3.0,
+      "post_lift_visual_verification_poll_sec": 0.05,
+      "post_lift_visual_minimum_lift_fraction": 0.5,
+      "post_lift_visual_height_tolerance_m": 0.005,
+      "post_lift_visual_max_planar_drift_m": 0.04,
+      "final_visual_refine_enabled": true,
+      "final_visual_refine_required": true,
+      "final_visual_refine_timeout_sec": 20.0,
+      "final_visual_refine_poll_sec": 0.05,
+      "final_visual_refine_snapshot_slack_sec": 3.0,
+      "final_visual_refine_service_timeout_sec": 3.0,
+      "final_visual_refine_max_translation_m": 0.025,
+      "final_visual_refine_max_yaw_deg": 10.0,
+      "final_visual_refine_max_roll_pitch_change_deg": 4.0,
+      "final_visual_refine_center_fallback_enabled": false,
+      "final_visual_refine_center_fallback_delay_sec": 0.0,
+      "final_visual_refine_center_fallback_required_samples": 5,
+      "final_visual_refine_center_fallback_max_jitter_m": 0.006,
+      "final_visual_refine_center_fallback_edge_margin_px": 4,
+      "final_visual_refine_post_move_confirm_enabled": true,
+      "final_visual_refine_post_move_confirm_timeout_sec": 12.0,
+      "final_visual_refine_post_move_confirm_required_samples": 5,
+      "final_visual_refine_post_move_confirm_max_jitter_m": 0.006,
+      "final_visual_refine_post_move_confirm_max_residual_m": 0.006,
+      "final_visual_refine_accept_unchanged_after_post_move_confirm": true,
+      "clear_view_reacquisition_camera_body_radius_m": 0.025,
+      "clear_view_reacquisition_enabled": true,
+      "clear_view_reacquisition_max_attempts": 1,
+      "clear_view_reacquisition_lateral_offset_m": 0.06,
+      "clear_view_reacquisition_radial_retreat_m": 0.04,
+      "clear_view_reacquisition_minimum_contact_clearance_m": 0.08,
+      "clear_view_reacquisition_preferred_side": "negative",
+      "clear_view_reacquisition_inference_reserve_sec": 20.0,
+      "clear_view_reacquisition_bilateral_azimuth_offsets_deg": [
+        -75.0,
+        75.0,
+        -45.0,
+        45.0,
+        -15.0,
+        15.0
+      ],
+      "clear_view_reacquisition_camera_roll_offsets_deg": [
+        0.0,
+        30.0,
+        -30.0,
+        60.0,
+        -60.0,
+        90.0,
+        -90.0,
+        180.0
+      ],
+      "clear_view_reacquisition_path_evidence_required": true,
+      "clear_view_reacquisition_comparison_budget_sec": 0.0,
+      "clear_view_reacquisition_search_budget_sec": 25.0
+    },
+    "/grasp_6d": {
+      "enabled": true,
+      "use_remote_grasp6d": true,
+      "plan_validity_sec": 120.0,
+      "target_max_drift_m": 0.04,
+      "target_observation_validity_sec": 8.0,
+      "backend": "remote_graspnet_baseline",
+      "root": "",
+      "checkpoint_path": "",
+      "device": "cpu",
+      "seed_feat_dim": 512,
+      "num_points": 50000,
+      "voxel_size": 0.005,
+      "plan_hz": 1.0,
+      "collision_thresh": 0.05,
+      "collision_voxel_size": 0.01,
+      "tactile_weight": 0.2,
+      "remote": {
+        "gate_audit_enabled": true,
+        "gate_audit_output_path": "~/.ros/grasp6d_gate_audit_latest.json",
+        "server_url": "http://172.23.132.97:8000",
+        "timeout_sec": 30.0,
+        "auto_request": false,
+        "request_hz": 1.5,
+        "result_max_age_sec": 15.0,
+        "stability_window_size": 5,
+        "stability_min_hits": 3,
+        "tracking_position_threshold_m": 0.025,
+        "tracking_orientation_threshold_deg": 25.0,
+        "tracking_approach_threshold_deg": 20.0,
+        "tracking_width_threshold_m": 0.008,
+        "target_instance_association_threshold_m": 0.08,
+        "target_absolute_sanity_distance_m": 0.15,
+        "moveit_top_n": 24,
+        "replan_position_delta_m": 0.012,
+        "replan_orientation_delta_deg": 12.0,
+        "replan_target_drift_m": 0.025,
+        "replan_cooldown_sec": 1.0,
+        "selection_hysteresis_ratio": 0.12,
+        "candidate_consecutive_invalidations": 2,
+        "performance_window_size": 100,
+        "planning_snapshot_frames": 5,
+        "near_field_planning_snapshot_frames": 3,
+        "planning_snapshot_timeout_sec": 8.0,
+        "planning_snapshot_max_inference_latency_sec": 5.0,
+        "planning_snapshot_max_age_sec": 0.35,
+        "planning_snapshot_max_span_sec": 12.0,
+        "planning_mask_min_iou": 0.85,
+        "planning_mask_max_centroid_shift_px": 5.0,
+        "planning_max_joint_delta_rad": 0.01,
+        "mask_erosion_px": 2,
+        "mask_internal_hole_max_area_px": 25,
+        "depth_mad_scale": 3.5,
+        "depth_mad_absolute_floor_m": 0.002,
+        "graspnet_input_mode": "context_roi",
+        "graspnet_input_context_margin_px": 24.0,
+        "graspnet_input_context_expand_ratio": 0.25,
+        "graspnet_input_context_max_margin_px": 64.0,
+        "graspnet_input_target_guard_px": 2,
+        "graspnet_input_support_band_m": 0.006,
+        "graspnet_input_min_target_points": 120,
+        "graspnet_input_min_support_points": 200,
+        "graspnet_input_min_total_points": 320,
+        "graspnet_input_min_target_fraction": 0.15,
+        "graspnet_input_bbox_min_iou": 0.5,
+        "target_cloud_voxel_size_m": 0.0015,
+        "target_cloud_outlier_neighbors": 16,
+        "target_cloud_outlier_std_ratio": 2.0,
+        "multiview": {
+          "correspondence_max_m": 0.008,
+          "minimum_inliers": 80,
+          "minimum_overlap_fraction": 0.3,
+          "maximum_rmse_m": 0.004,
+          "maximum_translation_m": 0.025,
+          "maximum_yaw_deg": 10.0,
+          "maximum_support_normal_angle_deg": 4.0,
+          "maximum_support_offset_delta_m": 0.004,
+          "maximum_iterations": 12
+        },
+        "max_gripper_width_m": 0.05,
+        "candidate_width_tolerance_m": 0.0,
+        "gripper_geometry": {
+          "max_inner_gap_m": 0.05,
+          "opening_fit_clearance_each_side_m": 0.0005,
+          "width_safety_margin_per_side_m": 0.002,
+          "tool_jaw_axis": "y",
+          "tool_finger_length_axis": "z",
+          "finger_box_xyz_m": [
+            0.0434,
+            0.0286,
+            0.06
+          ],
+          "palm_box_xyz_m": [
+            0.1175,
+            0.155,
+            0.0774
+          ]
+        },
+        "adaptive_stage_generation": {
+          "enabled": true,
+          "tilt_sample_count": 4,
+          "max_tilt_deg": 45.0,
+          "approach_min_m": 0.01,
+          "approach_max_m": 0.06,
+          "pregrasp_min_m": 0.025,
+          "pregrasp_max_m": 0.095,
+          "pregrasp_approach_gap_min_m": 0.005,
+          "lift_min_m": 0.02,
+          "lift_max_m": 0.08,
+          "depth_uncertainty_scale": 2.0,
+          "contact_overlap_min_m": 0.002,
+          "approach_finger_fraction": 0.25,
+          "pregrasp_finger_fraction": 0.2,
+          "lift_finger_fraction": 0.5
+        },
+        "runtime_execution_error_max_age_sec": 180.0,
+        "tabletop_geometry_candidates": {
+          "enabled": true,
+          "angle_step_deg": 5.0,
+          "angle_dedup_deg": 1.0,
+          "jaw_clearance_each_side_m": 0.002,
+          "width_projection_trim_fraction": 0.01,
+          "min_contact_band_points": 6,
+          "contact_band_fraction": 0.12,
+          "min_finger_support_clearance_m": 0.003,
+          "max_candidates": 32,
+          "approach_tilt_degrees": [],
+          "merge_center_distance_m": 0.005,
+          "merge_insertion_angle_deg": 10.0,
+          "merge_jaw_angle_deg": 10.0
+        },
+        "max_candidates": 300,
+        "near_field_max_candidates": 12,
+        "failure_backoff_sec": 10.0,
+        "candidate_frame_convention": "opencv_optical",
+        "model_grasp_to_tool_rpy_deg": [
+          0.0,
+          90.0,
+          0.0
+        ],
+        "orientation_variants_rpy_deg": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            180.0
+          ]
+        ],
+        "require_candidate_depth": true,
+        "accept_position_only_fallback": false,
+        "accept_orientation_fallback": false,
+        "use_perception_roi": true,
+        "require_perception_roi": true,
+        "perception_roi_margin_px": 12,
+        "perception_roi_max_age_sec": 1.0,
+        "perception_roi_min_valid_depth_px": 80,
+        "candidate_target_gate_enabled": true,
+        "candidate_max_target_distance_m": 0.04,
+        "candidate_min_relative_z_m": -0.015,
+        "candidate_max_relative_z_m": 0.08,
+        "rank_by_target_distance": true,
+        "candidate_center_distance_weight": 0.25,
+        "candidate_model_score_weight_m": 0.015,
+        "candidate_joint_path_cost_weight_m": 0.004,
+        "candidate_max_joint_delta_rad": 0.0,
+        "candidate_downward_approach_weight_m": 0.02,
+        "candidate_min_downward_approach_cos": 0.65,
+        "candidate_max_final_approach_lateral_m": 0.02,
+        "soft_score_weights": {
+          "final_approach_lateral_weight": 1.0,
+          "final_approach_lateral_knee_m": 0.01
+        },
+        "candidate_max_jaw_normal_cos": 0.35,
+        "candidate_jaw_tilt_rank_weight_m": 0.01,
+        "candidate_min_finger_support_clearance_m": 0.003,
+        "target_position_refine_enabled": false,
+        "target_position_refine_blend": 0.0,
+        "target_position_refine_max_m": 0.04,
+        "target_position_refine_max_age_sec": 1.0,
+        "target_position_refine_offset_xyz_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target_cloud_enabled": true,
+        "target_cloud_roi_margin_px": 0,
+        "target_cloud_foreground_percentile": 35.0,
+        "target_cloud_depth_window_m": 0.055,
+        "target_cloud_min_points": 80,
+        "target_cloud_support_plane_enabled": true,
+        "target_cloud_support_plane_context_margin_px": 24,
+        "target_cloud_support_plane_ransac_iterations": 96,
+        "target_cloud_support_plane_far_percentile": 55.0,
+        "target_cloud_support_plane_inlier_distance_m": 0.0035,
+        "target_cloud_support_plane_min_height_m": 0.004,
+        "target_cloud_support_plane_min_inlier_ratio": 0.08,
+        "target_cloud_max_age_sec": 1.0,
+        "target_cloud_max_points_for_gate": 2500,
+        "target_cloud_candidate_max_point_distance_m": 0.03,
+        "target_cloud_candidate_min_support_clearance_m": -0.002,
+        "target_projection_frame_convention": "ros_camera_link",
+        "camera_visibility_gate_enabled": false,
+        "camera_visibility_diagnostic_enabled": true,
+        "camera_visibility_require_approach": false,
+        "camera_visibility_margin_px": 36,
+        "camera_visibility_bbox_padding_px": 8,
+        "camera_visibility_min_depth_m": 0.07,
+        "camera_visibility_max_depth_m": 0.5,
+        "camera_visibility_rank_weight_m": 0.012,
+        "observation_envelope_gate_enabled": true,
+        "observation_camera_tilt_offsets_deg": [
+          10.0,
+          20.0,
+          25.0,
+          30.0
+        ],
+        "observation_camera_roll_offsets_deg": [
+          0.0,
+          15.0,
+          -15.0,
+          30.0,
+          -30.0,
+          45.0,
+          -45.0,
+          60.0,
+          -60.0,
+          75.0,
+          -75.0,
+          90.0,
+          -90.0,
+          180.0
+        ]
+      }
+    },
+    "/gripper": {
+      "open_position_m": 0.05,
+      "open_skip_tolerance_m": 0.001,
+      "close_limit_m": 0.0,
+      "close_step_fast_m": 0.002,
+      "close_step_slow_m": 0.0007,
+      "open_step_safe_m": 0.003,
+      "command_rate_hz": 25,
+      "use_compliant_close": false,
+      "use_plan_bound_close_position": true,
+      "plan_bound_opening_clearance_each_side_m": 0.002,
+      "plan_bound_close_preload_m": 0.002,
+      "simple_close_position_m": 0.0,
+      "simple_close_wait_sec": 0.8,
+      "open_wait_sec": 1.0,
+      "hold_arm_during_gripper_commands": true,
+      "arm_hold_timeout_sec": 0.5,
+      "require_tactile_feedback": false,
+      "tactile_feedback_timeout_sec": 1.0
+    },
+    "/mujoco_digital_twin": {
+      "enabled": true,
+      "unknown_object_mass_bound": {
+        "source": "operator_declared_operational_limit",
+        "scope": "all_unknown_objects",
+        "maximum_mass_kg": 0.02,
+        "operator_statement": "以后所有的未知物体不会超过20g"
+      },
+      "unknown_lift_gate_enabled": false,
+      "execution_gate_enabled": true,
+      "selection_gate_enabled": true,
+      "selection_max_candidates": 12,
+      "selection_time_budget_sec": 80.0,
+      "selection_snapshot_reserve_sec": 30.0,
+      "audit_output_path": "~/.ros/grasp6d_mujoco_audit_latest.json",
+      "server_url": "http://172.23.132.97:8001",
+      "timeout_sec": 40.0,
+      "min_score": 80,
+      "allow_execution_on_error": false,
+      "require_object_pose": true,
+      "send_joint_state_in_request": true,
+      "open_width_m": 0.05,
+      "object_model": {
+        "type": "obb_box",
+        "density_upper_bound_kg_m3": 20000.0,
+        "mass_floor_kg": 0.02,
+        "operational_mass_ceiling_kg": 0.5,
+        "friction_lower_bound": [
+          0.1,
+          0.005,
+          0.0001
+        ]
+      },
+      "gripper_model": {
+        "name": "Alicia_D_v5_6_gripper_50mm",
+        "max_inner_gap_m": 0.05,
+        "close_target_inner_gap_m": 0.0,
+        "close_settle_sec": 0.8
+      }
+    }
+  }
+}
