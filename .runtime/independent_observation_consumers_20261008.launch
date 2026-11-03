@@ -1,0 +1,8 @@
+<launch>
+  <!-- Idle reload only. No parameter loads and no hardware/camera includes. -->
+  <node pkg="alicia_grasp_modes" type="unknown_tabletop_perception.py" name="unknown_tabletop_perception" output="screen" respawn="false"/>
+  <node pkg="alicia_grasp_modes" type="mode_aware_grasp_task.py" name="grasp_task_node" output="screen" respawn="false">
+    <remap from="/grasp/start" to="/grasp/internal_start"/>
+  </node>
+  <node pkg="alicia_grasp_modes" type="mode_aware_remote_grasp6d.py" name="remote_grasp6d_node" output="screen" respawn="false"/>
+</launch>

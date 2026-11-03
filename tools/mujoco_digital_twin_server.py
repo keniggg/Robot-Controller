@@ -665,6 +665,11 @@ def _evaluate_close_contact_samples(
     right_body,
     max_single_finger_object_motion_m=MAX_SINGLE_FINGER_OBJECT_MOTION_M,
 ):
+    """Legacy sample-only check: sample zero must already be pre-close.
+
+    This helper does not integrate support preparation, servo dynamics or
+    preload. Production uses _simulate_close_contact and its fixed baseline.
+    """
     if not samples:
         return CloseContactResult(False, failure_code='MUJOCO_CONTACT_FAILED', failure_reason='no closure samples')
     initial_position = np.asarray(samples[0].get('object_position_m', [0.0, 0.0, 0.0]), dtype=float)
@@ -1141,6 +1146,16 @@ def _normalize_http_simulation_result(payload, result, sim_backend):
                 'simulation backend returned invalid lift evidence',
             )
         normalized['lift_evidence'] = copy.deepcopy(lift_evidence)
+    close_evidence = result.get('close_evidence')
+    if isinstance(close_evidence, dict):
+        try:
+            json.dumps(close_evidence, allow_nan=False)
+        except (TypeError, ValueError, OverflowError):
+            return internal_failure(
+                'simulation backend returned invalid closure diagnostics',
+            )
+        # Diagnostic only; the existing component/lift gates remain decisive.
+        normalized['close_evidence'] = copy.deepcopy(close_evidence)
     joint_source = result.get('used_joint_state_source')
     if isinstance(joint_source, str):
         normalized['used_joint_state_source'] = joint_source
@@ -1648,6 +1663,7 @@ class MujocoDigitalTwinBackend:
             'lift_execution_contract': (
                 'velocity_consistent_prescribed_position'
             ),
+            'prescribed_arm_velocity_reference_version': 2,
             'cartesian_lift_position_tolerance_m': (
                 CARTESIAN_LIFT_POSITION_TOLERANCE_M
             ),
@@ -1750,14 +1766,20 @@ class MujocoDigitalTwinBackend:
                 diagnosis=collision_diag,
             )
 
+        close_evidence = {}
         contact_success, close_collision_free, contact_width, retained_data, contact_diag = (
-            self._simulate_close_contact(model, data, meta, trajectory[2][1])
+            self._simulate_close_contact(
+                model, data, meta, trajectory[2][1],
+                payload=payload, close_evidence=close_evidence,
+            )
         )
         collision_free = bool(collision_free and close_collision_free)
         if not collision_free or not contact_success:
             code = 'MUJOCO_COLLISION' if not collision_free else 'MUJOCO_CONTACT_FAILED'
+            if close_evidence.get('numerical_instability_events'):
+                code = 'MUJOCO_INTERNAL_ERROR'
             reason = contact_diag[0] if contact_diag else 'gripper did not form stable two-sided contact'
-            return self._score_response(
+            response = self._score_response(
                 plan_id,
                 ik_results,
                 collision_free=collision_free,
@@ -1767,6 +1789,8 @@ class MujocoDigitalTwinBackend:
                 failure_reason=reason,
                 diagnosis=collision_diag + contact_diag,
             )
+            response['close_evidence'] = close_evidence
+            return response
 
         support_normal = np.asarray(payload['support_plane']['normal_base'], dtype=float)
         lift_vector = np.asarray(sequence[3]['position'], dtype=float) - np.asarray(sequence[2]['position'], dtype=float)
@@ -1780,6 +1804,8 @@ class MujocoDigitalTwinBackend:
             payload=payload,
             contact_width_m=contact_width,
             commanded_lift_m=commanded_lift_m,
+            close_preloaded=True,
+            close_step_count=close_evidence.get('close_samples', 0),
         )
         if (
             lift_result.ik_success is not True
@@ -1854,6 +1880,7 @@ class MujocoDigitalTwinBackend:
                 lift_result.preload_settle_samples
             ),
         }
+        response['close_evidence'] = close_evidence
         if isinstance(lift_result.settled_gripper_state, dict):
             response['lift_evidence']['settled_gripper_state'] = copy.deepcopy(
                 lift_result.settled_gripper_state
@@ -2384,7 +2411,15 @@ class MujocoDigitalTwinBackend:
         target_values,
         timestep_s,
     ):
-        """Prescribe one controller-tracked step with consistent velocity."""
+        """Prescribe a step with matching position *and* servo velocity.
+
+        A MuJoCo position actuator produces kp*(ctrl-q)-kv*qdot. Merely
+        prescribing a nonzero qdot while leaving ctrl at the position target
+        makes its damper brake the requested motion. Encode the same desired
+        velocity in ctrl so the damping term acts on velocity error instead.
+        This changes no gain, effort limit, contact parameter, or free-object
+        state; it corrects the reference supplied to the existing actuator.
+        """
 
         count = len(joints)
         if (
@@ -2400,7 +2435,7 @@ class MujocoDigitalTwinBackend:
             raise RuntimeError(
                 'prescribed arm reference timestep must be positive'
             )
-        max_speed = 0.0
+        references = []
         for joint_id, actuator_id, start, target in zip(
             joints,
             actuator_ids,
@@ -2410,9 +2445,38 @@ class MujocoDigitalTwinBackend:
             start_value = float(start)
             target_value = float(target)
             speed = (target_value - start_value) / timestep
+            if not all(math.isfinite(v) for v in (start_value, target_value, speed)):
+                raise RuntimeError('prescribed arm reference must be finite')
+            actuator_id = int(actuator_id)
+            kp = float(model.actuator_gainprm[actuator_id, 0])
+            bias = np.asarray(model.actuator_biasprm[actuator_id], dtype=float)
+            gear = np.asarray(model.actuator_gear[actuator_id], dtype=float)
+            # The reference is in joint radians. Do not silently apply this
+            # conversion to an unrelated/general actuator or geared length.
+            if (not math.isfinite(kp) or kp <= 0.0
+                    or not np.isfinite(bias).all()
+                    or bias[0] != 0.0 or bias[1] != -kp or bias[2] > 0.0
+                    or int(model.actuator_dyntype[actuator_id]) != 0
+                    or int(model.actuator_gaintype[actuator_id]) != 0
+                    or int(model.actuator_biastype[actuator_id]) != 1
+                    or int(model.actuator_trntype[actuator_id]) != 0
+                    or int(model.actuator_trnid[actuator_id, 0]) != int(joint_id)
+                    or not np.array_equal(gear, [1., 0., 0., 0., 0., 0.])):
+                raise RuntimeError('prescribed reference requires a unit-gear position actuator')
+            ctrl = target_value - bias[2] / kp * speed
+            if not math.isfinite(ctrl):
+                raise RuntimeError('prescribed arm actuator reference must be finite')
+            if bool(model.actuator_ctrllimited[actuator_id]):
+                lower, upper = model.actuator_ctrlrange[actuator_id]
+                if not float(lower) <= ctrl <= float(upper):
+                    raise RuntimeError('prescribed arm reference exceeds actuator control range')
+            references.append((int(joint_id), actuator_id, start_value, speed, ctrl))
+        # Validate the entire command before mutating any state.
+        max_speed = 0.0
+        for joint_id, actuator_id, start_value, speed, ctrl in references:
             data.qpos[model.jnt_qposadr[int(joint_id)]] = start_value
             data.qvel[model.jnt_dofadr[int(joint_id)]] = speed
-            data.ctrl[int(actuator_id)] = target_value
+            data.ctrl[int(actuator_id)] = ctrl
             max_speed = max(max_speed, abs(speed))
         self._mujoco.mj_forward(model, data)
         return max_speed
@@ -2539,66 +2603,244 @@ class MujocoDigitalTwinBackend:
         diagnosis.append('trajectory collision check passed')
         return True, diagnosis
 
-    def _simulate_close_contact(self, model, seed_data, meta, grasp_q):
+    def _numerical_instability_events(self, data):
+        """Read engine-reported invalid dynamics before a data copy loses it.
+
+        MuJoCo can automatically reset huge/non-finite state during mj_step.
+        A finite qpos/qvel after that reset is not evidence of continuity.
+        """
+        events = []
+        for name in ('mjWARN_BADQPOS', 'mjWARN_BADQVEL', 'mjWARN_BADQACC'):
+            warning = data.warning[int(getattr(self._mujoco.mjtWarning, name))]
+            if int(warning.number) > 0:
+                events.append({'warning': name, 'count': int(warning.number),
+                               'lastinfo': int(warning.lastinfo)})
+        return events
+
+    def _closure_dynamic_state(self, model, data, meta):
+        """Read one post-forward state; never reset the free object or fingers."""
+        if not (
+            np.isfinite(data.qpos).all()
+            and np.isfinite(data.qvel).all()
+            and math.isfinite(float(data.time))
+        ):
+            return {'finite_state': False,
+                    'numerical_instability_events': self._numerical_instability_events(data)}
+        joint = int(meta['object_joint'])
+        qadr = int(model.jnt_qposadr[joint])
+        vadr = int(model.jnt_dofadr[joint])
+        support_force = 0.0
+        support_distances = []
+        support_solrefs = []
+        for index in range(int(data.ncon)):
+            contact = data.contact[index]
+            bodies = {
+                int(model.geom_bodyid[int(contact.geom1)]),
+                int(model.geom_bodyid[int(contact.geom2)]),
+            }
+            if bodies != {int(meta['object_body']), int(meta['support_body'])}:
+                continue
+            force = np.zeros(6, dtype=float)
+            self._mujoco.mj_contactForce(model, data, index, force)
+            support_force += max(0.0, float(force[0]))
+            support_distances.append(float(contact.dist))
+            support_solrefs.append(np.asarray(contact.solref).tolist())
+        return {
+            'finite_state': True,
+            'numerical_instability_events': self._numerical_instability_events(data),
+            'time_s': float(data.time),
+            'object_position_m': np.asarray(data.xpos[meta['object_body']]).tolist(),
+            'object_qpos': np.asarray(data.qpos[qadr:qadr + 7]).tolist(),
+            'object_qvel': np.asarray(data.qvel[vadr:vadr + 6]).tolist(),
+            'support_normal_force_n': support_force,
+            'support_distances_m': support_distances,
+            'support_contact_solref': support_solrefs,
+            'gripper': self._gripper_dynamic_state(model, data, meta),
+        }
+
+    def _simulate_close_contact(
+        self, model, seed_data, meta, grasp_q, *, payload, close_evidence=None,
+    ):
+        """Natural support preparation, then one request-timed servo closure.
+
+        Preparation has its own bounded budget equal to the requested closing
+        time. It is not lift/preload time and is not a proof of static settling.
+        The object's pose and velocity evolve without resets in both phases.
+        """
+        evidence = close_evidence if close_evidence is not None else {}
+        duration = float(payload['gripper']['close_settle_sec'])
+        timestep = float(model.opt.timestep)
+        if not math.isfinite(timestep) or timestep <= 0.0:
+            raise RuntimeError('invalid MuJoCo closure timestep')
+        requested_steps = int(math.floor(duration / timestep))
+        # Never round a sub-step budget up, including in a truncated request.
+        steps = min(MAX_DYNAMIC_LIFT_SAMPLES, requested_steps)
+        evidence.update({
+            'diagnostic_only': True,
+            'preparation_policy': 'bounded_natural_evolution_not_static_proof',
+            'requested_phase_duration_s': duration,
+            'timestep_s': timestep,
+            'requested_phase_samples': requested_steps,
+            'phase_sample_limit': MAX_DYNAMIC_LIFT_SAMPLES,
+            'budget_truncated': requested_steps > steps,
+            'preparation_samples': 0,
+            'close_samples': 0,
+            'sample_fields': [
+                'time_s', 'object_x_m', 'object_y_m', 'object_z_m',
+                'quaternion_w', 'quaternion_x', 'quaternion_y', 'quaternion_z',
+                'velocity_x_m_s', 'velocity_y_m_s', 'velocity_z_m_s',
+                'angular_velocity_x_rad_s', 'angular_velocity_y_rad_s',
+                'angular_velocity_z_rad_s', 'support_normal_force_n',
+                'measured_gap_m', 'left_object_force_n', 'right_object_force_n',
+                'left_contact', 'right_contact', 'opposed_contact',
+            ],
+            'preparation_trace': [],
+            'close_trace': [],
+        })
+
+        def failed(reason, collision_free=True):
+            evidence['failure_reason'] = reason
+            return False, collision_free, None, None, [reason]
+
+        def invalid_state_reason(phase, state):
+            events = state.get('numerical_instability_events') or []
+            if events:
+                evidence['numerical_instability_events'] = events
+                return 'MuJoCo numerical instability during %s: %s' % (
+                    phase, ', '.join(item['warning'] for item in events))
+            if not state['finite_state']:
+                return '%s has non-finite dynamic state' % phase
+            return ''
+
+        if steps < 1:
+            return failed('closing budget is shorter than one physics timestep')
+        if not np.isfinite(seed_data.qpos).all() or not np.isfinite(seed_data.qvel).all():
+            return failed('input scene has non-finite dynamic state')
+        seed_events = self._numerical_instability_events(seed_data)
+        if seed_events:
+            evidence['numerical_instability_events'] = seed_events
+            return failed('MuJoCo numerical instability in input scene: %s' %
+                          ', '.join(item['warning'] for item in seed_events))
         data = self._copy_data(model, seed_data)
         self._set_arm_qpos(
-            model,
-            data,
-            meta['arm_joints'],
-            grasp_q,
+            model, data, meta['arm_joints'], grasp_q,
             actuator_ids=meta['arm_actuators'],
         )
-        initial_object_position = np.asarray(data.xpos[meta['object_body']], dtype=float).copy()
-        for width in _closure_widths(MAX_INNER_GAP_M, 0.0):
+        self._command_gripper_inner_gap(model, data, MAX_INNER_GAP_M, meta)
+        self._mujoco.mj_forward(model, data)
+        initial = self._closure_dynamic_state(model, data, meta)
+        evidence['initial_state'] = initial
+        reason = invalid_state_reason('initial support preparation', initial)
+        if reason:
+            return failed(reason)
+
+        def sample(phase, classification, state):
+            if not state['finite_state']:
+                return
+            grip = state['gripper']
+            evidence[phase + '_trace'].append(
+                [state['time_s']] + state['object_position_m']
+                + state['object_qpos'][3:] + state['object_qvel']
+                + [state['support_normal_force_n'],
+                   grip['measured_inner_gap_m'],
+                   grip['left_object_normal_force_n'],
+                   grip['right_object_normal_force_n'],
+                   classification.left_contact, classification.right_contact,
+                   classification.two_sided]
+            )
+
+        def collision_reason(phase, classification):
+            detail = '; '.join(classification.disallowed_contacts[:3])
+            return 'disallowed collision during %s%s' % (
+                phase, ': ' + detail if detail else '',
+            )
+
+        def advance(width):
             self._set_arm_qpos(
-                model,
-                data,
-                meta['arm_joints'],
-                grasp_q,
+                model, data, meta['arm_joints'], grasp_q,
                 actuator_ids=meta['arm_actuators'],
             )
-            self._apply_gripper_inner_gap(model, data, width, meta)
+            self._command_gripper_inner_gap(model, data, width, meta)
             self._mujoco.mj_step(model, data)
+            # mj_step advances qpos but leaves derived geometry at its previous
+            # evaluation instant. All evidence below must use the new instant.
+            self._mujoco.mj_forward(model, data)
+
+        classification = self._classify_current_contacts(model, data, meta)
+        sample('preparation', classification, initial)
+        if classification.disallowed_collision:
+            return failed(collision_reason('initial support preparation', classification), False)
+        if classification.left_contact or classification.right_contact:
+            return failed('finger/object contact exists before open-gripper support preparation')
+        for index in range(steps):
+            advance(MAX_INNER_GAP_M)
+            evidence['preparation_samples'] = index + 1
+            state = self._closure_dynamic_state(model, data, meta)
+            evidence['preparation_final_state'] = state
+            reason = invalid_state_reason('support preparation', state)
+            if reason:
+                return failed(reason)
             classification = self._classify_current_contacts(model, data, meta)
+            sample('preparation', classification, state)
             if classification.disallowed_collision:
-                detail = '; '.join(classification.disallowed_contacts[:3])
-                suffix = ': %s' % detail if detail else ''
-                return (
-                    False,
-                    False,
-                    None,
-                    None,
-                    ['disallowed collision during gripper closure at %.4fm gap%s' % (width, suffix)],
+                return failed(collision_reason('support preparation', classification), False)
+            if classification.left_contact or classification.right_contact:
+                return failed('finger/object contact appeared during open-gripper support preparation')
+        evidence['preparation_simulation_time_s'] = steps * timestep
+        if state['support_normal_force_n'] <= 0.0:
+            return failed('input scene has no load-bearing support after natural preparation')
+
+        # This baseline is fixed once, before issuing the closing target.
+        # Retain residual velocity: preparation does not manufacture rest.
+        baseline = np.asarray(state['object_position_m'], dtype=float).copy()
+        evidence['preclose_state'] = state
+        grip_width = float(payload['gripper']['close_target_inner_gap_m'])
+        contact_width = None
+        for index in range(steps):
+            advance(grip_width)
+            evidence['close_samples'] = index + 1
+            evidence['close_simulation_time_s'] = (index + 1) * timestep
+            state = self._closure_dynamic_state(model, data, meta)
+            evidence['close_final_state'] = state
+            reason = invalid_state_reason('gripper closure', state)
+            if reason:
+                return failed(reason)
+            classification = self._classify_current_contacts(model, data, meta)
+            sample('close', classification, state)
+            displacement = float(np.linalg.norm(
+                np.asarray(state['object_position_m']) - baseline
+            ))
+            evidence['final_object_displacement_from_preclose_m'] = displacement
+            evidence['max_object_displacement_from_preclose_m'] = max(
+                displacement, evidence.get('max_object_displacement_from_preclose_m', 0.0),
+            )
+            if classification.left_contact or classification.right_contact:
+                if 'first_finger_contact_state' not in evidence:
+                    evidence['first_finger_contact_state'] = state
+                    evidence['first_finger_contact_sample'] = index + 1
+            if classification.disallowed_collision:
+                return failed(collision_reason('gripper closure', classification), False)
+            if (
+                classification.left_contact != classification.right_contact
+                and displacement > MAX_SINGLE_FINGER_OBJECT_MOTION_M
+            ):
+                return failed(
+                    'single-finger contact made the object unstable '
+                    '(%.4fm from fixed pre-close baseline)' % displacement,
                 )
-            if classification.left_contact != classification.right_contact:
-                displacement = float(
-                    np.linalg.norm(
-                        np.asarray(data.xpos[meta['object_body']], dtype=float)
-                        - initial_object_position
-                    )
-                )
-                if displacement > MAX_SINGLE_FINGER_OBJECT_MOTION_M:
-                    return (
-                        False,
-                        True,
-                        None,
-                        None,
-                        ['single-finger contact made the object unstable (%.4fm)' % displacement],
-                    )
-            if classification.two_sided:
-                return (
-                    True,
-                    True,
-                    float(width),
-                    self._copy_data(model, data),
-                    ['first simultaneous two-sided contact retained at %.4fm gap' % width],
-                )
+            if classification.two_sided and contact_width is None:
+                contact_width = float(state['gripper']['measured_inner_gap_m'])
+                evidence['first_two_sided_contact_sample'] = index + 1
+                evidence['first_two_sided_contact_state'] = state
+        if not classification.two_sided:
+            return failed('closure ended without geometrically opposed two-sided finger/object contact')
+        evidence['failure_reason'] = ''
         return (
-            False,
-            True,
-            None,
-            None,
-            ['closure ended without simultaneous two-sided finger/object contact'],
+            True, True, contact_width, self._copy_data(model, data),
+            ['natural support preparation completed in %.4fs; residual motion retained'
+             % (steps * timestep),
+             'continuous servo close/preload completed in %d steps (%.4fs) with opposed contact'
+             % (steps, steps * timestep)],
         )
 
     def _simulate_lift(
@@ -2611,6 +2853,8 @@ class MujocoDigitalTwinBackend:
         payload,
         contact_width_m,
         commanded_lift_m,
+        close_preloaded=False,
+        close_step_count=0,
     ):
         data = self._copy_data(model, retained_data)
         gripper_contract = payload.get('gripper') or {}
@@ -2627,14 +2871,34 @@ class MujocoDigitalTwinBackend:
             simulation_timestep_s = float(model.opt.timestep)
         except (AttributeError, TypeError, ValueError, OverflowError):
             simulation_timestep_s = 0.002
-        settle_steps = max(
-            1,
-            min(
-                MAX_DYNAMIC_LIFT_SAMPLES,
-                int(math.ceil(close_settle_sec / simulation_timestep_s)),
-            ),
+        settle_steps = min(
+            MAX_DYNAMIC_LIFT_SAMPLES,
+            int(math.floor(close_settle_sec / simulation_timestep_s)),
         )
-        for _step in range(max(0, settle_steps)):
+        if close_preloaded:
+            if int(close_step_count) != settle_steps or settle_steps < 1:
+                raise RuntimeError('completed closure sample count does not match request budget')
+            # Closure already consumed its entire close/preload budget. Verify
+            # the retained physical state; never add another settling period.
+            classification = self._classify_current_contacts(model, data, meta)
+            preload_contact = bool(classification.two_sided)
+            if classification.disallowed_collision:
+                return LiftResult(
+                    collision_free=False, contact_retained=preload_contact,
+                    lift_success=False, failure_code='MUJOCO_COLLISION',
+                    failure_reason='disallowed collision in completed closure state',
+                    diagnosis=tuple(diagnosis),
+                    grip_target_inner_gap_m=grip_width_m,
+                    preload_settle_samples=int(close_step_count),
+                )
+        elif settle_steps < 1:
+            return LiftResult(
+                collision_free=True, contact_retained=False, lift_success=False,
+                failure_code='MUJOCO_CONTACT_FAILED',
+                failure_reason='closing budget is shorter than one physics timestep',
+                diagnosis=tuple(diagnosis),
+            )
+        for _step in range(0 if close_preloaded else settle_steps):
             self._set_arm_qpos(
                 model,
                 data,
@@ -2649,6 +2913,17 @@ class MujocoDigitalTwinBackend:
                 meta,
             )
             self._mujoco.mj_step(model, data)
+            self._mujoco.mj_forward(model, data)
+            events = self._numerical_instability_events(data)
+            if events:
+                reason = 'MuJoCo numerical instability during preload: %s' % events
+                return LiftResult(
+                    collision_free=False, contact_retained=False, lift_success=False,
+                    failure_code='MUJOCO_INTERNAL_ERROR', failure_reason=reason,
+                    diagnosis=tuple(diagnosis + [reason]),
+                    grip_target_inner_gap_m=grip_width_m,
+                    preload_settle_samples=_step + 1,
+                )
             classification = self._classify_current_contacts(model, data, meta)
             if classification.disallowed_collision:
                 detail = '; '.join(classification.disallowed_contacts[:3])
@@ -3001,6 +3276,17 @@ class MujocoDigitalTwinBackend:
                 meta,
             )
             self._mujoco.mj_step(model, data)
+            self._mujoco.mj_forward(model, data)
+            events = self._numerical_instability_events(data)
+            if events:
+                reason = 'MuJoCo numerical instability during lift: %s' % events
+                return LiftResult(
+                    collision_free=False, contact_retained=False, lift_success=False,
+                    failure_code='MUJOCO_INTERNAL_ERROR', failure_reason=reason,
+                    diagnosis=tuple(diagnosis + [reason]),
+                    grip_target_inner_gap_m=grip_width_m,
+                    preload_settle_samples=settle_steps,
+                )
             actual_position = self._gripper_center(data, meta)
             actual_rotation = np.asarray(
                 data.xmat[meta['orientation_body']],

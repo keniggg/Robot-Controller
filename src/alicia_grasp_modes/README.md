@@ -8,12 +8,15 @@
 | --- | --- | --- |
 | 抓取目标 | Carton 纸盒 | 原 carton 检测模型与配置 |
 | 抓取目标 | 未知小物体 | 画面中心单个桌面物体，实测深度分割 |
-| 执行方式 | 一次性直接抓取 | 当前视角生成完整接触计划，再到预抓取位、接近、闭爪、抬升 |
-| 执行方式 | 两阶段抓取 | 保留原流程：先到观察位，重新获取近场数据，再规划执行 |
+| 执行方式 | 一阶段优先（必要时补充观察） | 未知物体推荐：当前视角足够时一次性抓取；视角不足时补充观察，回到初始位后再一次性抓取（`observe_return`） |
+| 执行方式 | 一次性直接抓取 | 保留旧方案：只用当前视角生成完整接触计划，再到预抓取位、接近、闭爪（`direct`） |
+| 执行方式 | 两阶段抓取 | 保留旧方案：先到观察位，重新获取近场数据，再从观察位规划执行（`two_stage`） |
 
 点击“应用方案并重新识别”后等待实际方案状态更新，再使用原有候选计算和执行按钮。应用方案本身不启动运动。执行过程中选择器锁定；服务端收到的切换请求排队到本次任务释放后处理。
 
-一次性指只规划一次接触抓取，不是跳过预抓取位或直接闭爪；不会伪造已到观察位或跨视角配准成功。完整四段路径仍通过原严格规划，任务入口仍保留原配置要求的 MuJoCo 验证。
+未知物体使用新方案 `observe_return`：先用当前视角尝试完整接触规划；仅在实测双侧接触表面信息不足时，借用两阶段的观察流程补充信息。补充观察后必须实测确认回到任务起始姿态，再使用新鲜快照规划一次性抓取。一般的路径、可达性或仿真失败不会自动触发补充观察。
+
+一次性抓取仍依次经过预抓取位、接近和闭爪；需要补充观察时，观察阶段与返回后的接触阶段分别规划。完整四段路径仍通过原严格规划，任务入口仍保留原配置要求的 MuJoCo 验证。是否实际抬升由会话配置决定；当前闭爪保持实验不抬升。
 
 直接模式在当前快照几何估计后，将同一快照的实测点注册为单视角接触表面，供原双侧接触和桌面候选验证使用。审计标记 `current_view_only`，没有跨视角配准；缺少实测接触面仍会拒绝。两阶段继续从实际到达的观察帧建立表面参考。
 
@@ -24,14 +27,21 @@
 在已 source 本工作区 `devel/setup.bash` 的终端中：
 
 ```bash
-rosrun alicia_grasp_modes switch_grasp_mode.py unknown
-rosrun alicia_grasp_modes switch_grasp_mode.py carton
-rosrun alicia_grasp_modes switch_grasp_mode.py unknown --strategy direct
-rosrun alicia_grasp_modes switch_grasp_mode.py carton --strategy two_stage
+rosrun alicia_grasp_modes switch_grasp_mode.py unknown --strategy observe_return
 rostopic echo /grasp_mode/status
 ```
 
-切换响应 `SWITCHING` 表示开始切换，`QUEUED` 表示当前抓取完成后切换。`/grasp_mode/status` 报告实际生效模式、执行方式、代次和目标状态，并提供心跳。省略 `--strategy` 时保留当前执行方式。
+切换响应 `SWITCHING` 表示开始切换，`QUEUED` 表示当前抓取完成后切换。`/grasp_mode/status` 报告实际生效模式、执行方式、代次和目标状态，并提供心跳。启动新方案时明确写出 `--strategy observe_return`；省略该参数会保留当前兼容执行方式，不能用于保证选中新方案。
+
+旧方案仍可显式选择，carton 继续使用原流程：
+
+```bash
+rosrun alicia_grasp_modes switch_grasp_mode.py unknown --strategy direct
+rosrun alicia_grasp_modes switch_grasp_mode.py unknown --strategy two_stage
+rosrun alicia_grasp_modes switch_grasp_mode.py carton --strategy two_stage
+```
+
+`observe_return` 仅适用于未知物体；carton 保留 `direct` 和 `two_stage`。
 
 未知模式把单个物体对准画面中心：选定后跟踪其基坐标位置和表面形状。目标丢失后需要再次选择 unknown 以建立新代次，不会自动改抓其他物体。切回 carton 后原 GUI 模型选择功能仍作用于 carton 感知。
 
@@ -39,7 +49,7 @@ rostopic echo /grasp_mode/status
 
 `launch/perception_modes.launch` 只含感知、规划、任务入口和路由节点，用于已有相机/驱动运行时的接入。已有同名原感知/remote/task 节点必须先退出；不要与原 `grasp_system.launch` 同时启动这些节点。
 
-`launch/full_system_modes.launch` 是以后从停止状态启动整套系统的入口，提供与原完整入口对应的驱动、相机、触觉和 GUI 参数，并增加 `initial_mode:=carton|unknown` 与 `initial_strategy:=two_stage|direct`。默认不自动启动真机或使能；实际会话启动参数由操作者指定。
+`launch/full_system_modes.launch` 是以后从停止状态启动整套系统的入口，提供与原完整入口对应的驱动、相机、触觉和 GUI 参数，并增加 `initial_mode:=carton|unknown` 与 `initial_strategy:=two_stage|direct|observe_return`。启动未知物体新方案时显式使用 `initial_mode:=unknown initial_strategy:=observe_return`；通用入口保留原 carton/two_stage 兼容默认值。默认不自动启动真机或使能；实际会话启动参数由操作者指定。
 
 `launch/gui_modes.launch` 启动带方案模块的原控制面板。原 `gui.launch` 仍可用于之前的界面；两个入口不要同时启动。
 
@@ -48,10 +58,12 @@ rostopic echo /grasp_mode/status
 独立自动执行入口只执行当前选择的新鲜、完整审计计划：
 
 ```bash
-rosrun alicia_grasp_modes mode_aware_grasp_runner.py --mode unknown --strategy direct
+rosrun alicia_grasp_modes mode_aware_grasp_runner.py --mode unknown --strategy observe_return
 ```
 
-此命令会启动实际抓取任务。参数校验当前选择，不自动切换；两阶段可用 `--strategy two_stage`。direct 校验接触计划的四段路径、全部姿态、最终几何、计划摘要、模式代次与精确源戳；它不接受观察计划的审计替代接触计划。无合格三帧快照时按原 `/grasp/near_field_replan_timeout_sec` 截止时间返回明确的拒绝原因。
+此命令会启动实际抓取任务。参数校验当前选择，不自动切换；须先按上面的命令选中 `observe_return`。新方案校验当前视角的接触计划，或由缺少接触表面证据触发的补充观察计划；执行补充观察时还要求同目标绑定、实测返回和返回后的新鲜接触计划。
+
+旧入口仍可用 `--strategy direct` 或 `--strategy two_stage`，并要求当前选择匹配。direct 校验接触计划的四段路径、全部姿态、最终几何、计划摘要、模式代次与精确源戳；它不接受观察计划的审计替代接触计划。无合格三帧快照时按原 `/grasp/near_field_replan_timeout_sec` 截止时间返回明确的拒绝原因。
 
 ## 数据及执行约束
 
@@ -79,7 +91,9 @@ unknown_perception:
 
 初始锁定还要求连续三帧轮廓、几何和实测支撑面一致，且至少120个有效目标点，避免把一次性的66点深度碎片绑定为不可变目标。初始 RGB 轮廓验证失败时继续等待；已经锁定后才可回退到原深度实例。锁定后的身份约束和丢失锁存保持原逻辑。第三次直接尝试的90帧回放中，第10帧建立正确锁定，随后80帧均保持关联。
 
-本版用于有有效深度、与邻物分离的桌面小物体。冻结支撑面没有任何原门限合格实例时，可在同一帧用实测桌面重分割：与不可变初始支撑面的法向差不超过4°、初始实测目标投影凸包内距离差不超过4mm，之后仍通过原位移、尺寸、唯一实例约束。多候选歧义直接拒绝，目标丢失后不自动重锁。
+本版用于有有效深度、与邻物分离的桌面小物体。冻结支撑面没有任何原门限合格实例时，可在同一帧用实测桌面重分割：与不可变初始支撑面的法向差不超过4°、初始实测目标投影凸包内距离差不超过7mm；超过4mm会记录告警，之后仍通过原位移、尺寸、唯一实例约束。多候选歧义直接拒绝，目标丢失后不自动重锁。
+
+支撑偏移默认配置为 `support_local_shift_warning_m=0.004`、`support_max_local_shift_m=0.007`。`perception_modes.launch` 显式设置这两个启动参数，并允许调用者通过同名 launch 参数设置更严格的硬门限。告警写入 `/perception/unknown/detector_status` 的 `support_plane_warnings` 和 ROS 节流警告日志，带当前源帧时间戳、实测偏移和两级门限；实际配置另见 `support_plane_consistency_policy`。4–7mm 仅取消支撑偏移单项否决，不代表目标确认、接触证据或运动检查通过，也不校正测量或刷新冻结平面。此修改离线完成，须在后续明确启动时才生效；不会在线更改参数或自动覆盖另设的更严格策略。
 
 接触候选继续使用原夹口宽度、对称等价姿态和实际规划轨迹评价。短边夹持只在接触面、夹爪尺寸、碰撞与可达性均合格时可选，不能承诺所有物体的全局最优点或最短路径。两阶段观察位姿态用于获取数据，不代表最终夹持方向；其有界视角搜索仍可能选择较大转腕。
 
@@ -104,7 +118,7 @@ OPENBLAS_NUM_THREADS=1 python3 -m pytest -q src/alicia_grasp_modes/tests
 
 未知两阶段模式采用22–30 cm的有界观察距离搜索，名义距离26 cm，规划器与任务执行器使用同一份独立配置副本，carton及直接模式保持原配置。仍执行原始相机可见性、夹爪CAD间隙、严格路径和跟踪误差证明；根据操作者要求，未知模式取消额外的90°关节变化门槛；仍要求运动指标有限且非负，并保留URDF关节限位、碰撞和严格路径校验。接触候选优先比较短边所需开口，再比较已验证路径的硬件耗时、最大关节变化及路径代价；这是有界搜索内的排名，不宣称全局最优。
 
-旧参考桌面分割出现 `too_many_foreground_instances` 或 `too_many_depth_components` 时，允许一次当前帧桌面重估。重估仍必须满足原4°/4mm支撑面一致性、唯一实例、25mm位移与尺寸关联要求；其他异常直接上报，已丢失目标不会自动重锁。
+旧参考桌面分割出现 `too_many_foreground_instances` 或 `too_many_depth_components` 时，允许一次当前帧桌面重估。重估仍必须满足4°/7mm支撑面硬门限（超过4mm告警）、唯一实例、25mm位移与尺寸关联要求；其他异常直接上报，已丢失目标不会自动重锁。
 
 本次166项回归测试通过，原业务261份基线文件未变。真实直接抓取点云上的1620个位置/角度组合诊断没有提供足够的双侧接触高度，未据此降低2mm接触要求。实际重试结果见根工作区 `.ros_log/ros_live_20260921_session/observation_recovery_fix/`。
 

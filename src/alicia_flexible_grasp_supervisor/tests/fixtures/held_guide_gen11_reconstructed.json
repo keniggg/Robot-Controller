@@ -1,0 +1,183 @@
+{
+  "scope": "GEN11 recorded sample/goals with offline reconstructed nominal; original MoveIt nominal was not recorded",
+  "model_path": "deployment/2026-10-08/runtime/candidate_models/expanded_metric_20260929/alicia_expanded_metric_candidate.urdf",
+  "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "source_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/gen11_analysis/independent_selector_soft_margins.json",
+  "source_sha256": "741747ffb1b154d873783ac3870b08295ca7cea4a9d218820970f1892cdd1048",
+  "plan_id": "a844fac7ec9c7821728dd5a9",
+  "source_sample": {
+    "accepted_gripper_opening_m": 0.04980000000000001,
+    "accepted_positions_rad": [
+      -1.971165312433049,
+      -0.6289321230331129,
+      1.3069516312785663,
+      -0.1641359443037636,
+      -1.445009902188274,
+      -0.029145634969827184
+    ],
+    "accepted_sample_count": 5,
+    "accepted_stamp_ns": 1791697954267325909,
+    "accepted_tool_position_m": [
+      -0.10932409180870145,
+      -0.34329622296847795,
+      0.07924576345340026
+    ],
+    "certifies_command_response_or_calibration": false,
+    "epoch_ns": 1791694455560621129,
+    "joint_error_sdk_counts": [
+      -2.0000000000000657,
+      -16.000000000000018,
+      -16.00000000000009,
+      -1.9999999999999931,
+      0.9999999999999604,
+      3.999999999999998
+    ],
+    "joint_names": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+    "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+    "opening_stamp_ns": 1791697954267325909,
+    "orientation_error_rad": 0.04668446926499164,
+    "position_error_m": 0.015635153563155365,
+    "position_error_vector_m": [
+      0.002425539476922728,
+      0.007184455005997126,
+      -0.01367327288750364
+    ],
+    "sdk_positions_rad": [
+      -1.9680973508572777,
+      -0.6043884304269426,
+      1.3314953238847367,
+      -0.16106798272799233,
+      -1.4465438829761597,
+      -0.035281558121369745
+    ],
+    "sdk_sample_count": 4,
+    "sdk_stamp_ns": 1791697954302914031,
+    "sdk_tool_position_m": [
+      -0.11174963128562418,
+      -0.3504806779744751,
+      0.0929190363409039
+    ],
+    "stamp_sec": 1791697954.315172,
+    "stationary_window_end_ns": 1791697954267325909,
+    "stationary_window_start_ns": 1791697953967325909
+  },
+  "fixed_poses": [
+    [
+      -0.1157908838657863,
+      -0.3673136186471667,
+      0.07938959135751866,
+      0.9614127908211807,
+      -0.2561084036622277,
+      0.09243026309713091,
+      0.039377375265617506
+    ],
+    [
+      -0.11925476862961581,
+      -0.366013406986996,
+      0.05805136824417695,
+      0.9614127908211807,
+      -0.2561084036622277,
+      0.09243026309713091,
+      0.039377375265617506
+    ]
+  ],
+  "reconstructed_nominal_rad": [
+    -1.9696313316451632,
+    -0.5767767762450011,
+    1.2164467647933135,
+    -0.19174759848570513,
+    -1.2195147263690846,
+    -1.6260196351587797
+  ],
+  "failed_approach_prediction": {
+    "scope": "conditional_held_axes_endpoint_prediction",
+    "fixed_goal_pose": [
+      -0.11925476862961581,
+      -0.366013406986996,
+      0.05805136824417695,
+      0.9614127908211807,
+      -0.2561084036622277,
+      0.09243026309713091,
+      0.039377375265617506
+    ],
+    "position_error_m": 0.015809025542715238,
+    "orientation_error_rad": 0.08600076869926226,
+    "position_tolerance_m": 0.006,
+    "orientation_tolerance_rad": 0.08726646259971647,
+    "held_joints": [
+      "Joint2",
+      "Joint5"
+    ],
+    "maximum_total_counts": 32,
+    "sdk_minus_encoder_rad": [
+      0.003067961575771605,
+      0.024543692606170286,
+      0.024543692606170397,
+      0.003067961575771272,
+      -0.0015339807878855805,
+      -0.006135923151542544
+    ],
+    "initial_sdk_counts": [
+      742,
+      1636,
+      2917,
+      1873,
+      1213,
+      1016
+    ],
+    "virtual_start_positions_rad": [
+      -2.006446870554419,
+      -0.6565437772150544,
+      1.3084856120664519,
+      -0.27151459945575845,
+      -1.2793399770966247,
+      -1.576932249946439
+    ],
+    "future_following_verified": false,
+    "hardware_response_verified": false,
+    "execution_authorized": false,
+    "globally_optimal": false,
+    "proposed_delta_counts": [
+      6,
+      0,
+      -18,
+      32,
+      0,
+      22
+    ],
+    "predicted_position_error_m": 0.006081910579766619,
+    "predicted_orientation_error_rad": 0.08663353954155728,
+    "predicted_positions_rad": [
+      -1.997242985827105,
+      -0.6565437772150544,
+      1.2808739578845103,
+      -0.22242721424341796,
+      -1.2793399770966247,
+      -1.543184672612955
+    ],
+    "predicted_command_positions_rad": [
+      -1.9941750242513334,
+      -0.6320000846088841,
+      1.3054176504906807,
+      -0.2193592526676467,
+      -1.2808739578845103,
+      -1.5493205957644975
+    ],
+    "steps_predicted": 1,
+    "success": false,
+    "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL"
+  },
+  "stable_evaluation_index": 32,
+  "insertion_tilt_deg": 7.216953861477881,
+  "receipt_index": 13,
+  "metadata_note": "Receipt index is not the stable_evaluation index; this is a tilted candidate, not a vertical-grasp proof.",
+  "metadata_source_sha256": "2dcf9caabaf8cbbe63538050625cb93bf3a7bad6b33ad6bfbd1e441914393e7c"
+}

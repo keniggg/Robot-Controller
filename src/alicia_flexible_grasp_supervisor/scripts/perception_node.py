@@ -179,6 +179,7 @@ class PerceptionNode:
         self.detector_kind = 'simple_hsv'
         self.detector_error = ''
         self.detector_signature = None
+        self._detector_config = None
         self.detector_task = 'detect'
         self.require_instance_mask = False
         self.enabled = bool(pcfg.get('enabled', True))
@@ -746,8 +747,13 @@ class PerceptionNode:
         publisher.publish(String(data=message))
 
     def refresh_detector(self, force=False):
-        previous_segment_mode = PerceptionNode._segment_mode(self)
         pcfg = rospy.get_param('/perception', {})
+        # Poll parameters even without camera frames, but only discover model
+        # paths and normalize profiles when configuration changes. In particular,
+        # package discovery can scan the ROS workspace on every resolution.
+        if not force and pcfg == getattr(self, '_detector_config', None):
+            return
+        previous_segment_mode = PerceptionNode._segment_mode(self)
         enabled = bool(pcfg.get('enabled', True))
         detector_kind = str(pcfg.get('detector', 'simple_hsv')).lower()
         label = pcfg.get('object_label', 'target')
@@ -797,6 +803,7 @@ class PerceptionNode:
             yolo_task, require_instance_mask, yolo_reload_generation,
         )
         if not force and signature == self.detector_signature:
+            self._detector_config = deepcopy(pcfg)
             return
         self.enabled = enabled
         self.label = label
@@ -856,6 +863,9 @@ class PerceptionNode:
             PerceptionNode._publish_detector_status(self, 'error', yolo_choice, self.detector_error)
             rospy.logwarn_throttle(2.0, 'Failed to initialize %s detector: %s', detector_kind, exc)
         self.detector_signature = signature
+        # Snapshot nested profiles too: later edits must invalidate the cache.
+        # Failed selections are retried by configuration changes or force/reload.
+        self._detector_config = deepcopy(pcfg)
         rospy.loginfo('Perception detector updated: enabled=%s detector=%s label=%s ranges=%s min_area=%s shape=%s yolo_class=%s',
                       enabled, self.detector_kind, label, normalized_ranges or [(lower, upper)], min_area, shape, yolo_target_class)
 

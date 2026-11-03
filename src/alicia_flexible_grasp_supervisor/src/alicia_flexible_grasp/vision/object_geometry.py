@@ -1,4 +1,5 @@
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from numbers import Real
 
 import cv2
 import numpy as np
@@ -16,6 +17,118 @@ def _readonly_copy(value, shape=None):
     return output
 
 
+def _immutable_array(value, shape=None):
+    """Own immutable bytes, so callers cannot re-enable ndarray writes."""
+    output = np.asarray(value, dtype=float)
+    if shape is not None:
+        output = output.reshape(shape)
+    return np.frombuffer(output.tobytes(), dtype=float).reshape(output.shape)
+
+
+@dataclass(frozen=True)
+class ObservationGeometryDeficit:
+    """Original measurements when only the contact OBB size gate fails.
+
+    The minimum is the configured geometry acceptance threshold, **not** a
+    hardware minimum graspable width. Sizes describe the fitted visible cloud,
+    not verified complete physical object dimensions. In particular axes 0/1
+    lie in the support plane and axis 2 is its normal.
+
+    ``target_points_base`` is the deprojected target-depth input before support
+    rejection, voxel averaging and neighbour filtering. ``object_points_base``
+    is the unchanged cleaned cloud passed to the fit. ``support_points_base``
+    contains only this algorithm's measured support context, including its
+    outliers, not the full scene. Fitted box vertices are not measurements.
+
+    This evidence grants neither contact nor observation motion. The adapter
+    must independently bind exact frame/ticket/identity/TF/calibration, verify
+    support quality and occupied-scene/path clearance, and bound observation
+    attempts and information gain. A truly thin object may remain below the
+    original gate at every view. No dimension or point is enlarged here.
+    """
+    center_base: np.ndarray
+    axes_base: np.ndarray
+    size_xyz_m: np.ndarray
+    support_normal_base: np.ndarray
+    support_offset_m: float
+    support_inlier_ratio: float
+    target_points_base: np.ndarray
+    object_points_base: np.ndarray
+    support_points_base: np.ndarray
+    T_base_camera: np.ndarray
+    source_mode: str
+    min_size_m: float
+    max_size_m: float
+    max_height_m: float
+    support_distance_threshold_m: float
+    min_support_points: int
+    min_object_points: int
+    voxel_size_m: float
+    outlier_neighbors: int
+    outlier_std_ratio: float
+    failed_axis_indices: tuple = field(init=False)
+    kind: str = field(default='contact_obb_minimum_extent_not_met', init=False)
+    axis_roles: tuple = field(default=('support_plane_long', 'support_plane_short',
+                                     'support_normal_height'), init=False)
+    contact_geometry_authorized: bool = field(default=False, init=False)
+    observation_motion_authorized: bool = field(default=False, init=False)
+    complete_object_geometry: bool = field(default=False, init=False)
+
+    def __post_init__(self):
+        for name, shape in (('center_base', (3,)), ('axes_base', (3, 3)),
+                            ('size_xyz_m', (3,)), ('support_normal_base', (3,)),
+                            ('T_base_camera', (4, 4))):
+            array = np.asarray(getattr(self, name), dtype=float)
+            if array.shape != shape or not np.all(np.isfinite(array)):
+                raise ValueError('observation deficit invalid ' + name)
+            object.__setattr__(self, name, _immutable_array(array))
+        for name in ('target_points_base', 'object_points_base', 'support_points_base'):
+            points = np.asarray(getattr(self, name), dtype=float)
+            if (points.ndim != 2 or points.shape[1:] != (3,)
+                    or not np.all(np.isfinite(points))):
+                raise ValueError('observation deficit invalid ' + name)
+            object.__setattr__(self, name, _immutable_array(points))
+        for name in ('min_support_points', 'min_object_points', 'outlier_neighbors'):
+            value = getattr(self, name)
+            if type(value) is not int or value < (1 if name == 'outlier_neighbors' else 3):
+                raise ValueError('observation deficit invalid ' + name)
+        scalar_names = ('support_offset_m', 'support_inlier_ratio', 'min_size_m',
+                        'max_size_m', 'max_height_m', 'support_distance_threshold_m',
+                        'voxel_size_m', 'outlier_std_ratio')
+        for name in scalar_names:
+            value = getattr(self, name)
+            if (isinstance(value, (bool, np.bool_)) or not isinstance(value, Real)
+                    or not np.isfinite(value)):
+                raise ValueError('observation deficit invalid ' + name)
+            object.__setattr__(self, name, float(value))
+        if (self.source_mode not in _VALID_SOURCE_MODES
+                or not 0. < self.min_size_m <= self.max_size_m
+                or min(self.max_height_m, self.support_distance_threshold_m, self.voxel_size_m) <= 0.
+                or self.outlier_std_ratio < 0.
+                or not _MIN_SUPPORT_INLIER_RATIO <= self.support_inlier_ratio <= 1.
+                or len(self.support_points_base) < self.min_support_points
+                or len(self.object_points_base) < self.min_object_points
+                or len(self.target_points_base) < len(self.object_points_base)):
+            raise ValueError('observation deficit invalid measurement limits')
+        normal, axes, size = self.support_normal_base, self.axes_base, self.size_xyz_m
+        if (not np.isclose(np.linalg.norm(normal), 1., rtol=0., atol=1e-5)
+                or not np.allclose(axes.T @ axes, np.eye(3), rtol=0., atol=1e-5)
+                or abs(np.linalg.det(axes)-1.) > 1e-5
+                or not np.allclose(axes[:, 2], normal, rtol=0., atol=1e-5)
+                or np.any(size <= 0.) or np.any(size > self.max_size_m)
+                or size[2] > self.max_height_m or not np.any(size < self.min_size_m)):
+            raise ValueError('observation deficit must fail only the minimum extent gate')
+        _validated_transform(self.T_base_camera)
+        object.__setattr__(self, 'failed_axis_indices', tuple(int(i) for i in
+            np.flatnonzero(size < self.min_size_m)))
+
+    def __deepcopy__(self, memo):
+        # NumPy deepcopy otherwise creates writable owned arrays. All fields
+        # here are immutable values or views backed by immutable owned bytes.
+        memo[id(self)] = self
+        return self
+
+
 @dataclass(frozen=True)
 class GeometryEstimate:
     ok: bool
@@ -29,8 +142,14 @@ class GeometryEstimate:
     support_inlier_ratio: float
     object_points_base: np.ndarray
     source_mode: str
+    observation_deficit: ObservationGeometryDeficit = None
 
     def __post_init__(self):
+        if self.observation_deficit is not None and (
+                type(self.observation_deficit) is not ObservationGeometryDeficit
+                or self.ok is not False or self.failure_code != 'OBB_INVALID'
+                or self.source_mode != self.observation_deficit.source_mode):
+            raise ValueError('observation deficit cannot authorize contact geometry')
         object.__setattr__(self, 'center_base', _readonly_copy(self.center_base, (3,)))
         object.__setattr__(self, 'axes_base', _readonly_copy(self.axes_base, (3, 3)))
         object.__setattr__(self, 'size_xyz_m', _readonly_copy(self.size_xyz_m, (3,)))
@@ -99,7 +218,7 @@ def anchor_geometry_center_in_support_plane(
     return anchored, metrics
 
 
-def _failure(code, reason, source_mode):
+def _failure(code, reason, source_mode, observation_deficit=None):
     return GeometryEstimate(
         ok=False,
         failure_code=str(code),
@@ -112,6 +231,7 @@ def _failure(code, reason, source_mode):
         support_inlier_ratio=0.0,
         object_points_base=np.zeros((0, 3), dtype=float),
         source_mode=str(source_mode or ''),
+        observation_deficit=observation_deficit,
     )
 
 
@@ -232,6 +352,40 @@ def _sample_plane_triplets(rng, point_count, iterations):
     third += third >= np.minimum(first, second)
     third += third >= np.maximum(first, second)
     return np.column_stack((first, second, third))
+
+
+def _support_context_mask(depth, foreground, bbox, intrinsics, depth_scale,
+                          expand_ratio, minimum_span_m):
+    """Observe the gripper footprint even when the target spans few pixels.
+
+    A tight instance mask is not negative evidence for the remainder of its
+    bounding box: filtered rim pixels and mask holes can still be the object.
+    With a physical footprint requested, exclude that whole uncertain box.
+    This expands measured context only; the plane thresholds are unchanged.
+    """
+    expanded, box = _expanded_bbox_mask(depth.shape, bbox, expand_ratio)
+    if isinstance(minimum_span_m, (bool, np.bool_)):
+        raise ValueError('support minimum span must be numeric')
+    minimum_span_m = float(minimum_span_m)
+    if not np.isfinite(minimum_span_m) or minimum_span_m < 0.:
+        raise ValueError('support minimum span must be finite and nonnegative')
+    if minimum_span_m == 0.:
+        return expanded & ~foreground
+    values = np.asarray(depth)[box & np.isfinite(depth) & (depth > 0)]
+    if not len(values):
+        raise ValueError('support context lacks a measured target-range scale')
+    range_m = float(np.median(values)) * float(depth_scale)
+    if not np.isfinite(range_m) or range_m <= 0.:
+        raise ValueError('support context target range is invalid')
+    width, height, fx, fy, _cx, _cy = _intrinsic_values(intrinsics, depth.shape)
+    x, y, bw, bh = [int(v) for v in bbox]
+    # Preserve the configured context, and add the measured physical footprint.
+    px = max(bw, int(np.ceil(minimum_span_m * fx / range_m)))
+    py = max(bh, int(np.ceil(minimum_span_m * fy / range_m)))
+    x0, y0 = int(np.floor(x + bw / 2. - px / 2.)), int(np.floor(y + bh / 2. - py / 2.))
+    x1, y1 = int(np.ceil(x + bw / 2. + px / 2.)), int(np.ceil(y + bh / 2. + py / 2.))
+    expanded[max(0,y0):min(height,y1), max(0,x0):min(width,x1)] = True
+    return expanded & ~foreground & ~box
 
 
 def _fit_support_plane(points, threshold_m, min_support_points):
@@ -518,6 +672,15 @@ def _support_basis(normal):
     return np.column_stack([first, second])
 
 
+class _MinimumExtentOnly(ValueError):
+    """Internal typed fit outcome; no string matching or relaxed refit."""
+    def __init__(self, reason, center, axes, size):
+        super().__init__(reason)
+        self.center = _immutable_array(center)
+        self.axes = _immutable_array(axes)
+        self.size = _immutable_array(size)
+
+
 def _fit_obb(
     points,
     normal,
@@ -613,12 +776,16 @@ def _fit_obb(
         raise ValueError('OBB outputs contain non-finite values')
     if float(np.linalg.det(axes)) < 0.999:
         raise ValueError('OBB axes are not a right-handed orthonormal frame')
+    maximum_failed = np.any(size > float(max_size_m)) or height > float(max_height_m)
     if np.any(size < float(min_size_m)):
-        raise ValueError(
-            'OBB size %s is below minimum %.6f m'
-            % (np.array2string(size, precision=6), float(min_size_m))
-        )
-    if np.any(size > float(max_size_m)) or height > float(max_height_m):
+        reason = 'OBB size %s is below minimum %.6f m' % (
+            np.array2string(size, precision=6), float(min_size_m))
+        if maximum_failed or np.any(size <= 0.):
+            # Retain the original failure priority, but simultaneous failures
+            # must not acquire the observation-only minimum-extent evidence.
+            raise ValueError(reason)
+        raise _MinimumExtentOnly(reason, center, axes, size)
+    if maximum_failed:
         raise ValueError(
             'OBB size %s exceeds configured limits'
             % np.array2string(size, precision=6)
@@ -646,6 +813,7 @@ def estimate_object_geometry(
     previous_axes_base,
     outlier_neighbors=16,
     outlier_std_ratio=2.0,
+    support_minimum_span_m=0.0,
 ):
     """Return GeometryEstimate with one stable base-frame OBB."""
     source = str(source_mode or '')
@@ -705,7 +873,9 @@ def estimate_object_geometry(
                 raise ValueError('instance mask is empty')
         else:
             foreground = bbox_mask
-        support_mask = expanded & ~foreground
+        support_mask = _support_context_mask(
+            depth, foreground, bbox, intrinsics, scale,
+            support_bbox_expand_ratio, support_minimum_span_m)
         support_camera, _support_uv = deproject_depth(
             depth,
             support_mask,
@@ -787,6 +957,22 @@ def estimate_object_geometry(
         )
         if not np.all(np.isfinite(output_values)):
             raise ValueError('OBB output contains non-finite values')
+    except _MinimumExtentOnly as exc:
+        try:
+            deficit = ObservationGeometryDeficit(
+                center_base=exc.center, axes_base=exc.axes, size_xyz_m=exc.size,
+                support_normal_base=normal, support_offset_m=offset,
+                support_inlier_ratio=inlier_ratio, target_points_base=target_base,
+                object_points_base=object_points, support_points_base=support_base,
+                T_base_camera=transform, source_mode=source,
+                min_size_m=minimum_size, max_size_m=maximum_size,
+                max_height_m=maximum_height, support_distance_threshold_m=threshold,
+                min_support_points=support_minimum, min_object_points=object_minimum,
+                voxel_size_m=voxel_size, outlier_neighbors=neighbor_count,
+                outlier_std_ratio=neighbor_std_ratio)
+        except (TypeError, ValueError, OverflowError):
+            deficit = None
+        return _failure('OBB_INVALID', str(exc), source, observation_deficit=deficit)
     except Exception as exc:
         return _failure('OBB_INVALID', str(exc), source)
 

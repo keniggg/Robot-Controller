@@ -1,0 +1,450 @@
+{
+  "provenance": {
+    "kind": "recorded_summary_with_constructed_profile_bindings",
+    "record": "20261010T065458.401325Z_1cbfec9472d144049738a77835f31d16",
+    "source_audit_sha256": "eba6a2cdbf0f9e628bd76b982a6ee2acd6f7adef84438bb4199c558c5c4660e6",
+    "limitations": "Original summary has no profile angle/reach fields; constructed test associations are not recovered historical associations. No fused point set or whole GEN15 replay is claimed."
+  },
+  "geometry": {
+    "R_base_obb": [
+      [
+        -0.9268502667322414,
+        -0.3742112132653836,
+        -0.030241543029790884
+      ],
+      [
+        0.3721763383914187,
+        -0.9264129702834393,
+        0.05695420644844229
+      ],
+      [
+        -0.04932906039982173,
+        0.04153283468612777,
+        0.9979186677495344
+      ]
+    ],
+    "obb_size_xyz_m": [
+      0.07020640748390869,
+      0.04664009291698533,
+      0.022257962463448393
+    ],
+    "obb_center_base_m": [
+      -0.10717057381674795,
+      -0.3476172236707861,
+      0.010318894291649143
+    ],
+    "support_normal_base": [
+      -0.030241543029790884,
+      0.05695420644844229,
+      0.9979186677495344
+    ],
+    "support_offset_m": 0.016478092719668547
+  },
+  "recorded_tabletop": {
+    "surface_evidence_rejections": [
+      {
+        "angle_deg": 55.0,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.024434795956822426,
+        "positive_reach_m": 0.024434795956822426
+      },
+      {
+        "angle_deg": 59.99999999999999,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.024050026679205066,
+        "positive_reach_m": 0.024050026679205066
+      },
+      {
+        "angle_deg": 65.0,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.02385234616109219,
+        "positive_reach_m": 0.02385234616109219
+      },
+      {
+        "angle_deg": 75.0,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.02399447927206378,
+        "positive_reach_m": 0.02399447927206378
+      },
+      {
+        "angle_deg": 80.0,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.02433980591233947,
+        "positive_reach_m": 0.02433980591233947
+      },
+      {
+        "angle_deg": 85.0,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "maximum_side_reach_m": 0.025,
+        "negative_reach_m": 0.024883778941304044,
+        "positive_reach_m": 0.024883778941304044
+      }
+    ],
+    "contact_boundary_profiles": [
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.009282150571274659,
+          0.009548903210102412
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          7.877500510222122,
+          15.755001020444244,
+          23.632501530666367,
+          31.510002040888487
+        ],
+        "proposal_source_index": 0
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.009325964263922272,
+          0.009549163489957208
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          7.877500510222122,
+          15.755001020444244,
+          23.632501530666367,
+          31.510002040888487
+        ],
+        "proposal_source_index": 1
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "interior_probe_count": 4,
+            "maximum_observed_contact_patch_overlap_m": null,
+            "maximum_observed_tilt_deg": null,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 0,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.009328026575269394,
+          0.00954755543164126
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          7.877500510222122,
+          15.755001020444244,
+          23.632501530666367,
+          31.510002040888487
+        ],
+        "proposal_source_index": 2
+      }
+    ],
+    "required_contact_patch_overlap_m": 0.002,
+    "sampled_angles_deg": [
+      158.01385047876752,
+      68.01385047876752,
+      156.50692523938375,
+      66.50692523938376,
+      0.0,
+      5.000000000000001,
+      10.0,
+      15.000000000000002,
+      20.0,
+      25.000000000000007,
+      29.999999999999996,
+      35.0,
+      40.000000000000014,
+      45.0,
+      50.00000000000001,
+      55.0,
+      59.99999999999999,
+      65.0,
+      70.00000000000001,
+      75.0,
+      80.0,
+      85.0,
+      90.0,
+      95.0,
+      100.0,
+      105.00000000000001,
+      110.0,
+      115.0,
+      119.99999999999999,
+      125.00000000000001,
+      130.0,
+      135.0,
+      140.0,
+      145.0,
+      150.0,
+      155.0,
+      160.0,
+      165.0,
+      170.0,
+      175.0
+    ],
+    "plan_phase": "CONTACT_EXECUTION_PLAN",
+    "contact_execution_gate_deferred": false,
+    "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING"
+  },
+  "recorded_search": {
+    "request_id": 17,
+    "moveit_selection": {
+      "aperture_metric": "max_measured_band_and_frozen_obb_projected_width",
+      "checked_count": 0,
+      "comparison_budget_after_incumbent_sec": 8.0,
+      "configured_top_n": 0,
+      "global_time_optimality_claimed": false,
+      "motion_metric": "strict_sequence_hardware_duration_lower_bound",
+      "optimality_scope": "checked_hard_safe_candidates_only",
+      "physical_aperture_and_gates_unchanged": true,
+      "policy": "CHECKED_HARDWARE_DURATION_THEN_JOINT_MOTION",
+      "publication_reserve_sec": 2.0,
+      "ranking_order": [
+        "execution_duration_lower_bound_sec",
+        "joint_max_delta_rad",
+        "joint_path_cost",
+        "aperture_width_m"
+      ],
+      "reachable_count": 0,
+      "shortlist_count": 0,
+      "terminated_early": false,
+      "termination_reason": "",
+      "unchecked_tail_is_not_rejected": true
+    },
+    "pipeline_funnel": {
+      "acceptance_diagnostics": {},
+      "input_count": 9,
+      "primary_failure": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+      "rejection_counts": {
+        "BILATERAL_SURFACE_EVIDENCE_MISSING": 5,
+        "GRASPNET_STAGE_PROFILE_UNAVAILABLE": 5
+      },
+      "rejection_ratios": {
+        "BILATERAL_SURFACE_EVIDENCE_MISSING": 0.5555555555555556,
+        "GRASPNET_STAGE_PROFILE_UNAVAILABLE": 0.5555555555555556
+      },
+      "snapshot_evidence": {
+        "disjoint_window_required": false,
+        "near_field": true,
+        "source_span_ms": 866.221189,
+        "source_stamp_ns": [
+          1791615347290635347,
+          1791615347889531135,
+          1791615348156856536
+        ],
+        "unique_source_frames": 3
+      },
+      "source_counts": {
+        "graspnet": {
+          "generated": 9,
+          "locally_valid": 0,
+          "preview": 0,
+          "promoted": 0,
+          "stable": 0
+        },
+        "tabletop_geometry": {
+          "generated": 0,
+          "locally_valid": 0,
+          "preview": 0,
+          "promoted": 0,
+          "stable": 0
+        }
+      },
+      "stage_counts": {
+        "locally_valid": {
+          "entered": 9,
+          "passed": 0,
+          "rejected": 9
+        },
+        "nms": {
+          "entered": 1024,
+          "passed": 29,
+          "rejected": 995
+        },
+        "preview": {
+          "entered": 0,
+          "passed": 0,
+          "rejected": 0
+        },
+        "promoted": {
+          "entered": 0,
+          "passed": 0,
+          "rejected": 0
+        },
+        "raw": {
+          "entered": 1024,
+          "passed": 1024,
+          "rejected": 0
+        },
+        "remote_collision": {
+          "entered": 29,
+          "passed": 9,
+          "rejected": 20
+        },
+        "returned": {
+          "entered": 9,
+          "passed": 9,
+          "rejected": 0
+        },
+        "stable": {
+          "entered": 0,
+          "passed": 0,
+          "rejected": 0
+        },
+        "tabletop_materialized": {
+          "entered": 0,
+          "passed": 0,
+          "rejected": 0
+        }
+      },
+      "tracking_evidence": {
+        "max_hit_count": 0,
+        "required_hits": 1,
+        "track_count": 0,
+        "tracks": [],
+        "window_request_ids": [
+          17
+        ]
+      }
+    },
+    "outcome": {
+      "code": "NEAR_FIELD_SURFACE_VIEW_REQUIRED",
+      "preview_valid": false,
+      "reason": "NEAR_FIELD_SURFACE_VIEW_REQUIRED",
+      "valid_plan": false
+    }
+  },
+  "constructed_associations": [
+    {
+      "angle_deg": 68.01385047876752,
+      "height_profile_index": 0
+    },
+    {
+      "angle_deg": 66.50692523938376,
+      "height_profile_index": 1
+    },
+    {
+      "angle_deg": 70.0,
+      "height_profile_index": 2
+    }
+  ]
+}

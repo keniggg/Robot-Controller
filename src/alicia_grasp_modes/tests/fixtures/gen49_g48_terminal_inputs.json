@@ -1,0 +1,449 @@
+{
+  "kind": "GEN49_exact_G48_terminal_counterfactual_contract_fixture",
+  "source_record": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261018T095014.238124Z_ea3e1758e151468c9c945b7e94a07b1d",
+  "extraction_sha256": "30641768cb887ede0ee402ef8434d0813bbc4fe7d84c653e4d1bed48bc114675",
+  "original_terminal_wire": {
+    "received_ns": 1792317106945835351,
+    "message_type": "alicia_flexible_grasp_supervisor/Grasp6DPlan",
+    "md5sum": "ae029a77e4a5b225ed777aecbc151555",
+    "wire_sha256": "20302b2630344f2a57e40bb7354a147ac3b21f47b88b6b66140b4411a96feb43",
+    "wire_base64": "PQAAALKW1GrLD1E3CQAAAGJhc2VfbGluawAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB2AAAATkVBUl9GSUVMRF9OT19SRUFDSEFCTEVfQ0FORElEQVRFOiBhbGwgY2FuZGlkYXRlcyBjaGVja2VkIGJlZm9yZSB0aGUgc2hhcmVkIGRlYWRsaW5lIGZhaWxlZCBzdHJpY3QgTW92ZUl0IHJlYWNoYWJpbGl0eRMAAABuZWFyX2ZpZWxkX3Rlcm1pbmFsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "payload": {
+      "header": {
+        "seq": 61,
+        "stamp": {
+          "secs": 1792317106,
+          "nsecs": 928059339
+        },
+        "frame_id": "base_link"
+      },
+      "valid": false,
+      "poses": [],
+      "score": 0.0,
+      "candidate_width_m": 0.0,
+      "required_open_width_m": 0.0,
+      "object_geometry": {
+        "header": {
+          "seq": 0,
+          "stamp": {
+            "secs": 0,
+            "nsecs": 0
+          },
+          "frame_id": ""
+        },
+        "valid": false,
+        "label": "",
+        "target_track_id": "",
+        "source_mode": "",
+        "pose_base": {
+          "position": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 0.0
+          }
+        },
+        "size_xyz_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "support_normal_base": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "support_offset_m": 0.0,
+        "valid_depth_points": 0,
+        "valid_depth_ratio": 0.0,
+        "depth_mad_m": 0.0,
+        "fused_frames": 0,
+        "support_inlier_ratio": 0.0,
+        "object_point_count": 0,
+        "failure_reason": ""
+      },
+      "model_choice": "",
+      "plan_id": "",
+      "diagnostic": "NEAR_FIELD_NO_REACHABLE_CANDIDATE: all candidates checked before the shared deadline failed strict MoveIt reachability",
+      "candidate_source": "near_field_terminal",
+      "candidate_source_lineage": [],
+      "has_candidate_model_width": false,
+      "target_track_id": "",
+      "refinement_status": "",
+      "refinement_inlier_count": 0,
+      "refinement_overlap_fraction": 0.0,
+      "refinement_rmse_m": 0.0,
+      "refinement_translation_m": 0.0,
+      "refinement_rotation_deg": 0.0,
+      "refinement_source_clipped": false,
+      "fused_view_count": 0,
+      "contact_geometry_evidence": ""
+    },
+    "parsed_json": null
+  },
+  "next_original_clock_wire": {
+    "received_ns": 1792317107202039241,
+    "message_type": "alicia_flexible_grasp_supervisor/Grasp6DPlan",
+    "md5sum": "ae029a77e4a5b225ed777aecbc151555",
+    "wire_sha256": "13834e5d8a6788b0560ff8f0b0fac1075f2aba39a8832d45fb52d098586065f2",
+    "wire_base64": "PgAAALOW1GoHENALCQAAAGJhc2VfbGluawAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABCAAAAVEFSR0VUX1BST0NFU1NJTkdfUEVORElORzogY3VycmVudCBnZW9tZXRyeSBleHBpcmVkOyBpZGVudGl0eSBvbmx5EgAAAG5lYXJfZmllbGRfcGVuZGluZwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "payload": {
+      "header": {
+        "seq": 62,
+        "stamp": {
+          "secs": 1792317107,
+          "nsecs": 198184967
+        },
+        "frame_id": "base_link"
+      },
+      "valid": false,
+      "poses": [],
+      "score": 0.0,
+      "candidate_width_m": 0.0,
+      "required_open_width_m": 0.0,
+      "object_geometry": {
+        "header": {
+          "seq": 0,
+          "stamp": {
+            "secs": 0,
+            "nsecs": 0
+          },
+          "frame_id": ""
+        },
+        "valid": false,
+        "label": "",
+        "target_track_id": "",
+        "source_mode": "",
+        "pose_base": {
+          "position": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 0.0
+          }
+        },
+        "size_xyz_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "support_normal_base": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "support_offset_m": 0.0,
+        "valid_depth_points": 0,
+        "valid_depth_ratio": 0.0,
+        "depth_mad_m": 0.0,
+        "fused_frames": 0,
+        "support_inlier_ratio": 0.0,
+        "object_point_count": 0,
+        "failure_reason": ""
+      },
+      "model_choice": "",
+      "plan_id": "",
+      "diagnostic": "TARGET_PROCESSING_PENDING: current geometry expired; identity only",
+      "candidate_source": "near_field_pending",
+      "candidate_source_lineage": [],
+      "has_candidate_model_width": false,
+      "target_track_id": "",
+      "refinement_status": "",
+      "refinement_inlier_count": 0,
+      "refinement_overlap_fraction": 0.0,
+      "refinement_rmse_m": 0.0,
+      "refinement_translation_m": 0.0,
+      "refinement_rotation_deg": 0.0,
+      "refinement_source_clipped": false,
+      "fused_view_count": 0,
+      "contact_geometry_evidence": ""
+    },
+    "parsed_json": null
+  },
+  "original_phase_deadline_ns": 1792317171326731681,
+  "counterfactual_typed_receipt": {
+    "version": 1,
+    "policy": "same_station_completed_contact_search_failure",
+    "execution_authority": false,
+    "metric_geometry_authority": false,
+    "code": "NEAR_FIELD_NO_REACHABLE_CANDIDATE",
+    "reason": "all candidates checked before the shared deadline failed strict MoveIt reachability",
+    "binding": {
+      "camera_configuration_sha256": "8b9461817d3fe86709ae199a30d928bc0882bbba640767fb1603a41d2dfeb061",
+      "config_sha256": "fa9e3987b0097edd28f858c3574813774121fef1f4248741c15a9c2ed35bda54",
+      "control_epoch_ns": 1792286012067798399,
+      "lease_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e:observation:1792317050001857995",
+      "phase_id": 1,
+      "phase_reference_source_ns": 1792317080890040397,
+      "phase_started_ns": 1792317081332438230,
+      "reference_binding": "{\"anchor_extent_m\": [0.06701106318017572, 0.04416290867709838, 0.017437571593442967], \"anchor_position_base\": [-0.09975628743840248, -0.35153290247972735, 0.021309209955305747], \"anchor_source_stamp_ns\": 1792317017750285387, \"reference_support_footprint_base\": [[-0.1143621638662765, -0.3264304326380205, 0.002398810796013593], [-0.11677647071154723, -0.3265055447058174, 0.002288619480623048], [-0.1177011184997763, -0.32670078723456913, 0.002256813548217826], [-0.11900674701604876, -0.32747104555912304, 0.0022427870968332085], [-0.12032782552433985, -0.3282750500002291, 0.002230132818538402], [-0.13168167934109562, -0.3406498389090863, 0.002462641407504137], [-0.13251120102239683, -0.34191467558080474, 0.002502154826014488], [-0.14085077330382478, -0.3621440054788797, 0.003368586436577799], [-0.14176861892793774, -0.366058881933003, 0.0035693839693040534], [-0.08494655492923597, -0.385037866360418, 0.007458371990996025], [-0.07727218815676845, -0.38744467205117133, 0.00797384501038631], [-0.07689749608154575, -0.38696497587208545, 0.007961718710828139], [-0.0577481761329163, -0.3608908539674496, 0.007244666274252081], [-0.05878810348587017, -0.3585564697380238, 0.007049407430099878], [-0.059618101467503376, -0.35710867958780196, 0.006919502913853398], [-0.06102487310349129, -0.3552689297332312, 0.006737676641600191], [-0.06771377821018623, -0.3473165496128922, 0.005922791401650026], [-0.0700119645229585, -0.34567863640590557, 0.005711152336512413], [-0.07908746547045338, -0.3393722954026834, 0.004885493977751428], [-0.07964986452963277, -0.3389876102688896, 0.004834710493995623], [-0.0867193670914477, -0.3352159481382313, 0.0042627880760191745], [-0.08986755599979639, -0.3339195476020517, 0.0040320291027627665], [-0.10277979008086745, -0.3293279940827169, 0.0031308877436100066], [-0.10994779006289754, -0.32694818470606324, 0.002641195405362691], [-0.11140659378905805, -0.3267332568006712, 0.0025583584242745046], [-0.11287405278531377, -0.3265501810038816, 0.002477098659779615]], \"reference_support_plane_base\": [-0.047437800652554714, 0.06225537839830817, 0.9969322559380512, 0.012505508714481806]}",
+      "selection": {
+        "generation": 8,
+        "mode": "unknown",
+        "stamp_ns": 1792317017001239776,
+        "strategy": "observe_return"
+      },
+      "session_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e",
+      "source_id": "cfe315c05f38529c9388bd661577d77618f606883738c63b606158833e519f1d",
+      "station_q_rad": [
+        -2.0064468705544187,
+        -0.3773592738198677,
+        0.8973787609131001,
+        -0.20248546400090464,
+        -1.13667976382326,
+        -0.047553404424454875
+      ],
+      "target_epoch": 4,
+      "target_track_id": "g1-t4",
+      "view_index": 1,
+      "view_plan_id": "1210e81d2b40c8de6a7a2df1"
+    },
+    "phase_deadline_ns": 1792317171326731681,
+    "session_deadline_ns": 1792317649174484252,
+    "request": {
+      "request_id": 22,
+      "generation": 7,
+      "target_epoch": 4,
+      "snapshot_stamp_ns": 1792317083889718770
+    },
+    "emitted_ns": 1792317106928059339,
+    "sources": [
+      {
+        "contract": {
+          "binding": {
+            "camera_configuration_sha256": "8b9461817d3fe86709ae199a30d928bc0882bbba640767fb1603a41d2dfeb061",
+            "config_sha256": "fa9e3987b0097edd28f858c3574813774121fef1f4248741c15a9c2ed35bda54",
+            "control_epoch_ns": 1792286012067798399,
+            "lease_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e:observation:1792317050001857995",
+            "phase_id": 1,
+            "phase_reference_source_ns": 1792317080890040397,
+            "phase_started_ns": 1792317081332438230,
+            "reference_binding": "{\"anchor_extent_m\": [0.06701106318017572, 0.04416290867709838, 0.017437571593442967], \"anchor_position_base\": [-0.09975628743840248, -0.35153290247972735, 0.021309209955305747], \"anchor_source_stamp_ns\": 1792317017750285387, \"reference_support_footprint_base\": [[-0.1143621638662765, -0.3264304326380205, 0.002398810796013593], [-0.11677647071154723, -0.3265055447058174, 0.002288619480623048], [-0.1177011184997763, -0.32670078723456913, 0.002256813548217826], [-0.11900674701604876, -0.32747104555912304, 0.0022427870968332085], [-0.12032782552433985, -0.3282750500002291, 0.002230132818538402], [-0.13168167934109562, -0.3406498389090863, 0.002462641407504137], [-0.13251120102239683, -0.34191467558080474, 0.002502154826014488], [-0.14085077330382478, -0.3621440054788797, 0.003368586436577799], [-0.14176861892793774, -0.366058881933003, 0.0035693839693040534], [-0.08494655492923597, -0.385037866360418, 0.007458371990996025], [-0.07727218815676845, -0.38744467205117133, 0.00797384501038631], [-0.07689749608154575, -0.38696497587208545, 0.007961718710828139], [-0.0577481761329163, -0.3608908539674496, 0.007244666274252081], [-0.05878810348587017, -0.3585564697380238, 0.007049407430099878], [-0.059618101467503376, -0.35710867958780196, 0.006919502913853398], [-0.06102487310349129, -0.3552689297332312, 0.006737676641600191], [-0.06771377821018623, -0.3473165496128922, 0.005922791401650026], [-0.0700119645229585, -0.34567863640590557, 0.005711152336512413], [-0.07908746547045338, -0.3393722954026834, 0.004885493977751428], [-0.07964986452963277, -0.3389876102688896, 0.004834710493995623], [-0.0867193670914477, -0.3352159481382313, 0.0042627880760191745], [-0.08986755599979639, -0.3339195476020517, 0.0040320291027627665], [-0.10277979008086745, -0.3293279940827169, 0.0031308877436100066], [-0.10994779006289754, -0.32694818470606324, 0.002641195405362691], [-0.11140659378905805, -0.3267332568006712, 0.0025583584242745046], [-0.11287405278531377, -0.3265501810038816, 0.002477098659779615]], \"reference_support_plane_base\": [-0.047437800652554714, 0.06225537839830817, 0.9969322559380512, 0.012505508714481806]}",
+            "selection": {
+              "generation": 8,
+              "mode": "unknown",
+              "stamp_ns": 1792317017001239776,
+              "strategy": "observe_return"
+            },
+            "session_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e",
+            "source_id": "cfe315c05f38529c9388bd661577d77618f606883738c63b606158833e519f1d",
+            "station_q_rad": [
+              -2.0064468705544187,
+              -0.3773592738198677,
+              0.8973787609131001,
+              -0.20248546400090464,
+              -1.13667976382326,
+              -0.047553404424454875
+            ],
+            "target_epoch": 4,
+            "target_track_id": "g1-t4",
+            "view_index": 1,
+            "view_plan_id": "1210e81d2b40c8de6a7a2df1"
+          },
+          "geometry_deadline_ns": 1792317083424930858,
+          "identity_deadline_ns": 1792317087624930858,
+          "maximum_frame_age_sec": 0.8,
+          "metric_geometry_authority": false,
+          "motion_authorized": false,
+          "phase_deadline_ns": 1792317171326731681,
+          "policy": "qualified_observation_station_compute_wait",
+          "reference_refreshed": false,
+          "session_deadline_ns": 1792317649174484252,
+          "source_ns": 1792317082624930858,
+          "version": 1
+        },
+        "object_sha256": "b16930c081ccf6f288dcc0ebae754b2a5979bfe4268e0b1b2578637b1abe3140",
+        "mask": {
+          "frame_id": "camera_link",
+          "sha256": "2201cd9fe23c501b0974f48a0d8ad3b5e62ca471a14ba1eae29587ff0bf25efb",
+          "shape": [
+            489,
+            653
+          ]
+        }
+      },
+      {
+        "contract": {
+          "binding": {
+            "camera_configuration_sha256": "8b9461817d3fe86709ae199a30d928bc0882bbba640767fb1603a41d2dfeb061",
+            "config_sha256": "fa9e3987b0097edd28f858c3574813774121fef1f4248741c15a9c2ed35bda54",
+            "control_epoch_ns": 1792286012067798399,
+            "lease_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e:observation:1792317050001857995",
+            "phase_id": 1,
+            "phase_reference_source_ns": 1792317080890040397,
+            "phase_started_ns": 1792317081332438230,
+            "reference_binding": "{\"anchor_extent_m\": [0.06701106318017572, 0.04416290867709838, 0.017437571593442967], \"anchor_position_base\": [-0.09975628743840248, -0.35153290247972735, 0.021309209955305747], \"anchor_source_stamp_ns\": 1792317017750285387, \"reference_support_footprint_base\": [[-0.1143621638662765, -0.3264304326380205, 0.002398810796013593], [-0.11677647071154723, -0.3265055447058174, 0.002288619480623048], [-0.1177011184997763, -0.32670078723456913, 0.002256813548217826], [-0.11900674701604876, -0.32747104555912304, 0.0022427870968332085], [-0.12032782552433985, -0.3282750500002291, 0.002230132818538402], [-0.13168167934109562, -0.3406498389090863, 0.002462641407504137], [-0.13251120102239683, -0.34191467558080474, 0.002502154826014488], [-0.14085077330382478, -0.3621440054788797, 0.003368586436577799], [-0.14176861892793774, -0.366058881933003, 0.0035693839693040534], [-0.08494655492923597, -0.385037866360418, 0.007458371990996025], [-0.07727218815676845, -0.38744467205117133, 0.00797384501038631], [-0.07689749608154575, -0.38696497587208545, 0.007961718710828139], [-0.0577481761329163, -0.3608908539674496, 0.007244666274252081], [-0.05878810348587017, -0.3585564697380238, 0.007049407430099878], [-0.059618101467503376, -0.35710867958780196, 0.006919502913853398], [-0.06102487310349129, -0.3552689297332312, 0.006737676641600191], [-0.06771377821018623, -0.3473165496128922, 0.005922791401650026], [-0.0700119645229585, -0.34567863640590557, 0.005711152336512413], [-0.07908746547045338, -0.3393722954026834, 0.004885493977751428], [-0.07964986452963277, -0.3389876102688896, 0.004834710493995623], [-0.0867193670914477, -0.3352159481382313, 0.0042627880760191745], [-0.08986755599979639, -0.3339195476020517, 0.0040320291027627665], [-0.10277979008086745, -0.3293279940827169, 0.0031308877436100066], [-0.10994779006289754, -0.32694818470606324, 0.002641195405362691], [-0.11140659378905805, -0.3267332568006712, 0.0025583584242745046], [-0.11287405278531377, -0.3265501810038816, 0.002477098659779615]], \"reference_support_plane_base\": [-0.047437800652554714, 0.06225537839830817, 0.9969322559380512, 0.012505508714481806]}",
+            "selection": {
+              "generation": 8,
+              "mode": "unknown",
+              "stamp_ns": 1792317017001239776,
+              "strategy": "observe_return"
+            },
+            "session_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e",
+            "source_id": "cfe315c05f38529c9388bd661577d77618f606883738c63b606158833e519f1d",
+            "station_q_rad": [
+              -2.0064468705544187,
+              -0.3773592738198677,
+              0.8973787609131001,
+              -0.20248546400090464,
+              -1.13667976382326,
+              -0.047553404424454875
+            ],
+            "target_epoch": 4,
+            "target_track_id": "g1-t4",
+            "view_index": 1,
+            "view_plan_id": "1210e81d2b40c8de6a7a2df1"
+          },
+          "geometry_deadline_ns": 1792317084290865230,
+          "identity_deadline_ns": 1792317088490865230,
+          "maximum_frame_age_sec": 0.8,
+          "metric_geometry_authority": false,
+          "motion_authorized": false,
+          "phase_deadline_ns": 1792317171326731681,
+          "policy": "qualified_observation_station_compute_wait",
+          "reference_refreshed": false,
+          "session_deadline_ns": 1792317649174484252,
+          "source_ns": 1792317083490865230,
+          "version": 1
+        },
+        "object_sha256": "f805ccff60848add952af2d1701ef9a633e243e20ddf49b4ff32a4a942009f04",
+        "mask": {
+          "frame_id": "camera_link",
+          "sha256": "53ef407d0475d3b973d26723eb3ba919583a360ba8358c99c771731677d02f9f",
+          "shape": [
+            489,
+            653
+          ]
+        }
+      },
+      {
+        "contract": {
+          "binding": {
+            "camera_configuration_sha256": "8b9461817d3fe86709ae199a30d928bc0882bbba640767fb1603a41d2dfeb061",
+            "config_sha256": "fa9e3987b0097edd28f858c3574813774121fef1f4248741c15a9c2ed35bda54",
+            "control_epoch_ns": 1792286012067798399,
+            "lease_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e:observation:1792317050001857995",
+            "phase_id": 1,
+            "phase_reference_source_ns": 1792317080890040397,
+            "phase_started_ns": 1792317081332438230,
+            "reference_binding": "{\"anchor_extent_m\": [0.06701106318017572, 0.04416290867709838, 0.017437571593442967], \"anchor_position_base\": [-0.09975628743840248, -0.35153290247972735, 0.021309209955305747], \"anchor_source_stamp_ns\": 1792317017750285387, \"reference_support_footprint_base\": [[-0.1143621638662765, -0.3264304326380205, 0.002398810796013593], [-0.11677647071154723, -0.3265055447058174, 0.002288619480623048], [-0.1177011184997763, -0.32670078723456913, 0.002256813548217826], [-0.11900674701604876, -0.32747104555912304, 0.0022427870968332085], [-0.12032782552433985, -0.3282750500002291, 0.002230132818538402], [-0.13168167934109562, -0.3406498389090863, 0.002462641407504137], [-0.13251120102239683, -0.34191467558080474, 0.002502154826014488], [-0.14085077330382478, -0.3621440054788797, 0.003368586436577799], [-0.14176861892793774, -0.366058881933003, 0.0035693839693040534], [-0.08494655492923597, -0.385037866360418, 0.007458371990996025], [-0.07727218815676845, -0.38744467205117133, 0.00797384501038631], [-0.07689749608154575, -0.38696497587208545, 0.007961718710828139], [-0.0577481761329163, -0.3608908539674496, 0.007244666274252081], [-0.05878810348587017, -0.3585564697380238, 0.007049407430099878], [-0.059618101467503376, -0.35710867958780196, 0.006919502913853398], [-0.06102487310349129, -0.3552689297332312, 0.006737676641600191], [-0.06771377821018623, -0.3473165496128922, 0.005922791401650026], [-0.0700119645229585, -0.34567863640590557, 0.005711152336512413], [-0.07908746547045338, -0.3393722954026834, 0.004885493977751428], [-0.07964986452963277, -0.3389876102688896, 0.004834710493995623], [-0.0867193670914477, -0.3352159481382313, 0.0042627880760191745], [-0.08986755599979639, -0.3339195476020517, 0.0040320291027627665], [-0.10277979008086745, -0.3293279940827169, 0.0031308877436100066], [-0.10994779006289754, -0.32694818470606324, 0.002641195405362691], [-0.11140659378905805, -0.3267332568006712, 0.0025583584242745046], [-0.11287405278531377, -0.3265501810038816, 0.002477098659779615]], \"reference_support_plane_base\": [-0.047437800652554714, 0.06225537839830817, 0.9969322559380512, 0.012505508714481806]}",
+            "selection": {
+              "generation": 8,
+              "mode": "unknown",
+              "stamp_ns": 1792317017001239776,
+              "strategy": "observe_return"
+            },
+            "session_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e",
+            "source_id": "cfe315c05f38529c9388bd661577d77618f606883738c63b606158833e519f1d",
+            "station_q_rad": [
+              -2.0064468705544187,
+              -0.3773592738198677,
+              0.8973787609131001,
+              -0.20248546400090464,
+              -1.13667976382326,
+              -0.047553404424454875
+            ],
+            "target_epoch": 4,
+            "target_track_id": "g1-t4",
+            "view_index": 1,
+            "view_plan_id": "1210e81d2b40c8de6a7a2df1"
+          },
+          "geometry_deadline_ns": 1792317084689718770,
+          "identity_deadline_ns": 1792317088889718770,
+          "maximum_frame_age_sec": 0.8,
+          "metric_geometry_authority": false,
+          "motion_authorized": false,
+          "phase_deadline_ns": 1792317171326731681,
+          "policy": "qualified_observation_station_compute_wait",
+          "reference_refreshed": false,
+          "session_deadline_ns": 1792317649174484252,
+          "source_ns": 1792317083889718770,
+          "version": 1
+        },
+        "object_sha256": "23f9f0c08ccdcddc768c304d26df3f79d3324e38eaf3f124b51f2a8400070e81",
+        "mask": {
+          "frame_id": "camera_link",
+          "sha256": "531a392883923509e74b689f64d9a95ad31cacb4a6e5579392c736f7a914a416",
+          "shape": [
+            489,
+            653
+          ]
+        }
+      }
+    ],
+    "current": {
+      "contract": {
+        "binding": {
+          "camera_configuration_sha256": "8b9461817d3fe86709ae199a30d928bc0882bbba640767fb1603a41d2dfeb061",
+          "config_sha256": "fa9e3987b0097edd28f858c3574813774121fef1f4248741c15a9c2ed35bda54",
+          "control_epoch_ns": 1792286012067798399,
+          "lease_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e:observation:1792317050001857995",
+          "phase_id": 1,
+          "phase_reference_source_ns": 1792317080890040397,
+          "phase_started_ns": 1792317081332438230,
+          "reference_binding": "{\"anchor_extent_m\": [0.06701106318017572, 0.04416290867709838, 0.017437571593442967], \"anchor_position_base\": [-0.09975628743840248, -0.35153290247972735, 0.021309209955305747], \"anchor_source_stamp_ns\": 1792317017750285387, \"reference_support_footprint_base\": [[-0.1143621638662765, -0.3264304326380205, 0.002398810796013593], [-0.11677647071154723, -0.3265055447058174, 0.002288619480623048], [-0.1177011184997763, -0.32670078723456913, 0.002256813548217826], [-0.11900674701604876, -0.32747104555912304, 0.0022427870968332085], [-0.12032782552433985, -0.3282750500002291, 0.002230132818538402], [-0.13168167934109562, -0.3406498389090863, 0.002462641407504137], [-0.13251120102239683, -0.34191467558080474, 0.002502154826014488], [-0.14085077330382478, -0.3621440054788797, 0.003368586436577799], [-0.14176861892793774, -0.366058881933003, 0.0035693839693040534], [-0.08494655492923597, -0.385037866360418, 0.007458371990996025], [-0.07727218815676845, -0.38744467205117133, 0.00797384501038631], [-0.07689749608154575, -0.38696497587208545, 0.007961718710828139], [-0.0577481761329163, -0.3608908539674496, 0.007244666274252081], [-0.05878810348587017, -0.3585564697380238, 0.007049407430099878], [-0.059618101467503376, -0.35710867958780196, 0.006919502913853398], [-0.06102487310349129, -0.3552689297332312, 0.006737676641600191], [-0.06771377821018623, -0.3473165496128922, 0.005922791401650026], [-0.0700119645229585, -0.34567863640590557, 0.005711152336512413], [-0.07908746547045338, -0.3393722954026834, 0.004885493977751428], [-0.07964986452963277, -0.3389876102688896, 0.004834710493995623], [-0.0867193670914477, -0.3352159481382313, 0.0042627880760191745], [-0.08986755599979639, -0.3339195476020517, 0.0040320291027627665], [-0.10277979008086745, -0.3293279940827169, 0.0031308877436100066], [-0.10994779006289754, -0.32694818470606324, 0.002641195405362691], [-0.11140659378905805, -0.3267332568006712, 0.0025583584242745046], [-0.11287405278531377, -0.3265501810038816, 0.002477098659779615]], \"reference_support_plane_base\": [-0.047437800652554714, 0.06225537839830817, 0.9969322559380512, 0.012505508714481806]}",
+          "selection": {
+            "generation": 8,
+            "mode": "unknown",
+            "stamp_ns": 1792317017001239776,
+            "strategy": "observe_return"
+          },
+          "session_id": "eace6c305972a87982f1e7928362a0d3a7dfe9679f6f0425caf8dcf3c43aef7e",
+          "source_id": "cfe315c05f38529c9388bd661577d77618f606883738c63b606158833e519f1d",
+          "station_q_rad": [
+            -2.0064468705544187,
+            -0.3773592738198677,
+            0.8973787609131001,
+            -0.20248546400090464,
+            -1.13667976382326,
+            -0.047553404424454875
+          ],
+          "target_epoch": 4,
+          "target_track_id": "g1-t4",
+          "view_index": 1,
+          "view_plan_id": "1210e81d2b40c8de6a7a2df1"
+        },
+        "geometry_deadline_ns": 1792317106631108808,
+        "identity_deadline_ns": 1792317110831108808,
+        "maximum_frame_age_sec": 0.8,
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "phase_deadline_ns": 1792317171326731681,
+        "policy": "qualified_observation_station_compute_wait",
+        "reference_refreshed": false,
+        "session_deadline_ns": 1792317649174484252,
+        "source_ns": 1792317105831108808,
+        "version": 1
+      },
+      "object_sha256": "e2b1babaaad714956caee129f5cce538859ba0617e21faac186f05900db3abcf",
+      "mask": {
+        "frame_id": "camera_link",
+        "sha256": "0b9953704d09c88ec99e4769d64819ecc90b45f68876997509690034b376955a",
+        "shape": [
+          489,
+          653
+        ]
+      }
+    },
+    "search": {
+      "checked_count": 19,
+      "shortlist_count": 19,
+      "reachable_count": 0,
+      "selected": false,
+      "terminated_early": false
+    },
+    "audit_sha256": "e788652700db6369e882e4bf93d35191fff4d04fdeaa4d4785677359e59a8438"
+  },
+  "counterfactual_receipt_was_recorded": false,
+  "scope": "Exact recorded owner, source witnesses, terminal and next clock. New receipt is assembled for protocol validation; no original Task ingress order, SDK delivery, pixel inference or MoveIt curve is claimed."
+}

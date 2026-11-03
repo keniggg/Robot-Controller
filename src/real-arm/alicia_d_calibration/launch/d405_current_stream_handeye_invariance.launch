@@ -1,25 +1,30 @@
 <launch>
     <arg name="image_topic" default="/supervisor/camera/color/image_raw" />
-    <arg name="camera_info_yaml" default="$(find alicia_d_calibration)/scripts/d405_factory_camera.yaml" />
+    <arg name="camera_info_yaml" default="" />
     <arg name="base_frame" default="base_link" />
     <arg name="tool_frame" default="tool0" />
     <arg name="camera_frame" default="camera_link" />
     <arg name="board_frame" default="charuco_board" />
     <arg name="quality_topic" default="/charuco/quality" />
 
+    <arg name="dictionary_id" default="DICT_4X4_100" />
     <arg name="board_width" default="11" />
     <arg name="board_height" default="8" />
     <arg name="square_length" default="0.015" />
     <arg name="marker_length" default="0.011" />
 
-    <node name="charuco_tracker_handeye_verify" pkg="alicia_d_calibration" type="charuco_tracker.py" output="screen">
+    <node name="charuco_tracker_handeye_verify" pkg="alicia_d_calibration" type="charuco_tracker.py" output="screen"
+          launch-prefix="$(dirname)/../../../../tools/with_local_realsense_sdk.sh">
         <param name="board_size" value="[$(arg board_width), $(arg board_height)]" />
         <param name="square_length" value="$(arg square_length)" />
         <param name="marker_length" value="$(arg marker_length)" />
-        <param name="dictionary_id" value="DICT_4X4_100" />
+        <param name="dictionary_id" value="$(arg dictionary_id)" />
         <param name="camera_frame" value="$(arg camera_frame)" />
         <param name="board_frame" value="$(arg board_frame)" />
         <param name="image_topic" value="$(arg image_topic)" />
+        <!-- Runtime RGB profile only; no static YAML/CameraInfo fallback. -->
+        <param name="intrinsics_source" value="realsense_runtime" />
+        <param name="camera_parameter_namespace" value="/camera" />
         <param name="camera_info_yaml" value="$(arg camera_info_yaml)" />
         <param name="quality_topic" value="$(arg quality_topic)" />
         <param name="max_input_age_sec" value="0.35" />

@@ -6,6 +6,8 @@ from typing import Mapping
 
 import numpy as np
 
+from alicia_flexible_grasp.vision.regular_box_inference import RegularBoxInference
+
 from .gripper_geometry import (
     ANALYTICAL_FINGER_BOX_PADDING_XYZ_M,
     ANALYTICAL_FINGER_PAIR_CENTER_TOOL_XYZ_M,
@@ -13,11 +15,14 @@ from .gripper_geometry import (
     ANALYTICAL_MAX_INNER_GAP_M,
     ANALYTICAL_PALM_CENTER_TOOL_XYZ_M,
     BilateralSurfaceEvidence,
+    InferredBoxContactEvidence,
     GripperGeometry,
     _obb_line_interval,
     bilateral_surface_contact_bounds_m,
     bilateral_contact_height_bounds_m,
     evaluate_bilateral_surface_evidence,
+    evaluate_inferred_box_contact,
+    inferred_box_precision_reserve,
     gripper_box_centers,
     parse_tool_axis,
 )
@@ -30,6 +35,9 @@ _MAX_TABLETOP_CANDIDATES = 32
 # configuration remains capped at four; this larger internal bound exists only
 # so those two finite evidence sets can be evaluated together.
 _MAX_MATERIALIZED_APPROACH_TILTS = 8
+# At most one local measurement per original aperture-transition bracket.
+# This is a finite proposal budget, not another global angular lattice.
+_MAX_OPEN_APERTURE_REFINEMENTS = 4
 
 
 class _InputInvalid(ValueError):
@@ -143,6 +151,61 @@ class TabletopGenerationResult:
         return bool(self.proposals)
 
 
+def _measured_aperture_directions(angles, facts, normal, config, enabled):
+    """Measure original directions, then bounded complementary gaps.
+
+    Complete OBB projection fitting between the padded open fingers is a
+    sufficient separation condition, not a necessary collision condition.
+    A negative margin therefore suggests a local proposal; it never rejects
+    a direction or relaxes any later CAD, contact or trajectory check.
+    """
+    for angle, axis in angles:
+        yield angle, axis, None
+    if not enabled:
+        return
+    ordered = sorted(facts, key=lambda row: row['angle_deg'])
+    if len(ordered) < 2:
+        return
+    basis_x = _plane_basis_x(normal)
+    basis_y = np.cross(normal, basis_x)
+    retained = [axis for _, axis in angles]
+    added = 0
+    pairs = tuple(zip(ordered, ordered[1:] + ordered[:1]))
+    for first, second in pairs:
+        distance = (second['angle_deg'] - first['angle_deg']) % 180.
+        if not 0. < distance <= config.angle_step_deg + 1e-9:
+            continue
+        # A nearby direction fits the full open envelope but lacks measured
+        # bilateral support; its neighbour has support but lacks that simple
+        # separation proof. Test their interior with the original evaluator.
+        fitting = [row for row in (first, second)
+                   if row['open_envelope_aperture_margin_m'] >= 0.
+                   and not row['bilateral_ready']]
+        measured = [row for row in (first, second)
+                    if row['open_envelope_aperture_margin_m'] < 0.
+                    and row['bilateral_ready']]
+        if not fitting or not measured:
+            continue
+        angle = (first['angle_deg'] + .5 * distance) % 180.
+        radians = np.deg2rad(angle)
+        axis = basis_x * np.cos(radians) + basis_y * np.sin(radians)
+        if any(abs(float(axis @ prior)) > np.cos(np.deg2rad(config.angle_dedup_deg))
+               for prior in retained):
+            continue
+        retained.append(axis)
+        yield angle, _frozen_array(axis), dict(
+            policy='measured_open_aperture_transition_midpoint',
+            original_bracket_angles_deg=[first['angle_deg'], second['angle_deg']],
+            original_bracket_aperture_margins_m=[first['open_envelope_aperture_margin_m'],
+                                                second['open_envelope_aperture_margin_m']],
+            original_bracket_bilateral_ready=[first['bilateral_ready'], second['bilateral_ready']],
+            independent_measurement_required=True, collision_verified=False,
+            motion_authorized=False)
+        added += 1
+        if added >= _MAX_OPEN_APERTURE_REFINEMENTS:
+            return
+
+
 def generate_tabletop_proposals(
     object_points_base,
     obb_center_base,
@@ -153,20 +216,31 @@ def generate_tabletop_proposals(
     config,
     fused_surface=None,
     finger_geometry=None,
+    refine_obb_neighbor_angles=False,
+    inferred_box=None,
 ):
     """Return bounded, category-independent grasp proposals without side effects."""
     try:
         checked_config = _validated_config(config)
+        if type(refine_obb_neighbor_angles) is not bool:
+            raise _InputInvalid("refine_obb_neighbor_angles must be boolean")
+        if refine_obb_neighbor_angles and fused_surface is None and inferred_box is None:
+            raise _InputInvalid("angular refinement requires current measured fused contact surface")
         points = _finite_points(object_points_base, checked_config)
         center = _finite_vector(obb_center_base, 'obb_center_base')
         rotation = _validated_rotation(R_base_obb)
         obb_size = _positive_vector(obb_size_xyz_m, 'obb_size_xyz_m')
         support_point = _finite_vector(support_point_base, 'support_point_base')
         normal = _unit_vector(support_normal_base, 'support_normal_base')
-        if (fused_surface is None) != (finger_geometry is None):
+        if inferred_box is not None and not isinstance(inferred_box, RegularBoxInference):
+            raise _InputInvalid('inferred_box must be a qualified RegularBoxInference')
+        if (fused_surface is not None and finger_geometry is None) or (
+                fused_surface is None and finger_geometry is not None and inferred_box is None):
             raise _InputInvalid(
                 'fused_surface and finger_geometry must be supplied together'
             )
+        if inferred_box is not None and not isinstance(finger_geometry, GripperGeometry):
+            raise _InputInvalid('inferred box contact requires physical finger geometry')
         if fused_surface is not None:
             if not isinstance(finger_geometry, GripperGeometry):
                 raise _InputInvalid(
@@ -188,14 +262,27 @@ def generate_tabletop_proposals(
             'OBB vertical axis does not match support normal',
         )
 
-    angles = _sample_angles(rotation, normal, checked_config)
+    if inferred_box is not None:
+        if (not np.allclose(inferred_box.support_normal_base, normal, rtol=0., atol=1e-6)
+                or abs(float(np.dot(support_point, normal))+inferred_box.support_offset_m)>1e-6):
+            return _failure('SUPPORT_PLANE_INVALID', 'inferred box differs from current support')
+        return _generate_inferred_proposals(inferred_box, points, normal,
+                                            finger_geometry, checked_config)
+
+    angles = _sample_angles(rotation, normal, checked_config,
+                            refine_neighbors=refine_obb_neighbor_angles)
     proposals = []
     width_valid_count = 0
     contact_valid_count = 0
     bilateral_evidence_attempted = fused_surface is not None
     surface_evidence_rejections = []
     contact_center = center
-    for angle_deg, jaw_axis in angles:
+    direction_facts = []
+    sampled_angles = []
+    refine_aperture = bool(refine_obb_neighbor_angles and fused_surface is not None)
+    for angle_deg, jaw_axis, aperture_refinement in _measured_aperture_directions(
+            angles, direction_facts, normal, checked_config, refine_aperture):
+        sampled_angles.append(float(angle_deg))
         projection = points.dot(jaw_axis)
         raw_lower = float(np.min(projection))
         raw_upper = float(np.max(projection))
@@ -270,6 +357,22 @@ def generate_tabletop_proposals(
                 span
                 + 2.0 * checked_config.opening_fit_clearance_each_side_m
             )
+        aperture_audit = {}
+        if refine_aperture:
+            projection_width = float(np.abs(rotation.T @ jaw_axis) @ obb_size)
+            envelope_width = projection_width + float(ANALYTICAL_FINGER_BOX_PADDING_XYZ_M[1])
+            physical_gap = min(checked_config.max_inner_gap_m,
+                               finger_geometry.max_inner_gap_m, ANALYTICAL_MAX_INNER_GAP_M)
+            aperture_audit = dict(open_obb_projection_width_m=projection_width,
+                open_envelope_required_width_m=envelope_width,
+                open_envelope_aperture_margin_m=physical_gap-envelope_width,
+                open_envelope_projection_is_sufficient_not_necessary=True)
+            if aperture_refinement is None:
+                direction_facts.append(dict(angle_deg=float(angle_deg),
+                    bilateral_ready=bool(evidence.ok and measured_insertion_bounds is not None),
+                    open_envelope_aperture_margin_m=physical_gap-envelope_width))
+            else:
+                aperture_audit['open_aperture_refinement'] = aperture_refinement
         if span <= 1e-9 or not 0.0 < required <= checked_config.max_inner_gap_m:
             continue
         width_valid_count += 1
@@ -316,6 +419,7 @@ def generate_tabletop_proposals(
                 source_score=-(checked_config.max_inner_gap_m - required) - 0.01 * symmetry,
                 angle_deg=angle_deg,
                 audit={
+                    **aperture_audit,
                     'projection_raw_min_m': raw_lower,
                     'projection_raw_max_m': raw_upper,
                     'projection_min_m': lower,
@@ -352,12 +456,15 @@ def generate_tabletop_proposals(
                 },
             )
         )
-    proposals.sort(key=lambda item: (item.source_score, item.angle_deg))
+    has_refined_proposal = any('open_aperture_refinement' in item.audit for item in proposals)
+    proposals.sort(key=lambda item: (
+        int(has_refined_proposal and item.audit.get('open_envelope_aperture_margin_m', 0.) < 0.),
+        item.source_score, item.angle_deg))
     bounded = tuple(
         replace(item, source_index=index)
         for index, item in enumerate(proposals[:checked_config.max_candidates])
     )
-    sampled_angles = tuple(item[0] for item in angles)
+    sampled_angles = tuple(sampled_angles)
     if bounded:
         return TabletopGenerationResult(
             bounded, '', '', sampled_angles, tuple(surface_evidence_rejections))
@@ -384,6 +491,60 @@ def generate_tabletop_proposals(
         'no aperture-valid jaw direction has bilateral contact support',
         sampled_angles,
     )
+
+
+def _generate_inferred_proposals(model, measured_points, normal, gripper, config):
+    """Two model side directions, preserving measured points as audit only."""
+    basis_x=_plane_basis_x(normal);basis_y=np.cross(normal,basis_x)
+    proposals=[];rejections=[];angles=[]
+    effective=min(config.max_inner_gap_m,gripper.max_inner_gap_m,ANALYTICAL_MAX_INNER_GAP_M)
+    for index in (0,1):
+        jaw=model.axes_base[:,index]
+        angle=_axis_angle_deg(jaw,basis_x,basis_y);angles.append(angle)
+        evidence=evaluate_inferred_box_contact(model,model.center_base,jaw,-normal,gripper,
+            support_normal_base=normal,
+            opening_fit_clearance_each_side_m=config.opening_fit_clearance_each_side_m)
+        required=evidence.inferred_width_m+evidence.width_uncertainty_m+2.*config.opening_fit_clearance_each_side_m
+        code=evidence.code
+        precision_reserve, _ = inferred_box_precision_reserve(model, evidence.width_uncertainty_m, gripper)
+        precision_preference_met=bool(effective-required >= precision_reserve)
+        if evidence.ok and required>effective+1e-12:
+            code='NO_FIT_DIRECTION' if evidence.inferred_width_m+2.*config.opening_fit_clearance_each_side_m>effective else 'BOX_INFERENCE_PRECISION_VIEW_REQUIRED'
+        if not evidence.ok or required>effective+1e-12:
+            rejections.append(dict(angle_deg=angle,failure_code=code,
+                targeted_view=dict(evidence.targeted_view,physical_opening_m=effective,
+                    aperture_margin_m=effective-required,
+                    precision_preference_met=precision_preference_met),model_sha256=model.model_sha256))
+            continue
+        bounds=(-evidence.contact_height_bounds_m[1],-evidence.contact_height_bounds_m[0])
+        projection=np.asarray(measured_points)@jaw
+        margin=effective-required
+        proposals.append(TabletopProposal(source_index=len(proposals),
+            contact_center_base=model.center_base,insertion_axis_base=-normal,jaw_axis_base=jaw,
+            required_open_width_m=required,aperture_margin_m=margin,
+            negative_contact_count=0,positive_contact_count=0,contact_symmetry=0.,
+            source_score=-margin,angle_deg=angle,audit=dict(
+                projection_raw_min_m=float(np.min(projection)),projection_raw_max_m=float(np.max(projection)),
+                width_projection_trim_fraction=0.,
+                inferred_contact_height_min_m=float(bounds[0]),inferred_contact_height_max_m=float(bounds[1]),
+                contact_height_bounds_source='regular_box_inferred_from_complete_top',
+                inferred_contact_width_m=evidence.inferred_width_m,
+                width_uncertainty_m=evidence.width_uncertainty_m,
+                inferred_box_model_sha256=model.model_sha256,
+                inferred_box_model=model.to_evidence_dict(),
+                inferred_contact_evidence_code=evidence.code,
+                measured_side_surfaces=False,measured_side_point_counts_available=False,
+                targeted_view=dict(evidence.targeted_view, physical_opening_m=effective,
+                    aperture_margin_m=margin, precision_preference_met=precision_preference_met))))
+    proposals.sort(key=lambda item:(item.source_score,item.angle_deg))
+    proposals=tuple(replace(p,source_index=i) for i,p in enumerate(proposals[:config.max_candidates]))
+    if proposals:
+        return TabletopGenerationResult(proposals,'','',tuple(angles),tuple(rejections))
+    precision=any(row['failure_code']=='BOX_INFERENCE_PRECISION_VIEW_REQUIRED' for row in rejections)
+    return TabletopGenerationResult((),
+        'BOX_INFERENCE_PRECISION_VIEW_REQUIRED' if precision else 'NO_FIT_DIRECTION',
+        'qualified box needs more precise chosen-edge localization' if precision else
+        'no inferred box side direction fits the physical gripper',tuple(angles),tuple(rejections))
 
 
 def materialize_tabletop_candidates(
@@ -940,10 +1101,24 @@ def _unit_vector(value, name):
     return np.array(vector, dtype=float, copy=True)
 
 
-def _sample_angles(rotation, normal, config):
+def _sample_angles(rotation, normal, config, refine_neighbors=False):
     basis_x = _plane_basis_x(normal)
     basis_y = np.cross(normal, basis_x)
     candidates = [rotation[:, 0], rotation[:, 1]]
+    if refine_neighbors:
+        # At most four additional directions bridge measured object axes and
+        # the existing world lattice. A nearby lattice angle may collide at
+        # an open grasp while the exact OBB-axis tilt lacks contact margin.
+        # Every midpoint is only a proposal: independently measure bilateral
+        # support and derive its own tilt/height before the original gates.
+        for axis in tuple(candidates):
+            angle = _axis_angle_deg(axis, basis_x, basis_y)
+            lower = np.floor(angle / config.angle_step_deg) * config.angle_step_deg
+            for neighbour in (lower, lower + config.angle_step_deg):
+                if abs(neighbour - angle) < 2.0 * config.angle_dedup_deg:
+                    continue
+                middle = np.deg2rad(0.5 * (angle + neighbour))
+                candidates.append(basis_x * np.cos(middle) + basis_y * np.sin(middle))
     candidates.extend(
         basis_x * np.cos(np.deg2rad(angle_deg))
         + basis_y * np.sin(np.deg2rad(angle_deg))

@@ -1,0 +1,136 @@
+{
+  "backend": "mujoco",
+  "plan_id": "bdbd1ed6139bfccd75d6217a",
+  "simulation_ok": false,
+  "score": 35.0,
+  "ik_success": false,
+  "collision_free": true,
+  "contact_success": false,
+  "lift_success": false,
+  "failure_code": "MUJOCO_IK_FAILED",
+  "failure_reason": "Cartesian lift IK failed at alpha 0.9891: position error 0.000003m orientation error 0.000052",
+  "candidate_source": "tabletop_geometry",
+  "candidate_source_lineage": [
+    "tabletop_geometry"
+  ],
+  "diagnosis": [
+    "trajectory collision check passed",
+    "first simultaneous two-sided contact retained at 0.0186m gap",
+    "request-bound grasp target 0.0000m from contact width 0.0186m",
+    "preloaded grasp retained two-sided contact for lift",
+    "settled gripper gap 0.0149m actuator force L/R -1.487/1.499N object normal force L/R 1.484/1.503N",
+    "Cartesian lift path with 0.2000mm position and 0.2865deg orientation waypoint tolerances",
+    "Cartesian lift IK failed at alpha 0.9891: position error 0.000003m orientation error 0.000052"
+  ],
+  "ik_results": [
+    {
+      "name": "pregrasp",
+      "success": true,
+      "position_error_m": 0.00019595327960679124,
+      "orientation_error": 0.0006733625289746641,
+      "iterations": 151
+    },
+    {
+      "name": "approach",
+      "success": true,
+      "position_error_m": 0.00019723866510248367,
+      "orientation_error": 0.0006514800311040632,
+      "iterations": 167
+    },
+    {
+      "name": "grasp",
+      "success": true,
+      "position_error_m": 0.0001994869926720267,
+      "orientation_error": 0.0006713180799762646,
+      "iterations": 110
+    },
+    {
+      "name": "lift",
+      "success": true,
+      "position_error_m": 0.00019841914579431884,
+      "orientation_error": 0.0006438134844458747,
+      "iterations": 176
+    },
+    {
+      "name": "lift_cartesian_waypoint",
+      "success": false,
+      "position_error_m": 3.0906211011629453e-06,
+      "orientation_error": 5.233935068481172e-05,
+      "iterations": 160
+    }
+  ],
+  "lift_evidence": {
+    "contract_version": 1,
+    "object_lift_m": 0.0,
+    "commanded_lift_m": 0.0,
+    "minimum_lift_m": 0.0,
+    "actual_tool_lift_m": 0.0,
+    "max_cartesian_tracking_error_m": 0.0,
+    "final_cartesian_tracking_error_m": 0.0,
+    "final_cartesian_orientation_error_rad": 0.0,
+    "max_prescribed_joint_speed_rad_s": 0.0,
+    "initial_lift_sample_count": 0,
+    "reference_resampling_passes": 0,
+    "reference_ik_position_tolerance_m": 0.0,
+    "reference_ik_orientation_tolerance_rad": 0.0,
+    "two_sided_lift_samples": 0,
+    "lost_contact_samples": 0,
+    "lift_sample_count": 0,
+    "max_lost_contact_streak": 0,
+    "contact_loss_grace_samples": 0,
+    "grip_target_inner_gap_m": 0.0,
+    "preload_settle_samples": 400,
+    "settled_gripper_state": {
+      "left_finger_qpos_m": -0.017568030252648782,
+      "right_finger_qpos_m": 0.01750325823749226,
+      "measured_inner_gap_m": 0.014928711509858961,
+      "left_ctrl_target_m": -0.025,
+      "right_ctrl_target_m": 0.025,
+      "left_actuator_force_n": -1.487130328916852,
+      "right_actuator_force_n": 1.4992847333122343,
+      "left_object_normal_force_n": 1.4836961071172483,
+      "right_object_normal_force_n": 1.5026536336402392,
+      "jaw_axis_base": [
+        0.9657567390752233,
+        -0.2531184360782541,
+        0.05696471055039287
+      ],
+      "finger_object_contacts": [
+        {
+          "finger": "left",
+          "position_base_m": [
+            -0.130012941703111,
+            -0.4268832276847701,
+            0.0969652383309947
+          ],
+          "normal_base": [
+            -0.9657627570333295,
+            0.25309962886045706,
+            -0.05694624656710349
+          ],
+          "abs_normal_jaw_axis_cos": 0.9999999996345773,
+          "normal_force_n": 1.4836961071172483,
+          "distance_m": -0.0020962237299286964
+        },
+        {
+          "finger": "right",
+          "position_base_m": [
+            -0.113253581001801,
+            -0.4306550607139202,
+            0.09731845083033912
+          ],
+          "normal_base": [
+            0.9657626228114722,
+            -0.2530964825277886,
+            0.05696250444254472
+          ],
+          "abs_normal_jaw_axis_cos": 0.9999999997392783,
+          "normal_force_n": 1.5026536336402392,
+          "distance_m": -0.0020373497454418436
+        }
+      ]
+    }
+  },
+  "used_joint_state_source": "request",
+  "ok": true
+}

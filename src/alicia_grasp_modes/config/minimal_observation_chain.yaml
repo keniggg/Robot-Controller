@@ -1,0 +1,4 @@
+# Load into /grasp only while the task is idle. This selects the existing
+# observe_return path; it changes no geometry, collision or execution gate.
+# A current-view contact plan still goes straight to the common executor.
+unknown_observe_return_max_observations: 1

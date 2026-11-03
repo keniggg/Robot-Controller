@@ -2,6 +2,7 @@
 import os
 import pathlib
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -47,7 +48,17 @@ class GuiLayoutContractTest(unittest.TestCase):
         theme.apply_app_theme(cls.app)
 
     def setUp(self):
+        def service_unavailable(*_args, **_kwargs):
+            raise rospy.ROSException('ROS services unavailable in offline layout fixture')
+
         self._patchers = [
+            # Real Qt timers still run; ROS time is an explicit local provider
+            # because this layout fixture never initializes a ROS node.
+            mock.patch.object(
+                rospy.Time,
+                'now',
+                side_effect=lambda: rospy.Time(*divmod(time.time_ns(), 10**9)),
+            ),
             mock.patch.object(
                 rospy,
                 'get_param',
@@ -66,12 +77,23 @@ class GuiLayoutContractTest(unittest.TestCase):
                 'Subscriber',
                 side_effect=lambda *_args, **_kwargs: InertRosEndpoint(),
             ),
+            # Delayed hand-eye refreshes and controller-status callbacks must
+            # observe unavailable offline services without reaching ROS.
+            mock.patch.object(rospy, 'wait_for_service', side_effect=service_unavailable),
+            mock.patch.object(rospy, 'ServiceProxy', side_effect=service_unavailable),
             mock.patch.object(perception_widget_module, 'tf2_ros', None),
         ]
         for patcher in self._patchers:
             patcher.start()
 
     def tearDown(self):
+        # Retire the fixture's widgets while their external providers remain
+        # installed, including deferred QObject deletion after deleteLater().
+        for widget in self.app.topLevelWidgets():
+            widget.close()
+            widget.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+        self.app.processEvents()
         for patcher in reversed(self._patchers):
             patcher.stop()
 
@@ -231,6 +253,9 @@ class GuiLayoutContractTest(unittest.TestCase):
         tabs = window.findChild(QtWidgets.QTabWidget)
         self.assertIsNotNone(tabs)
         self.assertEqual(tabs.count(), 9)
+        joint_controls = tabs.widget(1)
+        self.assertTrue(joint_controls.show_feedback_angles)
+        self.assertEqual(len(joint_controls.feedback_labels), len(joint_controls.names))
         expected_tabs = (
             '总览监控',
             '关节控制',
@@ -363,6 +388,11 @@ class GuiLayoutContractTest(unittest.TestCase):
                 button.contentsRect().width(),
                 button.fontMetrics().horizontalAdvance(button.text()),
             )
+
+        quality_timeouts = QtTest.QSignalSpy(handeye.quality_timer.timeout)
+        self.assertTrue(handeye.quality_timer.isActive())
+        QtTest.QTest.qWait(350)
+        self.assertGreaterEqual(len(quality_timeouts), 1)
 
         window.close()
         window.deleteLater()

@@ -1,0 +1,931 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "recorded_plan_and_encoder_fk_with_explicit_counterfactual_translations",
+  "source_record_id": "20260927T071553.378661Z_f557b777f3ee4ad48b4e05890fdaac34",
+  "source_manifest_sha256": "70614f70857e64a0b29ea96b1cc5261e2ca9e2f1e7aec303c0afc7984a498905",
+  "plan": {
+    "header": {
+      "seq": 109869,
+      "stamp": {
+        "secs": 1790493363,
+        "nsecs": 559016227
+      },
+      "frame_id": "base_link"
+    },
+    "valid": true,
+    "poses": [
+      {
+        "position": {
+          "x": -0.13036198576402666,
+          "y": -0.41930267293639495,
+          "z": 0.12015075969382569
+        },
+        "orientation": {
+          "x": 0.7347034364504068,
+          "y": 0.6741993099479863,
+          "z": -0.04342090264424995,
+          "w": 0.06148801628919937
+        }
+      },
+      {
+        "position": {
+          "x": -0.1301326971616489,
+          "y": -0.4210894681236333,
+          "z": 0.10828674731623263
+        },
+        "orientation": {
+          "x": 0.7347034364504068,
+          "y": 0.6741993099479863,
+          "z": -0.04342090264424995,
+          "w": 0.06148801628919937
+        }
+      },
+      {
+        "position": {
+          "x": -0.12978876425808228,
+          "y": -0.42376966090449086,
+          "z": 0.09049072874984303
+        },
+        "orientation": {
+          "x": 0.7347034364504068,
+          "y": 0.6741993099479863,
+          "z": -0.04342090264424995,
+          "w": 0.06148801628919937
+        }
+      },
+      {
+        "position": {
+          "x": -0.1304193079146211,
+          "y": -0.41885597413958536,
+          "z": 0.12311676278822395
+        },
+        "orientation": {
+          "x": 0.7347034364504068,
+          "y": 0.6741993099479863,
+          "z": -0.04342090264424995,
+          "w": 0.06148801628919937
+        }
+      }
+    ],
+    "score": -0.04162826016545296,
+    "candidate_width_m": 0.0,
+    "required_open_width_m": 0.016250526532530785,
+    "object_geometry": {
+      "header": {
+        "seq": 0,
+        "stamp": {
+          "secs": 1790493363,
+          "nsecs": 559016227
+        },
+        "frame_id": "base_link"
+      },
+      "valid": true,
+      "label": "unknown_small",
+      "target_track_id": "g3-t9",
+      "source_mode": "instance_mask",
+      "pose_base": {
+        "position": {
+          "x": -0.12950805611854274,
+          "y": -0.4229878918717247,
+          "z": 0.09318144524829666
+        },
+        "orientation": {
+          "x": -0.05926456477205455,
+          "y": 0.046409721998749674,
+          "z": 0.7097216307432487,
+          "w": 0.7004491815410462
+        }
+      },
+      "size_xyz_m": {
+        "x": 0.023357266885763478,
+        "y": 0.0170436582512353,
+        "z": 0.013342531968422512
+      },
+      "support_normal_base": {
+        "x": -0.019107383531479536,
+        "y": 0.14889959893653074,
+        "z": 0.9886676981327555
+      },
+      "support_offset_m": -0.024946050718426704,
+      "valid_depth_points": 703,
+      "valid_depth_ratio": 0.9669876098632812,
+      "depth_mad_m": 0.0026000000070780516,
+      "fused_frames": 3,
+      "support_inlier_ratio": 0.7408376932144165,
+      "object_point_count": 261,
+      "failure_reason": ""
+    },
+    "model_choice": "unknown_tabletop",
+    "plan_id": "ec712883949b08d7cc658d8d",
+    "diagnostic": "CONTACT_EXECUTION_PLAN",
+    "candidate_source": "tabletop_geometry",
+    "candidate_source_lineage": [
+      "tabletop_geometry"
+    ],
+    "has_candidate_model_width": false,
+    "target_track_id": "g3-t9",
+    "refinement_status": "NOT_EVALUATED",
+    "refinement_inlier_count": 0,
+    "refinement_overlap_fraction": 0.0,
+    "refinement_rmse_m": 0.0,
+    "refinement_translation_m": 0.0,
+    "refinement_rotation_deg": 0.0,
+    "refinement_source_clipped": false,
+    "fused_view_count": 0,
+    "contact_geometry_evidence": "{\"contact_center_base\":[-0.12950805611854274,-0.4229878918717247,0.09318144524829666],\"contact_height_axis_base\":[0.01910738353147952,-0.14889959893653074,-0.9886676981327555],\"contact_height_bounds_m\":[-0.004292213397423763,-0.0013988610144489138],\"grasp_tool_pose_base\":[-0.12978876425808228,-0.42376966090449086,0.09049072874984303,0.7347034364504068,0.6741993099479863,-0.04342090264424995,0.06148801628919937],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"schema_version\":1,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}"
+  },
+  "plan_id": "ec712883949b08d7cc658d8d",
+  "robot_description_fixture": "measured_contact_20260926.json",
+  "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+  "accepted_counts": [
+    809,
+    1444,
+    3135,
+    2003,
+    1137,
+    2210
+  ],
+  "accepted_stamp_ns": 1790493696563866895,
+  "epoch_ns": 1790491632655134541,
+  "geometry": {
+    "actual_T_base_tool0": [
+      [
+        0.09030781535988838,
+        0.9956566274659674,
+        0.02263578291157547,
+        -0.13098949581131988
+      ],
+      [
+        0.9858683262952763,
+        -0.08615372083395861,
+        -0.14367038523723158,
+        -0.422086513694675
+      ],
+      [
+        -0.14109621431021638,
+        0.03529046003610605,
+        -0.9893666871983132,
+        0.09076442773215965
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "planned_T_base_tool0": [
+      [
+        0.08713983135843545,
+        0.9960128300807195,
+        0.01910738353147952,
+        -0.12978876425808228
+      ],
+      [
+        0.9853333694043941,
+        -0.08334902863695665,
+        -0.14889959893653074,
+        -0.42376966090449086
+      ],
+      [
+        -0.1467133290775155,
+        0.031802228536242726,
+        -0.9886676981327555,
+        0.09049072874984303
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "contact_center_base": [
+      -0.12950805611854274,
+      -0.4229878918717247,
+      0.09318144524829666
+    ],
+    "contact_height_axis_base": [
+      0.01910738353147952,
+      -0.14889959893653074,
+      -0.9886676981327555
+    ],
+    "contact_height_bounds_m": [
+      -0.004292213397423763,
+      -0.0013988610144489138
+    ],
+    "minimum_contact_overlap_m": 0.002,
+    "support_normal_base": [
+      -0.019107383531479536,
+      0.14889959893653074,
+      0.9886676981327555
+    ],
+    "support_offset_m": -0.024946050718426704,
+    "opening_width_m": 0.04975
+  },
+  "translation_evidence_limit_m": 0.00460616416406,
+  "translation_evidence_semantics": "historical_handeye_cross_validation_maximum_not_a_certified_bound",
+  "expected_baseline": {
+    "ok": true,
+    "code": "MEASURED_CONTACT_GEOMETRY_OK",
+    "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+    "planned_overlap_m": 0.002893352382974849,
+    "actual_overlap_m": 0.002893352382974849,
+    "minimum_contact_overlap_m": 0.002,
+    "minimum_support_clearance_m": 0.0037587669858157036,
+    "support_clearances_m": [
+      [
+        "left_finger",
+        0.003996785695852725
+      ],
+      [
+        "right_finger",
+        0.0037587669858157036
+      ],
+      [
+        "palm",
+        0.05840214161701164
+      ]
+    ],
+    "plan_id": "ec712883949b08d7cc658d8d",
+    "scope": "frozen_geometry_model_contact_only",
+    "physical_grip_verified": false
+  },
+  "counterfactual_sensitivity": [
+    {
+      "direction": "support_normal",
+      "translation_m": -0.012,
+      "ok": false,
+      "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+      "reason": "measured CAD support clearance -0.008241m is below unchanged 0.003000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": -0.008241233014184293,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          -0.008003214304147258
+        ],
+        [
+          "right_finger",
+          -0.008241233014184293
+        ],
+        [
+          "palm",
+          0.046402141617011616
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "support_normal",
+      "translation_m": -0.009,
+      "ok": false,
+      "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+      "reason": "measured CAD support clearance -0.005241m is below unchanged 0.003000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": -0.005241233014184304,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          -0.005003214304147269
+        ],
+        [
+          "right_finger",
+          -0.005241233014184304
+        ],
+        [
+          "palm",
+          0.04940214161701162
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "support_normal",
+      "translation_m": -0.00460616416406,
+      "ok": false,
+      "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+      "reason": "measured CAD support clearance -0.000847m is below unchanged 0.003000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": -0.0008473971782443079,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          -0.0006093784682072723
+        ],
+        [
+          "right_finger",
+          -0.0008473971782443079
+        ],
+        [
+          "palm",
+          0.05379597745295164
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "support_normal",
+      "translation_m": 0.00460616416406,
+      "ok": false,
+      "code": "MEASURED_CONTACT_PATCH_MISS",
+      "reason": "measured bilateral target/CAD contact overlap 0.001214m is below frozen 0.002000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.001214361731383199,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.008364931149875715,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.00860294985991275
+        ],
+        [
+          "right_finger",
+          0.008364931149875715
+        ],
+        [
+          "palm",
+          0.06300830578107164
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "support_normal",
+      "translation_m": 0.009,
+      "ok": false,
+      "code": "MEASURED_CONTACT_PATCH_MISS",
+      "reason": "measured bilateral target/CAD contact overlap 0.000000m is below frozen 0.002000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.0,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.012758766985815725,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.012996785695852761
+        ],
+        [
+          "right_finger",
+          0.012758766985815725
+        ],
+        [
+          "palm",
+          0.06740214161701163
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "support_normal",
+      "translation_m": 0.012,
+      "ok": false,
+      "code": "MEASURED_CONTACT_PATCH_MISS",
+      "reason": "measured bilateral target/CAD contact overlap 0.000000m is below frozen 0.002000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.0,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.0157587669858157,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.015996785695852736
+        ],
+        [
+          "right_finger",
+          0.0157587669858157
+        ],
+        [
+          "palm",
+          0.07040214161701164
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "support_normal",
+      "translation_m": 0.03,
+      "ok": false,
+      "code": "MEASURED_CONTACT_PATCH_MISS",
+      "reason": "measured bilateral target/CAD contact overlap 0.000000m is below frozen 0.002000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.0,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.0337587669858157,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.03399678569585274
+        ],
+        [
+          "right_finger",
+          0.0337587669858157
+        ],
+        [
+          "palm",
+          0.08840214161701158
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "support_normal",
+      "translation_m": 0.04,
+      "ok": false,
+      "code": "MEASURED_CONTACT_PATCH_MISS",
+      "reason": "measured bilateral target/CAD contact overlap 0.000000m is below frozen 0.002000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.0,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.0437587669858157,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.04399678569585272
+        ],
+        [
+          "right_finger",
+          0.0437587669858157
+        ],
+        [
+          "palm",
+          0.09840214161701166
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_tool_z",
+      "translation_m": -0.012,
+      "ok": false,
+      "code": "MEASURED_CONTACT_PATCH_MISS",
+      "reason": "measured bilateral target/CAD contact overlap 0.000000m is below frozen 0.002000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.0,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.01575852528863282,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.015996543998669857
+        ],
+        [
+          "right_finger",
+          0.01575852528863282
+        ],
+        [
+          "palm",
+          0.07040189991982876
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_tool_z",
+      "translation_m": -0.009,
+      "ok": false,
+      "code": "MEASURED_CONTACT_PATCH_MISS",
+      "reason": "measured bilateral target/CAD contact overlap 0.000000m is below frozen 0.002000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.0,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.012758585712928566,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.012996604422965602
+        ],
+        [
+          "right_finger",
+          0.012758585712928566
+        ],
+        [
+          "palm",
+          0.06740196034412445
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_tool_z",
+      "translation_m": -0.00460616416406,
+      "ok": false,
+      "code": "MEASURED_CONTACT_PATCH_MISS",
+      "reason": "measured bilateral target/CAD contact overlap 0.001214m is below frozen 0.002000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.0012142689547726903,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.00836483837513384,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.008602857085170876
+        ],
+        [
+          "right_finger",
+          0.00836483837513384
+        ],
+        [
+          "palm",
+          0.06300821300632979
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_tool_z",
+      "translation_m": 0.00460616416406,
+      "ok": false,
+      "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+      "reason": "measured CAD support clearance -0.000847m is below unchanged 0.003000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": -0.0008473044035024468,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          -0.0006092856934654112
+        ],
+        [
+          "right_finger",
+          -0.0008473044035024468
+        ],
+        [
+          "palm",
+          0.05379607022769352
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_tool_z",
+      "translation_m": 0.009,
+      "ok": false,
+      "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+      "reason": "measured CAD support clearance -0.005241m is below unchanged 0.003000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": -0.005241051741297159,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          -0.0050030330312601234
+        ],
+        [
+          "right_finger",
+          -0.005241051741297159
+        ],
+        [
+          "palm",
+          0.04940232288989878
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_tool_z",
+      "translation_m": 0.012,
+      "ok": false,
+      "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+      "reason": "measured CAD support clearance -0.008241m is below unchanged 0.003000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": -0.008240991317001414,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          -0.008002972606964379
+        ],
+        [
+          "right_finger",
+          -0.008240991317001414
+        ],
+        [
+          "palm",
+          0.04640238331419454
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_tool_z",
+      "translation_m": 0.03,
+      "ok": false,
+      "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+      "reason": "measured CAD support clearance -0.026241m is below unchanged 0.003000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": -0.026240628771227098,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          -0.026002610061190076
+        ],
+        [
+          "right_finger",
+          -0.026240628771227098
+        ],
+        [
+          "palm",
+          0.02840274585996881
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_tool_z",
+      "translation_m": 0.04,
+      "ok": false,
+      "code": "MEASURED_CONTACT_SUPPORT_CLEARANCE",
+      "reason": "measured CAD support clearance -0.036240m is below unchanged 0.003000m requirement",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": -0.036240427356908037,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          -0.036002408646871
+        ],
+        [
+          "right_finger",
+          -0.036240427356908037
+        ],
+        [
+          "palm",
+          0.018402947274287887
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_jaw_axis",
+      "translation_m": -0.012,
+      "ok": true,
+      "code": "MEASURED_CONTACT_GEOMETRY_OK",
+      "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.0037223123014450132,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.003960331011482035
+        ],
+        [
+          "right_finger",
+          0.0037223123014450132
+        ],
+        [
+          "palm",
+          0.05836568693264092
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_jaw_axis",
+      "translation_m": -0.009,
+      "ok": true,
+      "code": "MEASURED_CONTACT_GEOMETRY_OK",
+      "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.003731425972537672,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.003969444682574708
+        ],
+        [
+          "right_finger",
+          0.003731425972537672
+        ],
+        [
+          "palm",
+          0.058374800603733554
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_jaw_axis",
+      "translation_m": -0.00460616416406,
+      "ok": true,
+      "code": "MEASURED_CONTACT_GEOMETRY_OK",
+      "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.0037447739640856653,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.003982792674122701
+        ],
+        [
+          "right_finger",
+          0.0037447739640856653
+        ],
+        [
+          "palm",
+          0.0583881485952816
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_jaw_axis",
+      "translation_m": 0.00460616416406,
+      "ok": true,
+      "code": "MEASURED_CONTACT_GEOMETRY_OK",
+      "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.003772760007545728,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.004010778717582764
+        ],
+        [
+          "right_finger",
+          0.003772760007545728
+        ],
+        [
+          "palm",
+          0.05841613463874164
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_jaw_axis",
+      "translation_m": 0.009,
+      "ok": true,
+      "code": "MEASURED_CONTACT_GEOMETRY_OK",
+      "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.003786107999093735,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.004024126709130771
+        ],
+        [
+          "right_finger",
+          0.003786107999093735
+        ],
+        [
+          "palm",
+          0.058429482630289645
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_jaw_axis",
+      "translation_m": 0.012,
+      "ok": true,
+      "code": "MEASURED_CONTACT_GEOMETRY_OK",
+      "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.003795221670186394,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.00403324038022343
+        ],
+        [
+          "right_finger",
+          0.003795221670186394
+        ],
+        [
+          "palm",
+          0.058438596301382345
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_jaw_axis",
+      "translation_m": 0.03,
+      "ok": true,
+      "code": "MEASURED_CONTACT_GEOMETRY_OK",
+      "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.0038499036967424433,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.004087922406779479
+        ],
+        [
+          "right_finger",
+          0.0038499036967424433
+        ],
+        [
+          "palm",
+          0.05849327832793834
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    },
+    {
+      "direction": "actual_jaw_axis",
+      "translation_m": 0.04,
+      "ok": true,
+      "code": "MEASURED_CONTACT_GEOMETRY_OK",
+      "reason": "measured modelled contact overlap and support clearance passed; physical grip unverified",
+      "planned_overlap_m": 0.002893352382974849,
+      "actual_overlap_m": 0.002893352382974849,
+      "minimum_contact_overlap_m": 0.002,
+      "minimum_support_clearance_m": 0.003880282600384699,
+      "support_clearances_m": [
+        [
+          "left_finger",
+          0.004118301310421735
+        ],
+        [
+          "right_finger",
+          0.003880282600384699
+        ],
+        [
+          "palm",
+          0.05852365723158061
+        ]
+      ],
+      "plan_id": "ec712883949b08d7cc658d8d",
+      "scope": "frozen_geometry_model_contact_only",
+      "physical_grip_verified": false
+    }
+  ],
+  "physical_grip_verified": false,
+  "observed_outcome": "empty_close_reported_by_operator; recorder reports GRASP_HOLD_UNVERIFIED",
+  "limits": "Counterfactual translations are diagnostic geometry only, not measured calibration error, motion commands, or successful recovery evidence."
+}

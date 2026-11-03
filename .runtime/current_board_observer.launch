@@ -1,0 +1,11 @@
+<launch>
+  <param name="/charuco_tracker_handeye_verify/detection_scale" value="1.5"/>
+  <include file="$(find alicia_d_calibration)/launch/d405_current_stream_handeye_invariance.launch">
+    <arg name="dictionary_id" value="DICT_5X5_100"/>
+    <arg name="board_width" value="12"/>
+    <arg name="board_height" value="9"/>
+    <arg name="square_length" value="0.015"/>
+    <arg name="marker_length" value="0.01125"/>
+    <arg name="board_frame" value="charuco_board"/>
+  </include>
+</launch>

@@ -1,0 +1,521 @@
+{
+  "scope": "exact_requested_endpoint_geometry_not_recorded_trajectory",
+  "selection_generation": 5,
+  "request_id": 41,
+  "candidates": [
+    {
+      "candidate_width_m": 0.0,
+      "contact_geometry_evidence": "{\"contact_center_base\":[-0.10341253301368081,-0.37753418659903437,0.015036554485519871],\"contact_height_axis_base\":[0.21138922352352424,-0.20782272075676883,-0.9550519948753451],\"contact_height_bounds_m\":[-0.013270220218704647,-0.010442259501093697],\"grasp_tool_pose_base\":[-0.0982299770127581,-0.38216550142877204,0.018411838104991626,0.33637001982307485,0.9297210373019946,-0.06245980082882632,0.13628197181854598],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"schema_version\":1,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}",
+      "execution_authorized": false,
+      "frame_id": "base_link",
+      "future_following_verified": false,
+      "object_geometry": {
+        "pose_xyz_xyzw": [
+          -0.10341253301368081,
+          -0.37753418659903437,
+          0.015036554485519871,
+          -0.029299812572024773,
+          0.025220521977949384,
+          0.9520844603391433,
+          0.3033819813949506
+        ],
+        "size_xyz_m": [
+          0.06344649315218542,
+          0.04547756131752747,
+          0.021959591900715413
+        ],
+        "source_stamp_ns": 1791598210282150745,
+        "support_normal_base": [
+          -0.040494478215019065,
+          0.06580227821581329,
+          0.9970106606329252
+        ],
+        "support_offset_m": 0.01871548245892454
+      },
+      "operation": "final_registered_strict_sequence",
+      "original_failed_trajectory_recorded": false,
+      "plan_id": "4ea4c1dfab63d28e62dfd4e4",
+      "poses_xyz_xyzw": [
+        [
+          -0.1005978729543049,
+          -0.3783172166701813,
+          0.07671963874797479,
+          0.33637001982307485,
+          0.9297210373019946,
+          -0.06245980082882632,
+          0.13628197181854598
+        ],
+        [
+          -0.10652089524217632,
+          -0.37401446536700306,
+          0.05587002950363251,
+          0.33637001982307485,
+          0.9297210373019946,
+          -0.06245980082882632,
+          0.13628197181854598
+        ],
+        [
+          -0.0982299770127581,
+          -0.38216550142877204,
+          0.018411838104991626,
+          0.33637001982307485,
+          0.9297210373019946,
+          -0.06245980082882632,
+          0.13628197181854598
+        ],
+        [
+          -0.10014354301825,
+          -0.3790555898974903,
+          0.0655320781492079,
+          0.33637001982307485,
+          0.9297210373019946,
+          -0.06245980082882632,
+          0.13628197181854598
+        ]
+      ],
+      "precheck": {
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "epoch_ns": 1791591831641651789,
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "hardware_response_verified": false,
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_m": 0.04975,
+        "opening_source": "current_accepted_open_posture",
+        "plan_id": "4ea4c1dfab63d28e62dfd4e4",
+        "real_grasp_success": false,
+        "reason": "nominal continuous geometry: target OBB collision at 11-end/left_finger",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "selection": {
+          "generation": 5,
+          "mode": "unknown",
+          "stamp_ns": "1791598151214660644",
+          "strategy": "observe_return"
+        },
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04975,
+          "accepted_positions_rad": [
+            -2.098485717827557,
+            -0.4279806398200939,
+            0.9694758579437252,
+            -0.18867963690993386,
+            -1.1596894756415448,
+            -0.015339807878856412
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791598215488652114,
+          "accepted_tool_position_m": [
+            -0.14331375878907612,
+            -0.3145909137734275,
+            0.08022976423053094
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791591831641651789,
+          "joint_error_sdk_counts": [
+            4.999999999999947,
+            -13.99999999999999,
+            -12.999999999999993,
+            3.000000000000008,
+            0.0,
+            -5.0
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791598215488652114,
+          "orientation_error_rad": 0.0430819104867371,
+          "position_error_m": 0.014226315736177383,
+          "position_error_vector_m": [
+            0.005448298291743092,
+            0.005533938535754179,
+            -0.011919715996284996
+          ],
+          "sdk_positions_rad": [
+            -2.1061556217669852,
+            -0.4065049087896949,
+            0.9894176081862385,
+            -0.1932815792735908,
+            -1.1596894756415448,
+            -0.007669903939428206
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1791598215453859433,
+          "sdk_tool_position_m": [
+            -0.14876205708081922,
+            -0.3201248523091817,
+            0.09214948022681593
+          ],
+          "stamp_sec": 1791598215.5183938,
+          "stationary_window_end_ns": 1791598215453859433,
+          "stationary_window_start_ns": 1791598215153859433
+        },
+        "success": false
+      },
+      "request": {
+        "generation": 11,
+        "request_id": 41,
+        "target_epoch": 16
+      },
+      "required_open_width_m": 0.03483034529476545,
+      "schema": 1,
+      "scope": "rejected_contact_request_diagnostic",
+      "source_stamp_ns": 1791598210282150745,
+      "target_track_id": "g5-t16"
+    },
+    {
+      "candidate_width_m": 0.0,
+      "contact_geometry_evidence": "{\"contact_center_base\":[-0.10341253301368081,-0.37753418659903437,0.015036554485519871],\"contact_height_axis_base\":[0.21138922352352424,-0.20782272075676883,-0.9550519948753451],\"contact_height_bounds_m\":[-0.013270220218704647,-0.010442259501093697],\"grasp_tool_pose_base\":[-0.09843373799275619,-0.38121920762682915,0.018160821166450437,0.9297210373019946,-0.33637001982307485,0.13628197181854598,0.06245980082882632],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"schema_version\":1,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}",
+      "execution_authorized": false,
+      "frame_id": "base_link",
+      "future_following_verified": false,
+      "object_geometry": {
+        "pose_xyz_xyzw": [
+          -0.10341253301368081,
+          -0.37753418659903437,
+          0.015036554485519871,
+          -0.029299812572024773,
+          0.025220521977949384,
+          0.9520844603391433,
+          0.3033819813949506
+        ],
+        "size_xyz_m": [
+          0.06344649315218542,
+          0.04547756131752747,
+          0.021959591900715413
+        ],
+        "source_stamp_ns": 1791598210282150745,
+        "support_normal_base": [
+          -0.040494478215019065,
+          0.06580227821581329,
+          0.9970106606329252
+        ],
+        "support_offset_m": 0.01871548245892454
+      },
+      "operation": "final_registered_strict_sequence",
+      "original_failed_trajectory_recorded": false,
+      "plan_id": "1b87e07e1920e58bb8ebf252",
+      "poses_xyz_xyzw": [
+        [
+          -0.10080163393430301,
+          -0.3773709228682384,
+          0.07646862180943359,
+          0.9297210373019946,
+          -0.33637001982307485,
+          0.13628197181854598,
+          0.06245980082882632
+        ],
+        [
+          -0.10672465622217443,
+          -0.37306817156506017,
+          0.05561901256509131,
+          0.9297210373019946,
+          -0.33637001982307485,
+          0.13628197181854598,
+          0.06245980082882632
+        ],
+        [
+          -0.09843373799275619,
+          -0.38121920762682915,
+          0.018160821166450437,
+          0.9297210373019946,
+          -0.33637001982307485,
+          0.13628197181854598,
+          0.06245980082882632
+        ],
+        [
+          -0.1003473039982481,
+          -0.3781092960955474,
+          0.06528106121066672,
+          0.9297210373019946,
+          -0.33637001982307485,
+          0.13628197181854598,
+          0.06245980082882632
+        ]
+      ],
+      "precheck": {
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "epoch_ns": 1791591831641651789,
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "hardware_response_verified": false,
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_m": 0.04975,
+        "opening_source": "current_accepted_open_posture",
+        "plan_id": "1b87e07e1920e58bb8ebf252",
+        "real_grasp_success": false,
+        "reason": "nominal continuous geometry: target OBB collision at 11-end/right_finger",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "selection": {
+          "generation": 5,
+          "mode": "unknown",
+          "stamp_ns": "1791598151214660644",
+          "strategy": "observe_return"
+        },
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04975,
+          "accepted_positions_rad": [
+            -2.098485717827557,
+            -0.4279806398200939,
+            0.9694758579437252,
+            -0.18867963690993386,
+            -1.1596894756415448,
+            -0.015339807878856412
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791598220688656887,
+          "accepted_tool_position_m": [
+            -0.14331375878907612,
+            -0.3145909137734275,
+            0.08022976423053094
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791591831641651789,
+          "joint_error_sdk_counts": [
+            4.999999999999947,
+            -13.99999999999999,
+            -12.999999999999993,
+            3.000000000000008,
+            0.0,
+            -5.0
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791598220688656887,
+          "orientation_error_rad": 0.0430819104867371,
+          "position_error_m": 0.014226315736177383,
+          "position_error_vector_m": [
+            0.005448298291743092,
+            0.005533938535754179,
+            -0.011919715996284996
+          ],
+          "sdk_positions_rad": [
+            -2.1061556217669852,
+            -0.4065049087896949,
+            0.9894176081862385,
+            -0.1932815792735908,
+            -1.1596894756415448,
+            -0.007669903939428206
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1791598220713801640,
+          "sdk_tool_position_m": [
+            -0.14876205708081922,
+            -0.3201248523091817,
+            0.09214948022681593
+          ],
+          "stamp_sec": 1791598220.7179394,
+          "stationary_window_end_ns": 1791598220688656887,
+          "stationary_window_start_ns": 1791598220388656887
+        },
+        "success": false
+      },
+      "request": {
+        "generation": 11,
+        "request_id": 41,
+        "target_epoch": 16
+      },
+      "required_open_width_m": 0.03483034529476547,
+      "schema": 1,
+      "scope": "rejected_contact_request_diagnostic",
+      "source_stamp_ns": 1791598210282150745,
+      "target_track_id": "g5-t16"
+    },
+    {
+      "candidate_width_m": 0.0,
+      "contact_geometry_evidence": "{\"contact_center_base\":[-0.10341253301368081,-0.37753418659903437,0.015036554485519871],\"contact_height_axis_base\":[0.21138922352352424,-0.20782272075676886,-0.9550519948753448],\"contact_height_bounds_m\":[-0.013270220218704646,-0.010442259501093693],\"grasp_tool_pose_base\":[-0.09843373799275619,-0.38121920762682915,0.01816082116645043,0.9297210373019944,-0.33637001982307485,0.13628197181854598,0.06245980082882632],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"schema_version\":1,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}",
+      "execution_authorized": false,
+      "frame_id": "base_link",
+      "future_following_verified": false,
+      "object_geometry": {
+        "pose_xyz_xyzw": [
+          -0.10341253301368081,
+          -0.37753418659903437,
+          0.015036554485519871,
+          -0.029299812572024773,
+          0.025220521977949384,
+          0.9520844603391433,
+          0.3033819813949506
+        ],
+        "size_xyz_m": [
+          0.06344649315218542,
+          0.04547756131752747,
+          0.021959591900715413
+        ],
+        "source_stamp_ns": 1791598210282150745,
+        "support_normal_base": [
+          -0.040494478215019065,
+          0.06580227821581329,
+          0.9970106606329252
+        ],
+        "support_offset_m": 0.01871548245892454
+      },
+      "operation": "final_registered_strict_sequence",
+      "original_failed_trajectory_recorded": false,
+      "plan_id": "cf1d250a169283c355042426",
+      "poses_xyz_xyzw": [
+        [
+          -0.10080163393430301,
+          -0.3773709228682384,
+          0.07646862180943358,
+          0.9297210373019944,
+          -0.33637001982307485,
+          0.13628197181854598,
+          0.06245980082882632
+        ],
+        [
+          -0.10672465622217443,
+          -0.37306817156506017,
+          0.055619012565091296,
+          0.9297210373019944,
+          -0.33637001982307485,
+          0.13628197181854598,
+          0.06245980082882632
+        ],
+        [
+          -0.09843373799275619,
+          -0.38121920762682915,
+          0.01816082116645043,
+          0.9297210373019944,
+          -0.33637001982307485,
+          0.13628197181854598,
+          0.06245980082882632
+        ],
+        [
+          -0.1003473039982481,
+          -0.3781092960955474,
+          0.06528106121066671,
+          0.9297210373019944,
+          -0.33637001982307485,
+          0.13628197181854598,
+          0.06245980082882632
+        ]
+      ],
+      "precheck": {
+        "checked_stage_names": [
+          "pregrasp",
+          "approach",
+          "grasp"
+        ],
+        "epoch_ns": 1791591831641651789,
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "hardware_response_verified": false,
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_m": 0.04975,
+        "opening_source": "current_accepted_open_posture",
+        "plan_id": "cf1d250a169283c355042426",
+        "real_grasp_success": false,
+        "reason": "nominal continuous geometry: target OBB collision at 11-end/right_finger",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "selection": {
+          "generation": 5,
+          "mode": "unknown",
+          "stamp_ns": "1791598151214660644",
+          "strategy": "observe_return"
+        },
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04975,
+          "accepted_positions_rad": [
+            -2.098485717827557,
+            -0.4279806398200939,
+            0.9694758579437252,
+            -0.18867963690993386,
+            -1.1596894756415448,
+            -0.015339807878856412
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1791598225788609151,
+          "accepted_tool_position_m": [
+            -0.14331375878907612,
+            -0.3145909137734275,
+            0.08022976423053094
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1791591831641651789,
+          "joint_error_sdk_counts": [
+            4.999999999999947,
+            -13.99999999999999,
+            -12.999999999999993,
+            3.000000000000008,
+            0.0,
+            -5.0
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1791598225788609151,
+          "orientation_error_rad": 0.0430819104867371,
+          "position_error_m": 0.014226315736177383,
+          "position_error_vector_m": [
+            0.005448298291743092,
+            0.005533938535754179,
+            -0.011919715996284996
+          ],
+          "sdk_positions_rad": [
+            -2.1061556217669852,
+            -0.4065049087896949,
+            0.9894176081862385,
+            -0.1932815792735908,
+            -1.1596894756415448,
+            -0.007669903939428206
+          ],
+          "sdk_sample_count": 5,
+          "sdk_stamp_ns": 1791598225853891054,
+          "sdk_tool_position_m": [
+            -0.14876205708081922,
+            -0.3201248523091817,
+            0.09214948022681593
+          ],
+          "stamp_sec": 1791598225.8768213,
+          "stationary_window_end_ns": 1791598225788609151,
+          "stationary_window_start_ns": 1791598225488609151
+        },
+        "success": false
+      },
+      "request": {
+        "generation": 11,
+        "request_id": 41,
+        "target_epoch": 16
+      },
+      "required_open_width_m": 0.03483034529476545,
+      "schema": 1,
+      "scope": "rejected_contact_request_diagnostic",
+      "source_stamp_ns": 1791598210282150745,
+      "target_track_id": "g5-t16"
+    }
+  ],
+  "motion_authorized": false
+}

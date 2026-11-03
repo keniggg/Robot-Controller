@@ -1,5 +1,6 @@
 """Transport tests use a fake GitHub server; no credentials/network/robot I/O."""
 import copy
+import errno
 import hashlib
 import io
 import json
@@ -447,3 +448,29 @@ def test_stale_starter_listing_does_not_delete_completed_upload(source):
     assert store.upload_file('record-1', source, 'original.bag')['verified']
     assert server.uploads == 5
     assert not any(method == 'DELETE' for method, path in server.requests)
+
+
+def test_restore_on_filesystem_without_hard_links(source, monkeypatch):
+    store = make_store(FakeGitHub())
+    entry = store.upload_file('record-1', source, source.name)
+    def unsupported(*args):
+        raise OSError(errno.EOPNOTSUPP, 'hard links unavailable')
+    monkeypatch.setattr(transport.os, 'link', unsupported)
+    output = source.parent / 'external-restored.bag'
+    assert store.restore_file(entry, output)['verified']
+    assert output.read_bytes() == source.read_bytes()
+    assert not list(source.parent.glob('.external-restored.bag.restore-*'))
+
+
+def test_no_link_restore_does_not_replace_concurrent_destination(source, monkeypatch):
+    store = make_store(FakeGitHub())
+    entry = store.upload_file('record-1', source, source.name)
+    output = source.parent / 'raced.bag'
+    def racing_link(*args):
+        output.write_bytes(b'other writer')
+        raise OSError(errno.EPERM, 'hard links unavailable')
+    monkeypatch.setattr(transport.os, 'link', racing_link)
+    with pytest.raises(FileExistsError):
+        store.restore_file(entry, output)
+    assert output.read_bytes() == b'other writer'
+    assert not list(source.parent.glob('.raced.bag.restore-*'))

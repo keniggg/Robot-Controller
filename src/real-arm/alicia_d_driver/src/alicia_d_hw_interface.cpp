@@ -57,6 +57,12 @@ bool AliciaDHardwareInterface::init()
     joint_command_pub_ = nh_.advertise<sensor_msgs::JointState>("/joint_commands", 1);
     joint_state_sub_ = nh_.subscribe("/joint_states", 10, &AliciaDHardwareInterface::jointStateCallback, this);
 
+    physical_reference_command_pub_ = nh_.advertise<PhysicalReferenceCommand>(
+        "/alicia_d/physical_reference_command", 1, false);
+    physical_reference_.reset(new PhysicalReferenceRos(nh_, false,
+        [this](const std::function<void()>& action) {
+            std::lock_guard<std::mutex> lock(command_mutex_); action();
+        }, [](ReferenceEvidence&) {}, []() {}));
     ROS_INFO("Alicia-D hardware interface initialized successfully.");
     return true;
 }
@@ -108,6 +114,21 @@ void AliciaDHardwareInterface::read(const ros::Time& time, const ros::Duration& 
 
 void AliciaDHardwareInterface::write(const ros::Time& time, const ros::Duration& period)
 {
+    std::lock_guard<std::mutex> lock(command_mutex_);
+    if (physical_reference_ && !physical_reference_->legacy_allowed_locked()) {
+        physical_reference_->healthy_locked();
+        ReferenceVector physical{};
+        for (size_t j=0; j<6; ++j) {
+            const auto it=joint_name_to_index_map_.find("Joint"+std::to_string(j+1));
+            if(it==joint_name_to_index_map_.end()) return;
+            physical[j]=joint_position_commands_[it->second];
+        }
+        PhysicalReferenceCommand command;
+        if (physical_reference_->encode_locked(physical, command))
+            physical_reference_command_pub_.publish(command);
+        return; // No fallthrough to legacy output on any map fault or gate.
+    }
+
     if (!is_initialized_ && publish_only_on_change_ && !publish_initial_command_)
     {
         return;

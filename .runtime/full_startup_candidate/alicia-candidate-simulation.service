@@ -1,0 +1,16 @@
+# Reviewed unit template; installation state is recorded in staging_manifest.json.
+[Unit]
+Description=Frozen candidate MuJoCo companion for the Alicia full ROS stack
+BindsTo=alicia-ros-live-20260928.service
+After=alicia-ros-live-20260928.service
+
+[Service]
+Type=exec
+WorkingDirectory=/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_startup_candidate/candidate_simulation_startup.py --serve
+Restart=no
+
+# No Install/WantedBy: the reviewed full-start entry explicitly starts this
+# dependency. No hardware, ROS, motion controller, or enable/disable commands.

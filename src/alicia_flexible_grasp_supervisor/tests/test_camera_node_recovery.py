@@ -78,6 +78,9 @@ class FakeRospy:
             'simulate': False,
             'fallback_to_simulation': True,
             'read_failure_limit': 1,
+            # Legacy synchronous path remains covered; separate integration
+            # tests below exercise the production asynchronous default.
+            'async_publication_enabled': False,
         }
         if camera_cfg:
             self.camera_cfg.update(camera_cfg)
@@ -304,6 +307,7 @@ class CameraNodeRecoveryTest(unittest.TestCase):
         node = module.CameraNode.__new__(module.CameraNode)
         node.cfg = fake_rospy.camera_cfg
         node.width, node.height, node.fps = 640, 480, 30
+        node.stream_width, node.stream_height = 640, 480
         node.align_depth_to_color = True
         return module, node, correction
 

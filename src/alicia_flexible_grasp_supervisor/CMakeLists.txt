@@ -40,6 +40,7 @@ add_service_files(
   SetTargetPose.srv
   CompensatePregrasp.srv
   CheckPoseSequence.srv
+  CheckContactSequence.srv
   ResolveFreeSpaceOrientations.srv
   SetJointCommand.srv
   SetFloat.srv

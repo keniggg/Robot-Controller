@@ -1,0 +1,87 @@
+{
+  "selection_stamp_ns": 1791616697987946271,
+  "source_stamp_ns": 1791616705922231435,
+  "last_good_source_stamp_ns": 1791616705722177267,
+  "actual_nearest_feedback": {
+    "before": {
+      "stamp_ns": 1791616705856017128,
+      "recorder_receipt_ns": 1791616705857226133,
+      "frame_id": "sdk_measured",
+      "q": [
+        -1.8668546188568254,
+        0.5460971604872883,
+        -0.14266021327336464,
+        -0.021475731030398976,
+        -0.5261554102447749,
+        -0.010737865515199488
+      ]
+    },
+    "after": {
+      "stamp_ns": 1791616706056025958,
+      "recorder_receipt_ns": 1791616706058454036,
+      "frame_id": "sdk_measured",
+      "q": [
+        -1.8668546188568254,
+        0.5460971604872883,
+        -0.14266021327336464,
+        -0.021475731030398976,
+        -0.5261554102447749,
+        -0.010737865515199488
+      ]
+    },
+    "span_ns": 200008830,
+    "maximum_span_ns": 200000000,
+    "excess_ns": 8830,
+    "q_max_abs_difference_rad": 0.0,
+    "after_recorded_before_failure_ms": 5.421877,
+    "has_intermediate_stamp_anywhere_in_complete_record": false
+  },
+  "next_frames": [
+    {
+      "source_stamp_ns": 1791616706188566207,
+      "received_ros_ns": 1791616706313643932,
+      "recorded_state": "unavailable",
+      "recorded_detail": "target_lost_requires_new_generation",
+      "offline_bracket": {
+        "qualified": true,
+        "before_stamp_ns": 1791616706155988675,
+        "after_stamp_ns": 1791616706269591192,
+        "span_ns": 113602517,
+        "q": [
+          -1.8668546188568254,
+          0.5460971604872883,
+          -0.14266021327336464,
+          -0.021475731030398976,
+          -0.5261554102447749,
+          -0.010737865515199488
+        ]
+      }
+    },
+    {
+      "source_stamp_ns": 1791616706289359569,
+      "received_ros_ns": 1791616706425326108,
+      "recorded_state": "unavailable",
+      "recorded_detail": "target_lost_requires_new_generation",
+      "offline_bracket": {
+        "qualified": true,
+        "before_stamp_ns": 1791616706269591192,
+        "after_stamp_ns": 1791616706359636627,
+        "span_ns": 90045435,
+        "q": [
+          -1.8668546188568251,
+          0.5460971604872883,
+          -0.14266021327336464,
+          -0.021475731030398973,
+          -0.5261554102447749,
+          -0.010737865515199486
+        ]
+      }
+    }
+  ],
+  "provenance": {
+    "source_report_sha256": "2c5778ce974b9228994894e9ce15b235c73e756b247af5c3348d3e84550db94a",
+    "record": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20261010T071816.396801Z_d424471a68e04c86a96270c4eea0686f",
+    "scope": "Real GEN16 temporal evidence; process regression uses time-translation and synthetic RGB-D target, not recorded image replay."
+  },
+  "first_failure_observed_ns": 1791616706063875913
+}

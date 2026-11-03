@@ -1,0 +1,95 @@
+{
+  "kind": "GEN47_original_G46_request2_metadata_only",
+  "record_id": "20261018T082324.296405Z_e6c7310244df4038b13d663c75a90d2f",
+  "selection": {
+    "generation": 6,
+    "mode": "unknown",
+    "stamp_ns": 1792311806393660783,
+    "strategy": "observe_return"
+  },
+  "source_diagnostic_sha256": "de9bbf8b1c23a308b719a9a2b897cd4f7b8e0726ac6393dfe7c8232b40aced44",
+  "cause_report_sha256": "9779a0bfed0697a2701d3241dbaf312dfa59958392c4f998b221f4f5bd72e668",
+  "gen46_mode_source_sha256": "504d45fcb21bae603113080b4ab7df9e3c33689ba149e805c92ec4687d798028",
+  "original_request": {
+    "stamp_sec": 1792311815.698848,
+    "evidence": {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen46_runtime/compute_gateway_deployment_r1/consumers.log",
+      "offset": 13393,
+      "bytes": 3448,
+      "sha256": "786ffb98191e0e2be4c701d0250b402a72729f19500ae72d6843355db25c289e"
+    },
+    "metrics": {
+      "request_id": 2,
+      "generation": 3,
+      "target_epoch": 4,
+      "status": "ACCEPT_FAILED",
+      "event": "request_completed",
+      "primary_failure": null,
+      "drop_reason": "ACCEPT_FAILED",
+      "error": "observation view request, camera, handeye or source points changed",
+      "error_type": "ValueError",
+      "error_traceback": "Traceback (most recent call last):\n  File \"/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_flexible_grasp_supervisor/scripts/remote_grasp6d_node.py\", line 18388, in _stream_worker_main\n    accepted_result = self._accept_prediction(prepared)\n  File \"/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/scripts/mode_aware_remote_grasp6d.py\", line 2307, in _accept_prediction\n    return self._accept_diagnostic_observation_prediction(prepared)\n  File \"/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/src/alicia_grasp_modes/silhouette_observation_planning.py\", line 1109, in _accept_diagnostic_observation_prediction\n    passing,rejected = self._far_field_observation_variants(reference,prepared.geometry,\n  File \"/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/scripts/mode_aware_remote_grasp6d.py\", line 1231, in _far_field_observation_variants\n    arrival_projection = self._require_diagnostic_observation_view_source(prepared).get('arrival_projection')\n  File \"/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/src/alicia_grasp_modes/silhouette_observation_planning.py\", line 903, in _require_diagnostic_observation_view_source\n    raise ValueError('observation view request, camera, handeye or source points changed')\nValueError: observation view request, camera, handeye or source points changed\n",
+      "end_to_end_ms": 1870.8775043487549,
+      "result_age_ms": 2185.4910850524902,
+      "ros_prepare_ms": 138.49257900074008,
+      "ros_prepare_stages_ms": {},
+      "wsl_total_ms": 0.0,
+      "transport_ms": 0.0,
+      "snapshot_evidence": {
+        "snapshot_stamp_ns": 1792311813511866807,
+        "source_span_ms": 6800.488233,
+        "source_stamp_ns": [
+          1792311806711378574,
+          1792311806977341651,
+          1792311807112180948,
+          1792311813311287403,
+          1792311813511866807
+        ],
+        "unique_source_frames": 5
+      },
+      "request_preparation_profile": {
+        "schema_version": 1,
+        "scopes": [
+          {
+            "components": [
+              {
+                "completed": true,
+                "depth": 0,
+                "exclusive_thread_cpu_sec": 2.9438999999520377e-05,
+                "exclusive_wall_sec": 2.8695998480543494e-05,
+                "name": "lifecycle_check",
+                "thread_cpu_sec": 2.9438999999520377e-05,
+                "wall_sec": 2.8695998480543494e-05
+              },
+              {
+                "completed": true,
+                "depth": 0,
+                "exclusive_thread_cpu_sec": 0.12843424199999998,
+                "exclusive_wall_sec": 0.1578291129990248,
+                "name": "diagnostic_observation",
+                "thread_cpu_sec": 0.12843424199999998,
+                "wall_sec": 0.1578291129990248
+              }
+            ],
+            "elapsed_thread_cpu_sec": 0.1285142300000004,
+            "elapsed_wall_sec": 0.15791350600193255,
+            "scope": "mode_prepare"
+          }
+        ],
+        "ticket": {
+          "generation": 3,
+          "request_id": 2,
+          "snapshot_stamp_sec": 1792311813.5118668,
+          "target_epoch": 4
+        }
+      }
+    }
+  },
+  "actual_branch": "independent observation prepare -> original measured view source binding -> accept owner identity check",
+  "not_included": [
+    "original RGBD pixels",
+    "original MoveIt trajectory",
+    "physical endpoint feedback"
+  ],
+  "replay_scope": "Metadata pins the observed failing branch. Synthetic exact-source geometry/camera fixtures exercise original preparation/bind/require/accept code; they are not claimed as the original G46 image/path replay."
+}

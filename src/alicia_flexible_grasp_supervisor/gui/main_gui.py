@@ -90,7 +90,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         tabs.addTab(home, '总览监控')
 
-        tabs.addTab(JointControlWidget(color_topic, depth_topic), '关节控制')
+        tabs.addTab(JointControlWidget(color_topic, depth_topic, show_feedback_angles=True), '关节控制')
         tabs.addTab(CartesianControlWidget(color_topic, depth_topic), '笛卡尔控制')
         tabs.addTab(TcpCalibrationWidget(), 'TCP标定')
         tabs.addTab(HandeyeCalibrationWidget(), '手眼标定')

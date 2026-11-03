@@ -102,6 +102,20 @@ def test_all_contact_poses_and_exact_evidence_match_published_plan(mutation):
     assert not audit_matches_preview(report, preview, True)
 
 
+def working_volume_view(stamp_ns, distance=.26):
+    import numpy as np
+    from alicia_flexible_grasp.grasp.observation_working_volume import (
+        observation_obb_corners, validate_planned_observation_working_volume)
+    audit = validate_planned_observation_working_volume(
+        observation_obb_corners([distance, 0., 0.], np.eye(3), [.02, .02, .02]),
+        np.eye(4), [400., 400., 320., 240.], 640, 480,
+        snapshot_stamp_ns=stamp_ns)
+    return dict(actual_camera_target_distance_m=distance,
+        min_camera_target_distance_m=.07, max_camera_target_distance_m=.5,
+        acceptance_policy='rgbd_working_volume_v1', distance_is_soft_preference=True,
+        working_volume=audit)
+
+
 @pytest.mark.parametrize('mode', ['carton','unknown'])
 def test_two_stage_validates_mode_specific_observation_band_and_original_gates(mode):
     selection, report, preview = evidence()
@@ -118,8 +132,7 @@ def test_two_stage_validates_mode_specific_observation_band_and_original_gates(m
     selected['observation_envelope'] = dict(ok=True, minimum_support_clearance_m=.003)
     selected['moveit']['joint_max_delta_rad'] = .3
     if mode == 'unknown':
-        selected['observation_view'] = dict(actual_camera_target_distance_m=.30,
-            min_camera_target_distance_m=.22, max_camera_target_distance_m=.30)
+        selected['observation_view'] = working_volume_view(report['snapshot_stamp_ns'], .30)
     preview.diagnostic = 'FAR_FIELD_OBSERVATION_PLAN'
     runner = module.ModeAwareGraspRunner()
     runner.selection, runner.minimum_stamp_ns = selection, 20000000000
@@ -151,7 +164,7 @@ def fake_run(monkeypatch, start):
     monkeypatch.setattr(module.rospy.Time, 'now', staticmethod(lambda: module.rospy.Time(20)))
     runner.wait_for_preview = lambda timeout: preview
     runner.committed_audits[preview.plan_id] = report
-    runner.wait_for_execution_authority = lambda *a: types.SimpleNamespace(success=True)
+    runner.wait_for_execution_authority = lambda *a: (types.SimpleNamespace(success=True), a[2])
     def request(trigger):
         calls.append(('inference', trigger))
         return types.SimpleNamespace(success=True, message='ok')
@@ -189,7 +202,66 @@ def test_selection_change_before_start_cannot_launch_or_stop_new_mode(monkeypatc
     runner, params, calls = fake_run(monkeypatch, lambda *a: pytest.fail('stale selection executed'))
     def changed(*args):
         params[module.SELECTION_PARAM] = dict(params[module.SELECTION_PARAM], generation=3)
-        return types.SimpleNamespace(success=True)
+        return types.SimpleNamespace(success=True), args[2]
     runner.wait_for_execution_authority = changed
     assert runner.run() == 5
     assert calls == [('inference', True)]
+
+
+def duration_first_evidence():
+    selection,report,preview=evidence()
+    report['moveit_selection'].update(policy='CHECKED_HARDWARE_DURATION_THEN_JOINT_MOTION',
+        ranking_order=['execution_duration_lower_bound_sec','joint_max_delta_rad','joint_path_cost','aperture_width_m'],
+        physical_aperture_and_gates_unchanged=True,
+        motion_metric='strict_sequence_hardware_duration_lower_bound',
+        optimality_scope='checked_hard_safe_candidates_only',global_time_optimality_claimed=False)
+    return selection,report,preview
+
+
+def test_duration_first_contract_accepts_checked_contact_and_exact_pose_binding():
+    selection,report,preview=duration_first_evidence()
+    assert not selection_audit_error(report,selection,20000000000)
+    assert not direct_audit_error(report)
+    assert audit_matches_preview(report,preview,True)
+
+
+@pytest.mark.parametrize('mutation',['ranking_order','physical_aperture_and_gates_unchanged',
+    'motion_metric','optimality_scope','global_time_optimality_claimed','collision','geometry','plan_id'])
+def test_duration_first_policy_does_not_waive_contract_or_physical_evidence(mutation):
+    _,report,_=duration_first_evidence()
+    if mutation=='collision':report['selected']['moveit']['collision_free']=False
+    elif mutation=='geometry':report['selected']['final_geometry_gate']['passed_gate_count']=5
+    elif mutation=='plan_id':report['selected']['final_strict_plan_id']='c'*24
+    else:report['moveit_selection'].pop(mutation)
+    assert direct_audit_error(report)
+
+
+@pytest.mark.parametrize('fault', ['measured_kind', 'wrong_snapshot', 'source_image_stamp',
+    'actual_tf_stamp', 'tf_query_stamp', 'tf_rounding_stamp', 'visible_surface_stamp',
+    'actual_transform_source'])
+def test_planning_audit_rejects_measured_time_authority_and_wrong_snapshot(fault):
+    selection, report, _ = evidence()
+    selection.update(mode='unknown', strategy='two_stage')
+    report['moveit_selection'] = dict(policy='FIRST_REACHABLE_BY_AUTHORITATIVE_RANK',
+                                     checked_count=1, reachable_count=1)
+    selected = report['selected']
+    selected['execution_sequence']['kind'] = 'far_field_observation'
+    selected['execution_sequence']['stages'] = selected['execution_sequence']['stages'][:1]
+    selected['execution_sequence']['stages'][0]['stage'] = 'observation'
+    selected['observation_view'] = working_volume_view(report['snapshot_stamp_ns'])
+    selected['observation_envelope'] = dict(ok=True, minimum_support_clearance_m=.003)
+    selected['moveit']['joint_max_delta_rad'] = .3
+    runner = module.ModeAwareGraspRunner()
+    runner.selection, runner.minimum_stamp_ns = selection, 20000000000
+    assert runner.audit_error(report) == ''
+    working = selected['observation_view']['working_volume']
+    stamp = report['snapshot_stamp_ns']
+    if fault == 'measured_kind': working['kind'] = 'image_bound_observation_working_volume'
+    elif fault == 'wrong_snapshot': working['snapshot_stamp_ns'] = stamp - 1
+    elif fault == 'source_image_stamp': working['source_stamp_ns'] = stamp
+    elif fault == 'actual_tf_stamp': working['camera_transform_stamp_ns'] = stamp
+    elif fault == 'tf_query_stamp': working['camera_transform_query_stamp_ns'] = stamp
+    elif fault == 'tf_rounding_stamp': working['camera_transform_stamp_delta_ns'] = 0
+    elif fault == 'visible_surface_stamp': working['visible_surface_stamp_ns'] = stamp
+    elif fault == 'actual_transform_source': working['camera_transform_source'] = 'source_image_tf_lookup'
+    assert runner.audit_error(report)

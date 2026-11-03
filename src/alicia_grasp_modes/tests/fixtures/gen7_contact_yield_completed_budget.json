@@ -1,0 +1,151 @@
+{
+  "record_id": "20261012T104800.873840Z_462e869d618f484285a6ca2fcd4f3303",
+  "gate_audit_sha256": "30f81a03f46091daef49413f2bc01a11ab2da4497b9091d373d32fbf3dd1d4b8",
+  "request_id": 28,
+  "selection": {
+    "generation": 7,
+    "mode": "unknown",
+    "stamp_ns": 1791802082869364261,
+    "strategy": "observe_return"
+  },
+  "recorded_contact_search_yield_attempt": {
+    "attempted_families": [
+      {
+        "family_sha256": "b8249099b2df5be9169feb67c23b6e6b28fcd7691d2d2cc82a6929cc366d0586",
+        "track_id": 24,
+        "variant_index": 1
+      },
+      {
+        "family_sha256": "3675b1ae13f4d79171749595250adcf3358f407068f2eaeca690a7c41a0b2861",
+        "track_id": 4,
+        "variant_index": 0
+      }
+    ],
+    "budget_deadline_ns": 1791802226635798931,
+    "collision_receipts": [
+      {
+        "accepted_stamp_ns": 1791802197241025363,
+        "evidence_sha256": "f69e621aa56d74d07803a95e8a82273e07061ec1067f9324c2ecae587c7aaba0",
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "generation": 9,
+        "plan_id": "75e077bb9aeeecb9682a5e5b",
+        "reason": "predicted_command continuous geometry: target OBB collision at 13-end/left_finger",
+        "request_id": 28,
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "sdk_stamp_ns": 1791802197186874663,
+        "snapshot_stamp_ns": 1791802178299691200,
+        "success": false,
+        "target_epoch": 9
+      }
+    ],
+    "deferred_height_families": [
+      "75e077bb9aeeecb9682a5e5b"
+    ],
+    "fallback": true,
+    "incumbent_found": false,
+    "original_families": [
+      {
+        "family_sha256": "3675b1ae13f4d79171749595250adcf3358f407068f2eaeca690a7c41a0b2861",
+        "track_id": 4,
+        "variant_index": 0
+      }
+    ],
+    "original_phase_deadline_ns": 1791802241416233216,
+    "started_ns": 1791802196635798931
+  },
+  "recorded_final_outcome": {
+    "code": "NEAR_FIELD_DIRECT_TIMEOUT",
+    "preview_valid": false,
+    "reason": "NEAR_FIELD_DIRECT_TIMEOUT",
+    "valid_plan": false
+  },
+  "first_pass_rejections": [
+    {
+      "track_id": 4,
+      "variant_index": 0,
+      "rejection": {
+        "code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "final registration-bound four-stage sequence failed strict MoveIt: predicted_command continuous geometry: target OBB collision at 13-end/left_finger"
+      },
+      "had_bound_precheck_failure": true
+    },
+    {
+      "track_id": 24,
+      "variant_index": 1,
+      "rejection": {
+        "code": "CONTACT_HEIGHT_REGISTRATION_MARGIN",
+        "reason": "support-normal translation evidence limit +/-2.676768 mm; maximum symmetric contact/support margin 2.642114 mm. Registration calibration/evidence must resolve a tighter normal-direction error budget; a historical maximum error is not a certified bound on future error."
+      },
+      "had_bound_precheck_failure": false
+    }
+  ],
+  "scope": "Recorded first pass values only; later completed-family callbacks in regression are synthetic, not a replay of an unrecorded successful view/grasp",
+  "recorded_final_rejection_times": [
+    {
+      "log_line": 3947,
+      "logged_unix_seconds": "1791802196.906533",
+      "track_id": 24,
+      "variant_index": 1,
+      "code": "CONTACT_HEIGHT_REGISTRATION_MARGIN",
+      "reason": "support-normal translation evidence limit +/-2.676768 mm; maximum symmetric contact/support margin 2.642114 mm. Registration calibration/evidence must resolve a tighter normal-direction error budget; a historical maximum error is not a certified bound on future error."
+    },
+    {
+      "log_line": 3949,
+      "logged_unix_seconds": "1791802203.705047",
+      "track_id": 4,
+      "variant_index": 0,
+      "code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+      "reason": "final registration-bound four-stage sequence failed strict MoveIt: predicted_command continuous geometry: target OBB collision at 13-end/left_finger"
+    },
+    {
+      "log_line": 3950,
+      "logged_unix_seconds": "1791802203.947969",
+      "track_id": 9,
+      "variant_index": 1,
+      "code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+      "reason": "nominal contact goal has unavoidable target OBB collision within unchanged pose/opening tolerances: left_finger"
+    },
+    {
+      "log_line": 3951,
+      "logged_unix_seconds": "1791802204.133124",
+      "track_id": 26,
+      "variant_index": 1,
+      "code": "CONTACT_HEIGHT_REGISTRATION_MARGIN",
+      "reason": "support-normal translation evidence limit +/-2.676768 mm; maximum symmetric contact/support margin 2.392651 mm. Registration calibration/evidence must resolve a tighter normal-direction error budget; a historical maximum error is not a certified bound on future error."
+    },
+    {
+      "log_line": 3957,
+      "logged_unix_seconds": "1791802232.150941",
+      "track_id": 16,
+      "variant_index": 1,
+      "code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+      "reason": "final registration-bound four-stage sequence failed strict MoveIt: predicted_command continuous geometry: target OBB collision at 12-end/left_finger"
+    },
+    {
+      "log_line": 3958,
+      "logged_unix_seconds": "1791802232.493340",
+      "track_id": 13,
+      "variant_index": 1,
+      "code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+      "reason": "nominal contact goal has unavoidable target OBB collision within unchanged pose/opening tolerances: left_finger"
+    },
+    {
+      "log_line": 3959,
+      "logged_unix_seconds": "1791802232.677981",
+      "track_id": 22,
+      "variant_index": 1,
+      "code": "CONTACT_HEIGHT_REGISTRATION_MARGIN",
+      "reason": "support-normal translation evidence limit +/-2.676768 mm; maximum symmetric contact/support margin 2.339894 mm. Registration calibration/evidence must resolve a tighter normal-direction error budget; a historical maximum error is not a certified bound on future error."
+    },
+    {
+      "log_line": 3961,
+      "logged_unix_seconds": "1791802239.423517",
+      "track_id": 17,
+      "variant_index": 1,
+      "code": "MOVEIT_TIMEOUT",
+      "reason": "final registration-bound four-stage sequence failed strict MoveIt: contact precheck requires the unchanged live near-field deadline"
+    }
+  ]
+}

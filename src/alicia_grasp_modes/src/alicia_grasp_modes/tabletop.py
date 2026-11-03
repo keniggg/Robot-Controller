@@ -20,7 +20,8 @@ class Config:
     support_max_samples: int = 1800
     support_min_ratio: float = 0.70
     support_max_normal_change_deg: float = 4.0
-    support_max_local_shift_m: float = 0.004
+    support_max_local_shift_m: float = 0.007
+    support_local_shift_warning_m: float = 0.004
     min_object_points: int = 60
     center_radius_fraction: float = 0.125
     center_ambiguity_fraction: float = 0.045
@@ -51,10 +52,14 @@ class Segmentation:
 
 
 def _project(depth, intrinsics):
+    v, u = np.indices(depth.shape)
+    return _project_pixels(depth, u, v, intrinsics)
+
+
+def _project_pixels(depth, u, v, intrinsics):
     fx, fy, cx, cy = [float(v) for v in intrinsics]
     if not all(np.isfinite(intrinsics)) or fx <= 0 or fy <= 0:
         raise ValueError('invalid_camera_intrinsics')
-    v, u = np.indices(depth.shape)
     # This workspace publishes aligned images in camera_link, not optical TF.
     return np.stack((depth, -(u - cx) * depth / fx,
                      -(v - cy) * depth / fy), axis=-1)
@@ -70,7 +75,10 @@ def project_base_to_pixel(position, transform, intrinsics):
 
 
 def _fit_plane(points, config):
-    """Fixed-cost deterministic RANSAC, followed by measured inlier SVD."""
+    """Fixed-cost RANSAC with consensus-preserving measured SVD refinement."""
+    points = np.asarray(points, dtype=float)
+    if points.ndim != 2 or points.shape[1:] != (3,) or not np.all(np.isfinite(points)):
+        raise ValueError('invalid_support_plane_points')
     if len(points) < config.support_min_points:
         raise ValueError('insufficient_support_depth')
     indices = np.linspace(0, len(points) - 1,
@@ -78,6 +86,7 @@ def _fit_plane(points, config):
     points = points[indices]
     rng = np.random.RandomState(17)
     best = np.zeros(len(points), dtype=bool)
+    best_plane = None
     for _ in range(128):
         indices = rng.randint(len(points), size=3)
         if len(set(indices.tolist())) < 3:
@@ -92,21 +101,41 @@ def _fit_plane(points, config):
         inliers = np.abs(np.einsum('ij,j->i', points - a, normal)) <= config.support_threshold_m
         if np.count_nonzero(inliers) > np.count_nonzero(best):
             best = inliers
-    if np.count_nonzero(best) < config.support_min_points:
+            best_plane = np.r_[normal, -float(normal @ a)]
+    if np.count_nonzero(best) < config.support_min_points or best_plane is None:
         raise ValueError('support_plane_not_found')
+
+    def evaluate(plane):
+        distances = np.einsum('ij,j->i', points, plane[:3]) + plane[3]
+        inliers = np.abs(distances) <= config.support_threshold_m
+        count = int(np.count_nonzero(inliers))
+        residual = float(np.sqrt(np.mean(distances[inliers] ** 2))) if count else float('inf')
+        return inliers, count, residual
+
+    # Least squares minimizes squared error, not the number of points inside
+    # the original distance gate. In asymmetric noise it can discard an
+    # already qualified consensus. Compare every model on the same unmodified
+    # samples, retaining the RANSAC model if either SVD iteration is worse.
+    best, best_count, best_residual = evaluate(best_plane)
+    refining = best
     for _ in range(2):
-        center = np.mean(points[best], axis=0)
-        _, _, vh = np.linalg.svd(points[best] - center, full_matrices=False)
+        if np.count_nonzero(refining) < 3:
+            break
+        center = np.mean(points[refining], axis=0)
+        _, _, vh = np.linalg.svd(points[refining] - center, full_matrices=False)
         normal = vh[-1]
-        offset = -float(normal @ center)
-        best = np.abs(np.einsum('ij,j->i', points, normal) + offset) <= config.support_threshold_m
-    ratio = float(np.mean(best))
+        plane = np.r_[normal, -float(normal @ center)]
+        refining, count, residual = evaluate(plane)
+        if count > best_count or (count == best_count and residual < best_residual):
+            best, best_count, best_residual, best_plane = refining, count, residual, plane
+    if best_count < config.support_min_points:
+        raise ValueError('support_plane_not_found')
+    ratio = float(best_count / len(points))
     if ratio < config.support_min_ratio:
         raise ValueError('support_plane_inlier_ratio_low')
-    if offset < 0:
-        normal, offset = -normal, -offset
-    residual = float(np.sqrt(np.mean((points[best] @ normal + offset) ** 2)))
-    return np.r_[normal, offset], ratio, residual, len(points)
+    if best_plane[3] < 0:
+        best_plane = -best_plane
+    return best_plane, ratio, best_residual, len(points)
 
 
 def _normalized_plane(plane):
@@ -144,6 +173,17 @@ def _measured_support_footprint(points_base, plane_base):
     return footprint
 
 
+def _support_offset_diagnostics(maximum, config):
+    """Record measured disagreement without correcting geometry or authorizing it."""
+    warning = float(config.support_local_shift_warning_m)
+    if not np.isfinite(warning) or warning < 0:
+        raise ValueError('invalid_support_plane_warning_config')
+    # A caller may retain a stricter hard limit below the warning threshold.
+    return dict(support_reference_distance_warning=bool(maximum > warning + 1e-12),
+                support_reference_warning_distance_m=warning,
+                support_reference_hard_distance_m=float(config.support_max_local_shift_m))
+
+
 def _validate_support_plane_update(reference_plane_base, current_plane_base,
                                    target_position_base, config,
                                    target_footprint_base):
@@ -174,20 +214,110 @@ def _validate_support_plane_update(reference_plane_base, current_plane_base,
     anchor_shift = abs(float(delta[:3] @ anchor + delta[3]))
     footprint_shift = float(np.max(np.abs(footprint @ delta[:3] + delta[3])))
     maximum = max(anchor_shift, footprint_shift)
+    diagnostics = _support_offset_diagnostics(maximum, config)
     if maximum > max_shift + 1e-12:
         raise ValueError('support_plane_local_distance_inconsistent: %.6f > %.6f m' % (maximum, max_shift))
     return current, dict(support_reference_angle_deg=angle,
                          support_reference_anchor_distance_m=anchor_shift,
                          support_reference_max_distance_m=maximum,
-                         support_reference_footprint_vertices=int(len(footprint)))
+                         support_reference_footprint_vertices=int(len(footprint)),
+                         **diagnostics)
+
+
+def _support_quadrants(supporting, u, v, center):
+    return sum(bool(np.count_nonzero(
+        supporting & (u < center[0] if left else u >= center[0])
+        & (v < center[1] if top else v >= center[1])) >= 20)
+        for left in (True, False) for top in (True, False))
+
+
+def _fit_support_ring_sequence(depth, intrinsics, valid, radius, scale, config,
+                               points_camera=None):
+    """Use the same bounded measured rings before and after target locking.
+
+    Only an insufficient inlier ratio admits a smaller ring. A fit that meets
+    the original quality contract is final: spatial coverage and immutable
+    reference consistency are checked by the caller, never bypassed by trying
+    another footprint after positive disagreement.
+    """
+    for outer in (170, 140, 110):
+        ring = valid & (radius >= 70 * scale) & (radius <= outer * scale)
+        if points_camera is None:
+            ring_v, ring_u = np.nonzero(ring)
+            points = _project_pixels(depth[ring], ring_u, ring_v, intrinsics)
+        else:
+            points = points_camera[ring]
+        try:
+            plane, ratio, residual, count = _fit_plane(points, config)
+        except ValueError as exc:
+            if str(exc) != 'support_plane_inlier_ratio_low' or outer == 110:
+                raise
+        else:
+            return plane, ratio, residual, count, ring, points, float(outer * scale)
+
+
+def _audit_current_support(depth_m, intrinsics, transform_base_camera,
+                           config, anchor, reference_plane_base):
+    """Look for positive current-frame contradiction before reference filtering.
+
+    Missing/occluded support is not a contradiction. A fit is compared with the
+    immutable reference only after the original ratio, residual and spatial
+    coverage gates pass. This audit neither segments nor changes target identity.
+    """
+    depth = np.asarray(depth_m, dtype=np.float32)
+    transform = np.asarray(transform_base_camera, dtype=float)
+    if depth.ndim != 2 or not depth.size:
+        raise ValueError('invalid_depth_shape')
+    if transform.shape != (4, 4) or not np.all(np.isfinite(transform)):
+        raise ValueError('invalid_exact_transform')
+    valid = np.isfinite(depth) & (depth >= config.depth_min_m) & (depth <= config.depth_max_m)
+    center = project_base_to_pixel(anchor.position_base, transform, intrinsics)
+    v, u = np.indices(depth.shape)
+    scale = min(depth.shape[1] / 640.0, depth.shape[0] / 480.0)
+    radius = np.hypot(u - center[0], v - center[1])
+    evidence = dict(support_current_audit_available=False)
+    try:
+        # Preserve row-major samples and avoid a second full-frame cloud.
+        plane, ratio, residual, count, ring, points, outer = _fit_support_ring_sequence(
+            depth, intrinsics, valid, radius, scale, config)
+    except ValueError as exc:
+        if str(exc) not in ('insufficient_support_depth', 'support_plane_not_found',
+                            'support_plane_inlier_ratio_low'):
+            raise
+        evidence['support_current_audit_reason'] = str(exc)
+        return evidence
+    ring_u, ring_v = u[ring], v[ring]
+    supporting = (np.abs(np.einsum('ij,j->i', points, plane[:3])
+                         + plane[3]) <= config.support_threshold_m)
+    covered = _support_quadrants(supporting, ring_u, ring_v, center)
+    evidence.update(support_current_audit_inlier_ratio=ratio,
+                    support_current_audit_residual_m=residual,
+                    support_current_audit_sample_count=int(count),
+                    support_current_audit_quadrants=covered,
+                    support_current_audit_ring_outer_radius_px=outer)
+    if not np.isfinite(residual) or residual > config.support_threshold_m:
+        evidence['support_current_audit_reason'] = 'support_plane_residual_too_large'
+        return evidence
+    if covered < 3:
+        evidence['support_current_audit_reason'] = 'insufficient_support_spatial_coverage'
+        return evidence
+    current = _normalized_plane(np.linalg.solve(transform.T, plane))
+    _, agreement = _validate_support_plane_update(
+        reference_plane_base, current, anchor.position_base, config,
+        anchor.support_footprint_base)
+    evidence.update(agreement)
+    evidence['support_current_audit_available'] = True
+    return evidence
 
 
 def _depth_components(foreground, depth, minimum, edge,
-                      points_camera=None, target_camera=None, association_distance=None):
-    """4-connected measured pixels with bounded local depth discontinuity."""
+                      points_camera=None, target_camera=None, association_distance=None, *, connectivity=4):
+    """Measured neighbors; no filled pixels or relaxed depth edge."""
+    if type(connectivity) is not int or connectivity not in (4, 8):
+        raise ValueError('invalid_depth_component_connectivity')
     # First discard speckles in C++; floodFill then splits depth-discontinuous
     # touching regions without bridging missing depth or inventing mask pixels.
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, connectivity=4)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, connectivity=connectivity)
     eligible = [index for index in range(1, count)
                 if stats[index, cv2.CC_STAT_AREA] >= minimum]
     if target_camera is not None:
@@ -232,7 +362,7 @@ def _depth_components(foreground, depth, minimum, edge,
             y, x = locations[len(locations) // 2]
             _, _, blocked, rect = cv2.floodFill(
                 patch, blocked, (int(x), int(y)), 0, edge, edge,
-                flags=4 | cv2.FLOODFILL_MASK_ONLY | (2 << 8))
+                flags=connectivity | cv2.FLOODFILL_MASK_ONLY | (2 << 8))
             selected = blocked[1:-1, 1:-1] == 2
             if np.count_nonzero(selected) >= minimum:
                 full_mask = np.zeros(depth.shape, bool)
@@ -275,7 +405,12 @@ def segment(depth_m, intrinsics, transform_base_camera, config=None,
     if not fit_current_support:
         if plane_base is None:
             raise ValueError('missing_reference_support_plane')
-        current_plane_base = _normalized_plane(plane_base)
+        # Keep the supplied reference coefficients as exact provenance. Even
+        # an already normalized fitted plane can change by one ULP when
+        # normalized again; that is not a new support measurement. Candidate
+        # metrics and calculations still require the normalized metric plane.
+        reference_plane_base = np.array(plane_base, dtype=float, copy=True)
+        current_plane_base = _normalized_plane(reference_plane_base)
         plane_camera = transform.T @ current_plane_base
         distances = np.einsum('ijk,k->ij', points, plane_camera[:3]) + plane_camera[3]
         supporting = valid & (np.abs(distances) <= config.support_threshold_m)
@@ -286,23 +421,27 @@ def segment(depth_m, intrinsics, transform_base_camera, config=None,
         sample_count = min(np.count_nonzero(supporting), config.support_max_samples)
         plane_source = 'locked_base_plane'
     else:
-        plane_camera, ratio, residual, sample_count = _fit_plane(points[ring], config)
+        # The same bounded ring selection serves acquisition, current support
+        # audit and locked refitting. It never replaces the immutable target
+        # footprint used by the consistency checks below.
+        plane_camera, ratio, residual, sample_count, ring, _, outer = _fit_support_ring_sequence(
+            depth, intrinsics, valid, radius, scale, config, points_camera=points)
+        agreement['support_ring_outer_radius_px'] = outer
         current_plane_base = _normalized_plane(np.linalg.solve(transform.T, plane_camera))
-        if plane_base is not None:
-            current_plane_base, agreement = _validate_support_plane_update(
-                plane_base, current_plane_base, target_position_base, config,
-                target_footprint_base)
-            plane_camera = transform.T @ current_plane_base
         plane_source = 'current_ring_fit'
         supporting = ring & (np.abs(np.einsum('ijk,k->ij', points, plane_camera[:3]) + plane_camera[3]) <= config.support_threshold_m)
     if not np.isfinite(residual) or residual > config.support_threshold_m:
         raise ValueError('support_plane_residual_too_large')
     # A narrow strip or isolated patch must not establish the support surface.
-    covered = sum(bool(np.count_nonzero(supporting & (u < center[0] if left else u >= center[0])
-                                       & (v < center[1] if top else v >= center[1])) >= 20)
-                  for left in (True, False) for top in (True, False))
+    covered = _support_quadrants(supporting, u, v, center)
     if covered < 3:
         raise ValueError('insufficient_support_spatial_coverage')
+    if fit_current_support and plane_base is not None:
+        current_plane_base, consistency = _validate_support_plane_update(
+            plane_base, current_plane_base, target_position_base, config,
+            target_footprint_base)
+        agreement.update(consistency)
+        plane_camera = transform.T @ current_plane_base
     above = np.einsum('ijk,k->ij', points, plane_camera[:3]) + plane_camera[3]
     # Once locked, search the full frame; selection is based on base coordinates.
     roi = radius <= 155 * scale if target_position_base is None else np.ones(depth.shape, bool)
@@ -343,7 +482,8 @@ def segment(depth_m, intrinsics, transform_base_camera, config=None,
                                     np.array([np.mean(xs), np.mean(ys)]), bbox,
                                     p_camera, p_base, extent, float(p_camera[0]), quality, metrics,
                                     _measured_support_footprint(points_base, current_plane_base)))
-    return Segmentation(candidates, current_plane_base,
+    result_plane_base = current_plane_base if fit_current_support else reference_plane_base
+    return Segmentation(candidates, result_plane_base,
                         dict(support_source=plane_source, support_inlier_ratio=ratio,
                              support_residual_m=residual, support_sample_count=int(sample_count),
                              **agreement))
@@ -366,14 +506,17 @@ def _matching_candidates(candidates, anchor, last, config):
 
 def segment_with_support_fallback(depth_m, intrinsics, transform_base_camera,
                                   config=None, anchor=None, last=None,
-                                  reference_plane_base=None):
+                                  reference_plane_base=None, *, prefer_current_support=False):
     """Try bounded same-frame re-segmentation before mutating target identity.
 
-    The reference path is unchanged for a unique eligible measured instance.
-    A contaminated component can trigger one current-table fit; that fit must
+    Independent current-support evidence is checked even when the reference
+    path yields an eligible measured instance. A contaminated component can
+    trigger one current-table re-segmentation; that fit must
     agree with the immutable original plane over its actual measured object
     footprint. Neither path commits tracking state or unsets a loss latch.
     """
+    if type(prefer_current_support) is not bool:
+        raise ValueError('invalid_current_support_preference')
     config = config or Config()
     if anchor is None:
         return segment(depth_m, intrinsics, transform_base_camera, config)
@@ -382,6 +525,9 @@ def segment_with_support_fallback(depth_m, intrinsics, transform_base_camera,
     arguments = dict(target_position_base=anchor.position_base,
                      plane_base=reference_plane_base,
                      target_footprint_base=anchor.support_footprint_base)
+    support_audit = _audit_current_support(
+        depth_m, intrinsics, transform_base_camera, config, anchor,
+        reference_plane_base)
     reference_error = ''
     try:
         reference = segment(depth_m, intrinsics, transform_base_camera, config,
@@ -391,20 +537,39 @@ def segment_with_support_fallback(depth_m, intrinsics, transform_base_camera,
         # An old transported plane can turn table texture into many separate
         # foreground patches while the camera moves. Previously that bounded
         # work rejection bypassed the same-frame support-refit path entirely.
-        # Only these segmentation-cap failures admit one refit. Malformed
-        # inputs and failed geometric contracts must propagate unchanged.
-        if str(exc) not in ('too_many_foreground_instances', 'too_many_depth_components'):
+        # The original 2 mm band can also be empty or cover only a narrow strip
+        # while a qualified current plane agrees within the original local-
+        # distance tolerance. Admit those old-plane visibility failures only
+        # with this frame's independent support audit; missing/contradictory
+        # current support is not recovery evidence.
+        capped = str(exc) in ('too_many_foreground_instances', 'too_many_depth_components')
+        qualified_visibility_recovery = (
+            str(exc) in ('locked_support_plane_no_longer_visible',
+                         'insufficient_support_spatial_coverage')
+            and support_audit.get('support_current_audit_available') is True)
+        if not (capped or qualified_visibility_recovery):
             raise
         reference_error = str(exc)
         matching = []
     # An already ambiguous pair must remain ambiguous. Re-fitting a plane is
     # not independent evidence for discarding one of two eligible identities.
-    if len(matching) >= 1:
+    # At a qualified stationary measurement, even a plausible single old-
+    # plane component can include table texture. Use the independently audited
+    # current fit for its measured foreground. The immutable plane still gates
+    # agreement, and no refit may discard an already ambiguous second identity.
+    observation_refit = (prefer_current_support and len(matching) == 1
+                         and support_audit.get('support_current_audit_available') is True)
+    if len(matching) >= 1 and not observation_refit:
+        reference.metrics.update(support_audit)
+        for candidate in reference.candidates:
+            candidate.metrics.update(support_audit)
         return reference
     current = segment(depth_m, intrinsics, transform_base_camera, config,
                       fit_current_support=True, **arguments)
-    evidence = dict(support_refit_attempted=True,
+    evidence = dict(support_audit, support_refit_attempted=True,
                     support_reference_eligible_candidates=len(matching))
+    if observation_refit:
+        evidence['support_refit_reason'] = 'qualified_current_support_measurement'
     if reference_error:
         evidence['support_reference_segmentation_error'] = reference_error
     current.metrics.update(evidence)

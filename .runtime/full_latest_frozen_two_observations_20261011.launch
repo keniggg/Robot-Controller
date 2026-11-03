@@ -1,0 +1,5 @@
+<launch>
+  <!-- User requested frozen functionality, at most two supplemental views. -->
+  <include file="/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_latest_no_skin_20261010.launch"/>
+  <param name="/grasp/unknown_observe_return_max_observations" type="int" value="2"/>
+</launch>

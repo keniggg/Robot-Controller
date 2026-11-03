@@ -18,6 +18,9 @@ robot:
   planning_time: 2.0
   # Candidate reachability preflight only; final planning/execution keeps planning_time.
   strict_pose_planning_time: 0.25
+  # One solve per observation view, on the independent observation planner.
+  # Search still respects its original source/session deadlines; no retries.
+  observation_pose_planning_time: 1.0
   # Free-space orientation seeds use a deterministic contact-to-anchor
   # quaternion geodesic and collision-aware IK from an explicit joint seed.
   # These are generic numerical/search bounds, not target-specific poses.

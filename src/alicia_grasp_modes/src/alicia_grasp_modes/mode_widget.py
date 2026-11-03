@@ -7,11 +7,13 @@ from PyQt5 import QtCore, QtWidgets
 import rospy
 from std_msgs.msg import String
 from alicia_grasp_modes.srv import SetGraspMode
+from alicia_grasp_modes.selection import STRATEGIES, validate_mode_strategy
 from gui.theme import panel
 
 
 TARGET_NAMES = {'carton': 'Carton 纸盒', 'unknown': '未知小物体'}
-STRATEGY_NAMES = {'direct': '一次性直接抓取', 'two_stage': '两阶段抓取'}
+STRATEGY_NAMES = {'direct': '一次性直接抓取', 'two_stage': '两阶段抓取',
+                  'observe_return': '一阶段优先（必要时补充观察）'}
 
 
 class GraspModeWidget(QtWidgets.QWidget):
@@ -37,7 +39,7 @@ class GraspModeWidget(QtWidgets.QWidget):
         self.strategy.setObjectName('GraspStrategyChoice')
         for value, label in TARGET_NAMES.items():
             self.target.addItem(label, value)
-        for value in ('two_stage', 'direct'):
+        for value in STRATEGIES:
             self.strategy.addItem(STRATEGY_NAMES[value], value)
         form.addRow('抓取目标', self.target)
         form.addRow('执行方式', self.strategy)
@@ -70,7 +72,16 @@ class GraspModeWidget(QtWidgets.QWidget):
         self._describe()
 
     def _describe(self):
-        if self.strategy.currentData() == 'direct':
+        unknown = self.target.currentData() == 'unknown'
+        item = self.strategy.model().item(self.strategy.findData('observe_return'))
+        item.setEnabled(unknown)
+        if not unknown and self.strategy.currentData() == 'observe_return':
+            self.strategy.blockSignals(True)
+            self.strategy.setCurrentIndex(self.strategy.findData('two_stage'))
+            self.strategy.blockSignals(False)
+        if self.strategy.currentData() == 'observe_return':
+            description = '当前视角足够时一次性抓取；视角不足时补充观察 → 回到初始姿态 → 一次性抓取。'
+        elif self.strategy.currentData() == 'direct':
             description = '当前视角规划 → 预抓取位 → 接近、闭爪、抬升。'
         else:
             description = '先到观察位 → 重新识别规划 → 接近、闭爪、抬升。'
@@ -91,6 +102,7 @@ class GraspModeWidget(QtWidgets.QWidget):
             mode, strategy = value['mode'], value['strategy']
             if mode not in TARGET_NAMES or strategy not in STRATEGY_NAMES:
                 return
+            validate_mode_strategy(mode, strategy)
             generation = int(value['generation'])
         except (ValueError, KeyError, TypeError):
             return
@@ -138,6 +150,11 @@ class GraspModeWidget(QtWidgets.QWidget):
         if self._requesting or not self.apply_button.isEnabled():
             return
         mode, strategy = self.target.currentData(), self.strategy.currentData()
+        try:
+            validate_mode_strategy(mode, strategy)
+        except ValueError as exc:
+            self.status.setText('方案未应用：' + str(exc))
+            return
         self._requesting = True
         self._dirty = False
         self.status.setText('正在应用方案…')

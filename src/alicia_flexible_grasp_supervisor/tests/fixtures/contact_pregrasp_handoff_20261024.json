@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "scope": "Recorded plan-loss messages during the real successful pregrasp action to compensation gap. Tests rebase source/arrival deltas onto an explicitly synthetic motion/encoder fixture; no physical motion success is simulated as evidence.",
+  "record_id": "20261024T125834.070534Z_a70f38c1f16444108f4e34c0a3ff64e5",
+  "source_extract_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/actual_gen63_baseline_validation_20261023T041149Z/high_accuracy_grasp_r1/arrival_margin_repair_r1/integrated_failure_repair_r1/astra_handoff/actual_mujoco_repaired_grasp_r1/recorded_handoff_events.json",
+  "source_extract_sha256": "84ffbaa7c278aac4165a5f04a21153ba6a48f3af9136d1a2fa31a9a607d0de28",
+  "bag_declared_sha256": "8a5bb6a04229f087f718b37c0f98ea1021b7bb391a853563c39e62790f4cd4b9",
+  "bag_hash_recomputed_by_this_extractor": false,
+  "controller_result": {
+    "topic": "/alicia_controller/follow_joint_trajectory/result",
+    "bag_timestamp_ns": 1792846978476809024,
+    "callerid": null,
+    "message": {
+      "header": {
+        "seq": 2,
+        "stamp": {
+          "sec": 1792846978,
+          "nsec": 476184886,
+          "nanoseconds": 1792846978476184886
+        },
+        "frame_id": ""
+      },
+      "status": {
+        "goal_id": {
+          "stamp": {
+            "sec": 1792846899,
+            "nsec": 523366451,
+            "nanoseconds": 1792846899523366451
+          },
+          "id": "/motion_gateway-3-1792846899.523"
+        },
+        "status": 3,
+        "text": ""
+      },
+      "result": {
+        "error_code": 0,
+        "error_string": ""
+      }
+    }
+  },
+  "controller_completion_ns": 1792846978476184886,
+  "compensation_failure_core_stamp_ns": 1792846979404533000,
+  "loss_messages": [
+    {
+      "topic": "/grasp_6d/plan_enriched",
+      "bag_timestamp_ns": 1792846978519266366,
+      "callerid": null,
+      "header": {
+        "seq": 2845,
+        "stamp": {
+          "sec": 1792846978,
+          "nsec": 385302543,
+          "nanoseconds": 1792846978385302543
+        },
+        "frame_id": "base_link"
+      },
+      "plan_id": "",
+      "track": "",
+      "diagnostic": "TARGET_LOST: target object is not detected",
+      "valid": false,
+      "wire_sha256": "cdc31eedba471cb262e7c47922fcf589b64dd1369234078fed2f645a6d3aa73f"
+    },
+    {
+      "topic": "/grasp_6d/plan_enriched",
+      "bag_timestamp_ns": 1792846978718123912,
+      "callerid": null,
+      "header": {
+        "seq": 2846,
+        "stamp": {
+          "sec": 1792846978,
+          "nsec": 583675861,
+          "nanoseconds": 1792846978583675861
+        },
+        "frame_id": "base_link"
+      },
+      "plan_id": "",
+      "track": "",
+      "diagnostic": "TARGET_LOST: target object is not detected",
+      "valid": false,
+      "wire_sha256": "1a63e22a31a8f01902445481edad883730f9cead3617faf70615d574c3095450"
+    },
+    {
+      "topic": "/grasp_6d/plan_enriched",
+      "bag_timestamp_ns": 1792846978860713720,
+      "callerid": null,
+      "header": {
+        "seq": 2847,
+        "stamp": {
+          "sec": 1792846978,
+          "nsec": 718212127,
+          "nanoseconds": 1792846978718212127
+        },
+        "frame_id": "base_link"
+      },
+      "plan_id": "",
+      "track": "",
+      "diagnostic": "TARGET_LOST: target object is not detected",
+      "valid": false,
+      "wire_sha256": "2e1786b758f777e8acfff748f7f83ccc9e87dafee771dc3c01059ca2d50aa41a"
+    },
+    {
+      "topic": "/grasp_6d/plan_enriched",
+      "bag_timestamp_ns": 1792846979019704580,
+      "callerid": null,
+      "header": {
+        "seq": 2848,
+        "stamp": {
+          "sec": 1792846978,
+          "nsec": 917276382,
+          "nanoseconds": 1792846978917276382
+        },
+        "frame_id": "base_link"
+      },
+      "plan_id": "",
+      "track": "",
+      "diagnostic": "TARGET_LOST: target object is not detected",
+      "valid": false,
+      "wire_sha256": "b0912d004f1628cc018d35c12783180a98505786d27909121ad38352d4d762bb"
+    },
+    {
+      "topic": "/grasp_6d/plan_enriched",
+      "bag_timestamp_ns": 1792846979214207649,
+      "callerid": null,
+      "header": {
+        "seq": 2849,
+        "stamp": {
+          "sec": 1792846979,
+          "nsec": 52505970,
+          "nanoseconds": 1792846979052505970
+        },
+        "frame_id": "base_link"
+      },
+      "plan_id": "",
+      "track": "",
+      "diagnostic": "TARGET_LOST: target object is not detected",
+      "valid": false,
+      "wire_sha256": "757e6775263164949020c7c7d3038e61b4c6c79a05f82fc5911650049f525b1f"
+    }
+  ]
+}

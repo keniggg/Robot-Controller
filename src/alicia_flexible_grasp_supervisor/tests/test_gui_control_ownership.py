@@ -256,3 +256,328 @@ def test_manual_takeover_cancels_existing_moveit_trajectory_without_disabling_co
     gateway._gui_mode_cb(NS(data=False))
     assert events == ['cancel_moveit_trajectory']
     assert not gateway.positive_enable_requests and gateway.controller_checks == 0
+
+
+def reset_aware_widget(monkeypatch):
+    w, sent = direct_widget(monkeypatch)
+    w._display_feedback_ready = True
+    w._display_actuation_status = 'CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE'
+    w._display_sync_required = False
+    w._display_sync_manual = False
+    w._display_sync_after_sec = 0.0
+    w.messages = []
+    w.status = NS(setText=w.messages.append)
+    return w, sent
+
+
+def feedback(w, positions, stamp=122.5, names=None):
+    return NS(name=list(w.names if names is None else names), position=positions,
+              header=NS(stamp=widget_module.rospy.Time.from_sec(stamp)))
+
+
+def test_power_recovery_replaces_old_absolute_slider_baseline_without_motion(monkeypatch):
+    w, sent = reset_aware_widget(monkeypatch)
+    w.names = ['Joint%d' % i for i in range(1, 7)]
+    # Recorded September 26 startup angles retained by the old GUI.
+    w.sliders = [Slider(value) for value in [-5, 1302, -15, -3, -416, -6]]
+    w.labels = [NS(setText=lambda text: None) for _ in w.names]
+    w._pending_direct_edits[1] = ([0., 1.1, 0., 0., -.416, 0.], 10.)
+    w._apply_feedback_ready(False, 122.1)
+    w._apply_feedback_ready(True, 122.2)
+    assert not w._pending_direct_edits
+    measured = [-.003, -.0107, -.015, -.005, -.0107, -.006]
+    w.update_current_state(feedback(w, measured))
+    assert [s.value() for s in w.sliders] == [-3, -11, -15, -5, -11, -6]
+    assert not w._display_sync_required and not sent
+    assert all(not slider.emitted for slider in w.sliders)
+    # A fresh leftward edit is now below the measured J2 angle, not the old
+    # +1.302 rad target, and only its explicitly edited axis is admitted.
+    w.sliders[1].current = -40
+    w._queue_direct_edit(1)
+    w.flush_direct_publish()
+    assert len(sent) == 1 and sent[0].position[1] < measured[1]
+    assert sent[0].effort == [0., 1., 0., 0., 0., 0.]
+    # Ordinary confirmed manual feedback must still leave the target intact.
+    w.update_current_state(feedback(w, [-.003, -.025, -.015, -.005, -.011, -.006], 122.6))
+    assert w.sliders[1].value() == -40
+
+
+def test_recovery_during_drag_requires_explicit_sync_and_never_replays_release(monkeypatch):
+    w, sent = reset_aware_widget(monkeypatch)
+    down = [True]
+    w.sliders[1].isSliderDown = lambda: down[0]
+    w.sender = lambda: w.sliders[1]
+    w._begin_direct_slider_gesture(1)
+    w._queue_direct_edit(1)
+    w._apply_feedback_ready(False, 122.1)
+    w._apply_feedback_ready(True, 122.2)
+    w.update_current_state(feedback(w, [-.02, -.03]))
+    assert w._display_sync_manual
+    assert [s.value() for s in w.sliders] == [100, 200]
+    down[0] = False
+    w.handle_slider_released()
+    w.update_current_state(feedback(w, [-.02, -.03], 122.6))
+    w.flush_direct_publish()
+    assert w._display_sync_required and not sent
+    assert [s.value() for s in w.sliders] == [100, 200]
+    assert not w.direct_recovery.pending_edit[0] and not w._pending_direct_edits
+    w.sync_current_state()
+    assert [s.value() for s in w.sliders] == [-20, -30]
+    assert not w._display_sync_required and not sent
+
+
+@pytest.mark.parametrize('stamp,positions,names', [
+    (122.1, [.01, .02], None),  # Before the recovered-ready event.
+    (121.9, [.01, .02], None),  # Stale.
+    (123.1, [.01, .02], None),  # Future timestamp.
+    (0., [.01, .02], None),
+    (122.5, [.01], ['Joint1']),
+    (122.5, [.01, float('nan')], None),
+])
+def test_display_reset_rejects_stale_or_incomplete_feedback(monkeypatch, stamp, positions, names):
+    w, sent = reset_aware_widget(monkeypatch)
+    w._apply_feedback_ready(False, 122.1)
+    w._apply_feedback_ready(True, 122.2)
+    w.update_current_state(feedback(w, positions, stamp, names))
+    w.sync_current_state()
+    assert w._display_sync_required
+    assert [s.value() for s in w.sliders] == [100, 200] and not sent
+
+
+def test_positive_enable_reset_discards_old_handshake_without_wait_cycle(monkeypatch):
+    w, sent = reset_aware_widget(monkeypatch)
+    w.direct_recovery.update_actuation_status('UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT')
+    w.publish_direct(target=[.1, 1.3], edited_index=1)
+    assert sent == [('enable', False)] and w.direct_recovery.pending_edit[0]
+    w._apply_actuation_status('PENDING:POSITIVE_ENABLE_REQUESTED', 122.2)
+    assert not w.direct_recovery.pending_edit[0]
+    # No active drag: receiving a new valid sample permits display-only sync,
+    # without waiting for CONFIRMED (which would itself require a new goal).
+    w.update_current_state(feedback(w, [-.01, -.02]))
+    assert not w._display_sync_required
+    assert [s.value() for s in w.sliders] == [-10, -20]
+    w.flush_direct_publish()
+    assert sent == [('enable', False)]
+    # Repeated latched status must not erase normal new explicit input.
+    w._queue_direct_edit(0)
+    w._apply_actuation_status('PENDING:POSITIVE_ENABLE_REQUESTED', 122.7)
+    assert not w._display_sync_required and 0 in w._pending_direct_edits
+
+
+def test_edit_before_recovery_sample_cannot_publish_stale_absolute_target(monkeypatch):
+    w, sent = reset_aware_widget(monkeypatch)
+    w._apply_feedback_ready(False, 122.1)
+    w._apply_feedback_ready(True, 122.2)
+    w.publish_direct(target=[.1, 1.3], edited_index=1)
+    w._queue_direct_edit(1)
+    w.flush_direct_publish()
+    assert not sent and not w._pending_direct_edits
+    w.update_current_state(feedback(w, [-.01, -.02]))
+    assert w._display_sync_required and w._display_sync_manual
+    w.sync_current_state()
+    assert not w._display_sync_required and not sent
+
+
+@pytest.mark.parametrize('status', [
+    'DISABLED:NOT_REQUESTED',
+    'UNCONFIRMED:ENCODER_FEEDBACK_NOT_READY',
+    'UNCONFIRMED:SERIAL_RECONNECTED_TORQUE_UNCHANGED',
+    'UNCONFIRMED:DISCONTINUOUS_FEEDBACK_RECOVERY',
+])
+def test_driver_feedback_epoch_change_resynchronizes_without_ready_false(monkeypatch, status):
+    w, sent = reset_aware_widget(monkeypatch)
+    w._apply_actuation_status(status, 122.2)
+    assert w._display_sync_required
+    w.update_current_state(feedback(w, [-.01, -.02]))
+    assert not w._display_sync_required
+    assert [s.value() for s in w.sliders] == [-10, -20] and not sent
+
+
+def test_gui_startup_waits_for_ready_and_new_complete_sample(monkeypatch):
+    w, sent = reset_aware_widget(monkeypatch)
+    w._display_feedback_ready = None
+    w._display_sync_required = True
+    w.update_current_state(feedback(w, [.8, .9], 122.1))
+    assert [s.value() for s in w.sliders] == [100, 200]
+    w._apply_feedback_ready(True, 122.2)
+    assert w._display_sync_required
+    w.update_current_state(feedback(w, [-.01, -.02]))
+    assert not w._display_sync_required
+    assert [s.value() for s in w.sliders] == [-10, -20] and not sent
+
+
+def epoch(stamp, frame_id='sdk_reference_epoch'):
+    return NS(stamp=widget_module.rospy.Time.from_sec(stamp), frame_id=frame_id)
+
+
+def powercycle_widget(monkeypatch):
+    w, sent = reset_aware_widget(monkeypatch)
+    now = [123.0]
+    monkeypatch.setattr(widget_module.rospy.Time, 'now',
+                        lambda: widget_module.rospy.Time.from_sec(now[0]))
+    w.names = ['Joint%d' % i for i in range(1, 7)]
+    w.sliders = [Slider(value) for value in [0, 272, 0, 0, 0, 0]]
+    w.labels = [NS(setText=lambda text: None) for _ in w.names]
+    w._apply_control_reference_epoch(epoch(121.0))
+    w._apply_feedback_ready(False, 122.0)
+    w._apply_actuation_status('UNCONFIRMED:ENCODER_FEEDBACK_NOT_READY', 122.0)
+    return w, sent, now
+
+
+def test_explicit_sync_recovers_feedback_once_then_only_updates_display(monkeypatch):
+    w, sent, now = powercycle_widget(monkeypatch)
+    w._pending_direct_edits[1] = ([0., .5, 0., 0., 0., 0.], 10.)
+    w._pending_direct_publish = True
+    w.direct_recovery._pending_target = [0., .5, 0., 0., 0., 0.]
+    w.sync_current_state()
+    assert sent == [('enable', False)]
+    assert w._display_sync_required and not w._pending_direct_edits
+    assert not w._pending_direct_publish and not w.direct_recovery.pending_edit[0]
+    w.sync_current_state()
+    w.flush_direct_publish()
+    assert sent == [('enable', False)]
+
+    # A status transition and fresh-looking old-epoch data are insufficient.
+    now[0] = 123.8
+    w._apply_actuation_status('PENDING:POSITIVE_ENABLE_REQUESTED', 123.02)
+    w._apply_feedback_ready(True, 123.03)
+    w.update_current_state(feedback(w, [0., -.012, 0., 0., 0., 0.], 123.1))
+    w._apply_control_reference_epoch(epoch(122.0))  # Delayed prior-epoch latch.
+    w.sync_current_state()
+    assert w._display_sync_required and w.sliders[1].value() == 272
+    assert sent == [('enable', False)]
+
+    w._apply_control_reference_epoch(epoch(123.2))
+    w.update_current_state(feedback(w, [0., -.012, 0., 0., 0., 0.], 123.1))
+    assert w._display_sync_required
+    w.update_current_state(feedback(w, [0., -.012, 0., 0., 0., 0.], 123.3))
+    assert not w._display_sync_required
+    assert w._display_feedback_recovery is None and w.sliders[1].value() == -12
+    assert all(not slider.emitted for slider in w.sliders)
+    w.flush_direct_publish()
+    w.sync_current_state()
+    assert sent == [('enable', False)]  # No sync target, probe, or old goal.
+
+
+@pytest.mark.parametrize('status', [
+    '', 'DISABLED:NOT_REQUESTED', 'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT',
+    'UNCONFIRMED:ENCODER_FEEDBACK_STALE', 'UNCONFIRMED:UNKNOWN_REASON',
+    'PENDING:POSITIVE_ENABLE_REQUESTED', 'CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE',
+])
+def test_explicit_sync_does_not_enable_for_unapproved_status(monkeypatch, status):
+    w, sent, _ = powercycle_widget(monkeypatch)
+    w._apply_actuation_status(status, 122.1)
+    w.sync_current_state()
+    assert not sent and w._display_sync_required
+    assert w.__dict__.get('_display_feedback_recovery') is None
+
+
+@pytest.mark.parametrize('restriction', ['automatic', 'dragging', 'closed'])
+def test_explicit_sync_requires_manual_ownership_and_released_sliders(monkeypatch, restriction):
+    w, sent, _ = powercycle_widget(monkeypatch)
+    if restriction == 'automatic':
+        w.realtime_direct = NS(isChecked=lambda: False)
+    elif restriction == 'dragging':
+        w.sliders[1].isSliderDown = lambda: True
+    else:
+        w._alive = False
+    w.sync_current_state()
+    assert not sent and w._display_sync_required
+
+
+def test_fresh_complete_explicit_sync_never_requests_enable(monkeypatch):
+    w, sent, _ = powercycle_widget(monkeypatch)
+    w._apply_feedback_ready(True, 122.1)
+    w.current_state = feedback(w, [0., -.012, 0., 0., 0., 0.], 122.5)
+    w.sync_current_state()
+    assert not sent and not w._display_sync_required
+    assert w.sliders[1].value() == -12
+
+
+@pytest.mark.parametrize('stamp,positions,names', [
+    (123.2, [0.] * 6, None),  # Equal to epoch is not a newer sample.
+    (123.1, [0.] * 6, None),  # Old epoch.
+    (124.0, [0.] * 6, None),  # Future.
+    (0., [0.] * 6, None),
+    (123.3, [0.] * 5, ['Joint%d' % i for i in range(1, 6)]),
+    (123.3, [0., float('nan'), 0., 0., 0., 0.], None),
+])
+def test_sync_recovery_keeps_waiting_for_real_complete_new_epoch_sample(monkeypatch, stamp, positions, names):
+    w, sent, now = powercycle_widget(monkeypatch)
+    w.sync_current_state()
+    now[0] = 123.8
+    w._apply_control_reference_epoch(epoch(123.2))
+    w._apply_feedback_ready(True, 123.21)
+    w.update_current_state(feedback(w, positions, stamp, names))
+    w.sync_current_state()
+    assert w._display_sync_required and w.sliders[1].value() == 272
+    assert sent == [('enable', False)]
+
+
+@pytest.mark.parametrize('stamp,frame_id', [
+    (121., 'sdk_reference_epoch'), (123., 'sdk_reference_epoch'),
+    (124., 'sdk_reference_epoch'), (123.2, 'unrelated_epoch'),
+])
+def test_sync_recovery_ignores_old_missing_or_unrelated_epoch(monkeypatch, stamp, frame_id):
+    w, sent, now = powercycle_widget(monkeypatch)
+    w.sync_current_state()
+    now[0] = 123.8
+    w._apply_control_reference_epoch(epoch(stamp, frame_id))
+    w._apply_feedback_ready(True, 123.21)
+    w.update_current_state(feedback(w, [0.] * 6, 123.3))
+    assert w._display_sync_required and sent == [('enable', False)]
+
+
+def test_recovery_does_not_replay_slider_input_during_wait(monkeypatch):
+    w, sent, now = powercycle_widget(monkeypatch)
+    w.sync_current_state()
+    w.sliders[1].current = 900
+    w._queue_direct_edit(1)
+    w.publish_direct(target=[0., .9, 0., 0., 0., 0.], edited_index=1)
+    w.flush_direct_publish()
+    now[0] = 123.8
+    w._apply_control_reference_epoch(epoch(123.2))
+    w._apply_feedback_ready(True, 123.21)
+    w.update_current_state(feedback(w, [0., -.012, 0., 0., 0., 0.], 123.3))
+    assert w._display_sync_required  # Editing during recovery requires a new click.
+    w.sync_current_state()
+    w.flush_direct_publish()
+    assert not w._display_sync_required and w.sliders[1].value() == -12
+    assert not w._pending_direct_edits and not w.direct_recovery.pending_edit[0]
+    assert sent == [('enable', False)]
+
+
+def test_no_automatic_enable_from_feedback_or_timer_callbacks(monkeypatch):
+    w, sent, _ = powercycle_widget(monkeypatch)
+    for _ in range(3):
+        w._apply_feedback_ready(False, 122.0)
+        w._apply_actuation_status('UNCONFIRMED:ENCODER_FEEDBACK_NOT_READY', 122.1)
+        w.flush_direct_publish()
+    assert not sent
+
+
+def test_joint_widget_epoch_subscription_stops_with_widget(monkeypatch):
+    w, _, _ = powercycle_widget(monkeypatch)
+    events = []
+    w.control_reference_epoch_signal = NS(emit=lambda message: events.append('epoch'))
+    w._reference_epoch_subscriber = NS(unregister=lambda: events.append('unregistered'))
+    w._control_reference_epoch_cb(epoch(122.0))
+    w._shutdown_ros()
+    w._shutdown_ros()
+    w._control_reference_epoch_cb(epoch(123.0))
+    assert events == ['epoch', 'unregistered']
+
+
+def test_failed_enable_publication_is_not_repeated_and_never_replays_target(monkeypatch):
+    w, sent, _ = powercycle_widget(monkeypatch)
+    attempts = []
+    def failed_publish(msg):
+        attempts.append(msg.data)
+        raise RuntimeError('publisher closed')
+    w.enable_pub = NS(publish=failed_publish)
+    w.sync_current_state()
+    w.sync_current_state()
+    w.flush_direct_publish()
+    assert attempts == [False] and not sent
+    assert w._display_sync_required and w._display_feedback_recovery is not None
+    assert not w._pending_direct_edits and not w.direct_recovery.pending_edit[0]

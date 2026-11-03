@@ -1,0 +1,175 @@
+{
+  "scope": "Complete recorded response envelopes from three rejected candidates of 20261024T105955.362283Z_09876da49725454083e879d6a0aad109. Historical failure is preserved; no physical grasp was attempted.",
+  "sources": [
+    {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/actual_gen63_baseline_validation_20261023T041149Z/high_accuracy_grasp_r1/arrival_margin_repair_r1/integrated_failure_repair_r1/astra_geometry/actual_nearfield_sim_r1/frozen/1792839731833637797_6674750d73744b1ead19be905e030565/response.json",
+      "sha256": "ceb8fe44a7755891056930a996c72231c626eac3c49ac7e773b9413c87fab2d7"
+    },
+    {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/actual_gen63_baseline_validation_20261023T041149Z/high_accuracy_grasp_r1/arrival_margin_repair_r1/integrated_failure_repair_r1/astra_geometry/actual_nearfield_sim_r1/frozen/1792839748931780983_7d3d8a0c69284ee7bbee583a6d56c3b0/response.json",
+      "sha256": "a0703035b3fafccceaa00aeb441fcc91796cf5fe8a2ef9250ae4f6c7a51294f0"
+    },
+    {
+      "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/actual_gen63_baseline_validation_20261023T041149Z/high_accuracy_grasp_r1/arrival_margin_repair_r1/integrated_failure_repair_r1/astra_geometry/actual_nearfield_sim_r1/frozen/1792839763699881790_a0ca90b653d84706a52b43fd54ba905c/response.json",
+      "sha256": "a099008365569d99302c6867855ad472bc28b5af40cc60bb9c3fb395c17cda3d"
+    }
+  ],
+  "responses": [
+    {
+      "backend": "mujoco",
+      "plan_id": "b7e194d77a88b5df7025af11",
+      "simulation_ok": false,
+      "score": 55.0,
+      "ik_success": true,
+      "collision_free": true,
+      "contact_success": false,
+      "lift_success": false,
+      "failure_code": "MUJOCO_CONTACT_FAILED",
+      "failure_reason": "single-finger contact made the object unstable (0.0028m)",
+      "candidate_source": "tabletop_geometry",
+      "candidate_source_lineage": [
+        "tabletop_geometry"
+      ],
+      "diagnosis": [
+        "trajectory collision check passed",
+        "single-finger contact made the object unstable (0.0028m)"
+      ],
+      "ik_results": [
+        {
+          "name": "pregrasp",
+          "success": true,
+          "position_error_m": 0.000185718677400872,
+          "orientation_error": 0.0007742096026937048,
+          "iterations": 76
+        },
+        {
+          "name": "approach",
+          "success": true,
+          "position_error_m": 0.00018432640076375135,
+          "orientation_error": 0.0008317427787288398,
+          "iterations": 26
+        },
+        {
+          "name": "grasp",
+          "success": true,
+          "position_error_m": 0.00018556330954247322,
+          "orientation_error": 0.0008431692163298344,
+          "iterations": 29
+        },
+        {
+          "name": "lift",
+          "success": true,
+          "position_error_m": 0.00019401115027743878,
+          "orientation_error": 0.0008287193912761425,
+          "iterations": 32
+        }
+      ],
+      "used_joint_state_source": "request",
+      "ok": true
+    },
+    {
+      "backend": "mujoco",
+      "plan_id": "23d0094d069f04534722883d",
+      "simulation_ok": false,
+      "score": 55.0,
+      "ik_success": true,
+      "collision_free": true,
+      "contact_success": false,
+      "lift_success": false,
+      "failure_code": "MUJOCO_CONTACT_FAILED",
+      "failure_reason": "single-finger contact made the object unstable (0.0027m)",
+      "candidate_source": "tabletop_geometry",
+      "candidate_source_lineage": [
+        "tabletop_geometry"
+      ],
+      "diagnosis": [
+        "trajectory collision check passed",
+        "single-finger contact made the object unstable (0.0027m)"
+      ],
+      "ik_results": [
+        {
+          "name": "pregrasp",
+          "success": true,
+          "position_error_m": 0.00019828833825480318,
+          "orientation_error": 0.00131097116941934,
+          "iterations": 65
+        },
+        {
+          "name": "approach",
+          "success": true,
+          "position_error_m": 0.00019344618222552607,
+          "orientation_error": 0.0008912111204248297,
+          "iterations": 28
+        },
+        {
+          "name": "grasp",
+          "success": true,
+          "position_error_m": 0.0001913725635875307,
+          "orientation_error": 0.0009260671624601416,
+          "iterations": 27
+        },
+        {
+          "name": "lift",
+          "success": true,
+          "position_error_m": 0.0001958245235029062,
+          "orientation_error": 0.0008646159309290423,
+          "iterations": 32
+        }
+      ],
+      "used_joint_state_source": "request",
+      "ok": true
+    },
+    {
+      "backend": "mujoco",
+      "plan_id": "8718df73c68b4f7380769409",
+      "simulation_ok": false,
+      "score": 55.0,
+      "ik_success": true,
+      "collision_free": true,
+      "contact_success": false,
+      "lift_success": false,
+      "failure_code": "MUJOCO_CONTACT_FAILED",
+      "failure_reason": "single-finger contact made the object unstable (0.0026m)",
+      "candidate_source": "tabletop_geometry",
+      "candidate_source_lineage": [
+        "tabletop_geometry"
+      ],
+      "diagnosis": [
+        "trajectory collision check passed",
+        "single-finger contact made the object unstable (0.0026m)"
+      ],
+      "ik_results": [
+        {
+          "name": "pregrasp",
+          "success": true,
+          "position_error_m": 0.000178510670731319,
+          "orientation_error": 0.001228367333268233,
+          "iterations": 63
+        },
+        {
+          "name": "approach",
+          "success": true,
+          "position_error_m": 0.0001840418336745914,
+          "orientation_error": 0.0008496446913051408,
+          "iterations": 29
+        },
+        {
+          "name": "grasp",
+          "success": true,
+          "position_error_m": 0.00019628245405416885,
+          "orientation_error": 0.0009729084567633966,
+          "iterations": 26
+        },
+        {
+          "name": "lift",
+          "success": true,
+          "position_error_m": 0.00019428027202234886,
+          "orientation_error": 0.0008651597035206927,
+          "iterations": 32
+        }
+      ],
+      "used_joint_state_source": "request",
+      "ok": true
+    }
+  ]
+}

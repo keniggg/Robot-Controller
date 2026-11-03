@@ -65,7 +65,7 @@ def main():
             'Endpoint trim', 'retimed', 'settled', 'request_completed',
             'observation roll selected', 'observation selected', 'VALID_3D', 'precision lease',
             'Measured observation CAD envelope', 'Fixed-goal endpoint correction',
-            'Captured reached-view measured surface',
+            'Captured reached-view measured surface', 'Measured contact before closure',
         )):
             emit('ROSLOG', '%s %s' % (msg.name, msg.msg))
 

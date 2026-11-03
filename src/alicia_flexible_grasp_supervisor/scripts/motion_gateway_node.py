@@ -5,6 +5,7 @@ import hashlib
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from control_msgs.msg import (
     FollowJointTrajectoryGoal,
 )
 from std_msgs.msg import Bool, Header, String
+from std_srvs.srv import Trigger, TriggerResponse
 from sensor_msgs.msg import JointState
 from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan, GraspState
 from alicia_flexible_grasp.robot.observation_path_guard import (
@@ -36,8 +38,30 @@ from alicia_flexible_grasp.robot.actuation_bootstrap import PENDING_BOOTSTRAP_ST
 from alicia_flexible_grasp.robot.stationary_following import stationary_following_error, ARM_NAMES
 from alicia_flexible_grasp.robot.observation_preview import encode_path_evidence
 from alicia_flexible_grasp.robot.observation_timing import observation_timing
+from alicia_flexible_grasp.robot.pregrasp_timing import (
+    unknown_pregrasp_velocity_limits, pregrasp_velocity_scope, temporary_attribute,
+)
 from alicia_flexible_grasp.robot.endpoint_correction import EndpointCorrection
 from alicia_flexible_grasp.robot.pregrasp_gateway import PregraspCompensationGateway
+from alicia_flexible_grasp.robot.observe_return_gateway import ObserveReturnGateway
+try:
+    from alicia_flexible_grasp.robot.rgb_acquisition_gateway import RgbAcquisitionGateway
+    RGB_ACQUISITION_ADDON_ERROR = ''
+except ImportError as exc:
+    # grasp_modes is an optional integration addon; do not create a catkin
+    # dependency cycle or prevent the original gateway from starting alone.
+    RGB_ACQUISITION_ADDON_ERROR = str(exc)
+    class RgbAcquisitionGateway:
+        def _initialize_rgb_acquisition(self):
+            rospy.logwarn('RGB acquisition addon unavailable: %s', RGB_ACQUISITION_ADDON_ERROR)
+        def _rgb_acquisition_revoke_event(self):
+            pass
+from alicia_flexible_grasp.robot.observation_view_gateway import ObservationViewGateway
+from alicia_flexible_grasp.robot.observation_compensation_gateway import ObservationCompensationGateway
+from alicia_flexible_grasp.robot.contact_sequence_precheck import ContactSequencePrecheckGateway
+from alicia_flexible_grasp.robot.contact_pregrasp_gateway import ContactPregraspGateway
+from alicia_flexible_grasp.robot.contact_linear_compensation import ContactLinearCompensationGateway
+from alicia_flexible_grasp.robot.lift_linear_gateway import LiftLinearCompensationGateway
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from alicia_flexible_grasp.robot.joint_commander import JointCommander
 from alicia_flexible_grasp.robot.gripper_commander import GripperCommander
@@ -48,6 +72,7 @@ from alicia_flexible_grasp_supervisor.srv import (
     CartesianJogResponse,
     CompensatePregrasp,
     CheckPoseSequence,
+    CheckContactSequence,
     CheckPoseSequenceResponse,
     ResolveFreeSpaceOrientations,
     ResolveFreeSpaceOrientationsResponse,
@@ -68,9 +93,10 @@ except Exception:
     SwitchControllerRequest = None
     ListControllers = None
 
-class MotionGateway(PregraspCompensationGateway):
+class MotionGateway(ObservationCompensationGateway, RgbAcquisitionGateway, ObservationViewGateway, ContactPregraspGateway, ContactSequencePrecheckGateway, LiftLinearCompensationGateway, PregraspCompensationGateway, ContactLinearCompensationGateway, ObserveReturnGateway):
     def __init__(self):
         cfg = rospy.get_param('/robot', {})
+        self._initialize_observation_view_tf()
         self.joint_names = cfg.get('joint_names', ['Joint1','Joint2','Joint3','Joint4','Joint5','Joint6','right_finger'])
         self.trajectory_controller_names = cfg.get('trajectory_controller_names', ['alicia_controller', 'hand_controller'])
         self.joint_cmd = JointCommander(cfg.get('joint_command_topic','/joint_commands'), self.joint_names)
@@ -113,6 +139,7 @@ class MotionGateway(PregraspCompensationGateway):
         self._positive_enable_reference_epoch_sec = None
         self._control_reference_epoch_ns = None
         self._completed_command_reference = None
+        self._physical_reference_lease = None
         self._sdk_reference_sub = rospy.Subscriber(
             '/alicia_d/sdk_command', JointState, self._sdk_command_feedback_cb,
             queue_size=1)
@@ -123,10 +150,17 @@ class MotionGateway(PregraspCompensationGateway):
             '/alicia_d/control_reference_epoch', Header, self._control_reference_epoch_cb,
             queue_size=1)
         self._observation_task_state_stamp_ns = 0
+        self._observation_last_task_message = None
         self._observation_task_requires_inactive = False
         self._observation_plan_sub = rospy.Subscriber(
             '/grasp_6d/plan_enriched', Grasp6DPlan,
             self._committed_observation_plan_cb, queue_size=10)
+        self._frozen_contact_sub = rospy.Subscriber(
+            '/grasp_6d/frozen_contact_plan', String,
+            self._frozen_contact_plan_cb, queue_size=4)
+        self._observe_return_view_session_sub = rospy.Subscriber(
+            '/grasp_mode/observe_return_session', String,
+            self._observe_return_view_session_cb, queue_size=8)
         self._observation_feedback_sub = rospy.Subscriber(
             '/alicia_d/accepted_joint_states', JointState, self._observation_joint_feedback_cb,
             queue_size=1)
@@ -154,7 +188,32 @@ class MotionGateway(PregraspCompensationGateway):
                       self.handle_endpoint_feedback_correction)
         rospy.Service('/supervisor/compensate_pregrasp', CompensatePregrasp,
                       self.handle_compensate_pregrasp)
+        self._observation_compensation_measurement_sub = rospy.Subscriber(
+            '/grasp_mode/observe_return_measurement_request', String,
+            self._observation_compensation_measurement_cb, queue_size=8)
+        rospy.Service('/supervisor/compensate_observation_endpoint', CompensatePregrasp,
+                      self.handle_compensate_observation)
+        rospy.Service('/supervisor/capture_observe_return_origin', CompensatePregrasp,
+                      self.handle_capture_observe_return_origin)
+        rospy.Service('/supervisor/return_observe_return_origin', CompensatePregrasp,
+                      self.handle_return_observe_return_origin)
+        rospy.Service('/supervisor/admit_observe_return_view', CompensatePregrasp,
+                      self.handle_admit_observe_return_view)
+        # Reuse the frozen-plan/execute wire contract. Each service binds one
+        # immutable pose; requests cannot supply an arbitrary correction goal.
+        rospy.Service('/supervisor/compensate_approach', CompensatePregrasp,
+                      self.handle_compensate_approach)
+        rospy.Service('/supervisor/compensate_grasp_pose', CompensatePregrasp,
+                      self.handle_compensate_grasp_pose)
+        rospy.Service('/supervisor/move_contact_approach', CompensatePregrasp,
+                      self.handle_contact_approach)
+        rospy.Service('/supervisor/move_contact_grasp_pose', CompensatePregrasp,
+                      self.handle_contact_grasp_pose)
+        rospy.Service('/supervisor/move_contact_lift', CompensatePregrasp,
+                      self.handle_contact_lift)
         rospy.Service('/supervisor/set_gripper', SetFloat, self.handle_gripper)
+        rospy.Service('/supervisor/cleanup_physical_reference_manual', Trigger,
+                      self.handle_cleanup_physical_reference_manual)
         rospy.Service('/supervisor/move_to_pose', SetTargetPose, self.handle_pose)
         rospy.Service('/supervisor/move_to_pose_linear', SetTargetPose, self.handle_pose_linear)
         rospy.Service('/supervisor/check_pose_strict', SetTargetPose, self.handle_pose_strict)
@@ -164,6 +223,14 @@ class MotionGateway(PregraspCompensationGateway):
                       self.handle_observation_pose_strict_execute)
         rospy.Service('/supervisor/plan_and_execute_observation_pose_strict', SetTargetPose,
                       self.handle_observation_pose_strict_plan_execute)
+        self._initialize_rgb_acquisition()
+        if not RGB_ACQUISITION_ADDON_ERROR:
+            rospy.Service('/supervisor/plan_and_execute_rgb_acquisition_pose_strict', SetTargetPose,
+                          self.handle_rgb_acquisition_pose_strict)
+        rospy.Service('/supervisor/check_contact_sequence', CheckContactSequence,
+                      self.handle_contact_sequence_precheck)
+        rospy.Service('/supervisor/move_contact_pregrasp', CompensatePregrasp,
+                      self.handle_contact_pregrasp)
         rospy.Service(
             '/supervisor/check_pose_sequence_strict',
             CheckPoseSequence,
@@ -187,14 +254,19 @@ class MotionGateway(PregraspCompensationGateway):
         rospy.loginfo('MotionGateway ready: commands -> %s', cfg.get('joint_command_topic','/joint_commands'))
 
     def _gui_mode_cb(self, msg):
-        was_manual = getattr(self, '_gui_direct_mode', False)
-        self._gui_direct_mode = bool(msg.data)
-        if self._gui_direct_mode != was_manual:
-            self._completed_command_reference = None
+        with self._command_reference_lock:
+            was_manual = getattr(self, '_gui_direct_mode', False)
+            self._gui_direct_mode = bool(msg.data)
+            if self._gui_direct_mode != was_manual:
+                self._rgb_acquisition_revoke_event()
+                self._completed_command_reference = None
+                self._observation_sync_hold_evidence = None
         if self._gui_direct_mode and hasattr(self, '_observation_context_lock'):
             with self._observation_context_lock:
+                self._revoke_direct_contact_task('manual takeover', preserve_inactive=True)
                 self._observation_contexts.clear()
                 self._observation_contexts.set_active(False)
+                self._compensation_visual_context = None
         if self._gui_direct_mode and not was_manual:
             # Cancel only MoveIt's active trajectory; controllers and joint
             # torque remain enabled. The driver independently installs hold
@@ -227,6 +299,14 @@ class MotionGateway(PregraspCompensationGateway):
                 planner.observation_branch_hints_enabled = True
                 self._observation_planner = planner
             try:
+                # Observation has its own planner and search budget. Give each
+                # view one bounded solve without changing contact planning,
+                # attempt counts, or the caller's source/session deadlines.
+                planning_time = rospy.get_param('/robot/observation_pose_planning_time', 1.0)
+                if (isinstance(planning_time, bool) or not isinstance(planning_time, (int, float))
+                        or not math.isfinite(planning_time) or not 0.05 <= planning_time <= 1.0):
+                    raise ValueError('observation_pose_planning_time must be finite in [0.05, 1.0] seconds')
+                planner.strict_pose_planning_time = float(planning_time)
                 timing_key = self._configure_observation_timing(planner)
             except ValueError as exc:
                 planner._last_pose_plan = None
@@ -277,6 +357,7 @@ class MotionGateway(PregraspCompensationGateway):
                 result.message += ' observation_velocity_scaling=%.3f observation_acceleration_scaling=%.3f' % (
                     planner.strict_execution_velocity_scaling,
                     planner.strict_execution_acceleration_scaling)
+                result.message += ' observation_planning_time_sec=%.3f' % planning_time
                 return result
             finally:
                 planner.observation_path_validator = previous_validator
@@ -362,8 +443,28 @@ class MotionGateway(PregraspCompensationGateway):
             try:
                 if float(msg.header.stamp.to_sec()) > float(rospy.get_time()):
                     raise ObservationPathError('committed geometry source is future')
+                if self._compensation_allows_visual_loss(msg):
+                    rospy.logwarn_throttle(2.0,
+                        'Preserving frozen contact compensation through TARGET_LOST')
+                    return
+                compensation = getattr(self, '_compensation_visual_context', None)
+                if (compensation is not None and msg.valid is True
+                        and msg.target_track_id != compensation['scene'].track_id):
+                    raise ObservationPathError('contact compensation target track changed')
+                self._record_direct_contact_publication(msg)
                 self._observation_contexts.ingest(msg)
+                if self._observation_contexts.blocked or not self._observation_contexts.active:
+                    self._compensation_visual_context = None
+                    self._contact_pregrasp_receipts = {}
+                    self._contact_frozen_notifications = {}
+                    self._contact_frozen_admissions = {}
+                else:
+                    self._capture_contact_pregrasp_plan(msg)
             except Exception as exc:
+                self._compensation_visual_context = None
+                self._contact_pregrasp_receipts = {}
+                self._contact_frozen_notifications = {}
+                self._contact_frozen_admissions = {}
                 self._observation_contexts.clear()
                 rospy.logwarn('Rejected committed observation geometry: %s', exc)
 
@@ -376,7 +477,9 @@ class MotionGateway(PregraspCompensationGateway):
             if stamp_ns <= self._observation_task_state_stamp_ns:
                 return
             self._observation_task_state_stamp_ns = stamp_ns
+            self._observation_last_task_message = deepcopy(msg)
             self._pregrasp_task_stage = int(msg.stage)
+            self._compensation_task_label = str(msg.message)
             terminal_stages = (GraspStages.SUCCESS, GraspStages.FAILED,
                                GraspStages.EMERGENCY_STOP)
             terminal = (msg.stage in terminal_stages or
@@ -384,6 +487,10 @@ class MotionGateway(PregraspCompensationGateway):
             if terminal:
                 self._revoke_observation_task()
             if not bool(msg.active):
+                self._compensation_visual_context = None
+                self._contact_pregrasp_receipts = {}
+                self._contact_frozen_notifications = {}
+                self._contact_frozen_admissions = {}
                 # A real inactive message is the only way to release the
                 # terminal/disconnect latch; reconnecting alone is not enough.
                 self._observation_contexts.set_active(False)
@@ -392,6 +499,7 @@ class MotionGateway(PregraspCompensationGateway):
                 self._revoke_observation_task()
             elif not terminal and not getattr(self, '_observation_task_requires_inactive', False):
                 self._observation_contexts.set_active(True)
+            self._direct_contact_task_state(msg, terminal)
             self._notify_observation_task_state()
 
     def _notify_observation_task_state(self):
@@ -400,6 +508,11 @@ class MotionGateway(PregraspCompensationGateway):
             condition.notify_all()  # caller holds the context RLock
 
     def _revoke_observation_task(self):
+        self._revoke_direct_contact_task('task revoked')
+        self._compensation_visual_context = None
+        self._contact_pregrasp_receipts = {}
+        self._contact_frozen_notifications = {}
+        self._contact_frozen_admissions = {}
         self._observation_contexts.clear()
         self._observation_contexts.set_active(False)
         self._observation_task_requires_inactive = True
@@ -417,11 +530,14 @@ class MotionGateway(PregraspCompensationGateway):
         return False
 
     def _require_live_observation_task(self):
-        if (not self._observation_task_connection_available()
-                or not self._observation_contexts.active
-                or self._observation_contexts.blocked
-                or getattr(self, '_observation_task_requires_inactive', False)):
-            raise ObservationPathError('active task publisher is unavailable')
+        if not self._observation_task_connection_available():
+            raise ObservationPathError('OBSERVATION_TASK_PUBLISHER_DISCONNECTED')
+        if getattr(self, '_observation_task_requires_inactive', False):
+            raise ObservationPathError('OBSERVATION_TASK_REQUIRES_INACTIVE')
+        if not self._observation_contexts.active:
+            raise ObservationPathError('OBSERVATION_TASK_INACTIVE')
+        if self._observation_contexts.blocked:
+            raise ObservationPathError('OBSERVATION_CONTEXT_BLOCKED')
 
     def _wait_for_active_observation_task(self, max_wait_sec=.5):
         duration = float(max_wait_sec)
@@ -430,9 +546,10 @@ class MotionGateway(PregraspCompensationGateway):
         deadline = time.monotonic() + duration
         with self._observation_context_condition:
             while not self._observation_contexts.active:
-                if (not self._observation_task_connection_available()
-                        or getattr(self, '_observation_task_requires_inactive', False)):
-                    raise ObservationPathError('active task publisher is unavailable')
+                if not self._observation_task_connection_available():
+                    raise ObservationPathError('OBSERVATION_TASK_PUBLISHER_DISCONNECTED')
+                if getattr(self, '_observation_task_requires_inactive', False):
+                    raise ObservationPathError('OBSERVATION_TASK_REQUIRES_INACTIVE')
                 remaining = deadline - time.monotonic()
                 if remaining <= 0.:
                     raise ObservationPathError('active task admission notification timed out')
@@ -473,11 +590,22 @@ class MotionGateway(PregraspCompensationGateway):
             old = getattr(self, '_control_reference_epoch_ns', None)
             if old is not None and stamp_ns <= old:
                 return
+            self._rgb_acquisition_revoke_event()
             self._control_reference_epoch_ns = stamp_ns
             self._positive_enable_reference_epoch_sec = float(msg.stamp.to_sec())
             self._sdk_command_feedback = None
             self._driver_control_reference = None
             self._completed_command_reference = None
+            self._observation_sync_hold_evidence = None
+
+        # Keep lock order separate from the SDK reference lock. A new epoch
+        # invalidates a captured task budget, never creates a replacement.
+        # An already observed inactive task remains inactive across a reference
+        # change. Preserve only that fact; revoke publications and all active,
+        # missed or expired task authority before accepting a future start.
+        if old is not None and hasattr(self, '_observation_context_lock'):
+            with self._observation_context_lock:
+                self._revoke_direct_contact_task('SDK reference epoch changed', preserve_inactive=True)
 
     @staticmethod
     def _sdk_arm_words(positions):
@@ -516,6 +644,86 @@ class MotionGateway(PregraspCompensationGateway):
         if not 0. <= positions[-1] <= .05:
             raise ObservationPathError('accepted gripper opening outside physical range')
         return positions
+
+    def _rgb_validate_measured_feedback(self, message, epoch_ns):
+        """Validate an owned SDK sample; command/heartbeat caches are not evidence."""
+        if len(self.joint_names) != 7 or set(self.joint_names[:-1]) != set(ARM_NAMES):
+            raise ObservationPathError('RGB_MEASURED_ARM_JOINT_NAMES_INVALID')
+        positions = self._fresh_named_reference(
+            message, 'sdk_measured', list(ARM_NAMES)+[self.joint_names[-1]])
+        stamp_ns = message.header.stamp.to_nsec()
+        if type(epoch_ns) is not int or epoch_ns <= 0 or stamp_ns <= epoch_ns:
+            raise ObservationPathError('RGB_MEASURED_FEEDBACK_OUTSIDE_EPOCH')
+        self._sdk_arm_words(positions[:-1])
+        if not 0. <= positions[-1] <= .05:
+            raise ObservationPathError('accepted gripper opening outside physical range')
+        maximum = float(rospy.get_param(
+            '/robot/strict_execution_controller_sync_max_feedback_age_sec', .5))
+        age = (rospy.Time.now().to_nsec()-stamp_ns)*1e-9
+        if not math.isfinite(maximum) or not 0. < maximum <= .5 or not 0. <= age <= maximum:
+            raise ObservationPathError('RGB_MEASURED_FEEDBACK_EXPIRED_DURING_VALIDATION')
+        with self._command_reference_lock:
+            if self._control_reference_epoch_ns != epoch_ns:
+                raise ObservationPathError('RGB_MEASURED_FEEDBACK_EPOCH_CHANGED')
+        return SimpleNamespace(stamp_ns=stamp_ns, epoch_ns=epoch_ns, positions=positions[:-1],
+                               maximum_age_ns=int(maximum*1e9))
+
+    def _rgb_measured_feedback_snapshot(self, expected_epoch=None):
+        with self._command_reference_lock:
+            epoch_ns = self._control_reference_epoch_ns
+            message = deepcopy(getattr(self, '_observation_joint_feedback', None))
+        if expected_epoch is not None and epoch_ns != expected_epoch:
+            raise ObservationPathError('RGB_MEASURED_FEEDBACK_EPOCH_CHANGED')
+        return self._rgb_validate_measured_feedback(message, epoch_ns)
+
+    def _rgb_measured_arm_snapshot(self):
+        return self._rgb_measured_feedback_snapshot().positions
+
+    def _wait_for_stationary_rgb_feedback(self):
+        """Require new accepted SDK samples spanning the original .25 s window."""
+        started_ns = rospy.Time.now().to_nsec()
+        deadline = time.monotonic()+2.
+        try:
+            epoch_ns = self._rgb_measured_feedback_snapshot().epoch_ns
+            with self._endpoint_feedback_lock:
+                seen = {id(msg): msg for msg in self._endpoint_feedback_history['accepted']}
+            last = None
+            anchor = None
+            stable_stamp_ns = None
+            while not rospy.is_shutdown() and time.monotonic() <= deadline:
+                if self._manual_control_active():
+                    return False, 'MANUAL_CONTROL_ACTIVE'
+                latest = self._rgb_measured_feedback_snapshot(expected_epoch=epoch_ns)
+                with self._endpoint_feedback_lock:
+                    incoming = [(id(msg), msg, deepcopy(msg)) for msg in
+                        self._endpoint_feedback_history['accepted'] if id(msg) not in seen]
+                for ident, owned, message in incoming:
+                    seen[ident] = owned  # Keep identities alive until this bounded wait ends.
+                    sample = self._rgb_validate_measured_feedback(message, epoch_ns)
+                    if sample.stamp_ns <= started_ns and last is None:
+                        continue
+                    if last is not None and sample.stamp_ns <= last.stamp_ns:
+                        if (sample.stamp_ns == last.stamp_ns
+                                and sample.positions == last.positions):
+                            continue  # Repeated packets never advance the window.
+                        raise ObservationPathError('RGB_MEASURED_FEEDBACK_SOURCE_REGRESSED')
+                    if (last is None or sample.stamp_ns-last.stamp_ns > sample.maximum_age_ns
+                            or max(abs(a-b) for a,b in zip(anchor, sample.positions))
+                                > 2.*math.pi/4096.+1e-9):
+                        anchor = list(sample.positions)
+                        stable_stamp_ns = sample.stamp_ns
+                    last = sample
+                if (last is not None and latest.stamp_ns == last.stamp_ns
+                        and latest.positions == last.positions
+                        and last.stamp_ns-stable_stamp_ns >= 250_000_000):
+                    final = self._rgb_measured_feedback_snapshot(expected_epoch=epoch_ns)
+                    if (final.stamp_ns == last.stamp_ns and final.positions == last.positions
+                            and time.monotonic() <= deadline):
+                        return True, 'new accepted SDK samples stationary for at least .25 s'
+                time.sleep(.02)
+        except (ObservationPathError, ValueError, TypeError, AttributeError, KeyError) as exc:
+            return False, 'RGB_MEASURED_FEEDBACK_INVALID: '+str(exc)
+        return False, 'RGB_MEASURED_FEEDBACK_NOT_SETTLED'
 
     def _command_reference_snapshot(self):
         """Read paired successful-write telemetry, never a requested target.
@@ -579,7 +787,8 @@ class MotionGateway(PregraspCompensationGateway):
             setattr(desired, field, [float(by_name[name]) for name in joint_names])
         if require_stationary and any(value != 0. for value in desired.velocities + desired.accelerations):
             raise ObservationPathError('controller reference is not stationary')
-        self._sdk_arm_words(desired.positions)
+        if getattr(self, '_physical_reference_lease', None) is None:
+            self._sdk_arm_words(desired.positions)
         # Keep time and q/v/a from one callback snapshot. Reading the live
         # header later can incorrectly lend a newer frame's time to old q.
         desired.controller_stamp_sec = float(state.header.stamp.to_sec())
@@ -594,6 +803,49 @@ class MotionGateway(PregraspCompensationGateway):
         if reference is None or reference.mode != 'sdk_tracking':
             raise ObservationPathError('automatic SDK reference has not been admitted')
         desired = self._stationary_controller_reference(joint_names)
+        lease = getattr(self, '_physical_reference_lease', None)
+        if lease is not None:
+            from alicia_flexible_grasp.robot.physical_reference_client import PhysicalReferenceLease
+            from alicia_flexible_grasp.robot.following_model import ARM_NAMES
+            if type(lease) is not PhysicalReferenceLease:
+                raise ObservationPathError('PHYSICAL_REFERENCE_LEASE_INVALID')
+            states = lease.query(phases=(lease.ACTIVE_IDLE, lease.ARMED),
+                armed=lease.armed_envelope is not None)
+            idle = all(s.phase == lease.ACTIVE_IDLE and not s.output_gated for s in states)
+            armed_hold = (lease.armed_envelope is not None and all(
+                s.phase == lease.ARMED and s.output_gated and not s.goal_observed for s in states)
+                and rospy.Time.now().to_nsec()
+                    < lease.armed_envelope.goal.trajectory.header.stamp.to_nsec())
+            if not (idle or armed_hold) or any(state.epoch_ns != epoch for state in states):
+                raise ObservationPathError('PHYSICAL_REFERENCE_LEASE_NOT_ACTIVE')
+            bias_by_name = dict(zip(ARM_NAMES, lease.model.bias_rad))
+            physical = tuple(desired.positions)
+            derived_wire = [value+bias_by_name[name]
+                for name,value in zip(joint_names, physical)]
+            contract_names = tuple(lease.contract.wire_plan().joint_trajectory.joint_names)
+            if lease.armed_envelope is not None and all(s.goal_terminal for s in states):
+                checked_wire = lease.contract.wire_plan().joint_trajectory.points[-1].positions
+                checked_physical = lease.contract.physical_plan().joint_trajectory.points[-1].positions
+            else:
+                checked_wire = lease.contract.wire_reference[0]
+                checked_physical = lease.contract.physical_reference[0]
+            expected_physical = dict(zip(contract_names, checked_physical))
+            expected_wire = dict(zip(contract_names, checked_wire))
+            if (any(abs(value-expected_physical[name]) > 1e-12
+                    for name,value in zip(joint_names, physical))
+                    or self._sdk_arm_words(derived_wire) != self._sdk_arm_words(
+                        [expected_wire[n] for n in joint_names])):
+                raise ObservationPathError('PHYSICAL_REFERENCE_CHECKED_HOLD_CHANGED')
+            # Return the exact proof-bound virtual wire anchor only after
+            # matching its actual physical hold and exact successful SDK
+            # words. Retain the observed JTC physical values separately; a
+            # floating add/subtract round trip must not mutate a proof hash.
+            desired.positions = [expected_wire[n] for n in joint_names]
+            desired.derived_wire_positions = tuple(derived_wire)
+            desired.reference_domain = 'wire_from_authenticated_physical'
+            desired.physical_positions = physical
+            desired.source_bias_sha256 = lease.model.digest
+            desired.physical_binding_id = lease.model.binding_id
         wire_by_name = dict(zip(self.joint_names[:-1], reference.positions))
         wire = [wire_by_name[name] for name in joint_names]
         if self._sdk_arm_words(desired.positions) != self._sdk_arm_words(wire):
@@ -631,6 +883,12 @@ class MotionGateway(PregraspCompensationGateway):
             'sdk_words': self._sdk_arm_words(desired.positions),
             'completion': completed,
         }
+        if hasattr(desired, 'physical_binding_id'):
+            self._observation_sync_hold_evidence.update(
+                reference_domain=desired.reference_domain,
+                physical_positions=desired.physical_positions,
+                physical_binding_id=desired.physical_binding_id,
+                source_bias_sha256=desired.source_bias_sha256)
         return desired
 
     def _record_completed_controller_reference(self, plan):
@@ -642,16 +900,256 @@ class MotionGateway(PregraspCompensationGateway):
         if len(positions) != len(names):
             raise ObservationPathError('completed trajectory endpoint is incomplete')
         self._sdk_arm_words(positions)
+        lease = getattr(self, '_physical_reference_lease', None)
+        physical_completion = None
+        if lease is not None:
+            from alicia_flexible_grasp.robot.physical_reference_contract import (
+                validate_dual_reference, physical_plan_from_wire)
+            validate_dual_reference(lease.contract, wire_plan=plan)
+            started = lease.clock()
+            deadline = min(lease.local_deadline, started+.5)
+            for _ in range(251):
+                states = lease.query()
+                if not all(s.goal_terminal and s.goal_status == GoalStatus.SUCCEEDED
+                        and s.goal_error_code == 0 for s in states):
+                    raise ObservationPathError('PHYSICAL_COMPLETION_TERMINAL_REQUIRED')
+                if all(s.pending_complete and s.stationary for s in states):
+                    break
+                if rospy.is_shutdown() or lease.clock() >= deadline:
+                    raise ObservationPathError('PHYSICAL_COMPLETION_STATIONARY_TIMEOUT')
+                time.sleep(.002)
+            else:
+                raise ObservationPathError('PHYSICAL_COMPLETION_STATIONARY_TIMEOUT')
+            # A terminal result does not finish the driver's pending write.
+            # Only measured stable, completed output may become the next
+            # segment's stationary physical reference, on the same lease.
+            states = lease.quiesce()
+            if not all(s.phase == lease.ACTIVE_IDLE and not s.output_gated
+                    and s.goal_terminal and s.goal_status == GoalStatus.SUCCEEDED
+                    and s.goal_error_code == 0 and s.pending_complete and s.stationary
+                    for s in states):
+                raise ObservationPathError('PHYSICAL_COMPLETION_QUIESCENCE_REQUIRED')
+            physical_completion = dict(binding_id=lease.model.binding_id,
+                source_bias_sha256=lease.model.digest, proof_sha256=lease.contract.proof_sha256,
+                physical_positions=tuple(physical_plan_from_wire(plan,
+                    lease.model).joint_trajectory.points[-1].positions),
+                release_verified=False,quiescence_wait_sec=lease.clock()-started,
+                terminal_idle_receipts=[dict(phase=s.phase,
+                    state_stamp_ns=s.header.stamp.to_nsec(),
+                    sdk_stamp_ns=s.sdk_stamp_ns,encoder_stamp_ns=s.encoder_stamp_ns,
+                    pending_complete=s.pending_complete,stationary=s.stationary)
+                    for s in states])
         self._completed_command_reference = {
             'names': tuple(names), 'positions': tuple(positions),
             'end_sec': float(rospy.get_time()), 'kind': 'completed_gateway_trajectory',
             'trajectory_sha256': wire_digest(plan),
         }
+        if physical_completion is not None:
+            self._completed_command_reference['physical_reference'] = physical_completion
 
     def _configure_controller_reference_guard(self, planner):
         planner.controller_reference_guard_required = True
         planner.controller_reference_provider = self._controller_reference_for_execution
         planner.controller_reference_completion_callback = self._record_completed_controller_reference
+
+    def _physical_reference_transaction_hold(self, lease, positions, sdk_words, phase,
+                                             manual_cleanup=False, context_validator=None):
+        """Change JTC's coordinate reference while both output writers gate.
+
+        Only the controller reference moves. Successful SDK words and actual
+        encoder stationary evidence must persist throughout this transaction.
+        """
+        cfg = rospy.get_param('/robot', {})
+        timeout = float(cfg.get('strict_execution_controller_sync_timeout_sec', 2.))
+        duration = float(cfg.get('strict_execution_controller_sync_duration_sec', .30))
+        if not (math.isfinite(timeout) and math.isfinite(duration)
+                and .05 <= duration < timeout <= 3.):
+            raise ObservationPathError('PHYSICAL_TRANSACTION_TIMING_INVALID')
+        if self.trajectory_command_pub.get_num_connections() < 1:
+            raise ObservationPathError('PHYSICAL_TRANSACTION_HOLD_TRANSPORT_MISSING')
+        deadline = time.monotonic()+timeout
+        if not manual_cleanup:
+            deadline = min(deadline, lease.local_deadline)
+        names = tuple(self.joint_names[:-1])
+        target = tuple(float(v) for v in positions)
+        if len(target) != 6 or not all(math.isfinite(v) for v in target):
+            raise ObservationPathError('PHYSICAL_TRANSACTION_TARGET_INVALID')
+        hold = self._controller_feedback_hold_trajectory(names, target, duration)
+        hold.points[0].accelerations = [0.]*6
+        def live(require_stationary=False):
+            if context_validator is not None:
+                context_validator()
+            if not manual_cleanup:
+                lease.check_deadline()
+            if (self._manual_control_active() != manual_cleanup
+                    or getattr(self, '_control_reference_epoch_ns', None) != lease.model.epoch_ns):
+                raise ObservationPathError('PHYSICAL_TRANSACTION_OWNER_CHANGED')
+            self._fresh_accepted_reference()
+            states = (lease.manual_cleanup_query(phases=(phase,),
+                require_stationary=require_stationary) if manual_cleanup
+                else lease.query(phases=(phase,), armed=False))
+            if not all(s.output_gated and s.pending_complete
+                    and (not require_stationary or s.stationary)
+                    and tuple(s.sdk_counts) == tuple(sdk_words) for s in states):
+                raise ObservationPathError('PHYSICAL_TRANSACTION_GATE_OR_WIRE_CHANGED')
+        live(require_stationary=True)
+        sent = float(rospy.get_time())
+        self.trajectory_command_pub.publish(hold)
+        while not rospy.is_shutdown() and time.monotonic() < deadline:
+            live()
+            desired = self._stationary_controller_reference(names, require_stationary=False)
+            if (desired.controller_stamp_sec > sent+duration
+                    and max(abs(a-b) for a,b in zip(desired.positions, target)) <= 1e-12
+                    and all(v == 0. for v in desired.velocities+desired.accelerations)):
+                live(require_stationary=True)
+                return desired
+            rospy.sleep(.01)
+        raise ObservationPathError('PHYSICAL_TRANSACTION_HOLD_NOT_CONFIRMED')
+
+    def _prepare_physical_reference_lease(self, lease):
+        from alicia_flexible_grasp.robot.physical_reference_client import PhysicalReferenceLease
+        from alicia_flexible_grasp.robot.following_model import ARM_NAMES
+        if (type(lease) is not PhysicalReferenceLease
+                or getattr(self, '_physical_reference_lease', None) is not None):
+            raise ObservationPathError('PHYSICAL_PREPARE_LEASE_CONFLICT')
+        names = tuple(self.joint_names[:-1])
+        reference = self._controller_reference_for_execution(names)
+        by_name = dict(zip(lease.contract.wire_plan().joint_trajectory.joint_names,
+            lease.contract.wire_reference[0]))
+        if any(abs(v-by_name[n]) > 1e-12 for n,v in zip(names,reference.positions)):
+            raise ObservationPathError('PHYSICAL_PREPARE_CHECKED_REFERENCE_CHANGED')
+        bias = dict(zip(ARM_NAMES, lease.model.bias_rad))
+        physical = [by_name[n]-bias[n] for n in names]
+        try:
+            lease.prepare()
+            # Keep a failed prepare visible: later legacy calls must not fall
+            # back to raw transmission while a remote writer remains gated.
+            self._physical_reference_lease = lease
+            self._physical_reference_transaction_hold(lease, physical,
+                lease.template.baseline_sdk_counts, lease.PREPARED)
+            lease.commit()
+            self._controller_reference_for_execution(names)
+            return True
+        except Exception:
+            self._physical_reference_lease = lease
+            raise
+
+    def _release_physical_reference_lease(self, lease):
+        from alicia_flexible_grasp.robot.physical_reference_client import PhysicalReferenceLease
+        from alicia_flexible_grasp.robot.stationary_following import SDK_QUANTUM_RAD
+        if (type(lease) is not PhysicalReferenceLease
+                or getattr(self, '_physical_reference_lease', None) is not lease):
+            raise ObservationPathError('PHYSICAL_RELEASE_LEASE_CONFLICT')
+        completion = getattr(self, '_completed_command_reference', None)
+        marker = completion.get('physical_reference') if isinstance(completion, dict) else None
+        if (not isinstance(marker, dict) or marker.get('binding_id') != lease.model.binding_id
+                or marker.get('proof_sha256') != lease.contract.proof_sha256):
+            raise ObservationPathError('PHYSICAL_RELEASE_COMPLETION_REQUIRED')
+        lease.release_prepare()
+        counts = tuple(lease.release_counts)
+        canonical = dict(zip(('Joint%d' % i for i in range(1,7)),
+            [(c-2048)*SDK_QUANTUM_RAD for c in counts]))
+        names = tuple(self.joint_names[:-1])
+        positions = [canonical[n] for n in names]
+        desired = self._physical_reference_transaction_hold(lease, positions,
+            counts, lease.RELEASE_PENDING)
+        lease.release_commit()
+        # Only the acknowledged same-word release permits subsequent legacy
+        # arm/gripper transport. Failed or expired episodes retain the gate.
+        self._physical_reference_lease = None
+        marker['release_verified'] = True
+        marker['release_sdk_words'] = counts
+        self._completed_command_reference = dict(names=names,
+            positions=tuple(positions), end_sec=desired.controller_stamp_sec,
+            kind='completed_same_word_physical_reference_release',
+            physical_reference=marker, trajectory_sha256=completion['trajectory_sha256'])
+        self._controller_reference_for_execution(names)
+        return True
+
+    def _cleanup_manual_physical_reference_lease(self, lease, context_validator=None):
+        """Same-word cleanup under new real manual ownership, never success."""
+        from alicia_flexible_grasp.robot.physical_reference_client import PhysicalReferenceLease
+        from alicia_flexible_grasp.robot.stationary_following import SDK_QUANTUM_RAD
+        if (type(lease) is not PhysicalReferenceLease
+                or getattr(self, '_physical_reference_lease', None) is not lease
+                or not self._manual_control_active()
+                or getattr(self, '_control_reference_epoch_ns', None) != lease.model.epoch_ns):
+            raise ObservationPathError('PHYSICAL_MANUAL_CLEANUP_BINDING_INVALID')
+        if context_validator is not None:
+            context_validator()
+        lease.manual_cleanup_prepare()
+        counts = tuple(lease.release_counts)
+        canonical = dict(zip(('Joint%d' % i for i in range(1,7)),
+            [(c-2048)*SDK_QUANTUM_RAD for c in counts]))
+        self._physical_reference_transaction_hold(lease,
+            [canonical[n] for n in self.joint_names[:-1]], counts,
+            lease.RELEASE_PENDING, manual_cleanup=True,context_validator=context_validator)
+        if context_validator is not None:
+            context_validator()
+        states = lease.manual_cleanup_commit()
+        self._physical_reference_lease = None
+        self._completed_command_reference = None
+        self._observation_sync_hold_evidence = None
+        self._last_physical_manual_cleanup = dict(binding_id=lease.model.binding_id,
+            epoch_ns=lease.model.epoch_ns, sdk_words=counts,
+            driver_state_stamp_ns=states[0].header.stamp.to_nsec(),
+            hardware_state_stamp_ns=states[1].header.stamp.to_nsec(),
+            original_execution_result_preserved=True, automatic_owner_restored=False)
+        return True
+
+    def handle_cleanup_physical_reference_manual(self, req):
+        """Explicit same-word software cleanup after actual manual takeover."""
+        with self._planner_operation_lock():
+            lease = getattr(self, '_physical_reference_lease', None)
+            if lease is None:
+                return TriggerResponse(True,json.dumps(dict(
+                    code='PHYSICAL_MANUAL_CLEANUP_ALREADY_CLEAR',
+                    motion_submitted=False,automatic_owner_restored=False)))
+            def authority(require_lease=True):
+                if (getattr(self, '_gui_direct_mode', False) is not True
+                        or not self._manual_control_active()
+                        or getattr(self, '_control_reference_epoch_ns', None) != lease.model.epoch_ns
+                        or (require_lease and getattr(self, '_physical_reference_lease', None) is not lease)):
+                    raise ObservationPathError('PHYSICAL_MANUAL_CLEANUP_AUTHORITY_CHANGED')
+                with self._observation_context_lock:
+                    message = getattr(self, '_observation_last_task_message', None)
+                    # These are transition messages, not periodic heartbeats.
+                    # Require the latest real connected inactive message in
+                    # this epoch; GUI takeover's cleared flag is insufficient.
+                    if (not self._observation_task_connection_available()
+                            or message is None or message.active is not False
+                            or self._observation_task_requires_inactive
+                            or self._observation_contexts.active
+                            or message.header.stamp.to_nsec() != self._observation_task_state_stamp_ns
+                            or not lease.model.epoch_ns <= message.header.stamp.to_nsec()
+                                <= rospy.Time.now().to_nsec()):
+                        raise ObservationPathError('PHYSICAL_MANUAL_CLEANUP_EXPLICIT_IDLE_TASK_REQUIRED')
+            try:
+                authority()
+                # Typed stationary includes fresh arm-status evidence and an
+                # empty observed-GoalID set. A status-only idle cannot satisfy
+                # it while any observed arm goal lacks its exact terminal.
+                states = lease.manual_cleanup_query()
+                if any(s.goal_observed and not s.goal_terminal for s in states):
+                    raise ObservationPathError('PHYSICAL_MANUAL_CLEANUP_ARM_GOAL_NOT_TERMINAL')
+                self._cleanup_manual_physical_reference_lease(lease,context_validator=authority)
+                authority(require_lease=False)
+                receipt = deepcopy(self._last_physical_manual_cleanup)
+                receipt.update(code='PHYSICAL_MANUAL_CLEANUP_COMPLETE',motion_submitted=False,
+                    task_state_stamp_ns=self._observation_task_state_stamp_ns,
+                    transaction_receipts=deepcopy(lease.transaction_receipts),
+                    transaction_receipts_dropped=lease.transaction_receipts_dropped)
+                self._last_physical_manual_cleanup = deepcopy(receipt)
+                return TriggerResponse(True,json.dumps(receipt,sort_keys=True))
+            except Exception as exc:
+                receipt = dict(code='PHYSICAL_MANUAL_CLEANUP_REJECTED',reason=str(exc),
+                    binding_id=getattr(getattr(lease,'model',None),'binding_id',None),
+                    software_release_completed=bool(getattr(lease,'released',False)),
+                    motion_submitted=False,automatic_owner_restored=False,
+                    original_execution_result_preserved=True,
+                    transaction_receipts=deepcopy(getattr(lease,'transaction_receipts',[])),
+                    transaction_receipts_dropped=getattr(lease,'transaction_receipts_dropped',0))
+                return TriggerResponse(False,json.dumps(receipt,sort_keys=True))
 
     def _observation_controller_hold(self, joint_names):
         if getattr(self, '_driver_reference_sub', None) is not None:
@@ -702,8 +1200,25 @@ class MotionGateway(PregraspCompensationGateway):
             raise ObservationPathError('measured gripper gap is outside the physical 50 mm range')
         return opening
 
+    def _observation_reference_for_domain(self, names, following_model, reference_domain):
+        if reference_domain not in ('wire', 'physical'):
+            raise ObservationPathError('PHYSICAL_REFERENCE_DOMAIN_INVALID')
+        wire = self._observation_controller_hold(names)
+        if reference_domain == 'wire':
+            return wire
+        from alicia_flexible_grasp.robot.following_model import validate_source_bias_model
+        from alicia_flexible_grasp.robot.physical_reference_contract import physical_reference_from_wire
+        model = validate_source_bias_model(following_model)
+        if model.epoch_ns != getattr(self, '_control_reference_epoch_ns', None):
+            raise ObservationPathError('PHYSICAL_REFERENCE_EPOCH_CHANGED')
+        lease = getattr(self, '_physical_reference_lease', None)
+        if lease is not None and lease.model.digest != model.digest:
+            raise ObservationPathError('PHYSICAL_REFERENCE_ACTIVE_MODEL_CHANGED')
+        return physical_reference_from_wire(wire, model, names)
+
     def _validate_frozen_observation_path(self, context, trajectory, planner,
-                                        context_validator=None):
+                                        context_validator=None, contact_tracking_context=None,
+                                        following_model=None, reference_domain='wire'):
         scene, revocation = context
         with self._observation_context_lock:
             self._require_live_observation_task()
@@ -723,6 +1238,11 @@ class MotionGateway(PregraspCompensationGateway):
         if not isinstance(description, str) or not description.strip():
             raise ObservationPathError('runtime robot description is unavailable')
         model = SerialUrdfFk(description, names)
+        if following_model is not None:
+            from alicia_flexible_grasp.robot.following_model import validate_source_bias_model
+            validate_source_bias_model(following_model)
+            if following_model.model_sha256 != model.model_sha256:
+                raise ObservationPathError('PHYSICAL_REFERENCE_MODEL_CHANGED')
         if not np.all(np.isfinite(model.limits)):
             raise ObservationPathError('runtime observation URDF joint limits are unavailable')
         model_signature = planner._observation_branch_signature()[0]
@@ -741,19 +1261,65 @@ class MotionGateway(PregraspCompensationGateway):
         if mismatch:
             raise ObservationPathError('gripper CAD contract: ' + mismatch)
         opening = self._observation_measured_opening()
-        desired = self._observation_controller_hold(names)
+        desired = self._observation_reference_for_domain(names, following_model, reference_domain)
         constraints = deepcopy(rospy.get_param('/alicia_controller/constraints', None))
         tracking_allowance = observation_tracking_error_bounds(constraints, names)
         contracted = getattr(planner, 'observation_tracking_contract_required', False)
         stop_duration = rospy.get_param('/alicia_controller/stop_trajectory_duration', None)
         original_digest = wire_digest(trajectory)
-        if contracted:
+        scheduled = None
+        start_ns = trajectory.joint_trajectory.header.stamp.to_nsec()
+        if following_model is not None and start_ns > 0:
+            if rospy.Time.now().to_nsec() >= start_ns:
+                raise ObservationPathError('PHYSICAL_SCHEDULE_EXPIRED_BEFORE_PROOF')
+            scheduled = start_ns
+        start_options = {} if scheduled is None else {'scheduled_start_ns':scheduled}
+        mapped_wire = following_model is not None and reference_domain == 'wire'
+        view_audit = self._unknown_observation_view_audit(scene, trajectory, model, desired)
+        if mapped_wire:
+            from alicia_flexible_grasp.robot.physical_reference_contract import build_wire_reference_audit
+            audit = build_wire_reference_audit(trajectory,scene,model,gripper,opening,desired,
+                constraints=constraints,stop_duration=stop_duration,
+                gripper_geometry_snapshot=cfg,scheduled_start_ns=scheduled,
+                max_checks=FOLLOWING_PATH_MAX_CHECKS,max_seconds=FOLLOWING_PATH_MAX_SECONDS)
+        elif contracted:
             from alicia_flexible_grasp.robot.observation_tracking_contract import qualify_contract_path
             result = qualify_contract_path(trajectory, desired, scene, model, gripper,
                                            opening, constraints, stop_duration,
-                                           trajectory_stop_reserve=context_validator is not None)
+                                           trajectory_stop_reserve=context_validator is not None,
+                                           **start_options)
+            if not result['ok'] and contact_tracking_context is not None:
+                # Only the admitted, bounded final contact correction may ask
+                # for stricter per-axis JTC tolerances. The SAME full bridge,
+                # curve, CAD, support and stopping proof is still required.
+                from alicia_flexible_grasp.robot.contact_tracking_contract import build_contact_tracking_contract
+                from alicia_flexible_grasp.robot.observation_preview import qualify_candidate_path
+                contact = contact_tracking_context
+                if (context_validator is None or contact.get('pose_index') != 2
+                        or contact['plan'].model_choice != 'unknown_tabletop'
+                        or contact['scene'].digest != scene.digest):
+                    raise ObservationPathError('CONTACT_TRACKING_SCOPE_INVALID')
+                self._validate_pregrasp_context(contact)
+                with self._endpoint_feedback_lock:
+                    sdk = tuple(self._endpoint_feedback_history['sdk'])
+                    accepted = tuple(self._endpoint_feedback_history['accepted'])
+                contract = build_contact_tracking_contract(trajectory, desired, model,
+                    sdk, accepted, constraints, stop_duration,
+                    now_sec=rospy.get_time(), epoch_ns=contact['epoch'],
+                    following_model=(following_model if reference_domain == 'physical' else None))
+                tighter = qualify_candidate_path(trajectory, desired, scene, model, gripper,
+                    opening, contract['joint_error_bounds_rad'],**start_options)
+                tighter['tracking_contract_search'] = result['tracking_contract_search'] + [dict(
+                    policy=contract['policy'], path_position_tolerance_rad=contract['path_position_tolerance_rad'],
+                    ok=tighter['ok'], failure_location=tighter.get('failure_location'),
+                    reason=tighter.get('reason', ''))]
+                tighter['execution_tracking_contract'] = contract
+                tighter['command_derivative_bounds'] = contract['command_derivative_bounds']
+                result = tighter
             if not result['ok']:
-                raise ObservationPathError(str(result))
+                error = ObservationPathError(str(result))
+                error.candidate_path_rejection = deepcopy(result)
+                raise error
             audit = result['continuous_path']
             audit['execution_tracking_contract'] = result['execution_tracking_contract']
             audit['command_derivative_bounds'] = result['command_derivative_bounds']
@@ -761,7 +1327,8 @@ class MotionGateway(PregraspCompensationGateway):
         else:
             audit = validate_observation_trajectory(trajectory, scene, model, gripper,
                 opening, desired, joint_error_bounds_rad=tracking_allowance,
-                max_checks=FOLLOWING_PATH_MAX_CHECKS, max_seconds=FOLLOWING_PATH_MAX_SECONDS)
+                max_checks=FOLLOWING_PATH_MAX_CHECKS, max_seconds=FOLLOWING_PATH_MAX_SECONDS,
+                **start_options)
         # Planning, proof computation and callbacks do not authorize changed
         # geometry, a changed hold, a different model or a mutated trajectory.
         with self._observation_context_lock:
@@ -770,7 +1337,8 @@ class MotionGateway(PregraspCompensationGateway):
                 self._observation_contexts.validate_capture(scene, revocation)
             else:
                 context_validator()
-        after = self._observation_controller_hold(names)
+        self._revalidate_unknown_observation_view(scene, view_audit)
+        after = self._observation_reference_for_domain(names, following_model, reference_domain)
         if (after.positions != desired.positions
                 or self._observation_measured_opening() != opening
                 or rospy.get_param('/robot_description', '') != description
@@ -780,14 +1348,25 @@ class MotionGateway(PregraspCompensationGateway):
                     or rospy.get_param('/alicia_controller/stop_trajectory_duration', None) != stop_duration))
                 or planner._observation_branch_signature()[0] != model_signature
                 or wire_digest(trajectory) != original_digest
+                or (scheduled is not None and rospy.Time.now().to_nsec() >= scheduled)
                 or self._manual_control_active()):
             raise ObservationPathError('observation path inputs changed before submission')
+        if view_audit is not None:
+            audit['unknown_observation_target_visibility'] = view_audit
         audit['model_group_frame_tool_sha256'] = model_signature
-        audit['following_allowance_source'] = (audit['execution_tracking_contract']['policy'] if contracted
+        audit['following_allowance_source'] = (audit['wire_reference_contract']['policy'] if mapped_wire
+            else audit['execution_tracking_contract']['policy'] if contracted
             else 'configured_controller_path_band_floor_0.12_plus_sdk_half_count')
         audit['controller_constraints_snapshot'] = constraints
         audit['gripper_geometry_snapshot'] = cfg
         audit['controller_hold_provenance'] = deepcopy(self._observation_sync_hold_evidence)
+        if following_model is not None:
+            from alicia_flexible_grasp.robot.following_model import source_bias_model_record
+            audit.update(reference_domain=reference_domain,
+                source_bias_model=source_bias_model_record(following_model),
+                source_bias_sha256=following_model.digest,
+                physical_reference_is_prospective=True,
+                execution_authorized=False)
         return audit
 
     def _observation_execution_authorized(self):
@@ -799,7 +1378,8 @@ class MotionGateway(PregraspCompensationGateway):
             return False
 
     def _revalidate_observation_contract_submission(self, context, trajectory, audit,
-                                                  context_validator=None):
+                                                  context_validator=None, following_model=None,
+                                                  reference_domain='wire'):
         scene, revocation = context
         with self._observation_context_lock:
             self._require_live_observation_task()
@@ -807,7 +1387,24 @@ class MotionGateway(PregraspCompensationGateway):
                 self._observation_contexts.validate_capture(scene, revocation)
             else:
                 context_validator()
-        contract = audit['execution_tracking_contract']
+        self._revalidate_unknown_observation_view(scene, audit.get('unknown_observation_target_visibility'))
+        contract = audit.get('execution_tracking_contract') or audit['wire_reference_contract']
+        scheduled = audit.get('scheduled_start_ns')
+        if scheduled is not None and (type(scheduled) is not int
+                or trajectory.joint_trajectory.header.stamp.to_nsec() != scheduled
+                or rospy.Time.now().to_nsec() >= scheduled):
+            raise ObservationPathError('PHYSICAL_SUBMISSION_SCHEDULE_CHANGED_OR_EXPIRED')
+        if audit.get('reference_domain', 'wire') != reference_domain:
+            raise ObservationPathError('PHYSICAL_SUBMISSION_REFERENCE_DOMAIN_CHANGED')
+        if 'source_bias_sha256' in audit:
+            from alicia_flexible_grasp.robot.following_model import validate_source_bias_model
+            validate_source_bias_model(following_model)
+            if following_model.digest != audit['source_bias_sha256']:
+                raise ObservationPathError('PHYSICAL_SUBMISSION_MODEL_CHANGED')
+            current = self._observation_reference_for_domain(
+                trajectory.joint_trajectory.joint_names, following_model, reference_domain)
+            if tuple(current.positions) != tuple(audit['bridge_start_joint_positions_rad']):
+                raise ObservationPathError('PHYSICAL_SUBMISSION_BRIDGE_CHANGED')
         if (not self._observation_execution_authorized()
                 or rospy.get_param('/robot/observation_tracking_contract_enabled', False) is not True
                 or rospy.get_param('/alicia_controller/constraints', None) != audit['controller_constraints_snapshot']
@@ -834,12 +1431,24 @@ class MotionGateway(PregraspCompensationGateway):
     def _actuation_cb(self, msg):
         # Status is also a heartbeat on every accepted SDK feedback packet.
         # Only the driver's separately stamped reset event revokes an epoch.
-        self._actuation_status = str(msg.data).strip()
-        self._actuation_received_sec = float(rospy.get_time())
+        with self._command_reference_lock:
+            self._actuation_status = str(msg.data).strip()
+            self._actuation_received_sec = float(rospy.get_time())
+            # Latch every received prefix revocation, including excursions
+            # that recover before the executor next polls its live gate.
+            prefix_event = getattr(self, '_rgb_prefix_actuation_event', None)
+            if prefix_event is not None:
+                prefix_event(self._actuation_status)
 
     def _fresh_actuation_status(self):
-        age = float(rospy.get_time()) - getattr(self, '_actuation_received_sec', 0.0)
-        return getattr(self, '_actuation_status', '') if 0.0 <= age <= 2.0 else ''
+        # A callback between reading now and receipt previously produced a
+        # negative age for a fresh packet. Pair the status/time and clock read
+        # under the same lock; genuine stale/future receipts remain invalid.
+        with self._command_reference_lock:
+            status = getattr(self, '_actuation_status', '')
+            received = getattr(self, '_actuation_received_sec', 0.0)
+            age = float(rospy.get_time()) - received
+        return status if 0.0 <= age <= 2.0 else ''
 
     def handle_observation_actuation(self, req):
         if self._manual_control_active():
@@ -1279,14 +1888,23 @@ class MotionGateway(PregraspCompensationGateway):
                 self._endpoint_correction_deadline = None
 
     def handle_gripper(self, req):
-        if self._manual_control_active():
-            return SetFloatResponse(False, 'MANUAL_CONTROL_ACTIVE')
-        try:
-            arm_positions = self._gripper_arm_positions_for_command()
-        except ObservationPathError as exc:
-            return SetFloatResponse(False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc))
-        self.gripper.set_position(req.value, arm_positions=arm_positions)
-        return SetFloatResponse(True, 'gripper command published')
+        with self._planner_operation_lock():
+            if self._manual_control_active():
+                return SetFloatResponse(False, 'MANUAL_CONTROL_ACTIVE')
+            try:
+                arm_positions, expected = self._gripper_arm_positions_for_command(
+                    req.value, return_context=True)
+                if self._manual_control_active():
+                    return SetFloatResponse(False, 'MANUAL_CONTROL_ACTIVE')
+                with self._command_reference_lock:
+                    if getattr(self, '_gui_direct_mode', False):
+                        raise ObservationPathError('manual control took ownership before gripper publication')
+                    if expected is not None:
+                        self._require_bound_reference_locked(expected, ('sdk_tracking',))
+                    self.gripper.set_position(req.value, arm_positions=arm_positions)
+            except ObservationPathError as exc:
+                return SetFloatResponse(False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc))
+            return SetFloatResponse(True, 'gripper command published')
 
     def handle_pose(self, req):
         if req.execute and self._manual_control_active():
@@ -1350,12 +1968,16 @@ class MotionGateway(PregraspCompensationGateway):
                     0.0,
                     message,
                 )
-            ok, code, failed_stage, metrics, message = planner.check_pose_sequence(
-                req.targets,
-                req.stage_names,
-                req.linear,
-                deadline_sec=self._request_deadline_sec(req),
-            )
+            # Stage-specific duration estimates must use the same limits as
+            # execution. Cartesian approach/grasp/lift retain contact timing.
+            profile = self._unknown_pregrasp_velocity_limits(planner)
+            with temporary_attribute(planner, 'unknown_pregrasp_joint_velocity_limits_rad_s', profile):
+                ok, code, failed_stage, metrics, message = planner.check_pose_sequence(
+                    req.targets,
+                    req.stage_names,
+                    req.linear,
+                    deadline_sec=self._request_deadline_sec(req),
+                )
         response = CheckPoseSequenceResponse(
             bool(ok),
             str(code or ''),
@@ -1450,6 +2072,29 @@ class MotionGateway(PregraspCompensationGateway):
             else 0.0
         )
 
+    def _unknown_pregrasp_velocity_limits(self, planner):
+        return unknown_pregrasp_velocity_limits(
+            rospy.get_param('/grasp_mode/selection', {}),
+            rospy.get_param('/robot/unknown_pregrasp_timing', {}),
+            getattr(planner, 'strict_execution_max_joint_velocity_rad_s', .08))
+
+    @contextmanager
+    def _strict_pregrasp_timing_scope(self, planner):
+        # Inside the planner lock; only the named unknown pregrasp task stage.
+        # The exact path is still retimed and validated against its selected
+        # limits, acceleration bounds and unchanged controller tolerances.
+        selection = rospy.get_param('/grasp_mode/selection', {})
+        enabled = (isinstance(selection, dict) and selection.get('mode') == 'unknown'
+            and getattr(self, '_pregrasp_task_stage', None) == GraspStages.MOVE_PREGRASP
+            and getattr(self, '_compensation_task_label', '') in (
+                'planning 6D pregrasp', 'moving 6D pregrasp',
+                'planning 6D near-field pregrasp',
+                'moving 6D near-field pregrasp'))
+        profile = self._unknown_pregrasp_velocity_limits(planner) if enabled else None
+        with temporary_attribute(planner, 'strict_collinear_timing_enabled', enabled):
+            with pregrasp_velocity_scope(planner, profile):
+                yield
+
     def handle_pose_strict_execute(self, req):
         if self._manual_control_active():
             return SetTargetPoseResponse(False, 'MANUAL_CONTROL_ACTIVE')
@@ -1482,7 +2127,8 @@ class MotionGateway(PregraspCompensationGateway):
             execution_start_positions = (
                 self._current_arm_positions_snapshot()
             )
-            ok, msg = planner.execute_cached_strict_pose(req.target)
+            with self._strict_pregrasp_timing_scope(planner):
+                ok, msg = planner.execute_cached_strict_pose(req.target)
             if not ok and not any(code in str(msg) for code in (
                     'OBSERVATION_PATH_INVALID:', 'CONTROLLER_REFERENCE_INVALID',
                     'CONTROLLER_BRIDGE_INVALID')):
@@ -1545,7 +2191,8 @@ class MotionGateway(PregraspCompensationGateway):
             execution_start_positions = (
                 self._current_arm_positions_snapshot()
             )
-            ok, msg = planner.execute_cached_strict_pose(req.target)
+            with self._strict_pregrasp_timing_scope(planner):
+                ok, msg = planner.execute_cached_strict_pose(req.target)
             if not ok and not any(code in str(msg) for code in (
                     'OBSERVATION_PATH_INVALID:', 'CONTROLLER_REFERENCE_INVALID',
                     'CONTROLLER_BRIDGE_INVALID')):
@@ -2055,12 +2702,13 @@ class MotionGateway(PregraspCompensationGateway):
                 # wait within the SAME admission deadline, without resending.
                 # This pending state never authorizes trajectory execution.
                 reference = SimpleNamespace(mode='controller_frame_pending')
-            elif (mode == 'frozen_sdk_handoff'
+            elif (mode in ('initial_positive_enable', 'frozen_sdk_handoff')
                   and self._is_own_frozen_reference_transition(
                       desired, transition_origin, positions)):
-                # publish+duration is not controller receipt+duration. A
-                # source-stamped intermediate frame can legitimately be newer
-                # than that wall-clock estimate. Do not declare completion;
+                # publish+duration is not controller receipt+duration. This
+                # also applies to initial admission (gen16): its successful
+                # SDK write can precede the first stationary controller frame.
+                # Recognize only our own bridge, never declare completion, and
                 # wait within the SAME deadline without another publication.
                 reference = SimpleNamespace(mode='controller_frame_pending')
             elif any(value != 0. for value in desired.velocities + desired.accelerations):
@@ -2148,11 +2796,86 @@ class MotionGateway(PregraspCompensationGateway):
             self._completed_command_reference = None
             return False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc)
 
-    def _synchronize_trajectory_controller_to_feedback(self):
+    def _bound_reference_context(self, reference, epoch):
+        maximum = float(rospy.get_param(
+            '/robot/strict_execution_controller_sync_max_feedback_age_sec', .5))
+        if not math.isfinite(maximum) or not 0. < maximum <= .5:
+            raise ObservationPathError('invalid bound reference feedback age')
+        return dict(epoch_ns=epoch, sdk_words=self._sdk_arm_words(reference.positions),
+                    opening=reference.opening, max_feedback_age_sec=maximum)
+
+    def _require_bound_reference_locked(self, expected, modes):
+        """Check already delivered fields under the epoch lock; never wait for a callback.
+
+        The ordinary snapshot performs freshness/status admission outside this
+        short publication section. New unmatched callbacks must not lend an
+        old successful reference to a command in a different epoch.
+        """
+        if (expected['epoch_ns'] is None
+                or expected['epoch_ns'] != getattr(self, '_control_reference_epoch_ns', None)
+                or getattr(self, '_gui_direct_mode', False)):
+            raise ObservationPathError('bound command ownership or epoch changed')
+        now = float(rospy.get_time())
+        status = getattr(self, '_actuation_status', '')
+        if (not 0. <= now - getattr(self, '_actuation_received_sec', 0.) <= 2.
+                or not (status.startswith('CONFIRMED:') or status in PENDING_BOOTSTRAP_STATES)):
+            raise ObservationPathError('bound command actuation status changed or expired')
+        sdk = getattr(self, '_sdk_command_feedback', None)
+        reference = getattr(self, '_driver_control_reference', None)
+        accepted = getattr(self, '_observation_joint_feedback', None)
+        if (sdk is None or reference is None
+                or sdk.header.frame_id != 'sdk_transmitted'
+                or reference.header.frame_id not in modes
+                or sdk.header.stamp.to_nsec() != reference.header.stamp.to_nsec()
+                or sdk.header.stamp.to_nsec() < expected['epoch_ns']):
+            raise ObservationPathError('bound successful reference is missing or unpaired')
+        if accepted is None or accepted.header.frame_id != 'sdk_measured':
+            raise ObservationPathError('bound accepted feedback is unavailable')
+        for message in (sdk, accepted):
+            if (message.header.stamp.to_nsec() < expected['epoch_ns']
+                    or not 0. <= now - message.header.stamp.to_sec() <= expected['max_feedback_age_sec']):
+                raise ObservationPathError('bound reference feedback expired or outside epoch')
+        if (len(accepted.name) != len(accepted.position)
+                or len(accepted.name) != len(set(accepted.name))
+                or set(accepted.name) != set(self.joint_names)
+                or not all(math.isfinite(float(v)) for v in accepted.position)):
+            raise ObservationPathError('bound accepted feedback fields changed')
+        measured = dict(zip(accepted.name, accepted.position))
+        self._sdk_arm_words([measured[n] for n in self.joint_names[:-1]])
+        if not 0. <= measured[self.joint_names[-1]] <= .05:
+            raise ObservationPathError('bound measured gripper opening invalid')
+        for message, names in ((sdk, self.joint_names[:-1]), (reference, self.joint_names)):
+            if (len(message.name) != len(message.position)
+                    or len(message.name) != len(set(message.name))
+                    or set(message.name) != set(names)
+                    or not all(math.isfinite(float(v)) for v in message.position)):
+                raise ObservationPathError('bound reference fields changed')
+            values = dict(zip(message.name, message.position))
+            if self._sdk_arm_words([values[n] for n in self.joint_names[:-1]]) != expected['sdk_words']:
+                raise ObservationPathError('bound successful SDK words changed')
+        if values[self.joint_names[-1]] != expected['opening']:
+            raise ObservationPathError('bound successful gripper opening changed')
+
+    def _synchronize_trajectory_controller_to_feedback(self, expected_handoff=None):
         self._observation_sync_hold_evidence = None
+        if getattr(self, '_physical_reference_lease', None) is not None:
+            try:
+                if expected_handoff is not None:
+                    raise ObservationPathError('PHYSICAL_ACTIVE_LEASE_CANNOT_LEGACY_HANDOFF')
+                self._controller_reference_for_execution(self.joint_names[:-1])
+                return True, 'authenticated mapped controller reference preserved'
+            except Exception as exc:
+                return False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc)
         admission_epoch = getattr(self, '_control_reference_epoch_ns', None)
         try:
             selected, mode = self._select_controller_sync_reference()
+            if expected_handoff is not None:
+                if (mode != 'frozen_sdk_handoff'
+                        or admission_epoch != expected_handoff['epoch_ns']
+                        or self._sdk_arm_words(selected) != expected_handoff['sdk_words']):
+                    raise ObservationPathError('requested frozen handoff changed before selection')
+                with self._command_reference_lock:
+                    self._require_bound_reference_locked(expected_handoff, ('sdk_handoff_required',))
         except Exception as exc:
             return False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc)
         if mode == 'preserved':
@@ -2251,9 +2974,17 @@ class MotionGateway(PregraspCompensationGateway):
         # A new issued admission supersedes old completion provenance even if
         # this transaction fails before a delayed ACK arrives. A later attempt
         # must establish its own acknowledged, zero-displacement provenance.
-        self._completed_command_reference = None
-        publish_time_sec = float(rospy.get_time())
-        self.trajectory_command_pub.publish(hold)
+        try:
+            with self._command_reference_lock:
+                if admission_epoch != getattr(self, '_control_reference_epoch_ns', None):
+                    raise ObservationPathError('epoch changed before reference publication')
+                if expected_handoff is not None:
+                    self._require_bound_reference_locked(expected_handoff, ('sdk_handoff_required',))
+                self._completed_command_reference = None
+                publish_time_sec = float(rospy.get_time())
+                self.trajectory_command_pub.publish(hold)
+        except ObservationPathError as exc:
+            return False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc)
 
         deadline = publish_time_sec + timeout_sec
         wall_deadline = time.monotonic() + timeout_sec
@@ -2273,6 +3004,10 @@ class MotionGateway(PregraspCompensationGateway):
                     loop_time_sec >= publish_time_sec + bridge_duration_sec,
                     publish_time_sec + bridge_duration_sec,
                     transition_origin=transition_origin)
+                if expected_handoff is not None:
+                    with self._command_reference_lock:
+                        self._require_bound_reference_locked(
+                            expected_handoff, ('sdk_handoff_required', 'sdk_tracking'))
             except Exception as exc:
                 return False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc)
             if reference is not None and reference.mode == 'controller_frame_pending':
@@ -2311,7 +3046,16 @@ class MotionGateway(PregraspCompensationGateway):
                                 message.header.frame_id = 'motion_gateway_reference_sync'
                                 message.name = list(arm_names)
                                 message.position = list(arm_positions)
-                                self.joint_cmd.pub.publish(message)
+                                try:
+                                    with self._command_reference_lock:
+                                        if admission_epoch != getattr(self, '_control_reference_epoch_ns', None):
+                                            raise ObservationPathError('epoch changed before explicit admission')
+                                        if expected_handoff is not None:
+                                            self._require_bound_reference_locked(
+                                                expected_handoff, ('sdk_handoff_required', 'sdk_tracking'))
+                                        self.joint_cmd.pub.publish(message)
+                                except ObservationPathError as exc:
+                                    return False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc)
                                 explicit_sent = True
                             pending_ack = True
                             rospy.sleep(.02)
@@ -2327,16 +3071,25 @@ class MotionGateway(PregraspCompensationGateway):
                                 continue
                         except Exception as exc:
                             return False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc)
-                        self._completed_command_reference = {
-                            'names': tuple(arm_names), 'positions': tuple(admitted.positions),
-                            'end_sec': publish_time_sec + bridge_duration_sec,
-                            'kind': 'completed_'+mode,
-                        }
-                        self._observation_sync_hold_evidence = {
-                            'names': tuple(arm_names), 'positions': tuple(arm_positions),
-                            'end_sec': publish_time_sec + bridge_duration_sec,
-                            'kind': mode,
-                        }
+                        try:
+                            with self._command_reference_lock:
+                                if (admission_epoch != getattr(self, '_control_reference_epoch_ns', None)
+                                        or getattr(self, '_gui_direct_mode', False)):
+                                    raise ObservationPathError('ownership changed before reference completion')
+                                if expected_handoff is not None:
+                                    self._require_bound_reference_locked(expected_handoff, ('sdk_tracking',))
+                                self._completed_command_reference = {
+                                    'names': tuple(arm_names), 'positions': tuple(admitted.positions),
+                                    'end_sec': publish_time_sec + bridge_duration_sec,
+                                    'kind': 'completed_'+mode,
+                                }
+                                self._observation_sync_hold_evidence = {
+                                    'names': tuple(arm_names), 'positions': tuple(arm_positions),
+                                    'end_sec': publish_time_sec + bridge_duration_sec,
+                                    'kind': mode,
+                                }
+                        except ObservationPathError as exc:
+                            return False, 'CONTROLLER_REFERENCE_INVALID: '+str(exc)
                         return True, (
                             'controller feedback hold stable '
                             'max_error=%.6frad <= %.6frad '
@@ -2459,19 +3212,47 @@ class MotionGateway(PregraspCompensationGateway):
                 missing.append('%s=%s' % (name, state))
         return missing
 
-    def _gripper_arm_positions_for_command(self):
+    def _gripper_arm_positions_for_command(self, requested_position=None, return_context=False):
+        if getattr(self, '_physical_reference_lease', None) is not None:
+            raise ObservationPathError('gripper command requires confirmed physical-reference release')
         gcfg = rospy.get_param('/gripper', {})
         if not bool(gcfg.get('hold_arm_during_gripper_commands', True)):
-            return None
+            return (None, None) if return_context else None
 
         # Closing/opening the jaws must not add a second arm step either.
         # Read successful wire words on every request, never timeout-rebase
         # a measured arm vector into a new target.
         self._fresh_accepted_reference()
+        epoch = getattr(self, '_control_reference_epoch_ns', None)
         reference = self._command_reference_snapshot()
+        if (reference is not None and reference.mode == 'sdk_handoff_required'
+                and requested_position is not None and math.isfinite(float(requested_position))
+                and reference.opening <= float(requested_position) <= .05):
+            # Opening is the first automatic command in an observation task.
+            # Perform the existing gated handoff here as arm execution does:
+            # retain successful wire words; never initialize from encoders or
+            # admit a missing reference just to operate the gripper. Closing
+            # still requires an already admitted reference and cannot bootstrap.
+            expected = self._bound_reference_context(reference, epoch)
+            ok, reason = self._synchronize_trajectory_controller_to_feedback(expected_handoff=expected)
+            if not ok:
+                raise ObservationPathError(reason)
+            self._fresh_accepted_reference()
+            reference = self._command_reference_snapshot()
+            if (epoch is None or epoch != getattr(self, '_control_reference_epoch_ns', None)
+                    or reference is None
+                    or self._sdk_arm_words(reference.positions) != expected['sdk_words']
+                    or reference.opening != expected['opening']
+                    or reference.opening > float(requested_position)):
+                raise ObservationPathError('gripper handoff reference changed before command')
         if reference is None or reference.mode != 'sdk_tracking':
             raise ObservationPathError('gripper command requires an admitted successful arm reference')
-        return list(reference.positions)
+        if epoch is None or epoch != getattr(self, '_control_reference_epoch_ns', None):
+            raise ObservationPathError('gripper command reference epoch changed')
+        positions = list(reference.positions)
+        if return_context:
+            return positions, self._bound_reference_context(reference, epoch)
+        return positions
 
     def _current_arm_positions_snapshot(self):
         positions = list(getattr(self.joint_cmd, 'last_positions', []) or [])

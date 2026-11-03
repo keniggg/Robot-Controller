@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from alicia_flexible_grasp.grasp.gripper_close_contract import bind_simulated_fixed_close
 import hashlib
 import json
 import math
@@ -12,7 +13,7 @@ import urllib.error
 from collections import Counter, deque
 from collections.abc import Mapping
 from copy import copy, deepcopy
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from types import MappingProxyType, SimpleNamespace
 
 import numpy as np
@@ -34,7 +35,10 @@ from alicia_flexible_grasp.grasp.grasp6d_sequence import (
 )
 from alicia_flexible_grasp.robot.observation_path_guard import (
     SerialUrdfFk, ObservationPathError, observation_tracking_error_bounds,
-    observation_following_support_bound,
+    observation_following_support_bound, wire_digest,
+)
+from alicia_flexible_grasp.robot.contact_replay_receipt import (
+    DiagnosticStore, ReplayStorageUnavailable, surface_data,
 )
 from alicia_flexible_grasp.robot.observation_preview import (
     candidate_scene, decode_path_evidence, qualify_candidate_path,
@@ -43,6 +47,27 @@ from alicia_flexible_grasp.grasp.adaptive_stage_profiles import (
     AdaptiveStageLimits,
     adaptive_stage_profile_for_tilt,
     derive_adaptive_stage_profiles,
+)
+from alicia_flexible_grasp.grasp.contact_height_margin import evaluate_contact_height_margin
+from alicia_flexible_grasp.grasp.stable_recheck_contract import (
+    CODE as STABLE_RECHECK_REJECTED,
+    INCOMPLETE_CODE as STABLE_RECHECK_INCOMPLETE,
+    NO_PATH_CODE as NEAR_FIELD_NO_PATH_CANDIDATE,
+    STAGE as STABLE_RECHECK_STAGE,
+    measured_height_rejection_valid, completed_stable_recheck_proof_valid,
+)
+from alicia_flexible_grasp.grasp.contact_height_placement import (
+    place_contact_height, contact_height_window_proposals)
+from alicia_flexible_grasp.grasp.contact_execution import frozen_contact_geometry
+from alicia_flexible_grasp.utils.authoritative_parameters import read_authoritative_mapping
+from alicia_flexible_grasp.grasp.contact_evidence import (
+    decode_contact_evidence, encode_contact_evidence, encode_inferred_contact_evidence,
+)
+from alicia_flexible_grasp.vision.request_preparation_profile import (
+    KEY as REQUEST_PROFILE_KEY, profiled_preparation, error_preparation_profile)
+from alicia_flexible_grasp.vision.regular_box_inference import (
+    RegularBoxInference, qualify_regular_box_snapshot, transform_inferred_box,
+    enclose_inferred_box_geometry, validate_box_precision_candidate_source,
 )
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     compute_plan_id,
@@ -56,22 +81,29 @@ from alicia_flexible_grasp.grasp.rich_plan_integrity import (
 )
 from alicia_flexible_grasp.grasp.gripper_geometry import (
     ANALYTICAL_MAX_INNER_GAP_M,
+    GRIPPER_CONTRACT_TOLERANCE_M,
     BilateralSurfaceEvidence,
+    InferredBoxContactEvidence,
     CandidateGateResult,
     GripperGeometry,
     ObservationEnvelopeResult,
     bilateral_contact_height_bounds_m,
+    insufficient_measured_common_height,
     candidate_rank_key,
     candidate_with_motion_cost,
     contact_height_axis_base,
     evaluate_candidate,
     evaluate_bilateral_surface_evidence_and_bounds,
+    evaluate_inferred_box_contact,
     evaluate_explicit_candidate,
     evaluate_open_gripper_observation_envelope,
     finger_contact_patch_overlap_m,
     gripper_contract_mismatch_reason,
+    supported_finger_cad_context,
     parse_tool_axis,
     _obb_line_interval,
+    _obb_overlap,
+    _stage_boxes,
 )
 from alicia_flexible_grasp.grasp.hybrid_grasp_candidates import (
     MergeConfig,
@@ -106,6 +138,9 @@ from alicia_flexible_grasp.grasp.grasp6d_pipeline import (
     mandatory_safety_gate,
     soft_candidate_cost,
     source_neutral_candidate_cost,
+)
+from alicia_flexible_grasp.grasp.contact_direction_search import (
+    contact_direction_priorities,
 )
 from alicia_flexible_grasp.robot.planning_feedback import (
     is_orientation_fallback_message,
@@ -149,7 +184,13 @@ from alicia_flexible_grasp.vision.multiview_surface import (
     fused_surface_from_view,
     maximum_point_displacement_m,
     support_plane_separation_m,
+    support_offset_diagnostic,
     surface_view_from_observation,
+    surface_provenance_audit,
+)
+from alicia_flexible_grasp.vision.fused_scene_geometry import enclose_registered_surface
+from alicia_flexible_grasp.vision.box_surface_registration import (
+    append_box_consistent_registered_view,
 )
 from alicia_flexible_grasp.vision.object_geometry import (
     GeometryEstimate,
@@ -180,6 +221,8 @@ from alicia_flexible_grasp_supervisor.msg import (
 )
 from alicia_flexible_grasp_supervisor.srv import (
     CheckPoseSequence,
+    CheckContactSequence,
+    CheckContactSequenceRequest,
     CheckPoseSequenceRequest,
     ResolveFreeSpaceOrientations,
     ResolveFreeSpaceOrientationsRequest,
@@ -550,6 +593,41 @@ def _thaw_request_evidence(value):
     return deepcopy(value)
 
 
+def _contact_bundle_value(value):
+    """Lossless typed identity for frozen computation inputs, never authority."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return [type(value).__name__, value]
+    if isinstance(value, np.generic):
+        return _contact_bundle_value(value.item())
+    if isinstance(value, np.ndarray):
+        if value.dtype.hasobject:
+            raise ValueError('object arrays are not frozen contact inputs')
+        array = np.ascontiguousarray(value)
+        return ['array', array.dtype.str, list(array.shape),
+                hashlib.sha256(array.tobytes()).hexdigest()]
+    if isinstance(value, (bytes, bytearray)):
+        return ['bytes', len(value), hashlib.sha256(value).hexdigest()]
+    if hasattr(value, 'serialize'):
+        return ['ros', type(value).__module__, type(value).__name__, wire_digest(value)]
+    if hasattr(value, 'to_nsec'):
+        return [type(value).__name__, value.to_nsec()]
+    if isinstance(value, Mapping):
+        rows = [[_contact_bundle_value(k), _contact_bundle_value(v)] for k, v in value.items()]
+        return ['mapping', sorted(rows, key=lambda row: json.dumps(row[0], sort_keys=True))]
+    if isinstance(value, (list, tuple)):
+        return [type(value).__name__, [_contact_bundle_value(v) for v in value]]
+    if isinstance(value, (set, frozenset)):
+        return [type(value).__name__, sorted((_contact_bundle_value(v) for v in value),
+                                            key=lambda v: json.dumps(v, sort_keys=True))]
+    if is_dataclass(value):
+        data = {field.name: getattr(value, field.name) for field in fields(value)}
+    elif hasattr(value, '__dict__'):
+        data = vars(value)
+    else:
+        raise ValueError('unsupported frozen contact input: '+type(value).__name__)
+    return [type(value).__module__, type(value).__name__, _contact_bundle_value(data)]
+
+
 def _snapshot_input_evidence(snapshot):
     """Copy input source facts without inferring phase or prediction results."""
 
@@ -575,6 +653,43 @@ def _snapshot_input_evidence(snapshot):
         'unique_source_frames': len(set(stamps)),
         'source_span_ms': span_ms,
     }
+
+
+def _store_contact_replay(data):
+    """Optional diagnostics use the actual external runtime log directory."""
+    directory = os.environ.get('ROS_LOG_DIR')
+    if not directory:
+        raise ReplayStorageUnavailable('ROS_LOG_DIR unavailable; no local replay fallback')
+    return DiagnosticStore(os.path.join(directory, 'contact_replay_receipts')).put(data)
+
+
+def _snapshot_fused_scene_evidence(snapshot, geometry, scene_audit):
+    """Retain only enclosure diagnostics belonging to this exact geometry."""
+    try:
+        identity = getattr(snapshot, 'target_identity', None)
+        if (not isinstance(scene_audit, Mapping) or identity is None
+                or scene_audit.get('snapshot_stamp_ns') != snapshot.stamp_ns
+                or scene_audit.get('target_epoch') != identity.epoch
+                or scene_audit.get('target_track_id') != identity.track_id):
+            return {}
+        for key, value in (
+                ('center_base_m', geometry.center_base),
+                ('axes_base', geometry.axes_base),
+                ('new_size_xyz_m', geometry.size_xyz_m)):
+            if not np.array_equal(np.asarray(scene_audit.get(key)), value):
+                return {}
+        points = np.ascontiguousarray(geometry.object_points_base, dtype='<f8')
+        digest = hashlib.sha256()
+        digest.update(str(points.shape).encode('ascii'))
+        digest.update(b'\0' + points.dtype.str.encode('ascii') + b'\0')
+        digest.update(points.tobytes())
+        if scene_audit.get('enclosed_points_sha256') != digest.hexdigest():
+            return {}
+        return deepcopy(scene_audit)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        # Diagnostics cannot authorize motion or invalidate otherwise valid
+        # measurements. Incomplete evidence remains explicitly unavailable.
+        return {}
 
 
 @dataclass(frozen=True)
@@ -603,12 +718,16 @@ class PreparedPrediction:
     near_field_phase_id: int = 0
     near_field_phase_deadline_sec: float = 0.0
     target_observation: object = None
+    refinement_binding: object = None
+    fused_scene_audit: dict = None
+    request_preparation_profile: object = None
 
     def __post_init__(self):
         for name in (
             'remote_diagnostics',
             'remote_performance',
             'graspnet_input_audit',
+            'fused_scene_audit',
         ):
             value = getattr(self, name)
             if value is None:
@@ -616,6 +735,15 @@ class PreparedPrediction:
             if not isinstance(value, Mapping):
                 raise TypeError('{} must be a mapping'.format(name))
             object.__setattr__(self, name, _freeze_request_evidence(value))
+        # Optional observations cannot change the original preparation result.
+        try:
+            profile = self.request_preparation_profile
+            if profile is not None and not isinstance(profile, Mapping):
+                raise TypeError('request_preparation_profile must be a mapping')
+            object.__setattr__(self, 'request_preparation_profile',
+                _freeze_request_evidence(profile) if profile is not None else None)
+        except Exception:
+            object.__setattr__(self, 'request_preparation_profile', None)
 
 
 @dataclass(frozen=True)
@@ -645,10 +773,13 @@ PRODUCTION_STABILITY_MIN_HITS = 3
 # RGB-D windows, followed by the unchanged current-snapshot hard recheck. This
 # is ten distinct source frames, not a target-specific pose or geometry value.
 NEAR_FIELD_STABILITY_MIN_HITS = 2
-# Additional search after a fully validated incumbent, within (never beyond)
-# the task-owned phase deadline. Leave time to rebuild/revalidate publication.
-DIRECT_NEAR_FIELD_COMPARISON_SEC = 8.0
+# Success-first contact policy: after one completely validated incumbent,
+# spend no additional time comparing alternatives. Rebuild/revalidate publication
+# within the unchanged task-owned deadline and publication reserve below.
+DIRECT_NEAR_FIELD_COMPARISON_SEC = 0.0
 DIRECT_NEAR_FIELD_PUBLICATION_RESERVE_SEC = 2.0
+DIRECT_NEAR_FIELD_RESOLVER_BUDGET_SEC = 4.0
+DIRECT_NEAR_FIELD_SEARCH_WIDTH_BIN_M = 0.001
 MAX_CONTINUOUS_REQUEST_HZ = 5.0
 
 CONTINUOUS_RUNTIME_DEFAULTS = {
@@ -1343,6 +1474,28 @@ def validate_mandatory_planning_audit(enabled, output_path):
             'gate_audit_output_path must be non-empty',
         )
     return path
+
+
+def _audit_storage_check(output_path):
+    """Freeze managed output media while keeping unbound offline paths usable."""
+    from alicia_flexible_grasp.robot.experiment_storage_binding import (
+        select_storage, storage_module,
+    )
+    requested = os.path.abspath(os.path.expanduser(output_path.strip()))
+    resolved = os.path.realpath(requested)
+    helper = storage_module()
+    config = helper.read_config()[0]
+    requested_backend = helper.backend_for_path(requested, config)
+    resolved_backend = helper.backend_for_path(resolved, config)
+    inherited = os.environ.get('ALICIA_STORAGE_IDENTITY')
+    if inherited is None and requested_backend is None and resolved_backend is None:
+        return lambda: None
+    expected = json.loads(inherited) if inherited is not None else None
+    if inherited is not None and not isinstance(expected, dict):
+        raise ValueError('invalid inherited audit storage identity')
+    selected = select_storage(path=requested if requested_backend else resolved)
+    binding = selected.validate(requested, expected=expected)
+    return lambda: selected.validate(requested, expected=binding)
 
 
 def validate_distinct_audit_paths(planning_output_path, mujoco_output_path):
@@ -2578,6 +2731,72 @@ def project_base_target_at_tool_pose(tool_pose, target_base_xyz, tool_from_camer
     return u, v, optical_z
 
 
+def summarize_observation_view_rejections(rejections):
+    """Describe all endpoint rejections without ranking unlike failure stages.
+
+    Later information-gain/working-volume filters may reject a pose that has
+    already passed its CAD envelope. Missing clearance is not a collision,
+    and a collision row's clearance cannot represent those later rejections.
+    This report has no candidate, planning or execution authority.
+    """
+
+    codes, stages, clearances = Counter(), Counter(), []
+    rows = tuple(rejections or ())
+    for item in rows:
+        row = item if isinstance(item, Mapping) else {}
+        code = row.get('failure_code')
+        if not isinstance(code, str) or not code:
+            reason = row.get('reason')
+            code = (reason if isinstance(reason, str)
+                    and reason.startswith('OBSERVATION_') else
+                    'OBSERVATION_REJECTION_UNSPECIFIED')
+            if reason == 'OBSERVE_RETURN_VIEW_BASELINE_INSUFFICIENT':
+                code = reason
+        stage = row.get('rejection_stage')
+        if not isinstance(stage, str) or not stage:
+            if code in ('OBSERVATION_SUPPORT_COLLISION',
+                        'OBSERVATION_TARGET_COLLISION',
+                        'OBSERVATION_ENVELOPE_INVALID'):
+                stage = 'endpoint_geometry'
+            elif code == 'OBSERVATION_WORKING_VOLUME_INVALID':
+                stage = 'working_volume'
+            elif code == 'OBSERVE_RETURN_VIEW_BASELINE_INSUFFICIENT':
+                stage = 'view_baseline'
+            elif (code == 'OBSERVATION_TILT_SIDE_EVIDENCE_INSUFFICIENT'
+                  or code.startswith('OBSERVE_RETURN_MISSING_SIDE_')
+                  or code.startswith('OBSERVE_RETURN_VIEW_GAIN_')):
+                stage = 'information_gain'
+            else:
+                stage = 'unspecified'
+        codes[code] += 1
+        stages[stage] += 1
+        envelope = row.get('observation_envelope')
+        clearance = row.get('minimum_support_clearance_m')
+        if clearance is None and isinstance(envelope, Mapping):
+            clearance = envelope.get('minimum_support_clearance_m')
+        # -1e6 is the existing "not evaluated" envelope sentinel. Never
+        # present it, NaN, or an absent measurement as actual table clearance.
+        if (not isinstance(clearance, (bool, np.bool_))
+                and isinstance(clearance, (int, float, np.integer, np.floating))
+                and math.isfinite(float(clearance))
+                and float(clearance) != -1.0e6):
+            clearances.append(float(clearance))
+    return {
+        'rejected_count': len(rows),
+        'failure_code_counts': dict(sorted(codes.items())),
+        'rejection_stage_counts': dict(sorted(stages.items())),
+        'clearance_evidence_count': len(clearances),
+        'clearance_missing_count': len(rows) - len(clearances),
+        'clearance_range_m': (
+            [min(clearances), max(clearances)] if clearances else None
+        ),
+        'clearance_scope': 'only_rejected_rows_with_computed_clearance',
+        'ranking_performed': False,
+        'motion_planning_performed': False,
+        'contact_or_motion_authorized': False,
+    }
+
+
 def observation_camera_distance_variants(
     nominal_camera_target_distance_m,
     min_camera_target_distance_m,
@@ -3180,6 +3399,7 @@ def build_rich_plan(
     geometry_msg,
     snapshot_header,
     model_choice,
+    contact_geometry_evidence='',
 ):
     """Build one immutable-by-copy execution plan from one RGB-D snapshot."""
     raw_score = getattr(selected_candidate, 'score', None)
@@ -3236,6 +3456,8 @@ def build_rich_plan(
     message.refinement_status = 'NOT_EVALUATED'
     message.model_choice = model
     message.diagnostic = ''
+    message.contact_geometry_evidence = str(contact_geometry_evidence or '')
+    decode_contact_evidence(message, required=False)
     validate_rich_geometry(message.object_geometry)
     validate_plan_header_binding(message)
     validate_candidate_model_width(message)
@@ -3323,9 +3545,9 @@ class RemoteGrasp6DNode:
         # node surface so a shared planning/execution path cannot start.
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
-        grasp_cfg = rospy.get_param('/grasp', {})
-        if not isinstance(grasp_cfg, dict):
-            grasp_cfg = {}
+        grasp_cfg = self._read_grasp_config()
+        self.contact_sequence_precheck_enabled = bool(
+            grasp_cfg.get('unknown_contact_sequence_precheck_enabled', False))
         self.near_field_strategy = str(
             grasp_cfg.get('near_field_strategy', 'legacy_gated')
             or 'legacy_gated'
@@ -3377,7 +3599,7 @@ class RemoteGrasp6DNode:
         self.mujoco_selection_max_candidates = max(
             1,
             min(
-                12,
+                64,
                 int(twin_cfg.get('selection_max_candidates', 12)),
             ),
         )
@@ -3460,8 +3682,9 @@ class RemoteGrasp6DNode:
         cam_cfg = rospy.get_param('/camera', {})
         pcfg = rospy.get_param('/perception', {})
         hcfg = rospy.get_param('/handeye', {})
-        gcfg = rospy.get_param('/grasp', {})
+        gcfg = self._read_grasp_config()
         gripper_cfg = rospy.get_param('/gripper', {})
+        self._geometry_robot_description = rospy.get_param('/robot_description', None)
         self.camera_depth_scale = float(cam_cfg.get('depth_scale', 0.001))
         gripper_geometry_cfg = dict(remote_cfg.get('gripper_geometry', {}) or {})
         self.gripper_geometry = GripperGeometry(
@@ -3879,6 +4102,14 @@ class RemoteGrasp6DNode:
         )
         self._active_graspnet_input_audit = {}
         self.grasp_config = dict(gcfg or {})
+        rospy.loginfo(
+            '[RemoteGrasp6D] authoritative /grasp loaded key_count=%d '
+            'contact_height_registration_margin_enabled=%r '
+            'handeye_translation_max_error_m=%r',
+            len(self.grasp_config),
+            self.grasp_config.get('contact_height_registration_margin_enabled'),
+            self.grasp_config.get('handeye_translation_max_error_m'),
+        )
         self.handeye_parent_frame = str(hcfg.get('parent_frame', 'tool0'))
         self.handeye_camera_frame = str(hcfg.get('camera_frame', cam_cfg.get('frame_id', 'camera_link')))
         self.handeye_translation_xyz = list(hcfg.get('translation_xyz', [0.0, 0.0, 0.0]))
@@ -4498,6 +4729,9 @@ class RemoteGrasp6DNode:
             self.robot_execution_active = active
 
     def _reset_multiview_surface(self):
+        self._regular_box_snapshot = None
+        self._latest_raw_geometry_source = None
+        self._latest_box_registration_choice = None
         self._surface_view_recovery_token = None
         self._near_field_reference_view = None
         self._near_field_fused_surface = None
@@ -4513,7 +4747,9 @@ class RemoteGrasp6DNode:
         filling the synchronized buffer while inference is busy; use the
         requested integer stamp, never whichever planning snapshot is latest.
         """
-        identity = self._current_stream_target_identity()
+        with self._geometry_state_guard():
+            resolution_lifecycle = self._multiview_lifecycle_token()
+            identity = self._current_stream_target_identity()
         stamp_ns = _stamp_to_nsec(getattr(msg, 'reference_source_stamp', None))
         started_ns = _stamp_to_nsec(getattr(getattr(msg, 'header', None), 'stamp', None))
         center = getattr(msg, 'reference_center_base', None)
@@ -4565,12 +4801,89 @@ class RemoteGrasp6DNode:
             rospy.logwarn('Reached-view geometry rejected: %s: %s',
                           estimate.failure_code, estimate.failure_reason)
             return None
+        with self._geometry_state_guard():
+            if resolution_lifecycle != self._multiview_lifecycle_token():
+                return None
+            raw_source = getattr(self, '_latest_raw_geometry_source', None)
+            if (raw_source is not None and raw_source['snapshot'] is snapshot
+                    and raw_source['lifecycle'] == resolution_lifecycle):
+                # Preparation already owns this exact RAW observation. Do not
+                # create a second owner from the potentially enlarged union.
+                return raw_source['observation']
         return observation_from_snapshot(snapshot, estimate, transform, 'base_link')
+
+    def _raw_box_registration_model(self, snapshot, geometry, transform, observation,
+                                    camera_intrinsics=None):
+        if getattr(snapshot, 'original_sample', None) is None:
+            return None
+        intrinsics = (self._camera_intrinsics() if camera_intrinsics is None
+                      else camera_intrinsics)
+        qualified = qualify_regular_box_snapshot(snapshot, intrinsics,
+            float(intrinsics.depth_scale), transform, geometry,
+            observation.identity, observation.stamp_ns)
+        if qualified.ok and not self._box_requires_measured_bilateral_contact():
+            return qualified.model
+        return None
+
+    def _snapshot_registration_uses_history(self):
+        with self._geometry_state_guard():
+            surface, _ = self._active_multiview_surface()
+            return surface is not None
+
+    def _prepare_reached_box_registration(self, observation):
+        """Capture a commit token, qualifying only a matching raw source.
+
+        An older, missing or differently owned cache does not establish that
+        this reached measurement was revoked. It supplies no box constraint;
+        the original measured path remains available if the captured state is
+        unchanged at commit. Only a matching raw source can qualify a model.
+        """
+        with self._stream_condition, self._geometry_state_guard():
+            raw_source = getattr(self, '_latest_raw_geometry_source', None)
+            lifecycle = self._multiview_lifecycle_token()
+            latest = getattr(self, '_latest_target_observation', None)
+            matched = (raw_source is not None
+                and raw_source['observation'] is observation
+                and raw_source['lifecycle'] == lifecycle
+                and latest is observation)
+            context = dict(source=raw_source, latest_observation=latest,
+                observation=observation, lifecycle=lifecycle,
+                raw_source_matched=matched, inputs={})
+        if not matched:
+            return context
+        model = self._raw_box_registration_model(raw_source['snapshot'],
+            raw_source['geometry'], raw_source['transform'], observation,
+            camera_intrinsics=raw_source['intrinsics'])
+        if model is not None:
+            context['inputs'] = dict(raw_geometry=raw_source['geometry'], raw_box_model=model)
+        return context
+
+    def _reached_box_registration_current(self, observation, context):
+        """Check captured state, not an inference from initial cache absence."""
+        return (context['observation'] is observation
+            and context['source'] is getattr(self, '_latest_raw_geometry_source', None)
+            and context['latest_observation'] is getattr(self, '_latest_target_observation', None)
+            and context['lifecycle'] == self._multiview_lifecycle_token()
+            and observation.identity == self._current_stream_target_identity()
+            and (not context['raw_source_matched'] or (
+                context['source'] is not None
+                and context['source']['observation'] is observation
+                and context['source']['lifecycle'] == context['lifecycle'])))
 
     def near_field_state_cb(self, msg):
         """Reset candidate evidence only at the explicit near-field boundary."""
 
+        from alicia_flexible_grasp.grasp.refinement_continuity import (
+            binding_from_phase, RefinementContinuityError)
         requested_active = bool(getattr(msg, 'active', False))
+        planning_stage = str(getattr(msg, 'planning_stage', '') or 'contact_replan')
+        binding_error = None
+        try:
+            refinement_binding = binding_from_phase(msg, getattr(self, 'grasp_config', {}))
+        except RefinementContinuityError as exc:
+            refinement_binding = None
+            binding_error = exc
+            rospy.logwarn('Rejected final refinement binding: %s: %s', exc.code, exc)
         phase_id = int(getattr(msg, 'phase_id', 0) or 0)
         started_sec = self._stamp_to_sec(
             getattr(getattr(msg, 'header', None), 'stamp', None)
@@ -4595,6 +4908,7 @@ class RemoteGrasp6DNode:
         phase_budget_sec = deadline_sec - started_sec
         valid_active_contract = bool(
             requested_active
+            and binding_error is None
             and phase_id > 0
             and math.isfinite(started_sec)
             and started_sec > 0.0
@@ -4645,6 +4959,8 @@ class RemoteGrasp6DNode:
                 deadline_sec if active else 0.0
             )
             if active and (not previous or phase_id != previous_phase_id):
+                self._near_field_planning_stage = planning_stage
+                self._near_field_refinement_binding = refinement_binding
                 observation = resolved_observation
                 reference_valid = bool(
                     getattr(msg, 'reference_center_valid', False)
@@ -4728,6 +5044,8 @@ class RemoteGrasp6DNode:
                         captured_reference_view = None
                 self._reset_multiview_surface()
             elif not active:
+                self._near_field_planning_stage = 'contact_replan'
+                self._near_field_refinement_binding = None
                 self._reset_multiview_surface()
         if requested_active and not valid_active_contract:
             rospy.logwarn(
@@ -5140,6 +5458,10 @@ class RemoteGrasp6DNode:
                 return False, code
             if not bool(getattr(rich_plan, 'valid', False)):
                 return False, 'PLAN_INVALID'
+            try:
+                decode_contact_evidence(rich_plan)
+            except ValueError:
+                return False, 'CONTACT_GEOMETRY_EVIDENCE_INVALID'
             # Construct both outgoing messages before publishing either one.
             outgoing_rich = deepcopy(rich_plan)
             outgoing_legacy = rich_plan_to_legacy(outgoing_rich)
@@ -5217,6 +5539,7 @@ class RemoteGrasp6DNode:
 
     def _clear_geometry_cache(self):
         self._latest_geometry_estimate = None
+        self._latest_fused_scene_audit = None
         self._selected_candidate_gate = None
         self.selected_required_open_width_m = None
         self.latest_target_cloud_base_xyz = None
@@ -5336,7 +5659,12 @@ class RemoteGrasp6DNode:
     def _prepare_snapshot_geometry(self, snapshot, stamp):
         stream_guard = getattr(self, '_stream_condition', self._geometry_state_guard())
         with stream_guard, self._geometry_state_guard():
-            lifecycle = self._multiview_lifecycle_token()
+            # Some direct API callers have not prepared geometry before.
+            # Initialize absent fields without clearing a newer cache writer.
+            self.__dict__.setdefault('_latest_fused_scene_audit', None)
+            self.__dict__.setdefault('_latest_box_registration_choice', None)
+            preparation = self._capture_geometry_preparation()
+            lifecycle = preparation['lifecycle']
         try:
             target_depth, object_mask = self._snapshot_geometry_inputs(snapshot)
         except Exception as exc:
@@ -5387,6 +5715,11 @@ class RemoteGrasp6DNode:
             support_bbox_expand_ratio=float(
                 getattr(self, 'geometry_support_bbox_expand_ratio', 0.30)
             ),
+            support_minimum_span_m=(max(
+                float(self.gripper_geometry.finger_size_xyz_m[0]),
+                float(self.gripper_geometry.max_inner_gap_m)
+                + 2. * float(self.gripper_geometry.finger_size_xyz_m[1]))
+                + 2. * float(self.gripper_geometry.support_clearance_m)),
             support_distance_threshold_m=float(
                 getattr(self, 'geometry_support_distance_threshold_m', 0.004)
             ),
@@ -5404,6 +5737,7 @@ class RemoteGrasp6DNode:
                 getattr(self, 'geometry_outlier_std_ratio', 2.0)
             ),
         )
+        fused_replay = None
         if bool(getattr(estimate, 'ok', False)):
             try:
                 observation = observation_from_snapshot(
@@ -5412,15 +5746,142 @@ class RemoteGrasp6DNode:
                 return (self._invalid_geometry_estimate(
                     'TARGET_GEOMETRY_TRACK_INVALID', str(exc), snapshot.source_mode),
                     target_depth, transform)
+            # This raw-source model may disambiguate registration only. The
+            # final contact model is still qualified against the full fused
+            # geometry below by the existing planning preparation path.
+            registration_box = (self._raw_box_registration_model(
+                snapshot, estimate, transform, observation,
+                camera_intrinsics=intrinsics)
+                if lifecycle[2] and self._snapshot_registration_uses_history() else None)
+            # Estimation/qualification may overlap a real lifecycle change.
+            # Reject a known stale owner before any historical ICP/enclosure.
             with stream_guard, self._geometry_state_guard():
-                if lifecycle != self._multiview_lifecycle_token():
-                    return (self._invalid_geometry_estimate(
-                        'TARGET_GEOMETRY_GENERATION_STALE',
-                        'planning phase, generation or target changed during geometry preparation',
-                        snapshot.source_mode), target_depth, transform)
-                self._latest_target_observation = observation
-                if bool(getattr(self, 'near_field_planning_active', False)):
-                    self._register_near_field_surface(observation)
+                if not self._geometry_preparation_current(preparation):
+                    return self._geometry_preparation_stale_result(
+                        preparation, snapshot.source_mode, target_depth, transform)
+            raw_source = dict(snapshot=snapshot, geometry=estimate,
+                intrinsics=deepcopy(intrinsics), transform=np.frombuffer(
+                    np.asarray(transform, dtype=float).tobytes(), dtype=float).reshape(4, 4),
+                observation=observation, lifecycle=lifecycle)
+            scene_audit = None
+            registration_choice = None
+            if preparation['uses_history']:
+                # Surface values are immutable. Registration, all-point
+                # enclosure, coordinate conversion and provenance freezing
+                # must allow fresh station input callbacks to make progress.
+                registration, fused, registration_choice, evidence = (
+                    self._compute_near_field_registration(
+                        preparation['surface'], preparation['reference'], observation,
+                        raw_geometry=estimate, raw_box_model=registration_box,
+                        config=preparation['registration_config'],
+                        voxel_size_m=preparation['voxel_size_m'], lifecycle=lifecycle))
+                with stream_guard, self._geometry_state_guard():
+                    if not self._geometry_preparation_current(preparation):
+                        return self._geometry_preparation_stale_result(
+                            preparation, snapshot.source_mode, target_depth, transform)
+                surface, snapshot_reference = self._snapshot_surface_values(
+                    fused, preparation['reference'], observation, evidence)
+                if surface is not None and len(surface.view_stamps_ns) >= 2:
+                    try:
+                        estimate, scene_audit = enclose_registered_surface(
+                            estimate, surface, expected_identity=observation.identity,
+                            max_size_m=preparation['max_size_m'],
+                            max_height_m=preparation['max_height_m'])
+                        scene_audit = dict(scene_audit,
+                            snapshot_stamp_ns=int(observation.stamp_ns),
+                            coordinate_frame='current_snapshot_base_estimate',
+                            geometry_consumers='candidate_contact_analytic_sweep_moveit_mujoco')
+                        if registration_choice is not None:
+                            scene_audit['registration_choice'] = deepcopy(registration_choice['audit'])
+                        audit_owner = scene_audit
+                        try:
+                            correction = (np.asarray(evidence.result.transform_base)
+                                if isinstance(evidence, RegistrationEvidence) else np.eye(4))
+                            binding = dict(generation=lifecycle[0], phase_id=lifecycle[1],
+                                source_stamp_ns=int(observation.stamp_ns),
+                                target_epoch=observation.identity.epoch,
+                                target_track_id=observation.identity.track_id,
+                                session_id=preparation['session_id'],
+                                surface_reference_coordinates='each_object_coordinate_frame',
+                                object_points_sha256=scene_audit['enclosed_points_sha256'])
+                            captured = dict(snapshot=surface_data(surface, snapshot_reference,
+                                snapshot_stamp_ns=observation.stamp_ns,
+                                coordinate_frame='current_snapshot_base_estimate',
+                                snapshot_to_reference=correction, request_binding=binding),
+                                reference=surface_data(fused, preparation['reference'],
+                                snapshot_stamp_ns=observation.stamp_ns,
+                                coordinate_frame='phase_reference_base_estimate',
+                                snapshot_to_reference=correction, request_binding=binding))
+                            if registration_choice is not None:
+                                captured['before_registration_reference'] = surface_data(
+                                    registration_choice['before_surface'], registration_choice['before_reference'],
+                                    snapshot_stamp_ns=observation.stamp_ns,
+                                    coordinate_frame='preappend_phase_reference_base_estimate',
+                                    snapshot_to_reference=correction,
+                                    request_binding=dict(binding,
+                                        surface_stage='before_current_registration',
+                                        current_source_not_appended=True))
+                            fused_replay = (audit_owner, lifecycle, captured, None)
+                        except Exception as exc:
+                            fused_replay = (audit_owner, lifecycle, None,
+                                '%s: %s' % (type(exc).__name__, exc))
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        # Registration already completed successfully. Keep
+                        # that exact source's coherent measured intermediate
+                        # result even when the full envelope exceeds a bound.
+                        # No scene audit or valid planning geometry is granted.
+                        with stream_guard, self._geometry_state_guard():
+                            if not self._commit_geometry_preparation_locked(
+                                    preparation, observation, raw_source,
+                                    scene_audit=None, registration_choice=registration_choice,
+                                    registration=registration, fused=fused, evidence=evidence):
+                                return self._geometry_preparation_stale_result(
+                                    preparation, snapshot.source_mode, target_depth, transform)
+                        if registration is not None:
+                            self._report_registration_diagnostic(
+                                registration, observation, preparation['registration_config'])
+                        return (self._invalid_geometry_estimate(
+                            'FUSED_SCENE_GEOMETRY_INVALID', str(exc), snapshot.source_mode),
+                            target_depth, transform)
+            with stream_guard, self._geometry_state_guard():
+                if not self._commit_geometry_preparation_locked(
+                        preparation, observation, raw_source,
+                        scene_audit=scene_audit, registration_choice=registration_choice,
+                        registration=(registration if preparation['uses_history'] else None),
+                        fused=(fused if preparation['uses_history'] else None),
+                        evidence=(evidence if preparation['uses_history'] else None)):
+                    return self._geometry_preparation_stale_result(
+                        preparation, snapshot.source_mode, target_depth, transform)
+                if not preparation['uses_history'] and lifecycle[2]:
+                    # Keep the existing subclass dispatch for current-view
+                    # seeding (direct/observe_return initial-contact). This
+                    # branch performs no historical ICP or fused enclosure.
+                    if registration_box is None:
+                        self._register_near_field_surface(observation)
+                    else:
+                        self._register_near_field_surface(observation,
+                            raw_geometry=raw_source['geometry'], raw_box_model=registration_box)
+            if preparation['uses_history'] and registration is not None:
+                self._report_registration_diagnostic(
+                    registration, observation, preparation['registration_config'])
+        if fused_replay is not None:
+            owner, frozen_lifecycle, captured, error = fused_replay
+            receipt = dict(diagnostic_only=True, execution_authorized=False,
+                status='unavailable', references={})
+            try:
+                if error is not None:
+                    raise ValueError(error)
+                for frame, data in captured.items():
+                    receipt['references'][frame] = _store_contact_replay(data)
+                receipt['status'] = 'stored'
+            except Exception as exc:
+                receipt['reason'] = '%s: %s' % (type(exc).__name__, exc)
+            # I/O holds no stream lock. An old receipt is historical data and
+            # cannot overwrite another source's current geometry/audit cache.
+            with stream_guard, self._geometry_state_guard():
+                if (frozen_lifecycle == self._multiview_lifecycle_token()
+                        and self._latest_fused_scene_audit is owner):
+                    owner['surface_replay'] = receipt
         return estimate, target_depth, transform
 
     def _multiview_lifecycle_token(self):
@@ -5448,74 +5909,171 @@ class RemoteGrasp6DNode:
             return None, None
         return surface, reference
 
-    def _snapshot_multiview_surface(self):
-        """Express registered measurements in the current RGB-D estimate frame.
+    def _capture_geometry_preparation(self):
+        """Capture immutable inputs while the caller owns geometry state."""
+        surface, reference = self._active_multiview_surface()
+        return dict(lifecycle=self._multiview_lifecycle_token(),
+            invalidation_generation=int(getattr(self, '_geometry_invalidation_generation', 0)),
+            surface_owner=getattr(self, '_near_field_fused_surface', None),
+            reference_owner=getattr(self, '_near_field_reference_view', None),
+            observation_owner=getattr(self, '_latest_target_observation', None),
+            raw_owner=getattr(self, '_latest_raw_geometry_source', None),
+            registration_owner=getattr(self, '_latest_registration_evidence', None),
+            choice_owner=getattr(self, '_latest_box_registration_choice', None),
+            surface=surface, reference=reference,
+            uses_history=bool(getattr(self, 'near_field_planning_active', False)
+                and self._snapshot_registration_uses_history()),
+            registration_config=getattr(self, 'multiview_registration_config', RegistrationConfig()),
+            voxel_size_m=float(getattr(self, 'geometry_voxel_size_m', .0025)),
+            max_size_m=float(getattr(self, 'geometry_max_size_m', .600)),
+            max_height_m=float(getattr(self, 'geometry_max_height_m', .500)),
+            session_id=str((getattr(self, '_observe_return_session', None) or {}).get('session_id', '')))
 
-        Registration maps this snapshot into the phase reference. Candidate
-        OBBs and unrefined tool poses still use the snapshot coordinates, so
-        their measured contact surface must use the inverse mapping. Keep
-        provenance and the stored reference cloud unchanged. Final corrected
-        plans explicitly use the reference surface instead.
-        """
+    def _geometry_preparation_current(self, captured):
+        """Same-generation source changes also revoke an older cache writer."""
+        return (captured['lifecycle'] == self._multiview_lifecycle_token()
+            and captured['invalidation_generation'] == int(getattr(
+                self, '_geometry_invalidation_generation', 0))
+            and captured['surface_owner'] is getattr(self, '_near_field_fused_surface', None)
+            and captured['reference_owner'] is getattr(self, '_near_field_reference_view', None)
+            and captured['observation_owner'] is getattr(self, '_latest_target_observation', None)
+            and captured['raw_owner'] is getattr(self, '_latest_raw_geometry_source', None)
+            and captured['registration_owner'] is getattr(self, '_latest_registration_evidence', None)
+            and captured['choice_owner'] is getattr(self, '_latest_box_registration_choice', None))
+
+    def _geometry_preparation_stale_result(self, captured, source_mode, target_depth, transform):
+        """Keep the old lifecycle-error API; same-owner races use local retry."""
+        if captured['lifecycle'] != self._multiview_lifecycle_token():
+            return (self._invalid_geometry_estimate(
+                'TARGET_GEOMETRY_GENERATION_STALE',
+                'planning phase, generation or target changed during geometry preparation',
+                source_mode), target_depth, transform)
+        self._cancel_geometry_preparation(captured)
+
+    def _commit_geometry_preparation_locked(self, captured, observation, raw_source, *,
+            scene_audit, registration_choice, registration=None, fused=None, evidence=None):
+        """Commit one coherent source; caller owns stream and geometry locks."""
+        if not self._geometry_preparation_current(captured):
+            return False
+        self._latest_target_observation = observation
+        self._latest_raw_geometry_source = raw_source
+        self._latest_fused_scene_audit = scene_audit
+        self._latest_box_registration_choice = registration_choice
+        if captured['uses_history']:
+            if registration is not None and registration.ok:
+                self._near_field_fused_surface = fused
+            self._latest_registration_evidence = evidence
+        return True
+
+    def _cancel_geometry_preparation(self, captured):
+        """Fail closed on owner races; actual lifecycle revocations stay hard."""
+        if captured['lifecycle'] != self._multiview_lifecycle_token():
+            raise StreamResultCancelled('GENERATION_STALE')
+        if captured['invalidation_generation'] != int(getattr(
+                self, '_geometry_invalidation_generation', 0)):
+            raise StreamResultCancelled(str(getattr(
+                self, '_last_geometry_invalidation_code', '') or 'PLAN_STALE'))
+        raise StreamResultCancelled('TARGET_PROCESSING_PENDING')
+
+    @staticmethod
+    def _snapshot_surface_values(surface, reference, observation, evidence):
+        """Transform one captured immutable surface, without reading live state."""
+        if (surface is None or reference is None
+                or not isinstance(observation, TargetObservation)
+                or observation.identity != surface.identity):
+            return None, None
+        if evidence is None and observation.stamp_ns == reference.stamp_ns:
+            return surface, reference
+        if (not isinstance(evidence, RegistrationEvidence)
+                or evidence.identity != observation.identity
+                or evidence.stamp_ns != observation.stamp_ns
+                or evidence.result.ok is not True):
+            return None, None
+        correction = _readonly_rigid_transform(
+            evidence.result.transform_base, 'snapshot-to-reference registration')
+        inverse = np.linalg.inv(correction)
+        def points_in_snapshot(points):
+            return np.asarray(points).dot(inverse[:3, :3].T) + inverse[:3, 3]
+        return (
+            replace(surface, points_base=points_in_snapshot(surface.points_base)),
+            replace(reference, points_base=points_in_snapshot(reference.points_base),
+                support_normal_base=correction[:3, :3].T.dot(reference.support_normal_base),
+                support_offset_m=float(reference.support_offset_m + np.dot(
+                    reference.support_normal_base, correction[:3, 3]))),
+        )
+
+    def _snapshot_multiview_surface(self):
+        """Return captured registered measurements in the current snapshot frame."""
         with self._geometry_state_guard():
             surface, reference = self._active_multiview_surface()
             observation = getattr(self, '_latest_target_observation', None)
             evidence = getattr(self, '_latest_registration_evidence', None)
-            if (surface is None or reference is None
-                    or not isinstance(observation, TargetObservation)
-                    or observation.identity != surface.identity):
-                return None, None
-            if evidence is None and observation.stamp_ns == reference.stamp_ns:
-                return surface, reference
-            if (not isinstance(evidence, RegistrationEvidence)
-                    or evidence.identity != observation.identity
-                    or evidence.stamp_ns != observation.stamp_ns
-                    or evidence.result.ok is not True):
-                return None, None
-            correction = _readonly_rigid_transform(
-                evidence.result.transform_base, 'snapshot-to-reference registration')
-            inverse = np.linalg.inv(correction)
-            def points_in_snapshot(points):
-                return np.asarray(points).dot(inverse[:3, :3].T) + inverse[:3, 3]
-            return (
-                replace(surface, points_base=points_in_snapshot(surface.points_base)),
-                replace(reference, points_base=points_in_snapshot(reference.points_base),
-                    support_normal_base=correction[:3, :3].T.dot(reference.support_normal_base),
-                    support_offset_m=float(reference.support_offset_m + np.dot(
-                        reference.support_normal_base, correction[:3, 3]))),
-            )
+        return self._snapshot_surface_values(surface, reference, observation, evidence)
 
-    def _register_near_field_surface(self, observation):
-        """Register one exact measured near view into the current phase."""
+    @staticmethod
+    def _compute_near_field_registration(surface, reference, observation, *,
+            raw_geometry=None, raw_box_model=None, config, voxel_size_m, lifecycle):
+        """Run unchanged registration and evidence construction on frozen values."""
+        if not isinstance(observation, TargetObservation):
+            raise ValueError('observation must be a TargetObservation')
+        if surface is None:
+            return None, surface, None, None
+        moving = surface_view_from_observation(observation)
+        choice = None
+        if raw_box_model is None:
+            result, fused = append_registered_view(
+                surface, reference, moving, config=config, voxel_size_m=voxel_size_m)
+        else:
+            result, fused, audit = append_box_consistent_registered_view(
+                surface, reference, moving, raw_geometry, raw_box_model,
+                config=config, voxel_size_m=voxel_size_m)
+            choice = dict(lifecycle=lifecycle, observation=observation,
+                audit=audit, before_surface=surface, before_reference=reference)
+        evidence = RegistrationEvidence(identity=observation.identity,
+            stamp_ns=observation.stamp_ns, result=result, source_clipped=bool(moving.is_clipped))
+        return result, fused, choice, evidence
 
+    @staticmethod
+    def _report_registration_diagnostic(result, observation, config):
+        diagnostic = support_offset_diagnostic(
+            result.support_plane_separation_m, config.maximum_support_offset_delta_m)
+        if diagnostic['warning_flag']:
+            rospy.logwarn_throttle(
+                1.0,
+                'SUPPORT_OFFSET_DIAGNOSTIC_REQUIRED: source_stamp_ns=%d '
+                'measured_m=%.6f warning_threshold_m=%.6f hard_limit_m=%.6f '
+                'registration_ok=%s code=%s',
+                observation.stamp_ns, diagnostic['measured_m'],
+                diagnostic['warning_threshold_m'], diagnostic['hard_limit_m'],
+                result.ok, result.code)
+
+    def _register_near_field_surface(self, observation, *, raw_geometry=None,
+                                   raw_box_model=None):
+        """Register frozen inputs; abandon a result if its cache owners changed.
+
+        Callers that already hold geometry/stream locks retain their original
+        outer lock span. The preparation pipeline calls the pure helper above
+        directly so heavy contact computation owns neither lock.
+        """
         if not isinstance(observation, TargetObservation):
             raise ValueError('observation must be a TargetObservation')
         with self._geometry_state_guard():
-            surface, reference = self._active_multiview_surface()
-            if surface is None:
-                self._latest_registration_evidence = None
+            captured = self._capture_geometry_preparation()
+        result, fused, choice, evidence = self._compute_near_field_registration(
+            captured['surface'], captured['reference'], observation,
+            raw_geometry=raw_geometry, raw_box_model=raw_box_model,
+            config=captured['registration_config'], voxel_size_m=captured['voxel_size_m'],
+            lifecycle=captured['lifecycle'])
+        with self._geometry_state_guard():
+            if not self._geometry_preparation_current(captured):
                 return None
-            moving = surface_view_from_observation(observation)
-            result, fused = append_registered_view(
-                surface,
-                reference,
-                moving,
-                config=getattr(
-                    self, 'multiview_registration_config', RegistrationConfig()
-                ),
-                voxel_size_m=float(
-                    getattr(self, 'geometry_voxel_size_m', 0.0025)
-                ),
-            )
-            if result.ok:
+            self._latest_box_registration_choice = choice
+            if result is not None and result.ok:
                 self._near_field_fused_surface = fused
-            self._latest_registration_evidence = RegistrationEvidence(
-                identity=observation.identity,
-                stamp_ns=observation.stamp_ns,
-                result=result,
-                source_clipped=bool(moving.is_clipped),
-            )
-            return result
+            self._latest_registration_evidence = evidence
+        if result is not None:
+            self._report_registration_diagnostic(result, observation, captured['registration_config'])
+        return result
 
     @staticmethod
     def _registration_rotation_deg(transform):
@@ -5614,7 +6172,14 @@ class RemoteGrasp6DNode:
                     policy['maximum_support_offset_delta_m']
                 ):
                     return False
-                for pose in getattr(plan, 'poses', ()):
+                # The final local gate moves the target OBB and candidate
+                # together into the phase reference. Carry that same OBB in
+                # the committed plan so strict goal/path checks do not mix a
+                # registered tool pose with the unregistered snapshot target.
+                # Keep the measured support plane, source header and identity
+                # unchanged, as in _resolved_sequence_geometry_gate.
+                registered_poses = tuple(getattr(plan, 'poses', ())) + (geometry.pose_base,)
+                for pose in registered_poses:
                     current = transform_matrix(
                         [pose.position.x, pose.position.y, pose.position.z],
                         [pose.orientation.x, pose.orientation.y,
@@ -5650,6 +6215,16 @@ class RemoteGrasp6DNode:
             plan.fused_view_count = len(surface.view_stamps_ns)
             return True
 
+    def _request_multiview_surface_audit(self, prepared):
+        """Preserve the polymorphic no-argument hook and bind request evidence."""
+        audit = self._multiview_surface_audit()
+        if prepared is not None:
+            # Missing frozen evidence means unavailable, never another
+            # request's mutable latest enclosure. Subclass fields survive.
+            audit['fused_scene_geometry'] = _thaw_request_evidence(
+                getattr(prepared, 'fused_scene_audit', {}) or {}) or None
+        return audit
+
     def _multiview_surface_audit(self):
         with self._geometry_state_guard():
             surface, _reference = self._active_multiview_surface()
@@ -5676,6 +6251,8 @@ class RemoteGrasp6DNode:
                     for index, count in zip(unique, counts)
                 },
                 'point_count': len(surface.points_base),
+                'voxel_source_evidence': surface_provenance_audit(surface),
+                'fused_scene_geometry': deepcopy(getattr(self, '_latest_fused_scene_audit', None)),
                 'stored_coordinate_frame': 'phase_reference',
                 'candidate_coordinate_frame': 'current_snapshot',
                 'final_registered_coordinate_frame': 'phase_reference',
@@ -5706,8 +6283,16 @@ class RemoteGrasp6DNode:
                     'support_plane_separation_m': float(
                         evidence.result.support_plane_separation_m
                     ),
+                    'support_offset_diagnostic': support_offset_diagnostic(
+                        evidence.result.support_plane_separation_m,
+                        getattr(self, 'multiview_registration_config',
+                                RegistrationConfig()).maximum_support_offset_delta_m,
+                    ),
                     'source_clipped': bool(evidence.source_clipped),
                 }
+                if evidence.result.support_consistency_audit is not None:
+                    audit['latest_registration']['support_consistency_audit'] = asdict(
+                        evidence.result.support_consistency_audit)
             return audit
 
     def _support_plane_camera_from_geometry(self, estimate, transform):
@@ -5881,7 +6466,7 @@ class RemoteGrasp6DNode:
             )
             return
 
-        gcfg = rospy.get_param('/grasp', {})
+        gcfg = self._read_grasp_config()
         confidence = float(getattr(msg, 'confidence', 1.0) or 0.0)
         min_confidence = self._cfg_float(gcfg, 'min_object_confidence', 0.50)
         if confidence < min_confidence:
@@ -6395,6 +6980,10 @@ class RemoteGrasp6DNode:
                 terminal_claimed=replaced_terminal_claimed,
             )
         return True
+
+    def _release_preparation_cancelled_direct_snapshot_locked(self, ticket, error):
+        """Optional measured-station retry; ordinary modes retain one-shot policy."""
+        return False
 
     def _release_expired_direct_snapshot_locked(self, ticket, status):
         """Allow fresh input after expiry, within the same measured phase.
@@ -7182,6 +7771,16 @@ class RemoteGrasp6DNode:
             stamp=prepared.stamp,
         )
 
+    def _observation_distance_preferences(self, geometry, snapshot, reference_pose, prepared):
+        return observation_camera_distance_variants(
+            self.grasp_config.get('observation_camera_target_nominal_distance_m', .200),
+            self.grasp_config.get('observation_camera_target_min_distance_m', .180),
+            self.grasp_config.get('observation_camera_target_max_distance_m', .220))
+
+    def _observation_distance_reference_variant(self, reference_variant, geometry, camera_distance):
+        """Bind a proposal to its actual centre/depth before every endpoint gate."""
+        return reference_variant
+
     def _far_field_observation_variants(
         self,
         grasp_pose,
@@ -7255,35 +7854,25 @@ class RemoteGrasp6DNode:
             observation_reference_pose,
             getattr(geometry, 'support_normal_base', None),
         )
-        distances = observation_camera_distance_variants(
-            self.grasp_config.get(
-                'observation_camera_target_nominal_distance_m', 0.200,
-            ),
-            self.grasp_config.get(
-                'observation_camera_target_min_distance_m', 0.180,
-            ),
-            self.grasp_config.get(
-                'observation_camera_target_max_distance_m', 0.220,
-            ),
-        )
-        # Inspect tilts at the nominal distance across all angles first, then
-        # the other existing distance preferences. Never spend the small
-        # extra strict-check budget on every distance of only the first tilt.
-        # The original roll family/order remains unchanged behind this at
-        # most 3 x 5 endpoint-only extension; no tilt x roll product is added.
-        tilt_jobs = tuple(
-            (index, distance, variant)
-            for index, distance in enumerate(distances)
-            for variant in tilt_variants
-        )
-        roll_jobs = tuple(
-            (index, distance, variant)
-            for index, distance in enumerate(distances)
-            for variant in reference_variants
-        )
-        for distance_index, camera_distance, reference_variant in tilt_jobs + roll_jobs:
+        def jobs(variants):
+            rows = [(distance_index, variant_index, distance, variant)
+                    for variant_index, variant in enumerate(variants)
+                    for distance_index, distance in enumerate(
+                        self._observation_distance_preferences(geometry, snapshot,
+                            variant['reference_pose'], prepared))]
+            return tuple((index, distance, variant)
+                         for index, _, distance, variant in sorted(rows, key=lambda row: row[:2]))
+        # Interleave distance preferences across orientations; each orientation
+        # can have a different target/FOV-derived feasible depth interval.
+        tilt_jobs = jobs(tilt_variants)
+        roll_jobs = jobs(reference_variants)
+        indexed_jobs = (tuple((len(roll_jobs)+i, *row) for i, row in enumerate(tilt_jobs))
+                        + tuple((i, *row) for i, row in enumerate(roll_jobs)))
+        for preference_index, distance_index, camera_distance, reference_variant in indexed_jobs:
             if getattr(self, '_stream_condition', None) is not None:
                 self._require_stream_ticket_current(prepared.ticket)
+            reference_variant = self._observation_distance_reference_variant(
+                reference_variant, geometry, camera_distance)
             sequence = self._make_observation_sequence(
                 grasp_pose,
                 geometry,
@@ -7322,6 +7911,14 @@ class RemoteGrasp6DNode:
                 'camera_distance_preference_index': int(distance_index),
                 'object_yaw_used': False,
             })
+            if 'distance_bound_directed_missing_side' in reference_variant:
+                view_audit.update(
+                    observe_return_directed_missing_side=deepcopy(
+                        reference_variant['distance_bound_directed_missing_side']),
+                    orientation_source='measured_missing_side_geodesic',
+                    object_yaw_used=True, contact_candidate_yaw_used=False,
+                    direction_source='measured_bilateral_weak_side',
+                    measured_target_geometry_direction_used=True)
             setattr(sequence, 'observation_view_audit', view_audit)
             side_evidence = self._observation_side_evidence(
                 geometry,
@@ -7398,13 +7995,7 @@ class RemoteGrasp6DNode:
                     reference_variant['camera_roll_offset_deg']
                 ),
                 'camera_tilt_offset_deg': tilt_deg,
-                'preference_index': int(
-                    (len(roll_jobs) if tilt_deg > 0. else 0)
-                    + distance_index * (
-                        len(tilt_variants) if tilt_deg > 0. else len(reference_variants)
-                    )
-                    + reference_variant['preference_index']
-                ),
+                'preference_index': preference_index,
             })
         if view_cache is not None:
             view_cache.update({
@@ -7518,8 +8109,10 @@ class RemoteGrasp6DNode:
     def _proposal_contact_height_bounds(proposal):
         audit = dict(getattr(proposal, 'audit', {}) or {})
         try:
-            lower = float(audit['bilateral_contact_height_min_m'])
-            upper = float(audit['bilateral_contact_height_max_m'])
+            prefix = ('inferred' if audit.get('contact_height_bounds_source') ==
+                      'regular_box_inferred_from_complete_top' else 'bilateral')
+            lower = float(audit[prefix + '_contact_height_min_m'])
+            upper = float(audit[prefix + '_contact_height_max_m'])
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise TabletopCandidateContractError(
                 'CONTACT_SUPPORT_INVALID',
@@ -7535,6 +8128,168 @@ class RemoteGrasp6DNode:
                 'proposal bilateral contact-height support is invalid',
             )
         return lower, upper
+
+    def _prepare_regular_box_snapshot(self, snapshot, geometry, transform):
+        """Qualify and enclose immutable pixels before a short owner CAS."""
+        with self._geometry_state_guard():
+            captured = self._capture_geometry_preparation()
+            previous_box = getattr(self, '_regular_box_snapshot', None)
+            observation = captured['observation_owner']
+            lifecycle = captured['lifecycle']
+            if not lifecycle[2]:
+                self._regular_box_snapshot = None
+                return geometry
+            if (not isinstance(observation, TargetObservation)
+                    or observation.stamp_ns != self._snapshot_ros_stamp(snapshot).to_nsec()):
+                # The snapshot lost its current source owner. Keep any newer
+                # box cache intact and stop before candidate generation.
+                self._cancel_geometry_preparation(captured)
+        # Read the strict live policy exactly once, without geometry locks.
+        # A failed policy read revokes this captured box, but never a newer
+        # writer's cache. Preserve its original hard configuration exception.
+        try:
+            requires_measured = self._box_requires_measured_bilateral_contact()
+        except Exception:
+            with self._geometry_state_guard():
+                if (self._geometry_preparation_current(captured)
+                        and previous_box is getattr(self, '_regular_box_snapshot', None)):
+                    self._regular_box_snapshot = None
+            raise
+        if requires_measured:
+            with self._geometry_state_guard():
+                if (not self._geometry_preparation_current(captured)
+                        or previous_box is not getattr(self, '_regular_box_snapshot', None)):
+                    self._cancel_geometry_preparation(captured)
+                self._regular_box_snapshot = None
+            return geometry
+        intrinsics = self._camera_intrinsics()
+        qualified = qualify_regular_box_snapshot(snapshot, intrinsics,
+            float(intrinsics.depth_scale), transform, geometry,
+            observation.identity, observation.stamp_ns)
+        current_tool = self._inferred_contact_current_tool_audit() if qualified.ok else None
+        planning, enclosure = (enclose_inferred_box_geometry(geometry, qualified.model)
+                               if qualified.ok else (geometry, None))
+        prepared = dict(lifecycle=lifecycle, observation=observation,
+            result=qualified, geometry=geometry, planning_geometry=planning,
+            enclosure=enclosure, current_tool=current_tool)
+        with self._geometry_state_guard():
+            if (not self._geometry_preparation_current(captured)
+                    or previous_box is not getattr(self, '_regular_box_snapshot', None)):
+                # Never combine raw geometry with another box cache owner.
+                self._cancel_geometry_preparation(captured)
+            self._regular_box_snapshot = prepared
+            return planning
+
+    def _inferred_contact_current_tool_audit(self):
+        """Measured FK informs precision-view intent, never a new angle gate."""
+        audit = dict(available=False, motion_authorized=False,
+                     large_rotation_alone_requires_view=False)
+        try:
+            state = deepcopy(self.latest_joint_state)
+            stamp = state.header.stamp.to_nsec()
+            age = (rospy.Time.now().to_nsec()-stamp)*1e-9
+            names = ['Joint%d' % i for i in range(1, 7)]
+            if (not 0. <= age <= .5 or stamp <= 0 or len(state.name) != len(set(state.name))
+                    or len(state.name) != len(state.position) or not set(names).issubset(state.name)):
+                raise ValueError('fresh measured joint seed unavailable')
+            positions = dict(zip(state.name, state.position))
+            q = [positions[name] for name in names]
+            if not np.all(np.isfinite(q)):
+                raise ValueError('non-finite measured joints')
+            fk = SerialUrdfFk(rospy.get_param('/robot_description', ''), names)
+            transform = fk(q)
+            audit.update(available=True, joint_stamp_ns=stamp, joint_names=names,
+                measured_joint_positions_rad=q, model_sha256=fk.model_sha256,
+                R_base_tool=np.asarray(transform[:3, :3]).tolist(),
+                rotation_uncertainty_model='no_angle_dependent_error_model_assumed')
+        except (AttributeError, KeyError, TypeError, ValueError, ObservationPathError) as exc:
+            audit['reason'] = str(exc)
+        return audit
+
+    def _inferred_candidate_reorientation(self, transform):
+        captured = getattr(self, '_regular_box_snapshot', None)
+        current = captured.get('current_tool') if isinstance(captured, dict) else None
+        if not isinstance(current, dict) or current.get('available') is not True:
+            return dict(available=False, large_rotation_alone_requires_view=False)
+        wanted = np.asarray(transform, dtype=float)[:3, :3]
+        before = np.asarray(current['R_base_tool'])
+        return dict(current,
+            tool_reorientation_deg=math.degrees(math.acos(float(np.clip(
+                (np.trace(before.T @ wanted)-1.)*.5, -1., 1.)))),
+            symmetric_jaw_line_rotation_deg=math.degrees(math.acos(float(np.clip(
+                abs(before[:, 1] @ wanted[:, 1]), -1., 1.)))))
+
+    def _current_box_precision_candidate(self, snapshot, geometry, transform):
+        """Return a current observation target, never an executable box model."""
+        with self._geometry_state_guard():
+            captured = getattr(self, '_regular_box_snapshot', None)
+            if (not isinstance(captured, dict)
+                    or captured['lifecycle'] != self._multiview_lifecycle_token()
+                    or captured['observation'] is not getattr(self, '_latest_target_observation', None)
+                    or captured['result'].ok is not False
+                    or captured['result'].model is not None
+                    or captured['result'].code != 'BOX_INFERENCE_PRECISION_VIEW_REQUIRED'
+                    or self._box_requires_measured_bilateral_contact()):
+                return None
+            try:
+                observation = captured['observation']
+                intrinsics = self._camera_intrinsics()
+                return validate_box_precision_candidate_source(
+                    captured['result'].audit.get('precision_view_candidate'),
+                    snapshot, intrinsics, float(intrinsics.depth_scale), transform, geometry,
+                    observation.identity, observation.stamp_ns)
+            except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+                return None
+
+    def _current_inferred_box(self, surface_frame='snapshot'):
+        with self._geometry_state_guard():
+            captured = getattr(self, '_regular_box_snapshot', None)
+            if (not isinstance(captured, dict)
+                    or captured['lifecycle'] != self._multiview_lifecycle_token()
+                    or captured['observation'] is not getattr(self, '_latest_target_observation', None)
+                    or captured['result'].ok is not True):
+                return None
+            if self._box_requires_measured_bilateral_contact():
+                return None
+            model = captured['result'].model
+            if not isinstance(model, RegularBoxInference):
+                return None
+            if surface_frame == 'snapshot':
+                return model
+            if surface_frame != 'reference':
+                raise ValueError('unknown inferred contact coordinate frame')
+            evidence = getattr(self, '_latest_registration_evidence', None)
+            reference = getattr(self, '_near_field_reference_view', None)
+            observation = captured['observation']
+            if isinstance(reference, SurfaceView) and reference.stamp_ns == observation.stamp_ns:
+                return model
+            if (not isinstance(evidence, RegistrationEvidence) or evidence.result.ok is not True
+                    or evidence.identity != observation.identity or evidence.stamp_ns != observation.stamp_ns):
+                return None
+            return transform_inferred_box(model, evidence.result.transform_base)
+
+    @staticmethod
+    def _contact_evidence_valid(evidence):
+        return isinstance(evidence, (BilateralSurfaceEvidence, InferredBoxContactEvidence)) and evidence.ok
+
+    @staticmethod
+    def _encode_current_contact_evidence(evidence, *, contact_center_base,
+            contact_height_axis_base, contact_height_bounds_m,
+            minimum_contact_overlap_m, grasp_pose, required_open_width_m):
+        common = dict(contact_center_base=contact_center_base,
+            contact_height_axis_base=contact_height_axis_base,
+            contact_height_bounds_m=contact_height_bounds_m,
+            minimum_contact_overlap_m=minimum_contact_overlap_m,
+            grasp_pose=grasp_pose, required_open_width_m=float(required_open_width_m))
+        if isinstance(evidence, InferredBoxContactEvidence):
+            width, uncertainty = float(evidence.inferred_width_m), float(evidence.width_uncertainty_m)
+            return encode_inferred_contact_evidence(**common, inferred_contact_width_m=width,
+                width_uncertainty_m=uncertainty,
+                opening_fit_clearance_each_side_m=(float(required_open_width_m)-width-uncertainty)*.5,
+                box_model_evidence=evidence.model_evidence)
+        width = float(evidence.measured_width_m)
+        return encode_contact_evidence(**common, measured_contact_width_m=width,
+            opening_fit_clearance_each_side_m=(float(required_open_width_m)-width)*.5)
 
     def _contact_band_fraction(self):
         config = getattr(self, 'tabletop_geometry_config', None)
@@ -7601,6 +8356,22 @@ class RemoteGrasp6DNode:
             minimum_points_per_side=12,
             support_normal_base=reference.support_normal_base,
         )
+        model = self._current_inferred_box(surface_frame)
+        if model is not None:
+            # The qualified model is a different, explicitly assumed geometry
+            # basis. A thin measured band must not silently replace its full
+            # interval, nor may a failed model precision check fall back to a
+            # weaker band and thereby bypass the uncertainty decision.
+            evidence = evaluate_inferred_box_contact(model, contact_center_base,
+                jaw_axis, insertion_axis, self.gripper_geometry,
+                # Registration admits bounded differences between measured
+                # planes; its phase reference is not this model's top-plane
+                # source. Project contact in the immutable model frame. The
+                # physical gate separately checks the unchanged source plane.
+                support_normal_base=model.support_normal_base,
+                opening_fit_clearance_each_side_m=getattr(
+                    self, 'opening_fit_clearance_each_side_m', None))
+            bounds = evidence.contact_height_bounds_m if evidence.ok else None
         return surface, evidence, bounds, insertion_axis
 
     @staticmethod
@@ -7613,15 +8384,15 @@ class RemoteGrasp6DNode:
         )
         return CandidateGateResult(
             ok=False,
-            failure_code='BILATERAL_SURFACE_EVIDENCE_MISSING',
+            failure_code=(evidence.code if isinstance(evidence, InferredBoxContactEvidence)
+                          else 'BILATERAL_SURFACE_EVIDENCE_MISSING'),
             failure_reason=(
                 'current fused surface lacks measured bilateral support '
                 '(negative=%d positive=%d)' % (negative, positive)
             ),
-            required_open_width_m=max(
-                0.0,
-                float(getattr(evidence, 'measured_width_m', 0.0) or 0.0),
-            ),
+            required_open_width_m=max(0., float(getattr(evidence,
+                'inferred_width_m' if isinstance(evidence, InferredBoxContactEvidence)
+                else 'measured_width_m', 0.) or 0.)),
             center_distance_m=0.0,
             support_clearance_m=-1.0e6,
             jaw_alignment=0.0,
@@ -7633,6 +8404,14 @@ class RemoteGrasp6DNode:
 
     @staticmethod
     def _bilateral_surface_audit(evidence, bounds, axis):
+        if isinstance(evidence, InferredBoxContactEvidence) and evidence.ok and bounds is not None:
+            return dict(contact_evidence_kind='regular_box_model_inference',
+                inferred_width_m=float(evidence.inferred_width_m),
+                width_uncertainty_m=float(evidence.width_uncertainty_m),
+                contact_height_bounds_m=tuple(float(v) for v in bounds),
+                contact_height_axis_base=tuple(float(v) for v in axis),
+                contact_height_bounds_source='regular_box_inferred_from_complete_top',
+                box_model_sha256=evidence.model_sha256)
         if (
             not isinstance(evidence, BilateralSurfaceEvidence)
             or not evidence.ok
@@ -7748,7 +8527,7 @@ class RemoteGrasp6DNode:
             )
             contact_height_axis_base_override = measured_axis
             if (
-                not isinstance(evidence, BilateralSurfaceEvidence)
+                not self._contact_evidence_valid(evidence)
                 or not evidence.ok
                 or bounds is None
             ):
@@ -7756,6 +8535,8 @@ class RemoteGrasp6DNode:
                     'BILATERAL_SURFACE_EVIDENCE_MISSING',
                     'contact audit requires the current bound fused surface',
                 )
+            if isinstance(evidence, InferredBoxContactEvidence):
+                contact_height_bounds_source = 'regular_box_inferred_from_complete_top'
         if contact_height_axis_base_override is not None:
             height_axis = np.asarray(
                 contact_height_axis_base_override, dtype=float
@@ -7870,8 +8651,20 @@ class RemoteGrasp6DNode:
         required_overlap_m,
         contact_height_bounds_m=None,
         contact_probe=None,
+        surface_snapshot=None,
+        contact_overlap_probe=None,
+        include_lower_boundary=False,
     ):
-        """Derive the largest CAD/contact-safe tilt for each wrist branch."""
+        """Refine observed contact-feasible brackets without changing gates."""
+
+        del surface_snapshot  # Bound by the mode-specific overlap callback.
+
+        def measured_overlap(candidate):
+            if contact_overlap_probe is not None:
+                return float(contact_overlap_probe(candidate))
+            return self._tabletop_candidate_contact_overlap_m(
+                proposal, candidate, support_normal,
+                contact_height_bounds_m=contact_height_bounds_m)
 
         required_overlap = float(required_overlap_m)
         if not math.isfinite(required_overlap) or required_overlap < 0.0:
@@ -7889,12 +8682,7 @@ class RemoteGrasp6DNode:
             if tilt <= 1e-9:
                 polarity = 0.0
             key = (int(candidate.variant_index), polarity)
-            overlap = self._tabletop_candidate_contact_overlap_m(
-                proposal,
-                candidate,
-                support_normal,
-                contact_height_bounds_m=contact_height_bounds_m,
-            )
+            overlap = measured_overlap(candidate)
             branch_samples.setdefault(key, []).append(
                 (tilt, overlap)
             )
@@ -7912,14 +8700,12 @@ class RemoteGrasp6DNode:
         def overlap_at(angle_deg, branch_key):
             if contact_probe is not None:
                 item = contact_probe(angle_deg, branch_key)
-                return self._tabletop_candidate_contact_overlap_m(
-                    proposal, item, support_normal,
-                    contact_height_bounds_m=contact_height_bounds_m)
+                return measured_overlap(item)
             variants = materialize_tabletop_candidates(
                 proposal=proposal,
                 support_point_base=support_point,
                 support_normal_base=support_normal,
-                gripper=self.gripper_geometry,
+                gripper=self._tabletop_placement_gripper(),
                 tool_jaw_axis=self.gripper_tool_jaw_axis,
                 tool_finger_length_axis=(
                     self.gripper_tool_finger_length_axis
@@ -7948,12 +8734,7 @@ class RemoteGrasp6DNode:
                     )
                     <= 1e-8
                 ):
-                    return self._tabletop_candidate_contact_overlap_m(
-                        proposal,
-                        item,
-                        support_normal,
-                        contact_height_bounds_m=contact_height_bounds_m,
-                    )
+                    return measured_overlap(item)
             return -float('inf')
 
         boundaries = []
@@ -7962,6 +8743,22 @@ class RemoteGrasp6DNode:
             if abs(float(branch_key[1])) <= 1e-9:
                 continue
             ordered = sorted(samples)
+            interior_probe_count = 0
+            if include_lower_boundary and not any(
+                    overlap + 1e-9 >= required_overlap for _, overlap in ordered):
+                # A concave pad may have a feasible island between two unsafe
+                # grid endpoints. Probe each original gap once (at most four),
+                # then refine only brackets supported by these measurements.
+                interiors = []
+                for first, second in zip(ordered, ordered[1:]):
+                    midpoint = .5 * (float(first[0]) + float(second[0]))
+                    if (second[0] - first[0] > 1e-9
+                            and 0. < midpoint <= float(maximum_tilt_deg)):
+                        interiors.append((midpoint, overlap_at(midpoint, branch_key)))
+                        interior_probe_count += 1
+                        if interior_probe_count >= 4:
+                            break
+                ordered = sorted(ordered + interiors)
             finite_samples = [
                 (float(angle), float(overlap))
                 for angle, overlap in ordered
@@ -7975,6 +8772,7 @@ class RemoteGrasp6DNode:
             evidence = {
                 'required_contact_patch_overlap_m': float(required_overlap),
                 'sample_count': int(len(finite_samples)),
+                'interior_probe_count': interior_probe_count,
                 'maximum_observed_contact_patch_overlap_m': (
                     float(maximum_observed[1])
                     if maximum_observed is not None
@@ -7999,6 +8797,20 @@ class RemoteGrasp6DNode:
                     **evidence,
                 })
                 continue
+            minimum_safe = float(safe_samples[0][0])
+            if include_lower_boundary:
+                previous = next((sample for sample in reversed(ordered)
+                                 if sample[0] < minimum_safe - 1e-9), None)
+                if previous is not None and previous[1] + 1e-9 < required_overlap:
+                    unsafe_angle = float(previous[0])
+                    # Only refine this observed entering bracket. Concave CAD
+                    # contact is not assumed globally monotone in tilt.
+                    for _iteration in range(14):
+                        midpoint = .5 * (unsafe_angle + minimum_safe)
+                        if overlap_at(midpoint, branch_key) + 1e-9 >= required_overlap:
+                            minimum_safe = midpoint
+                        else:
+                            unsafe_angle = midpoint
             lower_angle, lower_overlap = safe_samples[-1]
             upper_sample = next(
                 (
@@ -8025,8 +8837,17 @@ class RemoteGrasp6DNode:
                 float(maximum_tilt_deg),
                 float(lower_angle),
             )
-            if maximum_safe > 1e-6:
+            if (maximum_safe > 1e-6 and (not include_lower_boundary
+                    or overlap_at(maximum_safe, branch_key) + 1e-9 >= required_overlap)):
                 boundaries.append(maximum_safe)
+            if include_lower_boundary:
+                # Include a small feasible angle and a verified interior pose;
+                # every resulting candidate still runs the full final gates.
+                for angle in (minimum_safe, .5 * (minimum_safe + maximum_safe)):
+                    if (1e-6 < angle <= float(maximum_tilt_deg)
+                            and overlap_at(angle, branch_key) + 1e-9 >= required_overlap):
+                        boundaries.append(float(angle))
+                evidence['minimum_observed_safe_tilt_deg'] = minimum_safe
             branch_audit.append({
                 'variant_index': int(branch_key[0]),
                 'tilt_polarity': float(branch_key[1]),
@@ -8039,6 +8860,14 @@ class RemoteGrasp6DNode:
         for angle in sorted(boundaries, reverse=True):
             if not any(abs(angle - prior) <= 1e-5 for prior in unique):
                 unique.append(float(angle))
+        if include_lower_boundary:
+            # Four new angles retain the existing bounded eight-angle union.
+            # Spread the budget across entering/interior/leaving samples;
+            # descending truncation would discard every new smaller angle.
+            unique.sort()
+            if len(unique) > 4:
+                unique = [unique[int(round(index * (len(unique) - 1) / 3.))]
+                          for index in range(4)]
         return tuple(unique[:4]), tuple(branch_audit)
 
     @staticmethod
@@ -8068,8 +8897,13 @@ class RemoteGrasp6DNode:
         # stratum.
         return (1, rotated_branch, -tilt)
 
+    def _tabletop_placement_gripper(self, contact_execution_phase=None):
+        """Pose construction geometry; physical gate geometry stays independent."""
+        return self.gripper_geometry
+
     def _materialize_tabletop_union(self, proposal, support_point, support_normal,
-                                   probe_variants, probe_tilts, union_tilts):
+                                   probe_variants, probe_tilts, union_tilts,
+                                   contact_execution_phase=None):
         """Extend one proposal's frozen probe grid, preserving full-grid IDs.
 
         Existing CAD results belong only to this local generation call. New
@@ -8080,7 +8914,7 @@ class RemoteGrasp6DNode:
             return probe_variants
         arguments = dict(
             proposal=proposal, support_point_base=support_point,
-            support_normal_base=support_normal, gripper=self.gripper_geometry,
+            support_normal_base=support_normal, gripper=self._tabletop_placement_gripper(contact_execution_phase),
             tool_jaw_axis=self.gripper_tool_jaw_axis,
             tool_finger_length_axis=self.gripper_tool_finger_length_axis,
         )
@@ -8120,6 +8954,7 @@ class RemoteGrasp6DNode:
         snapshot=None,
         contact_execution_phase=True,
         target_label='',
+        refine_obb_neighbor_angles=False,
     ):
         """Materialize a bounded geometry batch from one frozen estimate."""
 
@@ -8170,9 +9005,12 @@ class RemoteGrasp6DNode:
             support_normal_base=support_normal,
             config=self.tabletop_geometry_config,
             fused_surface=fused_surface,
+            inferred_box=self._current_inferred_box() if contact_execution_phase else None,
             finger_geometry=(
                 self.gripper_geometry if fused_surface is not None else None
             ),
+            refine_obb_neighbor_angles=bool(
+                contact_execution_phase and refine_obb_neighbor_angles),
         )
         diagnostics = {
             'enabled': True,
@@ -8194,6 +9032,12 @@ class RemoteGrasp6DNode:
                 contact_execution_phase
             ),
         }
+        captured_box = getattr(self, '_regular_box_snapshot', None)
+        if isinstance(captured_box, dict):
+            diagnostics['regular_box_inference'] = dict(captured_box['result'].audit,
+                ok=captured_box['result'].ok, code=captured_box['result'].code)
+            diagnostics['regular_box_planning_enclosure'] = captured_box.get('enclosure')
+            diagnostics['current_measured_tool_for_box_precision'] = captured_box.get('current_tool')
         if not generation.ok:
             return (), diagnostics
         profiles = self._adaptive_stage_profiles(
@@ -8250,6 +9094,7 @@ class RemoteGrasp6DNode:
         diagnostics['proposal_reach_rejections'] = []
         for proposal in generation.proposals:
             try:
+                measured_reach = {}
                 if bool(contact_execution_phase):
                     # Tilt changes insertion about the jaw axis; neither the
                     # proposal's contact center nor its unoriented jaw line
@@ -8269,6 +9114,8 @@ class RemoteGrasp6DNode:
                     if interval is not None and interval[0] < 0.0 < interval[1]:
                         negative_reach = -float(interval[0]) + fit_clearance
                         positive_reach = float(interval[1]) + fit_clearance
+                        measured_reach = dict(negative_reach_m=negative_reach,
+                            positive_reach_m=positive_reach, maximum_side_reach_m=maximum_reach)
                         # Keep boundary-rounding cases for the full gate.
                         if max(negative_reach, positive_reach) > maximum_reach + 1.001e-9:
                             rejections['GRIPPER_SWEEP_COLLISION'] += 1
@@ -8300,7 +9147,7 @@ class RemoteGrasp6DNode:
                         proposal=proposal,
                         support_point_base=support_point,
                         support_normal_base=support_normal,
-                        gripper=self.gripper_geometry,
+                        gripper=self._tabletop_placement_gripper(contact_execution_phase),
                         tool_jaw_axis=self.gripper_tool_jaw_axis,
                         tool_finger_length_axis=(
                             self.gripper_tool_finger_length_axis
@@ -8320,10 +9167,13 @@ class RemoteGrasp6DNode:
                         maximum_tilt,
                         required_overlap_m=required_overlap,
                         contact_height_bounds_m=contact_height_bounds,
+                        surface_snapshot=(fused_surface, reference) if contact_execution_phase else None,
                     )
                 )
                 contact_boundary_profiles.append({
                     'proposal_source_index': int(proposal.source_index),
+                    'angle_deg': float(proposal.angle_deg),
+                    **measured_reach,
                     'contact_height_bounds_m': tuple(
                         float(value) for value in contact_height_bounds
                     ),
@@ -8353,7 +9203,8 @@ class RemoteGrasp6DNode:
                 )
                 variants = self._materialize_tabletop_union(
                     proposal, support_point, support_normal,
-                    probe_variants, tilt_degrees, materialization_tilts)
+                    probe_variants, tilt_degrees, materialization_tilts,
+                    contact_execution_phase=contact_execution_phase)
                 contact_boundary_profiles[-1][
                     'materialization_tilts_deg'
                 ] = tuple(materialization_tilts)
@@ -8398,9 +9249,7 @@ class RemoteGrasp6DNode:
                             surface_snapshot=(fused_surface, reference),
                         )
                         if (
-                            not isinstance(
-                                item_evidence, BilateralSurfaceEvidence
-                            )
+                            not self._contact_evidence_valid(item_evidence)
                             or not item_evidence.ok
                             or item_bounds is None
                         ):
@@ -8472,6 +9321,7 @@ class RemoteGrasp6DNode:
                                 )
                             ),
                             'sampled_angle_deg': float(proposal.angle_deg),
+                            'planned_reorientation': self._inferred_candidate_reorientation(item.T_base_tool0),
                             'negative_contact_count': int(
                                 proposal.negative_contact_count
                             ),
@@ -8577,9 +9427,17 @@ class RemoteGrasp6DNode:
                     proposal_index,
                 )
             )
+        has_aperture_refinement = any(
+            'open_aperture_refinement' in item.audit for item in materialized)
+        diagnostics['open_aperture_refined_proposal_count'] = len({
+            int(item.audit.get('proposal_source_index', item.source_index))
+            for item in materialized if 'open_aperture_refinement' in item.audit})
         ordered_proposals = sorted(
             proposal_strata,
             key=lambda proposal_index: (
+                int(has_aperture_refinement and
+                    proposal_strata[proposal_index][0].audit.get(
+                        'open_envelope_aperture_margin_m', 0.) < 0.),
                 float(proposal_strata[proposal_index][0].source_score),
                 int(proposal_index),
             ),
@@ -8619,106 +9477,150 @@ class RemoteGrasp6DNode:
             )
         return bounded, diagnostics
 
-    def _prepare_and_predict(self, ticket):
+    def _maybe_prepare_observation_from_contact_geometry(self, ticket, snapshot,
+            geometry, transform, tabletop_candidates, tabletop_diagnostics):
+        """Optional mode policy after measured geometry, before learned input.
+
+        The default retains the complete existing contact pipeline. A mode
+        that transitions must cancel its old ticket and grant no motion here.
+        """
+        return False
+
+    @profiled_preparation("base_prepare")
+    def _prepare_and_predict(self, ticket, _request_profile=None):
         """Prepare immutable request facts and perform one correlated WSL call."""
 
-        prepare_started = time.perf_counter()
-        self._require_stream_ticket_current(ticket)
-        with self._geometry_state_guard():
-            near_field = bool(
-                getattr(self, 'near_field_planning_active', False)
-            )
-            near_field_phase_id = int(
-                getattr(self, '_near_field_phase_id', 0) or 0
-            )
-            near_field_phase_deadline_sec = float(
-                getattr(
-                    self,
-                    '_near_field_phase_deadline_sec',
-                    0.0,
+        with _request_profile.stage('parameters'):
+            prepare_started = time.perf_counter()
+            _request_profile.call("lifecycle_check", self._require_stream_ticket_current, ticket)
+            with self._geometry_state_guard():
+                near_field = bool(
+                    getattr(self, 'near_field_planning_active', False)
                 )
-                or 0.0
+                near_field_phase_id = int(
+                    getattr(self, '_near_field_phase_id', 0) or 0
+                )
+                refinement_binding = getattr(self, '_near_field_refinement_binding', None) if near_field else None
+                if (near_field and getattr(self, '_near_field_planning_stage', 'contact_replan')
+                        in ('final_refinement', 'post_refine_confirmation')
+                        and refinement_binding is None):
+                    raise CandidateContractError('FINAL_REFINE_PHASE_INVALID', 'missing bound refinement contract')
+                near_field_phase_deadline_sec = float(
+                    getattr(
+                        self,
+                        '_near_field_phase_deadline_sec',
+                        0.0,
+                    )
+                    or 0.0
+                )
+            try:
+                snapshot, input_config = ticket.payload
+            except (TypeError, ValueError):
+                raise ValueError('inference ticket payload must contain snapshot/config')
+            if not isinstance(snapshot, SnapshotResult) or not snapshot.ok:
+                raise ValueError('inference ticket requires a valid planning snapshot')
+            if not bool(getattr(snapshot.object_msg, 'detected', False)):
+                raise CandidateContractError(
+                    'TARGET_LOST',
+                    'locked planning snapshot target is not detected',
+                )
+            if input_config is None:
+                input_config = self._freeze_graspnet_input_config()
+            request_invalidation_generation = self._capture_geometry_generation()
+            self._require_graspnet_input_prerequisites(snapshot, input_config)
+            self._refresh_runtime_params()
+            _request_profile.call("lifecycle_check", self._require_stream_ticket_current, ticket)
+            self.candidate_target_gate_enabled = bool(
+                input_config.candidate_target_gate_enabled
             )
-        try:
-            snapshot, input_config = ticket.payload
-        except (TypeError, ValueError):
-            raise ValueError('inference ticket payload must contain snapshot/config')
-        if not isinstance(snapshot, SnapshotResult) or not snapshot.ok:
-            raise ValueError('inference ticket requires a valid planning snapshot')
-        if not bool(getattr(snapshot.object_msg, 'detected', False)):
-            raise CandidateContractError(
-                'TARGET_LOST',
-                'locked planning snapshot target is not detected',
+            stamp = self._snapshot_ros_stamp(snapshot)
+            parameters_prepared_at = time.perf_counter()
+        with _request_profile.stage('geometry_registration'):
+            try:
+                estimate, depth_for_remote, transform = self._prepare_snapshot_geometry(
+                    snapshot,
+                    stamp,
+                )
+            except StreamResultCancelled:
+                # Preserve actual target/identity/manual revocations before a
+                # same-owner cache race reaches the local worker retry path.
+                _request_profile.call("lifecycle_check", self._require_stream_ticket_current, ticket)
+                raise
+            _request_profile.call("lifecycle_check", self._require_stream_ticket_current, ticket)
+            if not estimate.ok:
+                raise CandidateContractError(
+                    estimate.failure_code,
+                    estimate.failure_reason,
+                )
+            # Bind the measured enclosure before box qualification can expand the
+            # planning OBB. Keep the strict source/geometry checks and carry this
+            # request's copy across later qualification and remote latency.
+            with self._geometry_state_guard():
+                fused_scene_audit = _snapshot_fused_scene_evidence(
+                    snapshot, estimate, getattr(self, '_latest_fused_scene_audit', None))
+            try:
+                estimate = self._prepare_regular_box_snapshot(snapshot, estimate, transform)
+            except StreamResultCancelled:
+                # A cache-owner race may cancel only this preparation. Recheck
+                # original target/station/identity authority before reporting its
+                # local pending code, so actual revocations keep their hard code.
+                _request_profile.call("lifecycle_check", self._require_stream_ticket_current, ticket)
+                raise
+            geometry_prepared_at = time.perf_counter()
+        with _request_profile.stage('tabletop_candidates'):
+            tabletop_candidates, tabletop_diagnostics = (
+                self._generate_tabletop_candidates(
+                    estimate,
+                    snapshot=snapshot,
+                    contact_execution_phase=near_field,
+                    target_label=str(
+                        getattr(snapshot.object_msg, 'label', '') or ''
+                    ),
+                )
             )
-        if input_config is None:
-            input_config = self._freeze_graspnet_input_config()
-        request_invalidation_generation = self._capture_geometry_generation()
-        self._require_graspnet_input_prerequisites(snapshot, input_config)
-        self._refresh_runtime_params()
-        self._require_stream_ticket_current(ticket)
-        self.candidate_target_gate_enabled = bool(
-            input_config.candidate_target_gate_enabled
-        )
-        stamp = self._snapshot_ros_stamp(snapshot)
-        parameters_prepared_at = time.perf_counter()
-        estimate, depth_for_remote, transform = self._prepare_snapshot_geometry(
-            snapshot,
-            stamp,
-        )
-        self._require_stream_ticket_current(ticket)
-        if not estimate.ok:
-            raise CandidateContractError(
-                estimate.failure_code,
-                estimate.failure_reason,
+            tabletop_prepared_at = time.perf_counter()
+        _request_profile.call("lifecycle_check", self._require_stream_ticket_current, ticket)
+        if _request_profile.call(
+                "observation_preflight", self._maybe_prepare_observation_from_contact_geometry,
+                ticket, snapshot, estimate, transform,
+                tabletop_candidates, tabletop_diagnostics):
+            raise StreamResultCancelled('OBSERVE_RETURN_MEASURED_VIEW_REQUIRED')
+        with _request_profile.stage('remote_input'):
+            pose_estimator = FrozenSnapshotCandidatePoseEstimator(
+                transform,
+                stamp,
+                snapshot.frame_id,
+                raw_candidate_convention=self.candidate_frame_convention,
             )
-        geometry_prepared_at = time.perf_counter()
-        tabletop_candidates, tabletop_diagnostics = (
-            self._generate_tabletop_candidates(
-                estimate,
-                snapshot=snapshot,
-                contact_execution_phase=near_field,
-                target_label=str(
-                    getattr(snapshot.object_msg, 'label', '') or ''
-                ),
+            contract_mismatch = self._gripper_contract_mismatch_reason()
+            if contract_mismatch:
+                raise CandidateContractError(
+                    'GRIPPER_MODEL_MISMATCH', contract_mismatch
+                )
+            support_plane_kwargs = {}
+            if input_config.requires_support_plane:
+                (
+                    support_plane_point_camera,
+                    support_plane_normal_camera,
+                ) = self._support_plane_camera_from_geometry(estimate, transform)
+                support_plane_kwargs = {
+                    'support_plane_point_camera': support_plane_point_camera,
+                    'support_plane_normal_camera': support_plane_normal_camera,
+                }
+            graspnet_input, graspnet_input_audit = self._build_frozen_graspnet_input(
+                snapshot,
+                depth_for_remote,
+                input_config,
+                commit_audit=False,
+                **support_plane_kwargs,
             )
-        )
-        tabletop_prepared_at = time.perf_counter()
-        self._require_stream_ticket_current(ticket)
-        pose_estimator = FrozenSnapshotCandidatePoseEstimator(
-            transform,
-            stamp,
-            snapshot.frame_id,
-            raw_candidate_convention=self.candidate_frame_convention,
-        )
-        contract_mismatch = self._gripper_contract_mismatch_reason()
-        if contract_mismatch:
-            raise CandidateContractError(
-                'GRIPPER_MODEL_MISMATCH', contract_mismatch
-            )
-        support_plane_kwargs = {}
-        if input_config.requires_support_plane:
-            (
-                support_plane_point_camera,
-                support_plane_normal_camera,
-            ) = self._support_plane_camera_from_geometry(estimate, transform)
-            support_plane_kwargs = {
-                'support_plane_point_camera': support_plane_point_camera,
-                'support_plane_normal_camera': support_plane_normal_camera,
-            }
-        graspnet_input, graspnet_input_audit = self._build_frozen_graspnet_input(
-            snapshot,
-            depth_for_remote,
-            input_config,
-            commit_audit=False,
-            **support_plane_kwargs,
-        )
-        model_choice = str(getattr(self, '_last_model_choice', '') or '')
-        input_prepared_at = time.perf_counter()
+            model_choice = str(getattr(self, '_last_model_choice', '') or '')
+            input_prepared_at = time.perf_counter()
         ros_prepare_ms = max(
             0.0,
             (input_prepared_at - prepare_started) * 1000.0,
         )
-        self._require_stream_ticket_current(ticket)
+        _request_profile.call("lifecycle_check", self._require_stream_ticket_current, ticket)
         remote_failure_code = ''
         remote_failure_reason = ''
         try:
@@ -8729,8 +9631,8 @@ class RemoteGrasp6DNode:
                 encode_ms,
                 transport_ms,
                 decode_ms,
-            ) = self._predict_remote(
-                ticket,
+            ) = _request_profile.call(
+                "predict", self._predict_remote, ticket,
                 graspnet_input,
                 self._camera_intrinsics(),
                 snapshot.frame_id or self.pose_estimator.camera_frame,
@@ -8757,6 +9659,10 @@ class RemoteGrasp6DNode:
             'tabletop_candidates': (tabletop_prepared_at - geometry_prepared_at) * 1000.0,
             'remote_input': (input_prepared_at - tabletop_prepared_at) * 1000.0,
         }
+        try:
+            request_profile_snapshot = _request_profile.snapshot()
+        except Exception:
+            request_profile_snapshot = None
         return PreparedPrediction(
             ticket=ticket,
             snapshot=snapshot,
@@ -8767,6 +9673,7 @@ class RemoteGrasp6DNode:
             candidates=tuple(candidates),
             remote_diagnostics=diagnostics,
             remote_performance=dict(performance),
+            request_preparation_profile=request_profile_snapshot,
             tabletop_candidates=tabletop_candidates,
             remote_failure_code=remote_failure_code,
             remote_failure_reason=remote_failure_reason,
@@ -8780,6 +9687,8 @@ class RemoteGrasp6DNode:
             decode_ms=decode_ms,
             near_field=near_field,
             near_field_phase_id=near_field_phase_id,
+            refinement_binding=refinement_binding,
+            fused_scene_audit=fused_scene_audit,
             near_field_phase_deadline_sec=(
                 near_field_phase_deadline_sec
             ),
@@ -9177,6 +10086,9 @@ class RemoteGrasp6DNode:
             if not activated:
                 return False
             self._current_prepared_prediction = prepared
+            self._latest_fused_scene_audit = _thaw_request_evidence(
+                getattr(prepared, 'fused_scene_audit', {}) or {}
+            ) or None
             self._active_graspnet_input_audit = _thaw_request_evidence(
                 getattr(prepared, 'graspnet_input_audit', {}) or {}
             )
@@ -9593,9 +10505,7 @@ class RemoteGrasp6DNode:
             )
             if (
                 surface is None
-                or not isinstance(
-                    bilateral_evidence, BilateralSurfaceEvidence
-                )
+                or not self._contact_evidence_valid(bilateral_evidence)
                 or not bilateral_evidence.ok
                 or contact_height_bounds is None
             ):
@@ -9604,7 +10514,9 @@ class RemoteGrasp6DNode:
                     'current fused surface lacks measured bilateral support',
                 )
             target_points_base = surface.points_base
-            contact_height_source = 'fused_measured_bilateral_surface'
+            contact_height_source = ('regular_box_inferred_from_complete_top'
+                if isinstance(bilateral_evidence, InferredBoxContactEvidence)
+                else 'fused_measured_bilateral_surface')
         quaternion = quaternion_from_matrix(transform)
         grasp_pose = make_pose_stamped(
             'base_link',
@@ -9620,6 +10532,7 @@ class RemoteGrasp6DNode:
         )
         geometry = prepared.geometry
         gate = evaluate_explicit_candidate(
+            robot_description=getattr(self, '_geometry_robot_description', None),
             gripper=self.gripper_geometry,
             candidate_center_base=tabletop_candidate.contact_center_base,
             candidate_tool0_base=transform[:3, 3],
@@ -10400,13 +11313,8 @@ class RemoteGrasp6DNode:
                     and any(
                         profile.get('contact_height_bounds_source')
                         == 'fused_measured_bilateral_surface'
-                        and len(profile['contact_height_bounds_m']) == 2
-                        and all(math.isfinite(float(value)) for value in
-                                profile['contact_height_bounds_m'])
-                        and 0.0 < (
-                            float(profile['contact_height_bounds_m'][1])
-                            - float(profile['contact_height_bounds_m'][0])
-                        ) < required
+                        and insufficient_measured_common_height(
+                            profile['contact_height_bounds_m'], required)
                         for profile in profiles
                     )
                 )
@@ -10514,14 +11422,14 @@ class RemoteGrasp6DNode:
         return tuple(stable)
 
     def _direct_near_field_moveit_rank_key(self, candidate):
-        """Prefer the narrowest hard-safe grasp, then the smallest correction.
+        """Search short-side grasps in millimetre bands, then by pose change.
 
         This is only an ordering policy for candidates that already passed
         every hard geometry and collision gate. Aperture margin is physical
-        room for centering error, so it takes precedence over avoiding a wrist
-        rotation. Widths indistinguishable in the float32 plan message still
-        minimize frozen-pose change. Rigid-transform roundoff in equivalent
-        jaw variants must not choose a large wrist turn ahead of a small one.
+        room for centering error. Sub-millimetre width differences must not
+        spend the phase on large wrist turns before trying a nearby pose.
+        Binning affects search order only: physical aperture gates and final
+        selection still use the complete measured width.
         """
 
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
@@ -10556,13 +11464,109 @@ class RemoteGrasp6DNode:
             required_width = float('inf')
 
         return (
-            float32_wire_value(required_width),
+            (math.floor(float32_wire_value(required_width)
+                        / DIRECT_NEAR_FIELD_SEARCH_WIDTH_BIN_M)
+             if math.isfinite(required_width) else float('inf')),
             nonnegative_finite('contact_start_orientation_delta_rad'),
             nonnegative_finite('contact_start_translation_delta_m'),
             candidate.pre_moveit_score,
             candidate.track_id,
             candidate.variant_index,
         )
+
+    def _direct_contact_endpoint_priorities(self, candidates, prepared, diagnostics):
+        """Use bounded endpoint IK only to order full sequence checks.
+
+        A failed or unavailable probe is UNKNOWN, never an unreachable proof.
+        No candidate is removed, no pose changes, and all execution authority
+        still comes from the existing registered geometry and strict sequence.
+        The hints live only in this request; no joint solutions are executed.
+        """
+        priorities = {}
+        report = dict(policy='request_local_endpoint_ik_search_hint',
+                      execution_authority=False, candidates_removed=0,
+                      maximum_seconds=5.0, checked_count=0, hinted_count=0,
+                      status='unavailable')
+        diagnostics['endpoint_ik_search_order'] = report
+        state = deepcopy(getattr(self, 'latest_joint_state', None))
+        state_audit = self._joint_state_audit(state)
+        report['joint_seed'] = state_audit
+        if not state_audit.get('available'):
+            return priorities
+        source_ns = state_audit.get('stamp_ns', 0)
+        if not isinstance(source_ns, int) or source_ns <= 0:
+            report['status'] = 'joint_seed_stale'
+            return priorities
+        age = (rospy.Time.now().to_nsec() - source_ns) * 1e-9
+        if not 0.0 <= age <= 0.5:
+            report['status'] = 'joint_seed_stale'
+            return priorities
+        deadline_gate = self._direct_near_field_deadline_gate(prepared)
+        if not deadline_gate():
+            report['status'] = 'phase_expired'
+            return priorities
+        clock = getattr(self, '_endpoint_probe_clock', time.monotonic)
+        deadline = clock() + 5.0
+        try:
+            from moveit_msgs.msg import RobotState
+            from moveit_msgs.srv import GetPositionIK, GetPositionIKRequest
+            rospy.wait_for_service('/compute_ik', timeout=0.15)
+            service = rospy.ServiceProxy('/compute_ik', GetPositionIK)
+        except Exception as exc:
+            report['reason'] = str(exc)
+            return priorities
+        report['status'] = 'complete'
+        for candidate in sorted(candidates, key=self._direct_near_field_moveit_rank_key):
+            if clock() >= deadline or not deadline_gate():
+                report['status'] = 'budget_exhausted'
+                break
+            key = (candidate.track_id, candidate.variant_index)
+            runtime = self._stable_variant_runtime[key]
+            sequence = runtime.get('sequence')
+            row = dict(status='unknown', stages=[], execution_authority=False)
+            runtime['endpoint_ik_search_probe'] = row
+            report['checked_count'] += 1
+            seed = RobotState()
+            seed.joint_state = deepcopy(state)
+            try:
+                for stage in ('grasp', 'approach'):
+                    remaining = deadline - clock()
+                    if remaining <= 0.0 or not deadline_gate():
+                        row['reason'] = 'budget_exhausted'
+                        break
+                    pose = getattr(sequence, stage, None)
+                    if pose is None or pose.header.frame_id != 'base_link':
+                        row['reason'] = 'exact_base_frame_endpoint_unavailable'
+                        break
+                    request = GetPositionIKRequest()
+                    request.ik_request.group_name = 'alicia'
+                    request.ik_request.ik_link_name = 'tool0'
+                    request.ik_request.robot_state = deepcopy(seed)
+                    request.ik_request.pose_stamped = deepcopy(pose)
+                    request.ik_request.avoid_collisions = True
+                    request.ik_request.timeout = rospy.Duration(min(0.025, remaining))
+                    response = service(request)
+                    code = int(response.error_code.val)
+                    row['stages'].append(dict(stage=stage, error_code=code))
+                    if code != 1:
+                        row['reason'] = 'no_endpoint_hint; candidate remains eligible'
+                        break
+                    solved = self._joint_state_audit(response.solution.joint_state)
+                    if (not solved.get('available') or not set('Joint%d' % j for j in range(1, 7))
+                            .issubset(solved.get('name', ()))):
+                        row['reason'] = 'invalid_ik_response'
+                        break
+                    row['stages'][-1]['joint_solution'] = solved
+                    seed = deepcopy(response.solution)
+                else:
+                    if clock() < deadline and deadline_gate():
+                        priorities[key] = 0
+                        row['status'] = 'endpoint_pair_found'
+                        report['hinted_count'] += 1
+            except Exception as exc:
+                row['reason'] = str(exc)
+        report['elapsed_sec'] = max(0.0, clock() - (deadline - 5.0))
+        return priorities
 
     def _direct_near_field_execution_rank_key(self, candidate):
         """Preserve aperture margin; compare actual strict motion, not SO(3).
@@ -10575,7 +11579,9 @@ class RemoteGrasp6DNode:
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
             (candidate.track_id, candidate.variant_index), {})
         gate = runtime.get('final_registered_geometry_gate', {})
-        width = float(gate.get('required_open_width_m', prior[0]))
+        stable = getattr(candidate, 'stable_candidate', candidate)
+        width = float(gate.get('required_open_width_m',
+                               getattr(stable, 'required_open_width_m', float('inf'))))
         if not math.isfinite(width) or width <= 0.0:
             width = float('inf')
         result = candidate.moveit_result
@@ -10590,17 +11596,19 @@ class RemoteGrasp6DNode:
             *prior[1:],
         )
 
-    def _direct_near_field_comparison_search(self, prepared):
-        """Bound additional comparisons without spending a valid incumbent.
+    def _direct_near_field_comparison_search(self, prepared, candidates=None):
+        """Stop comparisons after the first complete hard-safe incumbent.
 
-        The initial search retains the full phase deadline. Only after a
-        complete hard-safe result exists do we cap further comparisons. The
-        same cutoff reaches both strict sequence calls and the IK resolver.
-        No plan is published by this checker.
+        Reserve publication time even before finding the first incumbent.
+        A complete hard-safe result sets the comparison cutoff to now; the
+        unchanged selection driver checks that cutoff before another call.
+        The same deadline reaches strict sequence calls and the IK resolver.
+        No plan is published by this checker: current owner and publication
+        geometry checks still run afterward.
         """
         phase_gate = self._direct_near_field_deadline_gate(prepared)
         phase_deadline = self._direct_near_field_deadline_sec(prepared)
-        cutoff = [phase_deadline]
+        cutoff = [phase_deadline - DIRECT_NEAR_FIELD_PUBLICATION_RESERVE_SEC]
 
         def continue_checking():
             return bool(phase_gate() and
@@ -11564,6 +12572,7 @@ class RemoteGrasp6DNode:
         status,
         base_report,
         stable_candidates=None,
+        promotion_context=None,
     ):
         """Write final evidence, then publish/commit execution authority."""
 
@@ -11579,20 +12588,26 @@ class RemoteGrasp6DNode:
         with self._stream_condition:
             self._require_stream_ticket_current_locked(ticket)
             with self._geometry_state_guard():
-                decision, now_sec = self._decide_preview_promotion(
-                    proposal['rich_plan'],
-                    proposal['signature'],
-                    proposal['score'],
-                )
-                promotion_token = self._capture_promotion_token_locked(
-                    ticket,
-                    proposal['expected_generation'],
-                )
+                if promotion_context is None:
+                    decision, now_sec = self._decide_preview_promotion(
+                        proposal['rich_plan'],
+                        proposal['signature'],
+                        proposal['score'],
+                    )
+                    promotion_token = self._capture_promotion_token_locked(
+                        ticket,
+                        proposal['expected_generation'],
+                    )
+                else:
+                    # The contact preview transaction already observed the
+                    # controller once. Retain that original token; the normal
+                    # post-audit and per-send checks below still validate it.
+                    decision, now_sec, promotion_token = promotion_context
 
-        def finalize_actual_preview(actual, actual_funnel, record_decision):
-            if not self._stream_ticket_still_current(ticket):
-                return False
+        def finalize_actual_preview(actual, actual_funnel, record_decision,
+                                    compensated_execution_rejection=False):
             try:
+                self._require_stream_ticket_current(ticket)
                 self._finalize_streaming_gate_audit(
                     prepared,
                     selection,
@@ -11610,9 +12625,17 @@ class RemoteGrasp6DNode:
                     execution_authority=False,
                     publish_reference=True,
                 )
-                return True
-            except (CandidateContractError, StreamResultCancelled):
-                return False
+            except (CandidateContractError, StreamResultCancelled) as exc:
+                if not compensated_execution_rejection or actual.promote:
+                    # Preview-only readiness and successful authority still
+                    # require their exact audit. Preserve the original error.
+                    raise
+                # An execution transaction already rejected and compensated
+                # keeps its explicit negative decision. Its best-effort final
+                # preview audit cannot turn that completed rejection into an
+                # exception, nor may callers misreport it as preview readiness.
+                actual_funnel['preview_audit_failure'] = {
+                    'code': str(exc.code), 'reason': str(exc)}
 
         audit_stable_candidates = tuple(
             stable_candidates
@@ -11692,6 +12715,7 @@ class RemoteGrasp6DNode:
                     actual,
                     funnel,
                     record_decision=True,
+                    compensated_execution_rejection=True,
                 )
                 return funnel, actual
             self._publish_bounded_gate_audit(
@@ -11779,8 +12803,16 @@ class RemoteGrasp6DNode:
             actual,
             funnel,
             record_decision=not actual.promote,
+            compensated_execution_rejection=not actual.promote,
         )
         return funnel, actual
+
+    def _require_preview_transaction_ready(self, ticket, funnel):
+        """A completed negative execution decision is not preview readiness."""
+        self._require_stream_ticket_current(ticket)
+        failure = funnel.get('preview_audit_failure')
+        if failure is not None:
+            raise CandidateContractError(failure['code'], failure['reason'])
 
     def _publish_preview_plan(
         self,
@@ -11990,6 +13022,50 @@ class RemoteGrasp6DNode:
         pose.pose.orientation.w = float(quaternion[3])
         return pose
 
+    @staticmethod
+    def _read_grasp_config():
+        try:
+            return read_authoritative_mapping(rospy.get_master(), '/grasp')
+        except Exception as exc:
+            raise CandidateContractError('GRASP_CONFIG_UNAVAILABLE', str(exc)) from exc
+
+    @staticmethod
+    def _box_requires_measured_bilateral_contact():
+        name = '/grasp/unknown_require_measured_bilateral_contact'
+        try:
+            value = rospy.get_param_cached(name)
+            if type(value) is not bool:
+                raise ValueError(name+' must be boolean')
+            return value
+        except Exception as exc:
+            raise CandidateContractError('GRASP_CONFIG_UNAVAILABLE', str(exc)) from exc
+
+    def _contact_height_evidence_limit(self):
+        cfg = getattr(self, 'grasp_config', {})
+        enabled = cfg.get('contact_height_registration_margin_enabled', False)
+        if type(enabled) is not bool:
+            raise CandidateContractError('CONTACT_HEIGHT_REGISTRATION_MARGIN',
+                                         'height margin flag must be boolean')
+        if not enabled:
+            return None
+        limit = cfg.get('handeye_translation_max_error_m')
+        if (isinstance(limit, (bool, np.bool_))
+                or not isinstance(limit, (int, float, np.number))
+                or not math.isfinite(float(limit)) or float(limit) <= 0.):
+            raise CandidateContractError('CONTACT_HEIGHT_REGISTRATION_MARGIN',
+                                         'height evidence limit must be finite and positive')
+        return float(limit)
+
+    def _contact_height_geometry(self, transform, geometry, center, bounds, axis, minimum):
+        return dict(gripper=self.gripper_geometry,
+            actual_T_base_tool0=transform, planned_T_base_tool0=transform,
+            contact_center_base=center, contact_height_axis_base=axis,
+            contact_height_bounds_m=bounds, minimum_contact_overlap_m=minimum,
+            support_normal_base=geometry.support_normal_base,
+            support_offset_m=geometry.support_offset_m,
+            opening_width_m=min(float(self.gripper_geometry.max_inner_gap_m),
+                                float(self.gripper_physical_open_width_m)))
+
     def _reproject_tabletop_stable_pose_for_support_clearance(
         self,
         grasp_pose,
@@ -12063,7 +13139,7 @@ class RemoteGrasp6DNode:
             ).reshape(3),
             support_point=support_point,
             support_normal=support_normal,
-            clearance_m=float(self.gripper_geometry.support_clearance_m),
+            clearance_m=float(self._tabletop_placement_gripper().support_clearance_m),
             gripper=self.gripper_geometry,
             tool_jaw_axis=self.gripper_tool_jaw_axis,
             tool_finger_length_axis=self.gripper_tool_finger_length_axis,
@@ -12097,10 +13173,23 @@ class RemoteGrasp6DNode:
         )
         runtime = {}
         scored = []
+        observation_rejections = []
         observation_view_cache = {}
-        for stable in tuple(stable_candidates):
+        stable_candidates = tuple(stable_candidates)
+        recheck_rows = []
+        for stable_index, stable in enumerate(stable_candidates):
             normalized = stable.payload
+            def variant_row(variant_index):
+                return dict(stable_index=stable_index,
+                    track_id=getattr(stable, 'track_id', None),
+                    source_request_id=getattr(stable, 'request_id', None),
+                    candidate_source=getattr(stable, 'candidate_source', ''),
+                    variant_index=variant_index, status='incomplete',
+                    code='STABLE_RECHECK_INPUT_INVALID',
+                    reason='stable variant did not produce evaluated geometry',
+                    contact_height_placement=None)
             if not isinstance(normalized, NormalizedPlanningCandidate):
+                recheck_rows.extend(variant_row(v) for v in (0, 1))
                 continue
             for variant_index in (0, 1):
                 # A far-field recheck may overlap the reached-view handoff.
@@ -12108,6 +13197,9 @@ class RemoteGrasp6DNode:
                 # on another variant from the cancelled request.
                 if getattr(self, '_stream_condition', None) is not None:
                     self._require_stream_ticket_current(prepared.ticket)
+                row = variant_row(variant_index)
+                height_placement = None
+                measured_height_rejected = False
                 try:
                     grasp_pose = self._stable_variant_pose(
                         stable,
@@ -12115,6 +13207,7 @@ class RemoteGrasp6DNode:
                         prepared.stamp,
                     )
                     camera_candidate = None
+                    height_placement = None
                     if normalized.candidate_source == 'graspnet':
                         source_payload = normalized.payload
                         if not isinstance(source_payload, LocalCandidatePayload):
@@ -12195,10 +13288,7 @@ class RemoteGrasp6DNode:
                             )
                             if (
                                 surface is None
-                                or not isinstance(
-                                    bilateral_evidence,
-                                    BilateralSurfaceEvidence,
-                                )
+                                or not self._contact_evidence_valid(bilateral_evidence)
                                 or not bilateral_evidence.ok
                                 or measured_bounds is None
                             ):
@@ -12207,7 +13297,30 @@ class RemoteGrasp6DNode:
                                 )
                             else:
                                 target_points_base = surface.points_base
+                                if str(stable.model_choice) == 'unknown_tabletop':
+                                    limit = self._contact_height_evidence_limit()
+                                    if limit is not None:
+                                        transform, height_placement = place_contact_height(
+                                            translation_evidence_limit_m=limit,
+                                            **self._contact_height_geometry(transform,
+                                                geometry, stable.center_base_xyz,
+                                                measured_bounds, measured_axis,
+                                                self._phase_contact_overlap_requirement_m(
+                                                    True, stage_profile)))
+                                        if transform is None:
+                                            measured_height_rejected = measured_height_rejection_valid(height_placement)
+                                            raise CandidateContractError(
+                                                'CONTACT_HEIGHT_REGISTRATION_MARGIN',
+                                                height_placement['reason'])
+                                        grasp_pose = make_pose_stamped('base_link',
+                                            transform[:3, 3], quaternion_from_matrix(transform),
+                                            stamp=grasp_pose.header.stamp)
+                                        sequence, stage_profile = self._make_contact_sequence(
+                                            grasp_pose, geometry,
+                                            insertion_axis_base=transform[:3, 2],
+                                            snapshot=prepared.snapshot)
                         explicit_gate_kwargs = {
+                            'robot_description': getattr(self, '_geometry_robot_description', None),
                             'gripper': self.gripper_geometry,
                             'candidate_center_base': stable.center_base_xyz,
                             'candidate_tool0_base': transform[:3, 3],
@@ -12428,49 +13541,27 @@ class RemoteGrasp6DNode:
                             view_cache=observation_view_cache,
                         )
                         if not observation_variants:
-                            best_rejection = max(
-                                tuple(rejected_observation_variants or ()),
-                                key=lambda item: float(
-                                    item.get(
-                                        'minimum_support_clearance_m',
-                                        -1.0e6,
-                                    )
-                                ),
-                                default={},
+                            rejection_summary = summarize_observation_view_rejections(
+                                rejected_observation_variants,
                             )
+                            observation_rejections.append({
+                                'track_id': int(stable.track_id),
+                                'variant_index': int(variant_index),
+                                'candidate_source': normalized.candidate_source,
+                                'source_index': int(normalized.source_index),
+                                'summary': deepcopy(rejection_summary),
+                            })
                             rospy.logwarn(
                                 (
                                     'remote 6D observation roll lattice '
-                                    'rejected: track=%s variant=%d tested=%d '
-                                    'best_roll=%.1fdeg code=%s '
-                                    'clearance=%.3fmm reason=%s'
+                                    'rejected: track=%s variant=%d '
+                                    'all_rejections=%s'
                                 ),
                                 getattr(stable, 'track_id', 'unknown'),
                                 int(variant_index),
-                                len(rejected_observation_variants),
-                                float(
-                                    best_rejection.get(
-                                        'camera_roll_offset_deg',
-                                        0.0,
-                                    )
-                                ),
-                                str(
-                                    best_rejection.get(
-                                        'failure_code',
-                                        'OBSERVATION_ENVELOPE_INVALID',
-                                    )
-                                ),
-                                1000.0 * float(
-                                    best_rejection.get(
-                                        'minimum_support_clearance_m',
-                                        -1.0e6,
-                                    )
-                                ),
-                                str(
-                                    best_rejection.get(
-                                        'failure_reason',
-                                        'no endpoint-safe observation roll',
-                                    )
+                                json.dumps(
+                                    rejection_summary,
+                                    sort_keys=True, separators=(',', ':'),
                                 ),
                             )
                             continue
@@ -12638,6 +13729,7 @@ class RemoteGrasp6DNode:
                             observation_variants
                         ),
                         'adaptive_stage_profile': stage_profile,
+                        'contact_height_placement': deepcopy(height_placement),
                         'camera_candidate': camera_candidate,
                         'geometry_gate': gate,
                         'scored_candidate': candidate,
@@ -12693,9 +13785,13 @@ class RemoteGrasp6DNode:
                         ),
                     }
                     scored.append(candidate)
+                    row.update(status='generated', code='',
+                        reason='stable variant generated; downstream safety and path checks remain required')
                 except StreamResultCancelled:
                     raise
                 except Exception as exc:
+                    row.update(status='rejected' if measured_height_rejected else 'incomplete',
+                        code=str(getattr(exc, 'code', type(exc).__name__)), reason=str(exc))
                     rospy.logwarn(
                         'remote 6D stable variant recheck failed: '
                         'track=%s variant=%d reason=%s',
@@ -12704,16 +13800,51 @@ class RemoteGrasp6DNode:
                         exc,
                     )
                     continue
+                finally:
+                    row['contact_height_placement'] = deepcopy(height_placement)
+                    recheck_rows.append(row)
+        generated_count = sum(row['status'] == 'generated' for row in recheck_rows)
+        rejected_count = sum(row['status'] == 'rejected' for row in recheck_rows)
+        incomplete_count = sum(row['status'] == 'incomplete' for row in recheck_rows)
+        recheck_audit = dict(schema_version=1, stage=STABLE_RECHECK_STAGE,
+            request_id=prepared.ticket.request_id, generation=prepared.ticket.generation,
+            target_epoch=prepared.ticket.target_epoch,
+            snapshot_stamp_ns=getattr(prepared.snapshot, 'stamp_ns', 0),
+            stable_candidate_count=len(stable_candidates),
+            expected_variant_count=2 * len(stable_candidates),
+            completed_variant_count=generated_count + rejected_count,
+            generated_count=generated_count, rejected_count=rejected_count,
+            incomplete_count=incomplete_count, completed=(incomplete_count == 0
+                and len(recheck_rows) == 2 * len(stable_candidates)),
+            variants=recheck_rows, contact_or_motion_authorized=False)
         condition = getattr(self, '_stream_condition', None)
         if condition is None:
+            self._stable_recheck_audit = (prepared, recheck_audit)
             self._stable_variant_runtime = runtime
             self._near_field_request_plan_cache = {}
+            self._observation_rejection_audit = (prepared, observation_rejections)
         else:
             with condition:
                 self._require_stream_ticket_current_locked(prepared.ticket)
+                self._stable_recheck_audit = (prepared, recheck_audit)
                 self._stable_variant_runtime = runtime
                 self._near_field_request_plan_cache = {}
+                self._observation_rejection_audit = (prepared, observation_rejections)
         return tuple(scored)
+
+    def _stable_recheck_audit_for(self, prepared):
+        audit = getattr(self, '_stable_recheck_audit', None)
+        if not isinstance(audit, tuple) or len(audit) != 2 or audit[0] is not prepared:
+            return None
+        return deepcopy(audit[1])
+
+    def _observation_rejection_audit_for(self, prepared):
+        """Keep rejected families tied to the exact accepted request object."""
+
+        audit = getattr(self, '_observation_rejection_audit', None)
+        if not isinstance(audit, tuple) or len(audit) != 2 or audit[0] is not prepared:
+            return []
+        return deepcopy(audit[1])
 
     @staticmethod
     def _tabletop_moveit_dedupe_key(candidate):
@@ -13302,6 +14433,24 @@ class RemoteGrasp6DNode:
     ):
         """Reuse only a proven success at the exact unchanged arm state."""
 
+        stage_poses = tuple(stage_poses)
+        close_hold = bool(
+            getattr(prepared, 'near_field', False)
+            and getattr(prepared, 'model_choice', '') == 'unknown_tabletop'
+            and rospy.get_param('/grasp/unknown_lift_after_close_enabled', True) is False
+        )
+        if close_hold and tuple(name for name, _ in stage_poses) == (
+                'pregrasp', 'approach', 'grasp', 'lift'):
+            # The fourth pose remains a simulation diagnostic in the rich
+            # plan. It is not a commanded motion for close-and-hold tasks.
+            # Include only executed stages in the strict check AND cache key;
+            # enabling lift therefore cannot reuse this three-stage proof.
+            stage_poses = stage_poses[:3]
+        runtime['moveit_execution_stage_policy'] = {
+            'close_hold_only': close_hold,
+            'checked_stage_names': [name for name, _ in stage_poses],
+            'lift_path_verified': any(name == 'lift' for name, _ in stage_poses),
+        }
         joint_state = deepcopy(getattr(self, 'latest_joint_state', None))
         cache_key = self._near_field_plan_cache_key(
             stage_poses,
@@ -13377,6 +14526,11 @@ class RemoteGrasp6DNode:
     ):
         """Reuse deterministic resolver results for one exact static request."""
 
+        close_hold = bool(
+            getattr(prepared, 'near_field', False)
+            and getattr(prepared, 'model_choice', '') == 'unknown_tabletop'
+            and rospy.get_param('/grasp/unknown_lift_after_close_enabled', True) is False
+        )
         joint_state = deepcopy(getattr(self, 'latest_joint_state', None))
         cache_key = self._near_field_plan_cache_key(
             stage_poses,
@@ -13387,7 +14541,7 @@ class RemoteGrasp6DNode:
         if not isinstance(cache, dict):
             cache = {}
             self._near_field_request_plan_cache = cache
-        entry_key = ('deterministic_orientation_resolver', cache_key)
+        entry_key = ('deterministic_orientation_resolver', cache_key, close_hold)
         cached = cache.get(entry_key) if cache_key is not None else None
         if isinstance(cached, tuple) and len(cached) == 4:
             self._record_near_field_plan_cache(
@@ -13401,7 +14555,29 @@ class RemoteGrasp6DNode:
             )
             return tuple(deepcopy(value) for value in cached)
 
-        if float(deadline_sec) > 0.0:
+        if self._direct_near_field_active(prepared):
+            # A failed contact direction must not spend the entire shared
+            # phase on alternate free-space orientations. Keep the remaining
+            # short-side candidates eligible; a timeout stays an unknown
+            # result and is never cached as deterministic unreachability.
+            parent_deadline = self._direct_near_field_candidate_deadline_sec(
+                prepared, runtime)
+            if float(deadline_sec) > 0.0:
+                parent_deadline = min(parent_deadline, float(deadline_sec))
+            deadline_sec = min(
+                parent_deadline,
+                self._execution_plan_validity_now_sec()
+                + DIRECT_NEAR_FIELD_RESOLVER_BUDGET_SEC,
+            )
+            runtime['orientation_search_budget'] = {
+                'maximum_sec': DIRECT_NEAR_FIELD_RESOLVER_BUDGET_SEC,
+                'deadline_sec': deadline_sec,
+                'parent_deadline_sec': parent_deadline,
+            }
+        if close_hold:
+            outcome = self._resolve_free_space_sequence(
+                stage_poses, deadline_sec=deadline_sec, include_lift=False)
+        elif float(deadline_sec) > 0.0:
             outcome = self._resolve_free_space_sequence(
                 stage_poses,
                 deadline_sec=deadline_sec,
@@ -13453,6 +14629,21 @@ class RemoteGrasp6DNode:
         return outcome
 
     @staticmethod
+    def _observation_search_source_audit(variants):
+        """Describe the checked view family without changing its admission."""
+        directed = any((variant.get('observation_view', {}) or {}).get(
+            'orientation_source') == 'measured_missing_side_geodesic' for variant in variants)
+        joint_space = any(variant.get('search_family') == 'joint_space_fk' for variant in variants)
+        return dict(
+            policy=('measured_joint_space_fk_and_existing_camera_view_search' if joint_space
+                    else 'measured_missing_side_and_existing_camera_view_search' if directed
+                    else 'object_yaw_independent_camera_roll_and_support_normal_tilt_lattice'),
+            object_yaw_used=directed,
+            measured_target_geometry_direction_used=directed or joint_space,
+            joint_space_fk_proposals_used=joint_space,
+            contact_candidate_yaw_used=False)
+
+    @staticmethod
     def _activate_far_field_observation_variant(
         runtime,
         variant,
@@ -13480,8 +14671,7 @@ class RemoteGrasp6DNode:
         )
         runtime['observation_orientation_search'] = {
             'available': True,
-            'policy': 'object_yaw_independent_camera_roll_and_support_normal_tilt_lattice',
-            'object_yaw_used': False,
+            **RemoteGrasp6DNode._observation_search_source_audit((variant,)),
             'configured_variant_count': len(
                 tuple(runtime.get('observation_variants', ()) or ())
             ),
@@ -13512,7 +14702,8 @@ class RemoteGrasp6DNode:
         """
         tilts, rolls = [], []
         for variant in variants:
-            (tilts if float(variant.get('camera_tilt_offset_deg', 0.)) > 0.
+            (tilts if (float(variant.get('camera_tilt_offset_deg', 0.)) > 0.
+                       or variant.get('search_family') == 'joint_space_fk')
              else rolls).append(variant)
         def priority(variant):
             clearance = float(getattr(variant.get('observation_envelope'),
@@ -13522,12 +14713,58 @@ class RemoteGrasp6DNode:
             return (-clearance, int(variant.get('preference_index', 0)))
         return tuple(sorted(tilts, key=priority) + rolls)
 
-    def _claim_observation_tilt_check(self, ticket):
+    def _observation_source_reserve_available(self, ticket):
+        try:
+            now = float(self._stream_source_clock())
+            source = float(ticket.snapshot_stamp_sec)
+            validity = float(self._configured_execution_plan_validity_sec())
+            reserve = float(getattr(self, 'mujoco_selection_snapshot_reserve_sec', 0.))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        return (all(math.isfinite(v) for v in (now, source, validity, reserve))
+            and source > 0. and reserve >= 0. and validity > reserve
+            and 0. <= now-source < validity-reserve)
+
+    def _observation_success_first_search(self):
+        """Only the bound unknown observation prefix searches past soft quotas."""
+        active = getattr(self, '_unknown_observation_planning_active', None)
+        return bool(callable(active) and active())
+
+    def _observation_search_prepared_current(self, prepared):
+        """Recheck original authority, without renewing any source or session.
+
+        Exhausted source reserve is a reason to obtain fresh evidence, not a
+        pose rejection. Owner/configuration invalidation retains its existing
+        exception/cancellation contract and cannot preserve an incumbent.
+        """
+        self._require_stream_ticket_current(prepared.ticket)
+        if not self._observation_source_reserve_available(prepared.ticket):
+            return False
+        try:
+            for name in ('_require_unknown_observation_prepared',
+                         '_require_diagnostic_observation_view_source'):
+                guard = getattr(self, name, None)
+                if callable(guard):
+                    guard(prepared)
+        except CandidateContractError as exc:
+            if exc.code == 'OBSERVATION_SOURCE_RESERVE_REACHED':
+                return False
+            raise
+        return self._observation_source_reserve_available(prepared.ticket)
+
+    def _claim_observation_tilt_check(self, ticket, comparison_deadline=None,
+                                     success_first=False, has_incumbent=False):
         """Claim bounded additional work without extending source authority.
 
         This is a *start-new-check* budget: SetTargetPose has no deadline
         field, so an in-flight strict call retains its existing MoveIt timeout.
         Original roll checks do not consume/reset this supplemental budget.
+        A bound unknown observation prefix first seeks a fully qualified path
+        across its existing finite lattice. The soft quotas below begin only
+        once that request has an incumbent. Information-driven comparison may
+        use the already allocated shared
+        post-incumbent window after the initial tilt budget is spent; it never
+        resets the count, source reserve, or overall observation-session TTL.
         Use the far-field plan's existing source lifetime, not the unrelated
         contact-simulation snapshot limit advertised by WSL /health. Contact
         simulation gets fresh near-field evidence after this observation.
@@ -13540,19 +14777,29 @@ class RemoteGrasp6DNode:
             if not isinstance(budget, dict) or budget.get('request_key') != key:
                 budget = {'request_key': key, 'checked_count': 0, 'used_sec': 0.}
                 self._observation_tilt_search_budget = budget
-            try:
-                now = float(self._stream_source_clock())
-                expiry = float(ticket.snapshot_stamp_sec) + float(
-                    self._configured_execution_plan_validity_sec()
-                ) - float(self.mujoco_selection_snapshot_reserve_sec)
-            except (AttributeError, TypeError, ValueError, OverflowError):
+            if not self._observation_source_reserve_available(ticket):
                 return None, 'OBSERVATION_TILT_SNAPSHOT_RESERVE_REACHED'
-            if not (math.isfinite(now) and math.isfinite(expiry) and now < expiry):
-                return None, 'OBSERVATION_TILT_SNAPSHOT_RESERVE_REACHED'
+            if success_first and not has_incumbent:
+                # These are discovery attempts on the same finite lattice,
+                # not comparisons against an executable incumbent. Preserve
+                # their cost/count audit, but do not mistake an optimization
+                # quota for a complete negative reachability result.
+                budget['checked_count'] += 1
+                budget['discovery_checked_count'] = budget.get('discovery_checked_count', 0) + 1
+                return budget, ''
+            if success_first and 'comparison_start_count' not in budget:
+                budget['comparison_start_count'] = budget['checked_count']
+                budget['comparison_start_used_sec'] = budget['used_sec']
+            checked_count = budget['checked_count'] - budget.get('comparison_start_count', 0)
+            used_sec = budget['used_sec'] - budget.get('comparison_start_used_sec', 0.)
             if (
                 budget.get('disabled_reason')
-                or budget['checked_count'] >= OBSERVATION_TILT_MAX_STRICT_CHECKS
-                or budget['used_sec'] >= OBSERVATION_TILT_STRICT_BUDGET_SEC
+                or checked_count >= OBSERVATION_TILT_MAX_STRICT_CHECKS
+                or (used_sec >= OBSERVATION_TILT_STRICT_BUDGET_SEC
+                    and not (comparison_deadline is not None
+                        and self._information_driven_observation_comparison()
+                        and getattr(self, '_observation_comparison_clock', time.monotonic)()
+                            < comparison_deadline))
             ):
                 return None, 'OBSERVATION_TILT_CHECK_BUDGET_REACHED'
             budget['checked_count'] += 1
@@ -13597,10 +14844,17 @@ class RemoteGrasp6DNode:
             if contracted is True:
                 from alicia_flexible_grasp.robot.observation_tracking_contract import qualify_contract_path
                 report = qualify_contract_path(trajectory, hold, scene, fk,
-                    self.gripper_geometry, evidence['opening'], constraints, stop_duration)
+                    self.gripper_geometry, evidence['opening'], constraints, stop_duration,
+                    reserve_endpoint_joints=True)
             else:
                 report = qualify_candidate_path(trajectory, hold, scene, fk,
                     self.gripper_geometry, evidence['opening'], errors)
+                from alicia_flexible_grasp.robot.observation_path_guard import observation_endpoint_joint_reserve
+                reserve = observation_endpoint_joint_reserve(fk, goal, errors)
+                report['endpoint_joint_reserve'] = reserve
+                if not reserve['ok']:
+                    report.update(ok=False, failure_location='goal',
+                        reason='OBSERVATION_ENDPOINT_JOINT_RESERVE_INSUFFICIENT')
             report['reference_mode'] = evidence['reference_mode']
             report['reference_epoch_ns'] = evidence['reference_epoch_ns']
             if (rospy.get_param('/robot_description', '') != description
@@ -13628,22 +14882,58 @@ class RemoteGrasp6DNode:
                        ik_valid=None, planning_success=None, evidence_code='',
                        reason=code + ': ' + str(report)), report
 
-    def _far_field_observation_search(self):
-        """Stop this frozen request after its shared starting hold fails.
+    def _information_driven_observation_comparison(self):
+        return False
 
-        All far-field variants in this invocation share one source plane and
-        live starting hold. An explicit start rejection makes more endpoints
-        useless; leave their tail unchecked. State is local to this request,
-        so a later aligned request receives an entirely new evaluation.
-        """
+    def _checked_observation_variant_rank(self, result, variant):
+        metrics = self._parse_plan_metrics(result.reason)
+        return (float(metrics.get('observation_screened_duration_sec',
+                    metrics.get('execution_duration_lower_bound_sec', float('inf')))),
+                float(result.joint_max_delta_rad), float(result.joint_path_cost),
+                int(variant.get('preference_index', 0)))
+
+    def _far_field_observation_search(self):
+        """One bounded comparison across view families; no optimum assertion."""
         start_rejected = [False]
+        information_driven = self._information_driven_observation_comparison()
+        shared = dict(deadline=None, ticket=None, stop_reason='')
+        if information_driven:
+            self._observation_information_comparison = shared
         def checker(candidate):
+            if information_driven:
+                runtime = self._stable_variant_runtime.get((candidate.track_id, candidate.variant_index), {})
+                shared['ticket'] = getattr(runtime.get('prepared'), 'ticket', None)
             result = self._check_moveit_stable_candidate(candidate)
             if (isinstance(result, MoveItResult) and not result.reachable
-                    and result.failure_code == 'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID'):
-                start_rejected[0] = True
+                    and result.failure_code in ('OBSERVATION_START_FOLLOWING_SUPPORT_INVALID',
+                                                'OBSERVATION_REFERENCE_UNAVAILABLE')):
+                start_rejected[0] = result.failure_code
             return result
-        return checker, lambda: not start_rejected[0]
+        def continuing():
+            if start_rejected[0]:
+                shared['stop_reason'] = start_rejected[0]
+                return False
+            if (information_driven and shared['ticket'] is not None
+                    and not self._observation_source_reserve_available(shared['ticket'])):
+                shared['stop_reason'] = 'OBSERVATION_SOURCE_RESERVE_REACHED'
+                return False
+            deadline = shared['deadline'] if information_driven else None
+            within = (deadline is None or
+                getattr(self, '_observation_comparison_clock', time.monotonic)() < deadline)
+            if not within:
+                shared['stop_reason'] = 'OBSERVATION_COMPARISON_BUDGET_REACHED'
+            return within
+        return checker, continuing
+
+    @staticmethod
+    def _retire_observation_selection_on_shared_failure(selection):
+        # A comparison may have found a prior family before its common driver
+        # reference was revoked. Retain checked evidence, never that selection.
+        if any(getattr(getattr(candidate, 'moveit_result', None), 'failure_code', '')
+                == 'OBSERVATION_REFERENCE_UNAVAILABLE' for candidate in selection.checked):
+            return replace(selection, selected=None, reachable=(), terminated_early=True,
+                termination_reason='OBSERVATION_REFERENCE_UNAVAILABLE')
+        return selection
 
     def _check_moveit_stable_candidate(self, candidate):
         runtime = getattr(self, '_stable_variant_runtime', {}).get(
@@ -13734,11 +15024,22 @@ class RemoteGrasp6DNode:
             attempted_count = 0
             variant_results = []
             comparison_clock = getattr(self, '_observation_comparison_clock', time.monotonic)
-            comparison_deadline = None
+            information_driven = self._information_driven_observation_comparison()
+            comparison_state = (getattr(self, '_observation_information_comparison', None)
+                if information_driven else None)
+            if not isinstance(comparison_state, dict):
+                comparison_state = dict(deadline=None)
+            comparison_deadline = comparison_state['deadline']
             comparison_terminated = False
+            success_first = self._observation_success_first_search()
+            search_stop_reason = ''
+            # Request-local scheduling information only. A view earns this
+            # signal after the original full checks and current-ticket commit.
+            runtime['_observation_qualified_incumbent_ticket'] = None
             for observation_variant in self._order_observation_checks(observation_variants):
                 tilt_budget = None
                 row = {
+                    'search_family': observation_variant.get('search_family', 'camera_orientation_lattice'),
                     'camera_roll_offset_deg': float(
                         observation_variant.get('camera_roll_offset_deg', 0.)
                     ),
@@ -13750,6 +15051,13 @@ class RemoteGrasp6DNode:
                     ),
                     'checked': False,
                 }
+                if success_first and not self._observation_search_prepared_current(prepared):
+                    search_stop_reason = 'OBSERVATION_SOURCE_RESERVE_REACHED'
+                    row['reason'] = search_stop_reason
+                    variant_results.append(row)
+                    reachable_variants.clear()
+                    runtime['_observation_qualified_incumbent_ticket'] = None
+                    break
                 # A qualified incumbent already includes the exact timed-path
                 # proof. Bound further comparison so a usable source cannot
                 # expire while exhaustively checking its fallback lattice.
@@ -13761,13 +15069,25 @@ class RemoteGrasp6DNode:
                     variant_results.append(row)
                     comparison_terminated = True
                     continue
-                if row['camera_tilt_offset_deg'] > 0.:
+                if information_driven and not self._observation_source_reserve_available(prepared.ticket):
+                    row['reason'] = 'OBSERVATION_SOURCE_RESERVE_REACHED'
+                    variant_results.append(row)
+                    comparison_state['stop_reason'] = row['reason']
+                    comparison_terminated = True
+                    continue
+                if (row['camera_tilt_offset_deg'] > 0.
+                        or row['search_family'] == 'joint_space_fk'):
                     tilt_budget, skip_reason = self._claim_observation_tilt_check(
-                        prepared.ticket
+                        prepared.ticket,
+                        comparison_deadline=comparison_deadline if information_driven else None,
+                        success_first=success_first,
+                        has_incumbent=comparison_deadline is not None,
                     )
                     if tilt_budget is None:
                         row['reason'] = skip_reason
                         variant_results.append(row)
+                        if success_first and skip_reason == 'OBSERVATION_TILT_CHECK_BUDGET_REACHED':
+                            comparison_terminated = True
                         continue
                 moveit_pose = observation_variant['sequence'].pregrasp
                 attempted_count += 1
@@ -13785,6 +15105,17 @@ class RemoteGrasp6DNode:
                     if tilt_budget is not None:
                         with self._stream_condition:
                             tilt_budget['used_sec'] += max(0., clock() - started)
+                if success_first and not self._observation_search_prepared_current(prepared):
+                    # Even a successful in-flight proof cannot replenish the
+                    # original source reserve or preserve an earlier result.
+                    search_stop_reason = 'OBSERVATION_SOURCE_RESERVE_REACHED'
+                    row.update(checked=True, reachable=False,
+                        failure_code='OBSERVATION_SEARCH_INCOMPLETE',
+                        reason=search_stop_reason, result_authority_expired=True)
+                    variant_results.append(row)
+                    reachable_variants.clear()
+                    runtime['_observation_qualified_incumbent_ticket'] = None
+                    break
                 with self._stream_condition:
                     self._require_stream_ticket_current_locked(
                         prepared.ticket
@@ -13803,6 +15134,20 @@ class RemoteGrasp6DNode:
                         ).get('execution_duration_lower_bound_sec'),
                     })
                     variant_results.append(row)
+                    if result.failure_code == 'OBSERVATION_REFERENCE_UNAVAILABLE':
+                        # Every endpoint shares the same driver reference. A
+                        # missing actuation epoch is not pose unreachability,
+                        # and an earlier candidate cannot preserve authority.
+                        runtime['_observation_qualified_incumbent_ticket'] = None
+                        runtime['observation_orientation_search'] = dict(
+                            available=False, shared_reference_rejected=True,
+                            configured_variant_count=len(observation_variants),
+                            attempted_variant_count=attempted_count,
+                            checked_variant_count=attempted_count,
+                            unchecked_variant_count=len(observation_variants)-attempted_count,
+                            search_complete=False, variant_results=variant_results,
+                            stop_reason=result.failure_code, reason=str(result.reason))
+                        return result
                     if str(result.failure_code or '') == 'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID':
                         # Every alternate endpoint shares this starting hold.
                         # Do not spend another IK search or promote a plan that
@@ -13816,9 +15161,11 @@ class RemoteGrasp6DNode:
                         }
                         return result
                     if result.reachable:
+                        runtime['_observation_qualified_incumbent_ticket'] = prepared.ticket
                         if comparison_deadline is None:
                             comparison_deadline = (comparison_clock()
                                 + OBSERVATION_COMPARISON_AFTER_INCUMBENT_SEC)
+                            comparison_state['deadline'] = comparison_deadline
                         reachable_variants.append((
                             result,
                             observation_variant,
@@ -13826,6 +15173,13 @@ class RemoteGrasp6DNode:
                         continue
                 failures.append(result)
                 if str(result.failure_code or '') == 'MOVEIT_TIMEOUT':
+                    if success_first:
+                        # Transport/service unavailability is shared by all
+                        # views; bound it to one failed call. A planner's
+                        # TIMED_OUT result has a separate pending code and
+                        # continues the existing finite candidate set.
+                        search_stop_reason = 'MOVEIT_TIMEOUT'
+                        break
                     if tilt_budget is not None:
                         # A supplemental branch/service timeout must not
                         # remove the original roll fallback. Stop starting
@@ -13837,23 +15191,18 @@ class RemoteGrasp6DNode:
                     if reachable_variants:
                         break
                     return result
+            if success_first and reachable_variants:
+                if not self._observation_search_prepared_current(prepared):
+                    search_stop_reason = 'OBSERVATION_SOURCE_RESERVE_REACHED'
+                    reachable_variants.clear()
+                    runtime['_observation_qualified_incumbent_ticket'] = None
+            pending_count = sum(row.get('checked', False) and row.get('failure_code') in (
+                'OBSERVATION_PLANNING_TIMEOUT', 'MOVEIT_TIMEOUT', 'MOVEIT_CHECK_ERROR',
+                'OBSERVATION_SEARCH_INCOMPLETE') for row in variant_results)
             if reachable_variants:
                 result, observation_variant = min(
                     reachable_variants,
-                    key=lambda item: (
-                        float(
-                            self._parse_plan_metrics(
-                                item[0].reason
-                            ).get(
-                                'observation_screened_duration_sec',
-                                self._parse_plan_metrics(item[0].reason).get(
-                                    'execution_duration_lower_bound_sec', float('inf')),
-                            )
-                        ),
-                        float(item[0].joint_max_delta_rad),
-                        float(item[0].joint_path_cost),
-                        int(item[1].get('preference_index', 0)),
-                    ),
+                    key=lambda item: self._checked_observation_variant_rank(item[0], item[1]),
                 )
                 selected_plan_metrics = self._parse_plan_metrics(
                     result.reason
@@ -13867,9 +15216,18 @@ class RemoteGrasp6DNode:
                     'variant_results': variant_results,
                     'check_order': 'tilt_support_margin_descending_then_original_rolls',
                     'ranking_scope': 'qualified_checked_variants_only',
+                    'information_motion_comparison': information_driven,
+                    'comparison_budget_shared_across_view_families': information_driven,
                     'comparison_budget_after_incumbent_sec': OBSERVATION_COMPARISON_AFTER_INCUMBENT_SEC,
                     'comparison_budget_reached': comparison_terminated,
-                    'search_complete': attempted_count == len(observation_variants),
+                    'search_complete': (attempted_count == len(observation_variants)
+                        and not (success_first and pending_count)),
+                    'success_first_search': success_first,
+                    'checked_variant_count': attempted_count,
+                    'unchecked_variant_count': len(observation_variants) - attempted_count,
+                    'pending_variant_count': pending_count,
+                    'stop_reason': search_stop_reason,
+                    'optimization_budget_starts_after_incumbent': success_first,
                     'tilt_max_strict_checks_per_request': OBSERVATION_TILT_MAX_STRICT_CHECKS,
                     'tilt_strict_start_budget_sec': OBSERVATION_TILT_STRICT_BUDGET_SEC,
                     'reachable_variant_count': len(reachable_variants),
@@ -13895,11 +15253,11 @@ class RemoteGrasp6DNode:
                 })
                 rospy.loginfo(
                     (
-                        'remote 6D observation selected by minimum duration '
+                        'remote 6D observation selected by configured information/motion ranking '
                         'among qualified checked views: roll=%.1fdeg tilt=%.1fdeg checked=%d/%d '
                         'reachable=%d joint_path_cost=%.3f '
                         'joint_max_delta=%.3frad duration_lb=%s '
-                        'limiting_joint=%s object_yaw_used=false'
+                        'limiting_joint=%s object_yaw_used=%s'
                     ),
                     float(
                         observation_variant.get(
@@ -13930,21 +15288,37 @@ class RemoteGrasp6DNode:
                             'unavailable',
                         )
                     ),
+                    str(runtime['observation_orientation_search']['object_yaw_used']).lower(),
                 )
                 return result
             runtime['observation_orientation_search'] = {
                 'available': False,
-                'policy': (
-                    'object_yaw_independent_camera_roll_and_support_normal_tilt_lattice'
-                ),
-                'object_yaw_used': False,
+                **self._observation_search_source_audit(observation_variants),
                 'configured_variant_count': len(observation_variants),
-                'attempted_variant_count': len(failures),
+                'attempted_variant_count': attempted_count,
                 'variant_results': variant_results,
                 'endpoint_envelope_rechecked': True,
-                'strict_moveit_rechecked': True,
+                'strict_moveit_rechecked': bool(attempted_count),
+                'checked_variant_count': attempted_count,
+                'unchecked_variant_count': len(observation_variants) - attempted_count,
+                'pending_variant_count': pending_count,
+                'success_first_search': success_first,
+                'optimization_budget_starts_after_incumbent': success_first,
+                'stop_reason': search_stop_reason,
+                'search_complete': (len(variant_results) == len(observation_variants)
+                    and all(row.get('checked', False) for row in variant_results)
+                    and not (success_first and (pending_count or search_stop_reason))),
                 'reason': 'no checked endpoint-safe observation branch passed strict MoveIt',
             }
+            if ((success_first and (pending_count or search_stop_reason))
+                    or len(variant_results) < len(observation_variants)
+                    or any(not row.get('checked', False) for row in variant_results)):
+                return MoveItResult(
+                    reachable=False, joint_path_cost=0.0, joint_max_delta_rad=0.0,
+                    reason='OBSERVATION_SEARCH_INCOMPLETE: checked %d/%d views, %d pending; '
+                           'unchecked or unresolved views are not proven unreachable; stop_reason=%s'
+                           % (attempted_count, len(observation_variants), pending_count, search_stop_reason),
+                    failure_code='OBSERVATION_SEARCH_INCOMPLETE' if success_first else 'MOVEIT_CHECK_ERROR')
             if not failures:
                 return MoveItResult(
                     reachable=False,
@@ -14133,6 +15507,8 @@ class RemoteGrasp6DNode:
 
         runtime.pop('final_registered_geometry_gate', None)
         runtime.pop('registration_support_lift_m', None)
+        runtime.pop('final_contact_height_recenter', None)
+        runtime.pop('final_contact_geometry_evidence', None)
         adjusted = deepcopy(plan)
         geometry = prepared.geometry
         normal = np.asarray(geometry.support_normal_base, dtype=float)
@@ -14150,7 +15526,7 @@ class RemoteGrasp6DNode:
                     lateral_target=transform[:3, 3],
                     support_point=-float(geometry.support_offset_m) * normal,
                     support_normal=normal,
-                    clearance_m=float(self.gripper_geometry.support_clearance_m),
+                    clearance_m=float(self._tabletop_placement_gripper().support_clearance_m),
                     gripper=self.gripper_geometry,
                     tool_jaw_axis=self.gripper_tool_jaw_axis,
                     tool_finger_length_axis=self.gripper_tool_finger_length_axis,
@@ -14185,8 +15561,104 @@ class RemoteGrasp6DNode:
         plan.poses = adjusted.poses
         plan.refinement_translation_m = adjusted.refinement_translation_m
         plan.required_open_width_m = float(gate.required_open_width_m)
+        self._freeze_final_contact_evidence(plan, runtime)
         runtime['final_registered_geometry_gate'] = asdict(gate)
         runtime['registration_support_lift_m'] = support_lift_m
+        if (str(plan.model_choice) == 'unknown_tabletop'
+                and str(plan.diagnostic) == CONTACT_EXECUTION_PLAN):
+            limit = self._contact_height_evidence_limit()
+            if limit is not None:
+                evidence = decode_contact_evidence(plan, required=True)
+                transform = pose_matrix(self._rich_plan_execution_sequence(plan).grasp)
+                report = evaluate_contact_height_margin(
+                    translation_evidence_limit_m=limit,
+                    **self._contact_height_geometry(transform, geometry,
+                        evidence['contact_center_base'], evidence['contact_height_bounds_m'],
+                        evidence['contact_height_axis_base'], evidence['minimum_contact_overlap_m']))
+                runtime['final_contact_height_margin'] = report
+                if report['ok'] is not True:
+                    if self._recenter_final_registered_contact_height(
+                            plan, prepared, runtime, limit, evidence):
+                        return
+                    raise CandidateContractError('CONTACT_HEIGHT_REGISTRATION_MARGIN', report['reason'])
+
+    def _recenter_final_registered_contact_height(self, plan, prepared, runtime, limit, evidence):
+        """Place the registered family within its existing measured interval.
+
+        Registration can consume the margin established in snapshot coordinates.
+        This is one bounded planning proposal, not execution authority: the caller
+        still hashes the changed family and performs the complete strict check.
+        """
+        if (str(plan.candidate_source) != 'tabletop_geometry'
+                or str(plan.refinement_status) != 'VALID_3D'
+                or str(plan.model_choice) != 'unknown_tabletop'
+                or str(plan.diagnostic) != CONTACT_EXECUTION_PLAN):
+            return False
+        if (self._direct_near_field_active(prepared)
+                and not self._direct_near_field_deadline_gate(prepared)()):
+            return False
+        geometry = prepared.geometry
+        original = pose_matrix(self._rich_plan_execution_sequence(plan).grasp)
+        proposed, audit = place_contact_height(
+            translation_evidence_limit_m=limit,
+            **self._contact_height_geometry(original, geometry,
+                evidence['contact_center_base'], evidence['contact_height_bounds_m'],
+                evidence['contact_height_axis_base'], evidence['minimum_contact_overlap_m']))
+        audit.update(scope='final_registered_contact_family_planning',
+            geometry_rechecked=False, strict_sequence_recheck_required=True,
+            deadline_extended=False, applied=False)
+        runtime['final_contact_height_recenter'] = audit
+        if proposed is None:
+            return False
+        delta = float(audit['normal_translation_m'])
+        total = float(plan.refinement_translation_m) + abs(delta)
+        policy = refinement_registration_policy(getattr(
+            self, 'multiview_registration_config', RegistrationConfig()))
+        if float32_wire_value(total) > float32_wire_value(policy['maximum_translation_m']):
+            audit['reason'] = 'registration and height recenter exceed the unchanged correction bound'
+            return False
+        trial_plan = deepcopy(plan)
+        displacement = proposed[:3, 3] - original[:3, 3]
+        for pose in trial_plan.poses:
+            pose.position.x += float(displacement[0])
+            pose.position.y += float(displacement[1])
+            pose.position.z += float(displacement[2])
+        trial_plan.refinement_translation_m = total
+        trial_runtime = dict(runtime)
+        trial_runtime.pop('final_contact_geometry_evidence', None)
+        sequence = self._rich_plan_execution_sequence(trial_plan)
+        gate = self._registered_sequence_geometry_gate(
+            trial_plan, prepared, trial_runtime, sequence)
+        audit['geometry_rechecked'] = True
+        audit['geometry_gate'] = asdict(gate) if isinstance(gate, CandidateGateResult) else None
+        if not isinstance(gate, CandidateGateResult) or not gate.ok:
+            audit['reason'] = 'recentered family failed complete frozen geometry: %s' % str(
+                getattr(gate, 'failure_reason', '') or 'missing evidence')
+            return False
+        trial_plan.required_open_width_m = float(gate.required_open_width_m)
+        self._freeze_final_contact_evidence(trial_plan, trial_runtime)
+        fresh = decode_contact_evidence(trial_plan, required=True)
+        after = evaluate_contact_height_margin(translation_evidence_limit_m=limit,
+            **self._contact_height_geometry(pose_matrix(sequence.grasp), geometry,
+                fresh['contact_center_base'], fresh['contact_height_bounds_m'],
+                fresh['contact_height_axis_base'], fresh['minimum_contact_overlap_m']))
+        audit['after_geometry_recheck'] = after
+        if after['ok'] is not True:
+            audit['reason'] = after['reason']
+            return False
+        if (self._direct_near_field_active(prepared)
+                and not self._direct_near_field_deadline_gate(prepared)()):
+            audit['reason'] = 'original near-field phase expired during height recenter'
+            return False
+        plan.poses = trial_plan.poses
+        plan.refinement_translation_m = total
+        plan.required_open_width_m = trial_plan.required_open_width_m
+        plan.contact_geometry_evidence = trial_plan.contact_geometry_evidence
+        runtime['final_contact_geometry_evidence'] = trial_plan.contact_geometry_evidence
+        runtime['final_registered_geometry_gate'] = asdict(gate)
+        runtime['final_contact_height_margin'] = after
+        audit['applied'] = True
+        return True
 
     def _registered_sequence_geometry_gate(self, plan, prepared, runtime, sequence):
         """Use the exact corrected object/contact coordinates for final gates."""
@@ -14204,9 +15676,598 @@ class RemoteGrasp6DNode:
                         'final contact coordinates require the exact registered snapshot')
                 final_runtime['contact_registration_transform'] = _readonly_rigid_transform(
                     evidence.result.transform_base, 'final contact registration')
+        # A prior candidate/registration result cannot authorize this family.
+        final_runtime.pop('final_contact_geometry_evidence', None)
+        runtime.pop('final_contact_geometry_evidence', None)
         gate = self._resolved_sequence_geometry_gate(final_runtime, sequence)
-        return self._apply_final_approach_lateral_gate(
+        gate = self._apply_final_approach_lateral_gate(
             gate, sequence, prepared.geometry.support_normal_base)
+        if isinstance(gate, CandidateGateResult) and gate.ok:
+            runtime['final_contact_geometry_evidence'] = final_runtime.get(
+                'final_contact_geometry_evidence', '')
+        return gate
+
+    @staticmethod
+    def _freeze_final_contact_evidence(plan, runtime):
+        """Freeze only the measurement made for the final registered family."""
+        plan.contact_geometry_evidence = str(runtime.get(
+            'final_contact_geometry_evidence', '') or '')
+        try:
+            decode_contact_evidence(plan)
+        except ValueError as exc:
+            raise CandidateContractError('CONTACT_GEOMETRY_EVIDENCE_INVALID', str(exc)) from exc
+
+    @staticmethod
+    def _log_contact_precheck_rejection(plan, prepared, evidence, operation):
+        """Keep rejected request geometry when later cancellation clears runtime.
+
+        Numeric diagnostics only, with no image arrays or executable trajectory.
+        A logging error must never alter the original candidate verdict.
+        """
+        try:
+            if (not isinstance(evidence, dict) or evidence.get('success') is not False
+                    or evidence.get('plan_id') != plan.plan_id):
+                return
+            def vector(value):
+                return [float(getattr(value, key)) for key in 'xyz']
+            def pose(value):
+                return vector(value.position) + [float(getattr(value.orientation, key))
+                                                 for key in 'xyzw']
+            geometry = plan.object_geometry
+            ticket = getattr(prepared, 'ticket', None)
+            diagnostic = dict(schema=1, scope='rejected_contact_request_diagnostic',
+                execution_authorized=False, future_following_verified=False,
+                original_failed_trajectory_recorded=False, operation=str(operation),
+                request={key: getattr(ticket, key, None)
+                         for key in ('request_id', 'generation', 'target_epoch')},
+                plan_id=str(plan.plan_id), source_stamp_ns=plan.header.stamp.to_nsec(),
+                frame_id=str(plan.header.frame_id),
+                candidate_width_m=float(plan.candidate_width_m),
+                required_open_width_m=float(plan.required_open_width_m),
+                target_track_id=str(plan.target_track_id),
+                poses_xyz_xyzw=[pose(value) for value in plan.poses],
+                object_geometry=dict(source_stamp_ns=geometry.header.stamp.to_nsec(),
+                    pose_xyz_xyzw=pose(geometry.pose_base), size_xyz_m=vector(geometry.size_xyz_m),
+                    support_normal_base=vector(geometry.support_normal_base),
+                    support_offset_m=float(geometry.support_offset_m)),
+                contact_geometry_evidence=plan.contact_geometry_evidence,
+                precheck=evidence)
+            rospy.loginfo('remote 6D rejected contact evidence: %s',
+                          json.dumps(diagnostic, sort_keys=True, allow_nan=False))
+        except Exception:
+            # The original rejection remains authoritative even if its optional
+            # diagnostic cannot be serialized or written.
+            return
+
+    def _require_current_contact_precheck_phase(self, prepared, deadline_sec):
+        """A revoked near-field phase is never an unbounded service request."""
+        if not bool(getattr(prepared, 'near_field', False)):
+            return
+        with self._stream_condition, self._geometry_state_guard():
+            self._require_stream_ticket_current_locked(prepared.ticket)
+            phase_id = int(getattr(prepared, 'near_field_phase_id', 0))
+            prepared_deadline = float(getattr(prepared, 'near_field_phase_deadline_sec', 0.))
+            live_deadline = float(getattr(self, '_near_field_phase_deadline_sec', 0.))
+            if (not bool(getattr(self, 'near_field_planning_active', False))
+                    or phase_id <= 0 or phase_id != int(getattr(self, '_near_field_phase_id', 0))
+                    or not all(math.isfinite(value) and value > 0.
+                               for value in (prepared_deadline, live_deadline))):
+                raise StreamResultCancelled('NEAR_FIELD_PHASE_STALE')
+            # Legacy gated planning historically submits the service's zero
+            # deadline sentinel. Preserve it only while its original finite
+            # phase and ticket remain live; direct planning must supply its
+            # explicit request budget and cannot reinterpret cancellation as 0.
+            if (deadline_sec == 0. and getattr(self, 'near_field_strategy', '') == 'legacy_gated'):
+                if self._execution_plan_validity_now_sec() >= min(prepared_deadline, live_deadline):
+                    raise CandidateContractError('MOVEIT_TIMEOUT', 'legacy contact phase expired')
+                return
+            if (not math.isfinite(deadline_sec) or deadline_sec <= 0.
+                    or deadline_sec > min(prepared_deadline, live_deadline)
+                    or self._execution_plan_validity_now_sec() >= deadline_sec):
+                raise CandidateContractError('MOVEIT_TIMEOUT',
+                    'contact precheck requires the unchanged live near-field deadline')
+
+    @staticmethod
+    def _contact_precheck_request_diagnostic(plan, prepared, operation, deadline_sec):
+        """Own a historical join before RPC; never consult a later callback."""
+        try:
+            ticket = getattr(prepared, 'ticket', None)
+            request = dict(schema=1, scope='contact_precheck_delivery',
+                diagnostic_only=True, execution_authorized=False,
+                future_following_verified=False, operation=str(operation),
+                request={key: getattr(ticket, key, None)
+                         for key in ('request_id', 'generation', 'target_epoch')},
+                phase_id=int(getattr(prepared, 'near_field_phase_id', 0)),
+                request_invalidation_generation=getattr(prepared, 'request_invalidation_generation', None),
+                plan_id=str(plan.plan_id), plan_wire_sha256=wire_digest(plan),
+                source_stamp_ns=plan.header.stamp.to_nsec(),
+                target_track_id=str(plan.target_track_id),
+                deadline_sec=float(deadline_sec),
+                request_monotonic_ns=time.monotonic_ns(), request_wall_ns=time.time_ns(),
+                task_run_id=None,
+                task_identity_limit='service protocol carries plan/source; task joined by existing task events')
+            raw = json.dumps(request, sort_keys=True, allow_nan=False)
+            request['diagnostic_call_id'] = hashlib.sha256(raw.encode()).hexdigest()
+            return json.loads(json.dumps(request, sort_keys=True, allow_nan=False))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _log_contact_precheck_delivery(request, response, outcome, error):
+        """Late replies remain historical evidence, never current-state input."""
+        try:
+            if request is None:
+                return
+            event = deepcopy(request)
+            event.update(consumer_outcome=str(outcome), consumer_error=str(error),
+                recorded_monotonic_ns=time.monotonic_ns(), recorded_wall_ns=time.time_ns(),
+                response=deepcopy(response))
+            if response is not None:
+                raw = event['response'].pop('evidence_json')
+                event['response']['evidence_json_sha256'] = hashlib.sha256(raw.encode()).hexdigest()
+                event['response']['evidence_json_bytes'] = len(raw.encode())
+                raw_size = len(raw.encode())
+                if raw_size <= 16*1024*1024:
+                    try:
+                        decoded = json.loads(raw)
+                        if raw_size <= 1024*1024:
+                            event['precheck'] = decoded
+                        elif isinstance(decoded, dict):
+                            # Full per-sample collision audits can exceed the
+                            # log line budget. Preserve their frozen identity
+                            # and content-addressed curve receipt even when a
+                            # late reply is cancelled before normal parsing.
+                            compact = {}
+                            for key in ('plan_id', 'source_stamp_ns', 'target_id',
+                                        'target_epoch', 'selection_generation',
+                                        'failure_code', 'failed_stage', 'message',
+                                        'contact_failure_replay'):
+                                if key in decoded:
+                                    value = decoded[key]
+                                    encoded = json.dumps(value, sort_keys=True,
+                                                         allow_nan=False)
+                                    if len(encoded.encode()) <= 32768:
+                                        compact[key] = value
+                            event['precheck'] = compact
+                            event['precheck_compacted'] = True
+                    except Exception:
+                        event['evidence_parse_failed'] = True
+                else:
+                    event['evidence_parse_limit_bytes'] = 16*1024*1024
+            rospy.loginfo('remote 6D contact precheck delivery: %s',
+                json.dumps(event, sort_keys=True, allow_nan=False))
+        except Exception:
+            # Optional logging does not revive a cancelled plan or replace
+            # the original RPC/phase/geometry verdict.
+            return
+
+    def _final_contact_sequence_evaluation(self, plan, stages, prepared, runtime,
+                                           operation, deadline_sec=0.0):
+        if not (getattr(self, 'contact_sequence_precheck_enabled', False)
+                and plan.model_choice == 'unknown_tabletop'):
+            return self._cached_strict_moveit_sequence_evaluation(
+                stages, prepared, runtime, operation, deadline_sec=deadline_sec)
+        # This service plans the entire virtual sequence and additionally checks
+        # the contact curve with fresh SDK/encoder bias. Do not reuse the nominal
+        # cache: it contains neither the SDK reference nor the enable epoch.
+        metrics = {'joint_path_cost': 0., 'joint_max_delta': 0.}
+        runtime.pop('validated_contact_precheck_failure', None)
+        runtime.pop('validated_contact_precheck_plan_id', None)
+        evidence = None
+        diagnostic_request = self._contact_precheck_request_diagnostic(plan, prepared, operation, deadline_sec)
+        diagnostic_response, consumer_outcome, consumer_error = None, 'not_received', ''
+        try:
+            self._require_current_contact_precheck_phase(prepared, deadline_sec)
+            now = self._execution_plan_validity_now_sec()
+            if deadline_sec > 0. and now >= deadline_sec:
+                raise CandidateContractError('MOVEIT_TIMEOUT', 'contact precheck deadline consumed')
+            service = '/supervisor/check_contact_sequence'
+            rospy.wait_for_service(service, timeout=min(.5, deadline_sec-now)
+                                   if deadline_sec > 0. else .5)
+            self._require_current_contact_precheck_phase(prepared, deadline_sec)
+            request = CheckContactSequenceRequest(plan=deepcopy(plan),
+                deadline=rospy.Time.from_sec(deadline_sec) if deadline_sec > 0. else rospy.Time(0))
+            response = rospy.ServiceProxy(service, CheckContactSequence)(request)
+            # Receipt clocks are distinct from image/source header stamps.
+            # Capture before the authoritative current-phase recheck, so its
+            # cancellation cannot erase an already delivered service result.
+            try:
+                diagnostic_response = dict(received_monotonic_ns=time.monotonic_ns(),
+                    received_wall_ns=time.time_ns(), success=response.success,
+                    failure_code=str(response.failure_code), failed_stage=str(response.failed_stage),
+                    message=str(response.message), evidence_json=str(response.evidence_json))
+            except Exception:
+                pass
+            self._require_current_contact_precheck_phase(prepared, deadline_sec)
+            evidence = json.loads(response.evidence_json)
+            runtime['contact_sequence_precheck'] = deepcopy(evidence)
+            if (not isinstance(evidence, dict) or evidence.get('plan_id') != plan.plan_id
+                    or evidence.get('scope') != 'read_only_candidate_constant_bias_prediction'
+                    or evidence.get('execution_authorized') is not False
+                    or type(response.success) is not bool
+                    or evidence.get('success') is not response.success):
+                raise CandidateContractError('MOVEIT_CHECK_ERROR', 'unbound contact precheck response')
+            if deadline_sec > 0. and self._execution_plan_validity_now_sec() >= deadline_sec:
+                raise CandidateContractError('MOVEIT_TIMEOUT', 'contact precheck returned after deadline')
+            if not response.success:
+                if (evidence.get('failure_code') == response.failure_code
+                        and evidence.get('failed_stage') == response.failed_stage
+                        and evidence.get('reason') == response.message):
+                    runtime['validated_contact_precheck_failure'] = deepcopy(evidence)
+                    runtime['validated_contact_precheck_plan_id'] = str(plan.plan_id)
+                raise CandidateContractError(response.failure_code or 'MOVEIT_CHECK_ERROR', response.message)
+            prediction = evidence.get('contact_prediction', {})
+            if (prediction.get('scope') != 'constant_current_bias_prediction'
+                    or prediction.get('future_following_verified') is not False
+                    or prediction.get('execution_authorized') is not False
+                    or not prediction.get('predicted_command_geometry')
+                    or not prediction.get('nominal_geometry')):
+                raise CandidateContractError('MOVEIT_CHECK_ERROR', 'missing contact prediction evidence')
+            cost, delta = float(response.joint_path_cost), float(response.joint_max_delta)
+            if not all(math.isfinite(v) and v >= 0. for v in (cost, delta)):
+                raise CandidateContractError('MOVEIT_CHECK_ERROR', 'invalid contact sequence costs')
+            metrics.update(joint_path_cost=cost, joint_max_delta=delta)
+            parsed = self._parse_plan_metrics(response.message)
+            for name in ('execution_duration_lower_bound_sec', 'hardware_limiting_joint'):
+                if name in parsed:
+                    metrics[name] = parsed[name]
+            checked = evidence.get('checked_stage_names', [])
+            runtime['moveit_execution_stage_policy'] = dict(
+                close_hold_only='lift' not in checked, checked_stage_names=checked,
+                lift_path_verified='lift' in checked)
+            consumer_outcome = 'accepted'
+            return MoveItResult(reachable=True, joint_path_cost=cost, joint_max_delta_rad=delta,
+                reason=response.message, collision_free=True, within_joint_limits=True,
+                ik_valid=True, planning_success=True), metrics
+        except StreamResultCancelled as exc:
+            consumer_outcome, consumer_error = 'ticket_or_phase_cancelled', str(exc)
+            raise
+        except Exception as exc:
+            consumer_outcome, consumer_error = 'rejected', str(exc)
+            self._log_contact_precheck_rejection(
+                plan, prepared, evidence, operation)
+            return MoveItResult(reachable=False, joint_path_cost=0., joint_max_delta_rad=0.,
+                reason=str(exc), failure_code=str(getattr(exc, 'code', 'MOVEIT_CHECK_ERROR'))), metrics
+        finally:
+            self._log_contact_precheck_delivery(diagnostic_request, diagnostic_response,
+                consumer_outcome, consumer_error)
+
+    @staticmethod
+    def _log_contact_height_window_diagnostic(plan, prepared, runtime, result,
+                                               deadline_sec, eligible,
+                                               ineligible, audit):
+        """Persist a bounded rejected search even if target loss clears runtime."""
+        try:
+            ticket = getattr(prepared, 'ticket', None)
+            stable = getattr(runtime.get('scored_candidate'), 'stable_candidate', None)
+            report = dict(schema=1, scope='contact_height_window_diagnostic',
+                execution_authorized=False, eligible=eligible,
+                first_ineligible_condition=ineligible or None,
+                request={key: getattr(ticket, key, None)
+                         for key in ('request_id', 'generation', 'target_epoch')},
+                plan_id=str(plan.plan_id), source_stamp_ns=plan.header.stamp.to_nsec(),
+                candidate_source=str(getattr(stable, 'candidate_source', '')),
+                plan_candidate_source=str(getattr(plan, 'candidate_source', '')),
+                model_choice=str(plan.model_choice), refinement_status=str(plan.refinement_status),
+                refinement_translation_m=float(plan.refinement_translation_m),
+                diagnostic=str(plan.diagnostic), deadline_sec=float(deadline_sec),
+                original_failure_code=str(getattr(result, 'failure_code', '')),
+                original_failure=deepcopy(runtime.get('contact_sequence_precheck')),
+                search=deepcopy(audit))
+            rospy.loginfo('remote 6D contact height retry: %s',
+                          json.dumps(report, sort_keys=True, allow_nan=False))
+        except Exception:
+            # Diagnostic serialization/IO can never change the search verdict.
+            return
+
+    @staticmethod
+    def _contact_height_recipe_request_binding(prepared):
+        ticket = getattr(prepared, 'ticket', None)
+        if ticket is None:
+            return None
+        try:
+            identity = tuple(int(getattr(ticket, name))
+                             for name in ('request_id', 'generation', 'target_epoch'))
+            if any(value <= 0 for value in identity):
+                return None
+            return identity + (getattr(prepared, 'request_invalidation_generation', None),
+                               getattr(prepared, 'near_field_phase_id', None),
+                               getattr(prepared, 'near_field_phase_deadline_sec', None))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return None
+
+    def _contact_height_recipe_parameters(self):
+        from alicia_flexible_grasp.grasp.contact_joint_placement import joint_placement_policy_parameters
+        config = dict(max_inner_gap_m=float(self.gripper_geometry.max_inner_gap_m),
+            width_safety_margin_per_side_m=float(self.gripper_geometry.jaw_clearance_each_side_m),
+            finger_box_xyz_m=np.asarray(self.gripper_geometry.finger_size_xyz_m).tolist(),
+            palm_box_xyz_m=np.asarray(self.gripper_geometry.palm_size_xyz_m).tolist(),
+            support_clearance_m=float(self.gripper_geometry.support_clearance_m),
+            tool_jaw_axis=self.gripper_tool_jaw_axis,
+            tool_finger_length_axis=self.gripper_tool_finger_length_axis)
+        return dict(config=config,
+            opening=min(float(self.gripper_geometry.max_inner_gap_m),
+                        float(self.gripper_physical_open_width_m)),
+            limit=self._contact_height_evidence_limit(),
+            # Reuse the existing CAD contract tolerance only as extra space
+            # inside the measured interval, never as a smaller evidence limit.
+            height_window_upper_interior_reserve_m=GRIPPER_CONTRACT_TOLERANCE_M,
+            height_window_maximum_proposals=4,
+            lateral_placement_policy='same_bound_terminal_balanced_support_tangent_v1',
+            joint_placement_policy=joint_placement_policy_parameters(),
+            policy=refinement_registration_policy(getattr(
+                self, 'multiview_registration_config', RegistrationConfig())))
+
+    def _contact_height_recipe_matches(self, recipe, plan, prepared):
+        """A request-local geometry hint, never a reusable motion verdict."""
+        if not isinstance(recipe, dict) or recipe.get('prepared') is not prepared:
+            return False
+        binding = self._contact_height_recipe_request_binding(prepared)
+        try:
+            return bool(binding is not None and recipe.get('request_binding') == binding
+                        and recipe.get('original_plan') == plan
+                        and recipe.get('parameters') == self._contact_height_recipe_parameters())
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+
+    def _contact_lateral_window_proposal(self, plan, failure, geometry, parameters):
+        """An optional placement hint; admission remains the full original gate."""
+        if not isinstance(failure, dict) or not failure.get('contact_terminal_failure'):
+            return None, dict(proposed=False, reason='bound terminal diagnostic unavailable')
+        try:
+            from alicia_flexible_grasp.grasp.contact_lateral_placement import contact_lateral_placement
+            transform = geometry['planned_T_base_tool0']
+            return contact_lateral_placement(failure=failure, plan_id=str(plan.plan_id),
+                source_stamp_ns=plan.header.stamp.to_nsec(),
+                goal_pose=list(transform[:3,3])+list(quaternion_from_matrix(transform)),
+                support_normal_base=geometry['support_normal_base'],
+                model_xml=rospy.get_param('/robot_description'),
+                maximum_translation_m=(float(parameters['policy']['maximum_translation_m'])
+                                       - float(plan.refinement_translation_m)))
+        except Exception as exc:
+            return None, dict(proposed=False, reason='lateral hint unavailable: '+str(exc))
+
+    def _contact_joint_window_proposal(self, plan, failure, geometry, parameters,
+                                       deadline_check):
+        """Replace one proposal slot; every new family keeps full admission."""
+        if not isinstance(failure, dict) or 'contact_terminal_failure' not in failure:
+            return None, dict(proposed=False, fallback_allowed=True,
+                              reason='no terminal diagnostic; retain original placement search')
+        try:
+            from alicia_flexible_grasp.grasp.contact_joint_placement import contact_joint_placement
+            from alicia_flexible_grasp.robot.observation_path_guard import FrozenObservationScene
+            transform = geometry['planned_T_base_tool0']
+            arguments = dict(failure=failure, plan_id=str(plan.plan_id),
+                source_stamp_ns=plan.header.stamp.to_nsec(),
+                goal_pose=list(transform[:3, 3])+list(quaternion_from_matrix(transform)),
+                support_normal_base=geometry['support_normal_base'],
+                model_xml=rospy.get_param('/robot_description'),
+                maximum_translation_m=(float(parameters['policy']['maximum_translation_m'])
+                                       - float(plan.refinement_translation_m)),
+                scene=FrozenObservationScene.from_contact_plan(plan),
+                contact_geometry=geometry,
+                translation_evidence_limit_m=parameters['limit'],
+                deadline_check=deadline_check)
+        except StreamResultCancelled:
+            raise
+        except Exception as exc:
+            return None, dict(proposed=False, fallback_allowed=False,
+                              reason='joint hint input unavailable: '+str(exc))
+        # The helper handles its own invalid inputs and bounded optimizer
+        # failures. Exceptions from the caller's live owner/deadline check
+        # must retain their original type and identity through this bridge.
+        return contact_joint_placement(**arguments)
+
+    def _contact_height_window_retry(self, plan, prepared, runtime, result,
+                                     deadline_sec, preferred_recipe=None,
+                                     skip_proposal_indices=()):
+        """Propose a bounded same-source placement after a bias-path collision."""
+        eligible, ineligible, audit = False, '', None
+        deadline_callback_errors = []
+        try:
+            failure = runtime.get('contact_sequence_precheck') or {}
+            scored = runtime.get('scored_candidate')
+            stable = getattr(scored, 'stable_candidate', None)
+            if (preferred_recipe is not None
+                    and not self._contact_height_recipe_matches(preferred_recipe, plan, prepared)):
+                ineligible = 'selected_recipe_binding'
+            elif (preferred_recipe is None
+                    and str(getattr(result, 'failure_code', '')) != 'CONTACT_SEQUENCE_PRECHECK_FAILED'):
+                ineligible = 'failure_code'
+            elif preferred_recipe is None and failure.get('success') is not False:
+                ineligible = 'failure_success'
+            elif preferred_recipe is None and failure.get('failed_stage') != 'grasp':
+                ineligible = 'failed_stage'
+            elif preferred_recipe is None and not str(failure.get('reason', '')).startswith(
+                    'predicted_command continuous geometry: target OBB collision at '):
+                ineligible = 'failure_kind'
+            elif preferred_recipe is None and failure.get('plan_id') != plan.plan_id:
+                ineligible = 'failure_plan_id'
+            elif (preferred_recipe is None and 'contact_terminal_failure' in failure
+                    and (runtime.get('validated_contact_precheck_plan_id') != str(plan.plan_id)
+                         or runtime.get('validated_contact_precheck_failure') != failure)):
+                ineligible = 'unvalidated_contact_precheck_failure'
+            elif getattr(stable, 'candidate_source', '') != 'tabletop_geometry':
+                ineligible = 'candidate_source'
+            elif plan.model_choice != 'unknown_tabletop':
+                ineligible = 'model_choice'
+            elif plan.refinement_status != 'VALID_3D':
+                ineligible = 'registration_status'
+            elif str(plan.diagnostic) != CONTACT_EXECUTION_PLAN:
+                ineligible = 'plan_phase'
+            elif not self._direct_near_field_active(prepared):
+                ineligible = 'direct_near_field'
+            elif not math.isfinite(deadline_sec) or deadline_sec <= 0.:
+                ineligible = 'deadline'
+            if ineligible:
+                return None
+            eligible = True
+            audit = dict(policy='same_candidate_bounded_contact_height_window',
+                         maximum_proposals=4, deadline_sec=deadline_sec,
+                         deadline_extended=False, motion_authorized=False,
+                         original_plan_id=str(plan.plan_id),
+                         original_failure=deepcopy(failure), proposals=[],
+                         selected_geometry_revalidation=preferred_recipe is not None,
+                         strict_result_reused=False, evaluated_proposal_indices=[])
+            runtime['contact_height_window_search'] = audit
+            if preferred_recipe is not None:
+                runtime['contact_height_window_preferred_revalidation'] = audit
+            limit = self._contact_height_evidence_limit()
+            if limit is None:
+                audit['reason'] = 'original contact height evidence limit unavailable'
+                return None
+            try:
+                parameters = self._contact_height_recipe_parameters()
+                config, opening = parameters['config'], parameters['opening']
+                geometry = frozen_contact_geometry(plan, config, opening)
+                original = geometry['planned_T_base_tool0']
+                proposals = contact_height_window_proposals(
+                    translation_evidence_limit_m=limit,
+                    upper_interior_reserve_m=parameters['height_window_upper_interior_reserve_m'],
+                    actual_T_base_tool0=original, **geometry)
+                if len(proposals) > parameters['height_window_maximum_proposals']:
+                    raise ValueError('contact height proposal budget exceeded')
+                audit['upper_interior_reserve_m'] = parameters['height_window_upper_interior_reserve_m']
+                policy = parameters['policy']
+                indexed = [(i, transform, placement) for i, (transform, placement) in enumerate(proposals)]
+                # Keep four slots and the original phase deadline. A joint
+                # placement replaces the lateral hint only when its frozen
+                # inputs and original geometric margins support that proposal.
+                lateral_failure = (preferred_recipe.get('lateral_failure', {})
+                    if preferred_recipe is not None else failure)
+                original_deadline_gate = self._direct_near_field_deadline_gate(prepared)
+                def joint_deadline_check():
+                    try:
+                        now = self._execution_plan_validity_now_sec()
+                        if (not math.isfinite(now) or now >= deadline_sec
+                                or original_deadline_gate() is not True):
+                            return False
+                        self._require_current_contact_precheck_phase(prepared, deadline_sec)
+                        return True
+                    except Exception as exc:
+                        deadline_callback_errors.append(exc)
+                        raise
+                lateral, joint_audit = self._contact_joint_window_proposal(
+                    plan, lateral_failure, geometry, parameters, joint_deadline_check)
+                audit['joint_placement'] = joint_audit
+                if lateral is None:
+                    if joint_audit.get('fallback_allowed') is not True:
+                        audit['reason'] = 'joint placement input or original owner/deadline invalid'
+                        return None
+                    lateral, lateral_audit = self._contact_lateral_window_proposal(
+                        plan, lateral_failure, geometry, parameters)
+                else:
+                    lateral_audit = joint_audit
+                audit['lateral_placement'] = lateral_audit
+                if lateral is not None:
+                    indexed.insert(0, (-1, lateral, lateral_audit))
+                    audit['policy'] = 'same_candidate_bounded_contact_placement_window'
+                indexed = indexed[:parameters['height_window_maximum_proposals']]
+                for proposal_index, _transform, placement in indexed:
+                    if proposal_index in skip_proposal_indices:
+                        continue
+                    if preferred_recipe is not None and (
+                            proposal_index != preferred_recipe.get('proposal_index')
+                            or float(placement['normal_translation_m']) != preferred_recipe.get('normal_translation_m')):
+                        continue
+                    displacement = (np.asarray(placement['translation_base_m'], dtype=float)
+                                    if proposal_index == -1 else
+                                    float(placement['normal_translation_m'])*np.asarray(geometry['support_normal_base']))
+                    if (preferred_recipe is not None and proposal_index == -1
+                            and not np.array_equal(displacement, preferred_recipe.get('translation_base_m'))):
+                        continue
+                    if (self._execution_plan_validity_now_sec() >= deadline_sec
+                            or not self._direct_near_field_deadline_gate(prepared)()):
+                        audit['reason'] = 'original request deadline consumed'
+                        break
+                    if getattr(self, '_stream_condition', None) is not None:
+                        self._require_stream_ticket_current(prepared.ticket)
+                    trial = dict(placement=deepcopy(placement), accepted=False)
+                    audit['proposals'].append(trial)
+                    audit['evaluated_proposal_indices'].append(proposal_index)
+                    candidate = deepcopy(plan)
+                    candidate_runtime = dict(runtime)
+                    delta = float(placement['normal_translation_m'])
+                    total = float(plan.refinement_translation_m)+float(np.linalg.norm(displacement))
+                    trial['registration_plus_placement_displacement_m'] = total
+                    if float32_wire_value(total) > float32_wire_value(policy['maximum_translation_m']):
+                        trial['reason'] = 'registration plus placement exceeds original bound'
+                        continue
+                    for pose in candidate.poses:
+                        for axis, value in zip('xyz', displacement):
+                            setattr(pose.position, axis, getattr(pose.position, axis)+float(value))
+                    candidate.refinement_translation_m = total
+                    sequence = self._rich_plan_execution_sequence(candidate)
+                    gate = self._registered_sequence_geometry_gate(
+                        candidate, prepared, candidate_runtime, sequence)
+                    trial['geometry_gate'] = asdict(gate) if isinstance(gate, CandidateGateResult) else None
+                    if not isinstance(gate, CandidateGateResult) or not gate.ok:
+                        trial['reason'] = 'original full registered geometry gate rejected placement'
+                        continue
+                    candidate.required_open_width_m = float(gate.required_open_width_m)
+                    self._freeze_final_contact_evidence(candidate, candidate_runtime)
+                    candidate.plan_id = compute_plan_id(candidate)
+                    current_geometry = frozen_contact_geometry(candidate, config, opening)
+                    height = evaluate_contact_height_margin(
+                        translation_evidence_limit_m=limit,
+                        actual_T_base_tool0=current_geometry['planned_T_base_tool0'],
+                        **current_geometry)
+                    trial['final_contact_height_margin'] = height
+                    if not height['ok']:
+                        trial['reason'] = 'recomputed contact evidence lacks original height margin'
+                        continue
+                    try:
+                        self._reject_inevitable_contact_goal(
+                            candidate, candidate_runtime, 'final_registered_height_window_proposal')
+                    except CandidateContractError as exc:
+                        if exc.code != 'CONTACT_SEQUENCE_PRECHECK_FAILED':
+                            raise
+                        trial.update(reason=str(exc), contact_goal_necessary_check=deepcopy(
+                            candidate_runtime.get('contact_goal_necessary_check')))
+                        continue
+                    stages = tuple((name, getattr(sequence, name))
+                                   for name in ('pregrasp', 'approach', 'grasp', 'lift'))
+                    checked, metrics = self._final_contact_sequence_evaluation(
+                        candidate, stages, prepared, candidate_runtime,
+                        'final_registered_height_window_strict_sequence',
+                        deadline_sec=deadline_sec)
+                    trial.update(plan_id=str(candidate.plan_id), result=asdict(checked),
+                        contact_sequence_precheck=deepcopy(candidate_runtime.get('contact_sequence_precheck')))
+                    if (isinstance(checked, MoveItResult) and checked.reachable is True
+                            and checked.collision_free is True and checked.within_joint_limits is True
+                            and checked.ik_valid is True and checked.planning_success is True):
+                        if (self._execution_plan_validity_now_sec() >= deadline_sec
+                                or not self._direct_near_field_deadline_gate(prepared)()):
+                            trial['reason'] = 'original request deadline consumed after check'
+                            break
+                        if getattr(self, '_stream_condition', None) is not None:
+                            self._require_stream_ticket_current(prepared.ticket)
+                        trial['accepted'] = True
+                        candidate_runtime['final_registered_geometry_gate'] = asdict(gate)
+                        candidate_runtime['final_contact_height_margin'] = height
+                        candidate_runtime['contact_height_window_search'] = audit
+                        binding = self._contact_height_recipe_request_binding(prepared)
+                        if binding is not None:
+                            candidate_runtime['_selected_contact_height_recipe'] = dict(
+                                prepared=prepared, request_binding=binding,
+                                original_plan=deepcopy(plan), parameters=deepcopy(parameters),
+                                proposal_index=proposal_index, normal_translation_m=delta)
+                            if proposal_index == -1:
+                                candidate_runtime['_selected_contact_height_recipe'].update(
+                                    translation_base_m=displacement.tolist(),
+                                    lateral_failure=deepcopy(lateral_failure))
+                        return candidate, sequence, checked, metrics, candidate_runtime
+            except StreamResultCancelled:
+                raise
+            except Exception as exc:
+                if deadline_callback_errors and exc is deadline_callback_errors[-1]:
+                    raise
+                audit['reason'] = str(exc)
+            return None
+        finally:
+            self._log_contact_height_window_diagnostic(
+                plan, prepared, runtime, result, deadline_sec,
+                eligible, ineligible, audit)
 
     def _strict_check_final_near_field_plan(
         self,
@@ -14216,14 +16277,25 @@ class RemoteGrasp6DNode:
     ):
         """Fail closed unless the exact post-registration plan is reachable."""
 
+        preferred_recipe = runtime.pop('_selected_contact_height_recipe', None)
         for name in (
             'final_execution_sequence',
             'final_strict_moveit_result',
             'final_strict_moveit_metrics',
             'final_strict_plan_id',
             'final_orientation_resolution',
+            'contact_sequence_precheck',
+            'contact_height_window_search',
+            'contact_height_window_preferred_revalidation',
         ):
             runtime.pop(name, None)
+        # The original free-space resolver, registration and support-height
+        # restoration have now finished. Unlike the earlier pre-resolution
+        # shortcut, this exact family cannot acquire another support lift.
+        # Reject only a core overlap shared by every allowed final contact
+        # endpoint; an inconclusive result still needs the complete precheck.
+        self._reject_inevitable_contact_goal(
+            plan, runtime, 'final_registered_after_original_resolution')
         sequence = self._rich_plan_execution_sequence(plan)
         stage_poses = (
             ('pregrasp', sequence.pregrasp),
@@ -14239,13 +16311,32 @@ class RemoteGrasp6DNode:
             if self._direct_near_field_active(prepared)
             else 0.0
         )
-        result, metrics = self._cached_strict_moveit_sequence_evaluation(
-            stage_poses,
-            prepared,
-            runtime,
-            'final_registered_strict_sequence',
-            deadline_sec=deadline_sec,
-        )
+        alternative = None
+        if self._contact_height_recipe_matches(preferred_recipe, plan, prepared):
+            # Rebuild one previously selected bounded placement from this exact
+            # original family. All geometry and the fresh-feedback full precheck
+            # still run; only the already-rejected family's search order changes.
+            alternative = self._contact_height_window_retry(
+                plan, prepared, runtime, None, deadline_sec,
+                preferred_recipe=preferred_recipe)
+        if alternative is None:
+            result, metrics = self._final_contact_sequence_evaluation(
+                plan, stage_poses, prepared, runtime,
+                'final_registered_strict_sequence', deadline_sec=deadline_sec)
+            if not result.reachable:
+                skipped = runtime.get('contact_height_window_preferred_revalidation', {}).get(
+                    'evaluated_proposal_indices', ())
+                alternative = self._contact_height_window_retry(
+                    plan, prepared, runtime, result, deadline_sec,
+                    skip_proposal_indices=skipped)
+        if alternative is not None:
+            replacement, sequence, result, metrics, replacement_runtime = alternative
+            plan.poses = replacement.poses
+            plan.required_open_width_m = replacement.required_open_width_m
+            plan.refinement_translation_m = replacement.refinement_translation_m
+            plan.contact_geometry_evidence = replacement.contact_geometry_evidence
+            plan.plan_id = replacement.plan_id
+            runtime.update(replacement_runtime)
         resolved_gate = None
         if (not result.reachable
                 and str(result.failure_code or '') == 'MOVEIT_UNREACHABLE'
@@ -14268,8 +16359,14 @@ class RemoteGrasp6DNode:
                     str(getattr(resolved_gate, 'failure_reason', '') or 'missing evidence'))
             resolved_stages = tuple((name, getattr(resolved, name))
                                     for name in ('pregrasp', 'approach', 'grasp', 'lift'))
-            result, metrics = self._cached_strict_moveit_sequence_evaluation(
-                resolved_stages, prepared, runtime, 'final_resolved_strict_sequence',
+            resolved_plan = deepcopy(plan)
+            resolved_plan.poses = [deepcopy(getattr(resolved, name).pose)
+                                   for name in ('pregrasp', 'approach', 'grasp', 'lift')]
+            resolved_plan.required_open_width_m = float(resolved_gate.required_open_width_m)
+            self._freeze_final_contact_evidence(resolved_plan, runtime)
+            resolved_plan.plan_id = compute_plan_id(resolved_plan)
+            result, metrics = self._final_contact_sequence_evaluation(
+                resolved_plan, resolved_stages, prepared, runtime, 'final_resolved_strict_sequence',
                 deadline_sec=deadline_sec)
             sequence = resolved
         hard_evidence = bool(
@@ -14298,6 +16395,7 @@ class RemoteGrasp6DNode:
             plan.poses = [deepcopy(getattr(sequence, name).pose)
                           for name in ('pregrasp', 'approach', 'grasp', 'lift')]
             plan.required_open_width_m = float(resolved_gate.required_open_width_m)
+            self._freeze_final_contact_evidence(plan, runtime)
             # Publish/hash only the fully validated final family, never its
             # rejected pre-resolution poses or an intermediate plan ID.
             plan.plan_id = compute_plan_id(plan)
@@ -14308,8 +16406,158 @@ class RemoteGrasp6DNode:
         runtime['final_strict_plan_id'] = str(plan.plan_id)
         return sequence, result, dict(metrics or {})
 
+    def _check_refinement_candidate_continuity(self, plan, prepared, runtime):
+        from alicia_flexible_grasp.grasp.refinement_continuity import (
+            validate_candidate_continuity, RefinementContinuityError)
+        try:
+            evidence = validate_candidate_continuity(
+                getattr(prepared, 'refinement_binding', None), plan,
+                getattr(prepared, 'near_field_phase_id', 0))
+        except RefinementContinuityError as exc:
+            raise CandidateContractError(exc.code, str(exc)) from exc
+        if evidence is not None:
+            runtime['refinement_continuity'] = evidence
+
+    @staticmethod
+    def _contact_goal_inevitable_collision(plan, gripper, opening, opening_tolerance,
+                                           robot_description=None, tool_jaw_axis='y',
+                                           tool_finger_length_axis='z'):
+        """Reject only overlap shared by every permitted nominal contact goal.
+
+        The contact precheck's compensate_cartesian_path requires an endpoint
+        within 0.5 mm / 0.005 rad of its final grasp pose before certifying
+        its continuous path. The original and final free-space resolvers may
+        each retain contact poses only to their numeric equality tolerance;
+        accumulate both tolerances rather than treating them as exact. Erode
+        each body by a displacement bound covering
+        that complete pose-error ball and every opening the open/skip policy
+        permits. Intersection of the remaining core with the SAME frozen OBB
+        is a necessary failure of the existing nominal contact check. This
+        cannot attest free space, a path, following response, or a grasp.
+        """
+        report = dict(policy='inevitable_frozen_contact_goal_obb_overlap',
+                      execution_authorized=False, path_verified=False,
+                      rejected=False, checked=False, bodies=[])
+        if (not isinstance(gripper, GripperGeometry)
+                or not all(math.isfinite(float(v)) for v in (opening, opening_tolerance))
+                or not 0. < opening <= gripper.max_inner_gap_m
+                or not 0. <= opening_tolerance < opening):
+            report['reason'] = 'invalid opening prediction; retain full checker'
+            return report
+        pose, size, _support = validate_rich_geometry(plan.object_geometry)
+        object_rotation = quaternion_matrix(pose[3:])[:3, :3]
+        transform = pose_matrix(RemoteGrasp6DNode._rich_plan_execution_sequence(plan).grasp)
+        # All future skip/open postures are included; no stale encoder opening
+        # or target-specific nominal width is used for this necessary test.
+        low = max(0., opening-opening_tolerance)
+        high = min(gripper.max_inner_gap_m, opening+opening_tolerance)
+        midpoint = .5*(low+high)
+        # At most one original and one final registered resolver contribute
+        # to any returned family. Publication rebuilds that same family; it
+        # does not compound additional resolver outputs into runtime.sequence.
+        resolver_count = 2
+        resolver_position = resolver_count*math.sqrt(3.)*1e-12
+        resolver_angle = resolver_count*2.*math.acos(1.-1e-9)
+        position_bound = .0005+resolver_position
+        angle_bound = .005+resolver_angle
+        report.update(checked=True, plan_id=str(plan.plan_id),
+                      opening_interval_m=[low, high],
+                      goal_position_tolerance_m=.0005,
+                      goal_orientation_tolerance_rad=.005,
+                      maximum_contact_orientation_resolutions=resolver_count,
+                      accumulated_resolver_position_allowance_m=resolver_position,
+                      accumulated_resolver_orientation_allowance_rad=resolver_angle,
+                      total_goal_position_bound_m=position_bound,
+                      total_goal_orientation_bound_rad=angle_bound)
+        cad_context = supported_finger_cad_context(
+            robot_description, gripper, tool_jaw_axis, tool_finger_length_axis)
+        for name, center, dimensions in _stage_boxes(transform, gripper, midpoint, 'y', 'z'):
+            if cad_context is not None and name in ('left_finger', 'right_finger'):
+                # An eroded analytical box is not a core of the CAD union.
+                # Its overlap cannot prove the now-shared CAD gate must fail.
+                report['bodies'].append(dict(body=name, inevitable_overlap=False,
+                    reason='analytical core cannot prove CAD intersection; retain full checker'))
+                continue
+            radius = float(np.linalg.norm(center-transform[:3, 3]) + .5*np.linalg.norm(dimensions))
+            # A point in this eroded box remains inside the original body
+            # under every allowed pose. The extra 1e-7 m keeps a numerical
+            # SAT boundary from becoming a false inevitable-overlap claim.
+            displacement = position_bound + 2.*radius*math.sin(angle_bound/2.)
+            if name != 'palm':
+                displacement += .25*(high-low)
+            erosion = displacement + 1e-7
+            core = np.asarray(dimensions)-2.*erosion
+            collision = bool(np.all(core > 0.) and _obb_overlap(
+                center, transform[:3, :3], core,
+                np.asarray(pose[:3]), object_rotation, np.asarray(size)))
+            report['bodies'].append(dict(body=name,
+                maximum_pose_and_opening_displacement_m=displacement,
+                core_size_xyz_m=core.tolist(), inevitable_overlap=collision))
+            report['rejected'] = report['rejected'] or collision
+        report['reason'] = ('every permitted contact endpoint overlaps the frozen target OBB'
+                            if report['rejected'] else 'no necessary failure proven; retain full checker')
+        return report
+
+    def _early_contact_goal_rejection(self, candidate, runtime):
+        """Cheap rejection before searching free-space orientations.
+
+        Nonidentity registration may require support-height restoration that
+        depends on the resolved free-space rotations. Leave that case to the
+        complete checker. At identity, every resolver result already has to
+        pass the same four-pose support gate, so it cannot alter grasp height.
+        """
+        if (not getattr(self, 'contact_sequence_precheck_enabled', False)
+                or getattr(runtime.get('prepared'), 'model_choice', '') != 'unknown_tabletop'):
+            return None
+        try:
+            plan = self._build_selected_preview_bundle(candidate, geometry_only=True)['rich_plan']
+        except CandidateContractError as exc:
+            # A pregrasp/lift geometry failure can still be repaired by the
+            # bounded resolver. This shortcut never turns it into a verdict.
+            runtime['contact_goal_necessary_check'] = dict(checked=False, rejected=False,
+                execution_authorized=False,
+                reason='pre-resolution final geometry unavailable: '+str(exc))
+            return None
+        if (float(plan.refinement_translation_m) != 0.
+                or float(plan.refinement_rotation_deg) != 0.
+                or float(runtime.get('registration_support_lift_m', 0.)) != 0.):
+            runtime['contact_goal_necessary_check'] = dict(checked=False, rejected=False,
+                execution_authorized=False,
+                reason='registration or support restoration can change contact height; retain full checker')
+            return None
+        return self._reject_inevitable_contact_goal(plan, runtime, 'pre_resolution_identity')
+
+    def _reject_inevitable_contact_goal(self, plan, runtime, proof_stage):
+        """Share the necessary collision test without widening its authority."""
+        if (not getattr(self, 'contact_sequence_precheck_enabled', False)
+                or str(plan.model_choice) != 'unknown_tabletop'):
+            return None
+        config = rospy.get_param('/gripper', {})
+        report = self._contact_goal_inevitable_collision(plan, self.gripper_geometry,
+            float(config.get('open_position_m', .05)),
+            float(config.get('open_skip_tolerance_m', .001)),
+            robot_description=getattr(self, '_geometry_robot_description', None),
+            tool_jaw_axis=getattr(self, 'gripper_tool_jaw_axis', 'y'),
+            tool_finger_length_axis=getattr(self, 'gripper_tool_finger_length_axis', 'z'))
+        report['proof_stage'] = proof_stage
+        runtime['contact_goal_necessary_check'] = report
+        if report['rejected']:
+            raise CandidateContractError('CONTACT_SEQUENCE_PRECHECK_FAILED',
+                'nominal contact goal has unavoidable target OBB collision within '
+                'unchanged pose/opening tolerances: '+','.join(
+                    b['body'] for b in report['bodies'] if b['inevitable_overlap']))
+        return None
+
     def _check_direct_registered_candidate(self, candidate):
         """Keep final contact failures inside the bounded ranked search."""
+        runtime = self._stable_variant_runtime[(candidate.track_id, candidate.variant_index)]
+        runtime.pop('final_contact_rejection', None)
+        try:
+            self._early_contact_goal_rejection(candidate, runtime)
+        except CandidateContractError as exc:
+            runtime['final_contact_rejection'] = {'code': exc.code, 'reason': str(exc)}
+            return MoveItResult(reachable=False, joint_path_cost=0., joint_max_delta_rad=0.,
+                reason='%s: %s' % (exc.code, exc), failure_code='MOVEIT_CHECK_ERROR')
         result = self._check_moveit_stable_candidate(candidate)
         if not result.reachable:
             return result
@@ -14331,7 +16579,8 @@ class RemoteGrasp6DNode:
             # This builds and validates without publishing.  The subsequent
             # publication reuses the exact-sequence MoveIt cache; selection
             # must see the post-registration geometry and motion evidence.
-            self._build_selected_preview_bundle(evaluated)
+            bundle = self._build_selected_preview_bundle(evaluated)
+            self._retain_qualified_contact_bundle(evaluated, bundle)
         except CandidateContractError as exc:
             runtime['final_contact_rejection'] = {
                 'code': exc.code, 'reason': str(exc),
@@ -14352,13 +16601,230 @@ class RemoteGrasp6DNode:
             )
         return MoveItResult(**runtime['final_strict_moveit_result'])
 
-    def _build_selected_preview_bundle(self, selected):
+    def _contact_bundle_inputs(self, selected, runtime):
+        """Bind every input used to prepare this candidate's frozen geometry.
+
+        Live feedback is checked separately by each original strict RPC. In
+        particular, advancing source timestamps are not geometry mutations.
+        """
+        prepared = runtime['prepared']
+        inputs = dict(
+            candidate={key: getattr(selected, key, None) for key in (
+                'track_id', 'variant_index', 'evaluation_request_id',
+                'evaluation_snapshot_stamp_sec', 'stable_candidate', 'payload',
+                'pre_moveit_score', 'soft_features', 'score_weights')},
+            prepared={key: getattr(prepared, key, None) for key in (
+                'snapshot', 'stamp', 'geometry', 'target_observation',
+                'refinement_binding', 'fused_scene_audit', 'near_field',
+                'near_field_phase_id', 'near_field_phase_deadline_sec',
+                'request_invalidation_generation', 'model_choice')},
+            ticket={key: getattr(prepared.ticket, key, None) for key in (
+                'request_id', 'generation', 'target_epoch', 'snapshot_stamp_sec')},
+            runtime={key: runtime.get(key) for key in (
+                'sequence', 'geometry_gate', 'grasp_pose', 'camera_candidate',
+                'adaptive_stage_profile', 'contact_registration_transform',
+                'final_contact_geometry_evidence', 'final_registered_geometry_gate')},
+            local={key: getattr(self, key, None) for key in (
+                'grasp_config', 'gripper_geometry', '_geometry_robot_description',
+                'gripper_tool_jaw_axis',
+                'gripper_tool_finger_length_axis', 'gripper_physical_open_width_m',
+                'multiview_registration_config', 'contact_sequence_precheck_enabled',
+                'mujoco_config')},
+            height_parameters=self._contact_height_recipe_parameters(),
+            parameters={key: rospy.get_param(key, None) for key in (
+                '/robot_description', '/grasp', '/gripper',
+                '/grasp_6d/remote/gripper_geometry', '/mujoco_digital_twin',
+                '/grasp_mode/selection')})
+        encoded = json.dumps(_contact_bundle_value(inputs), sort_keys=True,
+                             allow_nan=False, separators=(',', ':')).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _contact_bundle_motion_dependencies(evidence):
+        """Exact prediction dependencies, excluding fresh receipt clocks."""
+        if (not isinstance(evidence, dict) or evidence.get('success') is not True
+                or evidence.get('execution_authorized') is not False
+                or evidence.get('scope') != 'read_only_candidate_constant_bias_prediction'):
+            raise ValueError('qualified contact bundle requires complete strict evidence')
+        result = {key: deepcopy(evidence[key]) for key in (
+            'plan_id', 'epoch_ns', 'model_sha256', 'opening_m', 'selection',
+            'planning_scene_digest', 'checked_stage_names')}
+        for name in ('source_sample', 'completion_sample'):
+            sample = evidence[name]
+            result[name] = {key: deepcopy(sample[key]) for key in (
+                'epoch_ns', 'model_sha256', 'joint_names', 'sdk_positions_rad',
+                'accepted_positions_rad', 'accepted_gripper_opening_m')}
+        return result
+
+    @staticmethod
+    def _copy_contact_bundle(bundle):
+        """Copy mutable plan/audit bytes while retaining the actual ticket."""
+        result = {key: deepcopy(bundle[key]) for key in (
+            'rich_plan', 'legacy_plan', 'proposal_metadata', 'streaming_audit')}
+        result['ticket'] = bundle['ticket']
+        result['proposal'] = dict(bundle['proposal'], rich_plan=result['rich_plan'])
+        return result
+
+    @staticmethod
+    def _contact_bundle_contents_sha256(bundle):
+        """Bind the complete retained proposal, including its legacy wire."""
+        value = {key: bundle[key] for key in (
+            'rich_plan', 'legacy_plan', 'proposal_metadata', 'streaming_audit')}
+        value['proposal'] = {key: val for key, val in bundle['proposal'].items()
+                             if key != 'ticket'}
+        for name, ticket in (('ticket', bundle['ticket']),
+                             ('proposal_ticket', bundle['proposal']['ticket'])):
+            value[name] = {key: getattr(ticket, key, None) for key in (
+                'request_id', 'generation', 'target_epoch', 'snapshot_stamp_sec')}
+        encoded = json.dumps(_contact_bundle_value(value), sort_keys=True,
+                             allow_nan=False, separators=(',', ':')).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _retain_qualified_contact_bundle(self, selected, bundle):
+        if not isinstance(bundle, dict):
+            return False
+        runtime = self._selected_preview_runtime(selected, ticket=bundle['ticket'])
+        runtime.pop('_qualified_contact_bundle', None)
+        plan = bundle['rich_plan']
+        if (not bool(getattr(runtime['prepared'], 'near_field', False))
+                or not getattr(self, 'contact_sequence_precheck_enabled', False)
+                or getattr(plan, 'model_choice', '') != 'unknown_tabletop'):
+            return False
+        try:
+            dependencies = self._contact_bundle_motion_dependencies(
+                runtime.get('contact_sequence_precheck'))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            # Reuse is optional and requires more complete dependency evidence
+            # than the historical adapter. Incomplete evidence keeps every
+            # original build and strict gate; it never creates a cache entry.
+            return False
+        try:
+            if dependencies['plan_id'] != plan.plan_id:
+                raise ValueError('qualified contact evidence belongs to another plan')
+            held = self._copy_contact_bundle(bundle)
+            # The first build starts from the preliminary nominal result.
+            # Scores are outputs of the final strict result, not geometry
+            # inputs: recompute only these metadata from the verified result.
+            strict_result = deepcopy(runtime['final_strict_moveit_result'])
+            score = soft_candidate_cost(replace(selected.soft_features,
+                joint_path_cost=strict_result['joint_path_cost'],
+                joint_max_delta_rad=strict_result['joint_max_delta_rad']),
+                selected.score_weights)
+            held['proposal']['score'] = float(score.total)
+            held['proposal_metadata']['score'] = float(score.total)
+            held['streaming_audit']['final_score'] = float(score.total)
+            held['streaming_audit']['score_components'] = dict(score.components)
+            runtime['_qualified_contact_bundle'] = dict(
+                prepared=runtime['prepared'], inputs_sha256=self._contact_bundle_inputs(selected, runtime),
+                plan_wire_sha256=wire_digest(plan), bundle=held,
+                bundle_sha256=self._contact_bundle_contents_sha256(held),
+                motion_dependencies=dependencies,
+                strict_result=strict_result)
+            return True
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise CandidateContractError('CONTACT_BUNDLE_INVALID', str(exc)) from exc
+
+    def _qualified_contact_preview_bundle(self, selected, ticket=None, refresh_feedback=False):
+        """Reuse preparation, retaining every live strict-feedback boundary.
+
+        No result is reused across a changed physical dependency. The gateway
+        still independently checks the current scene, model, both feedback
+        channels, opening, epoch, configuration and the original deadline.
+        """
+        # The optimization has no effect on paths without a retained bundle;
+        # their original builder remains responsible for validating runtime.
+        cached = getattr(self, '_stable_variant_runtime', {}).get(
+            (selected.track_id, selected.variant_index))
+        if not isinstance(cached, dict) or '_qualified_contact_bundle' not in cached:
+            return None
+        runtime = self._selected_preview_runtime(selected, ticket=ticket)
+        held = runtime.get('_qualified_contact_bundle')
+        if held is None:
+            return None
+        prepared = runtime['prepared']
+        def current():
+            self._require_stream_ticket_current(prepared.ticket)
+            deadline = self._direct_near_field_candidate_deadline_sec(prepared, runtime)
+            self._require_current_contact_precheck_phase(prepared, deadline)
+            if (held['prepared'] is not prepared
+                    or held['inputs_sha256'] != self._contact_bundle_inputs(selected, runtime)
+                    or held['plan_wire_sha256'] != wire_digest(held['bundle']['rich_plan'])
+                    or held['bundle_sha256'] != self._contact_bundle_contents_sha256(held['bundle'])
+                    or int(getattr(self, '_geometry_invalidation_generation', 0))
+                        != int(prepared.request_invalidation_generation)):
+                raise CandidateContractError('CONTACT_BUNDLE_INPUT_CHANGED',
+                    'qualified contact bundle no longer matches its complete frozen inputs')
+            return deadline
+        deadline = current()
+        bundle = self._copy_contact_bundle(held['bundle'])
+        if refresh_feedback:
+            plan = bundle['rich_plan']
+            sequence = self._rich_plan_execution_sequence(plan)
+            stages = tuple((name, getattr(sequence, name))
+                           for name in ('pregrasp', 'approach', 'grasp', 'lift'))
+            result, metrics = self._final_contact_sequence_evaluation(
+                plan, stages, prepared, runtime, 'final_registered_frozen_bundle_strict_sequence',
+                deadline_sec=deadline)
+            if not (isinstance(result, MoveItResult) and all(getattr(result, key) is True
+                    for key in ('reachable', 'collision_free', 'within_joint_limits',
+                                'ik_valid', 'planning_success'))):
+                raise CandidateContractError(str(getattr(result, 'failure_code', '') or 'MOVEIT_CHECK_ERROR'),
+                    'frozen contact bundle fresh strict check failed: '+str(getattr(result, 'reason', '')))
+            try:
+                dependencies = self._contact_bundle_motion_dependencies(runtime.get('contact_sequence_precheck'))
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                raise CandidateContractError('CONTACT_BUNDLE_INPUT_CHANGED', str(exc)) from exc
+            if dependencies != held['motion_dependencies'] or asdict(result) != held['strict_result']:
+                raise CandidateContractError('CONTACT_BUNDLE_INPUT_CHANGED',
+                    'fresh feedback, scene, model or strict motion evidence changed after qualification')
+            if wire_digest(plan) != held['plan_wire_sha256']:
+                raise CandidateContractError('CONTACT_BUNDLE_INPUT_CHANGED',
+                    'frozen contact plan changed during the fresh strict check')
+            current()
+            runtime['final_execution_sequence'] = sequence
+            runtime['final_strict_moveit_result'] = asdict(result)
+            runtime['final_strict_moveit_metrics'] = dict(metrics)
+            runtime['final_strict_plan_id'] = str(plan.plan_id)
+            bundle['streaming_audit']['final_strict_moveit_result'] = asdict(result)
+            bundle['streaming_audit']['final_strict_moveit_metrics'] = dict(metrics)
+        def commit_streaming_audit():
+            self._latest_streaming_audit = deepcopy(bundle['streaming_audit'])
+        bundle['commit_callback'] = commit_streaming_audit
+        return bundle
+
+    def _selected_preview_runtime(self, selected, ticket=None):
+        """Bind a current request and its runtime under the invalidation lock.
+
+        Target loss/stop may clear this cache after MoveIt selection. Check
+        the explicit request first so that case is cancellation, not a broken
+        current cache. Cached callers without an explicit ticket must still
+        derive and validate the actual runtime ticket; they gain no bypass.
+        """
+        with self._stream_condition:
+            if ticket is not None:
+                self._require_stream_ticket_current_locked(ticket)
+            runtime = getattr(self, '_stable_variant_runtime', {}).get(
+                (selected.track_id, selected.variant_index)
+            )
+            if not isinstance(runtime, dict):
+                raise RuntimeError('selected stable variant runtime is unavailable')
+            runtime_ticket = getattr(runtime.get('prepared'), 'ticket', None)
+            if runtime_ticket is None:
+                raise RuntimeError('selected stable variant runtime ticket is unavailable')
+            self._require_stream_ticket_current_locked(runtime_ticket)
+            if ticket is not None and any(
+                int(getattr(ticket, field)) != int(getattr(runtime_ticket, field))
+                for field in ('request_id', 'generation', 'target_epoch')
+            ):
+                raise RuntimeError('selected stable variant runtime ticket mismatch')
+            if (int(selected.evaluation_request_id) != int(runtime_ticket.request_id)
+                    or int(selected.stable_candidate.target_epoch) != int(runtime_ticket.target_epoch)):
+                raise RuntimeError('selected candidate does not match runtime request/target')
+            return runtime
+
+    def _build_selected_preview_bundle(self, selected, ticket=None, geometry_only=False):
         """Build one immutable candidate-bound preview without publishing it."""
-        runtime = getattr(self, '_stable_variant_runtime', {}).get(
-            (selected.track_id, selected.variant_index)
-        )
-        if not isinstance(runtime, dict):
-            raise RuntimeError('selected stable variant runtime is unavailable')
+        runtime = self._selected_preview_runtime(selected, ticket=ticket)
         prepared = runtime['prepared']
         stable = selected.stable_candidate
         normalized = selected.payload
@@ -14438,6 +16904,11 @@ class RemoteGrasp6DNode:
                 rich_plan, prepared, runtime,
             )
         rich_plan.plan_id = compute_plan_id(rich_plan)
+        self._check_refinement_candidate_continuity(rich_plan, prepared, runtime)
+        if geometry_only:
+            # The same registration, contact-height placement and frozen
+            # geometry used for final validation, with no service/publication.
+            return {'rich_plan': rich_plan}
         final_strict_result = None
         final_strict_metrics = {}
         if near_field:
@@ -14450,6 +16921,13 @@ class RemoteGrasp6DNode:
                 prepared,
                 runtime,
             )
+        # Free-space resolution may alter the final family. Recheck the
+        # frozen reference after resolution as well as before its path search.
+        self._check_refinement_candidate_continuity(rich_plan, prepared, runtime)
+        try:
+            decode_contact_evidence(rich_plan)
+        except ValueError as exc:
+            raise CandidateContractError('CONTACT_GEOMETRY_EVIDENCE_INVALID', str(exc)) from exc
         legacy_plan = rich_plan_to_legacy(rich_plan)
         stage_profile = runtime.get('adaptive_stage_profile')
         stage_profile_audit = (
@@ -14496,6 +16974,9 @@ class RemoteGrasp6DNode:
                 'final_registered_geometry_gate'),
             'registration_support_lift_m': float(runtime.get(
                 'registration_support_lift_m', 0.0)),
+            'final_contact_height_recenter': deepcopy(runtime.get(
+                'final_contact_height_recenter')),
+            'refinement_continuity': deepcopy(runtime.get('refinement_continuity')),
             'strict_sequence_stages': (
                 ['pregrasp', 'approach', 'grasp', 'lift']
                 if near_field
@@ -14564,6 +17045,7 @@ class RemoteGrasp6DNode:
             ),
             'pre_moveit_score': float(selected.pre_moveit_score),
             'final_orientation_resolution': deepcopy(runtime.get('final_orientation_resolution', {})),
+            'moveit_execution_stage_policy': deepcopy(runtime.get('moveit_execution_stage_policy', {})),
             'final_score': float(selected.final_score),
             'score_components': dict(
                 soft_candidate_cost(
@@ -14599,7 +17081,7 @@ class RemoteGrasp6DNode:
                 ),
                 'evaluation_variant_index': int(selected.variant_index),
             },
-            'multiview_surface': self._multiview_surface_audit(),
+            'multiview_surface': self._request_multiview_surface_audit(prepared),
         }
 
         signature = self._preview_target_signature(stable)
@@ -14628,14 +17110,17 @@ class RemoteGrasp6DNode:
         return {
             'rich_plan': rich_plan,
             'legacy_plan': legacy_plan,
+            'streaming_audit': streaming_audit,
             'ticket': prepared.ticket,
             'commit_callback': commit_streaming_audit,
             'proposal_metadata': proposal_metadata,
             'proposal': proposal,
         }
 
-    def _publish_selected_preview(self, selected):
-        bundle = self._build_selected_preview_bundle(selected)
+    def _publish_selected_preview(self, selected, ticket=None):
+        bundle = self._qualified_contact_preview_bundle(selected, ticket=ticket, refresh_feedback=True)
+        if bundle is None:
+            bundle = self._build_selected_preview_bundle(selected, ticket=ticket)
         self._publish_preview_plan(
             bundle['rich_plan'],
             bundle['legacy_plan'],
@@ -14847,14 +17332,14 @@ class RemoteGrasp6DNode:
                 }
                 response = None
                 try:
-                    bundle = self._build_selected_preview_bundle(candidate)
+                    bundle = self._build_selected_preview_bundle(candidate, ticket=prepared.ticket)
                     plan = bundle['rich_plan']
                     record['plan_id'] = str(plan.plan_id)
                     payload = build_mujoco_payload(
                         plan,
                         joint_names,
                         joint_positions,
-                        cfg,
+                        bind_simulated_fixed_close(plan, cfg, rospy.get_param('/gripper', {})),
                     )
                     record['payload_plan_id'] = str(
                         payload.get('plan_id', '') or ''
@@ -14973,6 +17458,7 @@ class RemoteGrasp6DNode:
         base_report=None,
         promotion_decision=None,
         execution_authority=False,
+        preview_bundle=None,
     ):
         """Build one request-local continuous audit without side effects."""
 
@@ -15161,6 +17647,18 @@ class RemoteGrasp6DNode:
                 'pre_moveit_score': float(evaluated.pre_moveit_score),
                 'final_score': final_score,
                 'moveit': moveit,
+                    'contact_height_placement': deepcopy(
+                        candidate_runtime.get('contact_height_placement')),
+                    'contact_height_window_search': deepcopy(
+                        candidate_runtime.get('contact_height_window_search')),
+                'final_contact_height_margin': deepcopy(
+                    candidate_runtime.get('final_contact_height_margin')),
+                'final_contact_height_recenter': deepcopy(
+                    candidate_runtime.get('final_contact_height_recenter')),
+                'contact_sequence_precheck': deepcopy(
+                    candidate_runtime.get('contact_sequence_precheck')),
+                'contact_goal_necessary_check': deepcopy(
+                    candidate_runtime.get('contact_goal_necessary_check')),
                 'final_contact_rejection': deepcopy(
                     candidate_runtime.get('final_contact_rejection')),
                 'execution_sequence': self._execution_sequence_audit(
@@ -15235,6 +17733,10 @@ class RemoteGrasp6DNode:
                 'request_plan_cache': deepcopy(
                     candidate_runtime.get('request_plan_cache', {})
                 ),
+                'endpoint_ik_search_probe': deepcopy(
+                    candidate_runtime.get('endpoint_ik_search_probe', {})),
+                'moveit_execution_stage_policy': deepcopy(
+                    candidate_runtime.get('moveit_execution_stage_policy', {})),
                 'final_orientation_resolution': deepcopy(
                     candidate_runtime.get('final_orientation_resolution', {})),
                 'latest_soft_evidence': deepcopy(
@@ -15356,6 +17858,7 @@ class RemoteGrasp6DNode:
         }
         if self._direct_near_field_active(prepared):
             report['moveit_selection'].update({
+                'selection_policy': 'first_complete_hard_safe_candidate',
                 'comparison_budget_after_incumbent_sec': DIRECT_NEAR_FIELD_COMPARISON_SEC,
                 'publication_reserve_sec': DIRECT_NEAR_FIELD_PUBLICATION_RESERVE_SEC,
                 'motion_metric': 'strict_sequence_hardware_duration_lower_bound',
@@ -15379,11 +17882,12 @@ class RemoteGrasp6DNode:
             if item['candidate_source'] == 'graspnet':
                 item['candidate_index'] = item['source_index']
         report['stable_evaluations'] = deepcopy(stable_evaluations)
+        report['stable_recheck'] = self._stable_recheck_audit_for(prepared)
+        report['observation_view_rejections'] = self._observation_rejection_audit_for(prepared)
         report['lineage'] = deepcopy(stable_evaluations)
         report['selected'] = selected_lineage
-        preview_audit = dict(
-            getattr(self, '_latest_streaming_audit', {}) or {}
-        )
+        preview_audit = dict(preview_bundle['streaming_audit'] if preview_bundle is not None
+                             else (getattr(self, '_latest_streaming_audit', {}) or {}))
         report['plan_id'] = (
             str(preview_audit.get('plan_id', '') or '')
             if selected is not None
@@ -15605,6 +18109,7 @@ class RemoteGrasp6DNode:
         replace_audit_sha256=None,
         execution_authority=False,
         publish_reference=True,
+        preview_bundle=None,
     ):
         """Atomically persist Preview or separately bound Execution evidence."""
 
@@ -15617,6 +18122,7 @@ class RemoteGrasp6DNode:
                 base_report=base_report,
                 promotion_decision=promotion_decision,
                 execution_authority=execution_authority,
+                **({'preview_bundle': preview_bundle} if preview_bundle is not None else {}),
             )
         )
         if execution_authority:
@@ -15664,11 +18170,109 @@ class RemoteGrasp6DNode:
             )
         return report, reference
 
+    def _publish_audited_selected_contact_preview(self, prepared, selection,
+            local_funnel, moveit_funnel, stable, base_report):
+        """Commit station computation evidence before exposing its proposal.
+
+        This remains a preview transaction. Task owns independent admission
+        and motion; no source, identity, phase or session deadline is renewed.
+        """
+        selected, ticket = selection.selected, prepared.ticket
+        stage = getattr(self, '_stage_station_contact_preview_audit', None)
+        private = getattr(self, '_station_contact_preview_work', None)
+        if not callable(stage) or not callable(private):
+            return None
+        bundle = self._qualified_contact_preview_bundle(selected, ticket=ticket)
+        if bundle is None or not private(bundle['rich_plan'], ticket):
+            return None
+        with self._stream_condition, self._geometry_state_guard():
+            self._require_stream_ticket_current_locked(ticket)
+            decision, now_sec = self._decide_preview_promotion(
+                bundle['rich_plan'], bundle['proposal']['signature'], bundle['proposal']['score'])
+            promotion_token = self._capture_promotion_token_locked(
+                ticket, bundle['proposal']['expected_generation'])
+        stage(bundle, ticket)
+        publication_complete = False
+        def refresh_after_station_wait():
+            refreshed = self._qualified_contact_preview_bundle(
+                selected, ticket=ticket, refresh_feedback=True)
+            if refreshed is None or refreshed['rich_plan'] != bundle['rich_plan']:
+                raise CandidateContractError('CONTACT_BUNDLE_INPUT_CHANGED',
+                    'frozen contact bundle changed while waiting for current station input')
+        try:
+            funnel = self._merge_pipeline_funnel(local_funnel, moveit_funnel,
+                stable_count=len(stable), preview_count=1, promotion_count=0,
+                stable_candidates=stable, preview_candidate=selected)
+            report, reference = self._finalize_streaming_gate_audit(
+                prepared, selection, funnel, 'PREVIEW_READY', base_report=base_report,
+                promotion_decision=decision, execution_authority=False,
+                publish_reference=False, preview_bundle=bundle)
+            # Receipt waits and durable IO can outlive the previous feedback.
+            # Keep the third original strict call AFTER this work, on exactly
+            # the plan and physical dependencies recorded in the frozen audit.
+            bundle = self._qualified_contact_preview_bundle(selected, ticket=ticket, refresh_feedback=True)
+            self._require_station_contact_prepared_audit(bundle['rich_plan'], ticket,
+                refresh_after_wait=refresh_after_station_wait)
+            self._publish_bounded_gate_audit(report.get('selected'),
+                summary=dict(pipeline_funnel=deepcopy(funnel), status='PREVIEW_READY',
+                             promotion=deepcopy(report.get('promotion'))), reference=reference)
+            # Audit/reference publication cannot substitute for the last
+            # current-owner check before the original ROS publication guards.
+            self._qualified_contact_preview_bundle(selected, ticket=ticket)
+            self._require_station_contact_prepared_audit(bundle['rich_plan'], ticket,
+                refresh_after_wait=refresh_after_station_wait)
+            original_commit = bundle['commit_callback']
+
+            def commit_audited_preview():
+                original_commit()
+                self._cache_latest_preview_gate_audit_if_current(report)
+                if not decision.promote:
+                    # This is pure bookkeeping under the same short send/
+                    # fact-commit lock. Task can consume the published proof
+                    # immediately after that lock is released and may legally
+                    # retire the old planning ticket before this call returns.
+                    self._record_preview_promotion(ticket, decision)
+
+            self._publish_preview_plan(bundle['rich_plan'], bundle['legacy_plan'],
+                ticket=ticket, commit_callback=commit_audited_preview,
+                proposal_metadata=bundle['proposal_metadata'])
+            publication_complete = True
+            if decision.promote:
+                # A promotable preview uses the unchanged execution audit,
+                # token recheck, authority publication and compensation path.
+                # It must not fall back to publishing before its preview audit.
+                funnel, _ = self._finalize_promotion_transaction(
+                    prepared, selection, bundle['proposal'], local_funnel,
+                    moveit_funnel, len(stable), 'PREVIEW_READY', base_report,
+                    stable_candidates=stable,
+                    promotion_context=(decision, now_sec, promotion_token))
+                self._require_preview_transaction_ready(ticket, funnel)
+                # Task may already have consumed and retired private work.
+                # Check committed publication/audit facts, not that old work
+                # still carries a stationary-computation privilege.
+                current_report = getattr(self, '_active_gate_audit_report', {}) or {}
+                current_reference = getattr(self, '_latest_gate_audit_reference', {}) or {}
+                published = getattr(self, 'latest_preview_rich_plan', None)
+                if (published is None or wire_digest(published) != wire_digest(bundle['rich_plan'])
+                        or current_report.get('plan_id') != bundle['rich_plan'].plan_id
+                        or any(current_report.get(key) != int(getattr(ticket, key))
+                               for key in ('request_id', 'generation', 'target_epoch'))
+                        or current_reference.get('atomic_committed') is not True):
+                    raise CandidateContractError(PLANNING_AUDIT_FAILED,
+                        'published contact preview no longer has its committed owner-bound audit')
+                return {'status': 'PREVIEW_READY', 'funnel': funnel}
+            return {'status': 'PREVIEW_READY', 'funnel': funnel}
+        except BaseException:
+            if not publication_complete:
+                self._abort_station_contact_preview_audit(ticket)
+            raise
+
     def _accept_prediction(self, prepared):
         """Accept one correlated result into tracking and preview selection."""
 
         ticket = prepared.ticket
         self._require_stream_ticket_current(ticket)
+        self._stable_recheck_audit = None
         remote_failure_code = str(
             getattr(prepared, 'remote_failure_code', '') or ''
         )
@@ -15842,8 +18446,20 @@ class RemoteGrasp6DNode:
                 else self._far_field_observation_moveit_rank_key
             )
         )
+        if direct_near_field:
+            endpoint_priorities = self._direct_contact_endpoint_priorities(
+                moveit_candidates, prepared, acceptance_diagnostics)
+            original_rank = moveit_ranking_key
+            direction_priorities = contact_direction_priorities(
+                moveit_candidates, original_rank, endpoint_priorities,
+                observation_phase=getattr(self, '_observe_return_phase', ''))
+            moveit_ranking_key = lambda candidate: (
+                endpoint_priorities.get((candidate.track_id, candidate.variant_index), 1),
+                direction_priorities.get((candidate.track_id, candidate.variant_index), 0),
+                *original_rank(candidate),
+            )
         direct_checker, direct_continuation = (
-            self._direct_near_field_comparison_search(prepared)
+            self._direct_near_field_comparison_search(prepared, candidates=moveit_candidates)
             if direct_near_field else (None, None)
         )
         far_checker, far_continuation = (
@@ -15871,13 +18487,13 @@ class RemoteGrasp6DNode:
             # bounded set so an arbitrary Top-N cutoff cannot be reported as
             # evidence that all contact sequences are unreachable.
             exhaustive=bool(near_field),
-            # Far-field's information/translation ranking is also its final
-            # selection rule.  The first strictly reachable item in this
-            # ordering is the exact optimum, so checking lower-ranked poses
-            # cannot change the result and only makes live plans stale.
+            # Legacy far-field uses the same pre/post ranking. Information-
+            # driven views need actual timed-path costs, so compare them under
+            # one shared budget instead of declaring the first feasible best.
             # Direct contact pose distance is only a preflight heuristic,
             # not an authoritative joint-path/duration ranking.
-            first_reachable_by_rank=bool(not near_field),
+            first_reachable_by_rank=bool(not near_field
+                and not self._information_driven_observation_comparison()),
             # Near-field MoveIt checks can each run the deterministic
             # orientation resolver. Stop starting new checks before the
             # server-advertised snapshot lifetime is consumed, preserving
@@ -15895,9 +18511,18 @@ class RemoteGrasp6DNode:
                 'NEAR_FIELD_DIRECT_TIMEOUT'
                 if direct_near_field
                 else ('MUJOCO_SNAPSHOT_RESERVE_REACHED' if near_field
-                      else 'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID')
+                      else ('OBSERVATION_COMPARISON_STOPPED'
+                            if self._information_driven_observation_comparison()
+                            else 'OBSERVATION_START_FOLLOWING_SUPPORT_INVALID'))
             ),
         )
+        if (not near_field and self._information_driven_observation_comparison()
+                and selection.terminated_early):
+            reason = getattr(self, '_observation_information_comparison', {}).get('stop_reason')
+            if reason:
+                selection = replace(selection, termination_reason=reason)
+        if not near_field:
+            selection = self._retire_observation_selection_on_shared_failure(selection)
         if direct_near_field and len(selection.reachable) > 1:
             selection = replace(
                 selection,
@@ -15921,6 +18546,9 @@ class RemoteGrasp6DNode:
                 terminated_early=True,
                 termination_reason='NEAR_FIELD_DIRECT_TIMEOUT',
             )
+        contact_yield = getattr(self, '_contact_search_yield_selection', None)
+        if direct_near_field and callable(contact_yield):
+            selection = contact_yield(prepared, selection, candidates=moveit_candidates, ranking_key=moveit_ranking_key, local_funnel=local_funnel)
         if (
             not near_field
             and selection.reachable
@@ -15966,14 +18594,50 @@ class RemoteGrasp6DNode:
                 else 'NO_REACHABLE_STABLE_CANDIDATE'
             )
         )
+        if (direct_near_field and not scored and not selection.terminated_early
+                and not remote_failure_code):
+            # Zero paths checked is not evidence of unreachability. Only
+            # complete measured rejections can support observation recovery;
+            # swallowed exceptions remain explicitly incomplete.
+            proof = dict(request_id=ticket.request_id, generation=ticket.generation,
+                target_epoch=ticket.target_epoch,
+                snapshot_stamp_ns=getattr(prepared.snapshot, 'stamp_ns', 0),
+                contact_search_code=STABLE_RECHECK_REJECTED,
+                selected=selection.selected is not None, terminated_early=False,
+                checked_count=len(selection.checked),
+                shortlist_count=selection.shortlist_count,
+                reachable_count=len(selection.reachable),
+                locally_valid=local_funnel.get('stage_counts', {}).get('locally_valid', {}),
+                stable_recheck=self._stable_recheck_audit_for(prepared),
+                contact_or_motion_authorized=False)
+            status = (STABLE_RECHECK_REJECTED
+                if completed_stable_recheck_proof_valid(proof) else STABLE_RECHECK_INCOMPLETE)
+        elif (direct_near_field and selection.selected is None
+                and status == 'NEAR_FIELD_NO_REACHABLE_CANDIDATE'
+                and not remote_failure_code):
+            ledger = self._stable_recheck_audit_for(prepared)
+            if ((isinstance(ledger, dict) and ledger.get('incomplete_count', 0) > 0)
+                    or len(selection.checked) != selection.shortlist_count):
+                # A checked subset cannot establish exhaustion of variants
+                # lost to exceptions. Preserve any actual successful selection.
+                status = STABLE_RECHECK_INCOMPLETE
+            elif not selection.checked:
+                # Generated variants can all fail the downstream mandatory
+                # safety recheck before MoveIt receives a single path.
+                status = NEAR_FIELD_NO_PATH_CANDIDATE
         if (status == 'NEAR_FIELD_NO_REACHABLE_CANDIDATE'
                 and not remote_failure_code
                 and self._near_field_unreachable_surface_recovery(
                     prepared, selection, acceptance_diagnostics=acceptance_diagnostics)):
             status = 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'
         if selection.selected is not None:
+            if direct_near_field:
+                audited = self._publish_audited_selected_contact_preview(
+                    prepared, selection, local_funnel, moveit_funnel, stable, base_audit_report)
+                if audited is not None:
+                    return audited
             promotion_proposal = self._publish_selected_preview(
-                selection.selected
+                selection.selected, ticket=ticket
             )
             preview_count = 1
             status = 'PREVIEW_READY'
@@ -16042,6 +18706,7 @@ class RemoteGrasp6DNode:
                     stable_candidates=stable,
                 )
             )
+            self._require_preview_transaction_ready(ticket, funnel)
             return {'status': status, 'funnel': funnel}
 
         funnel = self._merge_pipeline_funnel(
@@ -16087,6 +18752,22 @@ class RemoteGrasp6DNode:
             self._observe_execution_candidate_invalid(ticket=ticket)
         if direct_near_field and preview_count == 0:
             terminal_reason = (
+                'all current stable variants failed measured contact-height placement; '
+                'no candidate reached MoveIt; observation recovery requires independent view evidence'
+                if status == STABLE_RECHECK_REJECTED
+                else
+                'stable variant recheck has incomplete or unproven outcomes; '
+                'checked paths cannot establish exhaustion of all candidate variants'
+                if status == STABLE_RECHECK_INCOMPLETE
+                else
+                'post-local hard checks left no candidate for MoveIt; no path reachability '
+                'test ran and no completed measured-recheck recovery proof is available'
+                if status == NEAR_FIELD_NO_PATH_CANDIDATE
+                else
+                'bounded contact search yielded for independently measured missing views; '
+                'unchecked candidate families remain unclassified'
+                if status == 'CONTACT_SEARCH_YIELDED_FOR_MEASURED_VIEW'
+                else
                 'checked contact paths are unreachable; other reach-feasible jaw directions '
                 'lack registered bilateral surface evidence; request the existing bounded '
                 'observation opportunity, not a contact execution'
@@ -16215,7 +18896,11 @@ class RemoteGrasp6DNode:
             funnel = {}
             status = completion.code
             final_accepted = bool(completion.accepted)
-            if completion.accepted and error is not None:
+            preparation_pending = bool(
+                prepared is None and isinstance(error, StreamResultCancelled)
+                and error.code == 'TARGET_PROCESSING_PENDING'
+            )
+            if completion.accepted and error is not None and not preparation_pending:
                 self._observe_stream_prediction_failure(
                     ticket,
                     remote_prediction_failure_code(error),
@@ -16258,7 +18943,7 @@ class RemoteGrasp6DNode:
                                          publish_error)
             elif error is not None and completion.accepted:
                 final_accepted = False
-                status = 'PREDICT_FAILED'
+                status = error.code if preparation_pending else 'PREDICT_FAILED'
 
             final_now_sec = float(self._stream_source_clock())
             end_to_end_ms = max(
@@ -16346,6 +19031,26 @@ class RemoteGrasp6DNode:
                 metrics['ros_prepare_stages_ms'] = _thaw_request_evidence(
                     getattr(prepared, 'remote_diagnostics', {}) or {}
                 ).get('ros_prepare_stages_ms', {})
+            if metrics is not None:
+                profile = (getattr(prepared, REQUEST_PROFILE_KEY, None)
+                    if prepared is not None else
+                    error_preparation_profile(error, ticket) if error is not None else None)
+                if profile is not None:
+                    metrics[REQUEST_PROFILE_KEY] = _thaw_request_evidence(profile)
+                    if prepared is None:
+                        local_components = [component
+                            for scope in profile['scopes'] if scope['scope'] == 'base_prepare'
+                            for component in scope['components']
+                            if component['name'] in ('parameters', 'geometry_registration',
+                                'tabletop_candidates', 'remote_input', 'lifecycle_check',
+                                'observation_preflight')]
+                        metrics['ros_prepare_ms'] = 1000. * sum(
+                            component['exclusive_wall_sec'] for component in local_components)
+                        metrics['ros_prepare_stages_ms'] = {name: 1000. * sum(
+                            component['exclusive_wall_sec'] for component in local_components
+                            if component['name'] == name)
+                            for name in dict.fromkeys(c['name'] for c in local_components)}
+                        metrics['ros_prepare_measurement_status'] = 'partial_request_profile'
             active_audit = getattr(self, '_active_gate_audit_report', None)
             if (
                 metrics is not None
@@ -16432,6 +19137,8 @@ class RemoteGrasp6DNode:
 
             with self._stream_condition:
                 self._stream_worker_busy = False
+                if preparation_pending and status == 'TARGET_PROCESSING_PENDING':
+                    self._release_preparation_cancelled_direct_snapshot_locked(ticket, error)
                 self._release_expired_direct_snapshot_locked(ticket, status)
                 cancelled_tickets = []
                 next_ticket = completion.next_ticket
@@ -17500,6 +20207,7 @@ class RemoteGrasp6DNode:
                 deepcopy(self.latest_object_geometry),
                 deepcopy(self.latest_object_geometry.header),
                 str(getattr(self, '_last_model_choice', '') or ''),
+                contact_geometry_evidence=getattr(selected, '_contact_geometry_evidence', ''),
             )
             self._apply_registration_evidence_to_plan(
                 rich_plan,
@@ -17648,12 +20356,16 @@ class RemoteGrasp6DNode:
         """Stage, validate, and atomically publish the full runtime contract."""
 
         staged = copy(self)
+        # Parameter reads may overlap input/session callbacks. Commit only
+        # values assigned by staging, never the old callback state captured
+        # by the shallow copy (for example an observation cancellation flag).
+        staged_before = dict(staged.__dict__)
         continuous_config = self._stage_runtime_params(staged)
         missing = object()
         staged_updates = {
             name: value
             for name, value in staged.__dict__.items()
-            if self.__dict__.get(name, missing) is not value
+            if staged_before.get(name, missing) is not value
         }
         condition = getattr(self, '_stream_condition', None)
         if condition is None:
@@ -17684,6 +20396,7 @@ class RemoteGrasp6DNode:
         """Validate runtime values on a shallow request-local node copy."""
 
         self = staged
+        geometry_robot_description = rospy.get_param('/robot_description', None)
         remote_cfg = rospy.get_param('/grasp_6d/remote', {})
         twin_cfg = rospy.get_param('/mujoco_digital_twin', {})
         continuous_config = load_continuous_runtime_config(
@@ -17728,9 +20441,7 @@ class RemoteGrasp6DNode:
                 ),
             ),
         )
-        refreshed_grasp_config = dict(
-            rospy.get_param('/grasp', getattr(self, 'grasp_config', {})) or {}
-        )
+        refreshed_grasp_config = self._read_grasp_config()
         candidate_frame_convention = validate_production_candidate_frame_convention(
             rospy.get_param(
                 '/grasp_6d/remote/candidate_frame_convention',
@@ -17875,7 +20586,7 @@ class RemoteGrasp6DNode:
         mujoco_selection_max_candidates = max(
             1,
             min(
-                12,
+                64,
                 int(twin_cfg.get('selection_max_candidates', 12)),
             ),
         )
@@ -17904,6 +20615,7 @@ class RemoteGrasp6DNode:
         self.allow_position_only_fallback = allow_position_only_fallback
         self.allow_orientation_fallback = allow_orientation_fallback
         self.gripper_geometry = refreshed_gripper_geometry
+        self._geometry_robot_description = geometry_robot_description
         self.opening_fit_clearance_each_side_m = (
             refreshed_opening_fit_clearance_each_side_m
         )
@@ -18826,6 +21538,7 @@ class RemoteGrasp6DNode:
         contact_execution_phase=True,
         contact_surface_frame='snapshot',
     ):
+        setattr(camera_candidate, '_contact_geometry_evidence', '')
         estimate = (
             geometry
             if geometry is not None
@@ -18869,7 +21582,7 @@ class RemoteGrasp6DNode:
             )
             if (
                 surface is None
-                or not isinstance(evidence, BilateralSurfaceEvidence)
+                or not self._contact_evidence_valid(evidence)
                 or not evidence.ok
                 or contact_height_bounds is None
             ):
@@ -18889,6 +21602,7 @@ class RemoteGrasp6DNode:
                 contact_height_axis,
             )
         result = evaluate_candidate(
+            robot_description=getattr(self, '_geometry_robot_description', None),
             gripper=self.gripper_geometry,
             # Grasp center drives OBB/jaw-line gates; the four transforms are
             # physical tool0 poses used for static and swept boxes.
@@ -18941,6 +21655,16 @@ class RemoteGrasp6DNode:
             estimate.support_normal_base,
         )
         self._record_geometry_gate_result(result)
+        if result.ok and bool(contact_execution_phase):
+            camera_candidate._contact_geometry_evidence = self._encode_current_contact_evidence(evidence,
+                contact_center_base=candidate_center_base,
+                contact_height_axis_base=contact_height_axis,
+                contact_height_bounds_m=contact_height_bounds,
+                minimum_contact_overlap_m=self._phase_contact_overlap_requirement_m(
+                    True, getattr(plan, 'adaptive_stage_profile', None)),
+                grasp_pose=grasp_pose,
+                required_open_width_m=float(result.required_open_width_m),
+            )
         if not result.ok:
             rospy.logwarn(
                 (
@@ -19124,7 +21848,7 @@ class RemoteGrasp6DNode:
             else graspnet_input_audit
         )
         summary['graspnet_input'] = input_audit
-        multiview_surface_audit = self._multiview_surface_audit()
+        multiview_surface_audit = self._request_multiview_surface_audit(prepared)
         summary['multiview_surface'] = multiview_surface_audit
         audit_metadata_fn = getattr(pose_estimator, 'audit_metadata', None)
         if callable(audit_metadata_fn):
@@ -20040,10 +22764,13 @@ class RemoteGrasp6DNode:
             int(os.getpid()),
             int(threading.get_ident()),
         )
+        temporary_created = False
         try:
+            storage_check = _audit_storage_check(requested_path)
             directory = os.path.dirname(path)
             if directory:
                 os.makedirs(directory, exist_ok=True)
+            storage_check()
             payload = json.dumps(
                 report,
                 allow_nan=False,
@@ -20052,6 +22779,8 @@ class RemoteGrasp6DNode:
                 sort_keys=True,
             ).encode('utf-8')
             with open(temporary_path, 'wb') as handle:
+                temporary_created = True
+                storage_check()
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -20079,30 +22808,37 @@ class RemoteGrasp6DNode:
                     )
                     if current_sha256 != replacement_sha256:
                         raise StreamResultCancelled('AUDIT_SUPERSEDED')
+                    storage_check()
                     os.replace(temporary_path, path)
                     if commit_callback is not None:
                         commit_callback(reference)
             elif ticket is None:
+                storage_check()
                 os.replace(temporary_path, path)
                 if commit_callback is not None:
                     commit_callback(reference)
             else:
                 with self._stream_condition:
                     self._require_stream_ticket_current_locked(ticket)
+                    storage_check()
                     os.replace(temporary_path, path)
                     if commit_callback is not None:
                         commit_callback(reference)
             return reference
         except StreamResultCancelled:
             try:
-                if os.path.exists(temporary_path):
+                if temporary_created:
+                    storage_check()
+                if temporary_created and os.path.exists(temporary_path):
                     os.unlink(temporary_path)
             except Exception:
                 pass
             raise
         except Exception as exc:
             try:
-                if os.path.exists(temporary_path):
+                if temporary_created:
+                    storage_check()
+                if temporary_created and os.path.exists(temporary_path):
                     os.unlink(temporary_path)
             except Exception:
                 pass
@@ -21189,6 +23925,7 @@ class RemoteGrasp6DNode:
         self,
         stage_poses,
         deadline_sec=0.0,
+        include_lift=True,
     ):
         """Resolve only pregrasp/lift rotations through the planning-only API."""
 
@@ -21215,14 +23952,15 @@ class RemoteGrasp6DNode:
                 'MOVEIT_RESOLVE_ERROR',
                 unavailable['reason'],
             )
+        checked_stages = stages if include_lift is not False else stages[:3]
         try:
             service_name = '/supervisor/resolve_free_space_orientations'
             rospy.wait_for_service(service_name, timeout=0.5)
             request = ResolveFreeSpaceOrientationsRequest()
-            request.targets = [deepcopy(pose) for _name, pose in stages]
-            request.stage_names = [str(name) for name, _pose in stages]
-            request.linear = [False, True, True, False]
-            request.resolve_orientation = [True, False, False, True]
+            request.targets = [deepcopy(pose) for _name, pose in checked_stages]
+            request.stage_names = [str(name) for name, _pose in checked_stages]
+            request.linear = [False, True, True, False][:len(checked_stages)]
+            request.resolve_orientation = [True, False, False, True][:len(checked_stages)]
             request.deadline = (
                 rospy.Time.from_sec(float(deadline_sec))
                 if float(deadline_sec) > 0.0
@@ -21282,10 +24020,10 @@ class RemoteGrasp6DNode:
         resolved_targets = list(
             getattr(response, 'resolved_targets', ()) or ()
         )
-        if len(resolved_targets) != len(stages):
+        if len(resolved_targets) != len(checked_stages):
             unavailable['reason'] = (
                 'orientation resolver returned %d targets for %d stages'
-                % (len(resolved_targets), len(stages))
+                % (len(resolved_targets), len(checked_stages))
             )
             return (
                 None,
@@ -21320,7 +24058,7 @@ class RemoteGrasp6DNode:
                 unavailable['reason'],
             )
         for index, ((stage_name, original), resolved) in enumerate(
-            zip(stages, resolved_targets)
+            zip(checked_stages, resolved_targets)
         ):
             original_position = np.asarray(
                 [
@@ -21366,15 +24104,20 @@ class RemoteGrasp6DNode:
                     self._pose_quaternion_xyzw(resolved),
                     dtype=float,
                 )
-                dot = abs(
-                    float(
-                        np.dot(
-                            original_quaternion,
-                            resolved_quaternion,
-                        )
-                    )
-                )
-                if abs(dot - 1.0) > 1e-9:
+                norms = [float(np.linalg.norm(q)) for q in
+                         (original_quaternion, resolved_quaternion)]
+                if (not all(np.all(np.isfinite(q)) for q in
+                            (original_quaternion, resolved_quaternion))
+                        or not all(math.isfinite(n) and n > 1e-12 for n in norms)):
+                    unavailable['reason'] = 'orientation resolver returned invalid contact quaternion at '+stage_name
+                    return None, unavailable, 'MOVEIT_RESOLVE_ERROR', unavailable['reason']
+                # The preservation contract bounds rotation, not quaternion
+                # scale. A raw dot product near one is no angular proof for
+                # nonunit service responses.
+                raw_dot = abs(float(np.dot(original_quaternion, resolved_quaternion)))
+                dot = abs(float(np.dot(original_quaternion/norms[0],
+                                       resolved_quaternion/norms[1])))
+                if abs(raw_dot - 1.0) > 1e-9 or abs(dot - 1.0) > 1e-9:
                     unavailable['reason'] = (
                         'orientation resolver changed physical contact '
                         'orientation at %s'
@@ -21404,7 +24147,9 @@ class RemoteGrasp6DNode:
                 ),
             ),
             'max_position_error': maximum_position_error,
-            'resolved_stages': ['pregrasp', 'lift'],
+            'resolved_stages': ['pregrasp', 'lift'] if include_lift is not False else ['pregrasp'],
+            'checked_stage_names': [name for name, _ in checked_stages],
+            'lift_path_verified': False,  # Resolution still needs strict path validation.
             'contact_orientation_preserved_stages': [
                 'approach',
                 'grasp',
@@ -21415,7 +24160,8 @@ class RemoteGrasp6DNode:
                 pregrasp=resolved_targets[0],
                 approach=resolved_targets[1],
                 grasp=resolved_targets[2],
-                lift=resolved_targets[3],
+                lift=(resolved_targets[3] if include_lift is not False
+                      else deepcopy(stages[3][1])),
             ),
             audit,
             '',
@@ -21473,8 +24219,9 @@ class RemoteGrasp6DNode:
                 camera_candidate = deepcopy(camera_candidate)
                 camera_candidate._center_base_xyz = center
             surface_frame = 'reference'
+        runtime.pop('final_contact_geometry_evidence', None)
         if isinstance(payload, LocalCandidatePayload):
-            return self._evaluate_candidate_geometry(
+            gate = self._evaluate_candidate_geometry(
                 payload.raw_candidate,
                 camera_candidate,
                 grasp_pose,
@@ -21483,6 +24230,10 @@ class RemoteGrasp6DNode:
                 contact_execution_phase=True,
                 contact_surface_frame=surface_frame,
             )
+            if gate.ok:
+                runtime['final_contact_geometry_evidence'] = getattr(
+                    camera_candidate, '_contact_geometry_evidence', '')
+            return gate
         if not isinstance(payload, NormalizedPlanningCandidate):
             return CandidateGateResult(
                 ok=False,
@@ -21513,16 +24264,15 @@ class RemoteGrasp6DNode:
         )
         if (
             surface is None
-            or not isinstance(
-                bilateral_evidence, BilateralSurfaceEvidence
-            )
+            or not self._contact_evidence_valid(bilateral_evidence)
             or not bilateral_evidence.ok
             or measured_bounds is None
         ):
             return self._bilateral_surface_gate_failure(
                 bilateral_evidence
             )
-        return evaluate_explicit_candidate(
+        gate = evaluate_explicit_candidate(
+            robot_description=getattr(self, '_geometry_robot_description', None),
             gripper=self.gripper_geometry,
             candidate_center_base=center,
             candidate_tool0_base=transform[:3, 3],
@@ -21564,6 +24314,16 @@ class RemoteGrasp6DNode:
                 )
             ),
         )
+        if gate.ok:
+            runtime['final_contact_geometry_evidence'] = self._encode_current_contact_evidence(bilateral_evidence,
+                contact_center_base=center,
+                contact_height_axis_base=measured_axis,
+                contact_height_bounds_m=measured_bounds,
+                minimum_contact_overlap_m=self._phase_contact_overlap_requirement_m(True, profile),
+                grasp_pose=grasp_pose,
+                required_open_width_m=float(gate.required_open_width_m),
+            )
+        return gate
 
     def _strict_moveit_sequence_evaluation(
         self,
@@ -21829,6 +24589,31 @@ class RemoteGrasp6DNode:
             explicit_code = str(
                 getattr(response, 'failure_code', '') or ''
             )
+            if observation and (explicit_code == 'OBSERVATION_PLANNING_RESULT_INVALID'
+                    or message.startswith('move_to_pose exception: OBSERVATION_PLANNING_RESULT_INVALID:')):
+                # An inconsistent/untyped MoveIt result is an observation
+                # checker error. Preserve the exact gateway contract without
+                # inferring geometric unreachability from malformed evidence.
+                return (MoveItResult(reachable=False, joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta, reason=message,
+                    failure_code='MOVEIT_CHECK_ERROR'), metrics, '')
+            if observation and (explicit_code == 'OBSERVATION_PLANNING_TIMEOUT'
+                    or message.startswith('OBSERVATION_PLANNING_TIMEOUT:')):
+                # SetTargetPose's bool/string transport carries the exact
+                # gateway marker. Exhausting a planner's time allowance is
+                # pending evidence, not proof that this view is unreachable.
+                return (MoveItResult(reachable=False, joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta, reason=message,
+                    failure_code='OBSERVATION_PLANNING_TIMEOUT'), metrics, '')
+            if (observation and message.startswith(
+                    'OBSERVATION_PREVIEW_PATH_UNAVAILABLE: '
+                    'driver reference has no fresh actuation epoch:')):
+                # SetTargetPose has only bool/string response fields. Preserve
+                # this exact gateway contract as a typed shared-reference
+                # failure; never infer it from generic path/IK rejection text.
+                return (MoveItResult(reachable=False, joint_path_cost=path_cost,
+                    joint_max_delta_rad=max_delta, reason=message,
+                    failure_code='OBSERVATION_REFERENCE_UNAVAILABLE'), metrics, '')
             if explicit_code not in {
                 'MOVEIT_UNREACHABLE',
                 'MOVEIT_CHECK_ERROR',

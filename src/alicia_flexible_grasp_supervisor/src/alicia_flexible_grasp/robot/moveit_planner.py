@@ -9,7 +9,14 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import rospy
-from alicia_flexible_grasp.robot.actuation_bootstrap import bounded_observation_prefix
+from alicia_flexible_grasp.robot.actuation_bootstrap import (
+    bounded_observation_prefix, validate_bounded_observation_prefix,
+)
+
+
+class _ObservationPlanningTimeout(ValueError):
+    """A typed MoveIt timeout, distinct from a failed geometric proof."""
+
 
 class MoveItPlanner:
     OBSERVATION_BRANCH_HINT_MAX_AGE_SEC = 120.0
@@ -289,6 +296,11 @@ class MoveItPlanner:
                 '%s failed: %s; target unreachable or pose orientation invalid after %s; '
                 'check workspace, candidate orientation, handeye/base transform, collision scene, and current joint state'
             ) % (action, target_text, attempts_text)
+        except _ObservationPlanningTimeout as exc:
+            # SetTargetPose exposes only bool/reason. Keep this exact typed
+            # prefix through the gateway so search can distinguish unfinished
+            # planning from a proved rejection; no retry or motion is implied.
+            return False, '%s; %s' % (exc, target_text)
         except Exception as exc:
             return False, 'move_to_pose exception: %s; %s' % (exc, target_text)
         finally:
@@ -313,6 +325,11 @@ class MoveItPlanner:
             # A new planning request supersedes every previously cached pose
             # trajectory even when validation or planning below fails.
             self._last_pose_plan = None
+            # MoveGroup retains explicit starts from strict sequence checks and
+            # bounded joint corrections. A new live Cartesian segment (notably
+            # lift after contact) must start at the current measured robot state.
+            # Clearing pose targets alone does not clear that explicit start.
+            self.manipulator.set_start_state_to_current_state()
             current = self.manipulator.get_current_pose()
             current_pose = getattr(current, 'pose', current)
             distance = self._pose_position_distance(current_pose, pose)
@@ -389,22 +406,33 @@ class MoveItPlanner:
         # Never retain the full observation trajectory after this partial move.
         self._last_pose_plan = None
         try:
-            prefix = bounded_observation_prefix(cached['plan'])
             current = list(self.manipulator.get_current_joint_values())
-            origin = prefix.joint_trajectory.points[0].positions
+            origin = cached['plan'].joint_trajectory.points[0].positions
             if len(current) != 6 or any(not math.isfinite(v) for v in current):
                 return False, 'ACTUATION_PREFIX_FEEDBACK_INVALID'
             if max(abs(a-b) for a, b in zip(origin, current)) > 0.003:
                 return False, 'ACTUATION_PREFIX_START_CHANGED: planned=%s measured=%s; replan from measured feedback' % (list(origin), current)
             if not getattr(self, 'strict_execution_retime_enabled', False):
                 return False, 'ACTUATION_PREFIX_RETIMING_REQUIRED'
+            reference = None
+            if getattr(self, 'controller_reference_guard_required', False):
+                try:
+                    reference = self._controller_reference_snapshot(
+                        cached['plan'].joint_trajectory.joint_names)
+                except Exception as exc:
+                    return False, 'CONTROLLER_REFERENCE_INVALID: %s' % exc
+            prefix = bounded_observation_prefix(cached['plan'],
+                controller_reference=reference, measured_origin=current)
             prefix, reason = self._retime_strict_execution_plan(prefix)
             if prefix is None:
                 return False, 'ACTUATION_PREFIX_RETIMING_FAILED: ' + reason
             prefix, reference_evidence, reference_error = (
-                self._prepare_controller_reference_timing(prefix))
+                self._prepare_controller_reference_timing(prefix, bound_reference=reference))
             if reference_error:
                 return False, reference_error
+            # Retiming can change derivatives, and Noetic starts at its actual
+            # desired reference. Neither curve is certified by the source clip.
+            validate_bounded_observation_prefix(prefix, reference, current)
             guard_error = self._observation_path_guard_error(prefix)
             if guard_error:
                 return False, 'ACTUATION_PREFIX_PATH_BLOCKED: ' + guard_error
@@ -484,7 +512,8 @@ class MoveItPlanner:
             return plan
 
     def plan_and_execute_joint_probe(self, joints, execute=False,
-                                    start_joint_positions=None, before_execute=None):
+                                    start_joint_positions=None, before_execute=None,
+                                    following_model=None):
         """Exact joint target for an admitted diagnostic or pregrasp correction.
 
         The gateway owns the count cap, scene, stage and control provenance.
@@ -519,9 +548,15 @@ class MoveItPlanner:
                         or len(set(joint_state.name)) != len(joint_state.name)):
                     raise ValueError('JOINT_PROBE_FEEDBACK_INVALID')
                 actual = dict(zip(joint_state.name, joint_state.position))
-                if any(n not in actual or not math.isfinite(actual[n])
-                       or abs(actual[n]-reference_by_name[n]) > .035 for n in names):
+                if any(n not in actual or not math.isfinite(actual[n]) for n in names):
                     raise ValueError('JOINT_PROBE_REFERENCE_FOLLOWING_EXCEEDED')
+                from .following_model import following_offset
+                try:
+                    following_offset(reference,
+                        [actual['Joint%d' % i] for i in range(1, 7)],
+                        following_model=following_model)
+                except ValueError as exc:
+                    raise ValueError('JOINT_PROBE_REFERENCE_FOLLOWING_EXCEEDED') from exc
                 joint_state.position = [reference_by_name.get(n, p)
                                         for n, p in zip(joint_state.name, joint_state.position)]
                 if len(joint_state.velocity) == len(joint_state.name):
@@ -563,7 +598,8 @@ class MoveItPlanner:
             if not execute:
                 return True, 'exact joint probe planned; no motion or reusable execution cache'
             return self._execute_cached_pose_plan(pose, 'bounded exact joint probe',
-                required_kind='strict pose', before_execute=before_execute)
+                required_kind='strict pose', before_execute=before_execute,
+                following_model=following_model)
         except Exception as exc:
             return False, 'JOINT_PROBE_FAILED: %s' % exc
         finally:
@@ -623,12 +659,72 @@ class MoveItPlanner:
             return float('-inf')
         return value - now_sec
 
+    def _plan_joint_from_start_state(self, start_state, canonical_goal,
+                                    planning_time_limit_sec=None):
+        """Read-only fresh collision plan to an exact, caller-audited endpoint.
+
+        No IK fallback, trajectory endpoint editing or executable cache. The
+        caller separately owns physical pose, following and scene contracts.
+        """
+        self._last_pose_plan = None
+        previous_tolerance, previous_time = None, None
+        try:
+            names = tuple(self.manipulator.get_active_joints())
+            canonical = tuple('Joint%d' % i for i in range(1, 7))
+            goal = tuple(float(v) for v in canonical_goal)
+            if (set(names) != set(canonical) or len(names) != 6 or len(goal) != 6
+                    or not all(math.isfinite(v) for v in goal)):
+                raise ValueError('EXACT_SEQUENCE_JOINT_TARGET_INVALID')
+            target = dict(zip(canonical, goal))
+            previous_tolerance = float(self.manipulator.get_goal_joint_tolerance())
+            if not math.isfinite(previous_tolerance) or previous_tolerance < 0:
+                previous_tolerance = None
+                raise ValueError('EXACT_SEQUENCE_JOINT_TOLERANCE_INVALID')
+            if planning_time_limit_sec is not None:
+                limit = float(planning_time_limit_sec)
+                if not math.isfinite(limit) or limit <= 0:
+                    raise ValueError('EXACT_SEQUENCE_DEADLINE_EXPIRED')
+                previous_time = self.manipulator.get_planning_time()
+                self.manipulator.set_planning_time(limit)
+            self.manipulator.set_start_state(deepcopy(start_state))
+            self.manipulator.set_goal_joint_tolerance(0.)
+            self.manipulator.set_joint_value_target(target)
+            result = self.manipulator.plan()
+            if not self._plan_success(result):
+                raise ValueError('EXACT_SEQUENCE_JOINT_PLAN_FAILED')
+            plan = self._executable_plan(result)
+            tr = plan.joint_trajectory
+            if (len(tr.joint_names) != 6 or set(tr.joint_names) != set(canonical)
+                    or len(tr.points) < 2
+                    or getattr(getattr(plan, 'multi_dof_joint_trajectory', None), 'points', [])
+                    or any(len(p.positions) != 6 or not all(math.isfinite(v) for v in p.positions)
+                           for p in tr.points)):
+                raise ValueError('EXACT_SEQUENCE_JOINT_PATH_INVALID')
+            endpoint = dict(zip(tr.joint_names, tr.points[-1].positions))
+            if max(abs(endpoint[n]-target[n]) for n in canonical) > 1e-12:
+                raise ValueError('EXACT_SEQUENCE_JOINT_GOAL_CHANGED')
+            return plan, 'exact joint endpoint planned from supplied current state'
+        except Exception as exc:
+            return None, str(exc)
+        finally:
+            if previous_tolerance is not None:
+                self.manipulator.set_goal_joint_tolerance(previous_tolerance)
+            if previous_time is not None:
+                self.manipulator.set_planning_time(previous_time)
+            self._last_pose_plan = None
+            self._clear_targets()
+
     def check_pose_sequence(
         self,
         targets,
         stage_names=None,
         linear=None,
         deadline_sec=0.0,
+        stage_validator=None,
+        start_state_override=None,
+        pregrasp_planner=None,
+        approach_planner=None,
+        stage_state_transform=None,
     ):
         """Plan a collision-aware pose sequence without moving or caching it."""
 
@@ -686,7 +782,8 @@ class MoveItPlanner:
 
         self._last_pose_plan = None
         try:
-            start_state = deepcopy(self.robot.get_current_state())
+            start_state = deepcopy(start_state_override if start_state_override is not None
+                                   else self.robot.get_current_state())
             if getattr(start_state, 'joint_state', None) is None:
                 raise RuntimeError('current robot state has no joint_state')
             for index, (target, stage_name, use_linear) in enumerate(
@@ -705,7 +802,12 @@ class MoveItPlanner:
                         % stage_name,
                     )
                 pose = getattr(target, 'pose', target)
-                if bool(use_linear):
+                if (index == 0 and str(stage_name) == 'pregrasp'
+                        and not use_linear and pregrasp_planner is not None):
+                    plan, reason = pregrasp_planner(start_state, target)
+                elif index == 1 and str(stage_name) == 'approach' and approach_planner is not None:
+                    plan, reason = approach_planner(start_state, target)
+                elif bool(use_linear):
                     plan, reason = self._plan_cartesian_from_start_state(
                         start_state,
                         target,
@@ -751,7 +853,16 @@ class MoveItPlanner:
                         'strict sequence %s returned an empty or incomplete trajectory'
                         % stage_name,
                     )
-                metrics = self._plan_joint_path_metrics(plan)
+                if stage_validator is not None:
+                    try:
+                        stage_validator(str(stage_name), start_state, plan, target)
+                    except Exception as exc:
+                        return (False, str(getattr(exc, 'code', 'MOVEIT_CHECK_ERROR')),
+                                str(stage_name), sequence_metrics(), str(exc))
+                    if self._planning_deadline_remaining_sec(deadline_sec) <= 0.0:
+                        return (False, 'MOVEIT_TIMEOUT', str(stage_name),
+                                sequence_metrics(), 'sequence validation deadline consumed')
+                metrics = self._sequence_stage_joint_path_metrics(plan, stage_name, use_linear)
                 stage_duration = float(
                     metrics.get(
                         'joint_duration_lower_bound_sec',
@@ -775,6 +886,8 @@ class MoveItPlanner:
                         metrics.get('hardware_limiting_joint', '') or ''
                     )
                 next_state = self._robot_state_after_plan(start_state, plan)
+                if next_state is not None and stage_state_transform is not None:
+                    next_state = stage_state_transform(str(stage_name), next_state)
                 if next_state is None:
                     return (
                         False,
@@ -2063,9 +2176,24 @@ class MoveItPlanner:
                 self.manipulator.set_goal_joint_tolerance(0.0)
                 self.manipulator.set_joint_value_target(goal_by_name)
             result = self.manipulator.plan()
+            error_code = None
+            if isinstance(result, tuple) and len(result) >= 4:
+                from moveit_msgs.msg import MoveItErrorCodes
+                error_code = getattr(result[3], 'val', None)
+                if (type(result[0]) is not bool or type(error_code) is not int
+                        or result[0] != (error_code == MoveItErrorCodes.SUCCESS)):
+                    raise ValueError('OBSERVATION_PLANNING_RESULT_INVALID: '
+                                     'MoveIt success flag and error code disagree or are untyped')
+                if error_code == MoveItErrorCodes.TIMED_OUT:
+                    raise _ObservationPlanningTimeout(
+                        'OBSERVATION_PLANNING_TIMEOUT: moveit_error_code=%d planning_kind=%s'
+                        % (error_code, 'branch' if hint is not None else 'pose'))
             if not self._plan_success(result):
-                raise ValueError('OBSERVATION_BRANCH_PLAN_FAILED' if hint is not None
-                                 else 'OBSERVATION_POSE_PLAN_FAILED')
+                reason = ('OBSERVATION_BRANCH_PLAN_FAILED' if hint is not None
+                          else 'OBSERVATION_POSE_PLAN_FAILED')
+                if error_code is not None:
+                    reason += ': moveit_error_code=%d' % error_code
+                raise ValueError(reason)
             plan = self._executable_plan(result)
             trajectory = plan.joint_trajectory
             plan_names = tuple(trajectory.joint_names)
@@ -2155,7 +2283,7 @@ class MoveItPlanner:
         return ok
 
     def _execute_cached_pose_plan(self, pose, target_text, required_kind=None,
-                                 before_execute=None):
+                                 before_execute=None, following_model=None):
         cached = self._matching_cached_pose_plan(pose, required_kind=required_kind)
         if cached is None:
             return False, None
@@ -2185,6 +2313,16 @@ class MoveItPlanner:
         if reference_error:
             self._last_pose_plan = None
             return False, reference_error
+        if getattr(self, 'observation_trajectory_schedule', None) is not None:
+            execution_plan = self._schedule_execution_trajectory(execution_plan)
+            from alicia_flexible_grasp.robot.physical_reference_contract import message_bytes
+            scheduled_bytes = message_bytes(execution_plan)
+            execution_plan, reference_evidence, reference_error = (
+                self._prepare_controller_reference_timing(execution_plan,
+                    bound_reference=(reference_evidence or {}).get('reference')))
+            if reference_error or message_bytes(execution_plan) != scheduled_bytes:
+                self._last_pose_plan = None
+                return False, reference_error or 'PHYSICAL_SCHEDULE_CHANGED_RELATIVE_TIMING'
         cached['plan'] = execution_plan
         cached['metrics'] = self._plan_joint_path_metrics(execution_plan)
         guard_error = self._observation_path_guard_error(execution_plan)
@@ -2210,12 +2348,15 @@ class MoveItPlanner:
                 before_execute()
             rospy.loginfo('%s; %s', submission_timing, target_text)
             if getattr(self, 'observation_tracking_contract_required', False):
-                ok, contract_message = self._execute_observation_contract(execution_plan, reference_evidence)
+                ok, contract_message = self._execute_observation_contract(execution_plan,
+                    reference_evidence, following_model=following_model)
                 if not ok:
                     # Contract failures cannot become success through an
                     # endpoint-only check after the controller aborted.
                     return False, contract_message
             else:
+                if following_model is not None:
+                    raise ValueError('PHYSICAL_REFERENCE_CONTRACT_EXECUTOR_REQUIRED')
                 ok = self.manipulator.execute(execution_plan, wait=True)
                 self.manipulator.stop()
             if ok:
@@ -2247,7 +2388,27 @@ class MoveItPlanner:
             # Never replay it after a partial or failed hardware execution.
             self._last_pose_plan = None
 
-    def _execute_observation_contract(self, plan, reference_evidence):
+    def _schedule_execution_trajectory(self, plan):
+        """Freeze an explicit start before any final timed-trajectory proof."""
+        scheduler = getattr(self, 'observation_trajectory_schedule', None)
+        if scheduler is None:
+            return plan
+        if not callable(scheduler):
+            raise ValueError('PHYSICAL_TRAJECTORY_SCHEDULE_INVALID')
+        from alicia_flexible_grasp.robot.physical_reference_contract import message_bytes
+        original = message_bytes(plan)
+        scheduled = scheduler(deepcopy(plan))
+        if message_bytes(plan) != original:
+            raise ValueError('PHYSICAL_TRAJECTORY_SCHEDULE_MUTATED_INPUT')
+        compare = deepcopy(scheduled)
+        compare.joint_trajectory.header.stamp = deepcopy(plan.joint_trajectory.header.stamp)
+        if message_bytes(compare) != original:
+            raise ValueError('PHYSICAL_TRAJECTORY_SCHEDULE_CHANGED_CURVE')
+        if scheduled.joint_trajectory.header.stamp.to_nsec() <= rospy.Time.now().to_nsec():
+            raise ValueError('PHYSICAL_TRAJECTORY_START_NOT_FUTURE')
+        return scheduled
+
+    def _execute_observation_contract(self, plan, reference_evidence, following_model=None):
         from alicia_flexible_grasp.robot.contracted_trajectory import bound_action_goal
         audit = getattr(self, '_last_observation_path_audit', {})
         executor = getattr(self, 'observation_trajectory_executor', None)
@@ -2255,17 +2416,52 @@ class MoveItPlanner:
         revalidate = getattr(self, 'observation_submission_revalidate', None)
         if executor is None or not callable(authorized) or not callable(revalidate):
             raise ValueError('bound observation executor or live authority is unavailable')
-        goal = bound_action_goal(plan, audit, audit['controller_constraints_snapshot'],
-                                 audit['execution_tracking_contract']['stop_trajectory_duration_sec'],
-                                 reference=(reference_evidence or {}).get('reference'))
+        builder = getattr(self, 'observation_action_goal_builder', None) or bound_action_goal
+        if not callable(builder):
+            raise ValueError('bound action goal builder is unavailable')
+        reference = (reference_evidence or {}).get('reference')
+        provider = getattr(self, 'observation_physical_reference_provider', None)
+        submission = None
+        if provider is not None:
+            if not callable(provider):
+                raise ValueError('PHYSICAL_REFERENCE_PROVIDER_INVALID')
+            submission = provider(plan, audit, reference)
+            from .physical_reference_client import MappedTrajectorySubmission
+            if type(submission) is not MappedTrajectorySubmission:
+                raise ValueError('PHYSICAL_REFERENCE_SUBMISSION_REQUIRED')
+            if (following_model is not None
+                    and submission.contract.following_model.digest != following_model.digest):
+                raise ValueError('PHYSICAL_REFERENCE_MODEL_CHANGED')
+            from .physical_reference_contract import validate_dual_reference
+            validate_dual_reference(submission.contract, wire_plan=plan)
+            goal = submission.action_goal()
+        else:
+            if following_model is not None:
+                raise ValueError('PHYSICAL_REFERENCE_PROVIDER_REQUIRED')
+            goal = builder(plan, audit, audit['controller_constraints_snapshot'],
+                audit['execution_tracking_contract']['stop_trajectory_duration_sec'],
+                reference=reference)
         def before_send():
             revalidate(plan, audit)
             error = self._controller_reference_execution_error(plan, reference_evidence)
             if error:
                 raise ValueError(error)
-        rospy.loginfo('Submitting proof-bound observation path tolerances: %s',
-                      json.dumps(audit['execution_tracking_contract'], sort_keys=True))
-        return executor.execute(goal, before_send=before_send, still_authorized=authorized)
+        if submission is None:
+            execution_log = audit['execution_tracking_contract']
+        else:
+            physical_audit = json.loads(submission.contract.physical_audit_json)
+            execution_log = dict(reference_domain='physical',proof_kind=submission.contract.proof_kind,
+                physical_execution_tracking_contract=physical_audit['execution_tracking_contract'],
+                wire_reference_contract=audit.get('wire_reference_contract'),
+                wire_proof_kind=audit.get('kind'),raw_wire_tracking_enforced=False,
+                proof_sha256=submission.contract.proof_sha256)
+        rospy.loginfo('Submitting proof-bound path contract: %s',
+                      json.dumps(execution_log,sort_keys=True))
+        monitor = getattr(self, 'observation_execution_monitor', None)
+        options = {} if monitor is None else {'execution_monitor': monitor}
+        if submission is not None:
+            options['mapped_submission'] = submission
+        return executor.execute(goal, before_send=before_send, still_authorized=authorized, **options)
 
     def _controller_reference_completion_error(self, plan):
         """Record successful wait=True execution, never infer it from feedback."""
@@ -2316,7 +2512,7 @@ class MoveItPlanner:
             raise ValueError('controller reference must be stationary')
         return SimpleNamespace(**values)
 
-    def _prepare_controller_reference_timing(self, plan):
+    def _prepare_controller_reference_timing(self, plan, *, bound_reference=None):
         """Prove the actual Noetic bridge; only uniformly stretch its timing.
 
         With a stationary external reference, scaling all trajectory times,
@@ -2334,10 +2530,17 @@ class MoveItPlanner:
             limits = self._controller_reference_velocity_limits(names)
             original_digest = wire_digest(plan)
             original_geometry = deepcopy(plan)
+            start = plan.joint_trajectory.header.stamp.to_nsec()
+            start_options = ({'scheduled_start_ns': start} if start > 0 and
+                callable(getattr(self, 'observation_trajectory_schedule', None)) else {})
         except Exception as exc:
             return None, None, 'CONTROLLER_BRIDGE_INVALID: %s' % exc
         try:
-            reference = self._controller_reference_snapshot(names)
+            # Prefix geometry was already clipped against this exact verified
+            # reference. Reuse it for the bridge proof; the existing final
+            # live recheck rejects any change during clipping or retiming.
+            reference = (self._controller_reference_snapshot(names)
+                         if bound_reference is None else bound_reference)
         except Exception as exc:
             return None, None, 'CONTROLLER_REFERENCE_INVALID: %s' % exc
         try:
@@ -2346,7 +2549,7 @@ class MoveItPlanner:
             time_scale = 1.0
             execution_plan = plan
             try:
-                audit = validate_observation_trajectory_velocity(plan, reference, limits)
+                audit = validate_observation_trajectory_velocity(plan, reference, limits, **start_options)
             except ObservationVelocityLimitError as exc:
                 # Only a completed speed proof is retimable. Missing data,
                 # exhausted budgets or any other failure never enter here.
@@ -2366,7 +2569,7 @@ class MoveItPlanner:
                         original_geometry, execution_plan, tolerance=0.0):
                     raise ValueError('controller bridge time stretch changed joint positions')
                 audit = validate_observation_trajectory_velocity(
-                    execution_plan, reference, limits)
+                    execution_plan, reference, limits, **start_options)
             if getattr(self, 'observation_tracking_contract_required', False):
                 from alicia_flexible_grasp.robot.observation_tracking_contract import (
                     required_command_time_scale, validate_command_derivatives,
@@ -2380,7 +2583,8 @@ class MoveItPlanner:
                     time_scale *= contract_scale
                     if not self._same_joint_path_geometry(original_geometry, execution_plan, tolerance=0.):
                         raise ValueError('tracking contract time stretch changed joint positions')
-                    audit = validate_observation_trajectory_velocity(execution_plan, reference, limits)
+                    audit = validate_observation_trajectory_velocity(execution_plan, reference, limits,
+                        **start_options)
                 audit['stopping_contract_derivatives'] = validate_command_derivatives(execution_plan, reference)
             if wire_digest(plan) != original_digest:
                 raise ValueError('input trajectory changed during speed proof')
@@ -2485,7 +2689,28 @@ class MoveItPlanner:
             return None, 'strict execution retiming returned an empty trajectory'
         if not self._same_joint_path_geometry(plan, retimed):
             return None, 'strict execution retiming changed the planned joint path'
-        if getattr(self, 'observation_smooth_timing_enabled', False) is True:
+        geometry_reference = plan
+        if getattr(self, 'strict_collinear_timing_enabled', False) is True:
+            from .strict_collinear_timing import (
+                smooth_strict_collinear, validate_collinear_refinement,
+            )
+            names = list(retimed.joint_trajectory.joint_names)
+            limits = self._controller_reference_velocity_limits(names)
+            try:
+                smooth = smooth_strict_collinear(retimed, limits,
+                    minimum_duration=self.strict_execution_min_duration_sec)
+                if smooth is not None:
+                    timing_evidence = validate_collinear_refinement(plan, smooth)
+                    rospy.loginfo('Strict collinear timing refinement: %s',
+                                  json.dumps(timing_evidence, sort_keys=True))
+                    retimed = smooth
+                    # All later uniform stretches must preserve this already
+                    # proven refinement exactly. Other profiles retain the
+                    # original point-for-point geometry contract.
+                    geometry_reference = deepcopy(smooth)
+            except Exception as exc:
+                return None, 'strict collinear timing rejected: %s' % exc
+        elif getattr(self, 'observation_smooth_timing_enabled', False) is True:
             from .observation_timing import smooth_collinear_observation
             names = list(retimed.joint_trajectory.joint_names)
             limits = self._controller_reference_velocity_limits(names)
@@ -2563,7 +2788,7 @@ class MoveItPlanner:
                     'strict execution minimum-duration stretch failed: %s'
                     % stretch_error
                 )
-            if not self._same_joint_path_geometry(plan, retimed):
+            if not self._same_joint_path_geometry(geometry_reference, retimed):
                 return None, (
                     'strict execution minimum-duration stretch changed the '
                     'planned joint path'
@@ -2648,7 +2873,7 @@ class MoveItPlanner:
                     'strict execution local-velocity stretch failed: %s'
                     % stretch_error
                 )
-            if not self._same_joint_path_geometry(plan, retimed):
+            if not self._same_joint_path_geometry(geometry_reference, retimed):
                 return None, (
                     'strict execution local-velocity stretch changed the '
                     'planned joint path'
@@ -2967,6 +3192,13 @@ class MoveItPlanner:
             json.dumps(branch['goal_joint_positions'], separators=(',', ':')),
             json.dumps(branch.get('joint_names', []), separators=(',', ':')),
             branch.get('robot_description_sha256', ''))
+
+    def _sequence_stage_joint_path_metrics(self, plan, stage_name, use_linear):
+        from .pregrasp_timing import pregrasp_velocity_scope
+        limits = (getattr(self, 'unknown_pregrasp_joint_velocity_limits_rad_s', None)
+                  if stage_name == 'pregrasp' and not use_linear else None)
+        with pregrasp_velocity_scope(self, limits):
+            return self._plan_joint_path_metrics(plan)
 
     def _plan_joint_path_metrics(self, plan):
         trajectory = getattr(plan, 'joint_trajectory', None)

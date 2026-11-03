@@ -1,0 +1,22 @@
+# STAGED ONLY: awaiting prospective validation and coordinated ROS / MJCF deployment.
+handeye:
+  mode: eye_on_hand
+  base_frame: base_link
+  parent_frame: tool0
+  camera_frame: camera_link
+  child_frame: camera_link
+  calibration_file: /home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/d405_expanded_metric_candidate_eye_on_hand.yaml
+  translation_xyz:
+  - -0.08124712569175627
+  - 0.008418611687707862
+  - -0.10832724917416199
+  rotation_xyzw:
+  - 0.005930378367648055
+  - -0.7209825458838591
+  - 0.008460310130839265
+  - 0.692876195503739
+  publish_static_tf: true
+  use_tf: true
+  tf_lookup_latest: true
+  allow_static_fallback: false
+  tf_timeout_sec: 0.2

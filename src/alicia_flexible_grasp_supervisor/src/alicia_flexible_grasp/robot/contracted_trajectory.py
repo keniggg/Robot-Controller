@@ -19,6 +19,9 @@ from .observation_path_guard import ObservationPathError, wire_digest
 from .observation_tracking_contract import (
     tracking_contract_candidates, validate_command_derivatives, TRAJECTORY_STOP_POLICY,
 )
+from .contact_tracking_contract import (
+    POLICY as CONTACT_POLICY, validate_contact_tracking_contract_binding,
+)
 
 
 def bound_action_goal(plan, audit, constraints, stop_duration, *, reference=None):
@@ -36,9 +39,19 @@ def bound_action_goal(plan, audit, constraints, stop_duration, *, reference=None
         bounds = validate_command_derivatives(plan, reference)
         if audit.get('command_derivative_bounds') != bounds:
             raise ObservationPathError('trajectory stopping derivative proof changed')
-    choices = tracking_contract_candidates(constraints, names, stop_duration, command_bounds=bounds)
-    if not isinstance(contract, dict) or contract not in choices:
-        raise ObservationPathError('observation action has no exact tracking contract')
+    is_contact = isinstance(contract, dict) and contract.get('policy') == CONTACT_POLICY
+    if is_contact:
+        if reference is None:
+            raise ObservationPathError('contact action needs the bound controller reference')
+        validate_contact_tracking_contract_binding(contract, plan, reference, constraints, stop_duration)
+        if (audit.get('compensation_pose_index') != 2
+                or audit.get('command_derivative_bounds') != contract['command_derivative_bounds']
+                or audit.get('model_sha256') != contract['model_sha256']):
+            raise ObservationPathError('contact action scope or model changed')
+    else:
+        choices = tracking_contract_candidates(constraints, names, stop_duration, command_bounds=bounds)
+        if not isinstance(contract, dict) or contract not in choices:
+            raise ObservationPathError('observation action has no exact tracking contract')
     following = audit.get('following_support') or {}
     errors = np.asarray(following.get('joint_error_bounds_rad', []), dtype=float)
     if (errors.shape != (6,)
@@ -58,6 +71,8 @@ def bound_action_goal(plan, audit, constraints, stop_duration, *, reference=None
         if (isinstance(endpoint, bool) or not isinstance(endpoint, (int, float))
                 or not math.isfinite(endpoint) or endpoint <= 0.):
             raise ObservationPathError('missing positive endpoint tolerance for '+name)
+        if is_contact:
+            endpoint = contract['goal_position_tolerance_rad'][names.index(name)]
         velocity = constraints.get('stopped_velocity_tolerance', 0.)
         if (isinstance(velocity, bool) or not isinstance(velocity, (int, float))
                 or not math.isfinite(velocity) or velocity < 0.):
@@ -107,7 +122,8 @@ class ContractedTrajectoryExecutor:
         if self.active:
             self.client.cancel_goal()
 
-    def execute(self, goal, *, before_send, still_authorized):
+    def execute(self, goal, *, before_send, still_authorized, execution_monitor=None,
+                mapped_submission=None):
         if not callable(before_send) or not callable(still_authorized):
             raise ObservationPathError('observation action requires live authority callbacks')
         if self.hold_publisher.get_num_connections() < 1:
@@ -115,25 +131,88 @@ class ContractedTrajectoryExecutor:
         if not still_authorized():
             return False, 'observation authority revoked before submission'
         duration = goal.trajectory.points[-1].time_from_start.to_sec()
-        deadline = self.clock()+duration+goal.goal_time_tolerance.to_sec()+2.
+        lead = 0.
+        if mapped_submission is not None:
+            lead = max(0., goal.trajectory.header.stamp.to_sec()-float(rospy.get_time()))
+        deadline = self.clock()+lead+duration+goal.goal_time_tolerance.to_sec()+2.
+        if mapped_submission is not None:
+            deadline = min(deadline, mapped_submission.lease.local_deadline)
         sent = False
+        manager, original_send = None, None
+        def cancel_this_goal():
+            if mapped_submission is None:
+                self.client.cancel_goal()
+                return
+            envelope = mapped_submission.lease.armed_envelope
+            if envelope is None:
+                return
+            # init_goal calls the publisher before returning its handle. If
+            # publication raises after transmission, SimpleActionClient.gh
+            # may still name the preceding goal. Cancel only this exact ID.
+            from actionlib_msgs.msg import GoalID
+            self.client.action_client.pub_cancel.publish(
+                GoalID(id=envelope.goal_id.id, stamp=rospy.Time(0)))
         try:
             # Revalidate the final controller reference after transport setup,
             # immediately before this exact action is sent.
             before_send()
+            if execution_monitor is not None:
+                execution_monitor()
             if not still_authorized():
                 return False, 'observation authority revoked before submission'
             self.active = True
             # A transport can raise after publishing. Treat an attempted
             # send as possibly accepted, so cleanup cannot miss that case.
-            sent = True
+            if mapped_submission is not None:
+                from .physical_reference_client import MappedTrajectorySubmission
+                from .physical_reference_contract import message_bytes
+                if type(mapped_submission) is not MappedTrajectorySubmission:
+                    raise ObservationPathError('PHYSICAL_TYPED_SUBMISSION_REQUIRED')
+                manager = getattr(getattr(self.client, 'action_client', None), 'manager', None)
+                original_send = getattr(manager, 'send_goal_fn', None)
+                if (manager is None or not callable(original_send)
+                        or not callable(getattr(manager, 'register_send_goal_fn', None))
+                        or not callable(getattr(getattr(self.client.action_client,
+                            'pub_cancel', None), 'publish', None))):
+                    raise ObservationPathError('PHYSICAL_EXACT_ACTION_ENVELOPE_HOOK_UNAVAILABLE')
+                expected_goal = message_bytes(goal)
+                calls = [0]
+                def armed_send(envelope):
+                    nonlocal sent
+                    calls[0] += 1
+                    if calls[0] != 1 or message_bytes(envelope.goal) != expected_goal:
+                        raise ObservationPathError('PHYSICAL_ACTION_ENVELOPE_CHANGED_OR_REPLAYED')
+                    if not still_authorized():
+                        raise ObservationPathError('PHYSICAL_ACTION_AUTHORITY_REVOKED')
+                    mapped_submission.arm(envelope)
+                    if not still_authorized():
+                        raise ObservationPathError('PHYSICAL_ACTION_AUTHORITY_REVOKED_AFTER_ARM')
+                    # A publish exception may occur after transmission.
+                    sent = True
+                    original_send(envelope)
+                manager.register_send_goal_fn(armed_send)
+            else:
+                sent = True
             self.client.send_goal(goal)
+            if manager is not None:
+                manager.register_send_goal_fn(original_send)
+                manager = None
+                if calls[0] != 1:
+                    raise ObservationPathError('PHYSICAL_ACTION_ENVELOPE_NOT_OBSERVED')
             while self.clock() < deadline:
                 if not still_authorized() or rospy.is_shutdown():
-                    self.client.cancel_goal()
+                    cancel_this_goal()
                     return False, 'observation authority revoked during execution'
+                if execution_monitor is not None:
+                    execution_monitor()
+                if mapped_submission is not None:
+                    mapped_submission.check_active()
                 if self.client.wait_for_result(rospy.Duration.from_sec(.05)):
+                    if execution_monitor is not None:
+                        execution_monitor()
                     result, state = self.client.get_result(), self.client.get_state()
+                    if mapped_submission is not None:
+                        mapped_submission.confirm_result(state, result)
                     if (state == GoalStatus.SUCCEEDED and result is not None
                             and result.error_code == result.SUCCESSFUL):
                         return True, 'observation action succeeded with bound path tolerances'
@@ -142,15 +221,17 @@ class ContractedTrajectoryExecutor:
                             self.hold_publisher.publish(JointTrajectory())
                     return False, 'observation action failed state=%s code=%s reason=%s' % (
                         state, getattr(result, 'error_code', None), getattr(result, 'error_string', ''))
-            self.client.cancel_goal()
+            cancel_this_goal()
             if still_authorized():
                 self.hold_publisher.publish(JointTrajectory())
             return False, 'observation action deadline exceeded; controller hold requested'
         except Exception:
             if sent:
-                self.client.cancel_goal()
+                cancel_this_goal()
                 if still_authorized():
                     self.hold_publisher.publish(JointTrajectory())
             raise
         finally:
+            if manager is not None:
+                manager.register_send_goal_fn(original_send)
             self.active = False

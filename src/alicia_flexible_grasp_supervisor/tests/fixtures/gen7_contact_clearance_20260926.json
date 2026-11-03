@@ -1,0 +1,198 @@
+{
+  "frozen_contact_plan_wire_base64": "hhIAAOw2t2ouf0QsCQAAAGJhc2VfbGluawEEAAAA3lglUPOpwL+O5hosWzzYv5FxBLeJm74/eVDDuBhj5z+9SDfog8jlP5l5pDEwBJ2/c2ZPAMTtpD+EBqp4r6jAv8so16tvbdi/EvIWWVScuz95UMO4GGPnP71IN+iDyOU/mXmkMTAEnb9zZk8AxO2kP+EZHG9KoMC/MKizJW+K2L8KXxebhAa3P3lQw7gYY+c/vUg36IPI5T+ZeaQxMASdv3NmTwDE7aQ/xHjZmeqqwL9kBvJfjDTYv2vzaNOjXb8/eVDDuBhj5z+9SDfog8jlP5l5pDEwBJ2/c2ZPAMTtpD8NNyy9AAAAAJbcizwAAAAA7Da3ai5/RCwJAAAAYmFzZV9saW5rAQ0AAAB1bmtub3duX3NtYWxsBQAAAGczLXQ4DQAAAGluc3RhbmNlX21hc2s1q6i6S5rAv9y2mucVn9i/mBJUarRhtz/m5xh5tpSvvz9HXY/F8qk/orMrZKm75T8vR26EMVnnPyc7y6Oyypg/ZgqnPtUEkj9QMg3gPTWIPw46Q9PUH4S/5GxyqjNVxD+HIrFJlZfvPxQUyLxYAwAAfpx3P8NkKjsDAAAAZ5RNPx4BAAAAAAAAEAAAAHVua25vd25fdGFibGV0b3AYAAAAYTIxOTUzYzQ0MWViNGFjOWVmMGMyYmE5FgAAAENPTlRBQ1RfRVhFQ1VUSU9OX1BMQU4RAAAAdGFibGV0b3BfZ2VvbWV0cnkBAAAAEQAAAHRhYmxldG9wX2dlb21ldHJ5AAUAAABnMy10OA0AAABOT1RfRVZBTFVBVEVEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+  "sdk_positions_rad": [
+    -1.9174759848570513,
+    -0.6856894121848817,
+    1.3882526130365052,
+    -0.047553404424454875,
+    -1.35143707412725,
+    0.2837864457588436
+  ],
+  "sdk_positions_rad_stamp_ns": 1790392265057424848,
+  "accepted_positions_rad": [
+    -1.919009965644937,
+    -0.7148350471547088,
+    1.3790487283091915,
+    -0.04601942363656924,
+    -1.3560390164909069,
+    0.27765052260730105
+  ],
+  "accepted_positions_rad_stamp_ns": 1790392264992890251,
+  "measured_opening_m": 0.04975,
+  "scope": "recorded_start_replanned_geometry_not_original_failed_trajectory_not_hardware_success",
+  "robot_description": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<robot name=\"alicia_D_v5_5\">\n  <mujoco>\n    <compiler meshdir=\"../meshes\" discardvisual=\"false\" />\n    <contact>\n      <exclude body1=\"base_link\" body2=\"Link1\"/>\n      <exclude body1=\"Link1\" body2=\"Link2\"/>\n      <exclude body1=\"Link2\" body2=\"Link3\"/>\n      <exclude body1=\"Link3\" body2=\"Link4\"/>\n      <exclude body1=\"Link4\" body2=\"Link5\"/>\n      <exclude body1=\"Link5\" body2=\"Link6\"/>\n      <exclude body1=\"Link6\" body2=\"Link7\"/>\n      <exclude body1=\"Link6\" body2=\"Link8\"/>\n    </contact>\n  </mujoco>\n  <link\n    name=\"base_link\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <link\n    name=\"Link1\">\n    <inertial>\n      <origin\n        xyz=\"-0.000232391087694535 -1.30049454546467E-05 0.00272122513752755\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.193725361315237\" />\n      <inertia\n        ixx=\"0.000258312653055438\"\n        ixy=\"8.79363230651008E-07\"\n        ixz=\"-6.87511809706199E-07\"\n        iyy=\"0.000149233685494123\"\n        iyz=\"-1.07703111237371E-06\"\n        izz=\"0.000339752801671385\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint1\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0 0.1295\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"base_link\" />\n    <child\n      link=\"Link1\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-2.16\"\n      upper=\"2.16\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link2\">\n    <inertial>\n      <origin\n        xyz=\"0.149948141017768 -0.00073733103436536 -0.000614552702572041\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.216765318032361\" />\n      <inertia\n        ixx=\"0.00012827957403101\"\n        ixy=\"-1.18676813578654E-07\"\n        ixz=\"-1.68171130903575E-06\"\n        iyy=\"0.000226231611908606\"\n        iyz=\"-3.50051091633141E-07\"\n        izz=\"0.000143215063853149\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint2\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 -5E-05 0.04287\"\n      rpy=\"1.5708 -1.5708 0\" />\n    <parent\n      link=\"Link1\" />\n    <child\n      link=\"Link2\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.57\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link3\">\n    <inertial>\n      <origin\n        xyz=\"0.055786319810667 0.00248143782929366 0.000269720725052352\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0845575681430802\" />\n      <inertia\n        ixx=\"2.87941478239851E-05\"\n        ixy=\"-2.26498116289353E-06\"\n        ixz=\"-5.38445390787684E-06\"\n        iyy=\"7.61918370068424E-05\"\n        iyz=\"-3.82299515503286E-07\"\n        izz=\"8.043706644056E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint3\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.22367 -0.022592 0\"\n      rpy=\"0 0 -2.3562\" />\n    <parent\n      link=\"Link2\" />\n    <child\n      link=\"Link3\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-0.5\"\n      upper=\"2.35619\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link4\">\n    <inertial>\n      <origin\n        xyz=\"0.000298365504501796 -0.000601368925849056 0.0663740391896737\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0653695953286747\" />\n      <inertia\n        ixx=\"7.03004188086337E-05\"\n        ixy=\"-9.68417851161416E-09\"\n        ixz=\"-7.50131707418093E-07\"\n        iyy=\"6.8747029788813E-05\"\n        iyz=\"4.45271906086873E-08\"\n        izz=\"1.68226189350765E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint4\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.0986 -0.00211 0.0002\"\n      rpy=\"-1.5708 0 -1.5708\" />\n    <parent\n      link=\"Link3\" />\n    <child\n      link=\"Link4\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link5\">\n    <inertial>\n      <origin\n        xyz=\"-0.0110961410990681 0.0308024762289942 -0.000207575403674642\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0463941316397046\" />\n      <inertia\n        ixx=\"1.8425786696003E-05\"\n        ixy=\"2.02919305442313E-06\"\n        ixz=\"-5.09341788606234E-08\"\n        iyy=\"2.39811947218569E-05\"\n        iyz=\"-4.22854804621873E-08\"\n        izz=\"1.63952567717743E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint5\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0.00015 0.12275\"\n      rpy=\"1.5708 0 0\" />\n    <parent\n      link=\"Link4\" />\n    <child\n      link=\"Link5\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.5\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link6\">\n    <inertial>\n      <origin\n        xyz=\"-3.11347120307559E-09 6.19962735608128E-10 -0.00146275616399921\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.000754053623586768\" />\n      <inertia\n        ixx=\"1.9236769291339E-08\"\n        ixy=\"9.19452445636026E-14\"\n        ixz=\"3.52333012571258E-15\"\n        iyy=\"1.92358360258478E-08\"\n        iyz=\"-3.901270498029E-17\"\n        izz=\"3.70123450485896E-08\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6\"\n    type=\"revolute\">\n    <origin\n      xyz=\"-0.00385 0.0573 -0.00035\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Link5\" />\n    <child\n      link=\"Link6\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Grasp_base\">\n    <inertial>\n      <origin\n        xyz=\"-0.0321082111389046 -0.000168822009778203 0.0275474621634362\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.119820573147005\" />\n      <inertia\n        ixx=\"8.23026483118452E-05\"\n        ixy=\"2.1627287972411E-08\"\n        ixz=\"-6.37078693697654E-06\"\n        iyy=\"3.33372461482565E-05\"\n        iyz=\"2.3095070932307E-08\"\n        izz=\"8.59654133961544E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6_to_gripper_base\"\n    type=\"fixed\">\n    <origin\n      xyz=\"0 0 0\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Link6\" />\n    <child\n      link=\"Grasp_base\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n  <link\n    name=\"Link7\">\n    <inertial>\n      <origin\n        xyz=\"2.97087521250461E-08 0.0434087591943518 0.0106596716155943\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0256461121677861\" />\n      <inertia\n        ixx=\"6.46830326573767E-06\"\n        ixy=\"2.39543799544883E-11\"\n        ixz=\"-4.63721293861409E-12\"\n        iyy=\"5.13428741941794E-06\"\n        iyz=\"-1.26432048814187E-06\"\n        izz=\"8.03606347912567E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"left_finger\"\n    type=\"prismatic\">\n    <!--\n      The real SDK and /joint_states public contract is 0 m closed and\n      0.05 m open.  Keep the original CAD poses, but parameterize them in\n      that public direction: right_finger=0 is the centered/closed pose and\n      right_finger=0.05 is the original fully-open pose.\n    -->\n    <origin\n      xyz=\"-0.0002 0.000502 0.131180183660255\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link7\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-0.05\"\n      upper=\"0\"\n      effort=\"5\"\n      velocity=\"10\" />\n    <mimic joint=\"right_finger\" multiplier=\"-1\" offset=\"0\"/>\n  </joint>\n  <link\n    name=\"Link8\">\n    <inertial>\n      <origin\n        xyz=\"-2.97087521250461E-08 -0.0434087591943727 0.0106596716155944\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.025646112167786\" />\n      <inertia\n        ixx=\"6.46830326573761E-06\"\n        ixy=\"2.39543799589352E-11\"\n        ixz=\"4.63721294819601E-12\"\n        iyy=\"5.13428741941793E-06\"\n        iyz=\"1.26432048814186E-06\"\n        izz=\"8.03606347912559E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"right_finger\"\n    type=\"prismatic\">\n    <origin\n      xyz=\"-0.0002 -0.000498 0.131180183660255\"\n      rpy=\"1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link8\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"0\"\n      upper=\"0.05\"\n      effort=\"5\"\n      velocity=\"10\" />\n  </joint>\n  <link\n    name=\"tool0\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <sphere radius=\"0.005\" /> <!-- \u5b9a\u4e49\u4e00\u4e2a\u534a\u5f84\u4e3a0.02\u7c73\u7684\u5c0f\u7403\u4f53 -->\n      </geometry>\n      <material\n        name=\"green_virtual_sphere_material\"> <!-- \u53ef\u4ee5\u7ed9\u6750\u8d28\u8d77\u4e2a\u540d\u5b57 -->\n        <color\n          rgba=\"0 1 0 1\" /> <!-- \u7eff\u8272 (R G B A)\uff0cA\u4e3a1\u8868\u793a\u4e0d\u900f\u660e -->\n      </material>\n    </visual>\n  </link>\n  <joint\n    name=\"Grasp2tool\"\n    type=\"fixed\">\n    <origin\n      xyz=\"-0.0002 -0.0003 0.13118\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"tool0\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n</robot>\n",
+  "gripper_geometry": {
+    "max_inner_gap_m": 0.05,
+    "opening_fit_clearance_each_side_m": 0.0005,
+    "width_safety_margin_per_side_m": 0.002,
+    "tool_jaw_axis": "y",
+    "tool_finger_length_axis": "z",
+    "finger_box_xyz_m": [
+      0.0434,
+      0.0286,
+      0.06
+    ],
+    "palm_box_xyz_m": [
+      0.1175,
+      0.155,
+      0.0774
+    ]
+  },
+  "source_record": "20260926T030712.299481Z_ff7837d6a17b47ba8e0278fc2b194f68",
+  "motion_executed": false,
+  "boundary_goal_replan": {
+    "scope": "recorded_start_replanned_contact_path_no_execution",
+    "plan_id": "a21953c441eb4ac9ef0c2ba9",
+    "motion_executed": false,
+    "paths": {
+      "nominal": {
+        "wire_base64": "AAAAAAAAAAAAAAAACQAAAGJhc2VfbGluawYAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYIAAAABgAAABdKMstDtP6/Cw2yv+3f5r+X2jpmlRD2P0fq/57bj6e/7tq+91Wy9b/iM5SyBsXRPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAAuGHYpetP6/qJgw9Cj55r8GIQL87O/1PyXgfTtYxKe/kQSTtqKI9b8EzItoi9/RPwYAAAB0teqMa+8fv6Qo9EeLPo+/0qHy+j9Yo7+S6C4sT9NfvyXvRrkzAKk/sVTm2GsAgD8GAAAAkUFlg89u+L4xCIAnSoiAvzMCXU9NE3K/5saiEABvRb8HLnHO3hmHP4+47YplqGI/AAAAAAAAAADyfrsMBgAAAKuSFcd4tP6/pASMfLYT57+wsCcMYdD1P8IfkBtq+ae/ZV2rUWNf9b869HhUG/rRPwYAAAD6aDtyrTYgv5AizpzG+ZC/iEETNQ1Yo7/S8dOOOKZgv5qZmZmZmak/gHj6wNmWgD8GAAAAPyzDgL2n1j7H91yVnc1zv9duEJwwyXI/AXwtIavaLL8AAAAAAAAAAGMm7ajxjkA/AAAAAAAAAAAer7wYBgAAADcz64GStP6//zwOj48v57/1RELw67H1P7wwZaEQL6i/E/SMh5U29b8iWVuvthTSPwYAAADCkD2vjREgv27LJef095G/wEP7Mn/for+6ptDwMQNhv5qZmZmZmak/zESjHyTMgD8GAAAAzPGnsZnu1z4zWAaZYhB0v6DqnXP1B3M/9samTkB6Lb8AAAAAAAAAAJweIU4v4EA/AAAAAAAAAAAWz5wkBgAAAD7qkbqrtP6/E6Jpwq1M579qzihriJT1P+FhwDlLZai/povETzcO9b9tDUiqXS/SPwYAAACzCfYuptUfvwbrPTvQ9pK/koWtOaNmor94yLayL2Fhv5qZmZmZmak/EnflSeQBgT8GAAAA8erIPowx2T7Uf125S1d0v0xcmth8SnM/ZZ/0ZxchLr8AAAAAAAAAAMETprIaNkE/AAAAAAAAAABSdlwwBgAAANYBAnHEtP6/NSjvAgtr57907sKdMXj1P0vk51AZnKi/pEAU1Ubm9L+1EF5tEErSPwYAAABYQp+PGYUfv771lKWG9pO/KFDoamTtob/0j3YIQsBhv5qZmZmZmak/IlZf+SU4gT8GAAAAwhAKHNpw2j6Xo7mHkaJ0vwiKZJ/7kHM/OHxcUGPPLr8AAAAAAAAAAMzOg9rpkEE/AAAAAAEAAABjY2EABgAAABxBOaXctP6/oNdTi6GK578SyKf/4lz1PxZc2U9606i/z/KvccK+9L+URCoYz2TSPwYAAAB5dA/NaNwZvxJnOrCzRpG/trwKiZ78nL9oOFMfNvVdvxrjVUQ/M6U/AA/HAl7WfD8GAAAAatDcfEG6Jj/JJBd511iaP9RnT2D7bKo/RjbKJKd1aD8ysdr4ii+yv5lCzH8yCIi/AAAAAAEAAAAMpeELBgAAAF+uOVf0tP6/aWk23mur579ZCHxYmEL1P1ogGJltC6m/XzPYq6iX9L+oDdzBmX/SPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAF2YbdYV/QT+vGoUD5za4PxPa2pVXasM/mK1A0pyohD8a2AFK2t/Mv3dmcGzfyKO/AAAAAAEAAAA9wDgdAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "points": 8,
+        "error": "continuous path clearance is unresolved at subdivision limit",
+        "label": "6",
+        "lo": 0.9996166229248047,
+        "hi": 0.9996175765991211,
+        "depth": 20,
+        "displacement": 5.154996911244868e-12,
+        "lower": [
+          -1.919178333969573,
+          -0.7396754583306587,
+          1.3287585703160485,
+          -0.04891531455304469,
+          -1.2870260932352502,
+          0.28903812319157585
+        ],
+        "upper": [
+          -1.919178333969447,
+          -0.7396754583276747,
+          1.3287585703208213,
+          -0.04891531455267568,
+          -1.2870260932281907,
+          0.2890381231928285
+        ],
+        "bound": 0.0029999999987247493,
+        "minimum": 0.0029999995797748424,
+        "checked": 143,
+        "fk_checked": 158,
+        "limits": [
+          [
+            -2.16,
+            2.16
+          ],
+          [
+            -1.57,
+            1.57
+          ],
+          [
+            -0.5,
+            2.35619
+          ],
+          [
+            -3.14,
+            3.14
+          ],
+          [
+            -1.57,
+            1.5
+          ],
+          [
+            -3.14,
+            3.14
+          ]
+        ]
+      },
+      "shifted": {
+        "wire_base64": "AAAAAAAAAAAAAAAACQAAAGJhc2VfbGluawYAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYIAAAABgAAAAs5XUz7rf6/X4UR7Crx5b/aQDlfSDb2P68LonnrWKi/zKc/e3yf9b+WROWfjinSPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAP90SAsWrv6//BCQIGYK5r9JhwD1nxX2P40BIBZojai/b9ETOsl19b+43NxVE0TSPwYAAAB0teqMa+8fv6Qo9EeLPo+/0qHy+j9Yo7+S6C4sT9NfvyXvRrkzAKk/sVTm2GsAgD8GAAAAkUFlg89u+L4xCIAnSoiAvzMCXU9NE3K/5saiEABvRb8HLnHO3hmHP4+47YplqGI/AAAAAAAAAADyfrsMBgAAAJ+BQEgwrv6/+HzrqPMk5r/zFiYFFPb1PypBMvZ5wqi/Qyos1YlM9b/uBMpBo17SPwYAAAD6aDtyrTYgv5AizpzG+ZC/iEETNQ1Yo7/S8dOOOKZgv5qZmZmZmak/gHj6wNmWgD8GAAAAPyzDgL2n1j7H91yVnc1zv9duEJwwyXI/AXwtIavaLL8AAAAAAAAAAGMm7ajxjkA/AAAAAAAAAAAer7wYBgAAACsiFgNKrv6/U7Vtu8xA5r84q0Dpntf1PyRSB3wg+Ki/8cANC7wj9b/WaaycPnnSPwYAAADCkD2vjREgv27LJef095G/wEP7Mn/for+6ptDwMQNhv5qZmZmZmak/zESjHyTMgD8GAAAAzPGnsZnu1z4zWAaZYhB0v6DqnXP1B3M/9samTkB6Lb8AAAAAAAAAAJweIU4v4EA/AAAAAAAAAAAWz5wkBgAAADLZvDtjrv6/ZxrJ7upd5r+tNCdkO7r1P0mDYhRbLqm/hFhF01379L8hHpmX5ZPSPwYAAACzCfYuptUfvwbrPTvQ9pK/koWtOaNmor94yLayL2Fhv5qZmZmZmak/EnflSeQBgT8GAAAA8erIPowx2T7Uf125S1d0v0xcmth8SnM/ZZ/0ZxchLr8AAAAAAAAAAMETprIaNkE/AAAAAAAAAABSdlwwBgAAAMrwLPJ7rv6/iaBOL0h85r+3VMGW5J31P7MFiispZam/gg2VWG3T9L9pIa9amK7SPwYAAABYQp+PGYUfv771lKWG9pO/KFDoamTtob/0j3YIQsBhv5qZmZmZmak/IlZf+SU4gT8GAAAAwhAKHNpw2j6Xo7mHkaJ0vwiKZJ/7kHM/OHxcUGPPLr8AAAAAAAAAAMzOg9rpkEE/AAAAAAEAAABjY2EABgAAABAwZCaUrv6/9E+zt96b5r9VLqb4lYL1P359eyqKnKm/rb8w9eir9L9IVXsFV8nSPwYAAAB5dA/NaNwZvxJnOrCzRpG/trwKiZ78nL9oOFMfNvVdvxrjVUQ/M6U/AA/HAl7WfD8GAAAAatDcfEG6Jj/JJBd511iaP9RnT2D7bKo/RjbKJKd1aD8ysdr4ii+yv5lCzH8yCIi/AAAAAAEAAAAMpeELBgAAAFOdZNirrv6/veGVCqm85r+cbnpRS2j1P8JBunN91Km/PQBZL8+E9L9cHi2vIeTSPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAF2YbdYV/QT+vGoUD5za4PxPa2pVXasM/mK1A0pyohD8a2AFK2t/Mv3dmcGzfyKO/AAAAAAEAAAA9wDgdAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "points": 8,
+        "audit": {
+          "scope": "continuous_commanded_Link6_Link7_Link8_only",
+          "plan_id": "a21953c441eb4ac9ef0c2ba9",
+          "scene_sha256": "0eeef15e51541fbd39eb715cf61bb3c89a361c59fb7e27b767a1bba668b5c4e6",
+          "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+          "trajectory_sha256": "081156a72f91f9179eff738e288f769661d5f05f2f9da4c5b592a70dff685d7b",
+          "segments": 7,
+          "interval_checks": 7,
+          "fk_checks": 22,
+          "minimum_sampled_clearance_m": 0.01661285974959735,
+          "certified_minimum_clearance_m": 0.005479376252871112,
+          "bridge": "stationary_desired_to_first_positive_time_waypoint",
+          "bridge_start_joint_positions_rad": [
+            -1.9174759848570513,
+            -0.6856894121848817,
+            1.3882526130365052,
+            -0.047553404424454875,
+            -1.35143707412725,
+            0.2837864457588436
+          ],
+          "opening_width_m": 0.04975,
+          "following_support": null,
+          "elapsed_sec": 0.16005769399998826
+        }
+      }
+    }
+  },
+  "positive_clearance_goal_replan": {
+    "scope": "recorded_start_replanned_contact_path_no_execution",
+    "plan_id": "a21953c441eb4ac9ef0c2ba9",
+    "motion_executed": false,
+    "hypothetical_source_goal_clearance_margin_m": 0.0005,
+    "paths": {
+      "nominal": {
+        "wire_base64": "AAAAAAAAAAAAAAAACQAAAGJhc2VfbGluawYAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYIAAAABgAAABdKMstDtP6/Cw2yv+3f5r+X2jpmlRD2P0fq/57bj6e/7tq+91Wy9b/iM5SyBsXRPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAEVguu1qtP6/UixdVDb45r8MrSU7avD1P9+7Hw4qxKe/uGKGk5mJ9b8I1izNjt/RPwYAAAD+jaPKPPknv61OwRP1wY6/Uh5+6s+Ao786+rAT1Ddgv0F5IJ6+/Kg/2yFQnLRggD8GAAAAFN6DXHT3Bb9k2HIN9buAvzBchA22GnS/a8rrz1RyRr8cDSKiCSqIP9/96tUc0GM/AAAAAAAAAAA2pnMMBgAAANe3fIyRtP6/uJCPncIR57/eTZ/6TtH1PwrSB9sF+ae/l6aJzEth9b9n9WskIvrRPwYAAADqJNKx1X4ov8skILUltpC/j1Yn416Ho7/ELsjq9/Zgv5qZmZmZmak/2kxEXfH7gD8GAAAAIFqByCz4xj6axB3LBMhzv4zP/JwOvXI/zePCINMCLb8AAAAAAAAAAJUzIsuPAEE/AAAAAAAAAACHhC4YBgAAAOyLSae3tP6/SgF6OYws578SySFPPrP1P8HUsIFuLqi/Nwwyfmo59b/LZlHrwBTSPwYAAACxSFHmC2wov/7E4Ik9rpG/szbRr94Ro79Vt0hmTlJhv5qZmZmZmak/kuwZfmYxgT8GAAAAAtrBiHNIyT7xykzPRwh0v/dRkPZn+XI/I8WK1xCfLb8AAAAAAAAAADiZDV9BUEE/AAAAAAAAAAAZ0ckjBgAAAGqqGD7dtP6/nJh0H41I579lpWNEM5b1P+u0uoljZKi/ra6QuPMR9b8apUdOay/SPwYAAACFpRfEsFcov24mPrzuppK/mIVwkRmcor/TMm7/nK5hv5qZmZmZmak/wHMoWElngT8GAAAAoKDuQrOLyz6Bxy+JbEx0vyS5iMlEOXM//eMsuyFCLr8AAAAAAAAAAPYmqIlspEE/AAAAAAAAAABFHEYvBgAAANQR4VACtf6/BoImlr9l5796ySU9KXr1P3G1z3jkmqi/rPgMu+Xq9L+F0UhxIUrSPwYAAABZdv3g10Eov4r3BuBjoJO/ptm9S/wlor/B18bI8gtiv5qZmZmZmak/1TbyEKWdgT8GAAAA6PktxQO/zT7FkL97ppR0v9/VfPzUfHM/x64iU1DsLr8AAAAAAAAAACJhzoNR/UE/AAAAAAAAAACY6KM6BgAAABeRnd8mtf6/Z37yLB6E578F1n3sG1/1PwAQQtHw0ai/W0T68D7E9L/Sj3tw42TSPwYAAADIyvNtEfYjv36SKVhG7ZC/2k2oJu1Inb9462uJUlhev3zV/VoCI6U/6IZVU9FnfT8GAAAA709YsyXiMT/2T0N7nNCaPzfY+TJPjKs/EXMqRS64aT8Q/s/WssWyvzELWcW/Zom/AAAAAAEAAADZ4UgKBgAAAH+1TepKtf6/P94NtqOj57+ee8pPB0X1PwPcxQ+ICam/jwuB7v2d9L/4T4RgsX/SPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAb29AgHFjSz9rDXTeHPS3P+T/giCe0cM/v+oQrzkfhT9lqEHXyxHNv4B1WL5yXqS/AAAAAAEAAADt5mAbAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "points": 8,
+        "audit": {
+          "scope": "continuous_commanded_Link6_Link7_Link8_only",
+          "plan_id": "a21953c441eb4ac9ef0c2ba9",
+          "scene_sha256": "0eeef15e51541fbd39eb715cf61bb3c89a361c59fb7e27b767a1bba668b5c4e6",
+          "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+          "trajectory_sha256": "c86aad6c047aca2399c443f41912904ca2fb4bf5dcd4671a4995da8088bf60e0",
+          "segments": 7,
+          "interval_checks": 21,
+          "fk_checks": 36,
+          "minimum_sampled_clearance_m": 0.003499999593109482,
+          "certified_minimum_clearance_m": 0.003013015265906597,
+          "bridge": "stationary_desired_to_first_positive_time_waypoint",
+          "bridge_start_joint_positions_rad": [
+            -1.919009965644937,
+            -0.7148350471547088,
+            1.3790487283091915,
+            -0.04601942363656924,
+            -1.3560390164909069,
+            0.27765052260730105
+          ],
+          "opening_width_m": 0.04975,
+          "following_support": null,
+          "elapsed_sec": 0.47418542499963223
+        }
+      },
+      "shifted": {
+        "wire_base64": "AAAAAAAAAAAAAAAACQAAAGJhc2VfbGluawYAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYIAAAABgAAAAs5XUz7rf6/X4UR7Crx5b/aQDlfSDb2P68LonnrWKi/zKc/e3yf9b+WROWfjinSPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAADlP5W4irv6/pqS8gHMJ5r9PEyQ0HRb2P0fdweg5jai/li8HF8B29b+85n26FkTSPwYAAAD+jaPKPPknv61OwRP1wY6/Uh5+6s+Ao786+rAT1Ddgv0F5IJ6+/Kg/2yFQnLRggD8GAAAAFN6DXHT3Bb9k2HIN9buAvzBchA22GnS/a8rrz1RyRr8cDSKiCSqIP9/96tUc0GM/AAAAAAAAAAA2pnMMBgAAAMumpw1Jrv6/DAnvyf8i5r8htJ3zAff1P3LzqbUVwqi/dXMKUHJO9b8bBr0Rql7SPwYAAADqJNKx1X4ov8skILUltpC/j1Yn416Ho7/ELsjq9/Zgv5qZmZmZmak/2kxEXfH7gD8GAAAAIFqByCz4xj6axB3LBMhzv4zP/JwOvXI/zePCINMCLb8AAAAAAAAAAJUzIsuPAEE/AAAAAAAAAACHhC4YBgAAAOB6dChvrv6/nnnZZck95r9VLyBI8dj1Pyn2Ulx+96i/FdmyAZEm9b9/d6LYSHnSPwYAAACxSFHmC2wov/7E4Ik9rpG/szbRr94Ro79Vt0hmTlJhv5qZmZmZmak/kuwZfmYxgT8GAAAAAtrBiHNIyT7xykzPRwh0v/dRkPZn+XI/I8WK1xCfLb8AAAAAAAAAADiZDV9BUEE/AAAAAAAAAAAZ0ckjBgAAAF6ZQ7+Urv6/8BDUS8pZ5r+oC2I95rv1P1PWXGRzLam/i3sRPBr/9L/OtZg785PSPwYAAACFpRfEsFcov24mPrzuppK/mIVwkRmcor/TMm7/nK5hv5qZmZmZmak/wHMoWElngT8GAAAAoKDuQrOLyz6Bxy+JbEx0vyS5iMlEOXM//eMsuyFCLr8AAAAAAAAAAPYmqIlspEE/AAAAAAAAAABFHEYvBgAAAMgADNK5rv6/WvqFwvx25r+9LyQ23J/1P9nWcVP0Y6m/isWNPgzY9L854pleqa7SPwYAAABZdv3g10Eov4r3BuBjoJO/ptm9S/wlor/B18bI8gtiv5qZmZmZmak/1TbyEKWdgT8GAAAA6PktxQO/zT7FkL97ppR0v9/VfPzUfHM/x64iU1DsLr8AAAAAAAAAACJhzoNR/UE/AAAAAAAAAACY6KM6BgAAAAuAyGDerv6/u/ZRWVuV5r9IPHzlzoT1P2gx5KsAm6m/ORF7dGWx9L+GoMxda8nSPwYAAADIyvNtEfYjv36SKVhG7ZC/2k2oJu1Inb9462uJUlhev3zV/VoCI6U/6IZVU9FnfT8GAAAA709YsyXiMT/2T0N7nNCaPzfY+TJPjKs/EXMqRS64aT8Q/s/WssWyvzELWcW/Zom/AAAAAAEAAADZ4UgKBgAAAHOkeGsCr/6/k1Zt4uC05r/h4chIumr1P2v9Z+qX0qm/bdgBciSL9L+sYNVNOeTSPwYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAb29AgHFjSz9rDXTeHPS3P+T/giCe0cM/v+oQrzkfhT9lqEHXyxHNv4B1WL5yXqS/AAAAAAEAAADt5mAbAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "points": 8,
+        "audit": {
+          "scope": "continuous_commanded_Link6_Link7_Link8_only",
+          "plan_id": "a21953c441eb4ac9ef0c2ba9",
+          "scene_sha256": "0eeef15e51541fbd39eb715cf61bb3c89a361c59fb7e27b767a1bba668b5c4e6",
+          "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+          "trajectory_sha256": "fe8fa8a6eaad5dd5d46d829ab176097b026e238aa1a778ee80f8d9210b532d22",
+          "segments": 7,
+          "interval_checks": 7,
+          "fk_checks": 22,
+          "minimum_sampled_clearance_m": 0.01711348028729516,
+          "certified_minimum_clearance_m": 0.006236374638809246,
+          "bridge": "stationary_desired_to_first_positive_time_waypoint",
+          "bridge_start_joint_positions_rad": [
+            -1.9174759848570513,
+            -0.6856894121848817,
+            1.3882526130365052,
+            -0.047553404424454875,
+            -1.35143707412725,
+            0.2837864457588436
+          ],
+          "opening_width_m": 0.04975,
+          "following_support": null,
+          "elapsed_sec": 0.2869348609992812
+        }
+      }
+    }
+  }
+}

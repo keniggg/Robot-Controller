@@ -1,0 +1,30 @@
+from pathlib import Path
+import json,hashlib,rosbag,time,re,collections
+n=Path('/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_restart_20261010T002347Z');o=n/'gen13_handoff_analysis';r=Path('/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261010T050849.339487Z_fa4a10a8358a4fa2b80214f1f626b5c7');sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+start=json.loads((o/'observers_started.json').read_text());sealfiles=[]
+for x in start['observers']:
+ assert not Path('/proc/%d'%x['pid']).exists();p=Path(x['output']);rows=[json.loads(l) for l in p.read_text().splitlines()];assert rows[-1]['kind'] in ('observer_end','end');sealfiles.append(dict(pid=x['pid'],exit_code=0,path=str(p),sha256=sha(p),rows=len(rows),end=rows[-1]))
+ if x['name']=='station':station=rows
+ else:motion=rows
+requests=[x for x in motion if x['kind']=='measurement_request'];acks=[x for x in motion if x['kind']=='measurement_ack'];req=next(x for x in requests if x['payload'].get('view_index')==2 and x['payload']['state']=='requalifying');binding=req['payload'];arrival=binding['arrival_stamp_ns'];deadline=binding['capture_deadline_ns'];lease=binding['lease_id'];phase_acks=[x for x in acks if x['payload']['lease_id']==lease];firstreq=next(x for x in requests if x['payload'].get('view_index')==1 and x['payload']['state']=='qualified');q=[];evals=[];transitions=[];last={}
+with rosbag.Bag(str(r/'keyframes.bag'),'r') as b:
+ for t,m,stamp in b.read_messages(topics=['/perception/unknown/detector_status','/alicia_d/accepted_joint_states','/alicia_d/actuation_status','/alicia_d/control_reference_epoch']):
+  ns=stamp.to_nsec()
+  if t.endswith('detector_status'):
+   d=json.loads(m.data)
+   if arrival<=ns<=deadline+100000000:
+    e=d.get('observation_measurement',{});evals.append(dict(received_ns=ns,source_ns=d.get('source_stamp_ns'),state=d.get('state'),detail=d.get('detail'),source_age_sec=(ns-d['source_stamp_ns'])*1e-9 if d.get('source_stamp_ns') else None,measurement=e))
+  elif t.endswith('accepted_joint_states'):
+   by=dict(zip(m.name,m.position));q.append(dict(received_ns=ns,source_ns=m.header.stamp.to_nsec(),q=[by['Joint%d'%i] for i in range(1,7)]))
+  else:
+   v=m.data if hasattr(m,'data') else m.stamp.to_nsec()
+   if last.get(t)!=v:transitions.append(dict(topic=t,received_ns=ns,value=v));last[t]=v
+before_deadline=[x for x in evals if x['received_ns']<=deadline];failed=[x for x in before_deadline if x['measurement'].get('reason','').startswith('support_plane_local_distance_inconsistent:')];values=[float(re.search(r': ([0-9.]+) >',x['measurement']['reason']).group(1)) for x in failed];q0=q[0]['q'];maxdelta=max(max(abs(a-b) for a,b in zip(x['q'],q0)) for x in q);stationq=[x for x in q if arrival<=x['received_ns']<=deadline];qspan=[max(x['q'][i] for x in stationq)-min(x['q'][i] for x in stationq) for i in range(6)]
+metrics=[]
+for line in (n/'shared_reference_deployment/consumers.log').read_text().splitlines():
+ if 'pipeline metrics: ' in line:
+  try:d=json.loads(line.split('pipeline metrics: ',1)[1])
+  except ValueError:continue
+  if d.get('request_id') in (33,34) and d.get('event')=='request_completed':metrics.append(d)
+report=dict(generation=13,record_directory=str(r),recorded_input_manifest_sha256=sha(r/'manifest.json'),first_station_qualified=firstreq,second_station_request=req,second_station_acks=phase_acks,second_station_source_rows=evals,second_station_facts=dict(capture_window_sec=(deadline-arrival)*1e-9,frames_before_deadline=len(before_deadline),support_distance_rejected_frames=len(failed),support_distance_min_m=min(values),support_distance_max_m=max(values),original_limit_m=.004,qualified_source_count=max(len(x['measurement'].get('source_stamps_ns',[])) for x in before_deadline),first_rejected_source=failed[0],accepted_measurement_consumers=sorted(set(x['payload']['participant'] for x in phase_acks if x['payload']['state']=='requalifying' and x['payload']['accepted'])),qualified_consumers=sorted(set(x['payload']['participant'] for x in phase_acks if x['payload'].get('qualified'))),accepted_q_window_count=len(stationq),accepted_q_window_span_rad=qspan),compute_handoff=dict(contact_request_three_source_submitted=True,contact_and_followup_metrics=metrics,assessment='Request33 joined and evaluated three post-arrival measured sources; bilateral contact evidence remained absent. Request34 subsequently completed 15.055593s observation computation and produced next executed observation preview. Temporary geometry invalidation did not terminate this station task.'),actual_motion=dict(full_record_q_samples=len(q),initial_q=q0,max_delta_rad_from_record_start=maxdelta,final_q=q[-1]['q'],initial_state_from_full_bag=True,observer_started_after_selection=True),control_transitions=transitions,task_transitions=[x for x in station if x['kind']=='task'],result='failure',physical_grasp_success=False,interpretation='Both consumers accepted second-arrival request. Producer rejected every evaluated post-arrival source because local support plane distance exceeded original 4mm limit, leaving zero qualified source stamps; deadline expiry and task ACK timeout followed. This was not a missing request delivery or generic processing timeout. No threshold changes made.',temperature_accessed=False)
+p=o/'second_arrival_timeline.json';p.write_text(json.dumps(report,indent=2)+'\n');result=json.loads((r/'result_summary.json').read_text());outcome=json.loads((r/'recorder_outcome.json').read_text());assert result['state']=='complete' and outcome['bag_closed'];seal=o/'observers_closed_seal.json';seal.write_text(json.dumps(dict(at_ns=time.time_ns(),generation=13,all_closed=True,observers=sealfiles,record_result=result,bag_closed=outcome['bag_closed'],timeline_sha256=sha(p),hardware_action=False),indent=2)+'\n');print(json.dumps(dict(timeline_sha256=sha(p),seal_sha256=sha(seal),frames=len(before_deadline),distance_failures=len(failed),distance_range_m=[min(values),max(values)],qualified_source_count=report['second_station_facts']['qualified_source_count'],record_q_maxdelta=maxdelta,second_station_q_span=qspan)))

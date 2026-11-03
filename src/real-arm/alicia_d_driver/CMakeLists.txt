@@ -13,12 +13,21 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   std_srvs
   sensor_msgs
+  control_msgs
+  trajectory_msgs
+  actionlib_msgs
+  message_generation
   diagnostic_msgs
   hardware_interface
   controller_manager
   controller_manager_msgs
   serial  # <-- ADD THIS to find the ros-serial package
 )
+
+find_package(OpenSSL REQUIRED)
+add_message_files(FILES PhysicalReferenceCommand.msg PhysicalReferenceState.msg)
+add_service_files(FILES SetPhysicalReference.srv)
+generate_messages(DEPENDENCIES std_msgs control_msgs trajectory_msgs)
 
 # REMOVED: The PkgConfig method for finding the system library LibSerial
 # find_package(PkgConfig REQUIRED)
@@ -31,7 +40,7 @@ catkin_package(
   INCLUDE_DIRS include
 #   LIBRARIES bessica_d_hw_interface # Export the library for other packages to use
   # DEPENDS is no longer needed here as catkin handles dependencies from find_package
-  CATKIN_DEPENDS rospy roscpp std_msgs std_srvs sensor_msgs diagnostic_msgs hardware_interface controller_manager controller_manager_msgs serial
+  CATKIN_DEPENDS rospy roscpp std_msgs std_srvs sensor_msgs control_msgs trajectory_msgs actionlib_msgs message_runtime diagnostic_msgs hardware_interface controller_manager controller_manager_msgs serial
 )
 
 # --- Include Directories ---
@@ -46,9 +55,12 @@ include_directories(
 # --- Build Targets ---
 
 # 1. Hardware Driver Node (communicates with serial port)
-add_executable(alicia_d_driver_node src/alicia_d_driver_node.cpp src/serial_communicator.cpp)
+add_executable(alicia_d_driver_node src/alicia_d_driver_node.cpp src/serial_communicator.cpp
+  src/gripper_stroke_snapshot.cpp)
 # Link against catkin libraries, which now includes the 'serial' library
+add_dependencies(alicia_d_driver_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(alicia_d_driver_node
+  OpenSSL::Crypto
   ${catkin_LIBRARIES}
 )
 
@@ -57,22 +69,43 @@ add_library(alicia_d_hw_interface src/alicia_d_hw_interface.cpp)
 target_include_directories(alicia_d_hw_interface PUBLIC
       ${catkin_INCLUDE_DIRS}
 )
+add_dependencies(alicia_d_hw_interface ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(alicia_d_hw_interface
+  OpenSSL::Crypto
   ${catkin_LIBRARIES}
 )
 
 # 3. ros_control Main Executable (runs the control loop)
 add_executable(alicia_d_hw_interface_node src/alicia_d_hw_main.cpp)
+add_dependencies(alicia_d_hw_interface_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(alicia_d_hw_interface_node
   alicia_d_hw_interface # This executable needs the library we just defined
   ${catkin_LIBRARIES}
 )
 
 if(CATKIN_ENABLE_TESTING)
+  add_executable(r22_reference_map_independent_test test/r22_reference_map_independent_test.cpp)
+  add_test(NAME r22_reference_map_independent_test COMMAND r22_reference_map_independent_test)
+  catkin_add_gtest(physical_reference_contract_test test/physical_reference_contract_test.cpp)
+  catkin_add_gtest(physical_reference_transport_test test/physical_reference_transport_test.cpp)
+  if(TARGET physical_reference_transport_test)
+    get_filename_component(ALICIA_REFERENCE_WORKSPACE_ROOT "${PROJECT_SOURCE_DIR}/../../.." ABSOLUTE)
+    target_compile_definitions(physical_reference_transport_test PRIVATE
+      ALICIA_REFERENCE_WORKSPACE_ROOT="${ALICIA_REFERENCE_WORKSPACE_ROOT}")
+    add_dependencies(physical_reference_transport_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+    target_link_libraries(physical_reference_transport_test ${catkin_LIBRARIES} OpenSSL::Crypto)
+  endif()
+  catkin_add_gtest(gui_direct_profile_test test/gui_direct_profile_test.cpp)
+  catkin_add_gtest(gripper_stroke_snapshot_test
+    test/gripper_stroke_snapshot_test.cpp src/gripper_stroke_snapshot.cpp)
+  if(TARGET gripper_stroke_snapshot_test)
+    target_link_libraries(gripper_stroke_snapshot_test ${catkin_LIBRARIES})
+  endif()
   catkin_add_gtest(sdk_diagnostic_evidence_test test/sdk_diagnostic_evidence_test.cpp)
   catkin_add_gtest(
     actuation_confirmation_test
     test/actuation_confirmation_test.cpp
+    test/actuation_causal_probe_test.cpp
   )
   if(TARGET actuation_confirmation_test)
     target_include_directories(

@@ -20,10 +20,15 @@ from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT.parents[1] / 'tools/tests'))
+# Only disk identity is synthetic; audit paths and bytes remain real.
+from storage_os_adapter import storage_os
+
 for path in (ROOT, ROOT / 'src'):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from alicia_flexible_grasp.grasp.contact_evidence import encode_contact_evidence
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     compute_plan_id,
     float32_wire_value,
@@ -423,14 +428,51 @@ class GraspTaskSequenceTest(unittest.TestCase):
     def test_refinement_support_offset_disagreement_rejects_rehashed_preview(self):
         bound = self._rich_plan(stamp_sec=9.0)
         preview = self._mark_valid_3d(self._rich_plan(stamp_sec=9.95))
-        preview.object_geometry.support_offset_m = 0.00401
+        preview.object_geometry.support_offset_m = 0.00701
         preview.plan_id = compute_plan_id(preview)
         result, candidate = self._accept_refinement_preview(bound, preview)
         self.assertEqual(result.code, 'FINAL_REFINE_3D_INVALID')
         self.assertIsNone(candidate)
 
+    def test_refinement_support_offset_warning_is_logged_without_rejecting_preview(self):
+        for separation, accepted, warning in (
+                (.004, True, False), (.00401, True, True),
+                (.0057, True, True), (.007, True, True), (.00701, False, False)):
+            with self.subTest(separation=separation):
+                bound = self._rich_plan(stamp_sec=9.0)
+                preview = self._mark_valid_3d(self._rich_plan(stamp_sec=9.95))
+                preview.object_geometry.support_offset_m = separation
+                preview.plan_id = compute_plan_id(preview)
+                wire = io.BytesIO()
+                preview.serialize(wire)
+                preview = Grasp6DPlan().deserialize(wire.getvalue())
+                refinement = grasp_task_node.validate_final_refinement_execution(bound, preview)
+                self.assertEqual(refinement.ok, accepted, refinement.reason)
+                if warning:
+                    self.assertEqual(refinement.code, 'FINAL_REFINE_3D_VALID')
+                    marker, payload = refinement.reason.split(': ', 1)
+                    self.assertEqual(marker, 'SUPPORT_OFFSET_DIAGNOSTIC_REQUIRED')
+                    diagnostic = json.loads(payload)
+                    self.assertTrue(diagnostic['warning_flag'])
+                    self.assertAlmostEqual(diagnostic['measured_m'], separation)
+                    self.assertEqual(diagnostic['warning_threshold_m'], .004)
+                    self.assertEqual(diagnostic['hard_limit_m'], .007)
+                elif accepted:
+                    self.assertEqual(refinement.reason, '')
+                with mock.patch.object(grasp_task_node.rospy, 'logwarn_throttle') as log:
+                    result, candidate = self._accept_refinement_preview(bound, preview)
+                self.assertEqual(result.ok, accepted, result.reason)
+                self.assertEqual(log.called, warning)
+                if accepted:
+                    self.assertIsNotNone(candidate)
+                    self.assertEqual(candidate.plan_id, preview.plan_id)
+                    self.assertFalse(getattr(result, 'terminal_for_request', False))
+                else:
+                    self.assertEqual(result.code, 'FINAL_REFINE_3D_INVALID')
+                    self.assertIsNone(candidate)
+
     def test_refinement_compares_plane_separation_at_target_not_base_origin(self):
-        for separation_m in (0.0, 0.00401):
+        for separation_m in (0.0, 0.00701):
             with self.subTest(separation_m=separation_m):
                 bound = self._rich_plan(stamp_sec=9.0)
                 preview = self._mark_valid_3d(self._rich_plan(stamp_sec=9.95))
@@ -506,7 +548,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         angle = math.radians(4.0)
         preview.object_geometry.support_normal_base.x = math.sin(angle)
         preview.object_geometry.support_normal_base.z = math.cos(angle)
-        preview.object_geometry.support_offset_m = 0.004
+        preview.object_geometry.support_offset_m = 0.007
         preview.plan_id = compute_plan_id(preview)
         wire = io.BytesIO()
         preview.serialize(wire)
@@ -555,7 +597,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             {'minimum_overlap_fraction': 0.29}, {'maximum_rmse_m': 0.005},
             {'maximum_translation_m': 0.026}, {'maximum_yaw_deg': 11.0},
             {'maximum_support_normal_angle_deg': 4.1},
-            {'maximum_support_offset_delta_m': 0.005},
+            {'maximum_support_offset_delta_m': 0.00701},
             {'maximum_rmse_m': float('nan')}, {'maximum_yaw_deg': float('inf')},
             {'minimum_inliers': True}, {'minimum_inliers': 80.5},
             {'maximum_translation_m': -0.01}, {'maximum_rmse_m': '0.004'},
@@ -895,6 +937,33 @@ class GraspTaskSequenceTest(unittest.TestCase):
         return plan
 
     @staticmethod
+    def _mark_contact_geometry(plan, *, fixed_close_provenance=False):
+        """Synthetic bilateral band centered on the CAD opposing finger patch.
+
+        The 20 mm band is explicit test measurement evidence. It is not
+        inferred from the fixture OBB or generated by the production decoder.
+        """
+        pose = plan.poses[2]
+        quaternion = grasp_task_node._quaternion_xyzw(pose)
+        offset = grasp_task_node._rotate_vector(quaternion, (.0004, .0003, -.0302))
+        center = [pose.position.x + offset[0], pose.position.y + offset[1],
+                  pose.position.z + offset[2]]
+        axis = grasp_task_node._rotate_vector(quaternion, (0., 0., 1.))
+        # Executable closure fixtures explicitly carry the same 2 mm fit
+        # margin used to construct their synthetic measured aperture.
+        opening = {}
+        if fixed_close_provenance:
+            opening = dict(measured_contact_width_m=plan.required_open_width_m-.004,
+                opening_fit_clearance_each_side_m=.002,
+                required_open_width_m=plan.required_open_width_m)
+        plan.contact_geometry_evidence = encode_contact_evidence(
+            contact_center_base=center, contact_height_axis_base=axis,
+            contact_height_bounds_m=[-.010, .010], minimum_contact_overlap_m=.002,
+            grasp_pose=pose, **opening)
+        plan.plan_id = compute_plan_id(plan)
+        return plan
+
+    @staticmethod
     def _mark_valid_3d(plan):
         """Attach deterministic structured refinement evidence to a fixture."""
         plan.refinement_status = 'VALID_3D'
@@ -1168,6 +1237,12 @@ class GraspTaskSequenceTest(unittest.TestCase):
 
     def test_radial_observation_correction_requires_actual_cad_after_existing_move(self):
         node, plan, actual = self._measured_observation_fixture(z=0.13414)
+        node._bound_observation_camera_distance = lambda _plan, cfg: (.200, {
+            'min_camera_target_distance_m': cfg.get('observation_camera_target_min_distance_m', .180),
+            'max_camera_target_distance_m': cfg.get('observation_camera_target_max_distance_m', .220),
+            'handeye_translation_m': [0., 0., 0.],
+            'frozen_depth_mad_m': 0.,
+        })
         node._last_observation_camera_range_evidence = {
             'camera_position_m': [0.18, 0.0, 0.20],
             'target_position_m': [0.0, 0.0, 0.20],
@@ -1177,6 +1252,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             'plan_id': plan.plan_id,
             'plan_phase': grasp_task_node._FAR_FIELD_OBSERVATION_PLAN,
             'position_error_vector_m': [0.01, 0.0, 0.0],
+            'orientation_error_rad': 0.,
         }
         node._plan_and_execute_pose = mock.Mock(return_value=True)
         with mock.patch.object(
@@ -1350,7 +1426,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         if unknown_plan:
             plan.model_choice = 'unknown_tabletop'
             plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
-            plan.plan_id = compute_plan_id(plan)
+            self._mark_contact_geometry(plan, fixed_close_provenance=True)
         node.latest_grasp6d_plan = plan
         node.latest_obj = self._object(stamp_sec=1.0)
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(1.0)
@@ -2235,6 +2311,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             frames.append(frame)
         node.latest_grasp6d_preview_plan = frames[0]
         node.active = True
+        node._wait_for_final_refine_reference = lambda *_args: self._object(stamp_sec=12.0)
         node._set_near_field_active = lambda *args, **kwargs: True
         node._request_near_field_preview_stream = lambda *args, **kwargs: True
         node._target_drift_result = lambda *_args, **_kwargs: (
@@ -2289,6 +2366,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         preview.plan_id = compute_plan_id(preview)
         node.latest_grasp6d_preview_plan = preview
         node.active = True
+        node._wait_for_final_refine_reference = lambda *_args: self._object(stamp_sec=12.0)
         node._set_near_field_active = lambda *args, **kwargs: True
         node._request_near_field_preview_stream = lambda *args, **kwargs: True
         with mock.patch.object(
@@ -2319,6 +2397,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         preview.plan_id = compute_plan_id(preview)
         node.latest_grasp6d_preview_plan = preview
         node.active = True
+        node._wait_for_final_refine_reference = lambda *_args: self._object(stamp_sec=12.0)
         node._set_near_field_active = lambda *args, **kwargs: True
         node._request_near_field_preview_stream = lambda *args, **kwargs: True
         with mock.patch.object(
@@ -2354,6 +2433,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             frames.append(frame)
         node.latest_grasp6d_preview_plan = frames[0]
         node.active = True
+        node._wait_for_final_refine_reference = lambda *_args: self._object(stamp_sec=12.0)
         phases = []
         requests = []
         node._set_near_field_active = (
@@ -2407,6 +2487,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         second.plan_id = compute_plan_id(second)
         node.latest_grasp6d_preview_plan = first
         node.active = True
+        node._wait_for_final_refine_reference = lambda *_args: self._object(stamp_sec=12.0)
         clock = [10.0]
         index = [0]
         node._set_near_field_active = lambda *args, **kwargs: True
@@ -2470,6 +2551,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         plan = self._mark_valid_3d(self._rich_plan(stamp_sec=10.0))
         node.latest_grasp6d_preview_plan = None
         node.active = True
+        node._wait_for_final_refine_reference = lambda *_args: self._object(stamp_sec=12.0)
         node._set_near_field_active = lambda *args, **kwargs: True
         node._request_near_field_preview_stream = lambda *args, **kwargs: True
         with mock.patch.object(
@@ -3269,6 +3351,12 @@ class GraspTaskSequenceTest(unittest.TestCase):
         )
         plan = self._rich_plan(plan_id='retreat-plan', stamp_sec=9.0)
         plan.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        node._bound_observation_camera_distance = lambda _plan, cfg: (.200, {
+            'min_camera_target_distance_m': cfg.get('observation_camera_target_min_distance_m', .180),
+            'max_camera_target_distance_m': cfg.get('observation_camera_target_max_distance_m', .220),
+            'handeye_translation_m': [0., 0., 0.],
+            'frozen_depth_mad_m': 0.,
+        })
         node._last_observation_camera_range_evidence = {
             'camera_position_m': [0.18, 0.0, 0.20],
             'target_position_m': [0.0, 0.0, 0.20],
@@ -3278,6 +3366,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             'plan_id': plan.plan_id,
             'plan_phase': grasp_task_node._FAR_FIELD_OBSERVATION_PLAN,
             'position_error_vector_m': [0.01, 0.0, 0.0],
+            'orientation_error_rad': 0.,
         }
         node._current_tool_pose_base = lambda: self._pose(1.0, 2.0, 3.0)
         node.set_state = lambda *_args, **_kwargs: None
@@ -3335,6 +3424,12 @@ class GraspTaskSequenceTest(unittest.TestCase):
         )
         plan = self._rich_plan(plan_id='approach-plan', stamp_sec=9.0)
         plan.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+        node._bound_observation_camera_distance = lambda _plan, cfg: (.200, {
+            'min_camera_target_distance_m': cfg.get('observation_camera_target_min_distance_m', .180),
+            'max_camera_target_distance_m': cfg.get('observation_camera_target_max_distance_m', .220),
+            'handeye_translation_m': [0., 0., 0.],
+            'frozen_depth_mad_m': 0.,
+        })
         node._last_observation_camera_range_evidence = {
             'camera_position_m': [0.26, 0.0, 0.20],
             'target_position_m': [0.0, 0.0, 0.20],
@@ -3344,6 +3439,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
             'plan_id': plan.plan_id,
             'plan_phase': grasp_task_node._FAR_FIELD_OBSERVATION_PLAN,
             'position_error_vector_m': [0.01, 0.0, 0.0],
+            'orientation_error_rad': 0.,
         }
         node._current_tool_pose_base = lambda: self._pose(1.0, 2.0, 3.0)
         node.set_state = lambda *_args, **_kwargs: None
@@ -3948,7 +4044,10 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
                 bound = self._rich_plan(plan_id='bound', stamp_sec=9.0)
                 bound.diagnostic = grasp_task_node._FAR_FIELD_OBSERVATION_PLAN
+                bound.plan_id = grasp_task_node.compute_plan_id(bound)
                 node.active = True
+                node._freeze_execution_plan(bound)
+                node._bound_target_drift_result = lambda *_: grasp_task_node.PlanValidationResult(True)
                 node._near_field_phase_started_sec = 9.5
                 node._near_field_phase_deadline_sec = 40.0
                 states, motions, phase_calls, preview_windows = [], [], [], []
@@ -6448,7 +6547,13 @@ class GraspTaskSequenceTest(unittest.TestCase):
             states[-1][1],
         )
 
-    def _run_full_grasp_sequence(self, unknown=False, lift_enabled=True):
+    def _run_full_grasp_sequence(self, unknown=False, lift_enabled=True, contact_ok=True):
+        """Service-order/close-hold-lift policy unit with explicit device doubles.
+
+        This toy scene already replaces endpoint contact and settling. It is
+        not SDK/FK geometry or end-to-end evidence; those consumers run without
+        this boundary double in the GEN35/36/37 minimal-chain replays.
+        """
         node = grasp_task_node.GraspTaskNode.__new__(grasp_task_node.GraspTaskNode)
         node.latest_obj = self._object()
         node.latest_obj_time = grasp_task_node.rospy.Time.from_sec(3.5)
@@ -6456,13 +6561,15 @@ class GraspTaskSequenceTest(unittest.TestCase):
         if unknown:
             node.latest_grasp6d_plan.model_choice = 'unknown_tabletop'
             node.latest_grasp6d_plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
-            node.latest_grasp6d_plan.plan_id = compute_plan_id(node.latest_grasp6d_plan)
+            self._mark_contact_geometry(node.latest_grasp6d_plan)
         node.active = True
         execution_plan = node._freeze_execution_plan(
             node.latest_grasp6d_plan
         )
         node._wait_for_motion_settle = lambda reason='motion': calls.append(('settle', reason))
         node._simulate_grasp6d_plan_if_required = lambda *_args: True
+        node._validate_measured_contact_before_close = lambda *_args: contact_ok
+        node._validate_measured_aperture = lambda *_args: True
         states = []
         node.set_state = lambda *args, **kwargs: states.append(args)
 
@@ -6553,6 +6660,14 @@ class GraspTaskSequenceTest(unittest.TestCase):
         )
         self.assertIn(('close', True), calls)
         self.assertNotIn('/supervisor/move_to_pose', proxy_names)
+
+    def test_measured_contact_failure_prevents_close_and_lift_after_successful_descent(self):
+        result, calls, _, _ = self._run_full_grasp_sequence(
+            unknown=True, lift_enabled=False, contact_ok=False)
+        self.assertFalse(result)
+        self.assertIn(('linear', 0.30, True), calls)
+        self.assertNotIn(('close', True), calls)
+        self.assertNotIn(('linear', 0.40, True), calls)
 
     def test_unknown_close_and_hold_never_plans_or_executes_lift(self):
         result, calls, _, states = self._run_full_grasp_sequence(unknown=True, lift_enabled=False)
@@ -6926,11 +7041,19 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertIn('gripper would collide with table', states[-1][1])
 
     def test_strict_mujoco_gate_complete_pass_reaches_first_physical_action_once(self):
+        # Exercise a long recording path even when the test temp root is short.
+        audit_path = os.path.join(
+            self._mujoco_audit_directory.name,
+            *['audit-segment-%02d-%s' % (i, 'x' * 40) for i in range(6)],
+            'mujoco-audit.json',
+        )
+        self.assertGreater(len(audit_path), 320)
         result, physical, states, payloads, node, plan = (
             self._run_mujoco_gate_to_first_physical_action(
                 response=lambda bound: self._passing_mujoco_response(
                     bound.plan_id
-                )
+                ),
+                audit_output_path=audit_path,
             )
         )
 
@@ -7062,12 +7185,16 @@ class GraspTaskSequenceTest(unittest.TestCase):
                 self.assertIn(parameter, states[-1][1])
 
     def test_mujoco_and_planning_audit_canonical_path_conflict_blocks_before_network(self):
+        # Only synthetic inode fixtures use RAM: SanStand may be exFAT and
+        # cannot create hardlinks. Test/ROS logs and receipts stay on SanStand.
+        inode_fixture = tempfile.TemporaryDirectory(prefix='alicia-audit-inode-', dir='/dev/shm')
+        self.addCleanup(inode_fixture.cleanup)
         shared_path = os.path.join(
-            self._mujoco_audit_directory.name,
+            inode_fixture.name,
             'shared-audit.json',
         )
         alias_path = os.path.join(
-            self._mujoco_audit_directory.name,
+            inode_fixture.name,
             'not-created',
             '..',
             'shared-audit.json',
@@ -7089,7 +7216,7 @@ class GraspTaskSequenceTest(unittest.TestCase):
         with open(shared_path, 'wb') as handle:
             handle.write(b'{"planning_audit":"evidence"}')
         hardlink_path = os.path.join(
-            self._mujoco_audit_directory.name,
+            inode_fixture.name,
             'hardlinked-mujoco-audit.json',
         )
         os.link(shared_path, hardlink_path)
@@ -8376,6 +8503,80 @@ class GraspTaskSequenceTest(unittest.TestCase):
         self.assertAlmostEqual(endpoint_waits[0][2], 5.0)
         self.assertEqual(len(endpoint_records), 1)
         self.assertTrue(endpoint_records[0][-1])
+
+    def test_lift_execution_never_acquires_contact_trim_lease(self):
+        # A lift with the same CONTACT_EXECUTION_PLAN marker must not inherit
+        # pre-closure recovery. Success still requires settled, stable live FK.
+        for execution_ok, fk_stable, endpoint_valid in (
+                (False, True, True),
+                (True, True, True),
+                (True, False, True),
+                (True, True, False)):
+            with self.subTest(execution_ok=execution_ok, fk_stable=fk_stable,
+                              endpoint_valid=endpoint_valid):
+                node = grasp_task_node.GraspTaskNode.__new__(
+                    grasp_task_node.GraspTaskNode)
+                node.active = True
+                node._bound_execution_plan = None
+                node._position_only_execute_globally_enabled = lambda: False
+                node._validate_bound_plan = (
+                    lambda *_args, **_kwargs: grasp_task_node.PlanValidationResult(True))
+                node._invoke_plan_bound_action = (
+                    lambda _plan, _cfg, _label, action: (
+                        grasp_task_node.PlanValidationResult(True), action()))
+                states = []
+                node.set_state = lambda *args, **_kwargs: states.append(args)
+                node._set_contact_endpoint_precision = mock.Mock(return_value=True)
+                node._wait_for_motion_settle = mock.Mock(return_value=True)
+                node._wait_for_measured_endpoint_contract = mock.Mock(
+                    return_value=(fk_stable, 0.004, 1.0))
+                node._record_and_validate_measured_endpoint = mock.Mock(
+                    return_value=endpoint_valid)
+                plan = self._rich_plan()
+                plan.diagnostic = grasp_task_node._CONTACT_EXECUTION_PLAN
+                move_calls = []
+
+                def move_pose(_pose, execute):
+                    move_calls.append(bool(execute))
+                    if execute and not execution_ok:
+                        return FakeServiceResponse(
+                            False,
+                            'execute failed from cached plan (cartesian): target '
+                            'xyz=(-0.118, -0.432, 0.129)')
+                    return FakeServiceResponse(True, 'ok')
+
+                result = node._plan_and_execute_pose(
+                    grasp_task_node.GraspStages.LIFT_OBJECT,
+                    'linear 6D lift', self._pose(0.10, -0.40, 0.23),
+                    move_pose, '6D lift', execution_plan=plan,
+                    gcfg={
+                        'measured_endpoint_check_enabled': True,
+                        'measured_endpoint_position_tolerance_m': 0.006,
+                        'measured_endpoint_orientation_tolerance_deg': 5.0,
+                        'contact_endpoint_precision_enabled': True,
+                    },
+                    execute_pose=move_pose,
+                )
+
+                self.assertIs(result, execution_ok and fk_stable and endpoint_valid)
+                self.assertEqual(move_calls, [False, True])
+                node._set_contact_endpoint_precision.assert_not_called()
+                self.assertFalse(hasattr(node, '_last_contact_execution_failure'))
+                if execution_ok:
+                    node._wait_for_motion_settle.assert_called_once_with('6D lift')
+                    node._wait_for_measured_endpoint_contract.assert_called_once()
+                    node._record_and_validate_measured_endpoint.assert_called_once()
+                    self.assertTrue(
+                        node._record_and_validate_measured_endpoint.call_args.kwargs['required'])
+                    if not fk_stable:
+                        self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+                        self.assertIn('MEASURED_ENDPOINT_STABILITY_TIMEOUT', states[-1][1])
+                else:
+                    node._wait_for_motion_settle.assert_not_called()
+                    node._wait_for_measured_endpoint_contract.assert_not_called()
+                    node._record_and_validate_measured_endpoint.assert_not_called()
+                    self.assertEqual(states[-1][0], grasp_task_node.GraspStages.FAILED)
+                    self.assertIn('linear 6D lift failed: execute failed', states[-1][1])
 
     def test_contact_cached_cartesian_goal_tolerance_failure_recovers_only_after_fk_contract(self):
         node = grasp_task_node.GraspTaskNode.__new__(

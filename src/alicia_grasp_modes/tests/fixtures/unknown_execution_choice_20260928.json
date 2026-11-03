@@ -1,0 +1,426 @@
+{
+  "scope": "recorded_checked_candidates_offline_no_execution_authority",
+  "record_directory": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20260928T023737.018333Z_d8b731e76f5c4afe86c3a70c93b779eb",
+  "candidates": [
+    {
+      "source_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/candidate_path_audits/1790563095877039415_2_0.json",
+      "source_sha256": "ed3d0203c794494679557b532e8e7fda1d7593258a0af02c6f6f3c0531a2038c",
+      "request_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/wsl_simulation_requests/1790563096852876462_a4e9ed0b/request.json",
+      "request_sha256": "749f9909512c0d60169cc06865ffd4a1e07e6f5bdc1fdbcd69d015f56803ce10",
+      "track": 2,
+      "variant": 0,
+      "geometry": {
+        "center_base": [
+          -0.11018647497744549,
+          -0.40530153669672586,
+          0.07808401603539694
+        ],
+        "size_xyz_m": [
+          0.02331591911119932,
+          0.016854240736629993,
+          0.015090650320385162
+        ],
+        "axes_base": [
+          [
+            0.05928804155249491,
+            -0.9981684190676642,
+            0.012030598689586865
+          ],
+          [
+            0.9823584299874102,
+            0.060481786370734265,
+            0.17695725062872006
+          ],
+          [
+            -0.17736077120248556,
+            0.0013269112122203351,
+            0.9841450076818429
+          ]
+        ],
+        "support_normal_base": [
+          0.012030598689586865,
+          0.17695725062872006,
+          0.9841450076818429
+        ],
+        "support_offset_m": 0.0037459854701294704
+      },
+      "grasp_transform": [
+        [
+          -0.05928804155249507,
+          -0.9981684190676642,
+          -0.01203059868958685,
+          -0.10987111997485109
+        ],
+        [
+          -0.9823584299874103,
+          0.06048178637073403,
+          -0.1769572506287201,
+          -0.40504162549563427
+        ],
+        [
+          0.17736077120248556,
+          0.0013269112122203386,
+          -0.9841450076818432,
+          0.07737372785155654
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "result": {
+        "reachable": true,
+        "joint_path_cost": 4.221831747352442,
+        "joint_max_delta_rad": 3.101141681034539,
+        "reason": "strict pose sequence planned stages=pregrasp,approach,grasp,lift joint_path_cost=4.222 joint_max_delta=3.101 joint_duration_lower_bound_sec=158.087 execution_duration_lower_bound_sec=158.087 hardware_limiting_joint=Joint4",
+        "collision_free": true,
+        "within_joint_limits": true,
+        "ik_valid": true,
+        "planning_success": true,
+        "failure_code": "",
+        "evidence_code": ""
+      },
+      "required_open_width_m": 0.01637411303818226,
+      "mujoco_passed": true,
+      "plan_id": "a4897c661c5fc27a2b86a8e9"
+    },
+    {
+      "source_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/candidate_path_audits/1790563097776712218_4_1.json",
+      "source_sha256": "44c87f07034ba78565d99042f3a58ef525a41e52795d7e206da26593cc77da7f",
+      "request_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/wsl_simulation_requests/1790563098824622330_193a6daf/request.json",
+      "request_sha256": "c51c91da3333ec009da5390977def91ad3e2594fc104c08dda95e0c449959935",
+      "track": 4,
+      "variant": 1,
+      "geometry": {
+        "center_base": [
+          -0.11018647497744549,
+          -0.40530153669672586,
+          0.07808401603539694
+        ],
+        "size_xyz_m": [
+          0.02331591911119932,
+          0.016854240736629993,
+          0.015090650320385162
+        ],
+        "axes_base": [
+          [
+            0.05928804155249491,
+            -0.9981684190676642,
+            0.012030598689586865
+          ],
+          [
+            0.9823584299874102,
+            0.060481786370734265,
+            0.17695725062872006
+          ],
+          [
+            -0.17736077120248556,
+            0.0013269112122203351,
+            0.9841450076818429
+          ]
+        ],
+        "support_normal_base": [
+          0.012030598689586865,
+          0.17695725062872006,
+          0.9841450076818429
+        ],
+        "support_offset_m": 0.0037459854701294704
+      },
+      "grasp_transform": [
+        [
+          0.08714943526292362,
+          0.9961226032113336,
+          -0.012030598689586863,
+          -0.11052798227226096
+        ],
+        [
+          0.9802854363228665,
+          -0.08790105109276103,
+          -0.17695725062872014,
+          -0.40578216819091933
+        ],
+        [
+          -0.17732861942349093,
+          0.003628303772325661,
+          -0.9841450076818431,
+          0.07751491319003889
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "result": {
+        "reachable": true,
+        "joint_path_cost": 2.441895414962241,
+        "joint_max_delta_rad": 1.559894912392917,
+        "reason": "strict pose sequence planned stages=pregrasp,approach,grasp,lift joint_path_cost=2.442 joint_max_delta=1.560 joint_duration_lower_bound_sec=80.861 execution_duration_lower_bound_sec=80.861 hardware_limiting_joint=Joint3",
+        "collision_free": true,
+        "within_joint_limits": true,
+        "ik_valid": true,
+        "planning_success": true,
+        "failure_code": "",
+        "evidence_code": ""
+      },
+      "required_open_width_m": 0.016419993713498116,
+      "mujoco_passed": true,
+      "plan_id": "2f19f1f085591407f61b2f2f"
+    },
+    {
+      "source_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/candidate_path_audits/1790563099755682276_4_0.json",
+      "source_sha256": "ef5b96c71a27cbc7788bcdac777f1211886218cc6181091705d4268052b4d29c",
+      "request_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/wsl_simulation_requests/1790563101230207591_1fed6615/request.json",
+      "request_sha256": "c11a8b45b18664a82bc3eae60fbbb011ad027101c26f2222aa012f7a5e3fec40",
+      "track": 4,
+      "variant": 0,
+      "geometry": {
+        "center_base": [
+          -0.11018647497744549,
+          -0.40530153669672586,
+          0.07808401603539694
+        ],
+        "size_xyz_m": [
+          0.02331591911119932,
+          0.016854240736629993,
+          0.015090650320385162
+        ],
+        "axes_base": [
+          [
+            0.05928804155249491,
+            -0.9981684190676642,
+            0.012030598689586865
+          ],
+          [
+            0.9823584299874102,
+            0.060481786370734265,
+            0.17695725062872006
+          ],
+          [
+            -0.17736077120248556,
+            0.0013269112122203351,
+            0.9841450076818429
+          ]
+        ],
+        "support_normal_base": [
+          0.012030598689586865,
+          0.17695725062872006,
+          0.9841450076818429
+        ],
+        "support_offset_m": 0.0037459854701294704
+      },
+      "grasp_transform": [
+        [
+          -0.08714943526292392,
+          -0.9961226032113336,
+          -0.012030598689586877,
+          -0.10986058916212382
+        ],
+        [
+          -0.9802854363228665,
+          0.08790105109276074,
+          -0.1769572506287201,
+          -0.40505068047251674
+        ],
+        [
+          0.17732861942349087,
+          -0.0036283037723256473,
+          -0.9841450076818431,
+          0.07737522727676349
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "result": {
+        "reachable": true,
+        "joint_path_cost": 4.21923243656677,
+        "joint_max_delta_rad": 3.102159048137499,
+        "reason": "strict pose sequence planned stages=pregrasp,approach,grasp,lift joint_path_cost=4.219 joint_max_delta=3.102 joint_duration_lower_bound_sec=158.077 execution_duration_lower_bound_sec=158.077 hardware_limiting_joint=Joint4",
+        "collision_free": true,
+        "within_joint_limits": true,
+        "ik_valid": true,
+        "planning_success": true,
+        "failure_code": "",
+        "evidence_code": ""
+      },
+      "required_open_width_m": 0.016419993713498116,
+      "mujoco_passed": true,
+      "plan_id": "15c6e5d369450b398681f2fe"
+    },
+    {
+      "source_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/candidate_path_audits/1790563102159054462_8_0.json",
+      "source_sha256": "c1b714ca1888b897580c1a06dae0f10d4f1845eae24a2b7b497830c3a9898418",
+      "request_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/wsl_simulation_requests/1790563103000897897_141e568b/request.json",
+      "request_sha256": "458d9de1b1c25ddde30eff8887039bea9f4d533a2ec134912846bc0a37681715",
+      "track": 8,
+      "variant": 0,
+      "geometry": {
+        "center_base": [
+          -0.11018647497744549,
+          -0.40530153669672586,
+          0.07808401603539694
+        ],
+        "size_xyz_m": [
+          0.02331591911119932,
+          0.016854240736629993,
+          0.015090650320385162
+        ],
+        "axes_base": [
+          [
+            0.05928804155249491,
+            -0.9981684190676642,
+            0.012030598689586865
+          ],
+          [
+            0.9823584299874102,
+            0.060481786370734265,
+            0.17695725062872006
+          ],
+          [
+            -0.17736077120248556,
+            0.0013269112122203351,
+            0.9841450076818429
+          ]
+        ],
+        "support_normal_base": [
+          0.012030598689586865,
+          0.17695725062872006,
+          0.9841450076818429
+        ],
+        "support_offset_m": 0.0037459854701294704
+      },
+      "grasp_transform": [
+        [
+          -4.9439619065339e-16,
+          0.9999276297288572,
+          -0.01203059868958685,
+          -0.11049464904099274
+        ],
+        [
+          0.9842162356776823,
+          -0.0021290557478683084,
+          -0.1769572506287201,
+          -0.4058151355609197
+        ],
+        [
+          -0.1769700579998017,
+          -0.011840710555214087,
+          -0.9841450076818431,
+          0.07748791327113534
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "result": {
+        "reachable": true,
+        "joint_path_cost": 2.4510801743230872,
+        "joint_max_delta_rad": 1.559255991346164,
+        "reason": "strict pose sequence planned stages=pregrasp,approach,grasp,lift joint_path_cost=2.451 joint_max_delta=1.559 joint_duration_lower_bound_sec=80.798 execution_duration_lower_bound_sec=80.798 hardware_limiting_joint=Joint3",
+        "collision_free": true,
+        "within_joint_limits": true,
+        "ik_valid": true,
+        "planning_success": true,
+        "failure_code": "",
+        "evidence_code": ""
+      },
+      "required_open_width_m": 0.016729939728975296,
+      "mujoco_passed": true,
+      "plan_id": "469986481477dcb2a2fabd8b"
+    },
+    {
+      "source_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/candidate_path_audits/1790563103940925285_8_1.json",
+      "source_sha256": "705c729e04fa4527fdffba476b584b728d36f8ab29646eb523232d28d1aba4aa",
+      "request_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/unknown_grasp_20260923/wsl_simulation_requests/1790563104812448999_e95dca13/request.json",
+      "request_sha256": "79e28bd1e739ab9b5236626f4c6688f210478aa36cb98e63a54175af2093fbc6",
+      "track": 8,
+      "variant": 1,
+      "geometry": {
+        "center_base": [
+          -0.11018647497744549,
+          -0.40530153669672586,
+          0.07808401603539694
+        ],
+        "size_xyz_m": [
+          0.02331591911119932,
+          0.016854240736629993,
+          0.015090650320385162
+        ],
+        "axes_base": [
+          [
+            0.05928804155249491,
+            -0.9981684190676642,
+            0.012030598689586865
+          ],
+          [
+            0.9823584299874102,
+            0.060481786370734265,
+            0.17695725062872006
+          ],
+          [
+            -0.17736077120248556,
+            0.0013269112122203351,
+            0.9841450076818429
+          ]
+        ],
+        "support_normal_base": [
+          0.012030598689586865,
+          0.17695725062872006,
+          0.9841450076818429
+        ],
+        "support_offset_m": 0.0037459854701294704
+      },
+      "grasp_transform": [
+        [
+          2.220446049250313e-16,
+          -0.9999276297288573,
+          -0.012030598689586919,
+          -0.10989469246315542
+        ],
+        [
+          -0.9842162356776825,
+          0.002129055747867814,
+          -0.17695725062872014,
+          -0.4050290400058263
+        ],
+        [
+          0.17697005799980176,
+          0.01184071055521417,
+          -0.9841450076818433,
+          0.07733923279840238
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "result": {
+        "reachable": true,
+        "joint_path_cost": 4.224746432528186,
+        "joint_max_delta_rad": 3.100979900103018,
+        "reason": "strict pose sequence planned stages=pregrasp,approach,grasp,lift joint_path_cost=4.225 joint_max_delta=3.101 joint_duration_lower_bound_sec=158.051 execution_duration_lower_bound_sec=158.051 hardware_limiting_joint=Joint4",
+        "collision_free": true,
+        "within_joint_limits": true,
+        "ik_valid": true,
+        "planning_success": true,
+        "failure_code": "",
+        "evidence_code": ""
+      },
+      "required_open_width_m": 0.016729939728975296,
+      "mujoco_passed": true,
+      "plan_id": "a9ebd39691f9e0b80d9d007b"
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "scope": "recorded_feedback_timestamps_rebased_only_in_tests",
+  "record_directory": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20260928T023737.018333Z_d8b731e76f5c4afe86c3a70c93b779eb",
+  "evidence": {
+    "plan_id": "a4897c661c5fc27a2b86a8e9",
+    "epoch_ns": 1790558137511587030,
+    "fixed_goal_pose_index": 0,
+    "execution_requested": true,
+    "real_grasp_success": false,
+    "no_implicit_rollback_or_torque_disable": true,
+    "fixed_goal_pose": [
+      -0.10950911143653785,
+      -0.3997168667453087,
+      0.10698729114226364,
+      0.6827106231337357,
+      -0.7252438961489218,
+      0.060541819224230936,
+      0.06528540636389676
+    ],
+    "initial_sdk_counts": [
+      839,
+      1570,
+      2954,
+      4070,
+      2875,
+      2200
+    ],
+    "method": "held_axes_following_feedforward",
+    "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+    "sdk_stamp_ns": 1790563316929936614,
+    "accepted_stamp_ns": 1790563316918468602,
+    "proposal_policy": "held_axes_full_budget_guide",
+    "held_joints": [
+      "Joint2",
+      "Joint5"
+    ],
+    "sdk_minus_encoder_rad": [
+      0.004601942363656963,
+      0.026077673394055756,
+      0.019941750242513434,
+      0.006135923151542766,
+      0.012271846303085088,
+      0.009203884727313871
+    ],
+    "measured_start_positions_rad": [
+      -1.859184714917397,
+      -0.7593204900033923,
+      1.3698448435818775,
+      3.095573229953224,
+      1.2563302652783401,
+      0.2239611950313036
+    ],
+    "command_start_positions_rad": [
+      -1.85458277255374,
+      -0.7332428166093365,
+      1.389786593824391,
+      3.1017091531047667,
+      1.2686021115814252,
+      0.23316507975861747
+    ],
+    "proposed_delta_counts": [
+      2,
+      0,
+      28,
+      0,
+      0,
+      32
+    ],
+    "predicted_position_error_m": 0.007356414958078206,
+    "predicted_orientation_error_rad": 0.038962591907032,
+    "position_error_m": 0.007082581674171613,
+    "orientation_error_rad": 0.03182782494696787,
+    "conditional_budget_guide": {
+      "delta_counts": [
+        2,
+        0,
+        28,
+        0,
+        0,
+        32
+      ],
+      "predicted_position_error_m": 0.007356414958078206,
+      "predicted_orientation_error_rad": 0.038962591907032,
+      "physical_convergence_proven": false,
+      "path_authorized": false,
+      "globally_optimal": false
+    },
+    "hardware_response_verified": false,
+    "sdk_counts": [
+      841,
+      1570,
+      2982,
+      4070,
+      2875,
+      2232
+    ],
+    "measured_counts": [
+      837,
+      1553,
+      2967,
+      4066,
+      2870,
+      2223
+    ],
+    "steps_completed": 1,
+    "last_step_response": {
+      "command_delta_counts": [
+        2,
+        0,
+        28,
+        0,
+        0,
+        32
+      ],
+      "measured_delta_counts": [
+        1,
+        0,
+        26,
+        0,
+        3,
+        29
+      ],
+      "bounded_directional_response": false
+    },
+    "code": "PREGRASP_NO_BOUNDED_DIRECTIONAL_RESPONSE"
+  }
+}

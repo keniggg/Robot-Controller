@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "kind": "sealed_e5_contact_endpoint_input",
+  "execution_authorized": false,
+  "physical_motion_for_this_contact": false,
+  "source": {
+    "log": {
+      "path": "/home/zhuyupei/ssd_data/实验记录/Robot-Controller/ros_log/full_latest_r26_manual_20261102_r1/r27_remote_only_refresh_fk5_20261102_r5/remote.log",
+      "sha256": "26ae43a261b133134924af0d701ff50dd9d9bbee71f8c513c32458323e9b7802"
+    },
+    "line": 72,
+    "utf8_line_sha256": "d571f5b783a9ce3570c5d13aa32d7ed0e4d15dc30af6adb52fed11fd41336212",
+    "receipt": {
+      "codec": "gzip-json-v1",
+      "diagnostic_only": true,
+      "execution_authorized": false,
+      "gzip_bytes": 11448,
+      "gzip_sha256": "e59f51e43661c9e8a0439fc04b4b248505e4fb7085020cee049b53d562a4103c",
+      "kind": "contact_curve_failure",
+      "object_sha256": "065f2a071cae6aad7807da0bab2d5e532ba4006a61e796694d0b78defe480f93",
+      "relative_path": "sha256/06/065f2a071cae6aad7807da0bab2d5e532ba4006a61e796694d0b78defe480f93.json.gz",
+      "schema_version": 1,
+      "store_root": "/home/zhuyupei/ssd_data/实验记录/Robot-Controller/ros_log/full_latest_r26_manual_20261102_r1/core_ros/contact_replay_receipts",
+      "uncompressed_bytes": 38432
+    }
+  },
+  "model_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<robot name=\"alicia_D_v5_5\">\n  <mujoco>\n    <compiler meshdir=\"../meshes\" discardvisual=\"false\" />\n    <contact>\n      <exclude body1=\"base_link\" body2=\"Link1\"/>\n      <exclude body1=\"Link1\" body2=\"Link2\"/>\n      <exclude body1=\"Link2\" body2=\"Link3\"/>\n      <exclude body1=\"Link3\" body2=\"Link4\"/>\n      <exclude body1=\"Link4\" body2=\"Link5\"/>\n      <exclude body1=\"Link5\" body2=\"Link6\"/>\n      <exclude body1=\"Link6\" body2=\"Link7\"/>\n      <exclude body1=\"Link6\" body2=\"Link8\"/>\n    </contact>\n  </mujoco>\n  <link\n    name=\"base_link\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <link\n    name=\"Link1\">\n    <inertial>\n      <origin\n        xyz=\"-0.000232391087694535 -1.30049454546467E-05 0.00272122513752755\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.193725361315237\" />\n      <inertia\n        ixx=\"0.000258312653055438\"\n        ixy=\"8.79363230651008E-07\"\n        ixz=\"-6.87511809706199E-07\"\n        iyy=\"0.000149233685494123\"\n        iyz=\"-1.07703111237371E-06\"\n        izz=\"0.000339752801671385\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint1\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0 0.1295\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"base_link\" />\n    <child\n      link=\"Link1\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-2.16\"\n      upper=\"2.16\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link2\">\n    <inertial>\n      <origin\n        xyz=\"0.149948141017768 -0.00073733103436536 -0.000614552702572041\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.216765318032361\" />\n      <inertia\n        ixx=\"0.00012827957403101\"\n        ixy=\"-1.18676813578654E-07\"\n        ixz=\"-1.68171130903575E-06\"\n        iyy=\"0.000226231611908606\"\n        iyz=\"-3.50051091633141E-07\"\n        izz=\"0.000143215063853149\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint2\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 -5E-05 0.04287\"\n      rpy=\"1.570796326670687 -1.4619552299123753 3.673328578425508e-06\" />\n    <parent\n      link=\"Link1\" />\n    <child\n      link=\"Link2\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.57\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link3\">\n    <inertial>\n      <origin\n        xyz=\"0.055786319810667 0.00248143782929366 0.000269720725052352\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0845575681430802\" />\n      <inertia\n        ixx=\"2.87941478239851E-05\"\n        ixy=\"-2.26498116289353E-06\"\n        ixz=\"-5.38445390787684E-06\"\n        iyy=\"7.61918370068424E-05\"\n        iyz=\"-3.82299515503286E-07\"\n        izz=\"8.043706644056E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint3\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.22367 -0.022592 0\"\n      rpy=\"0 0 -2.4010124372456678\" />\n    <parent\n      link=\"Link2\" />\n    <child\n      link=\"Link3\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-0.5\"\n      upper=\"2.35619\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link4\">\n    <inertial>\n      <origin\n        xyz=\"0.000298365504501796 -0.000601368925849056 0.0663740391896737\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0653695953286747\" />\n      <inertia\n        ixx=\"7.03004188086337E-05\"\n        ixy=\"-9.68417851161416E-09\"\n        ixz=\"-7.50131707418093E-07\"\n        iyy=\"6.8747029788813E-05\"\n        iyz=\"4.45271906086873E-08\"\n        izz=\"1.68226189350765E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint4\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.0986 -0.00211 0.0002\"\n      rpy=\"-1.5708000003911129 0.014592309644319679 -1.5708000536043512\" />\n    <parent\n      link=\"Link3\" />\n    <child\n      link=\"Link4\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link5\">\n    <inertial>\n      <origin\n        xyz=\"-0.0110961410990681 0.0308024762289942 -0.000207575403674642\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0463941316397046\" />\n      <inertia\n        ixx=\"1.8425786696003E-05\"\n        ixy=\"2.02919305442313E-06\"\n        ixz=\"-5.09341788606234E-08\"\n        iyy=\"2.39811947218569E-05\"\n        iyz=\"-4.22854804621873E-08\"\n        izz=\"1.63952567717743E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint5\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0.00015 0.12275\"\n      rpy=\"1.5708000000612679 0.0057757130913083099 2.1215614713127198e-08\" />\n    <parent\n      link=\"Link4\" />\n    <child\n      link=\"Link5\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.5\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link6\">\n    <inertial>\n      <origin\n        xyz=\"-3.11347120307559E-09 6.19962735608128E-10 -0.00146275616399921\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.000754053623586768\" />\n      <inertia\n        ixx=\"1.9236769291339E-08\"\n        ixy=\"9.19452445636026E-14\"\n        ixz=\"3.52333012571258E-15\"\n        iyy=\"1.92358360258478E-08\"\n        iyz=\"-3.901270498029E-17\"\n        izz=\"3.70123450485896E-08\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6\"\n    type=\"revolute\">\n    <origin\n      xyz=\"-0.00385 0.0573 -0.00035\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Link5\" />\n    <child\n      link=\"Link6\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Grasp_base\">\n    <inertial>\n      <origin\n        xyz=\"-0.0321082111389046 -0.000168822009778203 0.0275474621634362\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.119820573147005\" />\n      <inertia\n        ixx=\"8.23026483118452E-05\"\n        ixy=\"2.1627287972411E-08\"\n        ixz=\"-6.37078693697654E-06\"\n        iyy=\"3.33372461482565E-05\"\n        iyz=\"2.3095070932307E-08\"\n        izz=\"8.59654133961544E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6_to_gripper_base\"\n    type=\"fixed\">\n    <origin\n      xyz=\"0 0 0\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Link6\" />\n    <child\n      link=\"Grasp_base\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n  <link\n    name=\"Link7\">\n    <inertial>\n      <origin\n        xyz=\"2.97087521250461E-08 0.0434087591943518 0.0106596716155943\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0256461121677861\" />\n      <inertia\n        ixx=\"6.46830326573767E-06\"\n        ixy=\"2.39543799544883E-11\"\n        ixz=\"-4.63721293861409E-12\"\n        iyy=\"5.13428741941794E-06\"\n        iyz=\"-1.26432048814187E-06\"\n        izz=\"8.03606347912567E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"left_finger\"\n    type=\"prismatic\">\n    <!--\n      The real SDK and /joint_states public contract is 0 m closed and\n      0.05 m open.  Keep the original CAD poses, but parameterize them in\n      that public direction: right_finger=0 is the centered/closed pose and\n      right_finger=0.05 is the original fully-open pose.\n    -->\n    <origin\n      xyz=\"-0.0002 0.000502 0.131180183660255\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link7\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-0.05\"\n      upper=\"0\"\n      effort=\"5\"\n      velocity=\"10\" />\n    <mimic joint=\"right_finger\" multiplier=\"-1\" offset=\"0\"/>\n  </joint>\n  <link\n    name=\"Link8\">\n    <inertial>\n      <origin\n        xyz=\"-2.97087521250461E-08 -0.0434087591943727 0.0106596716155944\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.025646112167786\" />\n      <inertia\n        ixx=\"6.46830326573761E-06\"\n        ixy=\"2.39543799589352E-11\"\n        ixz=\"4.63721294819601E-12\"\n        iyy=\"5.13428741941793E-06\"\n        iyz=\"1.26432048814186E-06\"\n        izz=\"8.03606347912559E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"right_finger\"\n    type=\"prismatic\">\n    <origin\n      xyz=\"-0.0002 -0.000498 0.131180183660255\"\n      rpy=\"1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link8\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"0\"\n      upper=\"0.05\"\n      effort=\"5\"\n      velocity=\"10\" />\n  </joint>\n  <link\n    name=\"tool0\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <sphere radius=\"0.005\" /> <!-- 定义一个半径为0.02米的小球体 -->\n      </geometry>\n      <material\n        name=\"green_virtual_sphere_material\"> <!-- 可以给材质起个名字 -->\n        <color\n          rgba=\"0 1 0 1\" /> <!-- 绿色 (R G B A)，A为1表示不透明 -->\n      </material>\n    </visual>\n  </link>\n  <joint\n    name=\"Grasp2tool\"\n    type=\"fixed\">\n    <origin\n      xyz=\"-0.0002 -0.0003 0.13118\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"tool0\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n</robot>\n",
+  "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "rows": [
+    {
+      "failure": {
+        "success": false,
+        "plan_id": "e5f67ca39572bbfa5b1d1233",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 15-end/right_finger",
+        "epoch_ns": 1793673971329898146,
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.049850000000000005,
+          "accepted_positions_rad": [
+            -2.0831459099487004,
+            -0.5460971604872883,
+            1.1274758790959463,
+            -0.5108156023659185,
+            -1.4971652489763856,
+            -0.1871456561220482
+          ],
+          "accepted_sample_count": 4,
+          "accepted_stamp_ns": 1793690247224266572,
+          "accepted_tool_position_m": [
+            -0.07468458641747736,
+            -0.3246948475662882,
+            0.0985707582496856
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1793673971329898146,
+          "joint_error_sdk_counts": [
+            6.000000000000342,
+            -14.000000000000025,
+            -10.999999999999998,
+            6.000000000000052,
+            3.000000000000026,
+            6.000000000000016
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1793690247224266572,
+          "orientation_error_rad": 0.03540570998931725,
+          "position_error_m": 0.012340514587803069,
+          "position_error_vector_m": [
+            0.004083405889212827,
+            0.004276143955844691,
+            -0.010831836848135004
+          ],
+          "sdk_positions_rad": [
+            -2.092349794676015,
+            -0.5246214294568893,
+            1.1443496677626883,
+            -0.5200194870932324,
+            -1.5017671913400426,
+            -0.19634954084936207
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1793690247270450151,
+          "sdk_tool_position_m": [
+            -0.07876799230669018,
+            -0.3289709915221329,
+            0.1094025950978206
+          ],
+          "stamp_sec": 1793690247.2763014,
+          "stationary_window_end_ns": 1793690247224266572,
+          "stationary_window_start_ns": 1793690246924266572
+        },
+        "contact_terminal_failure": {
+          "command_endpoint_rad": [
+            -1.8462496064667417,
+            -0.5934157472446714,
+            0.9724671032130279,
+            -0.08594861792053077,
+            -0.9252516579429307,
+            -1.7846697168920798
+          ],
+          "curve": "predicted_command",
+          "endpoint_screen_only": true,
+          "execution_authorized": false,
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "plan_id": "e5f67ca39572bbfa5b1d1233",
+          "schema_version": 1,
+          "source_stamp_ns": 1793690225142262458,
+          "stage": "grasp",
+          "trajectory_sha256": "7d93e68376dc0d689a5b24c2c7bdc515a0ac13a9a2328297b2418df29e94b82b"
+        },
+        "opening_m": 0.049850000000000005
+      },
+      "scene": {
+        "center": [
+          -0.08141852907934631,
+          -0.35038968899374295,
+          0.015599163119129926
+        ],
+        "digest": "3faf2a5799b6f0a05ffadc729609b7711f73af95128e8b7b119c847a015927c8",
+        "geometry_digest": "0401c2ea7ff5e729cb60067569ade0a319e9b7832aac5292b521425c41b82a63",
+        "normal": [
+          -0.05656959910649467,
+          0.06601149567023401,
+          0.9962140146054508
+        ],
+        "offset": 0.014708013273775578,
+        "plan_id": "e5f67ca39572bbfa5b1d1233",
+        "rotation": [
+          [
+            -0.8724739116045983,
+            -0.48523518970115576,
+            -0.05775884560009109
+          ],
+          [
+            0.48169805054020653,
+            -0.8738955070535169,
+            0.06537301321984096
+          ],
+          [
+            -0.08219648213358308,
+            0.02921392523027709,
+            0.9961878763052195
+          ]
+        ],
+        "size": [
+          0.07997911396124291,
+          0.03240266567211714,
+          0.024674170875600122
+        ],
+        "source_ns": 1793690225142262458,
+        "track_id": "g1-t3"
+      },
+      "gripper": {
+        "finger_size_xyz_m": [
+          0.0434,
+          0.0286,
+          0.06
+        ],
+        "jaw_clearance_each_side_m": 0.002,
+        "max_inner_gap_m": 0.05,
+        "palm_size_xyz_m": [
+          0.1175,
+          0.155,
+          0.0774
+        ],
+        "support_clearance_m": 0.003
+      },
+      "contact_geometry_evidence": {
+        "contact_center_base": [
+          -0.08141852907934631,
+          -0.35038968899374295,
+          0.015599163119129926
+        ],
+        "contact_height_axis_base": [
+          0.05775884560009108,
+          -0.06537301321984096,
+          -0.9961878763052195
+        ],
+        "contact_height_bounds_m": [
+          -0.0012463403854297574,
+          0.0017348511911186367
+        ],
+        "grasp_tool_pose_base": [
+          -0.08134972029568979,
+          -0.3502296860320267,
+          0.011008272237519457,
+          0.9649367475454875,
+          -0.25882621851146764,
+          0.036396314836959084,
+          0.024111617815468018
+        ],
+        "gripper_model": "Alicia_D_v5_6_gripper_50mm",
+        "measured_contact_width_m": 0.02756287888398068,
+        "measurement_source": "fused_measured_bilateral_surface",
+        "minimum_contact_overlap_m": 0.002,
+        "opening_fit_clearance_each_side_m": 0.0005000000000000004,
+        "required_open_width_m": 0.02856287888398068,
+        "schema_version": 2,
+        "tool_finger_length_axis": "+Z",
+        "tool_jaw_axis": "+Y"
+      },
+      "goal_pose": [
+        -0.08134972029568979,
+        -0.3502296860320267,
+        0.011008272237519457,
+        0.9649367475454875,
+        -0.25882621851146764,
+        0.036396314836959084,
+        0.024111617815468018
+      ],
+      "planned_opening_m": 0.049850000000000005,
+      "maximum_translation_m": 0.019319021109710236,
+      "translation_evidence_limit_m": 0.0026767676132463574
+    }
+  ]
+}

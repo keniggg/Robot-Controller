@@ -2,6 +2,7 @@
 import pathlib
 import re
 import unittest
+import xml.etree.ElementTree as ET
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -29,6 +30,124 @@ def _function_body(source, signature):
 
 
 class SerialDriverResilienceTest(unittest.TestCase):
+    def test_software_temperature_monitoring_is_off_without_parameters_and_in_both_launches(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        header = DRIVER_HEADER.read_text()
+        load = _function_body(source, 'void AliciaDDriverNode::load_parameters')
+        self.assertIn('bool software_temperature_monitoring_enabled_ = false;', header)
+        self.assertIn('double temperature_poll_rate_hz_ = 0.0;', header)
+        self.assertRegex(load, r'"software_temperature_monitoring_enabled",\s*'
+                         r'software_temperature_monitoring_enabled_, false\)')
+        self.assertIn('"temperature_poll_rate_hz", temperature_poll_rate_hz_, 0.0)', load)
+        for filename in ('alicia_d_driver.launch', 'alicia_d_bringup.launch'):
+            with self.subTest(launch=filename):
+                tree = ET.parse(str(DRIVER_PACKAGE / 'launch' / filename))
+                params = {p.attrib['name']: p.attrib['value']
+                          for p in tree.findall(".//node[@name='alicia_d_driver_node']/param")}
+                self.assertEqual(params['software_temperature_monitoring_enabled'], 'false')
+                self.assertEqual(float(params['temperature_poll_rate_hz']), 0.0)
+
+    def test_disabled_temperature_policy_cannot_take_a_joint_poll_slot_even_with_legacy_rate(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::state_poll_timer_callback')
+        predicate = re.search(r'const bool temperature_due\s*=\s*(.*?);', body, re.S).group(1)
+        predicate = predicate.replace('last_temperature_query_time_.isZero()', 'never_queried')
+        predicate = predicate.replace('(now - last_temperature_query_time_).toSec()', 'elapsed')
+        predicate = predicate.replace('&&', ' and ').replace('||', ' or ')
+        predicate = ' '.join(re.sub(r'!(?!=)', 'not ', predicate).split())
+        for enabled, suppressed, rate, never, elapsed, expected in (
+                (False, False, 1.0, True, 1000.0, False),
+                (False, False, 100.0, False, 1000.0, False),
+                (False, True, 1.0, True, 0.0, False),
+                (True, False, 0.0, True, 0.0, False),
+                (True, False, 1.0, True, 0.0, True),
+                (True, False, 1.0, False, 0.9, False),
+                (True, False, 1.0, False, 1.0, True),
+                (True, True, 1.0, False, 10.0, False)):
+            with self.subTest(enabled=enabled, suppressed=suppressed, rate=rate,
+                              never=never, elapsed=elapsed):
+                self.assertEqual(eval(predicate, {'__builtins__': {}}, {
+                    'software_temperature_monitoring_enabled_': enabled,
+                    'diagnostic_queries_suppressed': suppressed,
+                    'temperature_poll_rate_hz_': rate,
+                    'never_queried': never, 'elapsed': elapsed,
+                }), expected)
+        query = _function_body(body, 'if (temperature_due)')
+        self.assertEqual(body.count('SDK_FUNC_QUERY_TEMPERATURE'), 1)
+        self.assertIn('SDK_FUNC_QUERY_TEMPERATURE', query)
+        self.assertIn('last_temperature_query_time_ = now;', query)
+        self.assertIn('SDK_FUNC_QUERY_JOINT_GRIPPER', body[body.index('if (temperature_due)'):])
+
+    def test_disabled_temperature_packets_return_before_decoding_logging_or_retaining_samples(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::parse_sdk_temperature_frame')
+        guard = 'if (!software_temperature_monitoring_enabled_)'
+        self.assertEqual(_function_body(body, guard).strip(), 'return;')
+        for effect in ('data_payload.empty()', 'ROS_WARN(', 'ros::Time::now()',
+                       'msg.data.reserve(', 'latest_temperatures_c_ =',
+                       'temperature_pub_.publish(', 'sdk_diagnostic_pub_.publish('):
+            self.assertLess(body.index(guard), body.index(effect))
+        dispatch = _function_body(source, 'void AliciaDDriverNode::process_serial_data()')
+        self.assertLess(dispatch.index('publish_sdk_raw_diagnostic('),
+                        dispatch.index('parse_sdk_temperature_frame('))
+
+    def test_temperature_policy_keeps_raw_sdk_and_status_bytes_without_thermal_alarm(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        raw = _function_body(source, 'void AliciaDDriverNode::publish_sdk_raw_diagnostic')
+        gate = raw.index('if (software_temperature_monitoring_enabled_ &&')
+        thermal = _function_body(raw, 'if (software_temperature_monitoring_enabled_ &&')
+        self.assertIn('DiagnosticStatus::ERROR', thermal)
+        self.assertIn('hardware protection status event', thermal)
+        self.assertLess(raw.index('"payload_hex", format_bytes_as_hex(payload)'), gate)
+        self.assertLess(raw.index('"run_status_hex", format_bytes_as_hex({payload[14]})'), gate)
+        self.assertNotIn('return;', raw)
+        joint = _function_body(source, 'void AliciaDDriverNode::parse_sdk_joint_state_frame')
+        self.assertLess(joint.index('run_status_pub_.publish(status_msg);'),
+                        joint.index('if (software_temperature_monitoring_enabled_)'))
+
+    def test_temperature_policy_only_guards_thermal_interpretation_in_joint_parser(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'void AliciaDDriverNode::parse_sdk_joint_state_frame')
+        thermal = _function_body(body, 'if (software_temperature_monitoring_enabled_)')
+        for effect in ('latest_temperatures_c_', 'consecutive_e1_frames_',
+                       'mark_overheat_blocked(', 'ROS_WARN_THROTTLE(', 'ROS_ERROR_THROTTLE('):
+            self.assertIn(effect, thermal)
+        for nonthermal in ('publish_joint_state(true)', 'observe_feedback(',
+                           'last_accepted_joint_feedback_time_', 'motion_commands_enabled_',
+                           'protection_latched_pub_.publish(', 'write_raw_frame('):
+            self.assertNotIn(nonthermal, thermal)
+        self.assertEqual(body.count('mark_overheat_blocked('), 1)
+        self.assertEqual(source.count('mark_overheat_blocked('), 2)
+
+    def test_disabled_temperature_policy_cannot_reject_enable_or_bypass_encoder_confirmation(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        body = _function_body(source, 'bool AliciaDDriverNode::request_positive_enable')
+        thermal = _function_body(body, 'if (software_temperature_monitoring_enabled_)')
+        self.assertLess(body.index('bool sustained_temperature_protection = false;'),
+                        body.index('if (software_temperature_monitoring_enabled_)'))
+        self.assertEqual(body.count('sustained_temperature_protection ='), 2)
+        self.assertIn('sustained_temperature_protection =', thermal)
+        self.assertNotIn('actuation_confirmation_', thermal)
+        self.assertIn('reset_for_positive_enable(now.toSec())', body)
+        self.assertIn('"TORQUE_ON_WRITE_FAILED"', body)
+        send = _function_body(source, 'void AliciaDDriverNode::send_command_timer_callback')
+        self.assertNotIn('software_temperature_monitoring_enabled_', send)
+        self.assertIn('ActuationState::OVERHEAT_BLOCKED', send)
+
+    def test_driver_shutdown_closes_transport_without_a_torque_or_disable_write(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        destructor = _function_body(source, 'AliciaDDriverNode::~AliciaDDriverNode()')
+        disconnect = _function_body((DRIVER_SRC / 'serial_communicator.cpp').read_text(),
+                                    'void SerialCommunicator::disconnect()')
+        stop = _function_body((DRIVER_SRC / 'gripper_stroke_snapshot.cpp').read_text(),
+                              'void stop()')
+        self.assertIn('communicator_->disconnect();', destructor)
+        self.assertIn('serial_port_.close();', disconnect)
+        for body in (destructor, disconnect, stop):
+            self.assertNotRegex(body, r'write_|torque|set_disabled|motion_commands_enabled_')
+        demo = _function_body(source, 'void AliciaDDriverNode::demonstration_mode_callback')
+        self.assertIn('} else {\n        request_positive_enable("demonstration_false", true);', demo)
+
     def test_sdk_feedback_clock_and_snapshot_are_captured_under_the_same_lock(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         body = _function_body(source, 'void AliciaDDriverNode::send_command_timer_callback')
@@ -189,9 +308,70 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertNotIn('write_raw_frame(', body)
         self.assertNotIn('request_positive_enable(', body)
 
+    def test_joint_command_wrapper_keeps_mode_lock_through_mapping_and_queue_gates(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        wrapper = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        lock = 'std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);'
+        call = 'joint_command_admit_locked(msg);'
+        mapped = ('if (physical_reference_ && !gui_control_mode_ && '
+                  '!physical_reference_->legacy_allowed_locked())')
+        queued = re.search(
+            r'if \(physical_reference_ && !gui_control_mode_\s*'
+            r'&& msg->header\.stamp\.toNSec\(\)<'
+            r'physical_reference_->legacy_barrier_locked\(\)\) return;', wrapper)
+        # The RAII lock is in this function's outer scope, and the synchronous
+        # helper call is also in that scope. No cross-function body is joined.
+        self.assertTrue(wrapper.lstrip().startswith(lock))
+        self.assertEqual(wrapper.count(lock), 1)
+        self.assertEqual(wrapper.count(call), 1)
+        self.assertTrue(wrapper.rstrip().endswith(call))
+        prefix = wrapper[:wrapper.index(call)]
+        self.assertEqual(prefix.count('{')-prefix.count('}'), 0)
+        self.assertNotRegex(wrapper, r'\.unlock\s*\(|\.release\s*\(|std::move\s*\(\s*mode_lock')
+        rejection = _function_body(wrapper, mapped)
+        self.assertIn('return;', rejection)
+        self.assertNotIn(call, rejection)
+        self.assertIsNotNone(queued)
+        self.assertLess(wrapper.index(lock), wrapper.index(mapped))
+        self.assertLess(wrapper.index(mapped), queued.start())
+        self.assertLess(queued.end(), wrapper.index(call))
+        for effect in ('actuation_confirmation_.admit_command(',
+                       'latest_joint_angles_ =', 'write_raw_frame('):
+            self.assertNotIn(effect, wrapper)
+
+    def test_both_joint_admission_callers_hold_mode_lock_and_mapped_caller_proves_token(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        mapped = _function_body(source, 'void AliciaDDriverNode::physical_reference_command_callback')
+        helper = _function_body(source, 'void AliciaDDriverNode::joint_command_admit_locked')
+        lock = 'std::lock_guard<std::mutex> mode_lock(control_mode_mutex_);'
+        call = 'joint_command_admit_locked(msg);'
+        self.assertTrue(mapped.lstrip().startswith(lock))
+        self.assertTrue(mapped.rstrip().endswith(call))
+        self.assertEqual(mapped.count(lock), 1)
+        self.assertEqual(mapped.count(call), 1)
+        prefix = mapped[:mapped.index(call)]
+        self.assertEqual(prefix.count('{')-prefix.count('}'), 0)
+        self.assertNotRegex(mapped, r'\.unlock\s*\(|\.release\s*\(|std::move\s*\(\s*mode_lock')
+        self.assertIn('!alicia_d_driver::reference_hardware_caller(caller->second)', mapped)
+        self.assertIn('physical_reference_->legacy_allowed_locked()) return;', mapped)
+        proof = 'if (!physical_reference_->admit_locked(*incoming))'
+        self.assertLess(mapped.index(lock), mapped.index(proof))
+        self.assertLess(mapped.index(proof), mapped.index(call))
+        rejected = _function_body(mapped, proof)
+        self.assertIn('physical_reference_hold_locked(); return;', rejected)
+        self.assertNotIn(call, rejected)
+        # These are the only two call sites. The shared helper never drops or
+        # reacquires ownership, and cannot silently gain an unlocked caller.
+        self.assertEqual(source.count(call), 2)
+        # The original helper comments describe the caller's lock. Inspect
+        # executable text so those comments cannot look like lock operations.
+        helper_code = re.sub(r'//[^\n]*|/\*.*?\*/', '', helper, flags=re.S)
+        self.assertNotIn('control_mode_mutex_', helper_code)
+        self.assertNotRegex(helper_code, r'\bmode_lock\b')
+
     def test_direct_command_accumulates_only_admitted_targets_with_accepted_feedback(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
-        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_admit_locked')
         self.assertIn('select_gui_direct_command_reference(', body)
         self.assertNotIn('const bool continue_gesture', body)
         self.assertNotIn('streamed_hold_max_age_sec', body)
@@ -207,7 +387,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
 
     def test_auto_handoff_uses_only_frozen_successfully_written_sdk_words(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
-        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_admit_locked')
         handoff = _function_body(body, 'if (automatic_command_needs_sync)')
         self.assertIn('controller_handoff_matches_frozen_sdk_or_initial(', handoff)
         self.assertIn('last_sent_sdk_command_frame_', handoff)
@@ -216,14 +396,15 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertIn('retained_sdk_age_sec <= feedback_stale_timeout_sec_', handoff)
         self.assertNotIn('latest_joint_angles_', handoff)
         self.assertNotIn('last_streamed_joint_positions_', handoff)
-        self.assertLess(body.index('mode_lock(control_mode_mutex_)'),
-                        body.index('controller_handoff_matches_frozen_sdk_or_initial('))
+        wrapper = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        self.assertLess(wrapper.index('mode_lock(control_mode_mutex_)'),
+                        wrapper.index('joint_command_admit_locked(msg);'))
         self.assertLess(body.index('controller_handoff_matches_frozen_sdk_or_initial('),
                         body.index('actuation_confirmation_.admit_command('))
 
     def test_auto_handoff_samples_fresh_feedback_clock_under_its_data_lock(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
-        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_admit_locked')
         handoff = _function_body(body, 'if (automatic_command_needs_sync)')
         self.assertLess(handoff.index('data_lock(data_mutex_)'),
                         handoff.index('handoff_now = ros::Time::now()'))
@@ -247,11 +428,16 @@ class SerialDriverResilienceTest(unittest.TestCase):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         reset = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state')
         self.assertLess(reset.index('mode_lock(control_mode_mutex_)'),
-                        reset.index('control_reference_reset_time_ = ros::Time::now();'))
-        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+                        reset.index('clear_retained_command_state_locked(true);'))
+        helper = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state_locked')
+        self.assertIn('control_reference_reset_time_ = ros::Time::now();', helper)
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_admit_locked')
         self.assertIn('"motion_gateway_reference_sync"', body)
-        self.assertLess(body.index('mode_lock(control_mode_mutex_)'),
-                        body.index('reference_sync_stamp_in_current_epoch('))
+        wrapper = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        self.assertLess(wrapper.index('mode_lock(control_mode_mutex_)'),
+                        wrapper.index('joint_command_admit_locked(msg);'))
+        self.assertLess(body.index('reference_sync_stamp_in_current_epoch('),
+                        body.index('actuation_confirmation_.admit_command('))
         self.assertIn('msg->header.stamp.toNSec()', body)
         self.assertIn('control_reference_reset_time_.toNSec()', body)
         self.assertIn('control_mode_changed_time_.toNSec()', body)
@@ -259,7 +445,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
 
     def test_dedicated_reference_sync_is_arm_only_and_tracking_noop(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
-        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_admit_locked')
         self.assertIn('msg->name.size() != hardware_joint_names.size()', body)
         self.assertIn('msg->position.size() != hardware_joint_names.size()', body)
         self.assertIn('joint_map.size() != hardware_joint_names.size()', body)
@@ -274,7 +460,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
 
     def test_dedicated_reference_sync_samples_accepted_clock_and_status_without_widening_init(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
-        body = _function_body(source, 'void AliciaDDriverNode::joint_command_callback')
+        body = _function_body(source, 'void AliciaDDriverNode::joint_command_admit_locked')
         proof = _function_body(body, '// Dedicated reference-only admission')
         self.assertLess(proof.index('data_lock(data_mutex_)'),
                         proof.index('reference_now = ros::Time::now()'))
@@ -295,7 +481,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
         setup = _function_body(source, 'void AliciaDDriverNode::setup_ros_communications')
         self.assertIn('control_reference_epoch_pub_', DRIVER_HEADER.read_text())
         self.assertIn('"/alicia_d/control_reference_epoch", 1, true)', setup)
-        reset = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state')
+        reset = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state_locked')
         self.assertIn('reference_epoch_next_stamp_ns(', reset)
         self.assertIn('epoch_msg.stamp = control_reference_reset_time_;', reset)
         self.assertIn('epoch_msg.frame_id = "sdk_reference_epoch";', reset)
@@ -313,8 +499,25 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertIn('control_reference_pub_', DRIVER_HEADER.read_text())
         self.assertIn('"/alicia_d/control_reference", 20)', setup)
         body = _function_body(source, 'void AliciaDDriverNode::send_command_timer_callback')
-        written = _function_body(body, 'if (wrote)')
-        self.assertIn('control_reference_msg.header.stamp = now;', written)
+        # The successful write is recorded under the actuation lock, then
+        # its diagnostic publication occurs after that lock is released.
+        successful_blocks = [_function_body(body[m.start():], 'if (wrote)')
+                             for m in re.finditer(r'\bif \(wrote\)', body)]
+        published = [block for block in successful_blocks
+                     if 'control_reference_pub_.publish(' in block]
+        self.assertEqual(len(published), 1)
+        written = published[0]
+        self.assertIn('control_reference_msg.header.stamp = committed_at;', written)
+        self.assertIn('wire_msg.header.stamp = committed_at;', written)
+        commit = _function_body(body, 'double wire_gripper_rad = 0.0;')
+        successful = _function_body(commit, 'if (wrote)')
+        self.assertLess(commit.index('communicator_->write_raw_frame(servo_frame)'),
+                        commit.index('if (wrote)'))
+        self.assertIn('committed_at = ros::Time::now();', successful)
+        self.assertLess(successful.index('committed_at = ros::Time::now();'),
+                        successful.index('actuation_confirmation_.note_streamed_target('))
+        self.assertNotIn('data_mutex_', commit)
+        self.assertNotIn('sdk_command_pub_.publish(', commit)
         self.assertIn('"sdk_manual"', written)
         self.assertIn('"sdk_handoff_required"', written)
         self.assertIn('"sdk_tracking"', written)
@@ -332,11 +535,19 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertIn('!gui_control_mode_ && (endpoint_feedback_trim_enabled_', body)
         self.assertIn('last_streamed_joint_positions_ = wire_joint_angles;', body)
         self.assertIn('last_streamed_gripper_rad_ = wire_gripper_rad;', body)
-        self.assertIn('if (!control_mode_hold_only_)', body)
+        commit = _function_body(body, 'double wire_gripper_rad = 0.0;')
+        hold = _function_body(commit, 'if (control_mode_hold_only_)')
+        self.assertIn('actuation_confirmation_.note_committed_reference(', hold)
+        self.assertNotIn('actuation_confirmation_.note_streamed_target(', hold)
+        self.assertRegex(commit, r'}\s*else\s*{\s*'
+                         r'actuation_confirmation_\.note_streamed_target\(')
+        self.assertEqual(commit.count('wire_joint_angles, committed_at.toSec()'), 2)
         self.assertLess(body.index('if (wrote)'), body.index('sdk_command_pub_.publish(wire_msg)'))
         self.assertIn('wire_msg.position = wire_joint_angles;', body)
         reset = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state')
         self.assertIn('std::lock_guard<std::mutex> mode_lock(control_mode_mutex_)', reset)
+        self.assertIn('clear_retained_command_state_locked(true);', reset)
+        reset = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state_locked')
         for cache in ('gui_direct_hold_joint_angles_', 'last_streamed_joint_positions_', 'last_sent_sdk_command_frame_'):
             self.assertIn(cache + '.clear()', reset)
 
@@ -550,7 +761,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
         )
         joint_command = _function_body(
             source,
-            'void AliciaDDriverNode::joint_command_callback',
+            'void AliciaDDriverNode::joint_command_admit_locked',
         )
         self.assertIn(
             '#include "alicia_d_driver/endpoint_trim_continuity.hpp"',
@@ -634,7 +845,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
         header = DRIVER_HEADER.read_text()
         callback = _function_body(
             source,
-            'void AliciaDDriverNode::joint_command_callback',
+            'void AliciaDDriverNode::joint_command_admit_locked',
         )
         timer = _function_body(
             source,
@@ -705,7 +916,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         callback = _function_body(
             source,
-            'void AliciaDDriverNode::joint_command_callback',
+            'void AliciaDDriverNode::joint_command_admit_locked',
         )
 
         admission = callback.index('actuation_confirmation_.admit_command(')
@@ -768,7 +979,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         callback = _function_body(
             source,
-            'void AliciaDDriverNode::joint_command_callback',
+            'void AliciaDDriverNode::joint_command_admit_locked',
         )
 
         self.assertIn(
@@ -796,7 +1007,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         callback = _function_body(
             source,
-            'void AliciaDDriverNode::joint_command_callback',
+            'void AliciaDDriverNode::joint_command_admit_locked',
         )
         admission = (
             DRIVER_SRC.parent / 'include' / 'alicia_d_driver'
@@ -860,7 +1071,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
         self.assertIn('preserve_fresh_confirmation &&', enable)
         self.assertLess(
             enable.index('can_preserve_positive_enable('),
-            enable.index('clear_retained_command_state();'),
+            enable.index('clear_retained_command_state_locked(true);'),
         )
         self.assertLess(
             enable.index('if (sustained_temperature_protection)'),
@@ -875,7 +1086,7 @@ class SerialDriverResilienceTest(unittest.TestCase):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
         clear = _function_body(
             source,
-            'void AliciaDDriverNode::clear_retained_command_state',
+            'void AliciaDDriverNode::clear_retained_command_state_locked',
         )
         self.assertIn(
             'endpoint_trim_continuity_ =\n'
@@ -892,10 +1103,66 @@ class SerialDriverResilienceTest(unittest.TestCase):
         )
         for caller in callers:
             with self.subTest(caller=caller):
-                self.assertIn(
-                    'clear_retained_command_state();',
-                    _function_body(source, caller),
+                reset_call = (
+                    'clear_retained_command_state_locked(true);'
+                    if 'request_positive_enable' in caller
+                    else 'clear_retained_command_state();'
                 )
+                self.assertIn(reset_call, _function_body(source, caller))
+
+    def test_initial_probe_retirement_preserves_feedback_and_never_writes_hardware(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        retire = _function_body(source, 'bool AliciaDDriverNode::retire_failed_initial_probe_locked')
+        self.assertIn('actuation_confirmation_.update(', retire)
+        self.assertIn('if (!actuation_confirmation_.initial_probe_failed()) return false;', retire)
+        self.assertIn('if (!initial_probe_stream_retired_)', retire)
+        self.assertIn('clear_retained_command_state_locked(false);', retire)
+        clear = _function_body(source, 'void AliciaDDriverNode::clear_retained_command_state_locked')
+        guarded_feedback = _function_body(clear, 'if (discard_feedback)')
+        for assignment in ('has_real_feedback_ = false;',
+                           'last_feedback_time_ = ros::Time(0);',
+                           'last_accepted_joint_feedback_time_ = ros::Time(0);',
+                           'last_joint_feedback_frame_time_ = ros::Time(0);'):
+            self.assertIn(assignment, guarded_feedback)
+            self.assertNotIn(assignment, clear.replace(guarded_feedback, ''))
+        for cache in ('latest_joint_angles_', 'last_sent_sdk_command_frame_',
+                      'last_streamed_joint_positions_', 'gui_direct_hold_joint_angles_'):
+            self.assertIn(cache + '.clear();', clear)
+        self.assertIn('has_latest_command_ = false;', clear)
+        self.assertIn('endpoint_feedback_trim_task_lease_active_ = false;', clear)
+        for body in (retire, clear):
+            self.assertNotIn('write_raw_frame(', body)
+            self.assertNotIn('motion_commands_enabled_ =', body)
+            self.assertNotIn('reset_for_positive_enable(', body)
+        status = _function_body(source, 'void AliciaDDriverNode::publish_actuation_status')
+        self.assertNotIn('clear_retained_command_state', status)
+        self.assertNotIn('retire_failed_initial_probe', status)
+
+    def test_initial_probe_retirement_is_serialized_with_mode_enable_and_final_write(self):
+        source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
+        writer = _function_body(source, 'void AliciaDDriverNode::send_command_timer_callback')
+        self.assertLess(writer.index('mode_lock(control_mode_mutex_)'),
+                        writer.index('retire_failed_initial_probe_locked()'))
+        self.assertLess(writer.index('retire_failed_initial_probe_locked()'),
+                        writer.index('send_lock(send_mutex_'))
+        self.assertLess(writer.index('retire_failed_initial_probe_locked()'),
+                        writer.index('endpoint_trim_continuity_.request_correction('))
+        final_write = _function_body(writer, 'bool wrote = false;')
+        self.assertLess(final_write.index('actuation_lock(actuation_mutex_)'),
+                        final_write.index('actuation_confirmation_.update('))
+        self.assertLess(final_write.index('initial_probe_failed()) return;'),
+                        final_write.index('communicator_->write_raw_frame(servo_frame)'))
+        self.assertNotIn('data_mutex_', final_write.split('std::lock_guard')[1])
+        mode = _function_body(source, 'void AliciaDDriverNode::gui_control_mode_callback')
+        self.assertLess(mode.index('retire_failed_initial_probe_locked()'),
+                        mode.index('send_lock(send_mutex_)'))
+        self.assertLess(mode.index('retire_failed_initial_probe_locked()'),
+                        mode.index('reset_motion_observation()'))
+        enable = _function_body(source, 'bool AliciaDDriverNode::request_positive_enable')
+        self.assertLess(enable.index('mode_lock(control_mode_mutex_)'),
+                        enable.index('clear_retained_command_state_locked(true)'))
+        self.assertLess(enable.index('clear_retained_command_state_locked(true)'),
+                        enable.index('reset_for_positive_enable('))
 
     def test_endpoint_trim_correction_is_after_every_transmission_gate(self):
         source = (DRIVER_SRC / 'alicia_d_driver_node.cpp').read_text()
@@ -1124,14 +1391,28 @@ class SerialDriverResilienceTest(unittest.TestCase):
         # while the controller's 0.621719 rad error implies one actual sample
         # near -27.3 deg. At the deployed 10 Hz feedback cadence this exceeds
         # the same generic temporal bound used for every joint.
-        base_tolerance = 0.0123
-        max_velocity = 1.2
-        frame_dt = 0.1
+        launch = ET.fromstring((DRIVER_PACKAGE / 'launch' / 'alicia_d_bringup.launch').read_text())
+        params = {p.attrib['name']:p.attrib.get('value') for p in launch.iter('param')}
+        base_tolerance = float(params['feedback_jump_base_tolerance_rad'])
+        max_velocity = float(params['feedback_max_velocity_rad_s'])
+        frame_dt = 1.0 / float(params['state_poll_rate_hz'])
+        self.assertEqual(base_tolerance, 0.0123)
+        self.assertEqual(max_velocity, 0.3)
+        self.assertEqual(frame_dt, 0.1)
         allowed = base_tolerance + max_velocity * frame_dt
         implied_jump = 0.621719
         ordinary_motion = 0.026
         self.assertLess(ordinary_motion, allowed)
         self.assertGreater(implied_jump, allowed)
+        # Generation 6 had five consecutive CRC-valid Joint3 frames exactly
+        # 64 counts away from the ordinary pose. The former 1.2 rad/s bound
+        # admitted them; the physical .3 bound must detect each discontinuity.
+        retained_jump = 0.09817477042468092
+        self.assertLess(retained_jump, base_tolerance + 1.2 * frame_dt)
+        self.assertGreater(retained_jump, allowed)
+        self.assertEqual(params['reject_command_inconsistent_joint_feedback'], 'true')
+        self.assertEqual(int(params['feedback_jump_confirm_samples']), 2)
+        self.assertEqual(float(params['feedback_jump_confirmation_tolerance_rad']), .05)
 
         # A real discontinuity is delayed for one sample, then accepted only
         # when a second sample independently confirms the same new state.

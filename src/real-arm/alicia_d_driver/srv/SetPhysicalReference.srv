@@ -1,0 +1,43 @@
+# Mutations require the current /motion_gateway caller; QUERY never renews a lease.
+uint8 QUERY=0
+uint8 PREPARE=1
+uint8 COMMIT=2
+uint8 ARM=3
+uint8 QUIESCE=4
+uint8 RELEASE_PREPARE=5
+uint8 RELEASE_COMMIT=6
+uint8 REVOKE=7
+uint8 operation
+uint64 request_sequence
+string binding_id
+string previous_binding_id
+string owner_token
+string goal_token
+string episode_id
+uint64 epoch_ns
+uint64 selection_generation
+string plan_sha256
+string model_sha256
+string proof_sha256
+string physical_trajectory_sha256
+string wire_trajectory_sha256
+float64[6] bias_rad
+uint16[6] baseline_sdk_counts
+uint64 source_sdk_stamp_ns
+uint64 source_encoder_stamp_ns
+uint64 controller_stamp_ns
+uint64 issued_ns
+# Outer session clocks; never renewed by ARM or a new local episode.
+uint64 deadline_ns
+float64 maximum_duration_sec
+# Existing stage-local budget (e.g. the original compensation 60 seconds).
+uint64 episode_deadline_ns
+float64 episode_duration_sec
+float64 stop_duration_sec
+# ARM binds the real actionlib envelope before its one publication.
+control_msgs/FollowJointTrajectoryActionGoal action_goal
+trajectory_msgs/JointTrajectory wire_trajectory
+---
+bool success
+string code
+alicia_d_driver/PhysicalReferenceState state

@@ -201,6 +201,7 @@ def near_field_phase(
 def streaming_node(clock=None, prepare=None, start_worker=True):
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node.enabled = True
+    node.gripper_geometry = tabletop_gripper()
     node.status_pub = RecordingPublisher()
     node.pipeline_metrics_pub = RecordingPublisher()
     node.preview_plan_pub = RecordingPublisher()
@@ -560,6 +561,74 @@ def test_near_field_surface_registers_same_track_and_populates_plan_and_audit():
     assert audit['latest_registration']['support_plane_separation_m'] == (
         pytest.approx(result.support_plane_separation_m)
     )
+    support_audit = audit['latest_registration']['support_consistency_audit']
+    assert support_audit == dataclasses.asdict(result.support_consistency_audit)
+    assert support_audit['diagnostic_only'] is True
+    assert support_audit['correspondence_count'] == result.inlier_count
+    assert support_audit['raw_plane_separation_m'] == 0.
+    assert support_audit['transformed_plane_separation_m'] == pytest.approx(.001, abs=1e-12)
+    serialized = json.loads(json.dumps(audit, allow_nan=False))
+    assert serialized['latest_registration']['support_consistency_audit']['anchor_policy'] == (
+        'final_matched_reference_centroid_projected_to_reference_support')
+    support_audit['transformed_plane_separation_m'] = 1.
+    assert node._multiview_surface_audit()['latest_registration'][
+        'support_consistency_audit']['transformed_plane_separation_m'] == pytest.approx(.001, abs=1e-12)
+
+
+@pytest.mark.parametrize('kind', ['rejected', 'legacy'])
+def test_surface_audit_omits_unavailable_post_registration_support_diagnostic(kind, monkeypatch):
+    monkeypatch.setattr(remote_node.rospy, 'logwarn_throttle', lambda *args: None)
+    node = streaming_node(start_worker=False)
+    seed_measured_reference_surface(node)
+    moving = measured_observation(node, stamp_sec=20.1)
+    if kind == 'rejected':
+        moving = dataclasses.replace(moving, support_offset_m=.00701)
+    result = node._register_near_field_surface(moving)
+    if kind == 'rejected':
+        assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+    else:
+        assert result.ok
+        evidence = node._latest_registration_evidence
+        node._latest_registration_evidence = dataclasses.replace(evidence,
+            result=dataclasses.replace(result, support_consistency_audit=None))
+    assert 'support_consistency_audit' not in node._multiview_surface_audit()['latest_registration']
+
+
+@pytest.mark.parametrize('separation, accepted, warning', [
+    (.004, True, False), (.00401, True, True), (.0057, True, True),
+    (.007, True, True), (.00701, False, True),
+])
+def test_support_offset_warning_reaches_real_registration_audit_and_plan(
+        monkeypatch, separation, accepted, warning):
+    node = streaming_node(start_worker=False)
+    reference = seed_measured_reference_surface(node)
+    moving = dataclasses.replace(
+        measured_observation(node, stamp_sec=20.1,
+            points=measured_surface_points() + [0., 0., separation]),
+        support_offset_m=-separation,
+    )
+    warnings = []
+    monkeypatch.setattr(remote_node.rospy, 'logwarn_throttle',
+                        lambda *args: warnings.append(args))
+    result = node._register_near_field_surface(moving)
+    plan = bound_surface_plan(moving)
+    node._apply_registration_evidence_to_plan(plan, moving)
+    audit = node._multiview_surface_audit()['latest_registration']
+    assert result.ok is accepted, result.code
+    assert audit['support_offset_diagnostic'] == dict(
+        warning_flag=warning, measured_m=pytest.approx(separation),
+        warning_threshold_m=.004, hard_limit_m=.007)
+    assert bool(warnings) is warning
+    if warning:
+        assert 'SUPPORT_OFFSET_DIAGNOSTIC_REQUIRED' in warnings[0][1]
+    if accepted:
+        assert plan.refinement_status == 'VALID_3D'
+        assert node._near_field_fused_surface.view_stamps_ns == (
+            reference.stamp_ns, moving.stamp_ns)
+    else:
+        assert result.code == 'SUPPORT_OFFSET_MISMATCH'
+        assert plan.refinement_status == 'INVALID_3D'
+        assert node._near_field_fused_surface.view_stamps_ns == (reference.stamp_ns,)
 
 
 @pytest.mark.parametrize('base_shift', [[0.0, 0.0, 0.0], [-0.126, -0.402, 0.047]])
@@ -835,8 +904,12 @@ def test_selected_bundle_strict_checks_the_registered_four_pose_plan():
         # poses. Real contact/CAD restoration is covered separately below.
         node._prepare_final_registered_contact_plan = lambda *_args: None
 
+        geometry_bundle = node._build_selected_preview_bundle(selected, geometry_only=True)
+        assert strict_calls == []
+        assert set(geometry_bundle) == {'rich_plan'}  # no commit/publication callback
         bundle = node._build_selected_preview_bundle(selected)
         plan = bundle['rich_plan']
+        assert geometry_bundle['rich_plan'] == plan
         checked_stages, checked_deadline = strict_calls[0]
         assert [name for name, _pose in checked_stages] == [
             'pregrasp', 'approach', 'grasp', 'lift'
@@ -969,11 +1042,12 @@ def test_registration_metrics_cannot_attach_to_another_snapshot_or_lifecycle(mis
     assert plan.fused_view_count == 0
 
 
-def test_rejected_near_view_publishes_invalid_metrics_without_fusing_points():
+def test_rejected_near_view_publishes_invalid_metrics_without_fusing_points(monkeypatch):
+    monkeypatch.setattr(remote_node.rospy.Time, 'now', lambda: remote_node.rospy.Time(20, 100_000_000))
     node = streaming_node(start_worker=False)
     seed_measured_reference_surface(node)
     original = node._near_field_fused_surface
-    observation = dataclasses.replace(measured_observation(node, stamp_sec=20.1), support_offset_m=0.005)
+    observation = dataclasses.replace(measured_observation(node, stamp_sec=20.1), support_offset_m=0.00701)
     result = node._register_near_field_surface(observation)
     plan = bound_surface_plan(observation)
     assert node._apply_registration_evidence_to_plan(plan, observation)
@@ -3938,17 +4012,28 @@ def test_configured_resolution_preserves_recorded_bilateral_contact():
     candidates, diagnostics = node._generate_tabletop_candidates(
         geometry, snapshot=snapshot,
     )
-    accepted = []
+    # The original six directions retain their measured bilateral band, but
+    # their open fingers intersect the complete target OBB by 4.17--6.37 mm
+    # with the fixed CAD padding.  That contact is not authorized before close.
+    assert len(candidates) == diagnostics['materialized_total_count'] == 6
+    gates = []
+    node._record_geometry_gate_result = gates.append
     for candidate in candidates:
-        try:
-            normalized = node._normalize_tabletop_candidate(prepared, candidate)
-        except remote_node.CandidateContractError:
-            continue
-        assert normalized.geometry_gate.ok
-        assert normalized.required_open_width_m <= 0.050
-        assert normalized.geometry_gate.support_clearance_m >= 0.003 - 1e-12
-        accepted.append(normalized)
-    assert accepted, diagnostics
+        _, evidence, bounds, _ = node._current_bilateral_surface_measurement(
+            candidate.contact_center_base, candidate.T_base_tool0[:3, :3],
+        )
+        assert evidence.ok and bounds is not None
+        with pytest.raises(remote_node.CandidateContractError,
+                           match='^left_finger intrudes into target OBB$') as rejected:
+            node._normalize_tabletop_candidate(prepared, candidate)
+        assert rejected.value.code == 'GRIPPER_SWEEP_COLLISION'
+    assert len(gates) == len(candidates)
+    for gate in gates:
+        assert not gate.ok and gate.failed_gate == 'static_envelope'
+        assert gate.passed_gate_count == 4
+        assert gate.failure_code == 'GRIPPER_SWEEP_COLLISION'
+        assert gate.required_open_width_m <= 0.050
+        assert gate.support_clearance_m >= 0.003 - 1e-12
 
 
 def test_tabletop_generation_materializes_geometry_derived_stage_profiles():
@@ -4967,7 +5052,7 @@ def test_remote_failure_preview_keeps_old_execution_without_actuation(
             'bounded_moveit_select',
             lambda *_args, **_kwargs: selection,
         )
-        node._publish_selected_preview = lambda _selected: {
+        node._publish_selected_preview = lambda _selected, ticket=None: {
             'rich_plan': object(),
             'signature': 'geometry-preview',
             'score': 0.0,
@@ -6408,8 +6493,9 @@ def test_near_field_strict_sequence_checks_linear_lift_like_execution():
     ]
 
 
+@pytest.mark.parametrize('include_lift', [True, False])
 def test_free_space_sequence_resolver_preserves_xyz_and_contact_orientations(
-    monkeypatch,
+    monkeypatch, include_lift,
 ):
     node = streaming_node(clock=MutableClock(50.0), start_worker=False)
     observed = []
@@ -6447,7 +6533,7 @@ def test_free_space_sequence_resolver_preserves_xyz_and_contact_orientations(
                     success=True,
                     failure_code='',
                     failed_stage='',
-                    resolved_targets=resolved,
+                    resolved_targets=resolved[:len(request.targets)],
                     joint_path_cost=0.8,
                     joint_max_delta=0.4,
                     max_position_error=0.0002,
@@ -6479,6 +6565,7 @@ def test_free_space_sequence_resolver_preserves_xyz_and_contact_orientations(
         sequence, audit, code, reason = node._resolve_free_space_sequence(
             stages,
             deadline_sec=56.0,
+            include_lift=include_lift,
         )
 
         assert sequence is not None, reason
@@ -6489,13 +6576,18 @@ def test_free_space_sequence_resolver_preserves_xyz_and_contact_orientations(
         assert audit['joint_max_delta'] == pytest.approx(0.4)
         assert audit['max_position_error'] == pytest.approx(0.0002)
         assert sequence.pregrasp.pose.orientation.z == pytest.approx(0.1)
-        assert sequence.lift.pose.orientation.y == pytest.approx(0.2)
+        assert sequence.lift.pose.orientation.y == pytest.approx(0.2 if include_lift else 0.0)
+        if not include_lift:
+            assert sequence.lift == stages[3][1]
+        count = 4 if include_lift else 3
+        assert audit['checked_stage_names'] == [name for name, _ in stages[:count]]
+        assert audit['resolved_stages'] == (['pregrasp', 'lift'] if include_lift else ['pregrasp'])
         assert sequence.approach.pose.orientation.w == pytest.approx(1.0)
         assert sequence.grasp.pose.orientation.w == pytest.approx(1.0)
         assert observed[-1] == (
-            ['pregrasp', 'approach', 'grasp', 'lift'],
-            [False, True, True, False],
-            [True, False, False, True],
+            ['pregrasp', 'approach', 'grasp', 'lift'][:count],
+            [False, True, True, False][:count],
+            [True, False, False, True][:count],
             56.0,
         )
     finally:
@@ -6751,6 +6843,126 @@ def test_near_field_exact_sequence_cache_reuses_only_attested_safe_work():
             'free_space_orientation_resolution'
         ]['hit'] is True
         assert second_cache['resolved_strict_sequence']['hit'] is True
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('outer_deadline, expected', [(100.0, 54.0), (52.0, 52.0)])
+def test_direct_orientation_timeout_leaves_budget_for_next_candidate(outer_deadline, expected):
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    node._execution_plan_validity_now_sec = MutableClock(50.0)
+    node.near_field_strategy = 'single_snapshot_direct'
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        node.near_field_planning_active = True
+        node._near_field_phase_id = 1
+        node._near_field_phase_deadline_sec = 100.0
+        node.latest_joint_state = types.SimpleNamespace(
+            name=['Joint%d' % index for index in range(1, 7)], position=[0.0] * 6)
+        stages = tuple((name, remote_node.PoseStamped()) for name in
+                       ('pregrasp', 'approach', 'grasp', 'lift'))
+        prepared = types.SimpleNamespace(ticket=node._stream_worker_ticket, near_field=True)
+        deadlines = []
+
+        def resolve(_stages, deadline_sec):
+            deadlines.append(deadline_sec)
+            return (None, {'policy': 'deterministic_geodesic_collision_ik',
+                           'policy_attested': True}, 'MOVEIT_TIMEOUT', 'budget consumed')
+
+        node._resolve_free_space_sequence = resolve
+        for _ in range(2):
+            runtime = {}
+            result = node._cached_free_space_sequence_resolution(
+                stages, prepared, runtime, deadline_sec=outer_deadline)
+            assert result[2] == 'MOVEIT_TIMEOUT'
+            assert runtime['request_plan_cache']['free_space_orientation_resolution']['stored'] is False
+        assert deadlines == [expected, expected]
+        assert node._direct_near_field_deadline_gate(prepared)() is True
+        assert node._near_field_phase_deadline_sec == 100.0
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('model, enabled, expected_count', [
+    ('unknown_tabletop', False, 3), ('unknown_tabletop', True, 4),
+    ('unknown_tabletop', 'false', 4), ('carton_segment', False, 4),
+])
+def test_close_hold_strict_checks_executed_stages_and_separates_cache(
+    monkeypatch, model, enabled, expected_count,
+):
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        node.latest_joint_state = types.SimpleNamespace(name=['Joint1'], position=[0.0])
+        prepared = types.SimpleNamespace(ticket=node._stream_worker_ticket,
+                                         near_field=True, model_choice=model)
+        stages = tuple((name, remote_node.PoseStamped()) for name in
+                       ('pregrasp', 'approach', 'grasp', 'lift'))
+        policy = [enabled]
+        monkeypatch.setattr(remote_node.rospy, 'get_param', lambda *_args: policy[0])
+        calls = []
+
+        def strict(received):
+            calls.append([name for name, _ in received])
+            # Contact is reachable; only the optional lift is not.
+            success = len(received) == 3
+            return (MoveItResult(reachable=success, joint_path_cost=1.0,
+                                joint_max_delta_rad=0.2, reason='contact reachable; lift unreachable',
+                                failure_code='' if success else 'MOVEIT_UNREACHABLE'), {})
+
+        node._strict_moveit_sequence_evaluation = strict
+        runtime = {}
+        result, _ = node._cached_strict_moveit_sequence_evaluation(stages, prepared, runtime, 'first')
+        assert len(calls[0]) == expected_count
+        assert result.reachable is (expected_count == 3)
+        assert len(stages) == 4
+        assert runtime['moveit_execution_stage_policy']['lift_path_verified'] is (expected_count == 4)
+        policy[0] = True
+        result, _ = node._cached_strict_moveit_sequence_evaluation(stages, prepared, runtime, 'enabled')
+        assert calls[-1] == ['pregrasp', 'approach', 'grasp', 'lift']
+        assert result.reachable is False
+        assert len(calls) == 2
+    finally:
+        node.shutdown_streaming_worker()
+
+
+@pytest.mark.parametrize('model,near_field,enabled,expected_lift', [
+    ('unknown_tabletop', True, False, False),
+    ('unknown_tabletop', True, True, True),
+    ('unknown_tabletop', True, 'false', True),
+    ('unknown_tabletop', False, False, True),
+    ('carton_segment', True, False, True),
+])
+def test_close_hold_resolver_policy_is_bound_into_cache(
+    monkeypatch, model, near_field, enabled, expected_lift,
+):
+    node = streaming_node(clock=MutableClock(50.0), start_worker=False)
+    try:
+        node.start_streaming()
+        node.submit_stream_snapshot(snapshot(49.8))
+        node.latest_joint_state = types.SimpleNamespace(name=['Joint1'], position=[0.0])
+        prepared = types.SimpleNamespace(ticket=node._stream_worker_ticket,
+                                         near_field=near_field, model_choice=model)
+        stages = tuple((name, remote_node.PoseStamped()) for name in
+                       ('pregrasp', 'approach', 'grasp', 'lift'))
+        policy = [enabled]
+        monkeypatch.setattr(remote_node.rospy, 'get_param', lambda *_args: policy[0])
+        calls = []
+
+        def resolve(received, deadline_sec=0.0, include_lift=True):
+            calls.append(include_lift)
+            return (None, dict(policy='deterministic_geodesic_collision_ik',
+                               policy_attested=True), 'MOVEIT_UNREACHABLE', 'recorded failure')
+
+        node._resolve_free_space_sequence = resolve
+        node._cached_free_space_sequence_resolution(stages, prepared, {})
+        node._cached_free_space_sequence_resolution(stages, prepared, {})
+        assert calls == [expected_lift]
+        policy[0] = True
+        node._cached_free_space_sequence_resolution(stages, prepared, {})
+        assert calls == ([False, True] if not expected_lift else [True])
     finally:
         node.shutdown_streaming_worker()
 
@@ -7559,6 +7771,7 @@ def test_near_field_moveit_continuation_gate_reserves_server_lifetime():
     node = remote_node.RemoteGrasp6DNode.__new__(
         remote_node.RemoteGrasp6DNode
     )
+    node.execution_plan_validity_sec = 30.0
     node.mujoco_server_max_snapshot_age_sec = 120.0
     node.mujoco_selection_snapshot_reserve_sec = 30.0
     clock = MutableClock(109.999)
@@ -7592,6 +7805,7 @@ def test_near_field_moveit_continuation_gate_fails_closed_on_bad_contract(
     node = remote_node.RemoteGrasp6DNode.__new__(
         remote_node.RemoteGrasp6DNode
     )
+    node.execution_plan_validity_sec = 30.0
     node.mujoco_server_max_snapshot_age_sec = max_age_sec
     node.mujoco_selection_snapshot_reserve_sec = reserve_sec
     node._execution_plan_validity_now_sec = lambda: 25.0
@@ -7643,6 +7857,7 @@ def test_phase_evidence_count_enters_current_recheck_and_moveit_top_n(
     ready_request_id,
 ):
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.execution_plan_validity_sec = 30.0
     node.target_instance_epoch = 4
     node._last_model_choice = 'carton_segment'
     node._stream_condition = threading.Condition(threading.RLock())
@@ -7711,7 +7926,7 @@ def test_phase_evidence_count_enters_current_recheck_and_moveit_top_n(
     monkeypatch.setattr(remote_node, 'bounded_moveit_select', fake_bounded)
     node._check_moveit_stable_candidate = lambda _candidate: None
     published = []
-    node._publish_selected_preview = published.append
+    node._publish_selected_preview = lambda candidate, ticket=None: published.append(candidate)
 
     predictions = [prepared_prediction(request_id) for request_id in (1, 2, 3)]
     for prepared in predictions:
@@ -7876,7 +8091,7 @@ def test_direct_near_field_uses_current_request_and_bounded_comparison_without_m
         )
     )
     published = []
-    node._publish_selected_preview = published.append
+    node._publish_selected_preview = lambda candidate, ticket=None: published.append(candidate)
     prepared = prepared_prediction(1)
     prepared.near_field = True
     if frozen_request:
@@ -8230,7 +8445,7 @@ def test_direct_near_field_no_selection_has_exact_terminal_status(
         lambda scored: tuple(scored)
     )
     node._check_moveit_stable_candidate = lambda _candidate: None
-    node._publish_selected_preview = lambda _candidate: pytest.fail(
+    node._publish_selected_preview = lambda _candidate, ticket=None: pytest.fail(
         'a direct near-field terminal failure cannot publish a preview'
     )
     node._observe_execution_candidate_invalid = lambda **_kwargs: None
@@ -8287,6 +8502,10 @@ def test_direct_near_field_no_selection_has_exact_terminal_status(
             result=types.SimpleNamespace(ok=surface_case != 'unregistered'), source_clipped=False)
     if surface_case == 'recorded' and not terminated_early:
         expected_status = 'NEAR_FIELD_SURFACE_VIEW_REQUIRED'
+    elif surface_case == 'unchecked' and not terminated_early:
+        # An unchecked shortlist is not a completed reachability failure,
+        # even when a malformed selection omitted its early-stop flag.
+        expected_status = 'NEAR_FIELD_STABLE_RECHECK_INCOMPLETE'
 
     result = node._accept_prediction(prepared)
 
@@ -8305,6 +8524,7 @@ def test_snapshot_budget_terminal_status_survives_primary_failure_count(
     node = remote_node.RemoteGrasp6DNode.__new__(
         remote_node.RemoteGrasp6DNode
     )
+    node.execution_plan_validity_sec = 30.0
     node.target_instance_epoch = 4
     node._last_model_choice = 'carton_segment'
     node._stream_condition = threading.Condition(threading.RLock())
@@ -8340,7 +8560,7 @@ def test_snapshot_budget_terminal_status_survives_primary_failure_count(
     node._screen_near_field_selection_with_mujoco = (
         lambda _prepared, selection: (selection, '')
     )
-    node._publish_selected_preview = lambda _candidate: pytest.fail(
+    node._publish_selected_preview = lambda _candidate, ticket=None: pytest.fail(
         'an early-terminated unreachable subset cannot publish a preview'
     )
     node._observe_execution_candidate_invalid = lambda **_kwargs: None
@@ -9145,6 +9365,7 @@ def promotion_plan(
 
 def promotion_node(clock=None):
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    node.execution_plan_validity_sec = 30.0
     node._geometry_state_lock = threading.RLock()
     node._geometry_invalidation_generation = 0
     node._last_geometry_invalidation_code = ''
@@ -9191,6 +9412,7 @@ def seed_execution(node, plan, signature='candidate-A', score=1.0):
 
 def promotion_transaction_node(tmp_path):
     node = streaming_node(clock=MutableClock(10.0), start_worker=False)
+    node.execution_plan_validity_sec = 30.0
     node._geometry_state_lock = threading.RLock()
     node._geometry_invalidation_generation = 0
     node._last_geometry_invalidation_code = ''
@@ -11437,8 +11659,8 @@ def test_contact_unknown_duration_is_never_a_free_path(reason):
     assert min([unknown, known], key=node._direct_near_field_execution_rank_key) is known
 
 
-@pytest.mark.parametrize('first_time, cutoff', [(21.0, 29.0), (95.0, 98.0)])
-def test_contact_comparison_bounds_later_calls_and_preserves_phase(first_time, cutoff):
+@pytest.mark.parametrize('first_time', [21.0, 95.0])
+def test_contact_first_complete_candidate_stops_comparison_and_preserves_phase(first_time):
     node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
     node.near_field_planning_active = True
     node._near_field_phase_id = 1
@@ -11459,11 +11681,10 @@ def test_contact_comparison_bounds_later_calls_and_preserves_phase(first_time, c
     checker, gate = node._direct_near_field_comparison_search(prepared)
     assert gate()
     checker(candidate)
-    clock.value += 0.1
-    checker(candidate)
-    assert deadlines == [100.0, cutoff]
+    assert gate() is False
+    assert deadlines == [98.0]
     assert 'selection_deadline_sec' not in runtime
-    clock.value = cutoff
+    clock.value += 0.1
     assert gate() is False
     assert node._direct_near_field_deadline_gate(prepared)() is True
     assert node._direct_near_field_candidate_deadline_sec(prepared, runtime) == 100.0
@@ -11494,6 +11715,9 @@ def test_contact_rejected_result_does_not_start_incumbent_budget(change, maximum
     checker(candidate)
     clock.value = 60.0
     assert gate() is True
+    clock.value = 98.0
+    assert gate() is False  # no incumbent still leaves time to publish failure
+    assert node._direct_near_field_deadline_gate(types.SimpleNamespace(near_field=True))() is True
 
 
 def test_contact_comparison_cleans_private_deadline_after_error():
@@ -11515,7 +11739,7 @@ def test_contact_comparison_cleans_private_deadline_after_error():
     assert 'selection_deadline_sec' not in runtime
 
 
-@pytest.mark.parametrize('width_delta, expected_first', [(1e-17, 2), (1e-6, 1)])
+@pytest.mark.parametrize('width_delta, expected_first', [(1e-17, 2), (1e-6, 2), (0.002, 1)])
 def test_direct_near_field_rank_ignores_sub_wire_width_noise(
     width_delta, expected_first,
 ):
@@ -11535,6 +11759,18 @@ def test_direct_near_field_rank_ignores_sub_wire_width_noise(
     }
     ranked = sorted(candidates, key=node._direct_near_field_moveit_rank_key)
     assert ranked[0].track_id == expected_first
+
+
+def test_contact_final_ranking_retains_submillimetre_aperture_margin():
+    node = remote_node.RemoteGrasp6DNode.__new__(remote_node.RemoteGrasp6DNode)
+    narrow = contact_duration_candidate(1, width=0.0423, duration=90.0)
+    slightly_wider = contact_duration_candidate(2, width=0.0424, duration=20.0)
+    node._stable_variant_runtime = {
+        (1, 0): {'soft_evidence': {'contact_start_orientation_delta_rad': 3.0}},
+        (2, 0): {'soft_evidence': {'contact_start_orientation_delta_rad': 0.2}},
+    }
+    assert min([narrow, slightly_wider], key=node._direct_near_field_moveit_rank_key) is slightly_wider
+    assert min([narrow, slightly_wider], key=node._direct_near_field_execution_rank_key) is narrow
 
 
 def test_direct_near_field_rank_prefers_narrow_side_before_wrist_delta():
@@ -11755,7 +11991,7 @@ def _mujoco_selection_node(candidates):
         for candidate in candidates
     }
     node._require_stream_ticket_current = lambda _ticket: None
-    node._build_selected_preview_bundle = lambda candidate: {
+    node._build_selected_preview_bundle = lambda candidate, ticket=None: {
         'rich_plan': types.SimpleNamespace(
             plan_id='plan-%d' % candidate.track_id,
             candidate_source='tabletop_geometry',
@@ -11771,6 +12007,7 @@ def _mujoco_selection_node(candidates):
 def test_near_field_mujoco_selection_tries_next_reachable_candidate(
     monkeypatch,
 ):
+    monkeypatch.setattr(remote_node.rospy, 'get_param', lambda _name, default=None: default)
     first = _mujoco_selection_candidate(1, 0.1)
     second = _mujoco_selection_candidate(2, 0.2)
     node = _mujoco_selection_node((first, second))
@@ -11833,6 +12070,7 @@ def test_near_field_mujoco_selection_tries_next_reachable_candidate(
 
 
 def test_near_field_mujoco_selection_stops_on_authority_failure(monkeypatch):
+    monkeypatch.setattr(remote_node.rospy, 'get_param', lambda _name, default=None: default)
     first = _mujoco_selection_candidate(1, 0.1)
     second = _mujoco_selection_candidate(2, 0.2)
     node = _mujoco_selection_node((first, second))

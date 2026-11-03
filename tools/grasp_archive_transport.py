@@ -13,6 +13,8 @@ https://docs.github.com/en/rest/releases/assets
 https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases
 """
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -47,6 +49,28 @@ def _utc_now():
 
 def _identity(info):
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _publish_no_replace(temporary, destination):
+    """Atomically publish verified bytes, including on Linux exFAT volumes."""
+    try:
+        os.link(temporary, destination)
+    except OSError as exc:
+        if exc.errno not in {errno.EPERM, errno.EOPNOTSUPP, errno.EXDEV, errno.ENOSYS}:
+            raise
+        # exFAT cannot hard-link. A plain rename could overwrite a concurrent
+        # destination; RENAME_NOREPLACE preserves the same no-clobber rule.
+        libc = ctypes.CDLL(None, use_errno=True)
+        rename = getattr(libc, 'renameat2', None)
+        if rename is None:
+            raise TransportError('filesystem requires atomic no-replace rename support') from exc
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        if rename(-100, os.fsencode(temporary), -100, os.fsencode(destination), 1):
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code), str(destination))
+    else:
+        os.unlink(temporary)
 
 
 def _safe_relative(value):
@@ -481,9 +505,7 @@ class GithubReleaseStore:
                     raise TransportError("restored original file checksum mismatch")
                 writer.flush()
                 os.fsync(writer.fileno())
-            # link() is atomic and fails if another process created destination.
-            os.link(temporary, str(destination))
-            os.unlink(temporary)
+            _publish_no_replace(temporary, str(destination))
             directory_fd = os.open(str(destination.parent), os.O_DIRECTORY)
             try:
                 os.fsync(directory_fd)

@@ -18,10 +18,14 @@ from tf.transformations import quaternion_matrix
 
 from alicia_flexible_grasp.grasp.gripper_geometry import (
     GripperGeometry, _stage_boxes, _box_corners, _obb_overlap,
+    ANALYTICAL_FINGER_SIZE_XYZ_M, ANALYTICAL_MAX_INNER_GAP_M,
+    gripper_target_collision_box as _shared_target_collision_box,
+    gripper_target_overlap as _shared_target_overlap,
 )
+from .finger_cad_separation import load_finger_cad_model, validated_model_matches
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     plan_id_matches_content, pose_values, stamp_nanoseconds,
-    validate_plan_header_binding, validate_rich_geometry,
+    validate_plan_header_binding, validate_rich_geometry, is_independent_observation_plan,
 )
 
 # Computational limits only. A six-dimensional uncertainty proof needs more
@@ -33,6 +37,19 @@ FOLLOWING_PATH_MAX_SECONDS = 25.0
 
 class ObservationPathError(ValueError):
     pass
+
+
+def gripper_target_collision_box(fk, gripper, opening, body, transform, center, size):
+    return _shared_target_collision_box(fk, gripper, opening, body, transform, center, size)
+
+
+def gripper_target_overlap(fk, gripper, opening, body, transform, center, size,
+                           scene, displacement=0.):
+    try:
+        return _shared_target_overlap(fk, gripper, opening, body, transform,
+                                      center, size, scene, displacement)
+    except ValueError as exc:
+        raise ObservationPathError(str(exc)) from exc
 
 
 class ObservationVelocityLimitError(ObservationPathError):
@@ -87,6 +104,7 @@ class FrozenObservationScene:
     size: np.ndarray
     track_id: str = ''
     geometry_digest: str = ''
+    require_target_visibility: bool = False
 
     @classmethod
     def from_plan(cls, plan):
@@ -99,9 +117,10 @@ class FrozenObservationScene:
 
     @classmethod
     def _from_plan_phase(cls, plan, phase):
+        expected_poses = 1 if is_independent_observation_plan(plan) else 4
         if (getattr(plan, 'valid', False) is not True
                 or str(plan.diagnostic) != phase
-                or len(plan.poses) != 4 or not plan_id_matches_content(plan)):
+                or len(plan.poses) != expected_poses or not plan_id_matches_content(plan)):
             raise ObservationPathError('invalid committed %s plan' % phase)
         stamp = validate_plan_header_binding(plan)
         pose, size, support = validate_rich_geometry(plan.object_geometry)
@@ -119,7 +138,9 @@ class FrozenObservationScene:
             array.setflags(write=False)
         return cls(str(plan.plan_id), committed_plan_digest(plan), stamp, normal,
                    float(support[3]) / norm, center, rotation, dimensions,
-                   str(plan.target_track_id), wire_digest(plan.object_geometry))
+                   str(plan.target_track_id), wire_digest(plan.object_geometry),
+                   phase == 'FAR_FIELD_OBSERVATION_PLAN'
+                   and str(plan.model_choice) == 'unknown_tabletop')
 
 
 class CommittedObservationContexts:
@@ -200,6 +221,24 @@ class CommittedObservationContexts:
         self.active_scene = scene
         return scene, self.revocation
 
+    def admit_task_view(self, scene, previous_scene, revocation):
+        """Explicit caller-authorized switch; ordinary plan ingest cannot rebind.
+
+        The gateway caller must hold its context lock and validate the complete
+        task/session transaction. Keep the task revocation token; any previously
+        captured trajectory still fails ``validate_capture`` by scene identity.
+        """
+        self.validate_capture(previous_scene, revocation)
+        if (not isinstance(scene, FrozenObservationScene)
+                or scene.track_id != previous_scene.track_id
+                or scene.source_ns <= previous_scene.source_ns
+                or scene.plan_id == previous_scene.plan_id):
+            raise ObservationPathError('supplemental scene is not new and same-target')
+        self.active_scene = scene
+        self.entries[(scene.source_ns, 'base_link')] = scene
+        while len(self.entries) > self.capacity:
+            self.entries.popitem(last=False)
+
     def validate_capture(self, scene, revocation):
         if (not self.active or self.blocked or self.revocation != revocation
                 or self.active_scene is not scene):
@@ -216,6 +255,7 @@ class SerialUrdfFk:
     """Exact origin/axis FK of a fixed/revolute URDF chain, in joint-name order."""
     def __init__(self, xml, joint_names, base='base_link', tool='tool0'):
         self.model_sha256 = hashlib.sha256(str(xml).encode('utf-8')).hexdigest()
+        self.base_frame, self.tool_frame = base, tool
         self.names = tuple(str(name) for name in joint_names)
         if not self.names or len(set(self.names)) != len(self.names):
             raise ObservationPathError('FK requires distinct joint names')
@@ -272,6 +312,10 @@ class SerialUrdfFk:
             self.chain.append((transform, index, axis))
         if set(moving) != set(self.names) or len(moving) != len(self.names):
             raise ObservationPathError('trajectory names do not exactly match the tool chain')
+        # This optional shape proof is bound to the exact local finger/tool
+        # structure and pinned meshes; a mismatch keeps all old box checks.
+        self.finger_cad_model = (load_finger_cad_model(xml)
+            if base == 'base_link' and tool == 'tool0' else None)
 
     def __call__(self, positions):
         q = _array(positions, len(self.names), 'FK joints')
@@ -314,6 +358,30 @@ class SerialUrdfFk:
                 result[index] = radius
             radius += float(np.linalg.norm(origin[:3, 3]))
         return result
+
+
+def observation_endpoint_joint_reserve(fk, goal, errors):
+    """Check endpoint room for an existing joint-error contract, without I/O.
+
+    This is a nominal endpoint selection condition. It neither certifies the
+    correction path nor changes the URDF, permitted error or measured arrival.
+    """
+    if not isinstance(fk, SerialUrdfFk):
+        raise ObservationPathError('joint reserve requires the bound URDF model')
+    q = _array(goal, len(fk.names), 'joint reserve endpoint')
+    epsilon = _array(errors, len(fk.names), 'joint reserve errors')
+    if np.any(epsilon <= 0.) or np.any(epsilon > .5):
+        raise ObservationPathError('positive existing joint-error contract required')
+    fk(q)
+    lower = q-fk.limits[:, 0]
+    upper = fk.limits[:, 1]-q
+    passed = (q >= fk.limits[:, 0]+epsilon) & (q <= fk.limits[:, 1]-epsilon)
+    return dict(ok=bool(np.all(passed)), joint_names=list(fk.names),
+        goal_joint_positions_rad=q.tolist(), joint_error_bounds_rad=epsilon.tolist(),
+        lower_joint_margin_rad=lower.tolist(), upper_joint_margin_rad=upper.tolist(),
+        insufficient_joints=[name for name, ok in zip(fk.names, passed) if not ok],
+        model_sha256=fk.model_sha256, execution_authority=False,
+        complete_path_checked=False, certifies_hardware_tracking_stopping_or_calibration=False)
 
 
 def observation_endpoint_support_bound(fk, goal, errors, normal, offset, gripper, opening):
@@ -582,9 +650,28 @@ def _derivative_bound(c, lo, hi):
     return np.maximum(np.abs(lower), np.abs(upper))
 
 
+def validate_scheduled_start(trajectory, scheduled_start_ns=None):
+    """Bind absolute start bytes without creating a live timing permission.
+
+    A future trajectory has the same relative Noetic bridge only while the
+    externally authenticated desired hold remains stationary. The gateway and
+    typed admission separately enforce that premise and the real deadline.
+    Legacy callers continue to reject every nonzero start stamp.
+    """
+    actual = stamp_nanoseconds(trajectory.header.stamp)
+    if scheduled_start_ns is None:
+        if actual != 0:
+            raise ObservationPathError('nonzero trajectory start stamp is unsupported')
+    elif (type(scheduled_start_ns) is not int or scheduled_start_ns < 0
+            or actual != scheduled_start_ns):
+        raise ObservationPathError('scheduled trajectory start binding changed')
+    return actual
+
+
 def analyze_observation_trajectory_velocity(
         plan, controller_desired, joint_velocity_limits_rad_s, *,
-        max_checks=8192, max_depth=20, max_seconds=2., clock=time.monotonic):
+        max_checks=8192, max_depth=20, max_seconds=2., clock=time.monotonic,
+        scheduled_start_ns=None):
     """Bound every commanded spline's speed, including the real Noetic bridge.
 
     A returned scale is timing advice, never execution permission. With the
@@ -613,8 +700,7 @@ def analyze_observation_trajectory_velocity(
         raise ObservationPathError('invalid joint velocity limits: %s' % exc)
     if np.any(limits <= 0.):
         raise ObservationPathError('joint velocity limits must be positive')
-    if stamp_nanoseconds(trajectory.header.stamp) != 0:
-        raise ObservationPathError('nonzero trajectory start stamp is unsupported')
+    validate_scheduled_start(trajectory, scheduled_start_ns)
     if getattr(getattr(plan, 'multi_dof_joint_trajectory', None), 'points', ()):
         raise ObservationPathError('multi-DOF observation path is unsupported')
     points = list(trajectory.points)
@@ -711,7 +797,7 @@ def validate_observation_trajectory_velocity(
 def validate_observation_trajectory(plan, scene, fk, gripper, opening,
                                     controller_desired, max_checks=8192,
                                     max_depth=20, max_seconds=5., clock=time.monotonic,
-                                    joint_error_bounds_rad=None):
+                                    joint_error_bounds_rad=None, scheduled_start_ns=None):
     """Certify continuous nominal Link6/7/8 clearance, including Noetic bridge.
 
     A zero-stamped command starts at controller reception time. Its t=0 point
@@ -731,8 +817,7 @@ def validate_observation_trajectory(plan, scene, fk, gripper, opening,
     names = tuple(trajectory.joint_names)
     if names != fk.names or len(set(names)) != len(names):
         raise ObservationPathError('trajectory/FK joint order mismatch')
-    if stamp_nanoseconds(trajectory.header.stamp) != 0:
-        raise ObservationPathError('nonzero trajectory start stamp is unsupported')
+    validate_scheduled_start(trajectory, scheduled_start_ns)
     if getattr(getattr(plan, 'multi_dof_joint_trajectory', None), 'points', ()):
         raise ObservationPathError('multi-DOF observation path is unsupported')
     points = list(trajectory.points)
@@ -758,11 +843,16 @@ def validate_observation_trajectory(plan, scene, fk, gripper, opening,
         segments.append((segment_coefficients(points[index], points[index+1],
                                               times[index+1]-times[index], len(names)), str(index)))
     identity = np.eye(4)
-    radius = max(float(np.max(np.linalg.norm(_box_corners(center, identity[:3, :3], size), axis=1)))
-                 for _name, center, size in _stage_boxes(identity, gripper, opening, 'y', 'z'))
+    collision_boxes = [gripper_target_collision_box(
+        fk, gripper, opening, name, identity, center, size)[:2]
+        for name, center, size in _stage_boxes(identity, gripper, opening, 'y', 'z')]
+    radius = max(float(np.max(np.linalg.norm(
+        _box_corners(center, identity[:3, :3], size), axis=1)))
+        for center, size in collision_boxes)
     radii = fk.point_motion_radii(radius)
     checked, fk_checked, minimum, certified = 0, 0, float('inf'), float('inf')
     following_checks, following_minimum = 0, float('inf')
+    cad_projection_checks, cad_separation_proofs = 0, 0
     epsilon, support_box = None, None
     if joint_error_bounds_rad is not None:
         epsilon = _array(joint_error_bounds_rad, len(names), 'path following allowance')
@@ -790,10 +880,40 @@ def validate_observation_trajectory(plan, scene, fk, gripper, opening,
                                report['minimum_support_clearance_lower_bound_m'])
         return True
 
+    def attach_replay_sample(error, q, transform, displacement, label,
+                             body=None, center=None, size=None, clearance=None):
+        # Diagnostic attributes only. Never replace the original rejection.
+        try:
+            error.contact_replay_sample = dict(
+                available=transform is not None, label=str(label),
+                joint_positions_rad=np.asarray(q).tolist(),
+                displacement_bound_m=float(displacement),
+                checker_options=dict(max_checks=max_checks, max_depth=max_depth,
+                    max_seconds=float(max_seconds), joint_error_bounds_rad=(
+                        None if joint_error_bounds_rad is None else
+                        np.asarray(joint_error_bounds_rad).tolist())))
+            sample = error.contact_replay_sample
+            if transform is None:
+                sample['reason'] = 'checker stopped before FK evaluation at this requested point'
+            else:
+                sample['T_base_tool0'] = np.asarray(transform).tolist()
+            if body is not None:
+                sample.update(body=str(body), body_center_base_m=np.asarray(center).tolist(),
+                              body_size_xyz_m=np.asarray(size).tolist(),
+                              support_clearance_m=float(clearance))
+            if hasattr(error, 'cad_target_projection'):
+                sample['cad_target_projection'] = deepcopy(error.cad_target_projection)
+        except Exception:
+            # Even a diagnostic conversion failure cannot change a collision.
+            error.contact_replay_sample = dict(available=False,
+                reason='first-failure sample serialization unavailable')
+        return error
+
     def boxes_at(q, displacement, label):
-        nonlocal minimum, fk_checked
+        nonlocal minimum, fk_checked, cad_projection_checks, cad_separation_proofs
         if fk_checked >= max_checks or clock()-started > max_seconds:
-            raise ObservationPathError('continuous path validation computation budget exhausted')
+            error = ObservationPathError('continuous path validation computation budget exhausted')
+            raise attach_replay_sample(error, q, None, displacement, label)
         fk_checked += 1
         transform = fk(q)
         ok, local_min = True, float('inf')
@@ -801,12 +921,30 @@ def validate_observation_trajectory(plan, scene, fk, gripper, opening,
             clearance = float(np.min(_box_corners(center, transform[:3, :3], size) @ scene.normal + scene.offset))
             minimum, local_min = min(minimum, clearance), min(local_min, clearance)
             if clearance < gripper.support_clearance_m - 1e-9:
-                raise ObservationPathError('support clearance %.9fm at %s/%s' % (clearance, label, name))
-            if _obb_overlap(center, transform[:3, :3], size, scene.center, scene.rotation, scene.size):
-                raise ObservationPathError('target OBB collision at %s/%s' % (label, name))
-            if (clearance - displacement < gripper.support_clearance_m
-                    or _obb_overlap(center, transform[:3, :3], size + 2.*displacement,
-                                    scene.center, scene.rotation, scene.size)):
+                error = ObservationPathError('support clearance %.9fm at %s/%s' % (clearance, label, name))
+                error.candidate_rejection_code = 'SUPPORT_CLEARANCE_COLLISION'
+                error.candidate_rejection_at_start = label in ('dropped-start', 'bridge-start')
+                raise attach_replay_sample(error, q, transform, displacement, label,
+                                          name, center, size, clearance)
+            overlap, cad_proof = gripper_target_overlap(
+                fk, gripper, opening, name, transform, center, size, scene)
+            if cad_proof is not None:
+                cad_projection_checks += 1
+                cad_separation_proofs += int(not overlap)
+            if overlap:
+                error = ObservationPathError('target OBB collision at %s/%s' % (label, name))
+                error.candidate_rejection_code = 'TARGET_OBB_COLLISION'
+                error.candidate_rejection_at_start = label in ('dropped-start', 'bridge-start')
+                if cad_proof is not None:
+                    error.cad_target_projection = deepcopy(cad_proof)
+                raise attach_replay_sample(error, q, transform, displacement, label,
+                                          name, center, size, clearance)
+            interval_overlap, interval_proof = gripper_target_overlap(
+                fk, gripper, opening, name, transform, center, size, scene, displacement)
+            if interval_proof is not None:
+                cad_projection_checks += 1
+                cad_separation_proofs += int(not interval_overlap)
+            if clearance - displacement < gripper.support_clearance_m or interval_overlap:
                 ok = False
         return ok, local_min - displacement
 
@@ -844,7 +982,7 @@ def validate_observation_trajectory(plan, scene, fk, gripper, opening,
             if depth >= max_depth:
                 raise ObservationPathError('continuous path clearance is unresolved at subdivision limit')
             stack.extend(((mid, hi, depth+1), (lo, mid, depth+1)))
-    return {'scope': 'continuous_commanded_Link6_Link7_Link8_only',
+    report = {'scope': 'continuous_commanded_Link6_Link7_Link8_only',
             'plan_id': scene.plan_id, 'scene_sha256': scene.digest,
             'model_sha256': fk.model_sha256, 'trajectory_sha256': wire_digest(plan),
             'segments': len(segments), 'interval_checks': checked,
@@ -854,6 +992,10 @@ def validate_observation_trajectory(plan, scene, fk, gripper, opening,
             'bridge': 'stationary_desired_to_first_positive_time_waypoint',
             'bridge_start_joint_positions_rad': list(controller_desired.positions),
             'opening_width_m': float(opening),
+            'target_cad_projection': dict(checks=cad_projection_checks,
+                sufficient_separation_proofs=cad_separation_proofs,
+                motion_radius_m=radius, target_envelope_unchanged=True,
+                support_and_palm_checks_unchanged=True),
             'following_support': ({
                 'scope': 'conditional_continuous_Link6_Link7_Link8_support_only',
                 'joint_error_bounds_rad': epsilon.tolist(),
@@ -863,4 +1005,12 @@ def validate_observation_trajectory(plan, scene, fk, gripper, opening,
                 'certifies_hardware_tracking_stopping_or_calibration': False,
                 'target_obb_tracking_uncertainty_checked': False,
             } if support_box is not None else None),
-            'elapsed_sec': clock()-started}
+            'elapsed_sec': None}
+    elapsed = clock()-started
+    if elapsed > max_seconds:
+        raise ObservationPathError('continuous path validation computation budget exhausted')
+    report['elapsed_sec'] = elapsed
+    if scheduled_start_ns:
+        report.update(scheduled_start_ns=scheduled_start_ns,
+            start_time_policy='explicit_future_with_unchanged_stationary_bridge')
+    return report

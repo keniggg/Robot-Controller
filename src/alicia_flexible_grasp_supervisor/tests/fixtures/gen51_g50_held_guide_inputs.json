@@ -1,0 +1,1691 @@
+{
+  "schema": 1,
+  "kind": "GEN51_four_recorded_G50_held_guide_inputs",
+  "original_consumer_prefix": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/verification/gen51_g50_strict_algorithm_review_r1/original_G50_consumers_exact_prefix.log",
+  "original_consumer_prefix_sha256": "ee0f488103c6b3c101a7fb86b7a6a12656980267225db7431c81c4ac85ea8941",
+  "model_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<robot name=\"alicia_D_v5_5\">\n  <mujoco>\n    <compiler meshdir=\"../meshes\" discardvisual=\"false\" />\n    <contact>\n      <exclude body1=\"base_link\" body2=\"Link1\"/>\n      <exclude body1=\"Link1\" body2=\"Link2\"/>\n      <exclude body1=\"Link2\" body2=\"Link3\"/>\n      <exclude body1=\"Link3\" body2=\"Link4\"/>\n      <exclude body1=\"Link4\" body2=\"Link5\"/>\n      <exclude body1=\"Link5\" body2=\"Link6\"/>\n      <exclude body1=\"Link6\" body2=\"Link7\"/>\n      <exclude body1=\"Link6\" body2=\"Link8\"/>\n    </contact>\n  </mujoco>\n  <link\n    name=\"base_link\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <link\n    name=\"Link1\">\n    <inertial>\n      <origin\n        xyz=\"-0.000232391087694535 -1.30049454546467E-05 0.00272122513752755\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.193725361315237\" />\n      <inertia\n        ixx=\"0.000258312653055438\"\n        ixy=\"8.79363230651008E-07\"\n        ixz=\"-6.87511809706199E-07\"\n        iyy=\"0.000149233685494123\"\n        iyz=\"-1.07703111237371E-06\"\n        izz=\"0.000339752801671385\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint1\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0 0.1295\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"base_link\" />\n    <child\n      link=\"Link1\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-2.16\"\n      upper=\"2.16\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link2\">\n    <inertial>\n      <origin\n        xyz=\"0.149948141017768 -0.00073733103436536 -0.000614552702572041\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.216765318032361\" />\n      <inertia\n        ixx=\"0.00012827957403101\"\n        ixy=\"-1.18676813578654E-07\"\n        ixz=\"-1.68171130903575E-06\"\n        iyy=\"0.000226231611908606\"\n        iyz=\"-3.50051091633141E-07\"\n        izz=\"0.000143215063853149\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint2\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 -5E-05 0.04287\"\n      rpy=\"1.570796326670687 -1.4619552299123753 3.673328578425508e-06\" />\n    <parent\n      link=\"Link1\" />\n    <child\n      link=\"Link2\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.57\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link3\">\n    <inertial>\n      <origin\n        xyz=\"0.055786319810667 0.00248143782929366 0.000269720725052352\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0845575681430802\" />\n      <inertia\n        ixx=\"2.87941478239851E-05\"\n        ixy=\"-2.26498116289353E-06\"\n        ixz=\"-5.38445390787684E-06\"\n        iyy=\"7.61918370068424E-05\"\n        iyz=\"-3.82299515503286E-07\"\n        izz=\"8.043706644056E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint3\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.22367 -0.022592 0\"\n      rpy=\"0 0 -2.4010124372456678\" />\n    <parent\n      link=\"Link2\" />\n    <child\n      link=\"Link3\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-0.5\"\n      upper=\"2.35619\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link4\">\n    <inertial>\n      <origin\n        xyz=\"0.000298365504501796 -0.000601368925849056 0.0663740391896737\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0653695953286747\" />\n      <inertia\n        ixx=\"7.03004188086337E-05\"\n        ixy=\"-9.68417851161416E-09\"\n        ixz=\"-7.50131707418093E-07\"\n        iyy=\"6.8747029788813E-05\"\n        iyz=\"4.45271906086873E-08\"\n        izz=\"1.68226189350765E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint4\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.0986 -0.00211 0.0002\"\n      rpy=\"-1.5708000003911129 0.014592309644319679 -1.5708000536043512\" />\n    <parent\n      link=\"Link3\" />\n    <child\n      link=\"Link4\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link5\">\n    <inertial>\n      <origin\n        xyz=\"-0.0110961410990681 0.0308024762289942 -0.000207575403674642\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0463941316397046\" />\n      <inertia\n        ixx=\"1.8425786696003E-05\"\n        ixy=\"2.02919305442313E-06\"\n        ixz=\"-5.09341788606234E-08\"\n        iyy=\"2.39811947218569E-05\"\n        iyz=\"-4.22854804621873E-08\"\n        izz=\"1.63952567717743E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint5\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0.00015 0.12275\"\n      rpy=\"1.5708000000612679 0.0057757130913083099 2.1215614713127198e-08\" />\n    <parent\n      link=\"Link4\" />\n    <child\n      link=\"Link5\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.5\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link6\">\n    <inertial>\n      <origin\n        xyz=\"-3.11347120307559E-09 6.19962735608128E-10 -0.00146275616399921\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.000754053623586768\" />\n      <inertia\n        ixx=\"1.9236769291339E-08\"\n        ixy=\"9.19452445636026E-14\"\n        ixz=\"3.52333012571258E-15\"\n        iyy=\"1.92358360258478E-08\"\n        iyz=\"-3.901270498029E-17\"\n        izz=\"3.70123450485896E-08\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6\"\n    type=\"revolute\">\n    <origin\n      xyz=\"-0.00385 0.0573 -0.00035\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Link5\" />\n    <child\n      link=\"Link6\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Grasp_base\">\n    <inertial>\n      <origin\n        xyz=\"-0.0321082111389046 -0.000168822009778203 0.0275474621634362\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.119820573147005\" />\n      <inertia\n        ixx=\"8.23026483118452E-05\"\n        ixy=\"2.1627287972411E-08\"\n        ixz=\"-6.37078693697654E-06\"\n        iyy=\"3.33372461482565E-05\"\n        iyz=\"2.3095070932307E-08\"\n        izz=\"8.59654133961544E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6_to_gripper_base\"\n    type=\"fixed\">\n    <origin\n      xyz=\"0 0 0\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Link6\" />\n    <child\n      link=\"Grasp_base\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n  <link\n    name=\"Link7\">\n    <inertial>\n      <origin\n        xyz=\"2.97087521250461E-08 0.0434087591943518 0.0106596716155943\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0256461121677861\" />\n      <inertia\n        ixx=\"6.46830326573767E-06\"\n        ixy=\"2.39543799544883E-11\"\n        ixz=\"-4.63721293861409E-12\"\n        iyy=\"5.13428741941794E-06\"\n        iyz=\"-1.26432048814187E-06\"\n        izz=\"8.03606347912567E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"left_finger\"\n    type=\"prismatic\">\n    <!--\n      The real SDK and /joint_states public contract is 0 m closed and\n      0.05 m open.  Keep the original CAD poses, but parameterize them in\n      that public direction: right_finger=0 is the centered/closed pose and\n      right_finger=0.05 is the original fully-open pose.\n    -->\n    <origin\n      xyz=\"-0.0002 0.000502 0.131180183660255\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link7\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-0.05\"\n      upper=\"0\"\n      effort=\"5\"\n      velocity=\"10\" />\n    <mimic joint=\"right_finger\" multiplier=\"-1\" offset=\"0\"/>\n  </joint>\n  <link\n    name=\"Link8\">\n    <inertial>\n      <origin\n        xyz=\"-2.97087521250461E-08 -0.0434087591943727 0.0106596716155944\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.025646112167786\" />\n      <inertia\n        ixx=\"6.46830326573761E-06\"\n        ixy=\"2.39543799589352E-11\"\n        ixz=\"4.63721294819601E-12\"\n        iyy=\"5.13428741941793E-06\"\n        iyz=\"1.26432048814186E-06\"\n        izz=\"8.03606347912559E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"right_finger\"\n    type=\"prismatic\">\n    <origin\n      xyz=\"-0.0002 -0.000498 0.131180183660255\"\n      rpy=\"1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link8\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"0\"\n      upper=\"0.05\"\n      effort=\"5\"\n      velocity=\"10\" />\n  </joint>\n  <link\n    name=\"tool0\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <sphere radius=\"0.005\" /> <!-- 定义一个半径为0.02米的小球体 -->\n      </geometry>\n      <material\n        name=\"green_virtual_sphere_material\"> <!-- 可以给材质起个名字 -->\n        <color\n          rgba=\"0 1 0 1\" /> <!-- 绿色 (R G B A)，A为1表示不透明 -->\n      </material>\n    </visual>\n  </link>\n  <joint\n    name=\"Grasp2tool\"\n    type=\"fixed\">\n    <origin\n      xyz=\"-0.0002 -0.0003 0.13118\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"tool0\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n</robot>\n",
+  "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "cases": [
+    {
+      "line": 102,
+      "plan_id": "17ac3b232ddc67b7021910e7",
+      "raw_line_sha256": "6ce3ec7657ef44a711aa9f2757bb564779f75cafe6b47fd68456f6a122109aa8",
+      "source_sample": {
+        "accepted_gripper_opening_m": 0.04980000000000001,
+        "accepted_positions_rad": [
+          -1.971165312433049,
+          -0.3834951969714103,
+          0.9203884727313847,
+          0.0859029241215959,
+          -1.1320778214596032,
+          0.056757289151768725
+        ],
+        "accepted_sample_count": 5,
+        "accepted_stamp_ns": 1792325960187044199,
+        "accepted_tool_position_m": [
+          -0.14309084224912694,
+          -0.30703567790764075,
+          0.08233181585664995
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1792286012067798399,
+        "joint_error_sdk_counts": [
+          3.9999999999998415,
+          -12.000000000000032,
+          -11.99999999999996,
+          -4.000000000000004,
+          0.9999999999999604,
+          -2.9999999999999987
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1792325960187044199,
+        "orientation_error_rad": 0.03548492684927434,
+        "position_error_m": 0.012488117541291525,
+        "position_error_vector_m": [
+          0.00534002955731766,
+          0.004507293746061458,
+          -0.010349950103203498
+        ],
+        "sdk_positions_rad": [
+          -1.9773012355845914,
+          -0.3650874275167826,
+          0.9387962421860123,
+          0.09203884727313848,
+          -1.1336118022474888,
+          0.06135923151542565
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1792325960157565168,
+        "sdk_tool_position_m": [
+          -0.1484308718064446,
+          -0.3115429716537022,
+          0.09268176595985345
+        ],
+        "stamp_sec": 1792325960.244054,
+        "stationary_window_end_ns": 1792325960157565168,
+        "stationary_window_start_ns": 1792325959857565168
+      },
+      "nominal_pregrasp_command_rad": [
+        -1.8164812747038295,
+        -0.5223813278292774,
+        1.117421498611024,
+        0.10093258321749238,
+        -1.1979036718822131,
+        1.3094090869270607
+      ],
+      "pregrasp_goal": [
+        -0.10336256600216037,
+        -0.3520662044277095,
+        0.075159582794312,
+        -0.23569382442338815,
+        -0.9709232256237701,
+        0.011465039069130453,
+        0.04031208196253546
+      ],
+      "approach_goal": [
+        -0.09795633984965228,
+        -0.3556590757499625,
+        0.057628995640332595,
+        -0.23569382442338815,
+        -0.9709232256237701,
+        0.011465039069130453,
+        0.04031208196253546
+      ],
+      "original_failure": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+      "original_trials": [
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.7886215986746576,
+            -0.5353592949720888,
+            1.1504855909142309,
+            0.1825437137583913,
+            -1.179631225884058,
+            1.2578642460662257
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09795633984965228,
+              -0.3556590757499625,
+              0.057628995640332595,
+              -0.23569382442338815,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              882,
+              1699,
+              2798,
+              2167,
+              1279,
+              2868
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06955720371562811,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013032517413699941,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.7732817907958012,
+              -0.5353592949720888,
+              1.1228739367322893,
+              0.17640779060684875,
+              -1.179631225884058,
+              1.2087768608538851
+            ],
+            "predicted_orientation_error_rad": 0.06991787519792614,
+            "predicted_position_error_m": 0.006089983618191899,
+            "predicted_positions_rad": [
+              -1.7671458676442588,
+              -0.5537670644267165,
+              1.1044661672776617,
+              0.17027186745530618,
+              -1.1780972450961724,
+              1.2041749184902282
+            ],
+            "proposed_delta_counts": [
+              10,
+              0,
+              -18,
+              -4,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7824856755231153,
+              -0.5537670644267165,
+              1.1320778214596032,
+              0.17640779060684872,
+              -1.1780972450961724,
+              1.2532623037025687
+            ]
+          },
+          "solver_endpoint": [
+            -1.7822466043763399,
+            -0.5544188806857938,
+            1.1319822514082476,
+            0.17680706328655593,
+            -1.1780603941914385,
+            1.2526821092543976,
+            -3.0905575401972185,
+            -15.148518442886783,
+            -32.0,
+            -31.99999989416124
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 143,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.7886215986746576,
+            -0.5368932757599744,
+            1.1535535524900022,
+            0.18407769454627693,
+            -1.1826991874598294,
+            1.2501943421267976
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09795633984965228,
+              -0.3556590757499625,
+              0.057628995640332595,
+              -0.23569382442338815,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              882,
+              1698,
+              2800,
+              2168,
+              1277,
+              2863
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.07064999566279712,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013298627341689748,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.77021382922003,
+              -0.5368932757599744,
+              1.1259418983080607,
+              0.18100973297050565,
+              -1.1826991874598294,
+              1.201106956914457
+            ],
+            "predicted_orientation_error_rad": 0.07527214632894468,
+            "predicted_position_error_m": 0.0061240083514762554,
+            "predicted_positions_rad": [
+              -1.7640779060684877,
+              -0.5553010452146021,
+              1.107534128853433,
+              0.17487380981896308,
+              -1.1811652066719438,
+              1.1965050145508
+            ],
+            "proposed_delta_counts": [
+              12,
+              0,
+              -18,
+              -2,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7824856755231153,
+              -0.5553010452146021,
+              1.1351457830353746,
+              0.17794177139473435,
+              -1.1811652066719438,
+              1.2455923997631406
+            ]
+          },
+          "solver_endpoint": [
+            -1.7819654220469057,
+            -0.5558441974072124,
+            1.1344898947880486,
+            0.1771791731901288,
+            -1.180891348616032,
+            1.2458693348796757,
+            -3.1467658440739403,
+            -15.138751919995814,
+            -31.999999999926494,
+            -0.5586744253203448
+          ],
+          "solver_message": "Optimization terminated successfully.",
+          "solver_success": true
+        },
+        {
+          "iterations": 50,
+          "normalized_fallback": true,
+          "optimizer_orientation_margin": 0.99,
+          "optimizer_position_margin": 0.99,
+          "quantized_command_rad": [
+            -1.7794177139473437,
+            -0.5445631796994026,
+            1.158155494853659,
+            0.200951483213019,
+            -1.1857671490356005,
+            1.2363885150358267
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.10336256600216037,
+              -0.3520662044277095,
+              0.075159582794312,
+              -0.23569382442338815,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              888,
+              1693,
+              2803,
+              2179,
+              1275,
+              2854
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.08587751765815295,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.010113187037924323,
+            "position_tolerance_m": 0.01,
+            "predicted_command_positions_rad": [
+              -1.7794177139473437,
+              -0.5445631796994026,
+              1.158155494853659,
+              0.200951483213019,
+              -1.1857671490356005,
+              1.248660361338912
+            ],
+            "predicted_orientation_error_rad": 0.08690293330328581,
+            "predicted_position_error_m": 0.010112807821181739,
+            "predicted_positions_rad": [
+              -1.7732817907958014,
+              -0.5629709491540303,
+              1.1397477253990314,
+              0.19481556006147643,
+              -1.184233168247715,
+              1.244058418975255
+            ],
+            "proposed_delta_counts": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              8
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7732817907958014,
+              -0.5629709491540303,
+              1.1397477253990314,
+              0.19481556006147643,
+              -1.184233168247715,
+              1.2317865726721697
+            ]
+          },
+          "solver_endpoint": [
+            -1.7736132717707513,
+            -0.5622321891544494,
+            1.1400893309571682,
+            0.19530761946633107,
+            -1.1845755350052707,
+            1.2313344861379998,
+            -2.9812746305250055,
+            -14.852985692698692,
+            -32.0,
+            -32.0
+          ],
+          "solver_message": "Positive directional derivative for linesearch",
+          "solver_success": false
+        }
+      ]
+    },
+    {
+      "line": 106,
+      "plan_id": "5884e70098aa175e66fcc08a",
+      "raw_line_sha256": "c49c418ac899edbbef73215273cd1c0682eb76ae0a977815dc51094a2891bfc5",
+      "source_sample": {
+        "accepted_gripper_opening_m": 0.04980000000000001,
+        "accepted_positions_rad": [
+          -1.971165312433049,
+          -0.3834951969714103,
+          0.9203884727313847,
+          0.0859029241215959,
+          -1.1320778214596032,
+          0.056757289151768725
+        ],
+        "accepted_sample_count": 4,
+        "accepted_stamp_ns": 1792325969087184395,
+        "accepted_tool_position_m": [
+          -0.14309084224912694,
+          -0.30703567790764075,
+          0.08233181585664995
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1792286012067798399,
+        "joint_error_sdk_counts": [
+          3.9999999999998415,
+          -12.000000000000032,
+          -11.99999999999996,
+          -4.000000000000004,
+          0.9999999999999604,
+          -2.9999999999999987
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1792325969087184395,
+        "orientation_error_rad": 0.03548492684927434,
+        "position_error_m": 0.012488117541291525,
+        "position_error_vector_m": [
+          0.00534002955731766,
+          0.004507293746061458,
+          -0.010349950103203498
+        ],
+        "sdk_positions_rad": [
+          -1.9773012355845914,
+          -0.3650874275167826,
+          0.9387962421860123,
+          0.09203884727313848,
+          -1.1336118022474888,
+          0.06135923151542565
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1792325969117634845,
+        "sdk_tool_position_m": [
+          -0.1484308718064446,
+          -0.3115429716537022,
+          0.09268176595985345
+        ],
+        "stamp_sec": 1792325969.180857,
+        "stationary_window_end_ns": 1792325969087184395,
+        "stationary_window_start_ns": 1792325968787184395
+      },
+      "nominal_pregrasp_command_rad": [
+        -1.8158377464169742,
+        -0.534696713628548,
+        1.108720262303659,
+        0.1007207005402316,
+        -1.1773716543017207,
+        1.3086755324294508
+      ],
+      "pregrasp_goal": [
+        -0.10310429975005206,
+        -0.35249035108340776,
+        0.068884442015277,
+        -0.23569382442338815,
+        -0.9709232256237701,
+        0.011465039069130453,
+        0.04031208196253546
+      ],
+      "approach_goal": [
+        -0.09769807359754397,
+        -0.3560832224056608,
+        0.051353854861297614,
+        -0.23569382442338815,
+        -0.9709232256237701,
+        0.011465039069130453,
+        0.04031208196253546
+      ],
+      "original_failure": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+      "original_trials": [
+        {
+          "iterations": 143,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.787087617886772,
+            -0.5491651220630596,
+            1.1428156869748027,
+            0.18407769454627693,
+            -1.1596894756415448,
+            1.2532623037025687
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09769807359754397,
+              -0.3560832224056608,
+              0.051353854861297614,
+              -0.23569382442338815,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              883,
+              1690,
+              2793,
+              2168,
+              1292,
+              2865
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06959043441942356,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.012645450082423607,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.7717478100079156,
+              -0.5491651220630596,
+              1.1152040327928612,
+              0.17794177139473438,
+              -1.1596894756415448,
+              1.2041749184902284
+            ],
+            "predicted_orientation_error_rad": 0.07013879595179645,
+            "predicted_position_error_m": 0.0060528011831058265,
+            "predicted_positions_rad": [
+              -1.7656118868563733,
+              -0.5675728915176873,
+              1.0967962633382335,
+              0.1718058482431918,
+              -1.1581554948536592,
+              1.1995729761265714
+            ],
+            "proposed_delta_counts": [
+              10,
+              0,
+              -18,
+              -4,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7809516947352297,
+              -0.5675728915176873,
+              1.124407917520175,
+              0.17794177139473435,
+              -1.1581554948536592,
+              1.2486603613389118
+            ]
+          },
+          "solver_endpoint": [
+            -1.7813167592941817,
+            -0.5677076629271751,
+            1.124581062549808,
+            0.17818047693532574,
+            -1.158624431898673,
+            1.2491762629041785,
+            -2.9684084850744545,
+            -14.69823298922524,
+            -32.0,
+            -31.99999994636887
+          ],
+          "solver_message": "Optimization terminated successfully.",
+          "solver_success": true
+        },
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.787087617886772,
+            -0.5506991028509451,
+            1.145883648550574,
+            0.18407769454627693,
+            -1.162757437217316,
+            1.2455923997631406
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09769807359754397,
+              -0.3560832224056608,
+              0.051353854861297614,
+              -0.23569382442338815,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              883,
+              1689,
+              2795,
+              2168,
+              1290,
+              2860
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06923123822327001,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.012740567971792077,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.7717478100079156,
+              -0.5506991028509451,
+              1.1182719943686323,
+              0.17794177139473438,
+              -1.162757437217316,
+              1.1965050145508
+            ],
+            "predicted_orientation_error_rad": 0.07399006225822628,
+            "predicted_position_error_m": 0.006039779978095447,
+            "predicted_positions_rad": [
+              -1.7656118868563733,
+              -0.5691068723055729,
+              1.0998642249140047,
+              0.1718058482431918,
+              -1.1612234564294304,
+              1.191903072187143
+            ],
+            "proposed_delta_counts": [
+              10,
+              0,
+              -18,
+              -4,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7809516947352297,
+              -0.5691068723055729,
+              1.1274758790959463,
+              0.17794177139473435,
+              -1.1612234564294304,
+              1.2409904573994837
+            ]
+          },
+          "solver_endpoint": [
+            -1.780978861569129,
+            -0.5693587890777396,
+            1.1275095187412343,
+            0.17862694485534364,
+            -1.161951808855288,
+            1.2413016473386687,
+            -3.029878609511096,
+            -14.68769032464093,
+            -31.99999999992292,
+            -0.5369843348024518
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 44,
+          "normalized_fallback": true,
+          "optimizer_orientation_margin": 0.99,
+          "optimizer_position_margin": 0.99,
+          "quantized_command_rad": [
+            -1.7794177139473437,
+            -0.5583690067903734,
+            1.1520195717021164,
+            0.20248546400090464,
+            -1.167359379580973,
+            1.23178657267217
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.10310429975005206,
+              -0.35249035108340776,
+              0.068884442015277,
+              -0.23569382442338815,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              888,
+              1684,
+              2799,
+              2180,
+              1287,
+              2851
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.08596053182967739,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.010120817742672688,
+            "position_tolerance_m": 0.01,
+            "predicted_command_positions_rad": [
+              -1.7794177139473437,
+              -0.5583690067903734,
+              1.1520195717021164,
+              0.20248546400090464,
+              -1.167359379580973,
+              1.244058418975255
+            ],
+            "predicted_orientation_error_rad": 0.08687906951410866,
+            "predicted_position_error_m": 0.010120301333076969,
+            "predicted_positions_rad": [
+              -1.7732817907958014,
+              -0.5767767762450011,
+              1.1336118022474888,
+              0.19634954084936207,
+              -1.1658253987930873,
+              1.239456476611598
+            ],
+            "proposed_delta_counts": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              8
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7732817907958014,
+              -0.5767767762450011,
+              1.1336118022474888,
+              0.19634954084936207,
+              -1.1658253987930873,
+              1.227184630308513
+            ]
+          },
+          "solver_endpoint": [
+            -1.7726571767688521,
+            -0.5760529715370695,
+            1.1336979787776902,
+            0.19678212015073868,
+            -1.1663088369532715,
+            1.2265163001974062,
+            -2.8718124312278,
+            -14.403944898339319,
+            -31.999999911321844,
+            -31.999999976930162
+          ],
+          "solver_message": "Positive directional derivative for linesearch",
+          "solver_success": false
+        }
+      ]
+    },
+    {
+      "line": 112,
+      "plan_id": "0172807ac2e985c6d880183f",
+      "raw_line_sha256": "a99ec88ca6f7bc51036c4f5b8849b5cf5fd045c4831439626dc5390f4cf9bd8b",
+      "source_sample": {
+        "accepted_gripper_opening_m": 0.04980000000000001,
+        "accepted_positions_rad": [
+          -1.971165312433049,
+          -0.3834951969714103,
+          0.9203884727313847,
+          0.0859029241215959,
+          -1.1320778214596032,
+          0.056757289151768725
+        ],
+        "accepted_sample_count": 4,
+        "accepted_stamp_ns": 1792325979187167499,
+        "accepted_tool_position_m": [
+          -0.14309084224912694,
+          -0.30703567790764075,
+          0.08233181585664995
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1792286012067798399,
+        "joint_error_sdk_counts": [
+          3.9999999999998415,
+          -12.000000000000032,
+          -11.99999999999996,
+          -4.000000000000004,
+          0.9999999999999604,
+          -2.9999999999999987
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1792325979187167499,
+        "orientation_error_rad": 0.03548492684927434,
+        "position_error_m": 0.012488117541291525,
+        "position_error_vector_m": [
+          0.00534002955731766,
+          0.004507293746061458,
+          -0.010349950103203498
+        ],
+        "sdk_positions_rad": [
+          -1.9773012355845914,
+          -0.3650874275167826,
+          0.9387962421860123,
+          0.09203884727313848,
+          -1.1336118022474888,
+          0.06135923151542565
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1792325979197530887,
+        "sdk_tool_position_m": [
+          -0.1484308718064446,
+          -0.3115429716537022,
+          0.09268176595985345
+        ],
+        "stamp_sec": 1792325979.2831259,
+        "stationary_window_end_ns": 1792325979187167499,
+        "stationary_window_start_ns": 1792325978887167499
+      },
+      "nominal_pregrasp_command_rad": [
+        -1.816514304326609,
+        -0.5218595533781017,
+        1.1164797699551532,
+        0.10025779203794839,
+        -1.1971603095631906,
+        1.3109629009919193
+      ],
+      "pregrasp_goal": [
+        -0.10336256600216037,
+        -0.3520662044277095,
+        0.075159582794312,
+        -0.2356938244233881,
+        -0.9709232256237701,
+        0.011465039069130453,
+        0.04031208196253546
+      ],
+      "approach_goal": [
+        -0.09795633984965228,
+        -0.3556590757499625,
+        0.057628995640332595,
+        -0.2356938244233881,
+        -0.9709232256237701,
+        0.011465039069130453,
+        0.04031208196253546
+      ],
+      "original_failure": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+      "original_trials": [
+        {
+          "iterations": 148,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.7886215986746576,
+            -0.5353592949720888,
+            1.1504855909142309,
+            0.1825437137583913,
+            -1.179631225884058,
+            1.2578642460662257
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09795633984965228,
+              -0.3556590757499625,
+              0.057628995640332595,
+              -0.2356938244233881,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              882,
+              1699,
+              2798,
+              2167,
+              1279,
+              2868
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06955720371563132,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013032517413699941,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.7732817907958012,
+              -0.5353592949720888,
+              1.1228739367322893,
+              0.17640779060684875,
+              -1.179631225884058,
+              1.2087768608538851
+            ],
+            "predicted_orientation_error_rad": 0.06991787519792614,
+            "predicted_position_error_m": 0.006089983618191899,
+            "predicted_positions_rad": [
+              -1.7671458676442588,
+              -0.5537670644267165,
+              1.1044661672776617,
+              0.17027186745530618,
+              -1.1780972450961724,
+              1.2041749184902282
+            ],
+            "proposed_delta_counts": [
+              10,
+              0,
+              -18,
+              -4,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7824856755231153,
+              -0.5537670644267165,
+              1.1320778214596032,
+              0.17640779060684872,
+              -1.1780972450961724,
+              1.2532623037025687
+            ]
+          },
+          "solver_endpoint": [
+            -1.7822463198566545,
+            -0.554420294938633,
+            1.131984655638367,
+            0.17680707478744181,
+            -1.1780632216575406,
+            1.2526827302186032,
+            -3.090749348904422,
+            -15.148389044386871,
+            -32.0,
+            -31.999995290360978
+          ],
+          "solver_message": "Optimization terminated successfully.",
+          "solver_success": true
+        },
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.7886215986746576,
+            -0.5368932757599744,
+            1.1535535524900022,
+            0.18407769454627693,
+            -1.1826991874598294,
+            1.2501943421267976
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09795633984965228,
+              -0.3556590757499625,
+              0.057628995640332595,
+              -0.2356938244233881,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              882,
+              1698,
+              2800,
+              2168,
+              1277,
+              2863
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.07064999566280025,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013298627341689748,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.77021382922003,
+              -0.5368932757599744,
+              1.1259418983080607,
+              0.18100973297050565,
+              -1.1826991874598294,
+              1.201106956914457
+            ],
+            "predicted_orientation_error_rad": 0.07527214632894468,
+            "predicted_position_error_m": 0.0061240083514762554,
+            "predicted_positions_rad": [
+              -1.7640779060684877,
+              -0.5553010452146021,
+              1.107534128853433,
+              0.17487380981896308,
+              -1.1811652066719438,
+              1.1965050145508
+            ],
+            "proposed_delta_counts": [
+              12,
+              0,
+              -18,
+              -2,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7824856755231153,
+              -0.5553010452146021,
+              1.1351457830353746,
+              0.17794177139473435,
+              -1.1811652066719438,
+              1.2455923997631406
+            ]
+          },
+          "solver_endpoint": [
+            -1.781965659107271,
+            -0.5558417320919476,
+            1.1344855935924465,
+            0.17717914304305277,
+            -1.1808864302205666,
+            1.2458678226418722,
+            -3.146706550001838,
+            -15.138845913753297,
+            -31.999999999999805,
+            -0.532526126801918
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 45,
+          "normalized_fallback": true,
+          "optimizer_orientation_margin": 0.99,
+          "optimizer_position_margin": 0.99,
+          "quantized_command_rad": [
+            -1.7794177139473437,
+            -0.5445631796994026,
+            1.158155494853659,
+            0.200951483213019,
+            -1.1857671490356005,
+            1.2363885150358267
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.10336256600216037,
+              -0.3520662044277095,
+              0.075159582794312,
+              -0.2356938244233881,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              888,
+              1693,
+              2803,
+              2179,
+              1275,
+              2854
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.08587751765815295,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.010113187037924323,
+            "position_tolerance_m": 0.01,
+            "predicted_command_positions_rad": [
+              -1.7794177139473437,
+              -0.5445631796994026,
+              1.158155494853659,
+              0.200951483213019,
+              -1.1857671490356005,
+              1.248660361338912
+            ],
+            "predicted_orientation_error_rad": 0.08690293330328581,
+            "predicted_position_error_m": 0.010112807821181739,
+            "predicted_positions_rad": [
+              -1.7732817907958014,
+              -0.5629709491540303,
+              1.1397477253990314,
+              0.19481556006147643,
+              -1.184233168247715,
+              1.244058418975255
+            ],
+            "proposed_delta_counts": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              8
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7732817907958014,
+              -0.5629709491540303,
+              1.1397477253990314,
+              0.19481556006147643,
+              -1.184233168247715,
+              1.2317865726721697
+            ]
+          },
+          "solver_endpoint": [
+            -1.7736132709834553,
+            -0.562232455509402,
+            1.14008980957613,
+            0.19530760126507837,
+            -1.1845760657265698,
+            1.231334251048555,
+            -2.981273950237725,
+            -14.85298717683521,
+            -31.999999995806704,
+            -31.999999997386745
+          ],
+          "solver_message": "Positive directional derivative for linesearch",
+          "solver_success": false
+        }
+      ]
+    },
+    {
+      "line": 116,
+      "plan_id": "ef643c7b69d06dab302a745a",
+      "raw_line_sha256": "a4d0b64b2779a0cd2562a355f6e53d2dd503b1c04897c47dbc4d00dcf4d531db",
+      "source_sample": {
+        "accepted_gripper_opening_m": 0.04980000000000001,
+        "accepted_positions_rad": [
+          -1.971165312433049,
+          -0.3834951969714103,
+          0.9203884727313847,
+          0.0859029241215959,
+          -1.1320778214596032,
+          0.056757289151768725
+        ],
+        "accepted_sample_count": 5,
+        "accepted_stamp_ns": 1792325988187104105,
+        "accepted_tool_position_m": [
+          -0.14309084224912694,
+          -0.30703567790764075,
+          0.08233181585664995
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1792286012067798399,
+        "joint_error_sdk_counts": [
+          3.9999999999998415,
+          -12.000000000000032,
+          -11.99999999999996,
+          -4.000000000000004,
+          0.9999999999999604,
+          -2.9999999999999987
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1792325988187104105,
+        "orientation_error_rad": 0.03548492684927434,
+        "position_error_m": 0.012488117541291525,
+        "position_error_vector_m": [
+          0.00534002955731766,
+          0.004507293746061458,
+          -0.010349950103203498
+        ],
+        "sdk_positions_rad": [
+          -1.9773012355845914,
+          -0.3650874275167826,
+          0.9387962421860123,
+          0.09203884727313848,
+          -1.1336118022474888,
+          0.06135923151542565
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1792325988157724626,
+        "sdk_tool_position_m": [
+          -0.1484308718064446,
+          -0.3115429716537022,
+          0.09268176595985345
+        ],
+        "stamp_sec": 1792325988.1974099,
+        "stationary_window_end_ns": 1792325988157724626,
+        "stationary_window_start_ns": 1792325987857724626
+      },
+      "nominal_pregrasp_command_rad": [
+        -1.8151070674921925,
+        -0.5359007011996337,
+        1.1099697598633769,
+        0.10203146028473842,
+        -1.1785073370663413,
+        1.307588428987364
+      ],
+      "pregrasp_goal": [
+        -0.10310429975005206,
+        -0.35249035108340776,
+        0.068884442015277,
+        -0.2356938244233881,
+        -0.9709232256237701,
+        0.011465039069130453,
+        0.04031208196253546
+      ],
+      "approach_goal": [
+        -0.09769807359754397,
+        -0.3560832224056608,
+        0.051353854861297614,
+        -0.2356938244233881,
+        -0.9709232256237701,
+        0.011465039069130453,
+        0.04031208196253546
+      ],
+      "original_failure": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+      "original_trials": [
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.787087617886772,
+            -0.5553010452146021,
+            1.1550875332778878,
+            0.18407769454627693,
+            -1.1734953027325155,
+            1.2563302652783401
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09769807359754397,
+              -0.3560832224056608,
+              0.051353854861297614,
+              -0.2356938244233881,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              883,
+              1686,
+              2801,
+              2168,
+              1283,
+              2867
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.07014453946455547,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.012943161062165276,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.7717478100079156,
+              -0.5553010452146021,
+              1.1274758790959463,
+              0.17794177139473438,
+              -1.1734953027325155,
+              1.2072428800659996
+            ],
+            "predicted_orientation_error_rad": 0.07256028752007998,
+            "predicted_position_error_m": 0.006196919901877687,
+            "predicted_positions_rad": [
+              -1.7656118868563733,
+              -0.5737088146692298,
+              1.1090681096413186,
+              0.1718058482431918,
+              -1.1719613219446299,
+              1.2026409377023426
+            ],
+            "proposed_delta_counts": [
+              10,
+              0,
+              -18,
+              -4,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7809516947352297,
+              -0.5737088146692298,
+              1.1366797638232602,
+              0.17794177139473435,
+              -1.1719613219446299,
+              1.2517283229146832
+            ]
+          },
+          "solver_endpoint": [
+            -1.7810467851949732,
+            -0.574358712657612,
+            1.1367513340626871,
+            0.17782946134182478,
+            -1.1721047740557684,
+            1.2523053155185704,
+            -3.0456212052901646,
+            -14.661864535283515,
+            -32.0,
+            -31.999999408363248
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.787087617886772,
+            -0.5506991028509451,
+            1.145883648550574,
+            0.18714565612204823,
+            -1.1642914180052018,
+            1.244058418975255
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09769807359754397,
+              -0.3560832224056608,
+              0.051353854861297614,
+              -0.2356938244233881,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              883,
+              1689,
+              2795,
+              2170,
+              1289,
+              2859
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.07201400110877913,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013008268302693212,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.7686798484321442,
+              -0.5506991028509451,
+              1.1182719943686323,
+              0.18407769454627693,
+              -1.1642914180052018,
+              1.1949710337629145
+            ],
+            "predicted_orientation_error_rad": 0.077497491526704,
+            "predicted_position_error_m": 0.00624618270292779,
+            "predicted_positions_rad": [
+              -1.7625439252806019,
+              -0.5691068723055729,
+              1.0998642249140047,
+              0.17794177139473435,
+              -1.1627574372173162,
+              1.1903690913992575
+            ],
+            "proposed_delta_counts": [
+              12,
+              0,
+              -18,
+              -2,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7809516947352297,
+              -0.5691068723055729,
+              1.1274758790959463,
+              0.18100973297050565,
+              -1.1627574372173162,
+              1.239456476611598
+            ]
+          },
+          "solver_endpoint": [
+            -1.7802586775072498,
+            -0.5695499042331339,
+            1.1267634745080022,
+            0.18105212470858292,
+            -1.1625105544364607,
+            1.2392452271700212,
+            3.75928925432071,
+            -14.938121527182906,
+            -19.13133365796662,
+            -0.25858565033314745
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 62,
+          "normalized_fallback": true,
+          "optimizer_orientation_margin": 0.99,
+          "optimizer_position_margin": 0.99,
+          "quantized_command_rad": [
+            -1.7794177139473437,
+            -0.5583690067903734,
+            1.1520195717021164,
+            0.20248546400090464,
+            -1.167359379580973,
+            1.23178657267217
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.10310429975005206,
+              -0.35249035108340776,
+              0.068884442015277,
+              -0.2356938244233881,
+              -0.9709232256237701,
+              0.011465039069130453,
+              0.04031208196253546
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              888,
+              1684,
+              2799,
+              2180,
+              1287,
+              2851
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.08596053182967997,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.010120817742672688,
+            "position_tolerance_m": 0.01,
+            "predicted_command_positions_rad": [
+              -1.7794177139473437,
+              -0.5583690067903734,
+              1.1520195717021164,
+              0.20248546400090464,
+              -1.167359379580973,
+              1.244058418975255
+            ],
+            "predicted_orientation_error_rad": 0.08687906951411123,
+            "predicted_position_error_m": 0.010120301333076969,
+            "predicted_positions_rad": [
+              -1.7732817907958014,
+              -0.5767767762450011,
+              1.1336118022474888,
+              0.19634954084936207,
+              -1.1658253987930873,
+              1.239456476611598
+            ],
+            "proposed_delta_counts": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              8
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542322,
+              0.018407769454627743,
+              0.01840776945462763,
+              0.006135923151542572,
+              -0.0015339807878855805,
+              0.004601942363656963
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.7732817907958014,
+              -0.5767767762450011,
+              1.1336118022474888,
+              0.19634954084936207,
+              -1.1658253987930873,
+              1.227184630308513
+            ]
+          },
+          "solver_endpoint": [
+            -1.7726570934962556,
+            -0.5760559767967379,
+            1.1337034512495185,
+            0.19678179984099164,
+            -1.1663149149070973,
+            1.2265171528504983,
+            -2.871854579712634,
+            -14.403971155144013,
+            -31.99999999999999,
+            -31.99999999999999
+          ],
+          "solver_message": "Positive directional derivative for linesearch",
+          "solver_success": false
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Original current stationary SDK and exact goal/nominal records only; no original camera pixels, MoveIt scene or future physical feedback are reconstructed.",
+    "Any synthetic future sample in tests is explicitly provider-supplied for execution-policy arithmetic; it is not a recorded arrival, path certificate or authority.",
+    "Alternate endpoint guides do not prove collision-free complete paths or physical success."
+  ]
+}

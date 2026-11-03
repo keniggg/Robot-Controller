@@ -1,0 +1,5 @@
+<launch>
+  <!-- Staged only; not included by any live or persistent launch. -->
+  <param name="/robot_description" textfile="/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/alicia_expanded_metric_candidate.urdf"/>
+  <rosparam command="load" file="/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/handeye_candidate_config.yaml"/>
+</launch>

@@ -322,3 +322,53 @@ def test_post_completion_wait_revalidates_all_evidence(node, monkeypatch, change
     with pytest.raises(module.ObservationPathError):
         node._controller_reference_for_execution(NAMES)
     assert node.sent == []
+
+
+def test_actuation_heartbeat_cannot_make_in_progress_age_read_negative(node, monkeypatch):
+    reader_thread = threading.current_thread()
+    reader_clock_started = threading.Event()
+    callback_started = threading.Event()
+    callback_finished = threading.Event()
+
+    def clock():
+        if threading.current_thread() is reader_thread:
+            reader_clock_started.set()
+            assert callback_started.wait(1.)
+            # On the old unlocked implementation the callback completes here
+            # and its newer receipt gets subtracted from this older clock read.
+            callback_finished.wait(.1)
+            return 10.1
+        return 10.1001
+
+    monkeypatch.setattr(module.rospy, 'get_time', clock)
+
+    def receive():
+        assert reader_clock_started.wait(1.)
+        callback_started.set()
+        node._actuation_cb(String(data='CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE'))
+        callback_finished.set()
+
+    worker = threading.Thread(target=receive)
+    worker.start()
+    try:
+        assert node._fresh_actuation_status() == 'CONFIRMED:MEASURED_DIRECTIONAL_RESPONSE'
+    finally:
+        worker.join(1.)
+    assert not worker.is_alive() and callback_finished.is_set()
+    assert node._actuation_received_sec == 10.1001
+    monkeypatch.setattr(module.rospy, 'get_time', lambda: 10.1002)
+    assert node._fresh_actuation_status().startswith('CONFIRMED:')
+
+
+@pytest.mark.parametrize('now,receipt,status,expected', [
+    (12., 10., 'CONFIRMED:ok', 'CONFIRMED:ok'),
+    (12.0001, 10., 'CONFIRMED:ok', ''),
+    (10., 10.0001, 'CONFIRMED:ok', ''),
+    (10., 10., 'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT', 'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT'),
+    (10., 10., 'PENDING:POSITIVE_ENABLE_REQUESTED', 'PENDING:POSITIVE_ENABLE_REQUESTED'),
+])
+def test_actuation_snapshot_keeps_expiry_future_and_actual_status(node, monkeypatch, now, receipt, status, expected):
+    node._actuation_received_sec = receipt
+    node._actuation_status = status
+    monkeypatch.setattr(module.rospy, 'get_time', lambda: now)
+    assert node._fresh_actuation_status() == expected

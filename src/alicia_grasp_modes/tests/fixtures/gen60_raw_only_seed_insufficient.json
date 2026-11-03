@@ -1,0 +1,68 @@
+{
+  "scope": "Actual GEN60 raw-only region 2 seed rejection, not a qualified frame",
+  "source_stamp_ns": 1792649243704485416,
+  "config": {
+    "depth_min_m": 0.03,
+    "depth_max_m": 2.0,
+    "support_threshold_m": 0.002,
+    "foreground_min_m": 0.004,
+    "foreground_max_m": 0.12,
+    "support_min_points": 120,
+    "support_max_samples": 1800,
+    "support_min_ratio": 0.7,
+    "support_max_normal_change_deg": 4.0,
+    "support_max_local_shift_m": 0.007,
+    "support_local_shift_warning_m": 0.004,
+    "min_object_points": 60,
+    "center_radius_fraction": 0.125,
+    "center_ambiguity_fraction": 0.045,
+    "depth_edge_m": 0.008,
+    "association_distance_m": 0.025,
+    "max_surface_extent_m": 0.15
+  },
+  "crop_yx": [
+    [
+      412,
+      454
+    ],
+    [
+      186,
+      241
+    ]
+  ],
+  "expected_error": "rgb_seed_core_too_small",
+  "measured_points": 96,
+  "eroded_points": 38,
+  "original_top_points": 0,
+  "side_points": 0,
+  "final_foreground_points": 18,
+  "owner_stage": "raw_source_component_evidence",
+  "caller_line": 271,
+  "source_manifest_sha256": "874f55c7c11e618aa69e718890649ebfa44b67ec9b2fc288ce890a8a5424f91d",
+  "original_frame": {
+    "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/actual_attempt_r1/failed_seed_inputs_r2/1792649243704485416.npz",
+    "sha256": "9854dc5957c722a5a743f07e3f52e2754ee91a1cfefeed30f310c3daddc0f0a4"
+  },
+  "original_seed_trace": {
+    "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/actual_attempt_r1/source_owner_replay_r2/seed_05.npz",
+    "sha256": "537ced0595bc6737952f342ef0c7a4c2ee58d8105f2e007fb6fc07ce2401af1a"
+  },
+  "exact_replay": {
+    "path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/actual_attempt_r1/source_owner_replay_r2/result.json",
+    "sha256": "14f685622eefd0694eb4cdfafa4f025882a21d9de298020f985d6d34cf197352"
+  },
+  "probe_source": {
+    "path": "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/replay_gen60_failed_fragment_owner_20261022.py",
+    "sha256": "2c717a223a9e5f6fc8eb67ad81350702362550c7ab43fc6a5a797c972ddf7149"
+  },
+  "production_source_sha256": {
+    "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/src/alicia_grasp_modes/tabletop.py": "b70d05df5b976fb6217c592f9db9d7f57d7fdc05b8ee9addb4b4135cf2a120f8",
+    "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/src/alicia_grasp_modes/measured_mask_seeds.py": "e926e970cb5af494d63f51a4b0794a9915f9751fd685de95c0181c32f92281f2",
+    "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/src/alicia_grasp_modes/source_connected_owner.py": "2f4f1407890ea14bcced5da4e02c69c291835539eb15234177121b1c81efc04d",
+    "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/src/alicia_grasp_modes/rgb_instance.py": "3d400dd2e17f3b1ac6a2078e85c9a4b9a855d4c7402b0bc4aca291312b467b0a",
+    "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/src/alicia_grasp_modes/source_sampling_topology.py": "30cfbefcd84fdcb78046e9c2c1280cccbcaa50a35224b66e69cedce5dc77f0c6"
+  },
+  "fixture_sha256": "0f359e36a2f67d105702ea0c30f217eca6ffddf4d86d9df4d2f93dc5c53711ad",
+  "plane_normal_derivation": "(exact original T_base_camera.T @ failed current support_plane_base)[:3]",
+  "not_motion_authorization": true
+}

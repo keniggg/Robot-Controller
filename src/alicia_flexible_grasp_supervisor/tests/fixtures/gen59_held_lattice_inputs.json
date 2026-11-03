@@ -1,0 +1,1711 @@
+{
+  "limits": "Conditional offline arithmetic only; no historical execution permission or freshness proof.",
+  "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "rows": [
+    {
+      "approach_goal": [
+        -0.09681885662410926,
+        -0.35992334200206016,
+        0.054184567653609995,
+        0.3675629177737475,
+        0.9290725057131948,
+        -0.022321913125647828,
+        0.03497874783159167
+      ],
+      "lineage_index": 0,
+      "nominal_command_rad": [
+        -1.8714565612204823,
+        -0.5246214294568893,
+        1.1152040327928612,
+        -0.05829126993965436,
+        -1.167359379580973,
+        1.1428156869748027
+      ],
+      "orientation_tolerance_rad": 0.08726646259971647,
+      "original_code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+      "original_trials": [
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.911340061705509,
+            -0.5276893910326605,
+            1.1443496677626883,
+            -0.14112623248547898,
+            -1.1428156869748027,
+            1.193437052975029
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09681885662410926,
+              -0.35992334200206016,
+              0.054184567653609995,
+              0.3675629177737475,
+              0.9290725057131948,
+              -0.022321913125647828,
+              0.03497874783159167
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              802,
+              1704,
+              2794,
+              1956,
+              1303,
+              2826
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06969836312968937,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.014089021980877308,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9082721001297376,
+              -0.5276893910326605,
+              1.1106020904292042,
+              -0.1380582709097077,
+              -1.1428156869748027,
+              1.1443496677626883
+            ],
+            "predicted_orientation_error_rad": 0.0829161746089171,
+            "predicted_position_error_m": 0.00712269709181239,
+            "predicted_positions_rad": [
+              -1.9021361769781948,
+              -0.5522330836388308,
+              1.0891263593988052,
+              -0.1319223477581651,
+              -1.1382137446111456,
+              1.162757437217316
+            ],
+            "proposed_delta_counts": [
+              2,
+              0,
+              -22,
+              2,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.9052041385539662,
+              -0.5522330836388308,
+              1.1228739367322893,
+              -0.13499030933393638,
+              -1.1382137446111456,
+              1.2118448224296565
+            ]
+          },
+          "solver_endpoint": [
+            -1.9052043032590402,
+            -0.5523167479384404,
+            1.1223054304069007,
+            -0.13536466170797487,
+            -1.13880294227401,
+            1.2116166683822311,
+            15.862584730435485,
+            -19.40638539683075,
+            31.999999999895124,
+            -31.9905493159362
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.911340061705509,
+            -0.5537670644267164,
+            1.1903690913992575,
+            -0.1380582709097077,
+            -1.1949710337629145,
+            1.191903072187143
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09681885662410926,
+              -0.35992334200206016,
+              0.054184567653609995,
+              0.3675629177737475,
+              0.9290725057131948,
+              -0.022321913125647828,
+              0.03497874783159167
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              802,
+              1687,
+              2824,
+              1958,
+              1269,
+              2825
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.0706843490186637,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013599484190119722,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9082721001297376,
+              -0.5537670644267164,
+              1.1566215140657734,
+              -0.1349903093339364,
+              -1.1949710337629145,
+              1.1612234564294304
+            ],
+            "predicted_orientation_error_rad": 0.08726150458994356,
+            "predicted_position_error_m": 0.007051719803148102,
+            "predicted_positions_rad": [
+              -1.9021361769781948,
+              -0.5783107570328867,
+              1.1351457830353744,
+              -0.1288543861823938,
+              -1.1903690913992573,
+              1.179631225884058
+            ],
+            "proposed_delta_counts": [
+              2,
+              0,
+              -22,
+              2,
+              0,
+              -20
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.9052041385539662,
+              -0.5783107570328867,
+              1.1688933603688585,
+              -0.1319223477581651,
+              -1.1903690913992573,
+              1.2103108416417707
+            ]
+          },
+          "solver_endpoint": [
+            -1.905574866146891,
+            -0.5779220493185958,
+            1.1686839904989472,
+            -0.13189748819299735,
+            -1.19101375828861,
+            1.209877178229242,
+            16.60189081936817,
+            -18.533976780954657,
+            31.99955710033933,
+            -0.5841855223909825
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 50,
+          "normalized_fallback": true,
+          "optimizer_orientation_margin": 0.99,
+          "optimizer_position_margin": 0.99,
+          "quantized_command_rad": [
+            -1.919009965644937,
+            -0.5322913333963175,
+            1.1474176293384597,
+            -0.16106798272799233,
+            -1.1443496677626883,
+            1.210310841641771
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09681885662410926,
+              -0.35992334200206016,
+              0.054184567653609995,
+              0.3675629177737475,
+              0.9290725057131948,
+              -0.022321913125647828,
+              0.03497874783159167
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              797,
+              1701,
+              2796,
+              1943,
+              1302,
+              2837
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.08702144534478255,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013715016720457721,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9128740424933945,
+              -0.5322913333963175,
+              1.1136700520049756,
+              -0.1487961364249072,
+              -1.1443496677626883,
+              1.1642914180052018
+            ],
+            "predicted_orientation_error_rad": 0.08612858096475583,
+            "predicted_position_error_m": 0.006326336169656132,
+            "predicted_positions_rad": [
+              -1.9067381193418518,
+              -0.5568350260024878,
+              1.0921943209745766,
+              -0.1426602132733646,
+              -1.1397477253990311,
+              1.1826991874598294
+            ],
+            "proposed_delta_counts": [
+              4,
+              0,
+              -22,
+              8,
+              0,
+              -30
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.9128740424933943,
+              -0.5568350260024878,
+              1.1259418983080607,
+              -0.15493205957644973,
+              -1.1397477253990311,
+              1.2287186110963986
+            ]
+          },
+          "solver_endpoint": [
+            -1.913624402234499,
+            -0.5571911254568126,
+            1.125286844577545,
+            -0.15443848258025217,
+            -1.139515155211018,
+            1.2280975183293674,
+            15.682221180504243,
+            -19.10871878845848,
+            31.999999999426905,
+            -31.999999998300495
+          ],
+          "solver_message": "Positive directional derivative for linesearch",
+          "solver_success": false
+        }
+      ],
+      "plan_id": "1d981fcc7043e018937863b8",
+      "position_tolerance_m": 0.01,
+      "pregrasp_goal": [
+        -0.09778888901765692,
+        -0.3585818579065984,
+        0.07408101169658905,
+        0.3675629177737475,
+        0.9290725057131948,
+        -0.022321913125647828,
+        0.03497874783159167
+      ],
+      "sample": {
+        "accepted_gripper_opening_m": 0.04980000000000001,
+        "accepted_positions_rad": [
+          -2.136835237524698,
+          -0.6135923151542565,
+          1.2640001692177683,
+          -0.34514567727426926,
+          -1.4480778637640452,
+          -0.0859029241215959
+        ],
+        "accepted_sample_count": 5,
+        "accepted_stamp_ns": 1792644412493589672,
+        "accepted_tool_position_m": [
+          -0.13315162992452712,
+          -0.3319838108661005,
+          0.08532117727600813
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1792639534222874592,
+        "joint_error_sdk_counts": [
+          4.0000000000001315,
+          -16.000000000000018,
+          -14.000000000000025,
+          4.000000000000022,
+          3.000000000000171,
+          11.999999999999995
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1792644412493589672,
+        "orientation_error_rad": 0.042370299880506154,
+        "position_error_m": 0.01495567910053922,
+        "position_error_vector_m": [
+          0.004495556387246968,
+          0.00504826871832631,
+          -0.013340813058991444
+        ],
+        "sdk_positions_rad": [
+          -2.142971160676241,
+          -0.5890486225480862,
+          1.2854759002481673,
+          -0.35128160042581186,
+          -1.4526798061277024,
+          -0.10431069357622359
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1792644412427282313,
+        "sdk_tool_position_m": [
+          -0.13764718631177408,
+          -0.3370320795844268,
+          0.09866199033499957
+        ],
+        "stamp_sec": 1792644412.5464036,
+        "stationary_window_end_ns": 1792644412427282313,
+        "stationary_window_start_ns": 1792644412127282313
+      },
+      "source_audit": {
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20261022T044426.800138Z_c2cd1e6e1a8d4226ab4af1eaaa6646ff/keyframes_audits/27ac190088e2c5fb1bbacbd1ead32f26f62f7322218682bdc26ca7edc554f822.json": "27ac190088e2c5fb1bbacbd1ead32f26f62f7322218682bdc26ca7edc554f822",
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen57_resume_r3/actual_attempt_r1_geometry/historical_parameter_reconstruction_r1/attempt_2/context_parameters.json": "e612b0f1c0c9d3182ab4eafc65d3105c4d4d54fde81914b8d8d93043acdc07b6",
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/verification/gen59_release_manifest.json": "5fed4cbed7ea1e824eda3bb750657970dcc1ec2d711cd041eff1a3d482ef2c6c"
+      },
+      "track_id": 1
+    },
+    {
+      "approach_goal": [
+        -0.09693497415185921,
+        -0.35982823522072355,
+        0.055678296675815975,
+        0.4077386528384882,
+        0.9121553652618615,
+        -0.020774916059262575,
+        0.03591912398967492
+      ],
+      "lineage_index": 4,
+      "nominal_command_rad": [
+        -1.8714565612204823,
+        -0.521553467881118,
+        1.1152040327928612,
+        -0.056757289151768725,
+        -1.1704273411567443,
+        1.0569127628532067
+      ],
+      "orientation_tolerance_rad": 0.08726646259971647,
+      "original_code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+      "original_trials": [
+        {
+          "iterations": 150,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.911340061705509,
+            -0.5246214294568893,
+            1.145883648550574,
+            -0.14112623248547898,
+            -1.1474176293384597,
+            1.1060001480655473
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09693497415185921,
+              -0.35982823522072355,
+              0.055678296675815975,
+              0.4077386528384882,
+              0.9121553652618615,
+              -0.020774916059262575,
+              0.03591912398967492
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              802,
+              1706,
+              2795,
+              1956,
+              1300,
+              2769
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06997725617769558,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013987187765899656,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9082721001297376,
+              -0.5246214294568893,
+              1.1121360712170898,
+              -0.1380582709097077,
+              -1.1474176293384597,
+              1.0569127628532067
+            ],
+            "predicted_orientation_error_rad": 0.08289489275114734,
+            "predicted_position_error_m": 0.007077587445745686,
+            "predicted_positions_rad": [
+              -1.9021361769781948,
+              -0.5491651220630596,
+              1.0906603401866908,
+              -0.1319223477581651,
+              -1.1428156869748025,
+              1.0753205323078343
+            ],
+            "proposed_delta_counts": [
+              2,
+              0,
+              -22,
+              2,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.9052041385539662,
+              -0.5491651220630596,
+              1.1244079175201749,
+              -0.13499030933393638,
+              -1.1428156869748025,
+              1.1244079175201749
+            ]
+          },
+          "solver_endpoint": [
+            -1.9054758230957276,
+            -0.5491705392727476,
+            1.1241256677396438,
+            -0.13498579331505184,
+            -1.1433582621537688,
+            1.1237934681065327,
+            15.897413272143508,
+            -19.525827858493553,
+            31.99999992620681,
+            -30.56060868693154
+          ],
+          "solver_message": "Optimization terminated successfully.",
+          "solver_success": true
+        },
+        {
+          "iterations": 145,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.911340061705509,
+            -0.5246214294568893,
+            1.145883648550574,
+            -0.14112623248547898,
+            -1.1474176293384597,
+            1.1044661672776617
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09693497415185921,
+              -0.35982823522072355,
+              0.055678296675815975,
+              0.4077386528384882,
+              0.9121553652618615,
+              -0.020774916059262575,
+              0.03591912398967492
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              802,
+              1706,
+              2795,
+              1956,
+              1300,
+              2768
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06996341507582339,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013987171750398066,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9082721001297376,
+              -0.5246214294568893,
+              1.1121360712170898,
+              -0.1380582709097077,
+              -1.1474176293384597,
+              1.055378782065321
+            ],
+            "predicted_orientation_error_rad": 0.08377001742145392,
+            "predicted_position_error_m": 0.007077538062600499,
+            "predicted_positions_rad": [
+              -1.9021361769781948,
+              -0.5491651220630596,
+              1.0906603401866908,
+              -0.1319223477581651,
+              -1.1428156869748025,
+              1.0737865515199487
+            ],
+            "proposed_delta_counts": [
+              2,
+              0,
+              -22,
+              2,
+              0,
+              -32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.9052041385539662,
+              -0.5491651220630596,
+              1.1244079175201749,
+              -0.13499030933393638,
+              -1.1428156869748025,
+              1.1228739367322893
+            ]
+          },
+          "solver_endpoint": [
+            -1.9054611565588322,
+            -0.5490625180721926,
+            1.1239303940632128,
+            -0.13497165856695162,
+            -1.1431368003836555,
+            1.1234174638243548,
+            15.865885890552875,
+            -19.526587616264532,
+            31.999999998348187,
+            -0.2989801109034938
+          ],
+          "solver_message": "Optimization terminated successfully.",
+          "solver_success": true
+        },
+        {
+          "iterations": 48,
+          "normalized_fallback": true,
+          "optimizer_orientation_margin": 0.99,
+          "optimizer_position_margin": 0.99,
+          "quantized_command_rad": [
+            -1.9205439464328227,
+            -0.5292233718205462,
+            1.1489516101263453,
+            -0.1595340019401067,
+            -1.1489516101263453,
+            1.1213399559444037
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09693497415185921,
+              -0.35982823522072355,
+              0.055678296675815975,
+              0.4077386528384882,
+              0.9121553652618615,
+              -0.020774916059262575,
+              0.03591912398967492
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              796,
+              1703,
+              2797,
+              1944,
+              1299,
+              2779
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.08586197870776457,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013639639035803742,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9174759848570515,
+              -0.5292233718205462,
+              1.1182719943686323,
+              -0.1564660403643354,
+              -1.1489516101263453,
+              1.0967962633382335
+            ],
+            "predicted_orientation_error_rad": 0.0872014431278791,
+            "predicted_position_error_m": 0.006439489744536149,
+            "predicted_positions_rad": [
+              -1.9113400617055087,
+              -0.5537670644267165,
+              1.0967962633382333,
+              -0.1503301172127928,
+              -1.144349667762688,
+              1.1152040327928612
+            ],
+            "proposed_delta_counts": [
+              2,
+              0,
+              -20,
+              2,
+              0,
+              -16
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.91440802328128,
+              -0.5537670644267165,
+              1.1274758790959463,
+              -0.1533980787885641,
+              -1.144349667762688,
+              1.1397477253990314
+            ]
+          },
+          "solver_endpoint": [
+            -1.9138968480229253,
+            -0.5539338469910253,
+            1.1269066800939895,
+            -0.154036536996751,
+            -1.1438442837099203,
+            1.140224391424087,
+            15.716136648017532,
+            -19.227494998491615,
+            31.999999997926707,
+            -32.0
+          ],
+          "solver_message": "Optimization terminated successfully.",
+          "solver_success": true
+        }
+      ],
+      "plan_id": "26abf35bca068fb1381a8c16",
+      "position_tolerance_m": 0.01,
+      "pregrasp_goal": [
+        -0.09790500654540683,
+        -0.35848675112526185,
+        0.07557474071879504,
+        0.4077386528384882,
+        0.9121553652618615,
+        -0.020774916059262575,
+        0.03591912398967492
+      ],
+      "sample": {
+        "accepted_gripper_opening_m": 0.04980000000000001,
+        "accepted_positions_rad": [
+          -2.136835237524698,
+          -0.6135923151542565,
+          1.2640001692177683,
+          -0.34514567727426926,
+          -1.4480778637640452,
+          -0.0859029241215959
+        ],
+        "accepted_sample_count": 5,
+        "accepted_stamp_ns": 1792644416493651704,
+        "accepted_tool_position_m": [
+          -0.13315162992452712,
+          -0.3319838108661005,
+          0.08532117727600813
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1792639534222874592,
+        "joint_error_sdk_counts": [
+          4.0000000000001315,
+          -16.000000000000018,
+          -14.000000000000025,
+          4.000000000000022,
+          3.000000000000171,
+          11.999999999999995
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1792644416493651704,
+        "orientation_error_rad": 0.042370299880506154,
+        "position_error_m": 0.01495567910053922,
+        "position_error_vector_m": [
+          0.004495556387246968,
+          0.00504826871832631,
+          -0.013340813058991444
+        ],
+        "sdk_positions_rad": [
+          -2.142971160676241,
+          -0.5890486225480862,
+          1.2854759002481673,
+          -0.35128160042581186,
+          -1.4526798061277024,
+          -0.10431069357622359
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1792644416447201157,
+        "sdk_tool_position_m": [
+          -0.13764718631177408,
+          -0.3370320795844268,
+          0.09866199033499957
+        ],
+        "stamp_sec": 1792644416.5260236,
+        "stationary_window_end_ns": 1792644416447201157,
+        "stationary_window_start_ns": 1792644416147201157
+      },
+      "source_audit": {
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20261022T044426.800138Z_c2cd1e6e1a8d4226ab4af1eaaa6646ff/keyframes_audits/27ac190088e2c5fb1bbacbd1ead32f26f62f7322218682bdc26ca7edc554f822.json": "27ac190088e2c5fb1bbacbd1ead32f26f62f7322218682bdc26ca7edc554f822",
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen57_resume_r3/actual_attempt_r1_geometry/historical_parameter_reconstruction_r1/attempt_2/context_parameters.json": "e612b0f1c0c9d3182ab4eafc65d3105c4d4d54fde81914b8d8d93043acdc07b6",
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/verification/gen59_release_manifest.json": "5fed4cbed7ea1e824eda3bb750657970dcc1ec2d711cd041eff1a3d482ef2c6c"
+      },
+      "track_id": 3
+    },
+    {
+      "approach_goal": [
+        -0.09701780365053111,
+        -0.359041427061607,
+        0.05295176662554164,
+        0.9575723234393652,
+        -0.28519022559947793,
+        0.03290016021770521,
+        0.025285570254680312
+      ],
+      "lineage_index": 10,
+      "nominal_command_rad": [
+        -1.872990542008368,
+        -0.526155410244775,
+        1.1136700520049756,
+        -0.05829126993965436,
+        -1.1642914180052018,
+        -1.8223691760081417
+      ],
+      "orientation_tolerance_rad": 0.08726646259971647,
+      "original_code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+      "original_trials": [
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.9082721001297376,
+            -0.5246214294568893,
+            1.1320778214596032,
+            -0.1349903093339364,
+            -1.1274758790959463,
+            -1.8039614065535141
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09701780365053111,
+              -0.359041427061607,
+              0.05295176662554164,
+              0.9575723234393652,
+              -0.28519022559947793,
+              0.03290016021770521,
+              0.025285570254680312
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              804,
+              1706,
+              2786,
+              1960,
+              1313,
+              872
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06977662803713805,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013719796838883674,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9052041385539664,
+              -0.5246214294568893,
+              1.0983302441261191,
+              -0.13192234775816514,
+              -1.1274758790959463,
+              -1.7548740213411735
+            ],
+            "predicted_orientation_error_rad": 0.0655191762652112,
+            "predicted_position_error_m": 0.007009035416173231,
+            "predicted_positions_rad": [
+              -1.8990682154024237,
+              -0.5491651220630596,
+              1.0768545130957201,
+              -0.12578642460662254,
+              -1.122873936732289,
+              -1.736466251886546
+            ],
+            "proposed_delta_counts": [
+              2,
+              0,
+              -22,
+              2,
+              0,
+              32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.9021361769781948,
+              -0.5491651220630596,
+              1.1106020904292042,
+              -0.1288543861823938,
+              -1.122873936732289,
+              -1.7855536370988865
+            ]
+          },
+          "solver_endpoint": [
+            -1.9026004831001013,
+            -0.5485805737035955,
+            1.110286577042058,
+            -0.12883241868953235,
+            -1.1235566550465725,
+            -1.7855587062861935,
+            15.833038161364058,
+            -19.377206852622475,
+            32.0,
+            31.99998281791963
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.911340061705509,
+            -0.5230874486690036,
+            1.1290098598838318,
+            -0.14112623248547898,
+            -1.1259418983080607,
+            -1.7763497523715726
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09701780365053111,
+              -0.359041427061607,
+              0.05295176662554164,
+              0.9575723234393652,
+              -0.28519022559947793,
+              0.03290016021770521,
+              0.025285570254680312
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              802,
+              1707,
+              2784,
+              1956,
+              1314,
+              890
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.07034670582554461,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013704079117997679,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9082721001297376,
+              -0.5230874486690036,
+              1.0952622825503477,
+              -0.1380582709097077,
+              -1.1259418983080607,
+              -1.727262367159232
+            ],
+            "predicted_orientation_error_rad": 0.08050882821519748,
+            "predicted_position_error_m": 0.0072209936897149225,
+            "predicted_positions_rad": [
+              -1.9021361769781948,
+              -0.5476311412751739,
+              1.0737865515199487,
+              -0.1319223477581651,
+              -1.1213399559444035,
+              -1.7088545977046044
+            ],
+            "proposed_delta_counts": [
+              2,
+              0,
+              -22,
+              2,
+              0,
+              32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.9052041385539662,
+              -0.5476311412751739,
+              1.1075341288534328,
+              -0.13499030933393638,
+              -1.1213399559444035,
+              -1.757941982916945
+            ]
+          },
+          "solver_endpoint": [
+            -1.9049150330311937,
+            -0.5477262067269614,
+            1.1081512729602552,
+            -0.13463677386954845,
+            -1.1215254356499667,
+            -1.7575338604498714,
+            15.67077622859734,
+            -19.319698066910032,
+            31.999999999999588,
+            1.3310579893671861
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 33,
+          "normalized_fallback": true,
+          "optimizer_orientation_margin": 0.99,
+          "optimizer_position_margin": 0.99,
+          "quantized_command_rad": [
+            -1.9205439464328227,
+            -0.5322913333963175,
+            1.1397477253990314,
+            -0.16106798272799233,
+            -1.1351457830353744,
+            -1.761009944492716
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09701780365053111,
+              -0.359041427061607,
+              0.05295176662554164,
+              0.9575723234393652,
+              -0.28519022559947793,
+              0.03290016021770521,
+              0.025285570254680312
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              796,
+              1701,
+              2791,
+              1943,
+              1308,
+              900
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.0867180136028324,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013277016118963307,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9174759848570515,
+              -0.5322913333963175,
+              1.1090681096413186,
+              -0.15493205957644976,
+              -1.1351457830353744,
+              -1.727262367159232
+            ],
+            "predicted_orientation_error_rad": 0.08703590736283584,
+            "predicted_position_error_m": 0.006308942703949883,
+            "predicted_positions_rad": [
+              -1.9113400617055087,
+              -0.5568350260024878,
+              1.0875923786109196,
+              -0.14879613642490716,
+              -1.1305438406717172,
+              -1.7088545977046044
+            ],
+            "proposed_delta_counts": [
+              2,
+              0,
+              -20,
+              4,
+              0,
+              22
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.91440802328128,
+              -0.5568350260024878,
+              1.1182719943686323,
+              -0.15493205957644973,
+              -1.1305438406717172,
+              -1.7426021750380885
+            ]
+          },
+          "solver_endpoint": [
+            -1.914174950129043,
+            -0.5568052791126223,
+            1.1187131740545286,
+            -0.1545402749662042,
+            -1.1309663500648202,
+            -1.742770841078137,
+            15.679261910392107,
+            -18.986007748948698,
+            32.0,
+            23.83302852380624
+          ],
+          "solver_message": "Positive directional derivative for linesearch",
+          "solver_success": false
+        }
+      ],
+      "plan_id": "2324743e0e402fe1c5981e42",
+      "position_tolerance_m": 0.01,
+      "pregrasp_goal": [
+        -0.09798783604407875,
+        -0.35769994296614527,
+        0.0728482106685207,
+        0.9575723234393652,
+        -0.28519022559947793,
+        0.03290016021770521,
+        0.025285570254680312
+      ],
+      "sample": {
+        "accepted_gripper_opening_m": 0.04980000000000001,
+        "accepted_positions_rad": [
+          -2.136835237524698,
+          -0.6135923151542565,
+          1.2640001692177683,
+          -0.34514567727426926,
+          -1.4480778637640452,
+          -0.0859029241215959
+        ],
+        "accepted_sample_count": 4,
+        "accepted_stamp_ns": 1792644410393572733,
+        "accepted_tool_position_m": [
+          -0.13315162992452712,
+          -0.3319838108661005,
+          0.08532117727600813
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1792639534222874592,
+        "joint_error_sdk_counts": [
+          4.0000000000001315,
+          -16.000000000000018,
+          -14.000000000000025,
+          4.000000000000022,
+          3.000000000000171,
+          11.999999999999995
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1792644410393572733,
+        "orientation_error_rad": 0.042370299880506154,
+        "position_error_m": 0.01495567910053922,
+        "position_error_vector_m": [
+          0.004495556387246968,
+          0.00504826871832631,
+          -0.013340813058991444
+        ],
+        "sdk_positions_rad": [
+          -2.142971160676241,
+          -0.5890486225480862,
+          1.2854759002481673,
+          -0.35128160042581186,
+          -1.4526798061277024,
+          -0.10431069357622359
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1792644410407233740,
+        "sdk_tool_position_m": [
+          -0.13764718631177408,
+          -0.3370320795844268,
+          0.09866199033499957
+        ],
+        "stamp_sec": 1792644410.4596317,
+        "stationary_window_end_ns": 1792644410393572733,
+        "stationary_window_start_ns": 1792644410093572733
+      },
+      "source_audit": {
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20261022T044426.800138Z_c2cd1e6e1a8d4226ab4af1eaaa6646ff/keyframes_audits/27ac190088e2c5fb1bbacbd1ead32f26f62f7322218682bdc26ca7edc554f822.json": "27ac190088e2c5fb1bbacbd1ead32f26f62f7322218682bdc26ca7edc554f822",
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen57_resume_r3/actual_attempt_r1_geometry/historical_parameter_reconstruction_r1/attempt_2/context_parameters.json": "e612b0f1c0c9d3182ab4eafc65d3105c4d4d54fde81914b8d8d93043acdc07b6",
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/verification/gen59_release_manifest.json": "5fed4cbed7ea1e824eda3bb750657970dcc1ec2d711cd041eff1a3d482ef2c6c"
+      },
+      "track_id": 6
+    },
+    {
+      "approach_goal": [
+        -0.09733075644473464,
+        -0.35890465468245386,
+        0.053120061698402894,
+        0.9685804648173975,
+        -0.24276541514013025,
+        0.04491346097611132,
+        0.029993622807220188
+      ],
+      "lineage_index": 17,
+      "nominal_command_rad": [
+        -1.8837284075235674,
+        -0.5230874486690036,
+        1.1044661672776617,
+        -0.08743690490948154,
+        -1.1550875332778878,
+        -1.71038857849249
+      ],
+      "orientation_tolerance_rad": 0.08726646259971647,
+      "original_code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+      "original_trials": [
+        {
+          "iterations": 141,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.9205439464328227,
+            -0.5230874486690036,
+            1.1290098598838318,
+            -0.16720390587953488,
+            -1.1259418983080607,
+            -1.6873788666742053
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09733075644473464,
+              -0.35890465468245386,
+              0.053120061698402894,
+              0.9685804648173975,
+              -0.24276541514013025,
+              0.04491346097611132,
+              0.029993622807220188
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              796,
+              1707,
+              2784,
+              1939,
+              1314,
+              948
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06960541516540106,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.014337195469316567,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9205439464328227,
+              -0.5230874486690036,
+              1.0952622825503477,
+              -0.16106798272799233,
+              -1.1259418983080607,
+              -1.6382914814618648
+            ],
+            "predicted_orientation_error_rad": 0.06484391823912351,
+            "predicted_position_error_m": 0.0071844901448562416,
+            "predicted_positions_rad": [
+              -1.91440802328128,
+              -0.5476311412751739,
+              1.0737865515199487,
+              -0.15493205957644973,
+              -1.1213399559444035,
+              -1.6198837120072371
+            ],
+            "proposed_delta_counts": [
+              0,
+              0,
+              -22,
+              4,
+              0,
+              32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.91440802328128,
+              -0.5476311412751739,
+              1.1075341288534328,
+              -0.16106798272799228,
+              -1.1213399559444035,
+              -1.6689710972195777
+            ]
+          },
+          "solver_endpoint": [
+            -1.9148200108533016,
+            -0.5480996043749244,
+            1.1068812743577385,
+            -0.1613927975442207,
+            -1.1217200020872276,
+            -1.669287908215703,
+            13.614050774593277,
+            -19.290245413744525,
+            31.99999968409611,
+            31.999976625676442
+          ],
+          "solver_message": "Optimization terminated successfully.",
+          "solver_success": true
+        },
+        {
+          "iterations": 151,
+          "normalized_fallback": false,
+          "optimizer_orientation_margin": 0.8,
+          "optimizer_position_margin": 0.9,
+          "quantized_command_rad": [
+            -1.9251458887964796,
+            -0.5338253141842031,
+            1.145883648550574,
+            -0.1718058482431918,
+            -1.1474176293384597,
+            -1.6720390587953489
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09733075644473464,
+              -0.35890465468245386,
+              0.053120061698402894,
+              0.9685804648173975,
+              -0.24276541514013025,
+              0.04491346097611132,
+              0.029993622807220188
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              793,
+              1700,
+              2795,
+              1936,
+              1300,
+              958
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.06987080614103945,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.013746597477119244,
+            "position_tolerance_m": 0.006,
+            "predicted_command_positions_rad": [
+              -1.9220779272207085,
+              -0.5338253141842031,
+              1.1121360712170898,
+              -0.16260196351587797,
+              -1.1474176293384597,
+              -1.6229516735830083
+            ],
+            "predicted_orientation_error_rad": 0.07857440253724943,
+            "predicted_position_error_m": 0.007130827162695017,
+            "predicted_positions_rad": [
+              -1.9159420040691657,
+              -0.5583690067903734,
+              1.0906603401866908,
+              -0.15646604036433537,
+              -1.1428156869748025,
+              -1.6045439041283807
+            ],
+            "proposed_delta_counts": [
+              2,
+              0,
+              -22,
+              6,
+              0,
+              32
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.9190099656449369,
+              -0.5583690067903734,
+              1.1244079175201749,
+              -0.1656699250916492,
+              -1.1428156869748025,
+              -1.6536312893407212
+            ]
+          },
+          "solver_endpoint": [
+            -1.9182831116581283,
+            -0.5582189488171899,
+            1.123784735566102,
+            -0.1658338133612337,
+            -1.142462295621274,
+            -1.6528887749724412,
+            14.401252034314862,
+            -18.13511028193958,
+            31.81822374587636,
+            1.040993857576529
+          ],
+          "solver_message": "Iteration limit exceeded",
+          "solver_success": false
+        },
+        {
+          "iterations": 54,
+          "normalized_fallback": true,
+          "optimizer_orientation_margin": 0.99,
+          "optimizer_position_margin": 0.99,
+          "quantized_command_rad": [
+            -1.9312818119480222,
+            -0.5338253141842031,
+            1.1382137446111458,
+            -0.19174759848570513,
+            -1.1366797638232602,
+            -1.6505633277649499
+          ],
+          "rejection": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+          "rejection_evidence": {
+            "code": "PREGRASP_HELD_AXES_GUIDE_DOES_NOT_REACH_FIXED_GOAL",
+            "execution_authorized": false,
+            "fixed_goal_pose": [
+              -0.09731708884604685,
+              -0.35808761362114305,
+              0.07311506341670582,
+              0.9685804648173975,
+              -0.24276541514013025,
+              0.04491346097611132,
+              0.029993622807220188
+            ],
+            "future_following_verified": false,
+            "globally_optimal": false,
+            "hardware_response_verified": false,
+            "held_joints": [
+              "Joint2",
+              "Joint5"
+            ],
+            "initial_sdk_counts": [
+              789,
+              1700,
+              2790,
+              1923,
+              1307,
+              972
+            ],
+            "maximum_total_counts": 32,
+            "orientation_error_rad": 0.08645431196295583,
+            "orientation_tolerance_rad": 0.08726646259971647,
+            "position_error_m": 0.010035189237673544,
+            "position_tolerance_m": 0.01,
+            "predicted_command_positions_rad": [
+              -1.9312818119480222,
+              -0.5338253141842031,
+              1.1382137446111458,
+              -0.19174759848570513,
+              -1.1366797638232602,
+              -1.6566992509164924
+            ],
+            "predicted_orientation_error_rad": 0.08707391460501339,
+            "predicted_position_error_m": 0.010034538468448565,
+            "predicted_positions_rad": [
+              -1.9251458887964794,
+              -0.5583690067903734,
+              1.1167380135807468,
+              -0.18561167533416253,
+              -1.132077821459603,
+              -1.6382914814618648
+            ],
+            "proposed_delta_counts": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              -4
+            ],
+            "scope": "conditional_held_axes_endpoint_prediction",
+            "sdk_minus_encoder_rad": [
+              -0.006135923151542766,
+              0.024543692606170286,
+              0.021475731030399015,
+              -0.006135923151542599,
+              -0.0046019423636571855,
+              -0.01840776945462763
+            ],
+            "steps_predicted": 1,
+            "success": false,
+            "virtual_start_positions_rad": [
+              -1.9251458887964794,
+              -0.5583690067903734,
+              1.1167380135807468,
+              -0.18561167533416253,
+              -1.132077821459603,
+              -1.6321555583103222
+            ]
+          },
+          "solver_endpoint": [
+            -1.9256887520552806,
+            -0.5576709101102886,
+            1.117407170817128,
+            -0.1853288354774772,
+            -1.1317593091741898,
+            -1.6324326923993304,
+            13.473389823751303,
+            -18.944906280604705,
+            32.0,
+            26.47692292672565
+          ],
+          "solver_message": "Positive directional derivative for linesearch",
+          "solver_success": false
+        }
+      ],
+      "plan_id": "93042da885d332fb06ba46bb",
+      "position_tolerance_m": 0.01,
+      "pregrasp_goal": [
+        -0.09731708884604685,
+        -0.35808761362114305,
+        0.07311506341670582,
+        0.9685804648173975,
+        -0.24276541514013025,
+        0.04491346097611132,
+        0.029993622807220188
+      ],
+      "sample": {
+        "accepted_gripper_opening_m": 0.04980000000000001,
+        "accepted_positions_rad": [
+          -2.136835237524698,
+          -0.6135923151542565,
+          1.2640001692177683,
+          -0.34514567727426926,
+          -1.4480778637640452,
+          -0.0859029241215959
+        ],
+        "accepted_sample_count": 5,
+        "accepted_stamp_ns": 1792644414493553123,
+        "accepted_tool_position_m": [
+          -0.13315162992452712,
+          -0.3319838108661005,
+          0.08532117727600813
+        ],
+        "certifies_command_response_or_calibration": false,
+        "epoch_ns": 1792639534222874592,
+        "joint_error_sdk_counts": [
+          4.0000000000001315,
+          -16.000000000000018,
+          -14.000000000000025,
+          4.000000000000022,
+          3.000000000000171,
+          11.999999999999995
+        ],
+        "joint_names": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6"
+        ],
+        "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_stamp_ns": 1792644414493553123,
+        "orientation_error_rad": 0.042370299880506154,
+        "position_error_m": 0.01495567910053922,
+        "position_error_vector_m": [
+          0.004495556387246968,
+          0.00504826871832631,
+          -0.013340813058991444
+        ],
+        "sdk_positions_rad": [
+          -2.142971160676241,
+          -0.5890486225480862,
+          1.2854759002481673,
+          -0.35128160042581186,
+          -1.4526798061277024,
+          -0.10431069357622359
+        ],
+        "sdk_sample_count": 4,
+        "sdk_stamp_ns": 1792644414467192273,
+        "sdk_tool_position_m": [
+          -0.13764718631177408,
+          -0.3370320795844268,
+          0.09866199033499957
+        ],
+        "stamp_sec": 1792644414.5669882,
+        "stationary_window_end_ns": 1792644414467192273,
+        "stationary_window_start_ns": 1792644414167192273
+      },
+      "source_audit": {
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20261022T044426.800138Z_c2cd1e6e1a8d4226ab4af1eaaa6646ff/keyframes_audits/27ac190088e2c5fb1bbacbd1ead32f26f62f7322218682bdc26ca7edc554f822.json": "27ac190088e2c5fb1bbacbd1ead32f26f62f7322218682bdc26ca7edc554f822",
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen57_resume_r3/actual_attempt_r1_geometry/historical_parameter_reconstruction_r1/attempt_2/context_parameters.json": "e612b0f1c0c9d3182ab4eafc65d3105c4d4d54fde81914b8d8d93043acdc07b6",
+        "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/verification/gen59_release_manifest.json": "5fed4cbed7ea1e824eda3bb750657970dcc1ec2d711cd041eff1a3d482ef2c6c"
+      },
+      "track_id": 9
+    }
+  ],
+  "schema": 1
+}

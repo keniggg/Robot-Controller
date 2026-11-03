@@ -1,11 +1,19 @@
 from dataclasses import dataclass, replace
 import math
+import hashlib
+from types import SimpleNamespace
 from numbers import Integral
 
 import numpy as np
+
+from alicia_flexible_grasp.robot.finger_cad_separation import (
+    load_finger_cad_model, validated_model_matches,
+)
 from tf.transformations import quaternion_from_matrix, quaternion_matrix
 
 from alicia_flexible_grasp.vision.multiview_surface import FusedTargetSurface
+from alicia_flexible_grasp.vision.regular_box_inference import (
+    RegularBoxInference, inferred_box_axis_uncertainty)
 
 
 ANALYTICAL_GRIPPER_MODEL_NAME = 'Alicia_D_v5_6_gripper_50mm'
@@ -174,6 +182,195 @@ class BilateralSurfaceEvidence:
     contact_height_m: float
 
 
+@dataclass(frozen=True)
+class InferredBoxContactEvidence:
+    """Analytical regular-prism sides, explicitly distinct from measured bands."""
+    ok: bool
+    code: str
+    inferred_width_m: float
+    width_uncertainty_m: float
+    contact_height_bounds_m: tuple
+    contact_height_axis_base: np.ndarray
+    model_sha256: str
+    model_evidence: object
+    targeted_view: object
+
+    def __post_init__(self):
+        axis = np.asarray(self.contact_height_axis_base, dtype=float)
+        object.__setattr__(self, 'contact_height_axis_base',
+            np.frombuffer(axis.tobytes(), dtype=float).reshape(axis.shape))
+        object.__setattr__(self, 'contact_height_bounds_m', tuple(self.contact_height_bounds_m))
+
+
+def inferred_box_precision_reserve(model, width_uncertainty_m, finger_geometry):
+    """Report the configured clearance preference after full width uncertainty.
+
+    This software preference is not a measured localization error or an
+    extra mandatory aperture allowance. Required opening retains the full
+    model projection, center error and separate opening fit. Keep the fixed
+    gripper clearance unchanged for its measured-contact and CAD uses.
+    """
+    if not isinstance(model, RegularBoxInference) or not isinstance(finger_geometry, GripperGeometry):
+        raise ValueError('qualified box and physical gripper required')
+    uncertainty = float(width_uncertainty_m)
+    if not math.isfinite(uncertainty) or uncertainty < 0.:
+        raise ValueError('finite nonnegative box width uncertainty required')
+    return (float(finger_geometry.jaw_clearance_each_side_m),
+            'configured_jaw_clearance_after_width_uncertainty_once')
+
+
+def evaluate_inferred_box_contact(model, contact_center_base, jaw_axis_base,
+        insertion_axis_base, finger_geometry, support_normal_base=None,
+        opening_fit_clearance_each_side_m=None, enforce_precision_margin=True):
+    """Project a qualified box and its uncertainty into this actual jaw frame.
+
+    No points/counts are synthesized. Width includes the entire box projection
+    and the worst projection over its empirical yaw budget. A large wrist turn
+    by itself does not fail this calculation. Only its resulting geometric
+    aperture/contact uncertainty can request more precise observation.
+    The validated legacy enforce_precision_margin flag is accepted for call
+    compatibility; both values retain the same physical opening checks.
+    """
+    nominal = uncertainty = 0.
+    bounds = ()
+    axis = np.zeros(3)
+    proof, digest, targeted = None, '', {}
+    def result(ok, code):
+        return InferredBoxContactEvidence(ok, code, nominal, uncertainty,
+            bounds, axis, digest, proof, targeted)
+    try:
+        if not isinstance(model, RegularBoxInference) or not isinstance(finger_geometry, GripperGeometry):
+            raise ValueError('qualified box model and physical finger geometry required')
+        if type(enforce_precision_margin) is not bool:
+            raise ValueError('precision enforcement must be boolean')
+        proof = model.to_evidence_dict()
+        digest = model.model_sha256
+        center = _readonly_vector(contact_center_base, 'contact center')
+        jaw = _readonly_vector(jaw_axis_base, 'jaw axis')
+        axis = _readonly_vector(insertion_axis_base, 'insertion axis')
+        if (abs(np.linalg.norm(jaw)-1.) > 1e-6 or abs(np.linalg.norm(axis)-1.) > 1e-6
+                or abs(float(jaw @ axis)) > 1e-5):
+            raise ValueError('actual jaw and insertion must be orthonormal')
+        n = model.support_normal_base
+        if support_normal_base is not None and not np.allclose(
+                np.asarray(support_normal_base), n, rtol=0., atol=1e-6):
+            raise ValueError('inferred model and actual support differ')
+        fit = _opening_fit_clearance_each_side_m(opening_fit_clearance_each_side_m, finger_geometry)
+        A, size = model.axes_base, model.size_xyz_m
+        local_jaw = A.T @ jaw
+        nominal = float(np.abs(local_jaw) @ size)
+        # extrema of a rectangle projection occur at interval endpoints or a
+        # corner bearing. Enumerate all stationary candidates, not a coarse
+        # yaw sample that can miss the physical maximum.
+        theta = math.atan2(float(local_jaw[1]), float(local_jaw[0]))
+        spread = float(model.empirical_yaw_uncertainty_rad)
+        radial = float(np.linalg.norm(local_jaw[:2]))
+        candidates = [theta-spread, theta+spread, theta]
+        corner_angle = math.atan2(float(size[1]), float(size[0]))
+        for k in range(-3, 4):
+            for value in (corner_angle+k*math.pi, -corner_angle+k*math.pi):
+                if theta-spread <= value <= theta+spread:
+                    candidates.append(value)
+        widest = max(radial*(size[0]*abs(math.cos(a))+size[1]*abs(math.sin(a)))
+                     +size[2]*abs(local_jaw[2]) for a in candidates)
+        edge = float(model.empirical_edge_uncertainty_m)
+        edge_axes = inferred_box_axis_uncertainty(model)
+        hu = float(model.empirical_height_uncertainty_m)
+        positional = (2.*float(edge_axes @ np.abs(local_jaw[:2]))
+            if model.schema_version == 3 else 2.*edge*float(np.sum(np.abs(local_jaw[:2]))))
+        positional += 2.*hu*abs(float(local_jaw[2]))
+        # The physical jaws open symmetrically about the commanded center.
+        # A translated center consumes aperture as well as the model's own
+        # localization budget; projection width alone cannot certify it.
+        center_offset = abs(float((center-model.center_base) @ jaw))
+        uncertainty = max(0., float(widest-nominal)) + positional + 2.*center_offset
+        required = nominal+uncertainty+2.*fit
+        precision_reserve, precision_source = inferred_box_precision_reserve(
+            model, uncertainty, finger_geometry)
+        physical = min(float(finger_geometry.max_inner_gap_m), ANALYTICAL_MAX_INNER_GAP_M)
+        principal = int(np.argmax(np.abs(local_jaw[:2])))
+        other = 1-principal
+        local_center = A.T @ (center-model.center_base)
+        # The intended opposing faces must be normal to the chosen jaws, with
+        # bounded angular variation; diagonal corner pinching is not silently
+        # renamed planar side contact.
+        angle = math.degrees(math.acos(np.clip(abs(local_jaw[principal]),0.,1.)))
+        corners = []
+        intervals = []
+        half_strip = min(float(finger_geometry.finger_size_xyz_m[0])/2.,
+                         float(size[other])/2.-edge_axes[other])
+        lo_x = max(-size[other]/2.+edge_axes[other], local_center[other]-half_strip)
+        hi_x = min(size[other]/2.-edge_axes[other], local_center[other]+half_strip)
+        lo_z, hi_z = -size[2]/2.+hu, size[2]/2.-hu
+        for side in (-1.,1.):
+            face=[]
+            for x in (lo_x,hi_x):
+                for z in (lo_z,hi_z):
+                    point=np.zeros(3);point[principal]=side*size[principal]/2.;point[other]=x;point[2]=z
+                    face.append(model.center_base+A@point)
+            corners.extend(face)
+            projected=(np.asarray(face)-center)@axis
+            intervals.append((float(np.min(projected)),float(np.max(projected))))
+        bounds=(max(v[0] for v in intervals),min(v[1] for v in intervals))
+        targeted=dict(jaw_axis_base=jaw.tolist(),insertion_axis_base=axis.tolist(),
+            inferred_width_m=nominal,width_uncertainty_m=uncertainty,
+            required_open_upper_m=required,physical_opening_m=physical,
+            aperture_margin_m=physical-required,nominal_aperture_margin_m=physical-(nominal+2.*fit),
+            empirical_yaw_uncertainty_rad=spread,empirical_edge_uncertainty_m=edge,
+            contact_position_uncertainty_m=edge,
+            commanded_center_jaw_offset_m=center_offset,
+            precision_reserve_m=precision_reserve,
+            precision_reserve_source=precision_source,
+            precision_reserve_is_hard_requirement=False,
+            precision_preference_met=bool(physical-required >= precision_reserve),
+            target_edges_or_corners_base=[np.asarray(v).tolist() for v in corners],
+            model_sha256=digest,uncertainty_semantics='empirical_budget_not_certified_error_bound')
+        if model.schema_version == 3:
+            targeted['empirical_axis_uncertainty_m'] = edge_axes.tolist()
+            targeted['maximum_face_direction_error_deg'] = angle+math.degrees(spread)
+        if nominal+2.*fit > physical+1e-12:
+            return result(False,'NO_FIT_DIRECTION')
+        if abs(float(local_center[principal])) >= float(size[principal])/2.-edge_axes[principal]:
+            return result(False,'BOX_CONTACT_CENTER_OUTSIDE')
+        face_angle = angle+math.degrees(spread) if model.schema_version == 3 else angle
+        if face_angle > 8. or abs(float(axis@n)) < math.cos(math.radians(15.)):
+            return result(False,'BOX_CONTACT_DIRECTION_UNSUPPORTED')
+        if hi_x <= lo_x or bounds[1]-bounds[0] < GRIPPER_CONTRACT_TOLERANCE_M:
+            return result(False,'BOX_CONTACT_HEIGHT_UNRESOLVED')
+        if required > physical+1e-12:
+            return result(False,'BOX_INFERENCE_PRECISION_VIEW_REQUIRED')
+        return result(True,'INFERRED_REGULAR_BOX_CONTACT')
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        return result(False,'BOX_INFERENCE_INPUT_INVALID')
+
+
+def _inferred_gate_values(evidence, center, jaw, insertion, gripper, support,
+                          fit_clearance, supplied_bounds):
+    """Recompute typed inferred evidence at the actual candidate transform."""
+    if not evidence.ok:
+        raise ValueError('inferred box evidence must be qualified for contact')
+    model = RegularBoxInference.from_evidence_dict(evidence.model_evidence)
+    # The registered object follows its accepted rigid correction, while
+    # collision clearance keeps the original measured support plane. Bind
+    # that plane to the model's immutable source, not its transformed plane.
+    if not np.allclose(np.asarray(support), model.source_support_normal_base,
+                       rtol=0., atol=1e-6):
+        raise ValueError('inferred source and physical clearance support differ')
+    check = evaluate_inferred_box_contact(model, center, jaw, insertion, gripper,
+        support_normal_base=model.support_normal_base,
+        opening_fit_clearance_each_side_m=fit_clearance)
+    if (not check.ok or check.model_sha256 != evidence.model_sha256
+            or abs(check.inferred_width_m-evidence.inferred_width_m) > 1e-9
+            or abs(check.width_uncertainty_m-evidence.width_uncertainty_m) > 1e-9
+            or not np.allclose(check.contact_height_axis_base,
+                               evidence.contact_height_axis_base, rtol=0., atol=1e-9)):
+        raise ValueError('inferred contact projection differs from actual candidate')
+    given = np.asarray(supplied_bounds, dtype=float)
+    if given.shape != (2,) or not np.allclose(given, check.contact_height_bounds_m, rtol=0., atol=1e-9):
+        raise ValueError('inferred contact bounds differ from actual candidate')
+    return check.inferred_width_m + check.width_uncertainty_m + 2.*fit_clearance, tuple(given)
+
+
 def _linear_quantiles(values, fractions):
     """Linear order statistics using operations available in NumPy 1.17.
 
@@ -190,6 +387,17 @@ def _linear_quantiles(values, fractions):
 
 
 def _bilateral_surface_measurement(
+    fused_surface, contact_center_base, jaw_axis_base, insertion_axis_base,
+    finger_geometry, minimum_points_per_side, support_normal_base=None,
+):
+    # Preserve the contact consumer's original common-height evidence exactly.
+    return _bilateral_surface_measurement_details(
+        fused_surface, contact_center_base, jaw_axis_base, insertion_axis_base,
+        finger_geometry, minimum_points_per_side, support_normal_base,
+    )[:4]
+
+
+def _bilateral_surface_measurement_details(
     fused_surface,
     contact_center_base,
     jaw_axis_base,
@@ -198,6 +406,11 @@ def _bilateral_surface_measurement(
     minimum_points_per_side,
     support_normal_base=None,
 ):
+    """Original contact result plus independent jaw-band masks for view choice.
+
+    The fifth result is observational evidence only. It must not substitute
+    for common-height masks or authorize contact.
+    """
     if not isinstance(fused_surface, FusedTargetSurface):
         raise ValueError('fused_surface must be a FusedTargetSurface')
     center = _readonly_vector(contact_center_base, 'contact_center_base')
@@ -232,7 +445,7 @@ def _bilateral_surface_measurement(
                             rel_tol=0.0, abs_tol=1e-6):
             raise ValueError('support normal must be unit length')
     except (TypeError, ValueError):
-        return None, None, None, None
+        return None, None, None, None, None
 
     # The fixed Alicia semantic mapping is tool Y = jaw, tool Z = insertion,
     # and cross(Y, Z) = tool X.  The configured finger X/Z box dimensions are
@@ -264,7 +477,7 @@ def _bilateral_surface_measurement(
     )
     footprint_indices = np.flatnonzero(footprint)
     if len(footprint_indices) < 2:
-        return None, None, None, footprint
+        return None, None, None, footprint, None
 
     footprint_jaw = jaw_projection[footprint]
     lower, upper = _linear_quantiles(
@@ -276,7 +489,7 @@ def _bilateral_surface_measurement(
     upper = float(upper)
     width = upper - lower
     if not math.isfinite(width) or width <= 1e-9:
-        return None, None, None, footprint
+        return None, None, None, footprint, None
 
     # A measured point can support one side only when it lies within the
     # existing fixed jaw-clearance contract of that robust measured extreme.
@@ -291,6 +504,9 @@ def _bilateral_surface_measurement(
         footprint & (np.abs(jaw_projection - upper) <= side_depth)
         & (jaw_projection > midpoint)
     )
+    # Common-support intersection below mutates its masks in place. Preserve
+    # the independent side footprints before that operation for view selection.
+    side_masks = (negative_mask.copy(), positive_mask.copy())
     negative_count = int(np.count_nonzero(negative_mask))
     positive_count = int(np.count_nonzero(positive_mask))
     negative_views = int(np.unique(
@@ -307,7 +523,7 @@ def _bilateral_surface_measurement(
         width,
     )
     if negative_count < minimum or positive_count < minimum:
-        return counts, None, None, (negative_mask, positive_mask)
+        return counts, None, None, (negative_mask, positive_mask), side_masks
 
     # Require actual common support-normal extent before using insertion
     # coordinates for physical CAD overlap. Top-plane samples cannot acquire
@@ -319,7 +535,7 @@ def _bilateral_surface_measurement(
     support_lower = max(float(negative_support[0]), float(positive_support[0]))
     support_upper = min(float(negative_support[1]), float(positive_support[1]))
     if support_upper - support_lower <= 1e-9:
-        return counts, None, None, (negative_mask, positive_mask)
+        return counts, None, None, (negative_mask, positive_mask), side_masks
     common_support = ((support_projection >= support_lower)
                       & (support_projection <= support_upper))
     negative_mask &= common_support
@@ -332,7 +548,7 @@ def _bilateral_surface_measurement(
         width,
     )
     if counts[0] < minimum or counts[1] < minimum:
-        return counts, None, None, (negative_mask, positive_mask)
+        return counts, None, None, (negative_mask, positive_mask), side_masks
 
     negative_heights = insertion_projection[negative_mask]
     positive_heights = insertion_projection[positive_mask]
@@ -353,12 +569,13 @@ def _bilateral_surface_measurement(
         or not math.isfinite(common_upper)
         or common_upper <= common_lower
     ):
-        return counts, None, None, (negative_mask, positive_mask)
+        return counts, None, None, (negative_mask, positive_mask), side_masks
     return (
         counts,
         common_lower,
         common_upper,
         (negative_mask, positive_mask),
+        side_masks,
     )
 
 
@@ -462,6 +679,26 @@ def bilateral_surface_contact_bounds_m(
     if lower is None or upper is None:
         return None
     return float(lower), float(upper)
+
+
+def insufficient_measured_common_height(bounds_m, required_overlap_m):
+    """Positive but insufficient measured height is an observation deficit.
+
+    This predicate supplies no contact decision: tilt-specific contact still
+    runs the existing measured overlap and CAD checks. Invalid measurements
+    are not evidence that another view is justified.
+    """
+    if (not isinstance(bounds_m, (tuple, list, np.ndarray))
+            or (isinstance(bounds_m, np.ndarray) and bounds_m.shape != (2,))
+            or len(bounds_m) != 2
+            or any(isinstance(value, (bool, np.bool_, str))
+                   or not isinstance(value, (int, float, np.integer, np.floating))
+                   or not np.isfinite(value) for value in bounds_m)
+            or isinstance(required_overlap_m, (bool, np.bool_, str))
+            or not isinstance(required_overlap_m, (int, float, np.integer, np.floating))
+            or not np.isfinite(required_overlap_m) or required_overlap_m <= 0.):
+        return False
+    return 0. < float(bounds_m[1]) - float(bounds_m[0]) < float(required_overlap_m)
 
 
 @dataclass(frozen=True)
@@ -1217,6 +1454,112 @@ def _intended_finger_contact(
     )
 
 
+@dataclass(frozen=True)
+class _FingerCadBinding:
+    finger_cad_model: object
+    model_sha256: str
+    base_frame: str = 'base_link'
+    tool_frame: str = 'tool0'
+
+
+def supported_finger_cad_context(robot_description, gripper,
+                                 tool_jaw_axis='y', tool_finger_length_axis='z'):
+    """Bind static target checks to the same verified tool geometry as FK.
+
+    This optional context proves no path. Unsupported descriptions, geometry
+    or axes retain the original conservative analytical target policy.
+    """
+    if (not isinstance(robot_description, str)
+            or not isinstance(gripper, GripperGeometry)
+            or gripper.max_inner_gap_m != ANALYTICAL_MAX_INNER_GAP_M
+            or not np.array_equal(gripper.finger_size_xyz_m, ANALYTICAL_FINGER_SIZE_XYZ_M)):
+        return None
+    try:
+        jaw, _ = parse_tool_axis(tool_jaw_axis)
+        length, _ = parse_tool_axis(tool_finger_length_axis)
+        if (not np.array_equal(jaw, [0., 1., 0.])
+                or not np.array_equal(length, [0., 0., 1.])):
+            return None
+        model = load_finger_cad_model(robot_description)
+        digest = hashlib.sha256(robot_description.encode('utf-8')).hexdigest()
+        if not validated_model_matches(model, digest):
+            return None
+        return _FingerCadBinding(model, digest)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def gripper_target_collision_box(fk, gripper, opening, body, transform, center, size):
+    """Target-only broad phase enclosing the old box AND both pinned CAD models.
+
+    Unsupported geometry keeps the original box and cannot use a narrower
+    proof. Palm and support-plane validation retain their existing geometry.
+    """
+    model = getattr(fk, 'finger_cad_model', None)
+    if (not validated_model_matches(model, getattr(fk, 'model_sha256', None))
+            or getattr(fk, 'base_frame', None) != 'base_link'
+            or getattr(fk, 'tool_frame', None) != 'tool0'
+            or not isinstance(gripper, GripperGeometry)
+            or body not in ('left_finger', 'right_finger')
+            or gripper.max_inner_gap_m != ANALYTICAL_MAX_INNER_GAP_M
+            or not np.array_equal(gripper.finger_size_xyz_m, ANALYTICAL_FINGER_SIZE_XYZ_M)):
+        return center, size, None
+    rotation = transform[:3, :3]
+    original = rotation.T @ (np.asarray(center)-transform[:3, 3])
+    try:
+        local, dimensions = model.box(body, opening, original, size)
+        local, dimensions = np.asarray(local), np.asarray(dimensions)
+        if (local.shape != (3,) or dimensions.shape != (3,)
+                or not np.all(np.isfinite(local)) or not np.all(np.isfinite(dimensions))
+                or np.any(dimensions <= 0.)
+                or np.any(local-dimensions/2 > original-np.asarray(size)/2+1e-12)
+                or np.any(local+dimensions/2 < original+np.asarray(size)/2-1e-12)):
+            raise ValueError('CAD broad phase must enclose the original padded box')
+    except (ValueError, TypeError, OverflowError):
+        return center, size, None
+    return transform[:3, 3]+rotation @ local, dimensions, model
+
+
+def gripper_target_overlap(fk, gripper, opening, body, transform, center, size,
+                           scene, displacement=0.):
+    """Conservatively reject unless a broad box or a CAD projection separates.
+
+    A finite set of projection axes supplies sufficient separation only. A
+    missing, malformed or inconclusive CAD result preserves the rejection.
+    The original target OBB and tool-axis displacement enclosure stay intact.
+    """
+    if (isinstance(displacement, (bool, np.bool_))
+            or not isinstance(displacement, (int, float, np.number))
+            or not math.isfinite(float(displacement)) or displacement < 0.):
+        raise ValueError('invalid target displacement enclosure')
+    center, size, model = gripper_target_collision_box(
+        fk, gripper, opening, body, transform, center, size)
+    if not _obb_overlap(center, transform[:3, :3], size+2.*displacement,
+                        scene.center, scene.rotation, scene.size):
+        return False, None
+    if model is None:
+        return True, None
+    try:
+        proof = model.separation(body, opening, transform, scene.center,
+            scene.rotation, scene.size, displacement_m=displacement)
+        gap = proof.get('gap_m') if isinstance(proof, dict) else None
+        separated = (isinstance(proof, dict) and proof.get('separated') is True
+            and proof.get('status') == 'separated'
+            and proof.get('scope') == 'sufficient_CAD_union_separation'
+            and proof.get('execution_authorized') is False
+            and proof.get('body') == body
+            and proof.get('opening_m') == float(opening)
+            and proof.get('displacement_each_tool_axis_m') == float(displacement)
+            and proof.get('padding_each_tool_axis_m') == 0.0006
+            and proof.get('provenance') == model.provenance
+            and not isinstance(gap, (bool, np.bool_))
+            and isinstance(gap, (int, float, np.number))
+            and math.isfinite(float(gap)) and float(gap) > 1e-9)
+        return not separated, proof
+    except (ValueError, TypeError, OverflowError):
+        return True, None
+
+
 def _check_boxes(
     transform,
     gripper,
@@ -1230,6 +1573,7 @@ def _check_boxes(
     obb_size,
     allow_finger_contact,
     contact_gap_tolerance_m=0.0,
+    finger_cad_context=None,
 ):
     rotation = transform[:3, :3]
     stage_center = transform[:3, 3]
@@ -1248,14 +1592,13 @@ def _check_boxes(
         minimum_clearance = min(minimum_clearance, float(np.min(clearance)))
         if float(np.min(clearance)) < gripper.support_clearance_m - 1e-9:
             return False, minimum_clearance, '%s enters support clearance' % name
-        if not _obb_overlap(
-            box_center,
-            rotation,
-            box_size,
-            obb_center,
-            obb_rotation,
-            obb_size,
-        ):
+        # An old analytical-box miss cannot clear active CAD outside it.
+        # Target geometry and sufficient proofs match the continuous checker.
+        overlap, _proof = gripper_target_overlap(
+            finger_cad_context, gripper, opening_width_m, name, transform,
+            box_center, box_size,
+            SimpleNamespace(center=obb_center, rotation=obb_rotation, size=obb_size))
+        if not overlap:
             continue
         if (
             allow_finger_contact
@@ -1437,6 +1780,7 @@ def _evaluate_physical_candidate(
     contact_height_bounds_m=None,
     contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
+    robot_description=None,
 ):
     """Run source-independent physical gates for an explicit tool0 pose."""
     required_width = 0.0
@@ -1726,7 +2070,13 @@ def _evaluate_physical_candidate(
         )
 
     minimum_box_clearance = float('inf')
-    endpoint_contact = (False, False, True, True)
+    # The fingers remain open through approach and the grasp endpoint.  Only
+    # the subsequent lift represents a closed grasp carrying the target.
+    # Open descent must obey the same collision semantics as the strict
+    # trajectory checker; intended closed contact cannot excuse penetration.
+    finger_cad_context = supported_finger_cad_context(
+        robot_description, gripper, tool_jaw_axis, tool_finger_length_axis)
+    endpoint_contact = (False, False, False, True)
     for endpoint_index, (transform, allow_contact) in enumerate(
         zip(transforms, endpoint_contact)
     ):
@@ -1752,6 +2102,7 @@ def _evaluate_physical_candidate(
             obb_size,
             allow_contact,
             fit_clearance,
+            finger_cad_context=finger_cad_context,
         )
         minimum_box_clearance = min(minimum_box_clearance, clearance)
         if not safe:
@@ -1768,7 +2119,7 @@ def _evaluate_physical_candidate(
                 geometry_cost,
             )
 
-    segment_contact = (False, True, True)
+    segment_contact = (False, False, True)
     for segment_index, (first, second) in enumerate(zip(transforms[:-1], transforms[1:])):
         first_center_clearance = float(
             np.dot(first[:3, 3], support_normal) + support_offset
@@ -1816,6 +2167,7 @@ def _evaluate_physical_candidate(
                 obb_size,
                 segment_contact[segment_index],
                 fit_clearance,
+                finger_cad_context=finger_cad_context,
             )
             minimum_box_clearance = min(minimum_box_clearance, clearance)
             if not safe:
@@ -1875,6 +2227,7 @@ def _evaluate_candidate_impl(
     contact_height_bounds_m=None,
     contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
+    robot_description=None,
 ):
     """Validate the strict GraspNet source contract, then run physical gates."""
     required_width = 0.0
@@ -1932,7 +2285,16 @@ def _evaluate_candidate_impl(
         _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
         if jaw_index == finger_index:
             raise ValueError('jaw and finger length axes must be different')
-        if bilateral_surface_evidence is not None:
+        if isinstance(bilateral_surface_evidence, InferredBoxContactEvidence):
+            required_width, contact_height_bounds = _inferred_gate_values(
+                bilateral_surface_evidence, center, tool_rotation @ jaw_local,
+                tool_rotation @ _finger_local, gripper, support_normal_base,
+                fit_clearance, contact_height_bounds_m)
+            if contact_height_axis_base_override is not None and not np.allclose(
+                    contact_height_axis_base_override, bilateral_surface_evidence.contact_height_axis_base, rtol=0., atol=1e-9):
+                raise ValueError('inferred contact bounds axis differs from actual candidate')
+            contact_height_axis_base_override = bilateral_surface_evidence.contact_height_axis_base
+        elif bilateral_surface_evidence is not None:
             if (
                 not isinstance(
                     bilateral_surface_evidence, BilateralSurfaceEvidence
@@ -2001,6 +2363,7 @@ def _evaluate_candidate_impl(
         )
     return _evaluate_physical_candidate(
         gripper=gripper,
+        robot_description=robot_description,
         candidate_center_base=candidate_center_base,
         candidate_tool0_base=candidate_tool0_base,
         R_base_tool=R_base_tool,
@@ -2051,6 +2414,7 @@ def _evaluate_explicit_candidate_impl(
     bilateral_surface_evidence=None,
     contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
+    robot_description=None,
 ):
     """Validate an explicit target-cloud width, then run physical gates."""
     contact_height_bounds = None
@@ -2066,7 +2430,17 @@ def _evaluate_explicit_candidate_impl(
         _finger_local, finger_index = parse_tool_axis(tool_finger_length_axis)
         if jaw_index == finger_index:
             raise ValueError('jaw and finger length axes must be different')
-        if bilateral_surface_evidence is not None:
+        if isinstance(bilateral_surface_evidence, InferredBoxContactEvidence):
+            recomputed, contact_height_bounds = _inferred_gate_values(
+                bilateral_surface_evidence, candidate_center_base,
+                rotation @ jaw_local, rotation @ _finger_local,
+                gripper, support_normal_base, fit_clearance, contact_height_bounds_m)
+            measured_contact_height_bounds = contact_height_bounds
+            if contact_height_axis_base_override is not None and not np.allclose(
+                    contact_height_axis_base_override, bilateral_surface_evidence.contact_height_axis_base, rtol=0., atol=1e-9):
+                raise ValueError('inferred contact bounds axis differs from actual candidate')
+            contact_height_axis_base_override = bilateral_surface_evidence.contact_height_axis_base
+        elif bilateral_surface_evidence is not None:
             if (
                 not isinstance(
                     bilateral_surface_evidence, BilateralSurfaceEvidence
@@ -2209,6 +2583,7 @@ def _evaluate_explicit_candidate_impl(
         )
     return _evaluate_physical_candidate(
         gripper=gripper,
+        robot_description=robot_description,
         candidate_center_base=candidate_center_base,
         candidate_tool0_base=candidate_tool0_base,
         R_base_tool=R_base_tool,
@@ -2259,11 +2634,13 @@ def evaluate_candidate(
     contact_height_bounds_m=None,
     contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
+    robot_description=None,
 ):
     """Evaluate one candidate and always fail closed on invalid derived state."""
     try:
         return _evaluate_candidate_impl(
             gripper=gripper,
+            robot_description=robot_description,
             candidate_center_base=candidate_center_base,
             candidate_tool0_base=candidate_tool0_base,
             candidate_depth_m=candidate_depth_m,
@@ -2339,11 +2716,13 @@ def evaluate_explicit_candidate(
     bilateral_surface_evidence=None,
     contact_height_axis_base_override=None,
     minimum_contact_patch_overlap_m=GRIPPER_CONTRACT_TOLERANCE_M,
+    robot_description=None,
 ):
     """Evaluate an explicit tool0 candidate without a GraspNet depth field."""
     try:
         return _evaluate_explicit_candidate_impl(
             gripper=gripper,
+            robot_description=robot_description,
             candidate_center_base=candidate_center_base,
             candidate_tool0_base=candidate_tool0_base,
             R_base_tool=R_base_tool,

@@ -13,6 +13,7 @@ from alicia_flexible_grasp.vision.remote_grasp6d_client import RemoteGrasp6DClie
 from alicia_flexible_grasp.grasp.rich_plan_integrity import (
     plan_id_matches_content,
     required_open_width_is_valid,
+    is_silhouette_observation_plan,
     stamp_nanoseconds as _stamp_nanoseconds,
     stamp_seconds as _stamp_seconds,
     strict_plan_id_equal,
@@ -65,13 +66,15 @@ def validate_enriched_plan(plan, now_sec=None, validity_sec=2.0):
     if not str(getattr(plan, 'model_choice', '') or '').strip():
         return Grasp6DPlanState(False, float('inf'), 'MODEL_MISSING: 富计划模型为空')
     poses = list(getattr(plan, 'poses', ()) or ())
-    if len(poses) != 4 or not all(_finite_pose(pose) for pose in poses):
-        return Grasp6DPlanState(False, float('inf'), 'PLAN_MALFORMED: 必须包含四个有限姿态')
+    observation_only = is_silhouette_observation_plan(plan)
+    expected_poses = 1 if observation_only else 4
+    if len(poses) != expected_poses or not all(_finite_pose(pose) for pose in poses):
+        return Grasp6DPlanState(False, float('inf'), 'PLAN_MALFORMED: 姿态数量或数值与计划类型不符')
     try:
         required_width = float(plan.required_open_width_m)
     except Exception:
         required_width = float('nan')
-    if not required_open_width_is_valid(required_width):
+    if not observation_only and not required_open_width_is_valid(required_width):
         return Grasp6DPlanState(False, float('inf'), 'GRIPPER_TOO_NARROW: 富计划开口宽度无效')
     try:
         validate_candidate_model_width(plan)
@@ -109,6 +112,7 @@ def validate_enriched_plan(plan, now_sec=None, validity_sec=2.0):
     source_text = {
         'graspnet': 'GraspNet',
         'tabletop_geometry': '桌面几何',
+        'silhouette_observation': '补充观察（不闭爪）',
     }.get(source, source)
     return Grasp6DPlanState(
         True,

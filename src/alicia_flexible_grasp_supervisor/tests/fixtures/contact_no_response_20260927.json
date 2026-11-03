@@ -1,0 +1,354 @@
+{
+  "schema": 1,
+  "evidence_kind": "recorded_hardware_command_and_accepted_encoder_samples_not_simulated_response",
+  "source": {
+    "record_id": "20260927T063422.563534Z_094d509c116648378bf54b272bcc3489",
+    "bag_path": "/media/zhuyupei/SanStand/\u5b9e\u9a8c\u8bb0\u5f55/Robot-Controller/grasp_records/20260927T063422.563534Z_094d509c116648378bf54b272bcc3489/keyframes.bag",
+    "bag_sha256_from_manifest": "5775173704f47e0db867724014837936369c283beee2aebee3a59715fd67abf7",
+    "manifest_sha256": "12189e37a679cf8637ba81f020cf8938345c32ada325fea6951c55cc019ffde6",
+    "offline_extraction": "No ROS services, publications, or hardware motion used."
+  },
+  "plan_id": "a37bd0366fc9fbbbf059d2e4",
+  "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+  "robot_description_fixture": "pregrasp_following_20260919.json",
+  "joint_names": [
+    "Joint1",
+    "Joint2",
+    "Joint3",
+    "Joint4",
+    "Joint5",
+    "Joint6"
+  ],
+  "epoch_ns": 1790469885813935287,
+  "epoch_count_in_record": 1,
+  "fixed_goal_pose_index": 1,
+  "fixed_goal_pose": [
+    -0.12972620499197202,
+    -0.4219251500441767,
+    0.112142763909698,
+    0.7113248120182387,
+    0.6821686124322386,
+    -0.1182345900851456,
+    0.12117581329163547
+  ],
+  "contact_pose_index": 2,
+  "contact_pose": [
+    -0.1297780759934752,
+    -0.4279317964435222,
+    0.0951746317663997,
+    0.7113248120182387,
+    0.6821686124322386,
+    -0.1182345900851456,
+    0.12117581329163547
+  ],
+  "action_goal_id": "/move_group-2-1790491081.835051118",
+  "action_goal_stamp_ns": 1790491081835051118,
+  "action_result_stamp_ns": 1790491095823652567,
+  "trajectory_duration_sec": 5.965191389,
+  "action_elapsed_sec": 13.986949443817139,
+  "command_start_positions_rad": [
+    -1.9174759848570513,
+    -0.6902913545485385,
+    1.4005244593395905,
+    -0.12425244381873693,
+    -1.1274758790959463,
+    0.28685440733461487
+  ],
+  "command_goal_positions_rad": [
+    -1.9232966490823562,
+    -0.6665227152642608,
+    1.3231199165861,
+    -0.12721342283969023,
+    -1.0721789944109108,
+    0.3407682325956182
+  ],
+  "goal_tolerance_rad": 0.035,
+  "path_tolerance_defaults_rad": 0.12,
+  "goal_time_sec": 8.0,
+  "before": {
+    "sdk_stamp_ns": 1790491081775095808,
+    "sdk_bag_time_sec": 1790491081.7809029,
+    "sdk_positions_rad": [
+      -1.9174759848570513,
+      -0.6902913545485385,
+      1.4005244593395905,
+      -0.12425244381873693,
+      -1.1274758790959463,
+      0.28685440733461487
+    ],
+    "accepted_stamp_ns": 1790491081766721024,
+    "accepted_bag_time_sec": 1790491081.770759,
+    "accepted_positions_rad": [
+      -1.9098060809176234,
+      -0.7163690279425944,
+      1.37598076673342,
+      -0.1227184630308513,
+      -1.1274758790959463,
+      0.2914563496982718
+    ]
+  },
+  "after": {
+    "sdk_stamp_ns": 1790491095738425600,
+    "sdk_bag_time_sec": 1790491095.7451036,
+    "sdk_positions_rad": [
+      -1.923611908008594,
+      -0.6672816427302539,
+      1.3238254199453083,
+      -0.12732040539450823,
+      -1.0722525707320631,
+      0.34054373491061235
+    ],
+    "accepted_stamp_ns": 1790491095771724032,
+    "accepted_bag_time_sec": 1790491095.7749145,
+    "accepted_positions_rad": [
+      -1.9159420040691657,
+      -0.7163690279425944,
+      1.3146215352179944,
+      -0.1227184630308513,
+      -1.0799224746714915,
+      0.3313398501832985
+    ]
+  },
+  "controller_result": {
+    "error_code": -5,
+    "error_string": "Joint2 goal error 0.049846"
+  },
+  "observed_response": {
+    "joint2_command_delta_counts": 15,
+    "joint2_accepted_delta_counts": 0,
+    "joint2_max_sdk_minus_accepted_rad": 0.04908738521234046,
+    "accepted_sample_count": 140,
+    "joint_states_sample_count": 839,
+    "accepted_joint2_min_rad": -0.7163690279425944,
+    "accepted_joint2_max_rad": -0.7163690279425944
+  },
+  "fk_after": {
+    "xyz_m": [
+      -0.1304405342635393,
+      -0.42233066630006233,
+      0.10560072041305357
+    ],
+    "quaternion_xyzw": [
+      0.7167709952542068,
+      0.6783035722185023,
+      -0.11114080355823652,
+      0.1174364767112071
+    ],
+    "approach_goal_position_error_m": 0.00659340904646398,
+    "approach_goal_orientation_error_rad": 0.020871500319553277,
+    "contact_goal_position_error_m": 0.011853895322274268,
+    "following_contract_rejection": "PREGRASP_FOLLOWING_OUTSIDE_CONTRACT"
+  },
+  "health_evidence": {
+    "protection_latched_values": [
+      false
+    ],
+    "motion_enabled_values": [
+      true
+    ],
+    "hardware_root_cause_established": false,
+    "sdk_transport_semantics": "crc_valid_serial_response_not_motion_ack"
+  },
+  "limits": "Encoder plateau demonstrates no observed Joint2 response to a reversing command; it does not establish whether the cause is mechanical deadband, actuator electronics, firmware, contact, or temperature. No physical recovery is proven.",
+  "post_failure_stationary": {
+    "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+    "stamp_sec": 1790491097.9,
+    "epoch_ns": 1790469885813935287,
+    "model_sha256": "890592a24b8ad818d995e69beb670ea4254bf84f589615bfac3c8562f62449b7",
+    "sdk_stamp_ns": 1790491097858476655,
+    "accepted_stamp_ns": 1790491097871746972,
+    "accepted_gripper_opening_m": 0.04975,
+    "opening_stamp_ns": 1790491097871746972,
+    "stationary_window_start_ns": 1790491097558476655,
+    "stationary_window_end_ns": 1790491097858476655,
+    "sdk_sample_count": 4,
+    "accepted_sample_count": 5,
+    "joint_names": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "sdk_positions_rad": [
+      -1.923611908008594,
+      -0.6672816427302539,
+      1.3238254199453083,
+      -0.12732040539450823,
+      -1.0722525707320631,
+      0.34054373491061235
+    ],
+    "accepted_positions_rad": [
+      -1.9159420040691657,
+      -0.7163690279425944,
+      1.3146215352179944,
+      -0.1227184630308513,
+      -1.0799224746714915,
+      0.3313398501832985
+    ],
+    "joint_error_sdk_counts": [
+      5.0000000000000915,
+      -31.999999999999964,
+      -6.000000000000052,
+      3.000000000000008,
+      -5.0000000000000915,
+      -6.000000000000016
+    ],
+    "position_error_m": 0.02593275159408821,
+    "position_error_vector_m": [
+      0.0046831070303662015,
+      0.004833933401799939,
+      -0.02504414505727401
+    ],
+    "orientation_error_rad": 0.0669282169706557,
+    "sdk_tool_position_m": [
+      -0.1351236412939055,
+      -0.42716459970186227,
+      0.13064486547032758
+    ],
+    "accepted_tool_position_m": [
+      -0.1304405342635393,
+      -0.42233066630006233,
+      0.10560072041305357
+    ],
+    "certifies_command_response_or_calibration": false,
+    "window_proof": {
+      "sdk_rows": [
+        {
+          "stamp_ns": 1790491097540289100,
+          "frame_id": "sdk_transmitted",
+          "positions_rad": [
+            -1.923611908008594,
+            -0.6672816427302539,
+            1.3238254199453083,
+            -0.12732040539450823,
+            -1.0722525707320631,
+            0.34054373491061235
+          ]
+        },
+        {
+          "stamp_ns": 1790491097658427100,
+          "frame_id": "sdk_transmitted",
+          "positions_rad": [
+            -1.923611908008594,
+            -0.6672816427302539,
+            1.3238254199453083,
+            -0.12732040539450823,
+            -1.0722525707320631,
+            0.34054373491061235
+          ]
+        },
+        {
+          "stamp_ns": 1790491097758453151,
+          "frame_id": "sdk_transmitted",
+          "positions_rad": [
+            -1.923611908008594,
+            -0.6672816427302539,
+            1.3238254199453083,
+            -0.12732040539450823,
+            -1.0722525707320631,
+            0.34054373491061235
+          ]
+        },
+        {
+          "stamp_ns": 1790491097858476655,
+          "frame_id": "sdk_transmitted",
+          "positions_rad": [
+            -1.923611908008594,
+            -0.6672816427302539,
+            1.3238254199453083,
+            -0.12732040539450823,
+            -1.0722525707320631,
+            0.34054373491061235
+          ]
+        }
+      ],
+      "sdk_span_rad": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "accepted_rows": [
+        {
+          "stamp_ns": 1790491097471853277,
+          "frame_id": "sdk_measured",
+          "positions_rad": [
+            -1.9159420040691657,
+            -0.7163690279425944,
+            1.3146215352179944,
+            -0.1227184630308513,
+            -1.0799224746714915,
+            0.3313398501832985,
+            0.04975
+          ]
+        },
+        {
+          "stamp_ns": 1790491097572503956,
+          "frame_id": "sdk_measured",
+          "positions_rad": [
+            -1.9159420040691657,
+            -0.7163690279425944,
+            1.3146215352179944,
+            -0.1227184630308513,
+            -1.0799224746714915,
+            0.3313398501832985,
+            0.04975
+          ]
+        },
+        {
+          "stamp_ns": 1790491097671896291,
+          "frame_id": "sdk_measured",
+          "positions_rad": [
+            -1.9159420040691657,
+            -0.7163690279425944,
+            1.3146215352179944,
+            -0.1227184630308513,
+            -1.0799224746714915,
+            0.3313398501832985,
+            0.04975
+          ]
+        },
+        {
+          "stamp_ns": 1790491097771736997,
+          "frame_id": "sdk_measured",
+          "positions_rad": [
+            -1.9159420040691657,
+            -0.7163690279425944,
+            1.3146215352179944,
+            -0.1227184630308513,
+            -1.0799224746714915,
+            0.3313398501832985,
+            0.04975
+          ]
+        },
+        {
+          "stamp_ns": 1790491097871746972,
+          "frame_id": "sdk_measured",
+          "positions_rad": [
+            -1.9159420040691657,
+            -0.7163690279425944,
+            1.3146215352179944,
+            -0.1227184630308513,
+            -1.0799224746714915,
+            0.3313398501832985,
+            0.04975
+          ]
+        }
+      ],
+      "accepted_span_rad": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sdk_unchanged": true,
+      "accepted_span_within_one_count": true
+    }
+  }
+}

@@ -168,6 +168,8 @@ def test_late_final_checks_cannot_authorize_refined_plan(monkeypatch, delay_stag
     monkeypatch.setattr(module.rospy.Time, 'now', lambda: module.rospy.Time.from_sec(
         clock[0] if ros_override[0] is None else ros_override[0]))
     current = helper._rich_plan(stamp_sec=10.)
+    current.diagnostic = module._CONTACT_EXECUTION_PLAN
+    current.plan_id = sequence.compute_plan_id(current)
     candidate = helper._rich_plan(stamp_sec=12.01)
     node.set_state = Mock()
 
@@ -222,3 +224,14 @@ def test_late_final_checks_cannot_authorize_refined_plan(monkeypatch, delay_stag
         assert node.set_state.call_args.args[0] == module.GraspStages.FAILED
     if delay_stage in ('sequence', 'rebind_lock', 'ros_clock', 'monotonic_only'):
         node._freeze_execution_plan.assert_not_called()
+
+
+@pytest.mark.parametrize('age,accepted',[(.2,True),(.3,True),(.3999,True),(.4001,False)])
+def test_post_arrival_completion_uses_authorized_receiver_age_without_renewal(monkeypatch,age,accepted):
+    node,_,clock=setup_node(monkeypatch)
+    node._latest_obj_received_monotonic=clock[0]-age
+    original=node._latest_obj_received_monotonic
+    result=node._wait_for_final_refine_reference(None,10_000_000_000,12.3,.05)
+    assert (result is not None) is accepted
+    assert node._latest_obj_received_monotonic==original
+    assert clock[0] <= 12.3+1e-9

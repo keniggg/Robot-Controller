@@ -1,0 +1,4452 @@
+{
+  "accepted": [
+    {
+      "bag_receipt_ns": 1792661370167916536,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218215,
+          "stamp": {
+            "ns": 1792661370166709761
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661370267670869,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218216,
+          "stamp": {
+            "ns": 1792661370266719570
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661370381380081,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218217,
+          "stamp": {
+            "ns": 1792661370376766798
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661370477264642,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218218,
+          "stamp": {
+            "ns": 1792661370476732350
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661370577955484,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218219,
+          "stamp": {
+            "ns": 1792661370576731013
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661370677525043,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218220,
+          "stamp": {
+            "ns": 1792661370676783710
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661370768352270,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218221,
+          "stamp": {
+            "ns": 1792661370766748536
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661370867968797,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218222,
+          "stamp": {
+            "ns": 1792661370866684243
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661370978080034,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218223,
+          "stamp": {
+            "ns": 1792661370976730557
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371078805208,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218224,
+          "stamp": {
+            "ns": 1792661371076769298
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371170257806,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218225,
+          "stamp": {
+            "ns": 1792661371169056374
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371278133153,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218226,
+          "stamp": {
+            "ns": 1792661371276761839
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371367917299,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218227,
+          "stamp": {
+            "ns": 1792661371366714863
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371468133449,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218228,
+          "stamp": {
+            "ns": 1792661371466846965
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371577797889,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218229,
+          "stamp": {
+            "ns": 1792661371576808177
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371677360057,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218230,
+          "stamp": {
+            "ns": 1792661371676725879
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371778037071,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218231,
+          "stamp": {
+            "ns": 1792661371777513181
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371878926515,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218232,
+          "stamp": {
+            "ns": 1792661371876795383
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661371978609561,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218233,
+          "stamp": {
+            "ns": 1792661371976714683
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372067752122,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218234,
+          "stamp": {
+            "ns": 1792661372066747073
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372168162345,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218235,
+          "stamp": {
+            "ns": 1792661372166776046
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372278556108,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218236,
+          "stamp": {
+            "ns": 1792661372276701771
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372380519151,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218237,
+          "stamp": {
+            "ns": 1792661372376722327
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372477418422,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218238,
+          "stamp": {
+            "ns": 1792661372476722922
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372577772140,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218239,
+          "stamp": {
+            "ns": 1792661372576805107
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372667732715,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218240,
+          "stamp": {
+            "ns": 1792661372666721383
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372777491807,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218241,
+          "stamp": {
+            "ns": 1792661372776728154
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372877251148,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218242,
+          "stamp": {
+            "ns": 1792661372876713262
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661372978015184,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218243,
+          "stamp": {
+            "ns": 1792661372976774100
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373077842235,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218244,
+          "stamp": {
+            "ns": 1792661373076731326
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373177424669,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218245,
+          "stamp": {
+            "ns": 1792661373176832757
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373267980098,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218246,
+          "stamp": {
+            "ns": 1792661373266748075
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373378601312,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218247,
+          "stamp": {
+            "ns": 1792661373377595511
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373479185819,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218248,
+          "stamp": {
+            "ns": 1792661373476715423
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373579267024,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218249,
+          "stamp": {
+            "ns": 1792661373576732281
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373678469896,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218250,
+          "stamp": {
+            "ns": 1792661373677159165
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373767791032,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218251,
+          "stamp": {
+            "ns": 1792661373766704237
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373877933025,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218252,
+          "stamp": {
+            "ns": 1792661373876737257
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661373980316877,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218253,
+          "stamp": {
+            "ns": 1792661373976720259
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374077325105,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218254,
+          "stamp": {
+            "ns": 1792661374076687732
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374178564548,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218255,
+          "stamp": {
+            "ns": 1792661374176758600
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374284386157,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218256,
+          "stamp": {
+            "ns": 1792661374276716267
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374368798017,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218257,
+          "stamp": {
+            "ns": 1792661374366718942
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374477300643,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218258,
+          "stamp": {
+            "ns": 1792661374476737754
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374578144788,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218259,
+          "stamp": {
+            "ns": 1792661374576777257
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374677900075,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218260,
+          "stamp": {
+            "ns": 1792661374676711368
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374778102636,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218261,
+          "stamp": {
+            "ns": 1792661374776726543
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374924269676,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218262,
+          "stamp": {
+            "ns": 1792661374876769911
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661374977593183,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218263,
+          "stamp": {
+            "ns": 1792661374976757726
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375067910671,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218264,
+          "stamp": {
+            "ns": 1792661375066730950
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375199754238,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218265,
+          "stamp": {
+            "ns": 1792661375176727133
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375277213096,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218266,
+          "stamp": {
+            "ns": 1792661375276724889
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375377968788,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218267,
+          "stamp": {
+            "ns": 1792661375376718968
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375478009700,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218268,
+          "stamp": {
+            "ns": 1792661375476710029
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375568149805,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218269,
+          "stamp": {
+            "ns": 1792661375566715991
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375677463531,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218270,
+          "stamp": {
+            "ns": 1792661375676749877
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375778137683,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218271,
+          "stamp": {
+            "ns": 1792661375776740161
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375878862142,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218272,
+          "stamp": {
+            "ns": 1792661375876740176
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661375978284120,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218273,
+          "stamp": {
+            "ns": 1792661375976741889
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376068483114,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218274,
+          "stamp": {
+            "ns": 1792661376066736519
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376167761564,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218275,
+          "stamp": {
+            "ns": 1792661376166723836
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376277239084,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218276,
+          "stamp": {
+            "ns": 1792661376276750854
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376377650499,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218277,
+          "stamp": {
+            "ns": 1792661376376744021
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376478403091,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218278,
+          "stamp": {
+            "ns": 1792661376476725393
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376577932596,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218279,
+          "stamp": {
+            "ns": 1792661376576722743
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376667727470,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218280,
+          "stamp": {
+            "ns": 1792661376666700877
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376767334938,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218281,
+          "stamp": {
+            "ns": 1792661376766702920
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376878112792,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218282,
+          "stamp": {
+            "ns": 1792661376876816574
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661376978734016,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218283,
+          "stamp": {
+            "ns": 1792661376976728112
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377077838420,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218284,
+          "stamp": {
+            "ns": 1792661377076704639
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377169861555,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218285,
+          "stamp": {
+            "ns": 1792661377166712916
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377267333269,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218286,
+          "stamp": {
+            "ns": 1792661377266708562
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377378197431,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218287,
+          "stamp": {
+            "ns": 1792661377376738027
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377478197336,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218288,
+          "stamp": {
+            "ns": 1792661377476767226
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377577892541,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218289,
+          "stamp": {
+            "ns": 1792661377576768213
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377684183597,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218290,
+          "stamp": {
+            "ns": 1792661377676778327
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377767535209,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218291,
+          "stamp": {
+            "ns": 1792661377766715881
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377877269744,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218292,
+          "stamp": {
+            "ns": 1792661377876752212
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661377981723785,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218293,
+          "stamp": {
+            "ns": 1792661377976988053
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378077861785,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218294,
+          "stamp": {
+            "ns": 1792661378076737403
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378177792787,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218295,
+          "stamp": {
+            "ns": 1792661378176716659
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378277697563,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218296,
+          "stamp": {
+            "ns": 1792661378276715744
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378368083715,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218297,
+          "stamp": {
+            "ns": 1792661378366704504
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378468178272,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218298,
+          "stamp": {
+            "ns": 1792661378466706997
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378578438758,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218299,
+          "stamp": {
+            "ns": 1792661378576779858
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378680453062,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218300,
+          "stamp": {
+            "ns": 1792661378676706829
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378781174898,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218301,
+          "stamp": {
+            "ns": 1792661378776731309
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378877730846,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218302,
+          "stamp": {
+            "ns": 1792661378876689308
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661378968246936,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218303,
+          "stamp": {
+            "ns": 1792661378966712019
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379077532768,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218304,
+          "stamp": {
+            "ns": 1792661379076690787
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379177323579,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218305,
+          "stamp": {
+            "ns": 1792661379176776730
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379277814865,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218306,
+          "stamp": {
+            "ns": 1792661379276738482
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379377609252,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218307,
+          "stamp": {
+            "ns": 1792661379376781824
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379477359771,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218308,
+          "stamp": {
+            "ns": 1792661379476708609
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379577927827,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218309,
+          "stamp": {
+            "ns": 1792661379576737560
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379669148445,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218310,
+          "stamp": {
+            "ns": 1792661379666788469
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379779746770,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218311,
+          "stamp": {
+            "ns": 1792661379776689485
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379878542900,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218312,
+          "stamp": {
+            "ns": 1792661379876746246
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661379977652549,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218313,
+          "stamp": {
+            "ns": 1792661379976802695
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380077960014,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218314,
+          "stamp": {
+            "ns": 1792661380076796972
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380168002128,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218315,
+          "stamp": {
+            "ns": 1792661380166742621
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380278028964,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218316,
+          "stamp": {
+            "ns": 1792661380276698941
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380378518342,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218317,
+          "stamp": {
+            "ns": 1792661380376770422
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380477871179,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218318,
+          "stamp": {
+            "ns": 1792661380476729280
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380568449735,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218319,
+          "stamp": {
+            "ns": 1792661380567074007
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380677329301,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218320,
+          "stamp": {
+            "ns": 1792661380676716332
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380767958879,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218321,
+          "stamp": {
+            "ns": 1792661380766718580
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380868557214,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218322,
+          "stamp": {
+            "ns": 1792661380866690113
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661380977734327,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218323,
+          "stamp": {
+            "ns": 1792661380976713050
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381077507734,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218324,
+          "stamp": {
+            "ns": 1792661381076699492
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381178055524,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218325,
+          "stamp": {
+            "ns": 1792661381176674773
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381280330657,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218326,
+          "stamp": {
+            "ns": 1792661381276763083
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381367800474,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218327,
+          "stamp": {
+            "ns": 1792661381366731425
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381467755317,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218328,
+          "stamp": {
+            "ns": 1792661381466708151
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381579435586,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218329,
+          "stamp": {
+            "ns": 1792661381576743021
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381677692174,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218330,
+          "stamp": {
+            "ns": 1792661381676710388
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381777749300,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218331,
+          "stamp": {
+            "ns": 1792661381776724173
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381877348423,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218332,
+          "stamp": {
+            "ns": 1792661381876705358
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661381967945814,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218333,
+          "stamp": {
+            "ns": 1792661381966721448
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661382067953109,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218334,
+          "stamp": {
+            "ns": 1792661382066714283
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661382177875995,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218335,
+          "stamp": {
+            "ns": 1792661382176964871
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661382277365207,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218336,
+          "stamp": {
+            "ns": 1792661382276703116
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661382378308534,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218337,
+          "stamp": {
+            "ns": 1792661382376760236
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661382477863788,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218338,
+          "stamp": {
+            "ns": 1792661382476718182
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661382567695379,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218339,
+          "stamp": {
+            "ns": 1792661382566694565
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661382667824745,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218340,
+          "stamp": {
+            "ns": 1792661382666693877
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661382777815818,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218341,
+          "stamp": {
+            "ns": 1792661382776712660
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    },
+    {
+      "bag_receipt_ns": 1792661382878053426,
+      "message": {
+        "effort": [],
+        "header": {
+          "frame_id": "sdk_measured",
+          "seq": 218342,
+          "stamp": {
+            "ns": 1792661382876770738
+          }
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.1260973720094984,
+          -0.41417481272912315,
+          0.9587379924285256,
+          -0.4249126782443226,
+          -1.4848934026733007,
+          -0.0966407896367954,
+          0.04980000000000001
+        ],
+        "velocity": []
+      },
+      "topic": "/alicia_d/accepted_joint_states"
+    }
+  ],
+  "local_callback_times_available": false,
+  "measurement": {
+    "arrival_stamp_ns": 1792661347799412727,
+    "capture_deadline_ns": 1792661350799412727,
+    "control_epoch_ns": 1792639534222874592,
+    "deadline_ns": 1792661914081460952,
+    "lease_id": "682046ec6ddf1528c4fa781f922426d9d142efb2801b4300d78724df1d4b87ce:observation:1792661314889323711",
+    "metric_geometry_authority": false,
+    "motion_authorized": false,
+    "motion_kind": "observation",
+    "origin_plan_id": "c1a56a5f23d4be563eac8bb2",
+    "origin_snapshot_stamp_ns": 1792661291104682683,
+    "plan_sha256": "07b2d92633e04e3ed37fbaf7abac406722bacd2ed5375900024f94507415fc9a",
+    "request_id": "682046ec6ddf1528c4fa781f922426d9d142efb2801b4300d78724df1d4b87ce:observation:1792661314889323711:qualified",
+    "selection": {
+      "generation": 5,
+      "mode": "unknown",
+      "stamp_ns": 1792661288399203300,
+      "strategy": "observe_return"
+    },
+    "session_id": "682046ec6ddf1528c4fa781f922426d9d142efb2801b4300d78724df1d4b87ce",
+    "settle": {
+      "accepted_positions_rad": [
+        -2.1260973720094984,
+        -0.41417481272912315,
+        0.9587379924285256,
+        -0.4249126782443226,
+        -1.4848934026733007,
+        -0.0966407896367954
+      ],
+      "accepted_sample_count": 10,
+      "accepted_stamp_ns": 1792661347566718353,
+      "capture_stationarity_policy": {
+        "duration_sec": 0.8,
+        "minimum_samples": 3,
+        "position_epsilon_rad": 0.0025,
+        "version": 1
+      },
+      "epoch_ns": 1792639534222874592,
+      "joint_peak_to_peak_rad": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "stationary_window_end_ns": 1792661347566718353,
+      "stationary_window_start_ns": 1792661346676691104
+    },
+    "source_stamps_ns": [
+      1792661347840169906,
+      1792661348040567636,
+      1792661348239648103
+    ],
+    "stamp_ns": 1792661348481358528,
+    "state": "qualified",
+    "target_epoch": 4,
+    "target_track_id": "g1-t4",
+    "version": 1,
+    "view_index": 1,
+    "view_plan_id": "c1a56a5f23d4be563eac8bb2",
+    "view_source_stamp_ns": 1792661291104682683
+  },
+  "plan": {
+    "candidate_source": "tabletop_geometry",
+    "candidate_source_lineage": [
+      "tabletop_geometry"
+    ],
+    "candidate_width_m": 0.0,
+    "contact_geometry_evidence": "{\"contact_center_base\":[-0.09630282639582435,-0.3636196249303447,0.01601856668171982],\"contact_height_axis_base\":[-0.0377976939431525,0.05030620444918199,-0.9980183465881268],\"contact_height_bounds_m\":[-0.009367004123211358,-0.0063791408465683],\"grasp_tool_pose_base\":[-0.09909612937596135,-0.36048583712743926,0.019507096982159064,-0.44143720866459824,-0.896739853079181,-0.01422723166033394,0.0280786856034995],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measured_contact_width_m\":0.027805875983320915,\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"opening_fit_clearance_each_side_m\":0.0005000000000000004,\"required_open_width_m\":0.028805875983320916,\"schema_version\":2,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}",
+    "diagnostic": "CONTACT_EXECUTION_PLAN",
+    "fused_view_count": 3,
+    "has_candidate_model_width": false,
+    "header": {
+      "frame_id": "base_link",
+      "seq": 7,
+      "stamp": {
+        "ns": 1792661349239769697
+      }
+    },
+    "model_choice": "unknown_tabletop",
+    "object_geometry": {
+      "depth_mad_m": 0.005699999630451202,
+      "failure_reason": "",
+      "fused_frames": 3,
+      "header": {
+        "frame_id": "base_link",
+        "seq": 0,
+        "stamp": {
+          "ns": 1792661349239769697
+        }
+      },
+      "label": "unknown_small",
+      "object_point_count": 2620,
+      "pose_base": {
+        "orientation": {
+          "w": 0.33881718373426056,
+          "x": -0.033735861563768565,
+          "y": 0.021144365263300286,
+          "z": 0.9400094273296129
+        },
+        "position": {
+          "x": -0.09630282639582435,
+          "y": -0.3636196249303447,
+          "z": 0.01601856668171982
+        }
+      },
+      "size_xyz_m": {
+        "x": 0.07845616968802241,
+        "y": 0.032344061269238986,
+        "z": 0.023475770496137444
+      },
+      "source_mode": "instance_mask",
+      "support_inlier_ratio": 1.0,
+      "support_normal_base": {
+        "x": -0.049097571735552716,
+        "y": 0.06261215057691118,
+        "z": 0.9968295476408223
+      },
+      "support_offset_m": 0.013348727487027645,
+      "target_track_id": "g1-t4",
+      "valid": true,
+      "valid_depth_points": 8131,
+      "valid_depth_ratio": 0.7031912207603455
+    },
+    "plan_id": "83104955e7331f3aa7ff4fbb",
+    "poses": [
+      {
+        "orientation": {
+          "w": 0.0280786856034995,
+          "x": -0.44143720866459824,
+          "y": -0.896739853079181,
+          "z": -0.01422723166033394
+        },
+        "position": {
+          "x": -0.10167852615216624,
+          "y": -0.3571924868426709,
+          "z": 0.07193936127583941
+        }
+      },
+      {
+        "orientation": {
+          "w": 0.0280786856034995,
+          "x": -0.44143720866459824,
+          "y": -0.896739853079181,
+          "z": -0.01422723166033394
+        },
+        "position": {
+          "x": -0.09769620118067256,
+          "y": -0.3623490479918981,
+          "z": 0.056471098672461396
+        }
+      },
+      {
+        "orientation": {
+          "w": 0.0280786856034995,
+          "x": -0.44143720866459824,
+          "y": -0.896739853079181,
+          "z": -0.01422723166033394
+        },
+        "position": {
+          "x": -0.09909612937596135,
+          "y": -0.36048583712743926,
+          "z": 0.019507096982159064
+        }
+      },
+      {
+        "orientation": {
+          "w": 0.0280786856034995,
+          "x": -0.44143720866459824,
+          "y": -0.896739853079181,
+          "z": -0.01422723166033394
+        },
+        "position": {
+          "x": -0.1012348269486449,
+          "y": -0.35775833981760213,
+          "z": 0.06293061632994641
+        }
+      }
+    ],
+    "refinement_inlier_count": 660,
+    "refinement_overlap_fraction": 0.7432432174682617,
+    "refinement_rmse_m": 0.0010502669028937817,
+    "refinement_rotation_deg": 0.010463504120707512,
+    "refinement_source_clipped": false,
+    "refinement_status": "VALID_3D",
+    "refinement_translation_m": 0.0026811822317540646,
+    "required_open_width_m": 0.028805876150727272,
+    "score": -0.027764560654759407,
+    "target_track_id": "g1-t4",
+    "valid": true
+  },
+  "request": {
+    "control_epoch_ns": 1792639534222874592,
+    "controller_motion_confirmed": false,
+    "deadline_ns": 1792661383749328660,
+    "measurement_sha256": "1cf9880742d87e419fbfdd987065d5fa816054d3cf1c2751b6ddc38c75ab101d",
+    "metric_geometry_authority": false,
+    "motion_authorized": false,
+    "phase_id": 1,
+    "phase_started_ns": 1792661348501859426,
+    "plan_id": "83104955e7331f3aa7ff4fbb",
+    "plan_sha256": "420c5082846a149b4b4d617f58bace66c82aabd8860209ff1f30040359d61f6c",
+    "plan_source_ns": 1792661349239769697,
+    "request_id": "682046ec6ddf1528c4fa781f922426d9d142efb2801b4300d78724df1d4b87ce:observation:1792661314889323711:contact:1792661382949328660",
+    "selection": {
+      "generation": 5,
+      "mode": "unknown",
+      "stamp_ns": 1792661288399203300,
+      "strategy": "observe_return"
+    },
+    "session_id": "682046ec6ddf1528c4fa781f922426d9d142efb2801b4300d78724df1d4b87ce",
+    "stage": "MOVE_PREGRASP",
+    "stamp_ns": 1792661382949328660,
+    "state": "prepare",
+    "target_epoch": 4,
+    "target_track_id": "g1-t4",
+    "version": 1
+  },
+  "schema_version": 1,
+  "scope": "Frozen recorder messages; bag receipts are not actual task callback times.",
+  "source_record": "20261022T092802.096230Z_567d85bbe8f54a56af71145548b078f8",
+  "source_wire_sha256": "acf1ccc58ce0be09d87c2130f1fbd951b5c67de187ceae85ba5ab46c57070b9e"
+}

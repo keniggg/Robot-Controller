@@ -149,9 +149,11 @@ class MoveItTrajectoryExecutionConfigTest(unittest.TestCase):
             source,
         )
         self.assertIn(
-            'const bool temperature_due = !diagnostic_queries_suppressed',
+            'const bool temperature_due = software_temperature_monitoring_enabled_ &&',
             source,
         )
+        temperature_predicate = source.split('const bool temperature_due =', 1)[1].split(';', 1)[0]
+        self.assertIn('!diagnostic_queries_suppressed', temperature_predicate)
         self.assertIn(
             'const bool self_check_due = !diagnostic_queries_suppressed',
             source,

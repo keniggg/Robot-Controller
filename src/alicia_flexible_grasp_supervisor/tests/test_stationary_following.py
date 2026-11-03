@@ -104,3 +104,27 @@ def test_one_encoder_count_jitter_is_not_reported_as_new_command_response():
     report = run(fk, sdk, measured)
     assert report['joint_error_sdk_counts'][1] == pytest.approx(-7)
     assert not report['certifies_command_response_or_calibration']
+
+
+def test_gripper_opening_is_from_the_same_accepted_encoder_message():
+    fk, sdk, measured = fixture()
+    for index, msg in enumerate(measured):
+        msg.position[-1] = .040 + index * .001
+    report = run(fk, sdk, measured)
+    assert report['accepted_gripper_opening_m'] == pytest.approx(.044)
+    assert report['opening_stamp_ns'] == measured[-1].header.stamp.to_nsec()
+    assert report['opening_stamp_ns'] == report['accepted_stamp_ns']
+    assert report['opening_stamp_ns'] != report['sdk_stamp_ns']
+    # Joint order is a name mapping, including right_finger.
+    for msg in measured:
+        msg.name.reverse()
+        msg.position.reverse()
+    assert run(fk, sdk, measured) == report
+
+
+@pytest.mark.parametrize('opening', [float('nan'), float('inf'), -.001, .051])
+def test_invalid_same_frame_gripper_evidence_cannot_be_returned(opening):
+    fk, sdk, measured = fixture()
+    measured[-1].position[-1] = opening
+    with pytest.raises(ValueError, match='invalid measured gripper opening'):
+        run(fk, sdk, measured)

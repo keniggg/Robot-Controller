@@ -1409,6 +1409,69 @@ class MoveItPlannerPoseFeedbackTest(unittest.TestCase):
         self.assertEqual(manipulator.executed_plans, [planned])
         self.assertEqual(len(manipulator.cartesian_calls), 1)
 
+    def test_cartesian_lift_discards_compensation_start_before_planning(self):
+        # Real 2026-09-28 failed lift: MoveIt rejected the retained Joint2
+        # command start (-0.688757) against actual feedback (-0.751651).
+        # Model MoveGroup's persistent explicit-start behavior, then verify
+        # that a new segment really uses live feedback, not just a reset call.
+        current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.08))
+        measured = [-1.85458, -0.751651, 1.29161, -0.03682, -1.15662, 0.29452]
+        stale = [-1.85151, -0.688757, 1.36371, -0.03835, -1.23792, 0.24083]
+
+        class StatefulManipulator(FakeManipulator):
+            def set_start_state(self, state):
+                super().set_start_state(state)
+                self.explicit_start = list(state.joint_state.position)
+
+            def set_start_state_to_current_state(self):
+                super().set_start_state_to_current_state()
+                self.explicit_start = None
+
+            def compute_cartesian_path(self, waypoints, eef_step, jump_threshold,
+                                       avoid_collisions=True):
+                super().compute_cartesian_path(waypoints, eef_step,
+                                               jump_threshold, avoid_collisions)
+                start = self.explicit_start or self.current_joint_values
+                return JointPlan([start, [q + 0.01 for q in start]]), 1.0
+
+            def execute(self, plan, wait=True):
+                super().execute(plan, wait)
+                return max(abs(a-b) for a,b in zip(
+                    plan.joint_trajectory.points[0].positions,
+                    self.current_joint_values)) <= 0.05
+
+        manipulator = StatefulManipulator(current_pose=current,
+                                           current_joint_values=measured)
+        manipulator.set_start_state(self.robot_state(*stale))
+        planner = self.make_planner(manipulator)
+        target = make_pose(x=0.0, y=0.0, z=0.112)
+        ok, reason = planner.move_to_pose_linear(target, execute=False)
+        self.assertTrue(ok, reason)
+        self.assertEqual(planner._last_pose_plan['plan'].joint_trajectory.points[0].positions,
+                         measured)
+        ok, reason = planner.move_to_pose_linear(target, execute=True)
+        self.assertTrue(ok, reason)
+        self.assertEqual(manipulator.start_state_to_current_calls, 1)
+        self.assertEqual(len(manipulator.cartesian_calls), 1)
+
+    def test_cartesian_current_start_failure_invalidates_old_cache(self):
+        current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.08))
+        manipulator = FakeManipulator(current_pose=current)
+        planner = self.make_planner(manipulator)
+        target = make_pose(x=0.0, y=0.0, z=0.112)
+        planner._remember_pose_plan(target, SuccessfulPlan(), 'cartesian')
+        def unavailable():
+            raise RuntimeError('live start state unavailable')
+        manipulator.set_start_state_to_current_state = unavailable
+        ok, reason = planner.move_to_pose_linear(target, execute=False)
+        self.assertFalse(ok)
+        self.assertIn('live start state unavailable', reason)
+        self.assertIsNone(planner._last_pose_plan)
+        ok, reason = planner.move_to_pose_linear(target, execute=True)
+        self.assertFalse(ok)
+        self.assertEqual(manipulator.cartesian_calls, [])
+        self.assertEqual(manipulator.executed_plans, [])
+
     def test_cartesian_line_uses_noetic_signature_without_jump_threshold(self):
         current = types.SimpleNamespace(pose=make_pose(x=0.0, y=0.0, z=0.20))
         manipulator = FakeNoeticManipulator(current_pose=current)

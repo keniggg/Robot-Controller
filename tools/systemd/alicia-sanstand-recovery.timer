@@ -1,0 +1,12 @@
+[Unit]
+Description=Check for SanStand archive recovery every minute
+
+[Timer]
+OnBootSec=30s
+OnCalendar=*-*-* *:*:00
+AccuracySec=5s
+Persistent=true
+Unit=alicia-sanstand-recovery.service
+
+[Install]
+WantedBy=timers.target

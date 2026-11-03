@@ -1,0 +1,521 @@
+{
+  "schema_version": 1,
+  "description": "Two rejected r17 contact endpoint contracts. No historical path or execution certificate.",
+  "original_outcome": "FAILED: NEAR_FIELD_NO_REACHABLE_CANDIDATE",
+  "synthetic_variations_are_tests_only": true,
+  "model_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<robot name=\"alicia_D_v5_5\">\n  <mujoco>\n    <compiler meshdir=\"../meshes\" discardvisual=\"false\" />\n    <contact>\n      <exclude body1=\"base_link\" body2=\"Link1\"/>\n      <exclude body1=\"Link1\" body2=\"Link2\"/>\n      <exclude body1=\"Link2\" body2=\"Link3\"/>\n      <exclude body1=\"Link3\" body2=\"Link4\"/>\n      <exclude body1=\"Link4\" body2=\"Link5\"/>\n      <exclude body1=\"Link5\" body2=\"Link6\"/>\n      <exclude body1=\"Link6\" body2=\"Link7\"/>\n      <exclude body1=\"Link6\" body2=\"Link8\"/>\n    </contact>\n  </mujoco>\n  <link\n    name=\"base_link\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <link\n    name=\"Link1\">\n    <inertial>\n      <origin\n        xyz=\"-0.000232391087694535 -1.30049454546467E-05 0.00272122513752755\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.193725361315237\" />\n      <inertia\n        ixx=\"0.000258312653055438\"\n        ixy=\"8.79363230651008E-07\"\n        ixz=\"-6.87511809706199E-07\"\n        iyy=\"0.000149233685494123\"\n        iyz=\"-1.07703111237371E-06\"\n        izz=\"0.000339752801671385\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint1\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0 0.1295\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"base_link\" />\n    <child\n      link=\"Link1\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-2.16\"\n      upper=\"2.16\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link2\">\n    <inertial>\n      <origin\n        xyz=\"0.149948141017768 -0.00073733103436536 -0.000614552702572041\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.216765318032361\" />\n      <inertia\n        ixx=\"0.00012827957403101\"\n        ixy=\"-1.18676813578654E-07\"\n        ixz=\"-1.68171130903575E-06\"\n        iyy=\"0.000226231611908606\"\n        iyz=\"-3.50051091633141E-07\"\n        izz=\"0.000143215063853149\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint2\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 -5E-05 0.04287\"\n      rpy=\"1.570796326670687 -1.4619552299123753 3.673328578425508e-06\" />\n    <parent\n      link=\"Link1\" />\n    <child\n      link=\"Link2\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.57\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link3\">\n    <inertial>\n      <origin\n        xyz=\"0.055786319810667 0.00248143782929366 0.000269720725052352\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0845575681430802\" />\n      <inertia\n        ixx=\"2.87941478239851E-05\"\n        ixy=\"-2.26498116289353E-06\"\n        ixz=\"-5.38445390787684E-06\"\n        iyy=\"7.61918370068424E-05\"\n        iyz=\"-3.82299515503286E-07\"\n        izz=\"8.043706644056E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint3\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.22367 -0.022592 0\"\n      rpy=\"0 0 -2.4010124372456678\" />\n    <parent\n      link=\"Link2\" />\n    <child\n      link=\"Link3\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-0.5\"\n      upper=\"2.35619\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link4\">\n    <inertial>\n      <origin\n        xyz=\"0.000298365504501796 -0.000601368925849056 0.0663740391896737\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0653695953286747\" />\n      <inertia\n        ixx=\"7.03004188086337E-05\"\n        ixy=\"-9.68417851161416E-09\"\n        ixz=\"-7.50131707418093E-07\"\n        iyy=\"6.8747029788813E-05\"\n        iyz=\"4.45271906086873E-08\"\n        izz=\"1.68226189350765E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint4\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.0986 -0.00211 0.0002\"\n      rpy=\"-1.5708000003911129 0.014592309644319679 -1.5708000536043512\" />\n    <parent\n      link=\"Link3\" />\n    <child\n      link=\"Link4\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link5\">\n    <inertial>\n      <origin\n        xyz=\"-0.0110961410990681 0.0308024762289942 -0.000207575403674642\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0463941316397046\" />\n      <inertia\n        ixx=\"1.8425786696003E-05\"\n        ixy=\"2.02919305442313E-06\"\n        ixz=\"-5.09341788606234E-08\"\n        iyy=\"2.39811947218569E-05\"\n        iyz=\"-4.22854804621873E-08\"\n        izz=\"1.63952567717743E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint5\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0.00015 0.12275\"\n      rpy=\"1.5708000000612679 0.0057757130913083099 2.1215614713127198e-08\" />\n    <parent\n      link=\"Link4\" />\n    <child\n      link=\"Link5\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.5\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link6\">\n    <inertial>\n      <origin\n        xyz=\"-3.11347120307559E-09 6.19962735608128E-10 -0.00146275616399921\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.000754053623586768\" />\n      <inertia\n        ixx=\"1.9236769291339E-08\"\n        ixy=\"9.19452445636026E-14\"\n        ixz=\"3.52333012571258E-15\"\n        iyy=\"1.92358360258478E-08\"\n        iyz=\"-3.901270498029E-17\"\n        izz=\"3.70123450485896E-08\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6\"\n    type=\"revolute\">\n    <origin\n      xyz=\"-0.00385 0.0573 -0.00035\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Link5\" />\n    <child\n      link=\"Link6\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Grasp_base\">\n    <inertial>\n      <origin\n        xyz=\"-0.0321082111389046 -0.000168822009778203 0.0275474621634362\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.119820573147005\" />\n      <inertia\n        ixx=\"8.23026483118452E-05\"\n        ixy=\"2.1627287972411E-08\"\n        ixz=\"-6.37078693697654E-06\"\n        iyy=\"3.33372461482565E-05\"\n        iyz=\"2.3095070932307E-08\"\n        izz=\"8.59654133961544E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6_to_gripper_base\"\n    type=\"fixed\">\n    <origin\n      xyz=\"0 0 0\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Link6\" />\n    <child\n      link=\"Grasp_base\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n  <link\n    name=\"Link7\">\n    <inertial>\n      <origin\n        xyz=\"2.97087521250461E-08 0.0434087591943518 0.0106596716155943\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0256461121677861\" />\n      <inertia\n        ixx=\"6.46830326573767E-06\"\n        ixy=\"2.39543799544883E-11\"\n        ixz=\"-4.63721293861409E-12\"\n        iyy=\"5.13428741941794E-06\"\n        iyz=\"-1.26432048814187E-06\"\n        izz=\"8.03606347912567E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"left_finger\"\n    type=\"prismatic\">\n    <!--\n      The real SDK and /joint_states public contract is 0 m closed and\n      0.05 m open.  Keep the original CAD poses, but parameterize them in\n      that public direction: right_finger=0 is the centered/closed pose and\n      right_finger=0.05 is the original fully-open pose.\n    -->\n    <origin\n      xyz=\"-0.0002 0.000502 0.131180183660255\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link7\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-0.05\"\n      upper=\"0\"\n      effort=\"5\"\n      velocity=\"10\" />\n    <mimic joint=\"right_finger\" multiplier=\"-1\" offset=\"0\"/>\n  </joint>\n  <link\n    name=\"Link8\">\n    <inertial>\n      <origin\n        xyz=\"-2.97087521250461E-08 -0.0434087591943727 0.0106596716155944\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.025646112167786\" />\n      <inertia\n        ixx=\"6.46830326573761E-06\"\n        ixy=\"2.39543799589352E-11\"\n        ixz=\"4.63721294819601E-12\"\n        iyy=\"5.13428741941793E-06\"\n        iyz=\"1.26432048814186E-06\"\n        izz=\"8.03606347912559E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"right_finger\"\n    type=\"prismatic\">\n    <origin\n      xyz=\"-0.0002 -0.000498 0.131180183660255\"\n      rpy=\"1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link8\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"0\"\n      upper=\"0.05\"\n      effort=\"5\"\n      velocity=\"10\" />\n  </joint>\n  <link\n    name=\"tool0\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <sphere radius=\"0.005\" /> <!-- 定义一个半径为0.02米的小球体 -->\n      </geometry>\n      <material\n        name=\"green_virtual_sphere_material\"> <!-- 可以给材质起个名字 -->\n        <color\n          rgba=\"0 1 0 1\" /> <!-- 绿色 (R G B A)，A为1表示不透明 -->\n      </material>\n    </visual>\n  </link>\n  <joint\n    name=\"Grasp2tool\"\n    type=\"fixed\">\n    <origin\n      xyz=\"-0.0002 -0.0003 0.13118\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"tool0\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n</robot>\n",
+  "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "rows": [
+    {
+      "historical_row": 0,
+      "failure": {
+        "success": false,
+        "plan_id": "48f48fb8f89b9ce96112e365",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 14-end/left_finger",
+        "contact_terminal_failure": {
+          "command_endpoint_rad": [
+            -1.9487296312905886,
+            -0.5442686582279865,
+            0.8545141386198651,
+            -0.35668471785810785,
+            -0.8165279222136271,
+            1.461313724321484
+          ],
+          "curve": "predicted_command",
+          "endpoint_screen_only": true,
+          "execution_authorized": false,
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "plan_id": "48f48fb8f89b9ce96112e365",
+          "schema_version": 1,
+          "source_stamp_ns": 1793069917633621215,
+          "stage": "grasp",
+          "trajectory_sha256": "6a04b0f4038cfe21abf3ea1405fce0412fd0299420f519efb0d816459dee20b1"
+        },
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0831459099487004,
+            -0.2761165418194154,
+            0.7086991240031661,
+            -0.20248546400090464,
+            -1.1412817061869172,
+            0.07056311624273949
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1793069929978110684,
+          "accepted_tool_position_m": [
+            -0.10923515392924954,
+            -0.26888415302623436,
+            0.07732557218997904
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1793069314793658492,
+          "joint_error_sdk_counts": [
+            6.000000000000342,
+            -10.999999999999998,
+            -11.000000000000071,
+            3.000000000000008,
+            0.9999999999999604,
+            -2.000000000000002
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1793069929978110684,
+          "orientation_error_rad": 0.03411956770843155,
+          "position_error_m": 0.010713428852193303,
+          "position_error_vector_m": [
+            0.004888794332321825,
+            0.004781860457506226,
+            -0.008246881732643208
+          ],
+          "sdk_positions_rad": [
+            -2.092349794676015,
+            -0.25924275315267337,
+            0.7255729126699083,
+            -0.20708740636456158,
+            -1.1428156869748027,
+            0.07363107781851078
+          ],
+          "sdk_sample_count": 5,
+          "sdk_stamp_ns": 1793069930039334070,
+          "sdk_tool_position_m": [
+            -0.11412394826157136,
+            -0.2736660134837406,
+            0.08557245392262225
+          ],
+          "stamp_sec": 1793069930.0507088,
+          "stationary_window_end_ns": 1793069929978110684,
+          "stationary_window_start_ns": 1793069929678110684
+        },
+        "epoch_ns": 1793069314793658492,
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_m": 0.04980000000000001
+      },
+      "scene": {
+        "center": [
+          -0.08766687544568755,
+          -0.34513330880151133,
+          0.014044113610746702
+        ],
+        "digest": "4e1b112455b3d75e3f61141be3b1f07ab74f80cd5c9fbab37460eeab9c0e555e",
+        "geometry_digest": "d76e2bce45cea70de1628afb699e6e1a15c82c22eb6f7a474eb407588c8e7358",
+        "normal": [
+          -0.04364230958684981,
+          0.06551172640481229,
+          0.9968969668513324
+        ],
+        "offset": 0.015996938571333885,
+        "plan_id": "48f48fb8f89b9ce96112e365",
+        "rotation": [
+          [
+            -0.8977045130576625,
+            -0.43830147387325785,
+            -0.044926887678037916
+          ],
+          [
+            0.4351372622208847,
+            -0.8979614746684348,
+            0.06573243520670088
+          ],
+          [
+            -0.06915323754400948,
+            0.03945894083499915,
+            0.9968253717303558
+          ]
+        ],
+        "size": [
+          0.08090014612549704,
+          0.032561546940250936,
+          0.023282490897379243
+        ],
+        "source_ns": 1793069917633621215,
+        "track_id": "g1-t4"
+      },
+      "goal_pose": [
+        -0.08283715258703077,
+        -0.3497597802910193,
+        0.015707776373994252,
+        0.349018930316371,
+        0.9257972057046853,
+        -0.060349825934673314,
+        0.13207277804251588
+      ],
+      "poses": [
+        [
+          -0.08519149144137027,
+          -0.3463151520473152,
+          0.06794519643466373,
+          0.349018930316371,
+          0.9257972057046853,
+          -0.060349825934673314,
+          0.13207277804251588
+        ],
+        [
+          -0.09029489443261902,
+          -0.34224616783559053,
+          0.050997214447730685,
+          0.349018930316371,
+          0.9257972057046853,
+          -0.060349825934673314,
+          0.13207277804251588
+        ],
+        [
+          -0.08283715258703077,
+          -0.3497597802910193,
+          0.015707776373994252,
+          0.349018930316371,
+          0.9257972057046853,
+          -0.060349825934673314,
+          0.13207277804251588
+        ],
+        [
+          -0.08479419683015786,
+          -0.3468964329603542,
+          0.059130133362714964,
+          0.349018930316371,
+          0.9257972057046853,
+          -0.060349825934673314,
+          0.13207277804251588
+        ]
+      ],
+      "gripper": {
+        "finger_size_xyz_m": [
+          0.0434,
+          0.0286,
+          0.06
+        ],
+        "jaw_clearance_each_side_m": 0.002,
+        "max_inner_gap_m": 0.05,
+        "palm_size_xyz_m": [
+          0.1175,
+          0.155,
+          0.0774
+        ],
+        "support_clearance_m": 0.003
+      },
+      "planned_opening_m": 0.05,
+      "contact_geometry_evidence": {
+        "contact_center_base": [
+          -0.08766687544568755,
+          -0.34513330880151133,
+          0.014044113610746702
+        ],
+        "contact_height_axis_base": [
+          0.2024187543378349,
+          -0.20393519986279013,
+          -0.9578293596195739
+        ],
+        "contact_height_bounds_m": [
+          -0.007216081089485739,
+          -0.005216072778566538
+        ],
+        "grasp_tool_pose_base": [
+          -0.08283715258703077,
+          -0.3497597802910193,
+          0.015707776373994252,
+          0.349018930316371,
+          0.9257972057046853,
+          -0.060349825934673314,
+          0.13207277804251588
+        ],
+        "gripper_model": "Alicia_D_v5_6_gripper_50mm",
+        "measured_contact_width_m": 0.0262304263591344,
+        "measurement_source": "fused_measured_bilateral_surface",
+        "minimum_contact_overlap_m": 0.002,
+        "opening_fit_clearance_each_side_m": 0.0005000000000000004,
+        "required_open_width_m": 0.0272304263591344,
+        "schema_version": 2,
+        "tool_finger_length_axis": "+Z",
+        "tool_jaw_axis": "+Y"
+      },
+      "maximum_translation_m": 0.01825003812170441,
+      "translation_evidence_limit_m": 0.0026767676132463574,
+      "provenance": {
+        "receipt_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/actual_gen63_baseline_validation_20261023T041149Z/high_accuracy_grasp_r1/arrival_margin_repair_r1/integrated_failure_repair_r1/manual_full_restart_r17/core_ros/contact_replay_receipts/sha256/f1/f1585086384a5eddca289e915fea17d1d1b49f2df324c616e77632a4089bec1d.json.gz",
+        "receipt_gzip_sha256": "40e08cc50b0e4b48946e943920e2f75c7232f519f426469432f15e503be968a0",
+        "receipt_object_sha256": "f1585086384a5eddca289e915fea17d1d1b49f2df324c616e77632a4089bec1d",
+        "log_line": 2515,
+        "log_line_sha256": "f24d98d0122bb3ae30031c48dddc9fb2f9822522953955fd219395039a7ac950"
+      }
+    },
+    {
+      "historical_row": 5,
+      "failure": {
+        "success": false,
+        "plan_id": "3f5963ceaa555bbc28fb781d",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 14-end/right_finger",
+        "contact_terminal_failure": {
+          "command_endpoint_rad": [
+            -1.949805269569311,
+            -0.5441284902245882,
+            0.8535940112469215,
+            -0.357021059476588,
+            -0.8161039413446574,
+            -1.678814685030421
+          ],
+          "curve": "predicted_command",
+          "endpoint_screen_only": true,
+          "execution_authorized": false,
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "plan_id": "3f5963ceaa555bbc28fb781d",
+          "schema_version": 1,
+          "source_stamp_ns": 1793069917633621215,
+          "stage": "grasp",
+          "trajectory_sha256": "245ae0e325ca7a017a1b2572624e331093fdd3b3d774c61d55aa9a0690555d13"
+        },
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0831459099487004,
+            -0.2761165418194154,
+            0.7086991240031661,
+            -0.20248546400090464,
+            -1.1412817061869172,
+            0.07056311624273949
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1793069961878099817,
+          "accepted_tool_position_m": [
+            -0.10923515392924954,
+            -0.26888415302623436,
+            0.07732557218997904
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1793069314793658492,
+          "joint_error_sdk_counts": [
+            6.000000000000342,
+            -10.999999999999998,
+            -11.000000000000071,
+            3.000000000000008,
+            0.9999999999999604,
+            -2.000000000000002
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1793069961878099817,
+          "orientation_error_rad": 0.03411956770843155,
+          "position_error_m": 0.010713428852193303,
+          "position_error_vector_m": [
+            0.004888794332321825,
+            0.004781860457506226,
+            -0.008246881732643208
+          ],
+          "sdk_positions_rad": [
+            -2.092349794676015,
+            -0.25924275315267337,
+            0.7255729126699083,
+            -0.20708740636456158,
+            -1.1428156869748027,
+            0.07363107781851078
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1793069961799423572,
+          "sdk_tool_position_m": [
+            -0.11412394826157136,
+            -0.2736660134837406,
+            0.08557245392262225
+          ],
+          "stamp_sec": 1793069961.8966837,
+          "stationary_window_end_ns": 1793069961799423572,
+          "stationary_window_start_ns": 1793069961499423572
+        },
+        "epoch_ns": 1793069314793658492,
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "opening_m": 0.04980000000000001
+      },
+      "scene": {
+        "center": [
+          -0.08766687544568755,
+          -0.34513330880151133,
+          0.014044113610746702
+        ],
+        "digest": "f139e8a4b7826f66a5fd979449e8d4c4886f613b8a35047dc38d8f0a4c0417da",
+        "geometry_digest": "d76e2bce45cea70de1628afb699e6e1a15c82c22eb6f7a474eb407588c8e7358",
+        "normal": [
+          -0.04364230958684981,
+          0.06551172640481229,
+          0.9968969668513324
+        ],
+        "offset": 0.015996938571333885,
+        "plan_id": "3f5963ceaa555bbc28fb781d",
+        "rotation": [
+          [
+            -0.8977045130576625,
+            -0.43830147387325785,
+            -0.044926887678037916
+          ],
+          [
+            0.4351372622208847,
+            -0.8979614746684348,
+            0.06573243520670088
+          ],
+          [
+            -0.06915323754400948,
+            0.03945894083499915,
+            0.9968253717303558
+          ]
+        ],
+        "size": [
+          0.08090014612549704,
+          0.032561546940250936,
+          0.023282490897379243
+        ],
+        "source_ns": 1793069917633621215,
+        "track_id": "g1-t4"
+      },
+      "goal_pose": [
+        -0.08301703111165168,
+        -0.34880608757925574,
+        0.015466708068509456,
+        0.9257972057046852,
+        -0.34901893031637093,
+        0.13207277804251594,
+        0.06034982593467331
+      ],
+      "poses": [
+        [
+          -0.08537136996599116,
+          -0.3453614593355517,
+          0.06770412812917893,
+          0.9257972057046852,
+          -0.34901893031637093,
+          0.13207277804251594,
+          0.06034982593467331
+        ],
+        [
+          -0.09047477295723994,
+          -0.341292475123827,
+          0.05075614614224589,
+          0.9257972057046852,
+          -0.34901893031637093,
+          0.13207277804251594,
+          0.06034982593467331
+        ],
+        [
+          -0.08301703111165168,
+          -0.34880608757925574,
+          0.015466708068509456,
+          0.9257972057046852,
+          -0.34901893031637093,
+          0.13207277804251594,
+          0.06034982593467331
+        ],
+        [
+          -0.08497407535477877,
+          -0.3459427402485907,
+          0.05888906505723017,
+          0.9257972057046852,
+          -0.34901893031637093,
+          0.13207277804251594,
+          0.06034982593467331
+        ]
+      ],
+      "gripper": {
+        "finger_size_xyz_m": [
+          0.0434,
+          0.0286,
+          0.06
+        ],
+        "jaw_clearance_each_side_m": 0.002,
+        "max_inner_gap_m": 0.05,
+        "palm_size_xyz_m": [
+          0.1175,
+          0.155,
+          0.0774
+        ],
+        "support_clearance_m": 0.003
+      },
+      "planned_opening_m": 0.05,
+      "contact_geometry_evidence": {
+        "contact_center_base": [
+          -0.08766687544568755,
+          -0.34513330880151133,
+          0.014044113610746702
+        ],
+        "contact_height_axis_base": [
+          0.20241875433783502,
+          -0.20393519986279018,
+          -0.9578293596195739
+        ],
+        "contact_height_bounds_m": [
+          -0.0072160810894857375,
+          -0.0052160727785665354
+        ],
+        "grasp_tool_pose_base": [
+          -0.08301703111165168,
+          -0.34880608757925574,
+          0.015466708068509456,
+          0.9257972057046852,
+          -0.34901893031637093,
+          0.13207277804251594,
+          0.06034982593467331
+        ],
+        "gripper_model": "Alicia_D_v5_6_gripper_50mm",
+        "measured_contact_width_m": 0.026230426359134404,
+        "measurement_source": "fused_measured_bilateral_surface",
+        "minimum_contact_overlap_m": 0.002,
+        "opening_fit_clearance_each_side_m": 0.0005000000000000004,
+        "required_open_width_m": 0.027230426359134405,
+        "schema_version": 2,
+        "tool_finger_length_axis": "+Z",
+        "tool_jaw_axis": "+Y"
+      },
+      "maximum_translation_m": 0.01825003812170441,
+      "translation_evidence_limit_m": 0.0026767676132463574,
+      "provenance": {
+        "receipt_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/actual_gen63_baseline_validation_20261023T041149Z/high_accuracy_grasp_r1/arrival_margin_repair_r1/integrated_failure_repair_r1/manual_full_restart_r17/core_ros/contact_replay_receipts/sha256/c6/c684da973924cf1e329165528217686c18d221defdcdb32a36cede63473cf232.json.gz",
+        "receipt_gzip_sha256": "3890ba37c372bc06a26c131b555c61c8946f4d5ceb086743446305b8c9194cca",
+        "receipt_object_sha256": "c684da973924cf1e329165528217686c18d221defdcdb32a36cede63473cf232",
+        "log_line": 2731,
+        "log_line_sha256": "69836d4e6a20347799da112af178985ca71776c424bbc3debd25e01829035a78"
+      }
+    }
+  ],
+  "provenance": {
+    "extractor_sha256": "facb4b7c54492f31d70a33166e28ca17988639cdc3133e3a4390ce7c4dfb08dc",
+    "evidence_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/actual_gen63_baseline_validation_20261023T041149Z/high_accuracy_grasp_r1/arrival_margin_repair_r1/integrated_failure_repair_r1/aligned_grasp_after_causal_r17_r1/review_handoff/rejected_contact_evidence.json",
+    "evidence_sha256": "3be49600ab8eef1f0bbc7f008138d1c1a9ac4089e2364b77d88dd47a7a5bce36",
+    "events_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/actual_gen63_baseline_validation_20261023T041149Z/high_accuracy_grasp_r1/arrival_margin_repair_r1/integrated_failure_repair_r1/aligned_grasp_after_causal_r17_r1/review_handoff/stage_events.json",
+    "events_sha256": "a50fa69cbe756f354ec077658cd8e6dcbcd62ce5a8892a0e987cf145d4c5a61d",
+    "source_log": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/actual_gen63_baseline_validation_20261023T041149Z/high_accuracy_grasp_r1/arrival_margin_repair_r1/integrated_failure_repair_r1/manual_full_restart_r17/core_ros/e647f4b2-d1b0-11f1-9e66-55a64fb937e2/rosout.log",
+    "selected_failure_fields": [
+      "success",
+      "plan_id",
+      "scope",
+      "execution_authorized",
+      "failed_stage",
+      "failure_code",
+      "reason",
+      "contact_terminal_failure",
+      "source_sample",
+      "epoch_ns",
+      "model_sha256",
+      "opening_m"
+    ],
+    "extraction": "Exact field selection; numeric source values and model XML unchanged."
+  }
+}

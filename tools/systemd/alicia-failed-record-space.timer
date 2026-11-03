@@ -1,0 +1,11 @@
+[Unit]
+Description=Check SanStand failed-record cleanup threshold every five minutes
+
+[Timer]
+OnCalendar=*-*-* *:0/5:00
+Persistent=true
+AccuracySec=30s
+Unit=alicia-failed-record-space.service
+
+[Install]
+WantedBy=timers.target

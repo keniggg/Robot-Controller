@@ -17,7 +17,7 @@ from grasp_archive import (RETAIN, atomic_json, begin_record, config_for, finali
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--root',default=str(root_path()))
+    ap.add_argument('--root',help='record root (default: configured experiment storage)')
     args=ap.parse_args(); root=root_path(args.root);cfg=config_for(root)
     if not cfg['repo']: raise RuntimeError('configure repository first')
     base=root.parent/('.grasp_archive_validation_'+uuid.uuid4().hex)

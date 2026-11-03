@@ -2,6 +2,8 @@
 #define ALICIA_D_HW_INTERFACE_H
 
 #include <ros/ros.h>
+#include "alicia_d_driver/physical_reference_ros.hpp"
+#include <memory>
 #include <hardware_interface/joint_command_interface.h>
 #include <hardware_interface/joint_state_interface.h>
 #include <hardware_interface/robot_hw.h>
@@ -28,6 +30,8 @@ private:
     ros::NodeHandle nh_;
     ros::Publisher joint_command_pub_;
     ros::Subscriber joint_state_sub_;
+    ros::Publisher physical_reference_command_pub_;
+    std::unique_ptr<PhysicalReferenceRos> physical_reference_;
 
     // ROS-Control interfaces
     hardware_interface::JointStateInterface jnt_state_interface_;

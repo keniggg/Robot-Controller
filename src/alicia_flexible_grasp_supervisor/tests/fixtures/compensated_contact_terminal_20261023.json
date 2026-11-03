@@ -1,0 +1,842 @@
+{
+  "schema": 1,
+  "diagnostic_only": true,
+  "source_audit_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261023T142441.601053Z_753211d5deff4d1ab84ed6908cf2a6f8/keyframes_audits/aae681d84f39d9ab2abb35c09b72c7c6dc7622b5d7d6d94bc67781889cb2dd05.json",
+  "source_audit_sha256": "aae681d84f39d9ab2abb35c09b72c7c6dc7622b5d7d6d94bc67781889cb2dd05",
+  "terminal_diagnostic_reconstructed_from_lossless_replay": true,
+  "model_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<robot name=\"alicia_D_v5_5\">\n  <mujoco>\n    <compiler meshdir=\"../meshes\" discardvisual=\"false\" />\n    <contact>\n      <exclude body1=\"base_link\" body2=\"Link1\"/>\n      <exclude body1=\"Link1\" body2=\"Link2\"/>\n      <exclude body1=\"Link2\" body2=\"Link3\"/>\n      <exclude body1=\"Link3\" body2=\"Link4\"/>\n      <exclude body1=\"Link4\" body2=\"Link5\"/>\n      <exclude body1=\"Link5\" body2=\"Link6\"/>\n      <exclude body1=\"Link6\" body2=\"Link7\"/>\n      <exclude body1=\"Link6\" body2=\"Link8\"/>\n    </contact>\n  </mujoco>\n  <link\n    name=\"base_link\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/base_link.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <link\n    name=\"Link1\">\n    <inertial>\n      <origin\n        xyz=\"-0.000232391087694535 -1.30049454546467E-05 0.00272122513752755\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.193725361315237\" />\n      <inertia\n        ixx=\"0.000258312653055438\"\n        ixy=\"8.79363230651008E-07\"\n        ixz=\"-6.87511809706199E-07\"\n        iyy=\"0.000149233685494123\"\n        iyz=\"-1.07703111237371E-06\"\n        izz=\"0.000339752801671385\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link1.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint1\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0 0.1295\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"base_link\" />\n    <child\n      link=\"Link1\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-2.16\"\n      upper=\"2.16\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link2\">\n    <inertial>\n      <origin\n        xyz=\"0.149948141017768 -0.00073733103436536 -0.000614552702572041\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.216765318032361\" />\n      <inertia\n        ixx=\"0.00012827957403101\"\n        ixy=\"-1.18676813578654E-07\"\n        ixz=\"-1.68171130903575E-06\"\n        iyy=\"0.000226231611908606\"\n        iyz=\"-3.50051091633141E-07\"\n        izz=\"0.000143215063853149\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link2.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint2\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 -5E-05 0.04287\"\n      rpy=\"1.570796326670687 -1.4619552299123753 3.673328578425508e-06\" />\n    <parent\n      link=\"Link1\" />\n    <child\n      link=\"Link2\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.57\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link3\">\n    <inertial>\n      <origin\n        xyz=\"0.055786319810667 0.00248143782929366 0.000269720725052352\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0845575681430802\" />\n      <inertia\n        ixx=\"2.87941478239851E-05\"\n        ixy=\"-2.26498116289353E-06\"\n        ixz=\"-5.38445390787684E-06\"\n        iyy=\"7.61918370068424E-05\"\n        iyz=\"-3.82299515503286E-07\"\n        izz=\"8.043706644056E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link3.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint3\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.22367 -0.022592 0\"\n      rpy=\"0 0 -2.4010124372456678\" />\n    <parent\n      link=\"Link2\" />\n    <child\n      link=\"Link3\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-0.5\"\n      upper=\"2.35619\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link4\">\n    <inertial>\n      <origin\n        xyz=\"0.000298365504501796 -0.000601368925849056 0.0663740391896737\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0653695953286747\" />\n      <inertia\n        ixx=\"7.03004188086337E-05\"\n        ixy=\"-9.68417851161416E-09\"\n        ixz=\"-7.50131707418093E-07\"\n        iyy=\"6.8747029788813E-05\"\n        iyz=\"4.45271906086873E-08\"\n        izz=\"1.68226189350765E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link4.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint4\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0.0986 -0.00211 0.0002\"\n      rpy=\"-1.5708000003911129 0.014592309644319679 -1.5708000536043512\" />\n    <parent\n      link=\"Link3\" />\n    <child\n      link=\"Link4\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link5\">\n    <inertial>\n      <origin\n        xyz=\"-0.0110961410990681 0.0308024762289942 -0.000207575403674642\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0463941316397046\" />\n      <inertia\n        ixx=\"1.8425786696003E-05\"\n        ixy=\"2.02919305442313E-06\"\n        ixz=\"-5.09341788606234E-08\"\n        iyy=\"2.39811947218569E-05\"\n        iyz=\"-4.22854804621873E-08\"\n        izz=\"1.63952567717743E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link5.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint5\"\n    type=\"revolute\">\n    <origin\n      xyz=\"0 0.00015 0.12275\"\n      rpy=\"1.5708000000612679 0.0057757130913083099 2.1215614713127198e-08\" />\n    <parent\n      link=\"Link4\" />\n    <child\n      link=\"Link5\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"-1.57\"\n      upper=\"1.5\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Link6\">\n    <inertial>\n      <origin\n        xyz=\"-3.11347120307559E-09 6.19962735608128E-10 -0.00146275616399921\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.000754053623586768\" />\n      <inertia\n        ixx=\"1.9236769291339E-08\"\n        ixy=\"9.19452445636026E-14\"\n        ixz=\"3.52333012571258E-15\"\n        iyy=\"1.92358360258478E-08\"\n        iyz=\"-3.901270498029E-17\"\n        izz=\"3.70123450485896E-08\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link6.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6\"\n    type=\"revolute\">\n    <origin\n      xyz=\"-0.00385 0.0573 -0.00035\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Link5\" />\n    <child\n      link=\"Link6\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-3.14\"\n      upper=\"3.14\"\n      effort=\"12\"\n      velocity=\"5\" />\n  </joint>\n  <link\n    name=\"Grasp_base\">\n    <inertial>\n      <origin\n        xyz=\"-0.0321082111389046 -0.000168822009778203 0.0275474621634362\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.119820573147005\" />\n      <inertia\n        ixx=\"8.23026483118452E-05\"\n        ixy=\"2.1627287972411E-08\"\n        ixz=\"-6.37078693697654E-06\"\n        iyy=\"3.33372461482565E-05\"\n        iyz=\"2.3095070932307E-08\"\n        izz=\"8.59654133961544E-05\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Grasp_base.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"Joint6_to_gripper_base\"\n    type=\"fixed\">\n    <origin\n      xyz=\"0 0 0\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Link6\" />\n    <child\n      link=\"Grasp_base\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n  <link\n    name=\"Link7\">\n    <inertial>\n      <origin\n        xyz=\"2.97087521250461E-08 0.0434087591943518 0.0106596716155943\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.0256461121677861\" />\n      <inertia\n        ixx=\"6.46830326573767E-06\"\n        ixy=\"2.39543799544883E-11\"\n        ixz=\"-4.63721293861409E-12\"\n        iyy=\"5.13428741941794E-06\"\n        iyz=\"-1.26432048814187E-06\"\n        izz=\"8.03606347912567E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link7.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"left_finger\"\n    type=\"prismatic\">\n    <!--\n      The real SDK and /joint_states public contract is 0 m closed and\n      0.05 m open.  Keep the original CAD poses, but parameterize them in\n      that public direction: right_finger=0 is the centered/closed pose and\n      right_finger=0.05 is the original fully-open pose.\n    -->\n    <origin\n      xyz=\"-0.0002 0.000502 0.131180183660255\"\n      rpy=\"-1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link7\" />\n    <axis\n      xyz=\"0 0 -1\" />\n    <limit\n      lower=\"-0.05\"\n      upper=\"0\"\n      effort=\"5\"\n      velocity=\"10\" />\n    <mimic joint=\"right_finger\" multiplier=\"-1\" offset=\"0\"/>\n  </joint>\n  <link\n    name=\"Link8\">\n    <inertial>\n      <origin\n        xyz=\"-2.97087521250461E-08 -0.0434087591943727 0.0106596716155944\"\n        rpy=\"0 0 0\" />\n      <mass\n        value=\"0.025646112167786\" />\n      <inertia\n        ixx=\"6.46830326573761E-06\"\n        ixy=\"2.39543799589352E-11\"\n        ixz=\"4.63721294819601E-12\"\n        iyy=\"5.13428741941793E-06\"\n        iyz=\"1.26432048814186E-06\"\n        izz=\"8.03606347912559E-06\" />\n    </inertial>\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n      <material\n        name=\"\">\n        <color\n          rgba=\"1 1 1 1\" />\n      </material>\n    </visual>\n    <collision>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <mesh\n          filename=\"package://alicia_d_descriptions/meshes/Link8.STL\" />\n      </geometry>\n    </collision>\n  </link>\n  <joint\n    name=\"right_finger\"\n    type=\"prismatic\">\n    <origin\n      xyz=\"-0.0002 -0.000498 0.131180183660255\"\n      rpy=\"1.5708 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"Link8\" />\n    <axis\n      xyz=\"0 0 1\" />\n    <limit\n      lower=\"0\"\n      upper=\"0.05\"\n      effort=\"5\"\n      velocity=\"10\" />\n  </joint>\n  <link\n    name=\"tool0\">\n    <visual>\n      <origin\n        xyz=\"0 0 0\"\n        rpy=\"0 0 0\" />\n      <geometry>\n        <sphere radius=\"0.005\" /> <!-- 定义一个半径为0.02米的小球体 -->\n      </geometry>\n      <material\n        name=\"green_virtual_sphere_material\"> <!-- 可以给材质起个名字 -->\n        <color\n          rgba=\"0 1 0 1\" /> <!-- 绿色 (R G B A)，A为1表示不透明 -->\n      </material>\n    </visual>\n  </link>\n  <joint\n    name=\"Grasp2tool\"\n    type=\"fixed\">\n    <origin\n      xyz=\"-0.0002 -0.0003 0.13118\"\n      rpy=\"0 0 0\" />\n    <parent\n      link=\"Grasp_base\" />\n    <child\n      link=\"tool0\" />\n    <axis\n      xyz=\"0 0 0\" />\n  </joint>\n</robot>\n",
+  "rows": [
+    {
+      "source_index": 51,
+      "variant_index": 0,
+      "reference": {
+        "codec": "gzip-json-v1",
+        "diagnostic_only": true,
+        "execution_authorized": false,
+        "gzip_bytes": 11407,
+        "gzip_sha256": "fee474ff4f38df831cd20b5b5c238445073b8c0559a37d61ec215a619a232a15",
+        "kind": "contact_curve_failure",
+        "object_sha256": "d0d6b2b747f3229e0fca5a2758e929def68ef42e3ff6d41a1b9958b699507b78",
+        "relative_path": "sha256/d0/d0d6b2b747f3229e0fca5a2758e929def68ef42e3ff6d41a1b9958b699507b78.json.gz",
+        "schema_version": 1,
+        "store_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/full_stack_restart_r3/core_ros/contact_replay_receipts",
+        "uncompressed_bytes": 38117
+      },
+      "failure": {
+        "plan_id": "13adecea762d0eb3120504dc",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "epoch_ns": 1792757948673927919,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0831459099487004,
+            -0.5951845456996288,
+            1.1765632643082866,
+            -0.5767767762450011,
+            -1.4971652489763856,
+            -0.607456392002714
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1792765599329287537,
+          "accepted_tool_position_m": [
+            -0.0704521180215774,
+            -0.33854511636991097,
+            0.09699314930320381
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1792757948673927919,
+          "joint_error_sdk_counts": [
+            6.000000000000342,
+            -14.999999999999986,
+            -11.000000000000144,
+            4.999999999999947,
+            3.000000000000026,
+            4.999999999999947
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1792765599329287537,
+          "orientation_error_rad": 0.03592743362048247,
+          "position_error_m": 0.013053543800416094,
+          "position_error_vector_m": [
+            0.004468055904255294,
+            0.004172675267897108,
+            -0.011533441086445564
+          ],
+          "sdk_positions_rad": [
+            -2.092349794676015,
+            -0.5721748338813442,
+            1.193437052975029,
+            -0.5844466801844292,
+            -1.5017671913400426,
+            -0.6151262959421421
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1792765599339262091,
+          "sdk_tool_position_m": [
+            -0.0749201739258327,
+            -0.3427177916378081,
+            0.10852659038964937
+          ],
+          "stamp_sec": 1792765599.3817594,
+          "stationary_window_end_ns": 1792765599329287537,
+          "stationary_window_start_ns": 1792765599029287537
+        },
+        "success": false,
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 15-end/right_finger",
+        "contact_terminal_failure": {
+          "schema_version": 1,
+          "plan_id": "13adecea762d0eb3120504dc",
+          "source_stamp_ns": 1792765547917453527,
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "stage": "grasp",
+          "curve": "predicted_command",
+          "endpoint_screen_only": true,
+          "execution_authorized": false,
+          "command_endpoint_rad": [
+            -1.8682527904151984,
+            -0.6166536643437207,
+            1.0324949858060781,
+            -0.07918743489951953,
+            -0.9575770545274802,
+            -2.1124165368729035
+          ],
+          "trajectory_sha256": "6cf42ee289ee0338e036af6168a8512580c6b391c76b961491dc6924b1bdcba3"
+        }
+      },
+      "scene": {
+        "center": [
+          -0.09200514763703346,
+          -0.3566512314153673,
+          0.017864887191217156
+        ],
+        "digest": "2512cfc5d195eae87389f2627dc1485fd8ca09fa6a941816f441f7c6780e213c",
+        "geometry_digest": "93985dc763b61c97872e059954f89f5ecf72db3eda54190d22245acbfe3b8458",
+        "normal": [
+          -0.05311177640285963,
+          0.06847619552964214,
+          0.99623799859929
+        ],
+        "offset": 0.01453246921300888,
+        "plan_id": "13adecea762d0eb3120504dc",
+        "rotation": [
+          [
+            -0.6993681404616341,
+            -0.7127847582056775,
+            -0.05312337128712333
+          ],
+          [
+            0.7095618985314643,
+            -0.7013088141534781,
+            0.06846794390856019
+          ],
+          [
+            -0.08605879536491037,
+            0.010189978425678103,
+            0.9962379475205835
+          ]
+        ],
+        "size": [
+          0.0797897355380697,
+          0.034048458476977274,
+          0.02538360966072026
+        ],
+        "source_ns": 1792765547917453527,
+        "track_id": "g1-t3"
+      },
+      "poses": [
+        [
+          -0.09495115227915236,
+          -0.35239202357521343,
+          0.07255704129119293,
+          0.9060233877952146,
+          -0.4209995184419739,
+          0.03855050863774092,
+          0.019871701574846596
+        ],
+        [
+          -0.09399408083413677,
+          -0.353625543068162,
+          0.05460880365281826,
+          0.9060233877952146,
+          -0.4209995184419739,
+          0.03855050863774092,
+          0.019871701574846596
+        ],
+        [
+          -0.09179479321108157,
+          -0.3564600902357405,
+          0.013364926720425123,
+          0.9060233877952146,
+          -0.4209995184419739,
+          0.03855050863774092,
+          0.019871701574846596
+        ],
+        [
+          -0.09423931905213662,
+          -0.3533094683133523,
+          0.059207826889376154,
+          0.9060233877952146,
+          -0.4209995184419739,
+          0.03855050863774092,
+          0.019871701574846596
+        ]
+      ],
+      "gripper_geometry": {
+        "finger_box_xyz_m": [
+          0.0434,
+          0.0286,
+          0.06
+        ],
+        "max_inner_gap_m": 0.05,
+        "opening_fit_clearance_each_side_m": 0.0005,
+        "palm_box_xyz_m": [
+          0.1175,
+          0.155,
+          0.0774
+        ],
+        "tool_finger_length_axis": "z",
+        "tool_jaw_axis": "y",
+        "width_safety_margin_per_side_m": 0.002
+      },
+      "opening_m": 0.04980000000000001,
+      "contact_geometry_evidence": "{\"contact_center_base\":[-0.09200514763703346,-0.3566512314153673,0.017864887191217156],\"contact_height_axis_base\":[0.05312337128712337,-0.0684679439085602,-0.996237947520584],\"contact_height_bounds_m\":[-0.0013240349713027812,0.0018376187540680312],\"grasp_tool_pose_base\":[-0.09179479321108157,-0.3564600902357405,0.013364926720425123,0.9060233877952146,-0.4209995184419739,0.03855050863774092,0.019871701574846596],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measured_contact_width_m\":0.029943249860575602,\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"opening_fit_clearance_each_side_m\":0.0005000000000000004,\"required_open_width_m\":0.030943249860575603,\"schema_version\":2,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}"
+    },
+    {
+      "source_index": 17,
+      "variant_index": 0,
+      "reference": {
+        "codec": "gzip-json-v1",
+        "diagnostic_only": true,
+        "execution_authorized": false,
+        "gzip_bytes": 11411,
+        "gzip_sha256": "d7e783ff97b24dc61b6578028c3688e4ed30aad58072d84f1ac713be13d8cf32",
+        "kind": "contact_curve_failure",
+        "object_sha256": "8e8e6a02650d88e4bfc71d0e4f5327faa67b3be774e461b1cf16084c95bf6f3b",
+        "relative_path": "sha256/8e/8e8e6a02650d88e4bfc71d0e4f5327faa67b3be774e461b1cf16084c95bf6f3b.json.gz",
+        "schema_version": 1,
+        "store_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/full_stack_restart_r3/core_ros/contact_replay_receipts",
+        "uncompressed_bytes": 38187
+      },
+      "failure": {
+        "plan_id": "fead6a93c38a3cd6b2204e3b",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "epoch_ns": 1792757948673927919,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0831459099487004,
+            -0.5951845456996288,
+            1.1765632643082866,
+            -0.5767767762450011,
+            -1.4971652489763856,
+            -0.607456392002714
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1792765620729320190,
+          "accepted_tool_position_m": [
+            -0.0704521180215774,
+            -0.33854511636991097,
+            0.09699314930320381
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1792757948673927919,
+          "joint_error_sdk_counts": [
+            6.000000000000342,
+            -14.999999999999986,
+            -11.000000000000144,
+            4.999999999999947,
+            3.000000000000026,
+            4.999999999999947
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1792765620729320190,
+          "orientation_error_rad": 0.03592743362048247,
+          "position_error_m": 0.013053543800416094,
+          "position_error_vector_m": [
+            0.004468055904255294,
+            0.004172675267897108,
+            -0.011533441086445564
+          ],
+          "sdk_positions_rad": [
+            -2.092349794676015,
+            -0.5721748338813442,
+            1.193437052975029,
+            -0.5844466801844292,
+            -1.5017671913400426,
+            -0.6151262959421421
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1792765620739362056,
+          "sdk_tool_position_m": [
+            -0.0749201739258327,
+            -0.3427177916378081,
+            0.10852659038964937
+          ],
+          "stamp_sec": 1792765620.814712,
+          "stationary_window_end_ns": 1792765620729320190,
+          "stationary_window_start_ns": 1792765620429320190
+        },
+        "success": false,
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 15-end/right_finger",
+        "contact_terminal_failure": {
+          "schema_version": 1,
+          "plan_id": "fead6a93c38a3cd6b2204e3b",
+          "source_stamp_ns": 1792765547917453527,
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "stage": "grasp",
+          "curve": "predicted_command",
+          "endpoint_screen_only": true,
+          "execution_authorized": false,
+          "command_endpoint_rad": [
+            -1.8682426237662335,
+            -0.6163510273071942,
+            1.0324105220594064,
+            -0.07917368429808912,
+            -0.9577936803510753,
+            -2.199716384770956
+          ],
+          "trajectory_sha256": "e079ae250b1e636eee75b9127fd18e0ce631e16610e73a67712fee91221f65dd"
+        }
+      },
+      "scene": {
+        "center": [
+          -0.09200514763703346,
+          -0.3566512314153673,
+          0.017864887191217156
+        ],
+        "digest": "25d72e91429f9c0d01ede6e9e6d1d9e98d093526ce83338e1716818e1cbb2c8e",
+        "geometry_digest": "93985dc763b61c97872e059954f89f5ecf72db3eda54190d22245acbfe3b8458",
+        "normal": [
+          -0.05311177640285963,
+          0.06847619552964214,
+          0.99623799859929
+        ],
+        "offset": 0.01453246921300888,
+        "plan_id": "fead6a93c38a3cd6b2204e3b",
+        "rotation": [
+          [
+            -0.6993681404616341,
+            -0.7127847582056775,
+            -0.05312337128712333
+          ],
+          [
+            0.7095618985314643,
+            -0.7013088141534781,
+            0.06846794390856019
+          ],
+          [
+            -0.08605879536491037,
+            0.010189978425678103,
+            0.9962379475205835
+          ]
+        ],
+        "size": [
+          0.0797897355380697,
+          0.034048458476977274,
+          0.02538360966072026
+        ],
+        "source_ns": 1792765547917453527,
+        "track_id": "g1-t3"
+      },
+      "poses": [
+        [
+          -0.09491248562180973,
+          -0.3523850482395965,
+          0.07265098476900662,
+          0.8867973132128387,
+          -0.4601190053005658,
+          0.03938060854421268,
+          0.018171238548755554
+        ],
+        [
+          -0.09395541417679415,
+          -0.3536185677325451,
+          0.05470274713063195,
+          0.8867973132128387,
+          -0.4601190053005658,
+          0.03938060854421268,
+          0.018171238548755554
+        ],
+        [
+          -0.09175612655373894,
+          -0.35645311490012355,
+          0.013458870198238814,
+          0.8867973132128387,
+          -0.4601190053005658,
+          0.03938060854421268,
+          0.018171238548755554
+        ],
+        [
+          -0.09420065239479399,
+          -0.3533024929777353,
+          0.059301770367189845,
+          0.8867973132128387,
+          -0.4601190053005658,
+          0.03938060854421268,
+          0.018171238548755554
+        ]
+      ],
+      "gripper_geometry": {
+        "finger_box_xyz_m": [
+          0.0434,
+          0.0286,
+          0.06
+        ],
+        "max_inner_gap_m": 0.05,
+        "opening_fit_clearance_each_side_m": 0.0005,
+        "palm_box_xyz_m": [
+          0.1175,
+          0.155,
+          0.0774
+        ],
+        "tool_finger_length_axis": "z",
+        "tool_jaw_axis": "y",
+        "width_safety_margin_per_side_m": 0.002
+      },
+      "opening_m": 0.04980000000000001,
+      "contact_geometry_evidence": "{\"contact_center_base\":[-0.09200514763703346,-0.3566512314153673,0.017864887191217156],\"contact_height_axis_base\":[0.05312337128712333,-0.06846794390856017,-0.9962379475205834],\"contact_height_bounds_m\":[-0.0015080620537295361,0.0021179009511329886],\"grasp_tool_pose_base\":[-0.09175612655373894,-0.35645311490012355,0.013458870198238814,0.8867973132128387,-0.4601190053005658,0.03938060854421268,0.018171238548755554],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measured_contact_width_m\":0.030614398481254607,\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"opening_fit_clearance_each_side_m\":0.0005000000000000004,\"required_open_width_m\":0.03161439848125461,\"schema_version\":2,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}"
+    },
+    {
+      "source_index": 0,
+      "variant_index": 1,
+      "reference": {
+        "codec": "gzip-json-v1",
+        "diagnostic_only": true,
+        "execution_authorized": false,
+        "gzip_bytes": 11432,
+        "gzip_sha256": "3ede38e7b703075f2d343c3c1a6b8ce9cad1639a24a712824c1a64247ceece35",
+        "kind": "contact_curve_failure",
+        "object_sha256": "9049a2d791f91a3ec9d5c5925281f9a1742595aed98f7ee438a0a44357725c7f",
+        "relative_path": "sha256/90/9049a2d791f91a3ec9d5c5925281f9a1742595aed98f7ee438a0a44357725c7f.json.gz",
+        "schema_version": 1,
+        "store_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/full_stack_restart_r3/core_ros/contact_replay_receipts",
+        "uncompressed_bytes": 38199
+      },
+      "failure": {
+        "plan_id": "f87d4ab6e86385bb71a4c885",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "epoch_ns": 1792757948673927919,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0831459099487004,
+            -0.5951845456996288,
+            1.1765632643082866,
+            -0.5767767762450011,
+            -1.4971652489763856,
+            -0.607456392002714
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1792765578929374552,
+          "accepted_tool_position_m": [
+            -0.0704521180215774,
+            -0.33854511636991097,
+            0.09699314930320381
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1792757948673927919,
+          "joint_error_sdk_counts": [
+            6.000000000000342,
+            -14.999999999999986,
+            -11.000000000000144,
+            4.999999999999947,
+            3.000000000000026,
+            4.999999999999947
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1792765578929374552,
+          "orientation_error_rad": 0.03592743362048247,
+          "position_error_m": 0.013053543800416094,
+          "position_error_vector_m": [
+            0.004468055904255294,
+            0.004172675267897108,
+            -0.011533441086445564
+          ],
+          "sdk_positions_rad": [
+            -2.092349794676015,
+            -0.5721748338813442,
+            1.193437052975029,
+            -0.5844466801844292,
+            -1.5017671913400426,
+            -0.6151262959421421
+          ],
+          "sdk_sample_count": 4,
+          "sdk_stamp_ns": 1792765578839297248,
+          "sdk_tool_position_m": [
+            -0.0749201739258327,
+            -0.3427177916378081,
+            0.10852659038964937
+          ],
+          "stamp_sec": 1792765578.9474757,
+          "stationary_window_end_ns": 1792765578839297248,
+          "stationary_window_start_ns": 1792765578539297248
+        },
+        "success": false,
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 15-end/right_finger",
+        "contact_terminal_failure": {
+          "schema_version": 1,
+          "plan_id": "f87d4ab6e86385bb71a4c885",
+          "source_stamp_ns": 1792765547917453527,
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "stage": "grasp",
+          "curve": "predicted_command",
+          "endpoint_screen_only": true,
+          "execution_authorized": false,
+          "command_endpoint_rad": [
+            -1.86827041705838,
+            -0.6165955983463296,
+            1.0325500386328657,
+            -0.07918162234384397,
+            -0.9576910367036946,
+            -2.073963157636044
+          ],
+          "trajectory_sha256": "9b0997ad8216dba13bccf6edca3328c24b58572a3051b102c443409c02de246e"
+        }
+      },
+      "scene": {
+        "center": [
+          -0.09200514763703346,
+          -0.3566512314153673,
+          0.017864887191217156
+        ],
+        "digest": "198aee84fab2f5245042daabd1911c4e959ec3fabdf1b0d5c51f9caad87d51d3",
+        "geometry_digest": "93985dc763b61c97872e059954f89f5ecf72db3eda54190d22245acbfe3b8458",
+        "normal": [
+          -0.05311177640285963,
+          0.06847619552964214,
+          0.99623799859929
+        ],
+        "offset": 0.01453246921300888,
+        "plan_id": "f87d4ab6e86385bb71a4c885",
+        "rotation": [
+          [
+            -0.6993681404616341,
+            -0.7127847582056775,
+            -0.05312337128712333
+          ],
+          [
+            0.7095618985314643,
+            -0.7013088141534781,
+            0.06846794390856019
+          ],
+          [
+            -0.08605879536491037,
+            0.010189978425678103,
+            0.9962379475205835
+          ]
+        ],
+        "size": [
+          0.0797897355380697,
+          0.034048458476977274,
+          0.02538360966072026
+        ],
+        "source_ns": 1792765547917453527,
+        "track_id": "g1-t3"
+      },
+      "poses": [
+        [
+          -0.09497193653947889,
+          -0.3523914080347274,
+          0.07258692783315122,
+          0.91394859562686,
+          -0.4035058095145376,
+          0.03816140446086009,
+          0.02060906230964782
+        ],
+        [
+          -0.09401486509446327,
+          -0.3536249275276761,
+          0.054638690194776546,
+          0.91394859562686,
+          -0.4035058095145376,
+          0.03816140446086009,
+          0.02060906230964782
+        ],
+        [
+          -0.09181557747140807,
+          -0.3564594746952545,
+          0.013394813262383409,
+          0.91394859562686,
+          -0.4035058095145376,
+          0.03816140446086009,
+          0.02060906230964782
+        ],
+        [
+          -0.09426010331246312,
+          -0.3533088527728663,
+          0.059237713431334445,
+          0.91394859562686,
+          -0.4035058095145376,
+          0.03816140446086009,
+          0.02060906230964782
+        ]
+      ],
+      "gripper_geometry": {
+        "finger_box_xyz_m": [
+          0.0434,
+          0.0286,
+          0.06
+        ],
+        "max_inner_gap_m": 0.05,
+        "opening_fit_clearance_each_side_m": 0.0005,
+        "palm_box_xyz_m": [
+          0.1175,
+          0.155,
+          0.0774
+        ],
+        "tool_finger_length_axis": "z",
+        "tool_jaw_axis": "y",
+        "width_safety_margin_per_side_m": 0.002
+      },
+      "opening_m": 0.04980000000000001,
+      "contact_geometry_evidence": "{\"contact_center_base\":[-0.09200514763703346,-0.3566512314153673,0.017864887191217156],\"contact_height_axis_base\":[0.05312337128712334,-0.0684679439085602,-0.9962379475205835],\"contact_height_bounds_m\":[-0.0013858757352802403,0.0017919501825809543],\"grasp_tool_pose_base\":[-0.09181557747140807,-0.3564594746952545,0.013394813262383409,0.91394859562686,-0.4035058095145376,0.03816140446086009,0.02060906230964782],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measured_contact_width_m\":0.029768858607794997,\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"opening_fit_clearance_each_side_m\":0.0005000000000000004,\"required_open_width_m\":0.030768858607794998,\"schema_version\":2,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}"
+    },
+    {
+      "source_index": 34,
+      "variant_index": 0,
+      "reference": {
+        "codec": "gzip-json-v1",
+        "diagnostic_only": true,
+        "execution_authorized": false,
+        "gzip_bytes": 11407,
+        "gzip_sha256": "3cf9d8ece56081a6c5caca2394a1dd006851247f9cbefce93d24bf18b4ba432d",
+        "kind": "contact_curve_failure",
+        "object_sha256": "99be29dc9e751d762abd4ac6f83aea4a7b2cd9cf5f01b04f155a77e8ad51354f",
+        "relative_path": "sha256/99/99be29dc9e751d762abd4ac6f83aea4a7b2cd9cf5f01b04f155a77e8ad51354f.json.gz",
+        "schema_version": 1,
+        "store_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/gen58_resume_r1/observation_pose_fix/held_lattice_fix_r1/seed_wait_fix_r1/contact_feedback_fix_r1/full_stack_restart_r3/core_ros/contact_replay_receipts",
+        "uncompressed_bytes": 38221
+      },
+      "failure": {
+        "plan_id": "527c89d9c58d8923a97ed35d",
+        "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+        "scope": "read_only_candidate_constant_bias_prediction",
+        "epoch_ns": 1792757948673927919,
+        "source_sample": {
+          "accepted_gripper_opening_m": 0.04980000000000001,
+          "accepted_positions_rad": [
+            -2.0831459099487004,
+            -0.5951845456996288,
+            1.1765632643082866,
+            -0.5767767762450011,
+            -1.4971652489763856,
+            -0.607456392002714
+          ],
+          "accepted_sample_count": 5,
+          "accepted_stamp_ns": 1792765559729296610,
+          "accepted_tool_position_m": [
+            -0.0704521180215774,
+            -0.33854511636991097,
+            0.09699314930320381
+          ],
+          "certifies_command_response_or_calibration": false,
+          "epoch_ns": 1792757948673927919,
+          "joint_error_sdk_counts": [
+            6.000000000000342,
+            -14.999999999999986,
+            -11.000000000000144,
+            4.999999999999947,
+            3.000000000000026,
+            4.999999999999947
+          ],
+          "joint_names": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6"
+          ],
+          "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "opening_stamp_ns": 1792765559729296610,
+          "orientation_error_rad": 0.03592743362048247,
+          "position_error_m": 0.013053543800416094,
+          "position_error_vector_m": [
+            0.004468055904255294,
+            0.004172675267897108,
+            -0.011533441086445564
+          ],
+          "sdk_positions_rad": [
+            -2.092349794676015,
+            -0.5721748338813442,
+            1.193437052975029,
+            -0.5844466801844292,
+            -1.5017671913400426,
+            -0.6151262959421421
+          ],
+          "sdk_sample_count": 5,
+          "sdk_stamp_ns": 1792765559759358416,
+          "sdk_tool_position_m": [
+            -0.0749201739258327,
+            -0.3427177916378081,
+            0.10852659038964937
+          ],
+          "stamp_sec": 1792765559.8151655,
+          "stationary_window_end_ns": 1792765559729296610,
+          "stationary_window_start_ns": 1792765559429296610
+        },
+        "success": false,
+        "execution_authorized": false,
+        "failed_stage": "grasp",
+        "failure_code": "CONTACT_SEQUENCE_PRECHECK_FAILED",
+        "reason": "predicted_command continuous geometry: target OBB collision at 15-end/right_finger",
+        "contact_terminal_failure": {
+          "schema_version": 1,
+          "plan_id": "527c89d9c58d8923a97ed35d",
+          "source_stamp_ns": 1792765547917453527,
+          "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+          "stage": "grasp",
+          "curve": "predicted_command",
+          "endpoint_screen_only": true,
+          "execution_authorized": false,
+          "command_endpoint_rad": [
+            -1.8682664195024523,
+            -0.616820389198599,
+            1.0325831133062555,
+            -0.07919296598563935,
+            -0.957499740116412,
+            -2.035500007662246
+          ],
+          "trajectory_sha256": "68b9c42a3954a8505bd10dbe951a4080ec2d75f75af1f27e2f356fd2254c1503"
+        }
+      },
+      "scene": {
+        "center": [
+          -0.09200514763703346,
+          -0.3566512314153673,
+          0.017864887191217156
+        ],
+        "digest": "63478d06b5e67ef75e3873b360fe87f39a6d8fe757208065311356242908e15b",
+        "geometry_digest": "93985dc763b61c97872e059954f89f5ecf72db3eda54190d22245acbfe3b8458",
+        "normal": [
+          -0.05311177640285963,
+          0.06847619552964214,
+          0.99623799859929
+        ],
+        "offset": 0.01453246921300888,
+        "plan_id": "527c89d9c58d8923a97ed35d",
+        "rotation": [
+          [
+            -0.6993681404616341,
+            -0.7127847582056775,
+            -0.05312337128712333
+          ],
+          [
+            0.7095618985314643,
+            -0.7013088141534781,
+            0.06846794390856019
+          ],
+          [
+            -0.08605879536491037,
+            0.010189978425678103,
+            0.9962379475205835
+          ]
+        ],
+        "size": [
+          0.0797897355380697,
+          0.034048458476977274,
+          0.02538360966072026
+        ],
+        "source_ns": 1792765547917453527,
+        "track_id": "g1-t3"
+      },
+      "poses": [
+        [
+          -0.09498708014936123,
+          -0.3523987069659799,
+          0.07251238600927598,
+          0.921536068493211,
+          -0.38586299152207837,
+          0.03775819835234672,
+          0.021338807297811638
+        ],
+        [
+          -0.09403000870434565,
+          -0.35363222645892856,
+          0.054564148370901296,
+          0.921536068493211,
+          -0.38586299152207837,
+          0.03775819835234672,
+          0.021338807297811638
+        ],
+        [
+          -0.09183072108129045,
+          -0.356466773626507,
+          0.013320271438508165,
+          0.921536068493211,
+          -0.38586299152207837,
+          0.03775819835234672,
+          0.021338807297811638
+        ],
+        [
+          -0.0942752469223455,
+          -0.35331615170411873,
+          0.05916317160745921,
+          0.921536068493211,
+          -0.38586299152207837,
+          0.03775819835234672,
+          0.021338807297811638
+        ]
+      ],
+      "gripper_geometry": {
+        "finger_box_xyz_m": [
+          0.0434,
+          0.0286,
+          0.06
+        ],
+        "max_inner_gap_m": 0.05,
+        "opening_fit_clearance_each_side_m": 0.0005,
+        "palm_box_xyz_m": [
+          0.1175,
+          0.155,
+          0.0774
+        ],
+        "tool_finger_length_axis": "z",
+        "tool_jaw_axis": "y",
+        "width_safety_margin_per_side_m": 0.002
+      },
+      "opening_m": 0.04980000000000001,
+      "contact_geometry_evidence": "{\"contact_center_base\":[-0.09200514763703346,-0.3566512314153673,0.017864887191217156],\"contact_height_axis_base\":[0.05312337128712337,-0.06846794390856019,-0.9962379475205836],\"contact_height_bounds_m\":[-0.0012379624216260609,0.0020810553176447886],\"grasp_tool_pose_base\":[-0.09183072108129045,-0.356466773626507,0.013320271438508165,0.921536068493211,-0.38586299152207837,0.03775819835234672,0.021338807297811638],\"gripper_model\":\"Alicia_D_v5_6_gripper_50mm\",\"measured_contact_width_m\":0.029872691863998102,\"measurement_source\":\"fused_measured_bilateral_surface\",\"minimum_contact_overlap_m\":0.002,\"opening_fit_clearance_each_side_m\":0.0005000000000000004,\"required_open_width_m\":0.030872691863998103,\"schema_version\":2,\"tool_finger_length_axis\":\"+Z\",\"tool_jaw_axis\":\"+Y\"}"
+    }
+  ]
+}

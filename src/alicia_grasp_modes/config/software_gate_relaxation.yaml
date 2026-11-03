@@ -1,0 +1,95 @@
+# 2026-10-26 user-authorized 2x software timing / arrival gates.
+# Explicit values derive from r10 expanded launch; reloading never compounds.
+# Physical collision/actuator/identity checks and minimum evidence stay intact.
+# 25.0 -> 50.0 (software_time)
+/grasp/clear_view_reacquisition_search_budget_sec: 50.0
+# 2.0 -> 4.0 (software_time)
+/grasp/contact_endpoint_precision_service_timeout_sec: 4.0
+# 12.0 -> 24.0 (software_time)
+/grasp/final_visual_refine_post_move_confirm_timeout_sec: 24.0
+# 3.0 -> 6.0 (software_time)
+/grasp/final_visual_refine_service_timeout_sec: 6.0
+# 20.0 -> 40.0 (software_time)
+/grasp/final_visual_refine_timeout_sec: 40.0
+# 5.0 -> 10.0 (software_time)
+/grasp/motion_settle_timeout_sec: 10.0
+# 90.0 -> 180.0 (software_time)
+/grasp/near_field_replan_timeout_sec: 180.0
+# 3.0 -> 6.0 (software_time)
+/grasp/post_lift_visual_verification_timeout_sec: 6.0
+# 25.0 -> 50.0 (software_time)
+/grasp/timeout_sec: 50.0
+# 600.0 -> 1200.0 (software_time)
+/grasp/unknown_observe_return_session_timeout_sec: 1200.0
+# 0.3 -> 0.6 (software_time)
+/grasp/visual_retarget_raw_max_age_sec: 0.6
+# 2.0 -> 4.0 (software_time)
+/grasp/visual_retarget_timeout_sec: 4.0
+# 120.0 -> 240.0 (software_time)
+/grasp_6d/plan_validity_sec: 240.0
+# 1.0 -> 2.0 (software_time)
+/grasp_6d/remote/perception_roi_max_age_sec: 2.0
+# 0.35 -> 0.7 (software_time)
+/grasp_6d/remote/planning_snapshot_max_age_sec: 0.7
+# 8.0 -> 16.0 (software_time)
+/grasp_6d/remote/planning_snapshot_timeout_sec: 16.0
+# 15.0 -> 30.0 (software_time)
+/grasp_6d/remote/result_max_age_sec: 30.0
+# 180.0 -> 360.0 (software_time)
+/grasp_6d/remote/runtime_execution_error_max_age_sec: 360.0
+# 1.0 -> 2.0 (software_time)
+/grasp_6d/remote/target_cloud_max_age_sec: 2.0
+# 1.0 -> 2.0 (software_time)
+/grasp_6d/remote/target_position_refine_max_age_sec: 2.0
+# 30.0 -> 60.0 (software_time)
+/grasp_6d/remote/timeout_sec: 60.0
+# 8.0 -> 16.0 (software_time)
+/grasp_6d/target_observation_validity_sec: 16.0
+# 60 -> 120 (software_time)
+/gui/grasp_flow_lock_max_age_sec: 120
+# 30 -> 60 (software_time)
+/gui/pregrasp_execute_max_age_sec: 60
+# 12 -> 24 (software_time)
+/gui/pregrasp_plan_timeout_sec: 24
+# 0.05 -> 0.1 (software_time)
+/robot/orientation_resolution_ik_timeout_sec: 0.1
+# 2.0 -> 4.0 (software_time)
+/robot/strict_execution_controller_sync_timeout_sec: 4.0
+# 0.006 -> 0.012 (software_error)
+/grasp/final_visual_refine_center_fallback_max_jitter_m: 0.012
+# 0.006 -> 0.012 (software_error)
+/grasp/final_visual_refine_post_move_confirm_max_jitter_m: 0.012
+# 0.006 -> 0.012 (software_error)
+/grasp/final_visual_refine_post_move_confirm_max_residual_m: 0.012
+# 5.0 -> 10.0 (software_error)
+/grasp/measured_endpoint_orientation_tolerance_deg: 10.0
+# 0.006 -> 0.012 (software_error)
+/grasp/measured_endpoint_position_tolerance_m: 0.012
+# 0.003 -> 0.006 (software_error)
+/grasp/near_field_planar_center_anchor_max_residual_m: 0.006
+# 0.025 -> 0.05 (software_error)
+/grasp/observation_reuse_position_tolerance_m: 0.05
+# 0.005 -> 0.01 (software_error)
+/grasp/post_lift_visual_height_tolerance_m: 0.01
+# 0.04 -> 0.08 (software_error)
+/grasp/post_lift_visual_max_planar_drift_m: 0.08
+# 0.04 -> 0.08 (software_error)
+/grasp/pregrasp_reached_tolerance_m: 0.08
+# 0.01 -> 0.02 (software_error)
+/grasp/unknown_measured_endpoint_position_tolerance_m: 0.02
+# 0.012 -> 0.024 (software_error)
+/grasp/visual_retarget_max_jitter_m: 0.024
+# 0.025 -> 0.05 (software_error)
+/grasp_6d/remote/replan_target_drift_m: 0.05
+# 0.04 -> 0.08 (software_error)
+/grasp_6d/target_max_drift_m: 0.08
+# 0.8 -> 1.6 (software_time)
+/unknown_perception/max_frame_age_sec: 1.6
+# 0.4 -> 0.8 (software_time)
+/unknown_perception/tf_wait_sec: 0.8
+# 3.0 -> 6.0 (software_time)
+/grasp/unknown_observe_return_requalification_timeout_sec: 6.0
+
+# 0.02 -> 0.01: lower software command-probe admission floor.
+# Keep .003 rad measured directional response and the original 1 s deadline.
+/alicia_d_driver_node/actuation_command_probe_min_delta_rad: 0.01

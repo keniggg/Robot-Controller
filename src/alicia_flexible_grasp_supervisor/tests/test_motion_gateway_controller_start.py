@@ -2,6 +2,7 @@
 import importlib.util
 import pathlib
 import sys
+import threading
 import types
 import unittest
 from unittest import mock
@@ -110,6 +111,7 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
         sync_result=(True, 'controller synchronized'),
     ):
         gateway = MotionGateway.__new__(MotionGateway)
+        gateway._command_reference_lock = threading.RLock()
         gateway.planner = FakePlanner()
         gateway._ensure_planner = lambda: gateway.planner
         gateway._log_pose_request = lambda req, *args, **kwargs: None
@@ -636,6 +638,7 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
 
     def test_controller_sync_uses_one_cycle_feedback_bridge_until_settled(self):
         gateway = MotionGateway.__new__(MotionGateway)
+        gateway._command_reference_lock = threading.RLock()
         # This case isolates the settle window after separately tested
         # command-reference admission and a new driver acknowledgment.
         gateway._select_controller_sync_reference = lambda: ([0.4, -0.2], 'initial_positive_enable')
@@ -705,6 +708,7 @@ class MotionGatewayControllerStartTest(unittest.TestCase):
 
     def test_controller_sync_restarts_settle_window_after_error_excursion(self):
         gateway = MotionGateway.__new__(MotionGateway)
+        gateway._command_reference_lock = threading.RLock()
         gateway._select_controller_sync_reference = lambda: ([0.4, -0.2], 'initial_positive_enable')
         gateway._controller_reference_admission_state = lambda *args, **kwargs: types.SimpleNamespace(mode='sdk_tracking')
         gateway._stationary_controller_reference = lambda names: types.SimpleNamespace(positions=[0.4, -0.2])

@@ -1,0 +1,3 @@
+<launch>
+  <node pkg="alicia_grasp_modes" type="mode_aware_remote_grasp6d.py" name="remote_grasp6d_node" output="screen" respawn="false"/>
+</launch>

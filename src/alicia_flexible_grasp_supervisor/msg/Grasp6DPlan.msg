@@ -20,3 +20,5 @@ float32 refinement_translation_m
 float32 refinement_rotation_deg
 bool refinement_source_clipped
 uint32 fused_view_count
+# Canonical schema-1 measured bilateral contact geometry, bound to final grasp pose.
+string contact_geometry_evidence

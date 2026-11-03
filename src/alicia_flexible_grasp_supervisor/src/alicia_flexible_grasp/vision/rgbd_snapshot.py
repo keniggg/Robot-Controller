@@ -1,5 +1,6 @@
 from copy import deepcopy
 from dataclasses import dataclass
+import hashlib
 import threading
 import time
 
@@ -25,6 +26,53 @@ class RgbdSample:
 
 
 @dataclass(frozen=True)
+class FrozenRgbdSample:
+    """Request-owned original measurement, distinct from fused pixel arrays."""
+    color_bgr: np.ndarray
+    depth_raw: np.ndarray
+    object_mask: np.ndarray
+    bbox: tuple
+    object_msg: object
+    stamp_sec: float
+    frame_id: str
+    joint_positions: np.ndarray
+    stamp_ns: int = 0
+    target_epoch: int = 0
+    target_identity: TargetTrackIdentity = None
+
+    def __post_init__(self):
+        for name in ('color_bgr', 'depth_raw', 'object_mask', 'joint_positions'):
+            value = getattr(self, name)
+            object.__setattr__(self, name, None if value is None else _readonly_copy(value))
+        object.__setattr__(self, 'bbox', tuple(self.bbox or ()))
+        object.__setattr__(self, 'object_msg', deepcopy(self.object_msg))
+
+
+def retained_exact_source(snapshot):
+    """Return only the original final sample already admitted into this request.
+
+    Retention preserves evidence, not its execution lifetime. Existing request
+    expiry, target identity and current-frame motion authority still apply.
+    A malformed retained binding is rejected; it must not fall back to a newer
+    frame or silently use the temporal median.
+    """
+    sample = getattr(snapshot, 'original_sample', None)
+    if sample is None:
+        return None
+    if (not isinstance(sample, FrozenRgbdSample)
+            or sample.stamp_ns != snapshot.stamp_ns
+            or sample.stamp_sec != snapshot.stamp_sec
+            or sample.frame_id != snapshot.frame_id
+            or sample.target_epoch != snapshot.target_epoch
+            or sample.target_identity != snapshot.target_identity
+            or not snapshot.sample_stamp_ns
+            or snapshot.sample_stamp_ns[-1] != sample.stamp_ns
+            or not np.array_equal(sample.color_bgr, snapshot.color_bgr)):
+        raise ValueError('retained raw sample does not match its request snapshot')
+    return sample
+
+
+@dataclass(frozen=True)
 class DepthQuality:
     fused_frames: int
     mask_area: int
@@ -35,6 +83,10 @@ class DepthQuality:
     # Robust sigma estimate of repeated depth measurements at the same target
     # pixels.  Unlike depth_mad_m, this excludes real spatial object shape.
     depth_repeatability_m: float = 0.0
+    # Number of pooled finite residuals used by the existing temporal MAD.
+    # Zero means support metadata unavailable; this is not an independent
+    # sample count or a claim of zero measurement/calibration error.
+    depth_repeatability_sample_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -56,11 +108,14 @@ class SnapshotResult:
     target_epoch: int = 0
     target_identity: TargetTrackIdentity = None
     sample_stamp_ns: tuple = ()
+    original_sample: FrozenRgbdSample = None
+    sample_mask_sha256: tuple = ()
 
     def __post_init__(self):
         for name in ('color_bgr', 'depth_raw', 'target_depth_raw', 'object_mask'):
             object.__setattr__(self, name, _readonly_copy(getattr(self, name)))
         object.__setattr__(self, 'bbox', tuple(self.bbox or ()))
+        object.__setattr__(self, 'sample_mask_sha256', tuple(self.sample_mask_sha256 or ()))
         if self.target_identity is not None:
             validate_target_identity(self.target_identity)
             if self.target_identity.epoch != self.target_epoch:
@@ -395,6 +450,7 @@ def fuse_stable_samples(
     mask_stack = np.stack(masks, axis=0) > 0
     temporal_support = target_depth > 0
     temporal_repeatability_raw = 0.0
+    temporal_repeatability_sample_count = 0
     if np.any(temporal_support) and len(samples) >= 2:
         repeated_values = depth_stack[:, temporal_support].T
         repeated_valid = (
@@ -415,6 +471,7 @@ def fuse_stable_samples(
             )
             finite_residuals = residuals[np.isfinite(residuals)]
             if finite_residuals.size:
+                temporal_repeatability_sample_count = int(finite_residuals.size)
                 temporal_repeatability_raw = (
                     1.4826 * float(np.median(finite_residuals))
                 )
@@ -431,6 +488,7 @@ def fuse_stable_samples(
             if valid_points
             else 0.0
         ),
+        depth_repeatability_sample_count=temporal_repeatability_sample_count,
     )
     latest = samples[-1]
     sample_stamp_ns = tuple(
@@ -462,6 +520,17 @@ def fuse_stable_samples(
         target_epoch=int(getattr(latest, 'target_epoch', 0) or 0),
         target_identity=getattr(latest, 'target_identity', None),
         sample_stamp_ns=sample_stamp_ns,
+        # Only one original frame travels with a request; no global history is
+        # added. Collection already applied the normal raw/mask/object timing
+        # gates. Re-querying that cache after queueing would apply its short
+        # receive-age limit a second time and can lose valid source evidence.
+        original_sample=FrozenRgbdSample(**{
+            name: getattr(latest, name) for name in RgbdSample.__dataclass_fields__}),
+        # Bind historical masks to the actual fusion inputs without retaining
+        # another image copy or changing any admission/fusion/expiry rule.
+        sample_mask_sha256=tuple(hashlib.sha256(np.ascontiguousarray(
+            np.asarray(item.object_mask) > 0, dtype=np.uint8).tobytes()).hexdigest()
+            for item in samples) if require_mask else (),
     )
 
 

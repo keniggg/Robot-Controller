@@ -1,0 +1,551 @@
+{
+  "schema_version": 1,
+  "description": "GEN15 recorded SDK feedback and accepted source metadata for proposal handoff regression. No discarded endpoint q was retained; this fixture cannot replay its numerical FK solve or prove a strict path.",
+  "record": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261011T110808.411096Z_6fb1906474c24e59b6be584da92c6f43",
+  "audit_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261011T110808.411096Z_6fb1906474c24e59b6be584da92c6f43/keyframes_audits/abd232c08c8a42cebe5b6088516b6bc4c9905077a1f786941adbf48e52a6b11a.json",
+  "audit_sha256": "abd232c08c8a42cebe5b6088516b6bc4c9905077a1f786941adbf48e52a6b11a",
+  "source_binding": {
+    "generation": 9,
+    "request_id": 10,
+    "snapshot_stamp_ns": 1791716946951342821,
+    "target_epoch": 4,
+    "target_track_id": "g1-t4"
+  },
+  "source_audit": {
+    "arrival_projection": {
+      "anchor_source_stamp_ns": 1791716890413283586,
+      "camera_signature": "344b09b06f3fb879e8d41c9f6e466a7cee629a530694f358d24021625f7ea791",
+      "certifies_arrival_or_tracking": false,
+      "endpoint_only": true,
+      "execution_authority": false,
+      "footprint_sha256": "481d3f1133954fd784834c9cbfb01615b2ae3c2077569cf10baa53014d9a9660",
+      "historical_pixels_counted": 0,
+      "invalid_integral_sha256": "f03d20887bbfe343976f1c790801c6140105136c3579f4b41d42ea5348c6d8e7",
+      "measured_height_m": 0.018998232512608987,
+      "policy": "frozen_measured_arrival_prism_endpoint_prediction",
+      "prism_sha256": "3f32b70008135b00d879080b4e08f6d44ceaaeee784bdcec4192b6795bc2ad3f",
+      "reference_binding": "{\"anchor_extent_m\": [0.06179370348679408, 0.03883383997067218, 0.01298622007768422], \"anchor_position_base\": [-0.10090167442112483, -0.3550040912868223, 0.019742576224426878], \"anchor_source_stamp_ns\": 1791716890413283586, \"reference_support_footprint_base\": [[-0.12042609484530284, -0.32934349350370806, 0.0005647490501292061], [-0.12343737944539045, -0.3297701149668692, 0.0004274792199236606], [-0.13891057212122268, -0.3553896811338913, 0.0008809769946093657], [-0.13909290466902613, -0.3561176931496128, 0.0009073989356521645], [-0.13605426200241305, -0.3627011447833333, 0.0013928633997024702], [-0.1295761218440233, -0.36666248963354775, 0.0019295182692074392], [-0.09383554968740325, -0.3881841164418222, 0.004873801033246373], [-0.0931981670039735, -0.38843124594641515, 0.0049195473190390086], [-0.09192339419679131, -0.38892550493629197, 0.005011040280978843], [-0.09127098950185356, -0.38910440171336247, 0.005054201464617593], [-0.07936138401959612, -0.3899100059533204, 0.005720414128457205], [-0.07761808665239882, -0.38957877093748816, 0.005795714894879031], [-0.06316187448323896, -0.37442906260936176, 0.00580662624046388], [-0.06277685266475645, -0.373090620698537, 0.005760669223595803], [-0.06362641847061574, -0.370893004287937, 0.005607282031423308], [-0.06447382658289538, -0.3687694399082605, 0.005457671329416151], [-0.06532008144515832, -0.3667182037423633, 0.0053116990215308375], [-0.06574952943041364, -0.36578764467269215, 0.005243082578302373], [-0.06678359291797871, -0.3644354129535042, 0.005121809337689081], [-0.06782588540243722, -0.36320783253346195, 0.005006269229922855], [-0.06887189060791729, -0.36204294879441334, 0.004893635172506171], [-0.08177335806745084, -0.3497814053148585, 0.0036085852485861145], [-0.10027749267591361, -0.33901528652185486, 0.00210284536977486], [-0.11301358408305073, -0.3319826517418923, 0.0010851429366402696], [-0.11420646869872371, -0.33146139090103666, 0.0009966210728768656], [-0.11481496804947686, -0.3312254379598326, 0.0009529467040313962], [-0.11603196675098314, -0.3307535618433531, 0.000865599438722834], [-0.11664046610173627, -0.3305176386680777, 0.0008219265422597368], [-0.11849219129147252, -0.32985839613846013, 0.000691928891540833], [-0.11912737907970918, -0.3296708523269099, 0.0006492454698534007]], \"reference_support_plane_base\": [-0.052456560850321965, 0.049336933786177845, 0.9974037177534154, 0.009368376557485085]}",
+      "rgb_valid_sha256": "0248eb3205b79a4700e98b9326f3d6e52f8073b65f211edaf769e1c873ea57af",
+      "source_stamp_ns": 1791716946951342821,
+      "support_plane_sha256": "5f3dbfb837a9228fc67431d4878bab4462fd2af28c669045dfa2bf233eb4a195"
+    },
+    "base_optical_sha256": "b40a3e0b2f3e5fbd180797056930ebeb8a564e0a7d2e6e7c85139b90b190e7aa",
+    "camera_parameters": {
+      "cx": 324.9961242675781,
+      "cy": 250.833984375,
+      "depth_scale": 9.999999747378752e-05,
+      "fx": 395.7682800292969,
+      "fy": 395.6027526855469,
+      "height": 489,
+      "width": 653
+    },
+    "certifies_new_view_perception": false,
+    "conservative_target_corners_sha256": "78880cf59b41b17aecdd303bfaea537a22ce8c76f671b3349b0ebfae19bfd592",
+    "frozen_tool_reference_sha256": "35d6183c4a3c1043997d08bcb854bf73b31171dd6a3cbfe3dcc7f50be86618c1",
+    "generation": 9,
+    "projection_prediction_only": true,
+    "raw_depth_dtype": "uint16",
+    "raw_depth_sha256": "2dcae111fc7ac4fc89cf52e9531285d8b0d19e36002f7df7bef4dd65c0a7c107",
+    "raw_depth_shape": [
+      489,
+      653
+    ],
+    "raw_mask_sha256": "1ceb4019d921e2c48e02717008100eef9a599209839fd2a493ca5312c4165227",
+    "request_id": 10,
+    "snapshot_stamp_ns": 1791716946951342821,
+    "source_kind": "exact_last_raw_rgbd_sample",
+    "source_stamp_ns": 1791716946951342821,
+    "support_distance_tolerance_m": 0.002,
+    "support_plane_base": [
+      -0.04981817598086632,
+      0.06712424079678166,
+      0.9965001182335079,
+      0.015262394842272951
+    ],
+    "support_point_count": 110082,
+    "support_points_sha256": "9b635789ce8c7ffae68fd7883782755683ccc4966b9c46b0796fcf05803bf35f",
+    "synthetic_support_points": false,
+    "target_epoch": 4,
+    "target_track_id": "g1-t4",
+    "tool_camera_sha256": "e9dfdb45ddebc391221c8dfdb052175092acc7e1ca95b75e665481a222b14732",
+    "view_limits": {
+      "effective_visibility_limits": {
+        "maximum_depth_m": 0.5,
+        "minimum_depth_m": 0.07,
+        "roi_margin_px": 24.0
+      },
+      "requested_visibility_limits_snapshot": {
+        "camera_visibility_max_depth_m": 0.5,
+        "camera_visibility_min_depth_m": 0.07,
+        "observation_camera_visibility_margin_px": 24.0
+      }
+    }
+  },
+  "qualified_measurement_request": {
+    "version": 1,
+    "state": "qualified",
+    "lease_id": "13b4ab021f8fad2f68bcd09a091e2f2e0f32fd56259c59f02adca17b78d45531:observation:1791716897684145212",
+    "request_id": "13b4ab021f8fad2f68bcd09a091e2f2e0f32fd56259c59f02adca17b78d45531:observation:1791716897684145212:qualified",
+    "selection": {
+      "mode": "unknown",
+      "strategy": "observe_return",
+      "generation": 15,
+      "stamp_ns": 1791716890012068271
+    },
+    "session_id": "13b4ab021f8fad2f68bcd09a091e2f2e0f32fd56259c59f02adca17b78d45531",
+    "target_epoch": 4,
+    "target_track_id": "g1-t4",
+    "origin_plan_id": "f0c052ef764c3e3030df400b",
+    "origin_snapshot_stamp_ns": 1791716892079403877,
+    "view_plan_id": "f0c052ef764c3e3030df400b",
+    "view_source_stamp_ns": 1791716892079403877,
+    "view_index": 1,
+    "plan_sha256": "fa7c8e85cf08b7e08097bc6f0865954549a86b858d11ede270144541811aa9c8",
+    "control_epoch_ns": 1791714150182559125,
+    "deadline_ns": 1791717496839536666,
+    "stamp_ns": 1791716943821054458,
+    "motion_kind": "observation",
+    "arrival_stamp_ns": 1791716942991718769,
+    "capture_deadline_ns": 1791716945991718769,
+    "metric_geometry_authority": false,
+    "motion_authorized": false,
+    "settle": {
+      "epoch_ns": 1791714150182559125,
+      "accepted_stamp_ns": 1791716942778624960,
+      "stationary_window_start_ns": 1791716941978414810,
+      "stationary_window_end_ns": 1791716942778624960,
+      "accepted_sample_count": 9,
+      "accepted_positions_rad": [
+        -2.095417756251786,
+        -0.40957287036546625,
+        1.0983302441261191,
+        0.06902913545485385,
+        -1.2778059963087391,
+        0.10737865515199488
+      ],
+      "joint_peak_to_peak_rad": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "source_stamps_ns": [
+      1791716943087195634,
+      1791716943352622509,
+      1791716943552198410
+    ]
+  },
+  "selection": {
+    "generation": 15,
+    "mode": "unknown",
+    "stamp_ns": 1791716890012068271,
+    "strategy": "observe_return"
+  },
+  "view_phase": "supplemental_observation",
+  "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "observed_generator_audit": {
+    "available_directions": 4,
+    "backend": "scipy_slsqp",
+    "binding": {
+      "generation": 9,
+      "request_id": 10,
+      "snapshot_stamp_ns": 1791716946951342821,
+      "target_epoch": 4,
+      "target_track_id": "g1-t4"
+    },
+    "cache_hit": false,
+    "candidate_count": 1,
+    "conditional_tracking_contract": {
+      "certifies_hardware_tracking_stopping_or_calibration": false,
+      "commanded_stop_reserve_rad": 0.030250000001,
+      "joint_error_bounds_rad": [
+        0.06601699039494283,
+        0.06601699039494283,
+        0.06601699039494283,
+        0.06601699039494283,
+        0.06601699039494283,
+        0.06601699039494283
+      ],
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "maximum_command_acceleration_rad_s2": 0.3,
+      "maximum_command_velocity_rad_s": 0.08,
+      "path_position_tolerance_rad": [
+        0.035,
+        0.035,
+        0.035,
+        0.035,
+        0.035,
+        0.035
+      ],
+      "policy": "per_goal_tracking_with_commanded_stop_reserve_v1",
+      "stop_trajectory_duration_sec": 0.5
+    },
+    "current_joint_positions": [
+      -2.095417756251786,
+      -0.40957287036546625,
+      1.0983302441261191,
+      0.06902913545485385,
+      -1.2778059963087391,
+      0.10737865515199488
+    ],
+    "directions": [
+      {
+        "accepted": true,
+        "early_endpoint_checks": [
+          {
+            "ok": true
+          }
+        ],
+        "early_endpoint_qualified": true,
+        "elapsed_sec": 0.33638225399772637,
+        "endpoint_acceptance_uncertainty_m": 0.003000000000000001,
+        "exposure_prediction_only": true,
+        "exposure_target_noise_multiplier": 1.0,
+        "gap_index": 2,
+        "proves_common_contact_height": false,
+        "requested_new_side_gain_m": 0.003200000000000001,
+        "seed_count": 1,
+        "side_sign": -1,
+        "solver_message": "original endpoint gates qualified a feasible probe before objective convergence",
+        "solver_success": false
+      },
+      {
+        "accepted": false,
+        "early_endpoint_checks": [],
+        "elapsed_sec": 1.6629012199991848,
+        "endpoint_acceptance_uncertainty_m": 0.003000000000000001,
+        "exposure_prediction_only": true,
+        "exposure_target_noise_multiplier": 2.0,
+        "gap_index": 2,
+        "proves_common_contact_height": false,
+        "reason": "shared wall-clock budget exhausted",
+        "requested_new_side_gain_m": 0.0062000000000000015,
+        "seed_count": 1,
+        "side_sign": -1
+      }
+    ],
+    "elapsed_sec": 2.0001683659938863,
+    "endpoint_acceptance_uncertainty_m": 0.003000000000000001,
+    "execution_authority": false,
+    "exposure_prediction_only": true,
+    "exposure_target_noise_multipliers": [
+      1.0,
+      2.0
+    ],
+    "exposure_tier_order": "first_accepted_baseline_then_same_direction_extra",
+    "joint_error_bounds_rad": [
+      0.06601699039494283,
+      0.06601699039494283,
+      0.06601699039494283,
+      0.06601699039494283,
+      0.06601699039494283,
+      0.06601699039494283
+    ],
+    "joint_seed_stamp_ns": 1791716949198060573,
+    "max_iterations": 96,
+    "max_seconds": 2.0,
+    "maximum_tier_attempt_count": 4,
+    "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+    "objective": "joint_motion_plus_frozen_prism_image_centre",
+    "optical_side_proposal_reserve_m": 0.0001,
+    "optical_side_uncertainty_m": 0.003,
+    "original_candidates_removed": 0,
+    "policy": "bounded_measured_joint_space_missing_side_proposals",
+    "proposal_image_reserve_px": 4.0,
+    "proves_common_contact_height": false,
+    "proves_complete_path": false,
+    "search_family": "joint_space_fk",
+    "seed_policy": "one_current_measured_joint_state_per_direction_per_tier",
+    "selected_direction_count": 2,
+    "status": "budget_exhausted",
+    "tier_attempt_count": 2
+  },
+  "previous_registered_gain": {
+    "code": "OBSERVATION_NEW_MEASURED_COVERAGE",
+    "contact_or_motion_authorized": false,
+    "depth_uncertainty_m": 0.003,
+    "minimum_novel_voxels": 3,
+    "new_occupied_voxel_count": 41,
+    "newest_retained_point_count": 849,
+    "novelty_distance_m": 0.003,
+    "ok": true,
+    "policy": "registered_seed_connected_new_occupied_voxels_beyond_depth_noise",
+    "previous_source_stamps_ns": [
+      1791716891479656696
+    ],
+    "registration_ok": true,
+    "source_points_sha256": "d487beca18da6d2f398f4b3ea3d9cce94a14875e496b14fb80067a77c8cab2d0",
+    "source_stamp_ns": 1791716943884769678,
+    "source_stamps_ns": [
+      1791716891479656696,
+      1791716943884769678
+    ],
+    "target_epoch": 4,
+    "target_track_id": "g1-t4",
+    "voxel_size_m": 0.0015
+  },
+  "joint_feedback": {
+    "seed": {
+      "topic": "/joint_states",
+      "receipt_stamp_ns": 1791716949198531627,
+      "source_stamp_ns": 1791716949198060573,
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -2.095417756251786,
+        -0.40957287036546625,
+        1.0983302441261191,
+        0.06902913545485385,
+        -1.2778059963087391,
+        0.10737865515199488,
+        0.04980000000000001
+      ],
+      "velocity": [],
+      "effort": []
+    },
+    "accepted_before": {
+      "topic": "/alicia_d/accepted_joint_states",
+      "receipt_stamp_ns": 1791716949179590702,
+      "source_stamp_ns": 1791716949178585391,
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -2.095417756251786,
+        -0.40957287036546625,
+        1.0983302441261191,
+        0.06902913545485385,
+        -1.2778059963087391,
+        0.10737865515199488,
+        0.04980000000000001
+      ],
+      "velocity": [],
+      "effort": []
+    },
+    "accepted_after": {
+      "topic": "/alicia_d/accepted_joint_states",
+      "receipt_stamp_ns": 1791716949481191396,
+      "source_stamp_ns": 1791716949478806613,
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -2.0969517370396717,
+        -0.40957287036546625,
+        1.0983302441261191,
+        0.06902913545485385,
+        -1.2778059963087391,
+        0.10737865515199488,
+        0.04980000000000001
+      ],
+      "velocity": [],
+      "effort": []
+    },
+    "transitions": [
+      {
+        "topic": "/joint_states",
+        "receipt_stamp_ns": 1791716949118524074,
+        "source_stamp_ns": 1791716949118119005,
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.095417756251786,
+          -0.40957287036546625,
+          1.0983302441261191,
+          0.06902913545485385,
+          -1.2778059963087391,
+          0.10737865515199488,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      {
+        "topic": "/alicia_d/accepted_joint_states",
+        "receipt_stamp_ns": 1791716949179590702,
+        "source_stamp_ns": 1791716949178585391,
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.095417756251786,
+          -0.40957287036546625,
+          1.0983302441261191,
+          0.06902913545485385,
+          -1.2778059963087391,
+          0.10737865515199488,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      {
+        "topic": "/joint_states",
+        "receipt_stamp_ns": 1791716949481114387,
+        "source_stamp_ns": 1791716949478876435,
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.0969517370396717,
+          -0.40957287036546625,
+          1.0983302441261191,
+          0.06902913545485385,
+          -1.2778059963087391,
+          0.10737865515199488,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      {
+        "topic": "/alicia_d/accepted_joint_states",
+        "receipt_stamp_ns": 1791716949481191396,
+        "source_stamp_ns": 1791716949478806613,
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -2.0969517370396717,
+          -0.40957287036546625,
+          1.0983302441261191,
+          0.06902913545485385,
+          -1.2778059963087391,
+          0.10737865515199488,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      }
+    ],
+    "window_receipt_sec": [
+      1791716949.1,
+      1791716953.4
+    ],
+    "message_counts": {
+      "/joint_states": 258,
+      "/alicia_d/accepted_joint_states": 43
+    },
+    "fresh_after_search": {
+      "probe_clock_ns": 1791716951208060573,
+      "latest_by_topic": {
+        "/joint_states": {
+          "topic": "/joint_states",
+          "receipt_stamp_ns": 1791716951198516130,
+          "source_stamp_ns": 1791716951198090806,
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -2.0969517370396717,
+            -0.40957287036546625,
+            1.0983302441261191,
+            0.06902913545485385,
+            -1.2778059963087391,
+            0.10737865515199488,
+            0.04980000000000001
+          ],
+          "velocity": [],
+          "effort": []
+        },
+        "/alicia_d/accepted_joint_states": {
+          "topic": "/alicia_d/accepted_joint_states",
+          "receipt_stamp_ns": 1791716951179512023,
+          "source_stamp_ns": 1791716951178468830,
+          "name": [
+            "Joint1",
+            "Joint2",
+            "Joint3",
+            "Joint4",
+            "Joint5",
+            "Joint6",
+            "right_finger"
+          ],
+          "position": [
+            -2.0969517370396717,
+            -0.40957287036546625,
+            1.0983302441261191,
+            0.06902913545485385,
+            -1.2778059963087391,
+            0.10737865515199488,
+            0.04980000000000001
+          ],
+          "velocity": [],
+          "effort": []
+        }
+      }
+    }
+  },
+  "quantization": {
+    "sdk_count_rad": 0.0015339807878856412,
+    "delta_rad": -0.0015339807878858025,
+    "count_units": -1.0000000000001052,
+    "negative_one_count_residual_rad": -1.6132928326584306e-16
+  },
+  "limitations": [
+    "SDK feedback, stamps, selection and source audit are exact recorded values.",
+    "Actual proposal q/tool transform was lost when the invalid cache was stored; subsequent tests must label any generated/injected endpoint as a transport fixture or new reconstruction.",
+    "This input alone grants no motion or path authority."
+  ],
+  "derived_from_input_sha256": "9f678fd85804a5859219a1c7ab15f483e6be86e87ed6a81a8abddd7aa9f17aaa"
+}

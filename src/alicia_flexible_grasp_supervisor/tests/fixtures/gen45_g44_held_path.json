@@ -1,0 +1,335 @@
+{
+  "kind": "reconstructed_original_G44_held_path_provider",
+  "source_fixture_sha256": "40349dcb9d3e245b13211c2a13880fc1cf9389048b5814db56495f296fb2fe7c",
+  "plan_id": "da0c731f7b05ed1c022e0ce0",
+  "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "prediction": {
+    "scope": "conditional_held_axes_endpoint_prediction",
+    "fixed_goal_pose": [
+      -0.10115176491422596,
+      -0.3529183614082224,
+      0.055494363176829015,
+      0.9386628142895612,
+      -0.32679440160393736,
+      0.09806395507755017,
+      0.050010007647202134
+    ],
+    "position_error_m": 0.01165940085992151,
+    "orientation_error_rad": 0.07474535329385881,
+    "position_tolerance_m": 0.006,
+    "orientation_tolerance_rad": 0.08726646259971647,
+    "held_joints": [
+      "Joint2",
+      "Joint5"
+    ],
+    "maximum_total_counts": 32,
+    "sdk_minus_encoder_rad": [
+      0.0,
+      0.02147573103039896,
+      0.01687378866674183,
+      -0.0030679615757713274,
+      0.004601942363656963,
+      -0.006135923151542322
+    ],
+    "initial_sdk_counts": [
+      756,
+      1725,
+      2727,
+      1850,
+      1356,
+      934
+    ],
+    "virtual_start_positions_rad": [
+      -1.9819031779482483,
+      -0.516951525517461,
+      1.0246991663076084,
+      -0.30066023442558565,
+      -1.0661166475805206,
+      -1.7027186745530618
+    ],
+    "future_following_verified": false,
+    "hardware_response_verified": false,
+    "execution_authorized": false,
+    "globally_optimal": false,
+    "proposed_delta_counts": [
+      -4,
+      0,
+      -18,
+      4,
+      0,
+      32
+    ],
+    "predicted_position_error_m": 0.0044989782849423786,
+    "predicted_orientation_error_rad": 0.0737809563828789,
+    "predicted_positions_rad": [
+      -1.9880391010997909,
+      -0.516951525517461,
+      0.997087512125667,
+      -0.29452431127404305,
+      -1.0661166475805206,
+      -1.6536312893407215
+    ],
+    "predicted_command_positions_rad": [
+      -1.9880391010997909,
+      -0.4954757944870621,
+      1.0139613007924089,
+      -0.2975922728498144,
+      -1.0615147052168636,
+      -1.6597672124922638
+    ],
+    "steps_predicted": 1,
+    "success": true,
+    "code": "PREGRASP_HELD_AXES_GUIDE_QUALIFIED"
+  },
+  "curve_positions_rad": [
+    [
+      -1.9819031779482483,
+      -0.4954757944870621,
+      1.0415729549743502,
+      -0.303728196001357,
+      -1.0615147052168636,
+      -1.7088545977046041
+    ],
+    [
+      -1.9880391010997909,
+      -0.4954757944870621,
+      1.0139613007924089,
+      -0.2975922728498144,
+      -1.0615147052168636,
+      -1.6597672124922638
+    ]
+  ],
+  "duration_sec": 12.0,
+  "trajectory_sha256": "cf6d397397cfd33cfd37b116aaaec2f97700924d784bf47c9797b4ecf47608d5",
+  "controller_constraints": {
+    "Joint1": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint2": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint3": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint4": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint5": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "Joint6": {
+      "goal": 0.035,
+      "trajectory": 0.12
+    },
+    "goal_time": 8.0,
+    "stopped_velocity_tolerance": 0.03
+  },
+  "stop_duration_sec": 0.5,
+  "original_full_tracking_kernel": {
+    "ok": true,
+    "scope": "candidate_path_only_not_execution_authority",
+    "trajectory_sha256": "cf6d397397cfd33cfd37b116aaaec2f97700924d784bf47c9797b4ecf47608d5",
+    "failure_location": "",
+    "certifies_hardware_tracking": false,
+    "start_support": {
+      "ok": true,
+      "minimum_support_clearance_lower_bound_m": 0.004580477074039713,
+      "box_checks": 4,
+      "elapsed_sec": 0.0005165049988136161,
+      "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "joint_error_bounds_rad": [
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543
+      ],
+      "robot_description_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+      "goal_joint_positions_rad": [
+        -1.9819031779482483,
+        -0.4954757944870621,
+        1.0415729549743502,
+        -0.303728196001357,
+        -1.0615147052168636,
+        -1.7088545977046041
+      ],
+      "nominal_minimum_support_clearance_m": 0.06745791328279914,
+      "required_support_clearance_m": 0.003,
+      "certifies_hardware_tracking_stopping_or_calibration": false
+    },
+    "goal_support": {
+      "ok": true,
+      "minimum_support_clearance_lower_bound_m": 0.0036224061150339584,
+      "box_checks": 6,
+      "elapsed_sec": 0.0007663360011065379,
+      "scope": "conditional_joint_error_box_Link6_Link7_Link8_support_only",
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "joint_error_bounds_rad": [
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543
+      ],
+      "robot_description_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+      "goal_joint_positions_rad": [
+        -1.9880391010997909,
+        -0.4954757944870621,
+        1.0139613007924089,
+        -0.2975922728498144,
+        -1.0615147052168636,
+        -1.6597672124922638
+      ],
+      "nominal_minimum_support_clearance_m": 0.06251334320781204,
+      "required_support_clearance_m": 0.003,
+      "certifies_hardware_tracking_stopping_or_calibration": false
+    },
+    "continuous_path": {
+      "scope": "continuous_commanded_Link6_Link7_Link8_only",
+      "plan_id": "da0c731f7b05ed1c022e0ce0",
+      "scene_sha256": "8367aba2344417a933d6eb4ab29c0f726fd79c2e28455e8b23f93701ada4fbaa",
+      "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+      "trajectory_sha256": "cf6d397397cfd33cfd37b116aaaec2f97700924d784bf47c9797b4ecf47608d5",
+      "segments": 1,
+      "interval_checks": 3,
+      "fk_checks": 6,
+      "minimum_sampled_clearance_m": 0.062513343207812,
+      "certified_minimum_clearance_m": 0.04425341109175197,
+      "bridge": "stationary_desired_to_first_positive_time_waypoint",
+      "bridge_start_joint_positions_rad": [
+        -1.9819031779482483,
+        -0.4954757944870621,
+        1.0415729549743502,
+        -0.303728196001357,
+        -1.0615147052168636,
+        -1.7088545977046041
+      ],
+      "opening_width_m": 0.04980000000000001,
+      "following_support": {
+        "scope": "conditional_continuous_Link6_Link7_Link8_support_only",
+        "joint_error_bounds_rad": [
+          0.06319855633873543,
+          0.06319855633873543,
+          0.06319855633873543,
+          0.06319855633873543,
+          0.06319855633873543,
+          0.06319855633873543
+        ],
+        "minimum_support_clearance_lower_bound_m": 0.0036224061150339584,
+        "box_checks": 24,
+        "includes_controller_bridge": true,
+        "certifies_hardware_tracking_stopping_or_calibration": false,
+        "target_obb_tracking_uncertainty_checked": false
+      },
+      "elapsed_sec": 0.014372522000485333
+    },
+    "reason": "",
+    "execution_tracking_contract": {
+      "policy": "per_goal_tracking_with_trajectory_stop_reserve_v1",
+      "joint_names": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6"
+      ],
+      "path_position_tolerance_rad": [
+        0.06,
+        0.06,
+        0.06,
+        0.06,
+        0.06,
+        0.06
+      ],
+      "joint_error_bounds_rad": [
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543,
+        0.06319855633873543
+      ],
+      "commanded_stop_reserve_rad": 0.0024315659447926184,
+      "stop_trajectory_duration_sec": 0.5,
+      "maximum_command_velocity_rad_s": 0.007669903939456681,
+      "maximum_command_acceleration_rad_s2": 0.0019840550121374536,
+      "certifies_hardware_tracking_stopping_or_calibration": false
+    },
+    "command_derivative_bounds": {
+      "maximum_velocity_rad_s": [
+        0.0009587379924569581,
+        2.842170943040401e-14,
+        0.004314320965956795,
+        0.0009587379924569382,
+        2.842170943040401e-14,
+        0.007669903939456681
+      ],
+      "maximum_acceleration_rad_s2": [
+        0.000248006876542049,
+        2.842170943040401e-14,
+        0.0011160309443397503,
+        0.00024800687654206267,
+        2.842170943040401e-14,
+        0.0019840550121374536
+      ]
+    },
+    "tracking_contract_search": [
+      {
+        "path_position_tolerance_rad": [
+          0.09,
+          0.09,
+          0.09,
+          0.09,
+          0.09,
+          0.09
+        ],
+        "ok": false,
+        "failure_location": "goal",
+        "reason": "joint error box contains insufficient support clearance"
+      },
+      {
+        "path_position_tolerance_rad": [
+          0.06,
+          0.06,
+          0.06,
+          0.06,
+          0.06,
+          0.06
+        ],
+        "ok": true,
+        "failure_location": "",
+        "reason": ""
+      }
+    ]
+  },
+  "historical_MoveIt_trajectory": false,
+  "future_following_response_simulated": true,
+  "hardware_executed": false,
+  "original_input_sha256": {
+    "/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_flexible_grasp_supervisor/tests/fixtures/gen45_g44_pregrasp.json": "40349dcb9d3e245b13211c2a13880fc1cf9389048b5814db56495f296fb2fe7c",
+    "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/verification/gen44_actual_handoff_monitor_r1/same_plan_continuous_trajectory_audits.json": "995e377544ad72f214bc47f1e3006907ee8488484eedd99f4c3e27d77556b2ad"
+  }
+}

@@ -1,0 +1,9 @@
+<launch>
+  <include file="/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/full_latest_no_skin_20261010.launch"/>
+  <rosparam command="load" file="/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/config/minimal_observation_chain.yaml" ns="/grasp"/>
+  <rosparam command="load" file="/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/src/alicia_grasp_modes/config/software_gate_relaxation.yaml"/>
+  <rosparam command="load" file="$(find alicia_flexible_grasp_supervisor)/config/physical_reference_contact.yaml"/>
+  <param name="/gui/joint_direct_mode" type="bool" value="true"/>
+  <param name="/grasp_6d/remote/gate_audit_output_path" value="$(env ALICIA_SESSION_LOG_DIR)/planning_audits/grasp6d_gate_audit_latest.json"/>
+  <param name="/mujoco_digital_twin/audit_output_path" value="$(env ALICIA_SESSION_LOG_DIR)/planning_audits/grasp6d_mujoco_audit_latest.json"/>
+</launch>

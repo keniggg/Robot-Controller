@@ -1,0 +1,2912 @@
+{
+  "kind": "G49_original_arrival_feedback_and_status_replay_inputs",
+  "record": "20261018T110845.987064Z_143620cd21094235a5ac9166e012ca87",
+  "references": {
+    "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/verification/gen49_arrival_visibility_r1/arrival_messages.json": "3ca7c142e49c31a81b2b7bd2a595c2356a604742eed1236d4c189d1e93c49d7a",
+    "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/verification/gen49_arrival_motion_audit_r1/alicia_d__accepted_joint_states.json": "e2bafb4a43f9cfe98558ef4fa62ee89a490e2ba7fb25df27c2146dd99b74643d",
+    "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_gen41_restart_20261018T011222Z/verification/gen49_arrival_settle_contract_review_r1/task_measurement_review.json": "5be09143a9c83833c20bf6634884b8d095e4cd8a17afadf469f0ad908c591f7f"
+  },
+  "original_requests": [
+    {
+      "received_ns": 1792321745916212320,
+      "wire_sha256": "cbf0b22723871f669d998255218e8de6f95ba705669ebc2e1bd57d318b5136a6",
+      "message": {
+        "version": 1,
+        "state": "executing",
+        "lease_id": "a583cb084424a692c2c6909a8ab831d6fbc5efb7149e1b6e90a0b63605f44bd9:observation:1792321745914540529",
+        "request_id": "a583cb084424a692c2c6909a8ab831d6fbc5efb7149e1b6e90a0b63605f44bd9:observation:1792321745914540529:executing",
+        "selection": {
+          "mode": "unknown",
+          "strategy": "observe_return",
+          "generation": 9,
+          "stamp_ns": 1792321728135563373
+        },
+        "session_id": "a583cb084424a692c2c6909a8ab831d6fbc5efb7149e1b6e90a0b63605f44bd9",
+        "target_epoch": 4,
+        "target_track_id": "g1-t4",
+        "origin_plan_id": "d00e7ca5277a378bf711f4e3",
+        "origin_snapshot_stamp_ns": 1792321731415798187,
+        "view_plan_id": "d00e7ca5277a378bf711f4e3",
+        "view_source_stamp_ns": 1792321731415798187,
+        "view_index": 1,
+        "plan_sha256": "a98b17da3cbdaab96fdfe0e21182b5d5e2ea66de32d4553f1117ba23681115b5",
+        "control_epoch_ns": 1792286012067798399,
+        "deadline_ns": 1792322345039554834,
+        "stamp_ns": 1792321745914540529,
+        "motion_kind": "observation",
+        "arrival_stamp_ns": 0,
+        "capture_deadline_ns": 0,
+        "metric_geometry_authority": false,
+        "motion_authorized": false
+      }
+    },
+    {
+      "received_ns": 1792321795875032901,
+      "wire_sha256": "4a9943a05d04ad83b5acb593c840b7966d92f0364f5713166fa0fb5138d4794c",
+      "message": {
+        "version": 1,
+        "state": "requalifying",
+        "lease_id": "a583cb084424a692c2c6909a8ab831d6fbc5efb7149e1b6e90a0b63605f44bd9:observation:1792321745914540529",
+        "request_id": "a583cb084424a692c2c6909a8ab831d6fbc5efb7149e1b6e90a0b63605f44bd9:observation:1792321745914540529:requalifying",
+        "selection": {
+          "mode": "unknown",
+          "strategy": "observe_return",
+          "generation": 9,
+          "stamp_ns": 1792321728135563373
+        },
+        "session_id": "a583cb084424a692c2c6909a8ab831d6fbc5efb7149e1b6e90a0b63605f44bd9",
+        "target_epoch": 4,
+        "target_track_id": "g1-t4",
+        "origin_plan_id": "d00e7ca5277a378bf711f4e3",
+        "origin_snapshot_stamp_ns": 1792321731415798187,
+        "view_plan_id": "d00e7ca5277a378bf711f4e3",
+        "view_source_stamp_ns": 1792321731415798187,
+        "view_index": 1,
+        "plan_sha256": "a98b17da3cbdaab96fdfe0e21182b5d5e2ea66de32d4553f1117ba23681115b5",
+        "control_epoch_ns": 1792286012067798399,
+        "deadline_ns": 1792322345039554834,
+        "stamp_ns": 1792321795873908758,
+        "motion_kind": "observation",
+        "arrival_stamp_ns": 1792321795873908758,
+        "capture_deadline_ns": 1792321798873908758,
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "settle": {
+          "epoch_ns": 1792286012067798399,
+          "accepted_stamp_ns": 1792321795714435137,
+          "stationary_window_start_ns": 1792321794914409423,
+          "stationary_window_end_ns": 1792321795714435137,
+          "accepted_sample_count": 9,
+          "accepted_positions_rad": [
+            -1.586136134673753,
+            -0.6642136811544826,
+            1.478757479521758,
+            0.10277671278833796,
+            -1.4940972874006146,
+            -0.6181942575179135
+          ],
+          "joint_peak_to_peak_rad": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "received_ns": 1792321796587512016,
+      "wire_sha256": "89536bf34bafcfb0392e38fdf2a79311bdcf4bd35541e1f90f5ab09b9fd6d79c",
+      "message": {
+        "version": 1,
+        "state": "qualified",
+        "lease_id": "a583cb084424a692c2c6909a8ab831d6fbc5efb7149e1b6e90a0b63605f44bd9:observation:1792321745914540529",
+        "request_id": "a583cb084424a692c2c6909a8ab831d6fbc5efb7149e1b6e90a0b63605f44bd9:observation:1792321745914540529:qualified",
+        "selection": {
+          "mode": "unknown",
+          "strategy": "observe_return",
+          "generation": 9,
+          "stamp_ns": 1792321728135563373
+        },
+        "session_id": "a583cb084424a692c2c6909a8ab831d6fbc5efb7149e1b6e90a0b63605f44bd9",
+        "target_epoch": 4,
+        "target_track_id": "g1-t4",
+        "origin_plan_id": "d00e7ca5277a378bf711f4e3",
+        "origin_snapshot_stamp_ns": 1792321731415798187,
+        "view_plan_id": "d00e7ca5277a378bf711f4e3",
+        "view_source_stamp_ns": 1792321731415798187,
+        "view_index": 1,
+        "plan_sha256": "a98b17da3cbdaab96fdfe0e21182b5d5e2ea66de32d4553f1117ba23681115b5",
+        "control_epoch_ns": 1792286012067798399,
+        "deadline_ns": 1792322345039554834,
+        "stamp_ns": 1792321796586598157,
+        "motion_kind": "observation",
+        "arrival_stamp_ns": 1792321795873908758,
+        "capture_deadline_ns": 1792321798873908758,
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "settle": {
+          "epoch_ns": 1792286012067798399,
+          "accepted_stamp_ns": 1792321795714435137,
+          "stationary_window_start_ns": 1792321794914409423,
+          "stationary_window_end_ns": 1792321795714435137,
+          "accepted_sample_count": 9,
+          "accepted_positions_rad": [
+            -1.586136134673753,
+            -0.6642136811544826,
+            1.478757479521758,
+            0.10277671278833796,
+            -1.4940972874006146,
+            -0.6181942575179135
+          ],
+          "joint_peak_to_peak_rad": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "source_stamps_ns": [
+          1792321796018874883,
+          1792321796208590507,
+          1792321796341869592
+        ]
+      }
+    }
+  ],
+  "feedback": [
+    {
+      "received_ns": 1792321794915054559,
+      "source_stamp_ns": 1792321794914409423,
+      "seq": 357781,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "d89d73b637c99dc00709ca64cf00cbd4dced8ab9a2a4e8830a25f6fa2a2330a3",
+      "payload": {
+        "header": {
+          "seq": 357781,
+          "stamp": {
+            "secs": 1792321794,
+            "nsecs": 914409423
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795015297889,
+      "source_stamp_ns": 1792321795014353315,
+      "seq": 357782,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "88a9254bd4e5aa83892b023bc0fd5febf567a6f41c30eb3a4d76ea300b846542",
+      "payload": {
+        "header": {
+          "seq": 357782,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 14353315
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795115197181,
+      "source_stamp_ns": 1792321795114347491,
+      "seq": 357783,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "60b6b6f2a333e60ce105ef1b4efa3c8cc7b36f40d627b064f1e728a65bf30a34",
+      "payload": {
+        "header": {
+          "seq": 357783,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 114347491
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795215417861,
+      "source_stamp_ns": 1792321795214349586,
+      "seq": 357784,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "731125fa9a287bd561dda16de5d1f4934913c9021dc74230f5b496b5d9801041",
+      "payload": {
+        "header": {
+          "seq": 357784,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 214349586
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795315577745,
+      "source_stamp_ns": 1792321795314364877,
+      "seq": 357785,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "97b4ed4822c12f43a09e7082275c23ebf900b07a80e3ce6cd1e00d0f6fce0e8f",
+      "payload": {
+        "header": {
+          "seq": 357785,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 314364877
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795416048526,
+      "source_stamp_ns": 1792321795414428016,
+      "seq": 357786,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "4c8db20cdf9de7855367b3111d7d1a6fe102842388b41a60d78b6cb674f66652",
+      "payload": {
+        "header": {
+          "seq": 357786,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 414428016
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795515081405,
+      "source_stamp_ns": 1792321795514385697,
+      "seq": 357787,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "a299bcdf2f9b84e808f1eb852efcceeb3228eacb4bca1f1f22e88dc545f1b027",
+      "payload": {
+        "header": {
+          "seq": 357787,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 514385697
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795614768743,
+      "source_stamp_ns": 1792321795614330900,
+      "seq": 357788,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "f02b70add198e2953d447f91bdacdbc706f0cfbc8448f653e5e9c1d3e010b53a",
+      "payload": {
+        "header": {
+          "seq": 357788,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 614330900
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795716490507,
+      "source_stamp_ns": 1792321795714435137,
+      "seq": 357789,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "a11187af2b34d5fd8caf01ac4f0207a999e59f03ad8734d169e1106576c62ce1",
+      "payload": {
+        "header": {
+          "seq": 357789,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 714435137
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795815748691,
+      "source_stamp_ns": 1792321795814373216,
+      "seq": 357790,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "70f8b7c65957193107d012600b65c78f508564aae97b0f4ea7053d6e19d2736e",
+      "payload": {
+        "header": {
+          "seq": 357790,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 814373216
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321795915932893,
+      "source_stamp_ns": 1792321795914380542,
+      "seq": 357791,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "60d51c6554d3510dffcf5b43af9e4768b7d3d5020b1f27687837bf01404f7150",
+      "payload": {
+        "header": {
+          "seq": 357791,
+          "stamp": {
+            "secs": 1792321795,
+            "nsecs": 914380542
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796014901876,
+      "source_stamp_ns": 1792321796014351599,
+      "seq": 357792,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "af754de70b16190d3b194cc3016173efecf1206b1c02e9431926e969c071b713",
+      "payload": {
+        "header": {
+          "seq": 357792,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 14351599
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6642136811544826,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6642136811544826,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796116246223,
+      "source_stamp_ns": 1792321796114392082,
+      "seq": 357793,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "a3a4b49576526d4e9b961bc5d359913c4f99051613276728835317468858667f",
+      "payload": {
+        "header": {
+          "seq": 357793,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 114392082
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796218117475,
+      "source_stamp_ns": 1792321796214475809,
+      "seq": 357794,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "ee961817c9026592c4d614a4bb1ae94c6b81f7472557fe8c055f9b4852240d6a",
+      "payload": {
+        "header": {
+          "seq": 357794,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 214475809
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796315931320,
+      "source_stamp_ns": 1792321796314414724,
+      "seq": 357795,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "696a993bb3d1ee12d680561b67af7085dd303c4cde4b7e10310865cfdf58f43b",
+      "payload": {
+        "header": {
+          "seq": 357795,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 314414724
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796419352531,
+      "source_stamp_ns": 1792321796414422536,
+      "seq": 357796,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "a06f4323335398b1d2d6b19b8efb1c6d779feb9bb0af5b0329896d57ec3bcffe",
+      "payload": {
+        "header": {
+          "seq": 357796,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 414422536
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796515952825,
+      "source_stamp_ns": 1792321796514381358,
+      "seq": 357797,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "92e67a8b34c81d2128646b0dd119990ccaacc143814f7345466f297d93597068",
+      "payload": {
+        "header": {
+          "seq": 357797,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 514381358
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796615447044,
+      "source_stamp_ns": 1792321796614401736,
+      "seq": 357798,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "f8dc74de891e4d1ab5d0881ad09ef1f2ae14dcc7389d7f84bf0c52d7aea5b51f",
+      "payload": {
+        "header": {
+          "seq": 357798,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 614401736
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796714905023,
+      "source_stamp_ns": 1792321796714360389,
+      "seq": 357799,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "d7ef726c571299253fdd4bf0a76d03e2588832de71f3f70afedd45cfa40dd9b2",
+      "payload": {
+        "header": {
+          "seq": 357799,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 714360389
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796816132307,
+      "source_stamp_ns": 1792321796814411276,
+      "seq": 357800,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "1201bd7cb0cc7471fd504abf4405eb25e44f62f6ac69611d9f2a829ad51284cc",
+      "payload": {
+        "header": {
+          "seq": 357800,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 814411276
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321796916527032,
+      "source_stamp_ns": 1792321796914409712,
+      "seq": 357801,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "c322b26ad745d8107909e826b33e4426b2e0ee0f7fd8e76fb94b9b2478a225d1",
+      "payload": {
+        "header": {
+          "seq": 357801,
+          "stamp": {
+            "secs": 1792321796,
+            "nsecs": 914409712
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797015857934,
+      "source_stamp_ns": 1792321797014419263,
+      "seq": 357802,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "b5a3b0a23d2afcb6c1231da26856e24216d2e55eef9d1d239e5574898cbfc96e",
+      "payload": {
+        "header": {
+          "seq": 357802,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 14419263
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797116038560,
+      "source_stamp_ns": 1792321797114474262,
+      "seq": 357803,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "8de327b8624e74b2978f093432867b2861eeede4a1553342604a798a054ec250",
+      "payload": {
+        "header": {
+          "seq": 357803,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 114474262
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797215232372,
+      "source_stamp_ns": 1792321797214352870,
+      "seq": 357804,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "f282522d2afd8aeef4c38319841dd1d9acc53406b3a5f2758700c30654ab5bc4",
+      "payload": {
+        "header": {
+          "seq": 357804,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 214352870
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797315906763,
+      "source_stamp_ns": 1792321797314360167,
+      "seq": 357805,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "36ebd1138e1088e2aa75a87aa2632503c0ed5a3060282af3f1b3a025932ad7c4",
+      "payload": {
+        "header": {
+          "seq": 357805,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 314360167
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797415732383,
+      "source_stamp_ns": 1792321797414371725,
+      "seq": 357806,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "0f0636b676c03902b49dc843b4b09a40de673e914c8c3f1d0ecd729ee990c116",
+      "payload": {
+        "header": {
+          "seq": 357806,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 414371725
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797515220165,
+      "source_stamp_ns": 1792321797514378016,
+      "seq": 357807,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "c38c10feb33bff131bffbe06b353f8ba86c1d27e5bbc4492960237aadbb74237",
+      "payload": {
+        "header": {
+          "seq": 357807,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 514378016
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797619104862,
+      "source_stamp_ns": 1792321797614411697,
+      "seq": 357808,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "d09fcd3461c47a7d86d4e8f3578a27e2eb49364c91364314e0c42cc2dcba4798",
+      "payload": {
+        "header": {
+          "seq": 357808,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 614411697
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797715055465,
+      "source_stamp_ns": 1792321797714391261,
+      "seq": 357809,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "6589d3751ede9a57c14d07a8400082035d3d9146cc1c91faac95bd78dfd67abf",
+      "payload": {
+        "header": {
+          "seq": 357809,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 714391261
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797816057205,
+      "source_stamp_ns": 1792321797814433826,
+      "seq": 357810,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "4f50b8918db3397fff215b62c9b473d13b81f75d050d1739293bfcc320d7f87e",
+      "payload": {
+        "header": {
+          "seq": 357810,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 814433826
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321797916298389,
+      "source_stamp_ns": 1792321797914378212,
+      "seq": 357811,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "32e6fdd7621c3b0f032ea70a8a146c3da60650d0e9f7dc47d75616187d987cc8",
+      "payload": {
+        "header": {
+          "seq": 357811,
+          "stamp": {
+            "secs": 1792321797,
+            "nsecs": 914378212
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798015448570,
+      "source_stamp_ns": 1792321798014536756,
+      "seq": 357812,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "8bc5a14ce3a94561bbde9a8c51358b556ca9f29171932dac20759261453ba07b",
+      "payload": {
+        "header": {
+          "seq": 357812,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 14536756
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798115236043,
+      "source_stamp_ns": 1792321798114400107,
+      "seq": 357813,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "3cffbac47b432adfa0a937ad9643b2b8c8bbaed7e93562905942bdce13e82801",
+      "payload": {
+        "header": {
+          "seq": 357813,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 114400107
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798215194225,
+      "source_stamp_ns": 1792321798214354874,
+      "seq": 357814,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "af1d03b37fc26c9d7deade2c35ba3273b258b5d6679ad82a15b0e691e1cf1a67",
+      "payload": {
+        "header": {
+          "seq": 357814,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 214354874
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798315314531,
+      "source_stamp_ns": 1792321798314393676,
+      "seq": 357815,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "899267b9b035d06126c822446f22ddc4f606f00073fa90b72d609ec9e53b58d0",
+      "payload": {
+        "header": {
+          "seq": 357815,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 314393676
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798415125131,
+      "source_stamp_ns": 1792321798414496323,
+      "seq": 357816,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "dae9fc2905b40baaa7d671f46b95864da669be926ac1b49d2c64d120358a9d69",
+      "payload": {
+        "header": {
+          "seq": 357816,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 414496323
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798515160083,
+      "source_stamp_ns": 1792321798514370832,
+      "seq": 357817,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "41bc6d62378d82d1d183a4f066361e7fd6a97bd0ba1cd765f1c16d03cf170a86",
+      "payload": {
+        "header": {
+          "seq": 357817,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 514370832
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798614907026,
+      "source_stamp_ns": 1792321798614389990,
+      "seq": 357818,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "8747ebcfddb3c93e9b2460c108359edca81ebf73c77735437a17227024d2217c",
+      "payload": {
+        "header": {
+          "seq": 357818,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 614389990
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798716192245,
+      "source_stamp_ns": 1792321798714372964,
+      "seq": 357819,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "d12e97eba05195439f5fedcb224a2cf8f65e50664fdf6edde8c7717b747ae3a4",
+      "payload": {
+        "header": {
+          "seq": 357819,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 714372964
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798818006277,
+      "source_stamp_ns": 1792321798814352399,
+      "seq": 357820,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "f08d57335a5ef5c7835effa115b42977238a36c6b0ae6c9ed46dc32c169bae40",
+      "payload": {
+        "header": {
+          "seq": 357820,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 814352399
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321798915261507,
+      "source_stamp_ns": 1792321798914387343,
+      "seq": 357821,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "48c708f164b72b07f52572222cabc8d686dade97094e638cfd59aa2278f846dc",
+      "payload": {
+        "header": {
+          "seq": 357821,
+          "stamp": {
+            "secs": 1792321798,
+            "nsecs": 914387343
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    },
+    {
+      "received_ns": 1792321799014794826,
+      "source_stamp_ns": 1792321799014388575,
+      "seq": 357822,
+      "frame_id": "sdk_measured",
+      "wire_sha256": "fb7f1f14bbd5aba997a2f251a17c198b2fad7f853bfb81a3dbf7d57b93843b63",
+      "payload": {
+        "header": {
+          "seq": 357822,
+          "stamp": {
+            "secs": 1792321799,
+            "nsecs": 14388575
+          },
+          "frame_id": "sdk_measured"
+        },
+        "name": [
+          "Joint1",
+          "Joint2",
+          "Joint3",
+          "Joint4",
+          "Joint5",
+          "Joint6",
+          "right_finger"
+        ],
+        "position": [
+          -1.586136134673753,
+          -0.6672816427302539,
+          1.478757479521758,
+          0.10277671278833796,
+          -1.4940972874006146,
+          -0.6181942575179135,
+          0.04980000000000001
+        ],
+        "velocity": [],
+        "effort": []
+      },
+      "name": [
+        "Joint1",
+        "Joint2",
+        "Joint3",
+        "Joint4",
+        "Joint5",
+        "Joint6",
+        "right_finger"
+      ],
+      "position": [
+        -1.586136134673753,
+        -0.6672816427302539,
+        1.478757479521758,
+        0.10277671278833796,
+        -1.4940972874006146,
+        -0.6181942575179135,
+        0.04980000000000001
+      ],
+      "velocity": []
+    }
+  ],
+  "status": [
+    {
+      "source_stamp_ns": 1792321795019263744,
+      "received_ns": 1792321795049597740,
+      "wire_sha256": "f2372116d608a74382b458bcb10fe7276c1a7575970d5abc2b6aef4dc74af575",
+      "state": "pending",
+      "detail": "observation_measurement_pending",
+      "target_lost": false,
+      "failed_stage": null,
+      "support_segment_completed": null,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321795153181076,
+      "received_ns": 1792321795218816757,
+      "wire_sha256": "7e4c23d5c5ccc64e8b288f43484188467654d34d91cf0a79de7ece3eeac91e27",
+      "state": "pending",
+      "detail": "observation_measurement_pending",
+      "target_lost": false,
+      "failed_stage": null,
+      "support_segment_completed": null,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321795353037595,
+      "received_ns": 1792321795383696079,
+      "wire_sha256": "25f23f91a818f8dc832ce11cecf0d9e8c579f90c36025797eb0405091d36ef51",
+      "state": "pending",
+      "detail": "observation_measurement_pending",
+      "target_lost": false,
+      "failed_stage": null,
+      "support_segment_completed": null,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321795485309123,
+      "received_ns": 1792321795549963951,
+      "wire_sha256": "3a69d3c5a62213aed6422a337fd4e4138670e487d56626156b4c02f4556d9e2b",
+      "state": "pending",
+      "detail": "observation_measurement_pending",
+      "target_lost": false,
+      "failed_stage": null,
+      "support_segment_completed": null,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321795686321258,
+      "received_ns": 1792321795719324827,
+      "wire_sha256": "f87af9dc36fc6805c524e7ac028e50322b843f15a336b921f4e20c54cffe73be",
+      "state": "pending",
+      "detail": "observation_measurement_pending",
+      "target_lost": false,
+      "failed_stage": null,
+      "support_segment_completed": null,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321795819805860,
+      "received_ns": 1792321795883017539,
+      "wire_sha256": "ab06a6420d55ea9f17bbc1a4883f66ed97640610379e701fd0c1958151308cc9",
+      "state": "pending",
+      "detail": "observation_measurement_pending",
+      "target_lost": false,
+      "failed_stage": null,
+      "support_segment_completed": null,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321796018874883,
+      "received_ns": 1792321796259920120,
+      "wire_sha256": "3304aceb1f9092c64be876e519f28c2f8303af67a0f6ec750e357eca0d71783e",
+      "state": "pending",
+      "detail": "observation_measurement_pending",
+      "target_lost": false,
+      "failed_stage": null,
+      "support_segment_completed": null,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321796208590507,
+      "received_ns": 1792321796388624429,
+      "wire_sha256": "284476e2d2575df2e6b896b96da6d448ff612678392a0edc8fbf589075c53b80",
+      "state": "pending",
+      "detail": "observation_measurement_pending",
+      "target_lost": false,
+      "failed_stage": null,
+      "support_segment_completed": null,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321796341869592,
+      "received_ns": 1792321796572163820,
+      "wire_sha256": "233afe4e21bd2a63afc83e0755a856985baee45e3def1950e7962e89d88f098f",
+      "state": "ready",
+      "detail": "observation_measurement_requalified",
+      "target_lost": false,
+      "failed_stage": null,
+      "support_segment_completed": null,
+      "geometry_metrics": {
+        "current_measured_foreground_outside_domain_pixels": 207,
+        "current_measured_support_pixels": 6509,
+        "current_measured_support_region": {
+          "footprint_expansion_m": 0.0,
+          "footprint_sha256": "7918e4b4bab590f3613b91a48f855b20c871fd12b32160cfbe0a38b4254df431",
+          "historical_pixels_counted": 0,
+          "measured_height_m": 0.019391721520055888,
+          "policy": "current_depth_in_frozen_measured_footprint",
+          "support_plane_sha256": "9dfb14e851e3f0c7c6a99a4fd2511449186a9959924d49b15527ae9c70a3622c"
+        },
+        "depth_seed_extent_m": [
+          0.03715300778272837,
+          0.030245763323737695,
+          0.001591448321109892
+        ],
+        "depth_seed_retained_fraction": 0.9828269484808454,
+        "mask_kind": "current_rgb_instance",
+        "measured_support_background_pixels": 13169,
+        "median_height_m": 0.01856070760359016,
+        "observed_surface_extent_m": [
+          0.05469331044057833,
+          0.037289885064088306,
+          0.0024558048996971013
+        ],
+        "original_top_pixels": 326,
+        "rgb_contact_spatial_proposal": false,
+        "rgb_instance_pixels": 9227,
+        "rgb_mask_pixels_without_valid_depth": 2511,
+        "rgb_proposal_background_margin_px": 16,
+        "rgb_search_attempts": 1,
+        "rgb_search_background_invalid_pixels_removed": 0,
+        "rgb_search_box_xyxy": [
+          398,
+          299,
+          584,
+          469
+        ],
+        "rgb_search_clipping_required_box_xyxy": null,
+        "rgb_search_desired_box_xyxy": [
+          398,
+          299,
+          584,
+          469
+        ],
+        "rgb_search_expanded_boundary_sides": [],
+        "rgb_search_initial_margin_px": 16,
+        "rgb_search_margin_px": 48,
+        "rgb_search_margins_ltrb_px": [
+          30,
+          57,
+          88,
+          29
+        ],
+        "rgb_search_observed_background_clipped": false,
+        "rgb_search_policy": "measured_geometry_proposal",
+        "rgb_search_preserved_prism_guard_px": 0,
+        "rgb_search_retry_reason": "",
+        "rgb_seed_pixels": 3785,
+        "rgb_to_current_measured_support_area_ratio": 1.4175756644645876,
+        "rgb_to_depth_seed_area_ratio": 2.43778071334214,
+        "rgb_trusted_core_search_margin_px": 16,
+        "rgb_trusted_core_source": "first_same_frame_search",
+        "seed_policy": "measured_upper_interior_and_planar_sides",
+        "support_background_height_separated": true,
+        "support_colour_candidate_demotions": 0,
+        "support_colour_demoted_side_pixels": 0,
+        "support_colour_demotion_evidence": "none",
+        "support_colour_demotion_minimum_pixels": 25,
+        "support_colour_qualified_regions": 0,
+        "support_colour_reference_pixels": 654,
+        "support_current_audit_available": true,
+        "support_current_audit_inlier_ratio": 0.9766666666666667,
+        "support_current_audit_quadrants": 4,
+        "support_current_audit_residual_m": 0.0006850443375243328,
+        "support_current_audit_ring_outer_radius_px": 173.1875,
+        "support_current_audit_sample_count": 1800,
+        "support_inlier_ratio": 0.9766666666666667,
+        "support_plane_base": [
+          -0.05494137032517916,
+          0.0603069917462256,
+          0.9966667008450278,
+          0.01694271156962838
+        ],
+        "support_quadrants": 4,
+        "support_reference_anchor_distance_m": 0.0064098728210333295,
+        "support_reference_angle_deg": 0.24838728657374087,
+        "support_reference_distance_warning": true,
+        "support_reference_eligible_candidates": 0,
+        "support_reference_footprint_vertices": 22,
+        "support_reference_hard_distance_m": 0.007,
+        "support_reference_max_distance_m": 0.006608561936400038,
+        "support_reference_segmentation_error": "insufficient_support_spatial_coverage",
+        "support_reference_warning_distance_m": 0.004,
+        "support_refit_attempted": true,
+        "support_residual_m": 0.0006850443375243328,
+        "support_ring_outer_radius_px": 173.1875,
+        "support_sample_count": 1800,
+        "support_source": "current_ring_fit",
+        "trusted_core_pixels": 326,
+        "trusted_core_retained_fraction": 1.0,
+        "trusted_side_pixels": 0,
+        "trusted_top_pixels": 326,
+        "upper_seed_height_m": 0.019821097717077636,
+        "upper_surface_band_half_width_m": null,
+        "upper_surface_band_used": false,
+        "valid_points": 6716
+      },
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321796686522722,
+      "received_ns": 1792321796735568523,
+      "wire_sha256": "f0a070a0708cb2331adfc21da0f86f81c20f372527348317d82b61a5b1af351f",
+      "state": "unavailable",
+      "detail": "perception_failure: support_plane_local_distance_inconsistent: 0.007165 > 0.007000 m",
+      "target_lost": true,
+      "failed_stage": "segmentation",
+      "support_segment_completed": false,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321796819988012,
+      "received_ns": 1792321796933670282,
+      "wire_sha256": "2966dbd165e29ce4f9ff78ee95ac3f62606ca34c76194e8cb725628028e956c6",
+      "state": "unavailable",
+      "detail": "perception_failure: support_plane_local_distance_inconsistent: 0.007308 > 0.007000 m",
+      "target_lost": true,
+      "failed_stage": "segmentation",
+      "support_segment_completed": false,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321797021150112,
+      "received_ns": 1792321797174113750,
+      "wire_sha256": "8055cdf229439047988a3586c181c1ec521bc1e4707276db89a1dd6aaf12da93",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321797155105352,
+      "received_ns": 1792321797276135206,
+      "wire_sha256": "8d00b0690cd8befeee9d5e6fbb828157ce84cd8b502760392e76ccb0a50a46b4",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321797353924036,
+      "received_ns": 1792321797435593843,
+      "wire_sha256": "9a5d490c8caf0b61eea6ab8c1b40ccb9c059db7718e06f692bef32016b256cc7",
+      "state": "unavailable",
+      "detail": "perception_failure: support_plane_local_distance_inconsistent: 0.007257 > 0.007000 m",
+      "target_lost": true,
+      "failed_stage": "segmentation",
+      "support_segment_completed": false,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321797421193838,
+      "received_ns": 1792321797613023996,
+      "wire_sha256": "72eed3e2ef3c2fb8ee3fc741b761ac5b55c99ebb5d4b2034c6d2d002be69f3ba",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321797686099529,
+      "received_ns": 1792321797767616748,
+      "wire_sha256": "dea122f991cc5a4c0434c0512581b72e3b50da0c57d305e83a28efb86dc71aae",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321797820373773,
+      "received_ns": 1792321797974124908,
+      "wire_sha256": "36fa9dafad8f15a09b8bbf4faf8d93050a6dc9ca8ad1fed748aa300ac17729ef",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321798020548105,
+      "received_ns": 1792321798168089866,
+      "wire_sha256": "4d39f038b4e36d7fb473161a9b2212543357a1d63d4c5dd21470b3708f551504",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321798153624773,
+      "received_ns": 1792321798272515296,
+      "wire_sha256": "b037e6bb430250a880ef72e903589ebe250001032272f4ab762f2befd0f6965c",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321798352822303,
+      "received_ns": 1792321798434571266,
+      "wire_sha256": "e1b270e316ba341a1ab5511e8d4aa9f9cabd20e7e6a4acfb61e37d887cfaf0c6",
+      "state": "unavailable",
+      "detail": "perception_failure: support_plane_local_distance_inconsistent: 0.007070 > 0.007000 m",
+      "target_lost": true,
+      "failed_stage": "segmentation",
+      "support_segment_completed": false,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321798487707138,
+      "received_ns": 1792321798605411767,
+      "wire_sha256": "a70a5f82dbe7b707205e1aa72acccd7cf481e650887aa441f2f8272a4e4c3636",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321798686658382,
+      "received_ns": 1792321798768527269,
+      "wire_sha256": "caaca9255cddce8ebfbfe8b0b6e6854509b8af2f33902fb815955852a402b577",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    },
+    {
+      "source_stamp_ns": 1792321798820119142,
+      "received_ns": 1792321798973650693,
+      "wire_sha256": "38133b0349b4a73e0076817089fea1f8a57070f635995d464834e8a5fa34ef90",
+      "state": "unavailable",
+      "detail": "target_lost_requires_new_generation",
+      "target_lost": true,
+      "failed_stage": null,
+      "support_segment_completed": true,
+      "geometry_metrics": null,
+      "source_frame_qualification": null
+    }
+  ],
+  "original_stop_configuration": {
+    "motion_settle_min_sec": 0.8,
+    "motion_settle_position_epsilon_rad": 0.0025,
+    "motion_settle_required_samples": 3,
+    "motion_settle_sample_sec": 0.05,
+    "motion_settle_timeout_sec": 5.0
+  },
+  "limits": [
+    "This fixture contains no RGB pixels. The first qualified RGB frame has not been found in either recorded RGB stream; the second qualified RGB frame is present in /experiment/observation_rgbd, as verified in gen50_g49_reference_source_availability_r1.",
+    "Any newly added capture policy in replay is a counterfactual field based on this original runtime configuration, not a historical wire field.",
+    "No contact geometry, physical motion, or successful grasp is asserted."
+  ]
+}

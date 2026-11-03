@@ -14,6 +14,7 @@ import numpy as np
 from .observation_path_guard import (
     ObservationPathError, _polynomial_bounds, segment_coefficients,
     observation_tracking_error_bounds,
+    observation_endpoint_joint_reserve,
 )
 
 POLICY = 'per_goal_tracking_with_commanded_stop_reserve_v1'
@@ -144,7 +145,8 @@ def required_command_time_scale(plan, hold):
 
 
 def qualify_contract_path(plan, hold, scene, fk, gripper, opening, constraints, stop_duration,
-                          *, trajectory_stop_reserve=False):
+                          *, trajectory_stop_reserve=False, path_validator=None,
+                          reserve_endpoint_joints=False, scheduled_start_ns=None):
     """Search the same finite tracking contracts for every pose/target.
 
     A returned candidate is still only a conditional geometric certificate.
@@ -160,11 +162,27 @@ def qualify_contract_path(plan, hold, scene, fk, gripper, opening, constraints, 
     bounds = derivatives if trajectory_stop_reserve else None
     for contract in tracking_contract_candidates(constraints, fk.names, stop_duration,
                                                  command_bounds=bounds):
-        report = qualify_candidate_path(plan, hold, scene, fk, gripper, opening,
-                                        contract['joint_error_bounds_rad'])
+        options = {} if path_validator is None else {'path_validator': path_validator}
+        if scheduled_start_ns is not None:
+            options['scheduled_start_ns'] = scheduled_start_ns
+        reserve = (observation_endpoint_joint_reserve(fk,
+            plan.joint_trajectory.points[-1].positions, contract['joint_error_bounds_rad'])
+            if reserve_endpoint_joints else None)
+        if reserve is not None and not reserve['ok']:
+            report = dict(ok=False, failure_location='goal',
+                reason='OBSERVATION_ENDPOINT_JOINT_RESERVE_INSUFFICIENT',
+                endpoint_joint_reserve=reserve)
+        else:
+            report = qualify_candidate_path(plan, hold, scene, fk, gripper, opening,
+                                            contract['joint_error_bounds_rad'], **options)
+            if reserve is not None:
+                report['endpoint_joint_reserve'] = reserve
         attempts.append(dict(path_position_tolerance_rad=contract['path_position_tolerance_rad'],
                              ok=report['ok'], failure_location=report.get('failure_location'),
                              reason=report.get('reason', '')))
+        if 'candidate_rejection_code' in report:
+            attempts[-1]['candidate_rejection_code'] = report['candidate_rejection_code']
+            attempts[-1]['candidate_rejection_at_start'] = report['candidate_rejection_at_start']
         if report['ok']:
             report['execution_tracking_contract'] = contract
             report['command_derivative_bounds'] = derivatives

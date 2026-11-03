@@ -1,0 +1,226 @@
+{
+  "T_base_camera_link": [
+    [
+      -0.13921928646015558,
+      0.9722660073044792,
+      -0.18792764915714638,
+      -0.052448895029745105
+    ],
+    [
+      -0.5802609251918819,
+      -0.23387735874013815,
+      -0.7801273227904519,
+      -0.2300284072412437
+    ],
+    [
+      -0.802443299537722,
+      0.0004383023421029031,
+      0.596728211934102,
+      0.24841085186271
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "audit": {
+    "generation": 13,
+    "moveit_selection": {
+      "aperture_metric": "max_measured_band_and_frozen_obb_projected_width",
+      "checked_count": 0,
+      "comparison_budget_after_incumbent_sec": 8.0,
+      "configured_top_n": 0,
+      "global_time_optimality_claimed": false,
+      "motion_metric": "strict_sequence_hardware_duration_lower_bound",
+      "optimality_scope": "checked_hard_safe_candidates_only",
+      "physical_aperture_and_gates_unchanged": true,
+      "policy": "CHECKED_HARDWARE_DURATION_THEN_JOINT_MOTION",
+      "publication_reserve_sec": 2.0,
+      "ranking_order": [
+        "execution_duration_lower_bound_sec",
+        "joint_max_delta_rad",
+        "joint_path_cost",
+        "aperture_width_m"
+      ],
+      "reachable_count": 0,
+      "shortlist_count": 0,
+      "terminated_early": false,
+      "termination_reason": "",
+      "unchecked_tail_is_not_rejected": true
+    },
+    "request_id": 66,
+    "selected": null,
+    "snapshot_stamp_ns": 1790745646077659368,
+    "target_epoch": 15
+  },
+  "diagnostics": {
+    "tabletop_geometry": {
+      "adaptive_stage_profiles": [
+        {
+          "approach_offset_m": 0.023361126441890392,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.003,
+          "execution_position_error_m": 0.0,
+          "lateral_sweep_m": 0.0,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.033,
+          "object_height_m": 0.020361126441890393,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.03536112644189039,
+          "tilt_deg": 0.0
+        },
+        {
+          "approach_offset_m": 0.023361126441890392,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.003,
+          "execution_position_error_m": 0.0,
+          "lateral_sweep_m": 0.004557529680207885,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.033,
+          "object_height_m": 0.020361126441890393,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.03536112644189039,
+          "tilt_deg": 11.25
+        },
+        {
+          "approach_offset_m": 0.023361126441890392,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.003,
+          "execution_position_error_m": 0.0,
+          "lateral_sweep_m": 0.008939916050697471,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.033,
+          "object_height_m": 0.020361126441890393,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.03536112644189039,
+          "tilt_deg": 22.5
+        },
+        {
+          "approach_offset_m": 0.023361126441890392,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.003,
+          "execution_position_error_m": 0.0,
+          "lateral_sweep_m": 0.012978746460921434,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.033,
+          "object_height_m": 0.020361126441890393,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.03536112644189039,
+          "tilt_deg": 33.75
+        },
+        {
+          "approach_offset_m": 0.023361126441890392,
+          "contact_overlap_requirement_m": 0.002,
+          "depth_uncertainty_m": 0.003,
+          "execution_position_error_m": 0.0,
+          "lateral_sweep_m": 0.016518810923217057,
+          "lateral_sweep_reference": "final_approach",
+          "lift_height_m": 0.033,
+          "object_height_m": 0.020361126441890393,
+          "pregrasp_direction_mode": "support_normal",
+          "pregrasp_distance_m": 0.03536112644189039,
+          "tilt_deg": 45.0
+        }
+      ],
+      "contact_execution_gate_deferred": false,
+      "failure_code": "GRIPPER_SWEEP_COLLISION",
+      "materialized_count": 0,
+      "plan_phase": "CONTACT_EXECUTION_PLAN",
+      "surface_evidence_rejections": [
+        {
+          "angle_deg": 40.633827098849764,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.024215927989547418,
+          "positive_reach_m": 0.024215927989547418
+        },
+        {
+          "angle_deg": 29.999999999999993,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.02463032839798645,
+          "positive_reach_m": 0.02463032839798645
+        },
+        {
+          "angle_deg": 35.0,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.024331041113302494,
+          "positive_reach_m": 0.024331041113302494
+        },
+        {
+          "angle_deg": 44.99999999999999,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.024284954951207256,
+          "positive_reach_m": 0.024284954951207256
+        },
+        {
+          "angle_deg": 49.99999999999999,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.024536370878115756,
+          "positive_reach_m": 0.024536370878115756
+        },
+        {
+          "angle_deg": 55.00000000000001,
+          "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+          "maximum_side_reach_m": 0.025,
+          "negative_reach_m": 0.024981467963256232,
+          "positive_reach_m": 0.024981467963256232
+        }
+      ]
+    }
+  },
+  "geometry": {
+    "R_base_obb": [
+      [
+        -0.6507505647040797,
+        -0.7583371504895886,
+        -0.03805875358774238
+      ],
+      [
+        0.7575600491614272,
+        -0.6518336010983933,
+        0.034867296907514
+      ],
+      [
+        -0.05124914098653313,
+        -0.006141878086683216,
+        0.9986670130137025
+      ]
+    ],
+    "available": true,
+    "frame_id": "base_link",
+    "obb_center_base_m": [
+      -0.1080791660904404,
+      -0.4063448283210984,
+      0.012331905827096952
+    ],
+    "obb_rotation_convention": "columns_are_obb_axes_expressed_in_base_link",
+    "obb_size_xyz_m": [
+      0.0647411206777312,
+      0.047431855979094835,
+      0.020361126441890393
+    ],
+    "object_points_count": 1640,
+    "object_points_sha256": "bb069a59e611d94bd9c02d9c9aabc7ffe3f9867c86d027c4f947fbc14464ee21",
+    "source_mode": "instance_mask",
+    "support_inlier_ratio": 0.9985928418476598,
+    "support_normal_base": [
+      -0.03805875358774238,
+      0.034867296907514,
+      0.9986670130137025
+    ],
+    "support_offset_m": 0.007919883089531798
+  },
+  "locally_valid": {
+    "entered": 12,
+    "passed": 0,
+    "rejected": 12
+  },
+  "opening_fit_clearance_each_side_m": 0.0005,
+  "source": "generation13_initial_no_safe_audit.json, selection generation 13 request 66"
+}

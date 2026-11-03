@@ -4,7 +4,7 @@
 
 ## 数据流程
 
-每次时间戳+UUID独立目录；原始bag、日志、实际结果证据、文件大小/SHA-256及上传状态写入manifest。bag和日志正常关闭后由独立持久后台服务上传GitHub Releases，约1GiB原字节分块，支持断点复用与分卷。全部结果合计保留按完成时间最新10次；其他记录仅全部上传和再次验证后逐文件清理，摘要/清单/下载位置永久保留。异常、不完整、未上传或校验失败数据保留。录制开始余量默认2GiB，空间不足先尝试归档清理，仍不足阻止新录制；不终止控制。
+每次时间戳+UUID独立目录；原始bag、日志、实际结果证据、文件大小/SHA-256及上传状态写入manifest。bag和日志正常关闭后由独立持久后台服务上传GitHub Releases，约1GiB原字节分块，支持断点复用与分卷。全部结果合计保留按完成时间最新5次；其他记录仅全部上传和再次验证后逐文件清理，摘要/清单/下载位置永久保留。异常、不完整、未上传或校验失败数据保留。录制开始余量默认2GiB，空间不足先尝试归档清理，仍不足阻止新录制；不终止控制。
 
 ## 验证
 
@@ -38,4 +38,9 @@ The live queue exposed a capacity starvation problem: filesystem iteration could
 
 ## Local retention expansion
 
-The current aggregate retention is ten complete records, ordered by completion time across all outcomes. Existing local recordings remain protected while the queue is paused for migration and a new preview is validated. Prior five-record deployment notes above are historical. Upload, SHA-256 verification, restart recovery, file-scoped deletion and recording settings are unchanged. A five-record validation proof cannot enable cleanup under the ten-record policy; capacity admission remains independent.
+The temporarily expanded aggregate retention was ten complete records, ordered by completion time across all outcomes. Existing local recordings remain protected while the queue is paused for migration and a new preview is validated. Prior five-record deployment notes above are historical. Upload, SHA-256 verification, restart recovery, file-scoped deletion and recording settings are unchanged. A five-record validation proof cannot enable cleanup under the ten-record policy; capacity admission remains independent.
+
+
+## 2026-09-27 latest-five retention restored
+
+The user now requires the latest five complete records locally and complete GitHub backups for every experiment. `RETAIN` is five again, across all outcomes by completion time. A ten-record validation proof is rejected; migrate the live configuration and retain validation evidence for the new five-record policy before cleanup. The cleanup contract still rechecks the remote manifest and every registered file before deleting any registered payload. This code change alone neither imports unmanaged legacy logs nor deletes any real experiment.

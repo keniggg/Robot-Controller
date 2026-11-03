@@ -49,7 +49,7 @@ def observe_task_state(outcome, message, minimum_stamp_ns):
     state = str(message.get('state', ''))
     reason = str(message.get('message', ''))
     if state == 'SUCCESS' and message.get('success') is True:
-        result = 'success'
+        result = ('unknown' if reason.startswith('DIAGNOSTIC_OBSERVATION_COMPLETE:') else 'success')
     elif state == 'HOLDING' and message.get('success') is False:
         result = 'unknown'
     elif state == 'FAILED' and message.get('success') is False:
@@ -85,7 +85,9 @@ def classify_result(recorder_outcome, runner_log, interrupted=False, returncode=
         match = _SERVICE_RESULT.fullmatch(line)
         if match:
             observations.append({
-                'result': ('unknown' if match.group(2).startswith('GRASP_HOLD_UNVERIFIED:')
+                'result': ('unknown' if (match.group(2).startswith('GRASP_HOLD_UNVERIFIED:')
+                           or (match.group(1) == 'True' and match.group(2).startswith(
+                               'DIAGNOSTIC_OBSERVATION_COMPLETE:')))
                            else ('success' if match.group(1) == 'True' else 'failure')),
                 'reason': match.group(2),
                 'evidence': {'source': 'StartGrasp service response in runner.log', 'line': line},
@@ -96,6 +98,9 @@ def classify_result(recorder_outcome, runner_log, interrupted=False, returncode=
             response_unknown = True
     evidence = {'observations': observations, 'runner_returncode': returncode,
                 'recorder_stop_reason': recorder_outcome.get('stop_reason', '')}
+    if observations and all(entry['result'] == 'unknown' and entry['reason'].startswith(
+            'DIAGNOSTIC_OBSERVATION_COMPLETE:') for entry in observations):
+        evidence.update(diagnostic_observation_completed=True, grasp_performed=False)
     results = {entry['result'] for entry in observations}
     if len(results) > 1:
         return 'unknown', 'conflicting actual task results; manual confirmation required', evidence
@@ -145,11 +150,11 @@ def _closed_recording_files(directory, outcome):
 
 
 def main(argv=None):
-    from grasp_archive import begin_record, finalize_record, load_config
+    from grasp_archive import begin_record, finalize_record, load_config, root_path
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root', default=os.environ.get(
-        'GRASP_RECORD_ROOT', str(Path(__file__).resolve().parents[1] / '.grasp_records')))
+    parser.add_argument('--root', help='record root (default: configured experiment storage)')
+    parser.add_argument('--storage-backend', choices=('ssd', 'sanstand'), help='experiment disk (default: ssd)')
     parser.add_argument('--config', help='archive configuration (default: ROOT/archive_config.json)')
     parser.add_argument('--duration', type=float, default=600.,
                         help='unchanged keyframe recorder duration, seconds (default: 600)')
@@ -165,14 +170,24 @@ def main(argv=None):
         parser.error('duration must be in (0, 1800] seconds')
     if args.ready_timeout <= 0 or (args.min_free_bytes is not None and args.min_free_bytes < 0):
         parser.error('ready timeout must be positive and free-space reserve nonnegative')
-    root = Path(args.root).expanduser().resolve()
+    root = root_path(args.root, args.storage_backend)
+    from experiment_storage import select
+    storage = select(args.storage_backend, path=root)
+    # The old managed ros_log recording root remains a supported archive root.
+    identity = storage.validate(root)
+    if not (root == storage.archive_root or storage.archive_root in root.parents
+            or root == storage.ros_log_root/'unknown_grasp_20260923'):
+        parser.error('record root must be the selected archive or its supported legacy ros_log root')
     config = load_config(args.config or root / 'archive_config.json')
     if args.min_free_bytes is not None:
         config['min_free_bytes'] = args.min_free_bytes
     directory = begin_record(root, metadata={
         'command': command, 'recording_duration_seconds': args.duration,
         'owner_pid': os.getpid(), 'launcher': Path(__file__).name,
+        'storage': identity,
     }, config=config)
+    environment = dict(os.environ, **storage.environment(directory/'ros', session=directory),
+                       GRASP_RECORD_DIR=str(directory))
     print('GRASP_RECORD_DIR=%s' % directory, flush=True)
     interrupted = {'signal': None}
     previous_handlers = {}
@@ -196,12 +211,14 @@ def main(argv=None):
                 '--config', str(Path(args.config).expanduser().resolve() if args.config
                                 else root / 'archive_config.json'),
                 '--min-free-bytes', str(config['min_free_bytes']),
-            ], stdout=recorder_log, stderr=subprocess.STDOUT, start_new_session=True)
+            ], stdout=recorder_log, stderr=subprocess.STDOUT, start_new_session=True,
+                env=dict(environment, ROS_LOG_DIR=str(directory/'recorder_ros')))
             if not _await_recorder_ready(recorder, directory, args.ready_timeout, interrupted):
                 launcher_error = 'recorder did not become ready; grasp command was not started'
                 print(launcher_error, file=sys.stderr, flush=True)
             else:
-                runner_environment = dict(os.environ, GRASP_RECORD_DIR=str(directory))
+                storage.validate(directory, expected=identity)
+                runner_environment = dict(environment, ROS_LOG_DIR=str(directory/'runner_ros'))
                 runner = subprocess.Popen(command, stdout=runner_log, stderr=subprocess.STDOUT,
                                           start_new_session=True, env=runner_environment)
                 stop_sent = False
@@ -235,6 +252,7 @@ def main(argv=None):
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
+    storage.validate(directory, expected=identity)
     outcome = _read_json(directory / 'recorder_outcome.json')
     log = (directory / 'runner.log').read_text(encoding='utf-8', errors='replace')
     # Recorder interruption and robot-task outcome are separate facts.
@@ -256,6 +274,7 @@ def main(argv=None):
         print('RECORDING_NOT_FINALIZED: bag close was not confirmed; preserve %s' % directory,
               file=sys.stderr, flush=True)
         return 2
+    storage.validate(directory, expected=identity)
     finalize_record(directory, result=result, failure_reason=reason, evidence=evidence,
                     closed_files=_closed_recording_files(directory, outcome))
     print('GRASP_RECORD_QUEUED result=%s path=%s' % (result, directory), flush=True)

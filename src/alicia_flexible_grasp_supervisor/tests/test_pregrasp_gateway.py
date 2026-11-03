@@ -35,6 +35,7 @@ def make_gateway(monkeypatch, response=True, day='20260919'):
     plan.plan_id=compute_plan_id(plan)
     node=MotionGateway.__new__(MotionGateway)
     node._planner_lock=threading.RLock()
+    node._command_reference_lock=threading.RLock()
     parameters={}
     monkeypatch.setattr(module.rospy,'get_param',lambda key,default=None:parameters.get(key,default))
     monkeypatch.setattr(module.rospy,'set_param',lambda key,value:parameters.update({key:value}))
@@ -100,6 +101,28 @@ def test_no_response_leaves_original_goal_and_stops_after_one_step(monkeypatch):
     assert not result.success and 'NO_BOUNDED_DIRECTIONAL_RESPONSE' in result.message
     assert len(calls)==1 and state['moves']==1
     assert json.loads(result.message)['no_implicit_rollback_or_torque_disable']
+
+
+@pytest.mark.parametrize('feedforward', [False, True])
+def test_unknown_gateway_accepts_ten_mm_in_both_compensation_routes(monkeypatch, feedforward):
+    from pathlib import Path
+    node, _, plan, state, calls, _ = make_gateway(monkeypatch, day='20260925_actual')
+    plan.model_choice = 'unknown_tabletop'
+    context = node._pregrasp_context(plan)
+    context['config'].update(unknown_measured_endpoint_position_tolerance_m=.010,
+                            unknown_pregrasp_feedforward_enabled=feedforward)
+    record = json.loads((Path(__file__).parent /
+        'fixtures/pregrasp_following_20260925_actual.json').read_text())
+    row = record['actual_stationary_steps'][-1]
+    state['sdk'] = (np.array(row['sdk_counts'])-2048)*Q
+    state['actual'] = (np.array(row['measured_counts'])-2048)*Q
+    result = node.handle_compensate_pregrasp(NS(plan=plan, execute=True))
+    report = json.loads(result.message)
+    assert result.success, report
+    assert report['position_error_m'] == pytest.approx(.0062177692275435115)
+    assert report['code'] == 'PREGRASP_MEASURED_CONVERGED'
+    assert calls == [] and state['moves'] == 0
+    assert not report['real_grasp_success']
 
 
 @pytest.mark.parametrize('unknown,enabled,responds,expected,moves', [

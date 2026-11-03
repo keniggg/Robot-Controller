@@ -1,0 +1,750 @@
+{
+  "arrival_frame_completion": {
+    "completion_deadline_ns": 1791601380117423820,
+    "completion_monotonic": 10108.159553974,
+    "geometry_deadline_ns": 1791601379854992675,
+    "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+    "marker_kind": "observation_arrival_retry",
+    "maximum_frame_age_ns": 800000000,
+    "metric_geometry_authority": false,
+    "motion_authorized": false,
+    "processing_start_ns": 1791601379373123168,
+    "qualified_entry_ns": 1791601379376874923,
+    "reference_age_at_entry_sec": 0.32188224800000004,
+    "reference_refreshed": false,
+    "reference_source_stamp_ns": 1791601379054992675,
+    "session_deadline_ns": 1791601919294539213,
+    "source_age_at_entry_sec": 0.059451103000000005,
+    "source_stamp_ns": 1791601379317423820,
+    "used_past_geometry_deadline": false
+  },
+  "arrival_station_invalidated_reason": "station_compute_wait_station_changed",
+  "contract": {
+    "binding": {
+      "camera_configuration_sha256": "4af8332c88f361626691bdf743ef88a2fbdfe096bb45074ad876b34926d0e429",
+      "config_sha256": "93cdce50dd530becfcd918ab69baf53e96326601da0c543d0b93af84c9d33554",
+      "control_epoch_ns": 1791591831641651789,
+      "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+      "phase_id": 1,
+      "phase_reference_source_ns": 1791601358981364727,
+      "phase_started_ns": 1791601359304847002,
+      "reference_binding": "{\"anchor_extent_m\": [0.05954650134484539, 0.039964341675088506, 0.012345940066303504], \"anchor_position_base\": [-0.10173512125673538, -0.37160303339472056, 0.01763119502630997], \"anchor_source_stamp_ns\": 1791601303774594068, \"reference_support_footprint_base\": [[-0.11244692494007584, -0.3466122554495779, -0.00016918316984782834], [-0.11813492708091111, -0.34678529304443, -0.00039808411963804767], [-0.1210288559484508, -0.34693990270486014, -0.0005114050030547903], [-0.12364456780545827, -0.3478822566440327, -0.0005759889900303541], [-0.1255260425350557, -0.3487761057857975, -0.0006122590556312049], [-0.13540681834946292, -0.36627854347093125, -0.00019883319748181544], [-0.13569432563743783, -0.3668192702493033, -0.00018532077013299134], [-0.13695065700238407, -0.3691947893968481, -0.00012567691673574192], [-0.13825719159735728, -0.37819403563481535, 0.00024417888274507783], [-0.13790707915449993, -0.3788954867355153, 0.0002918435086101496], [-0.09689600545885987, -0.40505979759640737, 0.0032346966459029965], [-0.095152790603416, -0.4060534412290427, 0.003354198451302244], [-0.0933876378892993, -0.40691385421778214, 0.003468332828352892], [-0.09045490275869159, -0.40661847898841136, 0.0035766340433170223], [-0.0672892981899679, -0.3833805193924187, 0.0034464556101733005], [-0.0670342622082471, -0.3830854526038831, 0.003443172575355529], [-0.06709882516999445, -0.38215216431553317, 0.003396477862597563], [-0.06748542130655916, -0.380515047870152, 0.0033031767104326542], [-0.06838473207362651, -0.37947625672741453, 0.0032167177234921135], [-0.07772772141904784, -0.36990878718395237, 0.0023762290754232], [-0.1069105002265552, -0.34953099226582, 0.00019917555072235336], [-0.10800003835722131, -0.34888987452847203, 0.00012353846814028117], [-0.11076734252980855, -0.34743095087845416, -6.058207159766963e-05]], \"reference_support_plane_base\": [-0.04159484414329629, 0.047056246361816295, 0.9980258406569597, 0.011801908542497137]}",
+      "selection": {
+        "generation": 7,
+        "mode": "unknown",
+        "stamp_ns": 1791601303315075159,
+        "strategy": "observe_return"
+      },
+      "session_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00",
+      "source_id": "00215f4b06fc125e1aba2fc1caaf47e8fdf0357c738323a63f357af38533119f",
+      "station_q_rad": [
+        -2.1015536794033283,
+        -0.42644665903220824,
+        0.9541360500648689,
+        -0.18407769454627695,
+        -1.1428156869748027,
+        0.0030679615757712823
+      ],
+      "target_epoch": 4,
+      "target_track_id": "g1-t4",
+      "view_index": 1,
+      "view_plan_id": "5d86bcbd38b8d2ca92c4bed4"
+    },
+    "geometry_deadline_ns": 1791601379854992675,
+    "identity_deadline_ns": 1791601384054992675,
+    "maximum_frame_age_sec": 0.8,
+    "metric_geometry_authority": false,
+    "motion_authorized": false,
+    "phase_deadline_ns": 1791601449304847240,
+    "policy": "qualified_observation_station_compute_wait",
+    "reference_refreshed": false,
+    "session_deadline_ns": 1791601919294539213,
+    "source_ns": 1791601379054992675,
+    "version": 1
+  },
+  "events": [
+    {
+      "recorder_received_ns": 1791601302361196517,
+      "ros_md5": "2176decaecbce78abc3b96ef049fabed",
+      "ros_type": "std_msgs/Header",
+      "roswire_base64": "AAAAAJeFyWpN1D4mEwAAAHNka19yZWZlcmVuY2VfZXBvY2g=",
+      "source_ns": null,
+      "topic": "/alicia_d/control_reference_epoch",
+      "wire_sha256": "119e8159a61095b9617093656156ed3a397bc4f689580b70e32767294655ee29"
+    },
+    {
+      "recorder_received_ns": 1791601302461996555,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "CgAAAIKqyWpFqQ4IAAAAAAQAAABJRExFAAAAAAAABQAAAHJlYWR5",
+      "source_ns": 1791601282135178565,
+      "topic": "/grasp/state",
+      "wire_sha256": "a20998f1d4e2beada202f6f851568618ce32f0100c2a126d33e67754623b11cd"
+    },
+    {
+      "recorder_received_ns": 1791601302463812828,
+      "ros_md5": "0bdcb9c29c0363278db4d6def64fd010",
+      "ros_type": "alicia_flexible_grasp_supervisor/NearFieldPlanningPhase",
+      "roswire_base64": "AwAAAIKqyWoyWu4HCQAAAGJhc2VfbGluawAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAAY29udGFjdF9yZXBsYW4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "source_ns": 1791601282133061170,
+      "topic": "/grasp/near_field_phase",
+      "wire_sha256": "abc4d216682308e5c0ae65ef7991639ee1be0bd43a9b323413ef710b73cfcc11"
+    },
+    {
+      "recorder_received_ns": 1791601319238070249,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "DQAAAKeqyWprvRcOAAAAAA0AAABNT1ZFX1BSRUdSQVNQAwAAAAEAIgAAAGNhcHR1cmluZyBpbml0aWFsIG9ic2VydmF0aW9uIHBvc2U=",
+      "source_ns": 1791601319236436843,
+      "topic": "/grasp/state",
+      "wire_sha256": "7b83c28c23e850ecd8b0392c24785a63c56b1860b116040c1c4c17ece058097a"
+    },
+    {
+      "payload": {
+        "deadline_ns": "1791601919294539213",
+        "max_observations": 3,
+        "origin_plan_id": "5d86bcbd38b8d2ca92c4bed4",
+        "origin_snapshot_stamp_ns": "1791601311107632637",
+        "phase": "observing",
+        "previous_gain_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "return_verified_stamp_ns": "0",
+        "selection": {
+          "generation": 7,
+          "mode": "unknown",
+          "stamp_ns": 1791601303315075159,
+          "strategy": "observe_return"
+        },
+        "session_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00",
+        "stamp_ns": "1791601319294539213",
+        "target_epoch": 4,
+        "target_track_id": "g1-t4",
+        "version": 2,
+        "view_index": 1,
+        "view_plan_id": "5d86bcbd38b8d2ca92c4bed4",
+        "view_request_id": "initial:5d86bcbd38b8d2ca92c4bed4",
+        "view_source_stamp_ns": "1791601311107632637"
+      },
+      "recorder_received_ns": 1791601319296213388,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "+AIAAHsidmVyc2lvbiI6IDIsICJzZXNzaW9uX2lkIjogIjQwODA3NDdiMjY0YWE4YjgyODE2MjYxZTFlYTkyOTAwOTNjMGJlYTllNWRiNWMxOWMzNjI2NDZiMDkwNjBmMDAiLCAic2VsZWN0aW9uIjogeyJtb2RlIjogInVua25vd24iLCAic3RyYXRlZ3kiOiAib2JzZXJ2ZV9yZXR1cm4iLCAiZ2VuZXJhdGlvbiI6IDcsICJzdGFtcF9ucyI6IDE3OTE2MDEzMDMzMTUwNzUxNTl9LCAicGhhc2UiOiAib2JzZXJ2aW5nIiwgInN0YW1wX25zIjogIjE3OTE2MDEzMTkyOTQ1MzkyMTMiLCAiZGVhZGxpbmVfbnMiOiAiMTc5MTYwMTkxOTI5NDUzOTIxMyIsICJ0YXJnZXRfZXBvY2giOiA0LCAidGFyZ2V0X3RyYWNrX2lkIjogImcxLXQ0IiwgIm9yaWdpbl9wbGFuX2lkIjogIjVkODZiY2JkMzhiOGQyY2E5MmM0YmVkNCIsICJvcmlnaW5fc25hcHNob3Rfc3RhbXBfbnMiOiAiMTc5MTYwMTMxMTEwNzYzMjYzNyIsICJyZXR1cm5fdmVyaWZpZWRfc3RhbXBfbnMiOiAiMCIsICJtYXhfb2JzZXJ2YXRpb25zIjogMywgInZpZXdfaW5kZXgiOiAxLCAidmlld19wbGFuX2lkIjogIjVkODZiY2JkMzhiOGQyY2E5MmM0YmVkNCIsICJ2aWV3X3NvdXJjZV9zdGFtcF9ucyI6ICIxNzkxNjAxMzExMTA3NjMyNjM3IiwgInZpZXdfcmVxdWVzdF9pZCI6ICJpbml0aWFsOjVkODZiY2JkMzhiOGQyY2E5MmM0YmVkNCIsICJwcmV2aW91c19nYWluX3NoYTI1NiI6ICIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIn0=",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_session",
+      "wire_sha256": "445adac0e34a9d6f3445cc95e2900f081fc26f98552575559bbab46f831c82a0"
+    },
+    {
+      "recorder_received_ns": 1791601319331207513,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "DgAAAKeqyWqfp60TAAAAAA0AAABQTEFOX1BSRUdSQVNQAgAAAAEATwAAAGZhci1maWVsZCBvYnNlcnZhdGlvbiBwbGFuOyBjb250YWN0IHNpbXVsYXRpb24gZGVmZXJyZWQgdW50aWwgbmVhci1maWVsZCByZXBsYW4=",
+      "source_ns": 1791601319330147743,
+      "topic": "/grasp/state",
+      "wire_sha256": "c92920acc5e0e1f98cc32eee65879bbbee28a5d1703d186e732052f1af1fd84f"
+    },
+    {
+      "recorder_received_ns": 1791601319345634698,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "DwAAAKeqyWreSCoUAAAAAA0AAABQTEFOX1BSRUdSQVNQAgAAAAEAEwAAAHVzaW5nIDZEIGdyYXNwIHBsYW4=",
+      "source_ns": 1791601319338315486,
+      "topic": "/grasp/state",
+      "wire_sha256": "dbf848809f41736625dcf8050fcd82e3cfd9c10e0c2632663e5f670af3ebcfc3"
+    },
+    {
+      "recorder_received_ns": 1791601319348928213,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "EAAAAKeqyWrw6KwUAAAAAA0AAABNT1ZFX1BSRUdSQVNQAwAAAAEAKgAAAHByZWZsaWdodCBwbGFubmluZyA2RCBvYnNlcnZhdGlvbiBwcmVncmFzcA==",
+      "source_ns": 1791601319346876144,
+      "topic": "/grasp/state",
+      "wire_sha256": "69bdedff4b118cb48c3f8c83b0047ee15b528293468ba13c5998d1bac5e3f214"
+    },
+    {
+      "recorder_received_ns": 1791601319730517148,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "EQAAAKeqyWomXXsrAAAAAA0AAABNT1ZFX1BSRUdSQVNQAwAAAAEAFAAAAHBsYW5uaW5nIDZEIHByZWdyYXNw",
+      "source_ns": 1791601319729505062,
+      "topic": "/grasp/state",
+      "wire_sha256": "00cc1725f6df6891f61ee7ef0571d7f79c9890deec26388447a7c4f678378a12"
+    },
+    {
+      "recorder_received_ns": 1791601320232704401,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "EgAAAKiqyWod6sUNAAAAAA0AAABNT1ZFX1BSRUdSQVNQAwAAAAEAEgAAAG1vdmluZyA2RCBwcmVncmFzcA==",
+      "source_ns": 1791601320231074333,
+      "topic": "/grasp/state",
+      "wire_sha256": "e9109f89d1bf3619c1609569387a1163b884f7be5ca885d1d029c8bb66e72d45"
+    },
+    {
+      "payload": {
+        "arrival_stamp_ns": 0,
+        "capture_deadline_ns": 0,
+        "control_epoch_ns": 1791591831641651789,
+        "deadline_ns": 1791601919294539213,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "motion_kind": "observation",
+        "origin_plan_id": "5d86bcbd38b8d2ca92c4bed4",
+        "origin_snapshot_stamp_ns": 1791601311107632637,
+        "plan_sha256": "ba0f360b54d05261f5a3890c95636019d359017cf83a4c1eb51819a1e64f2ae9",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:executing",
+        "selection": {
+          "generation": 7,
+          "mode": "unknown",
+          "stamp_ns": 1791601303315075159,
+          "strategy": "observe_return"
+        },
+        "session_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00",
+        "stamp_ns": 1791601320237904548,
+        "state": "executing",
+        "target_epoch": 4,
+        "target_track_id": "g1-t4",
+        "version": 1,
+        "view_index": 1,
+        "view_plan_id": "5d86bcbd38b8d2ca92c4bed4",
+        "view_source_stamp_ns": 1791601311107632637
+      },
+      "recorder_received_ns": 1791601320239129066,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "HAQAAHsidmVyc2lvbiI6IDEsICJzdGF0ZSI6ICJleGVjdXRpbmciLCAibGVhc2VfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4IiwgInJlcXVlc3RfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4OmV4ZWN1dGluZyIsICJzZWxlY3Rpb24iOiB7Im1vZGUiOiAidW5rbm93biIsICJzdHJhdGVneSI6ICJvYnNlcnZlX3JldHVybiIsICJnZW5lcmF0aW9uIjogNywgInN0YW1wX25zIjogMTc5MTYwMTMwMzMxNTA3NTE1OX0sICJzZXNzaW9uX2lkIjogIjQwODA3NDdiMjY0YWE4YjgyODE2MjYxZTFlYTkyOTAwOTNjMGJlYTllNWRiNWMxOWMzNjI2NDZiMDkwNjBmMDAiLCAidGFyZ2V0X2Vwb2NoIjogNCwgInRhcmdldF90cmFja19pZCI6ICJnMS10NCIsICJvcmlnaW5fcGxhbl9pZCI6ICI1ZDg2YmNiZDM4YjhkMmNhOTJjNGJlZDQiLCAib3JpZ2luX3NuYXBzaG90X3N0YW1wX25zIjogMTc5MTYwMTMxMTEwNzYzMjYzNywgInZpZXdfcGxhbl9pZCI6ICI1ZDg2YmNiZDM4YjhkMmNhOTJjNGJlZDQiLCAidmlld19zb3VyY2Vfc3RhbXBfbnMiOiAxNzkxNjAxMzExMTA3NjMyNjM3LCAidmlld19pbmRleCI6IDEsICJwbGFuX3NoYTI1NiI6ICJiYTBmMzYwYjU0ZDA1MjYxZjVhMzg5MGM5NTYzNjAxOWQzNTkwMTdjZjgzYTRjMWViNTE4MTlhMWU2NGYyYWU5IiwgImNvbnRyb2xfZXBvY2hfbnMiOiAxNzkxNTkxODMxNjQxNjUxNzg5LCAiZGVhZGxpbmVfbnMiOiAxNzkxNjAxOTE5Mjk0NTM5MjEzLCAic3RhbXBfbnMiOiAxNzkxNjAxMzIwMjM3OTA0NTQ4LCAibW90aW9uX2tpbmQiOiAib2JzZXJ2YXRpb24iLCAiYXJyaXZhbF9zdGFtcF9ucyI6IDAsICJjYXB0dXJlX2RlYWRsaW5lX25zIjogMCwgIm1ldHJpY19nZW9tZXRyeV9hdXRob3JpdHkiOiBmYWxzZSwgIm1vdGlvbl9hdXRob3JpemVkIjogZmFsc2V9",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_request",
+      "wire_sha256": "325568c9b63a2add06a566bbdfbcd7a41b789746158d5634148499ba5a64bbb7"
+    },
+    {
+      "payload": {
+        "accepted": true,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "participant": "remote",
+        "qualified": false,
+        "reason": "OK",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:executing",
+        "request_sha256": "ddc323ac8c31050c14c6cf3ff1db818fdb9c9999d00db561bc33ab7df192c8a3",
+        "source_stamps_ns": [],
+        "state": "executing",
+        "version": 1
+      },
+      "recorder_received_ns": 1791601320241862297,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "DQIAAHsidmVyc2lvbiI6IDEsICJwYXJ0aWNpcGFudCI6ICJyZW1vdGUiLCAicmVxdWVzdF9pZCI6ICI0MDgwNzQ3YjI2NGFhOGI4MjgxNjI2MWUxZWE5MjkwMDkzYzBiZWE5ZTVkYjVjMTljMzYyNjQ2YjA5MDYwZjAwOm9ic2VydmF0aW9uOjE3OTE2MDEzMjAyMzc5MDQ1NDg6ZXhlY3V0aW5nIiwgImxlYXNlX2lkIjogIjQwODA3NDdiMjY0YWE4YjgyODE2MjYxZTFlYTkyOTAwOTNjMGJlYTllNWRiNWMxOWMzNjI2NDZiMDkwNjBmMDA6b2JzZXJ2YXRpb246MTc5MTYwMTMyMDIzNzkwNDU0OCIsICJzdGF0ZSI6ICJleGVjdXRpbmciLCAicmVxdWVzdF9zaGEyNTYiOiAiZGRjMzIzYWM4YzMxMDUwYzE0YzZjZjNmZjFkYjgxOGZkYjljOTk5OWQwMGRiNTYxYmMzM2FiN2RmMTkyYzhhMyIsICJhY2NlcHRlZCI6IHRydWUsICJyZWFzb24iOiAiT0siLCAicXVhbGlmaWVkIjogZmFsc2UsICJzb3VyY2Vfc3RhbXBzX25zIjogW10sICJtZXRyaWNfZ2VvbWV0cnlfYXV0aG9yaXR5IjogZmFsc2UsICJtb3Rpb25fYXV0aG9yaXplZCI6IGZhbHNlfQ==",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_ack",
+      "wire_sha256": "b3a08d44311e66cc6bfd3f15c06675296c860d6564f131c99936813af707813e"
+    },
+    {
+      "payload": {
+        "accepted": true,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "participant": "unknown",
+        "qualified": false,
+        "reason": "OK",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:executing",
+        "request_sha256": "ddc323ac8c31050c14c6cf3ff1db818fdb9c9999d00db561bc33ab7df192c8a3",
+        "source_stamps_ns": [],
+        "state": "executing",
+        "version": 1
+      },
+      "recorder_received_ns": 1791601320245471000,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "DgIAAHsiYWNjZXB0ZWQiOiB0cnVlLCAibGVhc2VfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4IiwgIm1ldHJpY19nZW9tZXRyeV9hdXRob3JpdHkiOiBmYWxzZSwgIm1vdGlvbl9hdXRob3JpemVkIjogZmFsc2UsICJwYXJ0aWNpcGFudCI6ICJ1bmtub3duIiwgInF1YWxpZmllZCI6IGZhbHNlLCAicmVhc29uIjogIk9LIiwgInJlcXVlc3RfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4OmV4ZWN1dGluZyIsICJyZXF1ZXN0X3NoYTI1NiI6ICJkZGMzMjNhYzhjMzEwNTBjMTRjNmNmM2ZmMWRiODE4ZmRiOWM5OTk5ZDAwZGI1NjFiYzMzYWI3ZGYxOTJjOGEzIiwgInNvdXJjZV9zdGFtcHNfbnMiOiBbXSwgInN0YXRlIjogImV4ZWN1dGluZyIsICJ2ZXJzaW9uIjogMX0=",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_ack",
+      "wire_sha256": "9b8e57ee0c6ae9b7b2304e52cb0c510c9624c6d4a29d64506a9b86f26f9c6b0c"
+    },
+    {
+      "payload": {
+        "arrival_stamp_ns": 1791601357925426244,
+        "capture_deadline_ns": 1791601360925426244,
+        "control_epoch_ns": 1791591831641651789,
+        "deadline_ns": 1791601919294539213,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "motion_kind": "observation",
+        "origin_plan_id": "5d86bcbd38b8d2ca92c4bed4",
+        "origin_snapshot_stamp_ns": 1791601311107632637,
+        "plan_sha256": "ba0f360b54d05261f5a3890c95636019d359017cf83a4c1eb51819a1e64f2ae9",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:requalifying",
+        "selection": {
+          "generation": 7,
+          "mode": "unknown",
+          "stamp_ns": 1791601303315075159,
+          "strategy": "observe_return"
+        },
+        "session_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00",
+        "settle": {
+          "accepted_positions_rad": [
+            -2.1015536794033283,
+            -0.4264466590322082,
+            0.9541360500648689,
+            -0.18407769454627695,
+            -1.1428156869748027,
+            0.0030679615757712823
+          ],
+          "accepted_sample_count": 10,
+          "accepted_stamp_ns": 1791601357888608815,
+          "epoch_ns": 1791591831641651789,
+          "joint_peak_to_peak_rad": [
+            0.0,
+            0.0015339807878855805,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "stationary_window_end_ns": 1791601357888608815,
+          "stationary_window_start_ns": 1791601356988653138
+        },
+        "stamp_ns": 1791601357925426244,
+        "state": "requalifying",
+        "target_epoch": 4,
+        "target_track_id": "g1-t4",
+        "version": 1,
+        "view_index": 1,
+        "view_plan_id": "5d86bcbd38b8d2ca92c4bed4",
+        "view_source_stamp_ns": 1791601311107632637
+      },
+      "recorder_received_ns": 1791601357927249670,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "BgYAAHsidmVyc2lvbiI6IDEsICJzdGF0ZSI6ICJyZXF1YWxpZnlpbmciLCAibGVhc2VfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4IiwgInJlcXVlc3RfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4OnJlcXVhbGlmeWluZyIsICJzZWxlY3Rpb24iOiB7Im1vZGUiOiAidW5rbm93biIsICJzdHJhdGVneSI6ICJvYnNlcnZlX3JldHVybiIsICJnZW5lcmF0aW9uIjogNywgInN0YW1wX25zIjogMTc5MTYwMTMwMzMxNTA3NTE1OX0sICJzZXNzaW9uX2lkIjogIjQwODA3NDdiMjY0YWE4YjgyODE2MjYxZTFlYTkyOTAwOTNjMGJlYTllNWRiNWMxOWMzNjI2NDZiMDkwNjBmMDAiLCAidGFyZ2V0X2Vwb2NoIjogNCwgInRhcmdldF90cmFja19pZCI6ICJnMS10NCIsICJvcmlnaW5fcGxhbl9pZCI6ICI1ZDg2YmNiZDM4YjhkMmNhOTJjNGJlZDQiLCAib3JpZ2luX3NuYXBzaG90X3N0YW1wX25zIjogMTc5MTYwMTMxMTEwNzYzMjYzNywgInZpZXdfcGxhbl9pZCI6ICI1ZDg2YmNiZDM4YjhkMmNhOTJjNGJlZDQiLCAidmlld19zb3VyY2Vfc3RhbXBfbnMiOiAxNzkxNjAxMzExMTA3NjMyNjM3LCAidmlld19pbmRleCI6IDEsICJwbGFuX3NoYTI1NiI6ICJiYTBmMzYwYjU0ZDA1MjYxZjVhMzg5MGM5NTYzNjAxOWQzNTkwMTdjZjgzYTRjMWViNTE4MTlhMWU2NGYyYWU5IiwgImNvbnRyb2xfZXBvY2hfbnMiOiAxNzkxNTkxODMxNjQxNjUxNzg5LCAiZGVhZGxpbmVfbnMiOiAxNzkxNjAxOTE5Mjk0NTM5MjEzLCAic3RhbXBfbnMiOiAxNzkxNjAxMzU3OTI1NDI2MjQ0LCAibW90aW9uX2tpbmQiOiAib2JzZXJ2YXRpb24iLCAiYXJyaXZhbF9zdGFtcF9ucyI6IDE3OTE2MDEzNTc5MjU0MjYyNDQsICJjYXB0dXJlX2RlYWRsaW5lX25zIjogMTc5MTYwMTM2MDkyNTQyNjI0NCwgIm1ldHJpY19nZW9tZXRyeV9hdXRob3JpdHkiOiBmYWxzZSwgIm1vdGlvbl9hdXRob3JpemVkIjogZmFsc2UsICJzZXR0bGUiOiB7ImVwb2NoX25zIjogMTc5MTU5MTgzMTY0MTY1MTc4OSwgImFjY2VwdGVkX3N0YW1wX25zIjogMTc5MTYwMTM1Nzg4ODYwODgxNSwgInN0YXRpb25hcnlfd2luZG93X3N0YXJ0X25zIjogMTc5MTYwMTM1Njk4ODY1MzEzOCwgInN0YXRpb25hcnlfd2luZG93X2VuZF9ucyI6IDE3OTE2MDEzNTc4ODg2MDg4MTUsICJhY2NlcHRlZF9zYW1wbGVfY291bnQiOiAxMCwgImFjY2VwdGVkX3Bvc2l0aW9uc19yYWQiOiBbLTIuMTAxNTUzNjc5NDAzMzI4MywgLTAuNDI2NDQ2NjU5MDMyMjA4MiwgMC45NTQxMzYwNTAwNjQ4Njg5LCAtMC4xODQwNzc2OTQ1NDYyNzY5NSwgLTEuMTQyODE1Njg2OTc0ODAyNywgMC4wMDMwNjc5NjE1NzU3NzEyODIzXSwgImpvaW50X3BlYWtfdG9fcGVha19yYWQiOiBbMC4wLCAwLjAwMTUzMzk4MDc4Nzg4NTU4MDUsIDAuMCwgMC4wLCAwLjAsIDAuMF19fQ==",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_request",
+      "wire_sha256": "ce5ded2081726b99ad44bb034087ee237ef8427b21e67980a8087ede325d5799"
+    },
+    {
+      "payload": {
+        "accepted": true,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "participant": "remote",
+        "qualified": false,
+        "reason": "OK",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:requalifying",
+        "request_sha256": "28a21690cc243c25ef8b32a9c1dd93dfd6b4ee1c12ab9c2f74a849f06d077b7a",
+        "source_stamps_ns": [],
+        "state": "requalifying",
+        "version": 1
+      },
+      "recorder_received_ns": 1791601357929075717,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "EwIAAHsidmVyc2lvbiI6IDEsICJwYXJ0aWNpcGFudCI6ICJyZW1vdGUiLCAicmVxdWVzdF9pZCI6ICI0MDgwNzQ3YjI2NGFhOGI4MjgxNjI2MWUxZWE5MjkwMDkzYzBiZWE5ZTVkYjVjMTljMzYyNjQ2YjA5MDYwZjAwOm9ic2VydmF0aW9uOjE3OTE2MDEzMjAyMzc5MDQ1NDg6cmVxdWFsaWZ5aW5nIiwgImxlYXNlX2lkIjogIjQwODA3NDdiMjY0YWE4YjgyODE2MjYxZTFlYTkyOTAwOTNjMGJlYTllNWRiNWMxOWMzNjI2NDZiMDkwNjBmMDA6b2JzZXJ2YXRpb246MTc5MTYwMTMyMDIzNzkwNDU0OCIsICJzdGF0ZSI6ICJyZXF1YWxpZnlpbmciLCAicmVxdWVzdF9zaGEyNTYiOiAiMjhhMjE2OTBjYzI0M2MyNWVmOGIzMmE5YzFkZDkzZGZkNmI0ZWUxYzEyYWI5YzJmNzRhODQ5ZjA2ZDA3N2I3YSIsICJhY2NlcHRlZCI6IHRydWUsICJyZWFzb24iOiAiT0siLCAicXVhbGlmaWVkIjogZmFsc2UsICJzb3VyY2Vfc3RhbXBzX25zIjogW10sICJtZXRyaWNfZ2VvbWV0cnlfYXV0aG9yaXR5IjogZmFsc2UsICJtb3Rpb25fYXV0aG9yaXplZCI6IGZhbHNlfQ==",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_ack",
+      "wire_sha256": "8de853afb82fadf2b1ec49edf076583c56b357405d539caa09d514baad52ebae"
+    },
+    {
+      "payload": {
+        "accepted": true,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "participant": "unknown",
+        "qualified": false,
+        "reason": "OK",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:requalifying",
+        "request_sha256": "28a21690cc243c25ef8b32a9c1dd93dfd6b4ee1c12ab9c2f74a849f06d077b7a",
+        "source_stamps_ns": [],
+        "state": "requalifying",
+        "version": 1
+      },
+      "recorder_received_ns": 1791601357930957078,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "FAIAAHsiYWNjZXB0ZWQiOiB0cnVlLCAibGVhc2VfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4IiwgIm1ldHJpY19nZW9tZXRyeV9hdXRob3JpdHkiOiBmYWxzZSwgIm1vdGlvbl9hdXRob3JpemVkIjogZmFsc2UsICJwYXJ0aWNpcGFudCI6ICJ1bmtub3duIiwgInF1YWxpZmllZCI6IGZhbHNlLCAicmVhc29uIjogIk9LIiwgInJlcXVlc3RfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4OnJlcXVhbGlmeWluZyIsICJyZXF1ZXN0X3NoYTI1NiI6ICIyOGEyMTY5MGNjMjQzYzI1ZWY4YjMyYTljMWRkOTNkZmQ2YjRlZTFjMTJhYjljMmY3NGE4NDlmMDZkMDc3YjdhIiwgInNvdXJjZV9zdGFtcHNfbnMiOiBbXSwgInN0YXRlIjogInJlcXVhbGlmeWluZyIsICJ2ZXJzaW9uIjogMX0=",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_ack",
+      "wire_sha256": "ca1bfd9bc4fe147bd129429914eeb2abc63141ce427bbf3c0cb1dc8f175b7571"
+    },
+    {
+      "payload": {
+        "accepted": true,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "participant": "unknown",
+        "qualified": true,
+        "reason": "OK",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:requalifying",
+        "request_sha256": "28a21690cc243c25ef8b32a9c1dd93dfd6b4ee1c12ab9c2f74a849f06d077b7a",
+        "source_stamps_ns": [
+          1791601358049455404,
+          1791601358246476650,
+          1791601358449840307
+        ],
+        "state": "requalifying",
+        "version": 1
+      },
+      "recorder_received_ns": 1791601358688993930,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "UAIAAHsiYWNjZXB0ZWQiOiB0cnVlLCAibGVhc2VfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4IiwgIm1ldHJpY19nZW9tZXRyeV9hdXRob3JpdHkiOiBmYWxzZSwgIm1vdGlvbl9hdXRob3JpemVkIjogZmFsc2UsICJwYXJ0aWNpcGFudCI6ICJ1bmtub3duIiwgInF1YWxpZmllZCI6IHRydWUsICJyZWFzb24iOiAiT0siLCAicmVxdWVzdF9pZCI6ICI0MDgwNzQ3YjI2NGFhOGI4MjgxNjI2MWUxZWE5MjkwMDkzYzBiZWE5ZTVkYjVjMTljMzYyNjQ2YjA5MDYwZjAwOm9ic2VydmF0aW9uOjE3OTE2MDEzMjAyMzc5MDQ1NDg6cmVxdWFsaWZ5aW5nIiwgInJlcXVlc3Rfc2hhMjU2IjogIjI4YTIxNjkwY2MyNDNjMjVlZjhiMzJhOWMxZGQ5M2RmZDZiNGVlMWMxMmFiOWMyZjc0YTg0OWYwNmQwNzdiN2EiLCAic291cmNlX3N0YW1wc19ucyI6IFsxNzkxNjAxMzU4MDQ5NDU1NDA0LCAxNzkxNjAxMzU4MjQ2NDc2NjUwLCAxNzkxNjAxMzU4NDQ5ODQwMzA3XSwgInN0YXRlIjogInJlcXVhbGlmeWluZyIsICJ2ZXJzaW9uIjogMX0=",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_ack",
+      "wire_sha256": "8be9001594c198dafaeeb275f86d484307d5108f52ee55b9b979271b540dfb67"
+    },
+    {
+      "payload": {
+        "accepted": true,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "participant": "remote",
+        "qualified": true,
+        "reason": "OK",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:requalifying",
+        "request_sha256": "28a21690cc243c25ef8b32a9c1dd93dfd6b4ee1c12ab9c2f74a849f06d077b7a",
+        "source_stamps_ns": [
+          1791601358049455404,
+          1791601358246476650,
+          1791601358449840307
+        ],
+        "state": "requalifying",
+        "version": 1
+      },
+      "recorder_received_ns": 1791601358704813718,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "TwIAAHsidmVyc2lvbiI6IDEsICJwYXJ0aWNpcGFudCI6ICJyZW1vdGUiLCAicmVxdWVzdF9pZCI6ICI0MDgwNzQ3YjI2NGFhOGI4MjgxNjI2MWUxZWE5MjkwMDkzYzBiZWE5ZTVkYjVjMTljMzYyNjQ2YjA5MDYwZjAwOm9ic2VydmF0aW9uOjE3OTE2MDEzMjAyMzc5MDQ1NDg6cmVxdWFsaWZ5aW5nIiwgImxlYXNlX2lkIjogIjQwODA3NDdiMjY0YWE4YjgyODE2MjYxZTFlYTkyOTAwOTNjMGJlYTllNWRiNWMxOWMzNjI2NDZiMDkwNjBmMDA6b2JzZXJ2YXRpb246MTc5MTYwMTMyMDIzNzkwNDU0OCIsICJzdGF0ZSI6ICJyZXF1YWxpZnlpbmciLCAicmVxdWVzdF9zaGEyNTYiOiAiMjhhMjE2OTBjYzI0M2MyNWVmOGIzMmE5YzFkZDkzZGZkNmI0ZWUxYzEyYWI5YzJmNzRhODQ5ZjA2ZDA3N2I3YSIsICJhY2NlcHRlZCI6IHRydWUsICJyZWFzb24iOiAiT0siLCAicXVhbGlmaWVkIjogdHJ1ZSwgInNvdXJjZV9zdGFtcHNfbnMiOiBbMTc5MTYwMTM1ODA0OTQ1NTQwNCwgMTc5MTYwMTM1ODI0NjQ3NjY1MCwgMTc5MTYwMTM1ODQ0OTg0MDMwN10sICJtZXRyaWNfZ2VvbWV0cnlfYXV0aG9yaXR5IjogZmFsc2UsICJtb3Rpb25fYXV0aG9yaXplZCI6IGZhbHNlfQ==",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_ack",
+      "wire_sha256": "b1f8190e4a59068482b948897bf6312bd0bf5d2e1b17f52f00f9d3e69992c855"
+    },
+    {
+      "payload": {
+        "arrival_stamp_ns": 1791601357925426244,
+        "capture_deadline_ns": 1791601360925426244,
+        "control_epoch_ns": 1791591831641651789,
+        "deadline_ns": 1791601919294539213,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "motion_kind": "observation",
+        "origin_plan_id": "5d86bcbd38b8d2ca92c4bed4",
+        "origin_snapshot_stamp_ns": 1791601311107632637,
+        "plan_sha256": "ba0f360b54d05261f5a3890c95636019d359017cf83a4c1eb51819a1e64f2ae9",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:qualified",
+        "selection": {
+          "generation": 7,
+          "mode": "unknown",
+          "stamp_ns": 1791601303315075159,
+          "strategy": "observe_return"
+        },
+        "session_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00",
+        "settle": {
+          "accepted_positions_rad": [
+            -2.1015536794033283,
+            -0.4264466590322082,
+            0.9541360500648689,
+            -0.18407769454627695,
+            -1.1428156869748027,
+            0.0030679615757712823
+          ],
+          "accepted_sample_count": 10,
+          "accepted_stamp_ns": 1791601357888608815,
+          "epoch_ns": 1791591831641651789,
+          "joint_peak_to_peak_rad": [
+            0.0,
+            0.0015339807878855805,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "stationary_window_end_ns": 1791601357888608815,
+          "stationary_window_start_ns": 1791601356988653138
+        },
+        "source_stamps_ns": [
+          1791601358049455404,
+          1791601358246476650,
+          1791601358449840307
+        ],
+        "stamp_ns": 1791601358707506656,
+        "state": "qualified",
+        "target_epoch": 4,
+        "target_track_id": "g1-t4",
+        "version": 1,
+        "view_index": 1,
+        "view_plan_id": "5d86bcbd38b8d2ca92c4bed4",
+        "view_source_stamp_ns": 1791601311107632637
+      },
+      "recorder_received_ns": 1791601358708387851,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "VQYAAHsidmVyc2lvbiI6IDEsICJzdGF0ZSI6ICJxdWFsaWZpZWQiLCAibGVhc2VfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4IiwgInJlcXVlc3RfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4OnF1YWxpZmllZCIsICJzZWxlY3Rpb24iOiB7Im1vZGUiOiAidW5rbm93biIsICJzdHJhdGVneSI6ICJvYnNlcnZlX3JldHVybiIsICJnZW5lcmF0aW9uIjogNywgInN0YW1wX25zIjogMTc5MTYwMTMwMzMxNTA3NTE1OX0sICJzZXNzaW9uX2lkIjogIjQwODA3NDdiMjY0YWE4YjgyODE2MjYxZTFlYTkyOTAwOTNjMGJlYTllNWRiNWMxOWMzNjI2NDZiMDkwNjBmMDAiLCAidGFyZ2V0X2Vwb2NoIjogNCwgInRhcmdldF90cmFja19pZCI6ICJnMS10NCIsICJvcmlnaW5fcGxhbl9pZCI6ICI1ZDg2YmNiZDM4YjhkMmNhOTJjNGJlZDQiLCAib3JpZ2luX3NuYXBzaG90X3N0YW1wX25zIjogMTc5MTYwMTMxMTEwNzYzMjYzNywgInZpZXdfcGxhbl9pZCI6ICI1ZDg2YmNiZDM4YjhkMmNhOTJjNGJlZDQiLCAidmlld19zb3VyY2Vfc3RhbXBfbnMiOiAxNzkxNjAxMzExMTA3NjMyNjM3LCAidmlld19pbmRleCI6IDEsICJwbGFuX3NoYTI1NiI6ICJiYTBmMzYwYjU0ZDA1MjYxZjVhMzg5MGM5NTYzNjAxOWQzNTkwMTdjZjgzYTRjMWViNTE4MTlhMWU2NGYyYWU5IiwgImNvbnRyb2xfZXBvY2hfbnMiOiAxNzkxNTkxODMxNjQxNjUxNzg5LCAiZGVhZGxpbmVfbnMiOiAxNzkxNjAxOTE5Mjk0NTM5MjEzLCAic3RhbXBfbnMiOiAxNzkxNjAxMzU4NzA3NTA2NjU2LCAibW90aW9uX2tpbmQiOiAib2JzZXJ2YXRpb24iLCAiYXJyaXZhbF9zdGFtcF9ucyI6IDE3OTE2MDEzNTc5MjU0MjYyNDQsICJjYXB0dXJlX2RlYWRsaW5lX25zIjogMTc5MTYwMTM2MDkyNTQyNjI0NCwgIm1ldHJpY19nZW9tZXRyeV9hdXRob3JpdHkiOiBmYWxzZSwgIm1vdGlvbl9hdXRob3JpemVkIjogZmFsc2UsICJzZXR0bGUiOiB7ImVwb2NoX25zIjogMTc5MTU5MTgzMTY0MTY1MTc4OSwgImFjY2VwdGVkX3N0YW1wX25zIjogMTc5MTYwMTM1Nzg4ODYwODgxNSwgInN0YXRpb25hcnlfd2luZG93X3N0YXJ0X25zIjogMTc5MTYwMTM1Njk4ODY1MzEzOCwgInN0YXRpb25hcnlfd2luZG93X2VuZF9ucyI6IDE3OTE2MDEzNTc4ODg2MDg4MTUsICJhY2NlcHRlZF9zYW1wbGVfY291bnQiOiAxMCwgImFjY2VwdGVkX3Bvc2l0aW9uc19yYWQiOiBbLTIuMTAxNTUzNjc5NDAzMzI4MywgLTAuNDI2NDQ2NjU5MDMyMjA4MiwgMC45NTQxMzYwNTAwNjQ4Njg5LCAtMC4xODQwNzc2OTQ1NDYyNzY5NSwgLTEuMTQyODE1Njg2OTc0ODAyNywgMC4wMDMwNjc5NjE1NzU3NzEyODIzXSwgImpvaW50X3BlYWtfdG9fcGVha19yYWQiOiBbMC4wLCAwLjAwMTUzMzk4MDc4Nzg4NTU4MDUsIDAuMCwgMC4wLCAwLjAsIDAuMF19LCAic291cmNlX3N0YW1wc19ucyI6IFsxNzkxNjAxMzU4MDQ5NDU1NDA0LCAxNzkxNjAxMzU4MjQ2NDc2NjUwLCAxNzkxNjAxMzU4NDQ5ODQwMzA3XX0=",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_request",
+      "wire_sha256": "53298eee7de7a36431c87a4df944ba9680ac2c364429c237f5ea7358a6ffa6e9"
+    },
+    {
+      "payload": {
+        "accepted": true,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "participant": "remote",
+        "qualified": false,
+        "reason": "OK",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:qualified",
+        "request_sha256": "893550638ade976428f7bd6a0354e2a047ef5cccf6694cbd78e6759b5f2e807c",
+        "source_stamps_ns": [],
+        "state": "qualified",
+        "version": 1
+      },
+      "recorder_received_ns": 1791601358711286306,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "DQIAAHsidmVyc2lvbiI6IDEsICJwYXJ0aWNpcGFudCI6ICJyZW1vdGUiLCAicmVxdWVzdF9pZCI6ICI0MDgwNzQ3YjI2NGFhOGI4MjgxNjI2MWUxZWE5MjkwMDkzYzBiZWE5ZTVkYjVjMTljMzYyNjQ2YjA5MDYwZjAwOm9ic2VydmF0aW9uOjE3OTE2MDEzMjAyMzc5MDQ1NDg6cXVhbGlmaWVkIiwgImxlYXNlX2lkIjogIjQwODA3NDdiMjY0YWE4YjgyODE2MjYxZTFlYTkyOTAwOTNjMGJlYTllNWRiNWMxOWMzNjI2NDZiMDkwNjBmMDA6b2JzZXJ2YXRpb246MTc5MTYwMTMyMDIzNzkwNDU0OCIsICJzdGF0ZSI6ICJxdWFsaWZpZWQiLCAicmVxdWVzdF9zaGEyNTYiOiAiODkzNTUwNjM4YWRlOTc2NDI4ZjdiZDZhMDM1NGUyYTA0N2VmNWNjY2Y2Njk0Y2JkNzhlNjc1OWI1ZjJlODA3YyIsICJhY2NlcHRlZCI6IHRydWUsICJyZWFzb24iOiAiT0siLCAicXVhbGlmaWVkIjogZmFsc2UsICJzb3VyY2Vfc3RhbXBzX25zIjogW10sICJtZXRyaWNfZ2VvbWV0cnlfYXV0aG9yaXR5IjogZmFsc2UsICJtb3Rpb25fYXV0aG9yaXplZCI6IGZhbHNlfQ==",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_ack",
+      "wire_sha256": "9704bf44ce6669abe6412d4e8a6045f4e63f2a094c98a66f8bde4b73119f94bb"
+    },
+    {
+      "payload": {
+        "accepted": true,
+        "lease_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548",
+        "metric_geometry_authority": false,
+        "motion_authorized": false,
+        "participant": "unknown",
+        "qualified": true,
+        "reason": "OK",
+        "request_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00:observation:1791601320237904548:qualified",
+        "request_sha256": "893550638ade976428f7bd6a0354e2a047ef5cccf6694cbd78e6759b5f2e807c",
+        "source_stamps_ns": [
+          1791601358049455404,
+          1791601358246476650,
+          1791601358449840307
+        ],
+        "state": "qualified",
+        "version": 1
+      },
+      "recorder_received_ns": 1791601358711613893,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "SgIAAHsiYWNjZXB0ZWQiOiB0cnVlLCAibGVhc2VfaWQiOiAiNDA4MDc0N2IyNjRhYThiODI4MTYyNjFlMWVhOTI5MDA5M2MwYmVhOWU1ZGI1YzE5YzM2MjY0NmIwOTA2MGYwMDpvYnNlcnZhdGlvbjoxNzkxNjAxMzIwMjM3OTA0NTQ4IiwgIm1ldHJpY19nZW9tZXRyeV9hdXRob3JpdHkiOiBmYWxzZSwgIm1vdGlvbl9hdXRob3JpemVkIjogZmFsc2UsICJwYXJ0aWNpcGFudCI6ICJ1bmtub3duIiwgInF1YWxpZmllZCI6IHRydWUsICJyZWFzb24iOiAiT0siLCAicmVxdWVzdF9pZCI6ICI0MDgwNzQ3YjI2NGFhOGI4MjgxNjI2MWUxZWE5MjkwMDkzYzBiZWE5ZTVkYjVjMTljMzYyNjQ2YjA5MDYwZjAwOm9ic2VydmF0aW9uOjE3OTE2MDEzMjAyMzc5MDQ1NDg6cXVhbGlmaWVkIiwgInJlcXVlc3Rfc2hhMjU2IjogIjg5MzU1MDYzOGFkZTk3NjQyOGY3YmQ2YTAzNTRlMmEwNDdlZjVjY2NmNjY5NGNiZDc4ZTY3NTliNWYyZTgwN2MiLCAic291cmNlX3N0YW1wc19ucyI6IFsxNzkxNjAxMzU4MDQ5NDU1NDA0LCAxNzkxNjAxMzU4MjQ2NDc2NjUwLCAxNzkxNjAxMzU4NDQ5ODQwMzA3XSwgInN0YXRlIjogInF1YWxpZmllZCIsICJ2ZXJzaW9uIjogMX0=",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_measurement_ack",
+      "wire_sha256": "7e1b893351e00f4bd97bca0f3fd164255ac8602f1c2b6b0373b51b8e7c390e2d"
+    },
+    {
+      "recorder_received_ns": 1791601359307583808,
+      "ros_md5": "0bdcb9c29c0363278db4d6def64fd010",
+      "ros_type": "alicia_flexible_grasp_supervisor/NearFieldPlanningPhase",
+      "roswire_base64": "BAAAAM+qyWqamCsSCQAAAGJhc2VfbGluawEBAAAAAAAAACmryWqImSsSAQ0AAAB1bmtub3duX3NtYWxsBQAAAGcxLXQ01hHHJdMdvL+mPREV5RvYv2ao1T0cpYc/zqrJavdvfjoOAAAAY29udGFjdF9yZXBsYW4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "source_ns": 1791601359304847002,
+      "topic": "/grasp/near_field_phase",
+      "wire_sha256": "5cd5601d9f1971dbb91dbc82db328df0c09f29378f7c27425ec73a067db31fab"
+    },
+    {
+      "recorder_received_ns": 1791601359310000896,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "EwAAAM+qyWrSWWESAAAAAA0AAABQTEFOX1BSRUdSQVNQAgAAAAEAIQAAAHdhaXRpbmcgZm9yIG5lYXItZmllbGQgNkQgcHJldmlldw==",
+      "source_ns": 1791601359308369874,
+      "topic": "/grasp/state",
+      "wire_sha256": "414bfc3b516c3e184b6b5cb931a10563f902e692e21586f73123bd409c067598"
+    },
+    {
+      "recorder_received_ns": 1791601378590121507,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "5XQBAOKqyWqoRBYjDAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601378588661928,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "ef4289b866a5278b4e0cb7590e43d2e69a4e93d776d2d84454486e2973e85074"
+    },
+    {
+      "recorder_received_ns": 1791601378691647768,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "5nQBAOKqyWr/kgspDAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601378688624383,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "a49d1828f5434f3a08b0df68c4449330d68497175c3b1c702201421270e3e135"
+    },
+    {
+      "recorder_received_ns": 1791601378791859626,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "53QBAOKqyWoUpgQvDAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601378788833812,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "2b1ae6513de2b96ff5f6154e018fc49d3bfc19d96af14292fa6f545d9fa50224"
+    },
+    {
+      "recorder_received_ns": 1791601378889491558,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "6HQBAOKqyWqhivc0DAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601378888638113,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "c123dd8ceb6489c307ab177145bab829c5353d35b819b16eca50bd7dbe29210b"
+    },
+    {
+      "recorder_received_ns": 1791601378990264654,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "6XQBAOKqyWqiy+06DAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601378988662690,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "a55e79b8ad92bb9c9f36bbc3a74ad173474b5f2b6a0f7b72989708bbc9bbe91c"
+    },
+    {
+      "recorder_received_ns": 1791601379090790033,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "6nQBAOOqyWoHskgFDAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601379088650247,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "a7340a6b7248323767fa0d5085b7b8027e4280559296ffe198158cc6b496c78a"
+    },
+    {
+      "recorder_received_ns": 1791601379190024137,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "63QBAOOqyWpHXj8LDAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601379188702279,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "dd40e57d1a59ff171cafb6085980388a8b09290260c91e115bb525dd91ebca63"
+    },
+    {
+      "payload": {
+        "deadline_ns": "1791601919294539213",
+        "max_observations": 3,
+        "origin_plan_id": "5d86bcbd38b8d2ca92c4bed4",
+        "origin_snapshot_stamp_ns": "1791601311107632637",
+        "phase": "observing",
+        "previous_gain_sha256": "719a2428fa9aecd09ab28d3e2940c13673ec8470ec8af9e15760c0f6fcb1fa74",
+        "return_verified_stamp_ns": "0",
+        "selection": {
+          "generation": 7,
+          "mode": "unknown",
+          "stamp_ns": 1791601303315075159,
+          "strategy": "observe_return"
+        },
+        "session_id": "4080747b264aa8b82816261e1ea9290093c0bea9e5db5c19c362646b09060f00",
+        "stamp_ns": "1791601379245801448",
+        "target_epoch": 4,
+        "target_track_id": "g1-t4",
+        "version": 2,
+        "view_index": 2,
+        "view_plan_id": "544517b6931f1587020687b8",
+        "view_request_id": "9d8c2adc7a0675e3d4fc128094dfb5c746010076d9af29b1c40abdafe0ffbe3e",
+        "view_source_stamp_ns": 1791601363778279781
+      },
+      "recorder_received_ns": 1791601379268197536,
+      "ros_md5": "992ce8a1687cec8c8bd883ec73ca41d1",
+      "ros_type": "std_msgs/String",
+      "roswire_base64": "FgMAAHsidmVyc2lvbiI6IDIsICJzZXNzaW9uX2lkIjogIjQwODA3NDdiMjY0YWE4YjgyODE2MjYxZTFlYTkyOTAwOTNjMGJlYTllNWRiNWMxOWMzNjI2NDZiMDkwNjBmMDAiLCAic2VsZWN0aW9uIjogeyJtb2RlIjogInVua25vd24iLCAic3RyYXRlZ3kiOiAib2JzZXJ2ZV9yZXR1cm4iLCAiZ2VuZXJhdGlvbiI6IDcsICJzdGFtcF9ucyI6IDE3OTE2MDEzMDMzMTUwNzUxNTl9LCAicGhhc2UiOiAib2JzZXJ2aW5nIiwgInN0YW1wX25zIjogIjE3OTE2MDEzNzkyNDU4MDE0NDgiLCAiZGVhZGxpbmVfbnMiOiAiMTc5MTYwMTkxOTI5NDUzOTIxMyIsICJ0YXJnZXRfZXBvY2giOiA0LCAidGFyZ2V0X3RyYWNrX2lkIjogImcxLXQ0IiwgIm9yaWdpbl9wbGFuX2lkIjogIjVkODZiY2JkMzhiOGQyY2E5MmM0YmVkNCIsICJvcmlnaW5fc25hcHNob3Rfc3RhbXBfbnMiOiAiMTc5MTYwMTMxMTEwNzYzMjYzNyIsICJyZXR1cm5fdmVyaWZpZWRfc3RhbXBfbnMiOiAiMCIsICJtYXhfb2JzZXJ2YXRpb25zIjogMywgInZpZXdfaW5kZXgiOiAyLCAidmlld19wbGFuX2lkIjogIjU0NDUxN2I2OTMxZjE1ODcwMjA2ODdiOCIsICJ2aWV3X3NvdXJjZV9zdGFtcF9ucyI6IDE3OTE2MDEzNjM3NzgyNzk3ODEsICJ2aWV3X3JlcXVlc3RfaWQiOiAiOWQ4YzJhZGM3YTA2NzVlM2Q0ZmMxMjgwOTRkZmI1Yzc0NjAxMDA3NmQ5YWYyOWIxYzQwYWJkYWZlMGZmYmUzZSIsICJwcmV2aW91c19nYWluX3NoYTI1NiI6ICI3MTlhMjQyOGZhOWFlY2QwOWFiMjhkM2UyOTQwYzEzNjczZWM4NDcwZWM4YWY5ZTE1NzYwYzBmNmZjYjFmYTc0In0=",
+      "source_ns": null,
+      "topic": "/grasp_mode/observe_return_session",
+      "wire_sha256": "ada822419278c76a77ac66cd76804903fcb9a757c3ee9fc99d537facc85a4244"
+    },
+    {
+      "recorder_received_ns": 1791601379289650201,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "7HQBAOOqyWqFlTQRDAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601379288658821,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "4ef9a020b0f4175d07fd922002a9ac05f76f8561e9f41738f3741371de16ca64"
+    },
+    {
+      "recorder_received_ns": 1791601379390180587,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "7XQBAOOqyWqBXSoXDAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601379388652417,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "5214c426761f6dd771979a6ebbb2730bb82ff5cfe0bd7bb72a22bd74643efe23"
+    },
+    {
+      "recorder_received_ns": 1791601379490978956,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "7nQBAOOqyWp+4R8dDAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601379488628606,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "1d8430b9437136b03c0f626b040e68382236c3172b907e6ebea5a81f83f1db64"
+    },
+    {
+      "recorder_received_ns": 1791601379492409229,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "FAAAAOOqyWoa10YdAAAAAA0AAABNT1ZFX1BSRUdSQVNQAwAAAAEAJwAAAGFkbWl0dGluZyBzdXBwbGVtZW50YWwgb2JzZXJ2YXRpb24gdmlldw==",
+      "source_ns": 1791601379491181850,
+      "topic": "/grasp/state",
+      "wire_sha256": "1fb47deae1740d57f41c025a316ea19264f50c1e704a7df0f892df55bd4528b0"
+    },
+    {
+      "recorder_received_ns": 1791601379515525579,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "FQAAAOOqyWp3A5weAAAAAAYAAABGQUlMRUQHAAAAAQCxAAAAT0JTRVJWRV9SRVRVUk5fU1VQUExFTUVOVEFMX0ZBSUxFRDogVEFSR0VUX0xPU1Q6IHBlcmNlcHRpb25fZmFpbHVyZTogb2JzZXJ2YXRpb25fYXJyaXZhbF9zdGF0aW9uX2ludmFsaWRhdGVkX2R1cmluZ19yZWNvdmVyeSAoZ2VuZXJhdGlvbj03IG9ic2VydmVkX3N0YW1wX25zPTE3OTE2MDEzNzk0OTM2NzExNzgp",
+      "source_ns": 1791601379513540983,
+      "topic": "/grasp/state",
+      "wire_sha256": "68859d8932a805e010dcba700c83939b11bfc7c20ff7a3fc84426f9e1f97d650"
+    },
+    {
+      "recorder_received_ns": 1791601379517932653,
+      "ros_md5": "0bdcb9c29c0363278db4d6def64fd010",
+      "ros_type": "alicia_flexible_grasp_supervisor/NearFieldPlanningPhase",
+      "roswire_base64": "BQAAAOOqyWoWqdQeCQAAAGJhc2VfbGluawABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAAY29udGFjdF9yZXBsYW4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "source_ns": 1791601379517253398,
+      "topic": "/grasp/near_field_phase",
+      "wire_sha256": "759531bb537d28287b143c006df2f829d1f08d65749b592c2edecd8da152c22b"
+    },
+    {
+      "recorder_received_ns": 1791601379521022796,
+      "ros_md5": "c85c0a7de717463c53d5cec2b43693e8",
+      "ros_type": "alicia_flexible_grasp_supervisor/GraspState",
+      "roswire_base64": "FgAAAOOqyWo70PUeAAAAAAYAAABGQUlMRUQHAAAAAADKAAAAZXhlY3V0aW9uIHNsb3QgcmVsZWFzZWQ6IE9CU0VSVkVfUkVUVVJOX1NVUFBMRU1FTlRBTF9GQUlMRUQ6IFRBUkdFVF9MT1NUOiBwZXJjZXB0aW9uX2ZhaWx1cmU6IG9ic2VydmF0aW9uX2Fycml2YWxfc3RhdGlvbl9pbnZhbGlkYXRlZF9kdXJpbmdfcmVjb3ZlcnkgKGdlbmVyYXRpb249NyBvYnNlcnZlZF9zdGFtcF9ucz0xNzkxNjAxMzc5NDkzNjcxMTc4KQ==",
+      "source_ns": 1791601379519426107,
+      "topic": "/grasp/state",
+      "wire_sha256": "395b22ba3c50816691fbf8097ebac395b0fcb7624c9e3de15fbe4c6145f23cfc"
+    },
+    {
+      "recorder_received_ns": 1791601379589236497,
+      "ros_md5": "3066dcd76a6cfaef579bd0f34173e9fd",
+      "ros_type": "sensor_msgs/JointState",
+      "roswire_base64": "73QBAOOqyWofsxUjDAAAAHNka19tZWFzdXJlZAcAAAAGAAAASm9pbnQxBgAAAEpvaW50MgYAAABKb2ludDMGAAAASm9pbnQ0BgAAAEpvaW50NQYAAABKb2ludDYMAAAAcmlnaHRfZmluZ2VyBwAAACqbHmD7zwDA9wiC7eZK27/J0l5TSIjuP0fq/57bj8e/z5kOGvlI8r8YLURU+yFpP0a28/3UeKk/AAAAAAAAAAA=",
+      "source_ns": 1791601379588624671,
+      "topic": "/alicia_d/accepted_joint_states",
+      "wire_sha256": "4c9bf5a30eed6fa7c9e77158178f61a5f38622275d0bafe7cdddbbe56f330cdf"
+    }
+  ],
+  "first_loss_ros_ns": 1791601379493671178,
+  "first_loss_source_ns": 1791601379317423820,
+  "generation": 7,
+  "last_positive": {
+    "confidence": 0.9021472930908203,
+    "detected": true,
+    "label": "unknown_small",
+    "position_base": [
+      -0.11109221266234064,
+      -0.37565118350050075,
+      0.02214123975808563
+    ],
+    "received_ns": 1791601379371250867,
+    "source_ns": 1791601379054992675
+  },
+  "limitations": [
+    "Exact state/phase/contract/q recorded messages; no second executing request exists in GEN7.",
+    "Producer sensor lifecycle is exercised separately with synthetic RGBD; these recorded control payloads do not constitute a full real sensor replay.",
+    "Recorder timestamps do not establish exact subscriber ingress or cross-topic callback ordering."
+  ],
+  "schema": 1,
+  "source_fixture_sha256": "ecf9b805c5e0f2b0c29e7af771b3ae74b98189d974ca363d336f3afce48622ce"
+}

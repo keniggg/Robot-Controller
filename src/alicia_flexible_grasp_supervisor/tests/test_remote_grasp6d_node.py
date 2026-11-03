@@ -22,6 +22,10 @@ from alicia_flexible_grasp_supervisor.msg import Grasp6DPlan
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT.parents[1] / 'tools/tests'))
+# Only disk identity is synthetic; audit paths and bytes remain real.
+from storage_os_adapter import storage_os
+
 for path in (ROOT, ROOT / 'src'):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
@@ -577,6 +581,20 @@ def frozen_input_config(node, mode=None, **overrides):
 
 
 class RemoteGrasp6DNodeTest(unittest.TestCase):
+    def setUp(self):
+        # These tests already own their parameter mapping through get_param.
+        # Expose that same fixture through the new authoritative RPC boundary;
+        # never contact a real master from an offline constructor/refresh test.
+        original_get_param = remote_node.rospy.get_param
+        def get_param(name):
+            if remote_node.rospy.get_param is original_get_param:
+                raise AssertionError('test must supply its parameter-server fixture')
+            return 1, 'fixture master', deepcopy(remote_node.rospy.get_param(name, {}))
+        patch = mock.patch.object(remote_node.rospy, 'get_master',
+            return_value=types.SimpleNamespace(getParam=get_param))
+        patch.start()
+        self.addCleanup(patch.stop)
+
     @staticmethod
     def _dedupe_gate(width=0.04):
         return remote_node.CandidateGateResult(
@@ -1090,7 +1108,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             payload=(snapshot, frozen_input_config(node)),
         )
 
-        prepared = node._prepare_and_predict(ticket)
+        with mock.patch.object(remote_node.rospy, 'get_param', return_value=False) as policy:
+            prepared = node._prepare_and_predict(ticket)
+        policy.assert_not_called()  # No active target: box policy is not consulted.
 
         self.assertIs(prepared.geometry, geometry)
         self.assertGreaterEqual(len(prepared.tabletop_candidates), 1)
@@ -1155,7 +1175,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             payload=(snapshot, config),
         )
 
-        prepared = node._prepare_and_predict(ticket)
+        with mock.patch.object(remote_node.rospy, 'get_param', return_value=False) as policy:
+            prepared = node._prepare_and_predict(ticket)
+        policy.assert_not_called()  # No active target: box policy is not consulted.
 
         self.assertIs(prepared.geometry, geometry)
         self.assertIn('support_plane_point_camera', captured)
@@ -1234,7 +1256,9 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
                 payload=(snapshot, input_config),
             )
 
-            prepared_results.append(node._prepare_and_predict(ticket))
+            with mock.patch.object(remote_node.rospy, 'get_param', return_value=False) as policy:
+                prepared_results.append(node._prepare_and_predict(ticket))
+            policy.assert_not_called()  # No active target: box policy is not consulted.
 
         baseline = prepared_results[0]
         for prepared, (expected_label, expected_model_choice) in zip(
@@ -1310,8 +1334,10 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             payload=(snapshot, frozen_input_config(node)),
         )
 
-        with self.assertRaises(ConnectionError) as raised:
-            node._prepare_and_predict(ticket)
+        with mock.patch.object(remote_node.rospy, 'get_param', return_value=False) as policy:
+            with self.assertRaises(ConnectionError) as raised:
+                node._prepare_and_predict(ticket)
+        policy.assert_not_called()  # No active target: box policy is not consulted.
 
         self.assertIs(raised.exception, remote_error)
 
@@ -7115,7 +7141,7 @@ class RemoteGrasp6DNodeTest(unittest.TestCase):
             for candidate in candidates
         }
         node._require_stream_ticket_current = lambda _ticket: None
-        node._build_selected_preview_bundle = lambda candidate: {
+        node._build_selected_preview_bundle = lambda candidate, ticket=None: {
             'rich_plan': types.SimpleNamespace(
                 plan_id='plan-%d' % candidate.track_id,
                 candidate_source='tabletop_geometry',

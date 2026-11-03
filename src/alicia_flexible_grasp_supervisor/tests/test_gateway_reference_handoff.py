@@ -551,3 +551,88 @@ def test_late_ack_from_failed_transaction_is_not_used_as_new_completion(node, mo
     assert ok, reason
     assert len(client.goals) == 1
     assert clock.now-client.goals[0][0] >= .10-1e-9
+
+
+@pytest.fixture
+def gen16_initial_bridge(node, monkeypatch):
+    # Exact controller frames from gen16 keyframes.bag, 2026-09-26:
+    # hold receipt 1790424757.563824; moving source frame .598056;
+    # the next source frame .618341 is stationary. No ROS I/O is used.
+    origin = [-1.8469119276622867, .4640674770560916, -.11001394863204939,
+              .038748589549250034, -.4183204476989503, -.09485818725262805]
+    endpoint = [-1.876058503584139, .44485442848683593, -.11044661672776615,
+                -.007669903939428206, -.4111068511533518, 0.]
+    transient = NS(
+        positions=[-1.8760584965180485, .4448544331447122, -.11044661662287317,
+                   -.007669892686055418, -.4111068529021655, -2.2996751197768006e-08],
+        velocities=[-.002485201888802635, -.0016382131720025228, -3.689172860865675e-05,
+                    -.0039579032543208825, .0006150720348054861, .008088145474122399],
+        accelerations=[436.9500481045285, 288.0318607262796, 6.486331215838968,
+                       695.8814996725251, -108.14242352367633, -1422.063764686294])
+    node._observation_joint_feedback.position = endpoint + [.04975]
+    node.joint_cmd.last_positions = endpoint + [.04975]
+    node._trajectory_controller_state.actual.positions = list(endpoint)
+    node._trajectory_controller_state.desired.positions = origin
+    clock = HandoffClock(node, monkeypatch, 'initial')
+
+    def moving(current):
+        assert node._completed_command_reference is None
+        desired = node._trajectory_controller_state.desired
+        for field in ('positions', 'velocities', 'accelerations'):
+            setattr(desired, field, list(getattr(transient, field)))
+        current.acknowledge()
+        node._actuation_status = 'PENDING:COMMAND_SYNCHRONIZED'
+
+    return node, clock, moving
+
+
+@pytest.mark.parametrize('completes', [True, False])
+def test_gen16_initial_bridge_waits_for_stationary_frame_within_original_deadline(
+        gen16_initial_bridge, completes):
+    node, clock, moving = gen16_initial_bridge
+    def tick(current):
+        moving(current)
+        if completes and current.elapsed >= .06:
+            desired = node._trajectory_controller_state.desired
+            desired.positions = list(current.selected)
+            desired.velocities = [0.] * 6
+            desired.accelerations = [0.] * 6
+    clock.on_tick = tick
+    ok, reason = node._synchronize_trajectory_controller_to_feedback()
+    assert len(clock.holds) == 1 and not clock.explicit
+    if completes:
+        assert ok, reason
+        assert .06 + .06 - 1e-9 <= clock.elapsed <= .40
+        assert node._completed_command_reference['positions'] == clock.selected
+    else:
+        assert not ok and 'timed out' in reason
+        assert .40 <= clock.elapsed <= .42 + 1e-9
+        assert node._completed_command_reference is None
+    # Reference admission is not encoder response confirmation.
+    assert node._actuation_status == 'PENDING:COMMAND_SYNCHRONIZED'
+
+
+@pytest.mark.parametrize('change', ['manual', 'epoch', 'sdk_word', 'path', 'velocity', 'acceleration'])
+def test_gen16_initial_bridge_still_rejects_changed_evidence_while_waiting(
+        gen16_initial_bridge, change):
+    node, clock, moving = gen16_initial_bridge
+    def tick(current):
+        moving(current)
+        if current.elapsed < .06:
+            return
+        if change == 'manual':
+            node._gui_direct_mode = True
+        elif change == 'epoch':
+            current.change_epoch()
+        elif change == 'sdk_word':
+            current.acknowledge(wrong_word=True)
+        else:
+            field = {'path': 'positions', 'velocity': 'velocities',
+                     'acceleration': 'accelerations'}[change]
+            getattr(node._trajectory_controller_state.desired, field)[0] += .001
+    clock.on_tick = tick
+    ok, reason = node._synchronize_trajectory_controller_to_feedback()
+    assert not ok and 'CONTROLLER_REFERENCE_INVALID' in reason
+    assert .06 <= clock.elapsed <= .08
+    assert len(clock.holds) == 1 and not clock.explicit
+    assert node._completed_command_reference is None

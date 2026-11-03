@@ -12,6 +12,14 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
 import grasp_archive as archive
 import run_recorded_grasp as lifecycle
+from storage_test_support import fake_storage
+
+
+@pytest.fixture
+def record_root(tmp_path, monkeypatch):
+    selected = fake_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(archive, 'STORAGE_CONFIG_PATH', selected.config_path)
+    return selected.archive_root
 
 
 def state(stamp=110, active=False, success=False, name='FAILED', message='contact failed'):
@@ -129,7 +137,8 @@ class FakeProcess:
 @pytest.mark.parametrize('runner_text,expected', [('', 'unknown'),
     ('GRASP_RESULT success=True message=success\n', 'success'),
     ('GRASP_RESULT success=False message=failed\n', 'failure')])
-def test_wrapper_records_before_runner_and_finalizes_only_closed_files(tmp_path, monkeypatch, runner_text, expected):
+def test_wrapper_records_before_runner_and_finalizes_only_closed_files(record_root, monkeypatch, runner_text, expected):
+    tmp_path = record_root
     events = []
     handles = []
     real_finalize = archive.finalize_record
@@ -137,6 +146,8 @@ def test_wrapper_records_before_runner_and_finalizes_only_closed_files(tmp_path,
     def popen(command, stdout, stderr, start_new_session, env=None):
         assert start_new_session is True
         handles.append(stdout)
+        assert env['ALICIA_STORAGE_BACKEND'] == 'ssd'
+        assert env['GRASP_RECORD_ROOT'] == str(tmp_path)
         is_recorder = '--record-dir' in command
         directory = Path(command[command.index('--record-dir') + 1]) if is_recorder else handles[0].name
         if not is_recorder:
@@ -165,7 +176,8 @@ def test_wrapper_records_before_runner_and_finalizes_only_closed_files(tmp_path,
     assert {f['path'] for f in manifest['files']} >= {'keyframes.bag', 'runner.log', 'recorder.log', 'authorization.json'}
 
 
-def test_disk_block_does_not_launch_recorder_or_arm(tmp_path, monkeypatch):
+def test_disk_block_does_not_launch_recorder_or_arm(record_root, monkeypatch):
+    tmp_path = record_root
     monkeypatch.setattr(lifecycle.subprocess, 'Popen', lambda *a, **k: pytest.fail('must not launch'))
     with pytest.raises(archive.InsufficientSpace, match='arm control unchanged'):
         lifecycle.main(['--root', str(tmp_path), '--min-free-bytes', str(1 << 100), '--', 'authorized-runner'])
@@ -177,7 +189,8 @@ def load_fake_ros_recorder(monkeypatch, events):
         'sensor_msgs.msg': 'Image CameraInfo JointState',
         'std_msgs.msg': 'String Bool Header UInt8 Float32MultiArray',
         'control_msgs.msg': 'JointTrajectoryControllerState FollowJointTrajectoryActionGoal FollowJointTrajectoryActionResult',
-        'actionlib_msgs.msg': 'GoalStatusArray', 'trajectory_msgs.msg': 'JointTrajectory',
+        'actionlib_msgs.msg': 'GoalID GoalStatusArray', 'trajectory_msgs.msg': 'JointTrajectory',
+        'moveit_msgs.msg': 'MoveGroupActionGoal MoveGroupActionResult',
         'rosgraph_msgs.msg': 'Log', 'diagnostic_msgs.msg': 'DiagnosticArray', 'tf2_msgs.msg': 'TFMessage',
         'alicia_flexible_grasp_supervisor.msg': 'GraspState Grasp6DPlan NearFieldPlanningPhase ObjectGeometry ObjectPose',
     }
@@ -238,6 +251,55 @@ def test_standalone_duration_is_unknown_and_bag_close_precedes_finalization(tmp_
     assert not (tmp_path / 'keyframes.bag').exists()
 
 
+@pytest.mark.parametrize('error_code', [-6, 1])
+def test_movegroup_plan_messages_are_recorded_without_claiming_motion(tmp_path, monkeypatch, error_code):
+    events, written, originals, subscriptions = [], [], {}, {}
+    module = load_fake_ros_recorder(monkeypatch, events)
+    original_write = module.rosbag.Bag.write
+
+    def write(bag, topic, message, receipt):
+        written.append((topic, message, receipt))
+        original_write(bag, topic, message, receipt)
+
+    def subscribe(topic, message_type, callback, **kwargs):
+        subscriptions[topic] = message_type
+        if topic.startswith('/move_group/'):
+            # Keep exact request precision, goal ID, error and response data.
+            # Both a failed plan and a successful plan-only result are still
+            # insufficient evidence that any robot motion occurred.
+            message = message_type(
+                header=types.SimpleNamespace(seq=23, stamp=117),
+                goal_id=types.SimpleNamespace(id='original-goal-23', stamp=111),
+                goal=types.SimpleNamespace(planning_options=types.SimpleNamespace(plan_only=True),
+                    request={'target': [0.12345678901234567, -0.9876543210123456]}),
+                result=types.SimpleNamespace(error_code=types.SimpleNamespace(val=error_code),
+                    planned_trajectory={'joint_names': ['Joint1'], 'positions': [0.3141592653589793]}))
+            originals[topic] = message
+            callback(message)
+        return types.SimpleNamespace(unregister=lambda: None)
+
+    monkeypatch.setattr(module.rosbag.Bag, 'write', write)
+    monkeypatch.setattr(module.rospy, 'Subscriber', subscribe)
+    monkeypatch.setattr(module.rospy, 'Publisher',
+        lambda *a, **k: pytest.fail('recording must remain passive'), raising=False)
+    monkeypatch.setattr(sys, 'argv', ['recorder', '--output', str(tmp_path / 'keyframes.bag'),
+                                    '--duration', '.2', '--min-free-bytes', '0'])
+    module.main()
+    expected = {'/move_group/goal': module.MoveGroupActionGoal,
+                '/move_group/result': module.MoveGroupActionResult,
+                '/move_group/status': module.GoalStatusArray,
+                '/move_group/cancel': module.GoalID}
+    assert {topic: subscriptions.get(topic) for topic in expected} == expected
+    captured = [(topic, message) for topic, message, receipt in written if topic in expected]
+    assert len(captured) == 4
+    assert all(message is originals[topic] for topic, message in captured)
+    assert originals['/move_group/goal'].goal.planning_options.plan_only is True
+    assert originals['/move_group/result'].result.error_code.val == error_code
+    manifest = json.loads(next(tmp_path.glob('*/manifest.json')).read_text())
+    assert manifest['result'] == 'unknown'
+    assert manifest['recorder_closed'] is True
+
+
 def test_terminal_state_older_than_observed_active_is_ignored():
     outcome = {}
     lifecycle.observe_task_state(outcome, state(stamp=120, active=True), 100)
@@ -258,7 +320,8 @@ def test_closed_output_path_must_not_reuse_an_already_finalized_record(tmp_path,
     assert not (directory / 'new.bag').exists()
 
 
-def test_wrapper_never_finalizes_bag_without_close_confirmation(tmp_path, monkeypatch):
+def test_wrapper_never_finalizes_bag_without_close_confirmation(record_root, monkeypatch):
+    tmp_path = record_root
     class CrashedRecorder:
         pid = 123
         returncode = 9
@@ -288,3 +351,17 @@ def test_hold_without_physical_evidence_is_unknown_not_failure_or_success():
         'GRASP_RESULT success=False message=' + reason)
     assert result == 'unknown'
     assert recorded_reason == reason
+
+
+@pytest.mark.parametrize('source', ['state', 'service', 'both'])
+def test_diagnostic_observation_completion_never_claims_a_grasp(source):
+    reason = 'DIAGNOSTIC_OBSERVATION_COMPLETE: audit_path=/external/evidence.json; no grasp performed'
+    outcome = {}
+    if source in ('state', 'both'):
+        lifecycle.observe_task_state(outcome, state(active=True), 100)
+        lifecycle.observe_task_state(outcome, state(stamp=111, success=True, name='SUCCESS', message=reason), 100)
+    log = 'GRASP_RESULT success=True message=' + reason if source in ('service', 'both') else ''
+    result, recorded, evidence = lifecycle.classify_result(outcome, log, returncode=0)
+    assert result == 'unknown' and recorded == reason
+    assert evidence['diagnostic_observation_completed']
+    assert evidence['grasp_performed'] is False

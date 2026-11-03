@@ -1,0 +1,3 @@
+# Contact execution with the matching typed driver/HW reference protocol.
+# Loaded by the current source-bound full-stack launch after the base presets.
+/grasp/unknown_physical_reference_mapping_enabled: true

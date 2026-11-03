@@ -1,9 +1,14 @@
 from copy import deepcopy
 from types import SimpleNamespace as NS
+import math
 
+import numpy as np
 import pytest
 
-from alicia_flexible_grasp.robot.actuation_bootstrap import bounded_observation_prefix
+from alicia_flexible_grasp.robot.actuation_bootstrap import (
+    bounded_observation_prefix, validate_bounded_observation_prefix,
+)
+from alicia_flexible_grasp.robot.observation_path_guard import segment_coefficients, _polynomial
 from test_moveit_planner_pose_feedback import JointPlan, FakeManipulator, make_pose
 import test_moveit_planner_pose_feedback as planner_tests
 import test_motion_gateway_controller_start as gateway_tests
@@ -44,6 +49,116 @@ def test_prefix_cannot_expand_bound_or_reduce_required_response(bound):
         bounded_observation_prefix(path(0, .5), bound)
 
 
+def stationary(q):
+    return NS(positions=list(q), velocities=[0.]*6, accelerations=[0.]*6)
+
+
+def test_real_sdk_offsets_clip_against_desired_without_rebasing_measured_path():
+    # Three, five and eight SDK counts: the observed J2/J3/J5 discrepancy.
+    offsets = np.array([0., 3., 5., 0., 8., 0.])*2.*math.pi/4096.
+    measured = np.array([-1.82, .51, -.30, 0., -.23, .0046])
+    desired = stationary(measured+offsets)
+    direction = np.array([.2, -.1, -.3, 0., -.5, .05])
+    original = JointPlan([measured, measured+.01*direction, measured+direction], duration_sec=4.)
+    before = deepcopy(original)
+    result = bounded_observation_prefix(original, controller_reference=desired,
+                                        measured_origin=measured)
+    endpoint = np.array(result.joint_trajectory.points[-1].positions)
+    assert endpoint[4]-desired.positions[4] == pytest.approx(-.025, abs=2e-10)
+    assert abs(endpoint[4]-measured[4]) < .013
+    assert np.max(abs(endpoint-measured)) < .025
+    progress = (endpoint-measured)[direction != 0.]/direction[direction != 0.]
+    assert np.max(progress)-np.min(progress) < 1e-12
+    assert original.joint_trajectory.points[-1].positions == before.joint_trajectory.points[-1].positions
+    assert result.joint_trajectory.points[0].positions == list(measured)
+    validate_bounded_observation_prefix(result, desired, measured)
+    old = bounded_observation_prefix(original)
+    with pytest.raises(ValueError, match='continuous curve exceeds'):
+        validate_bounded_observation_prefix(old, desired, measured)
+
+
+@pytest.mark.parametrize('measured,desired,endpoint', [
+    (0., -.006, .019),     # controller origin limits the prefix
+    (-.002, 0., .023),    # current measured origin limits the prefix
+    (0., .001, .025),     # measured bound, sufficient command delta remains
+])
+def test_both_fixed_origins_limit_the_same_source_curve(measured, desired, endpoint):
+    result = bounded_observation_prefix(path(0., .1),
+        controller_reference=stationary([desired]*6), measured_origin=[measured]*6)
+    assert result.joint_trajectory.points[-1].positions[0] == pytest.approx(endpoint, abs=2e-10)
+    validate_bounded_observation_prefix(result, stationary([desired]*6), [measured]*6)
+
+
+@pytest.mark.parametrize('desired', [.003, .01, .024])
+def test_direction_without_required_command_delta_is_unavailable(desired):
+    with pytest.raises(ValueError, match='insufficient directional command delta'):
+        bounded_observation_prefix(JointPlan([[0.]*6, [.1]*6], duration_sec=1.),
+                                   controller_reference=stationary([desired]*6))
+
+
+def test_preexisting_offset_alone_cannot_claim_directional_response():
+    with pytest.raises(ValueError, match='insufficient directional command delta'):
+        bounded_observation_prefix(JointPlan([[0.]*6, [.001]*6], duration_sec=1.),
+                                   controller_reference=stationary([.025]*6))
+
+
+def test_command_direction_must_progress_from_actual_measured_start():
+    with pytest.raises(ValueError, match='insufficient directional command delta'):
+        bounded_observation_prefix(JointPlan([[0.]*6, [.0005]*6], duration_sec=1.),
+            controller_reference=stationary([-.023]*6), measured_origin=[.001]*6)
+
+
+def test_displaced_controller_bridge_cannot_be_clipped_away():
+    with pytest.raises(ValueError, match='origins or controller bridge'):
+        bounded_observation_prefix(path(0., .1),
+                                   controller_reference=stationary([.026]*6))
+
+
+def test_source_spline_first_excursion_is_cut_on_curve_not_endpoint_chord():
+    original = JointPlan([[0.]*6, [.01, .01, 0., 0., 0., 0.]], duration_sec=1.)
+    original.joint_trajectory.points[0].velocities = [.15, 0., 0., 0., 0., 0.]
+    original.joint_trajectory.points[1].velocities = [-.15, 0., 0., 0., 0., 0.]
+    coefficients = segment_coefficients(*original.joint_trajectory.points, 1., 6)
+    assert _polynomial(coefficients, .5)[0] > .025  # both knots were inside
+    result = bounded_observation_prefix(original)
+    endpoint = result.joint_trajectory.points[-1].positions
+    assert endpoint[0] == pytest.approx(.025, abs=2e-10)
+    assert 0. < endpoint[1] < .01  # a linear chord would give equal q1/q2
+    lo, hi = 0., .5
+    for _ in range(50):
+        mid = (lo+hi)/2.
+        if _polynomial(coefficients, mid)[0] < endpoint[0]: lo = mid
+        else: hi = mid
+    assert endpoint == pytest.approx(_polynomial(coefficients, lo), abs=1e-9)
+
+
+def test_source_spline_reversal_between_monotone_knots_is_rejected():
+    original = path(0., .024)
+    original.joint_trajectory.points[0].velocities = [-.001, 0., 0., 0., 0., 0.]
+    original.joint_trajectory.points[1].velocities = [0.]*6
+    with pytest.raises(ValueError, match='reverses a joint'):
+        bounded_observation_prefix(original)
+
+
+def test_final_spline_extrema_are_not_licensed_by_bounded_knots():
+    result = path(0., .024)
+    result.joint_trajectory.points[0].velocities = [.1, 0., 0., 0., 0., 0.]
+    result.joint_trajectory.points[1].velocities = [-.1, 0., 0., 0., 0., 0.]
+    with pytest.raises(ValueError, match='continuous curve exceeds'):
+        validate_bounded_observation_prefix(result, stationary([0.]*6), [0.]*6)
+
+
+def test_final_actual_desired_bridge_can_fail_when_measured_bridge_passes():
+    result = JointPlan([[0.]*6, [.024, .024, 0., 0., 0., 0.]], duration_sec=1.)
+    for point in result.joint_trajectory.points:
+        point.velocities = [0.]*6
+        point.accelerations = [0.]*6
+    result.joint_trajectory.points[-1].velocities[0] = -.011
+    validate_bounded_observation_prefix(result, stationary([0.]*6), [0.]*6)
+    with pytest.raises(ValueError, match='continuous curve exceeds'):
+        validate_bounded_observation_prefix(result, stationary([.01, 0., 0., 0., 0., 0.]), [0.]*6)
+
+
 def prefix_planner(current=None):
     manipulator = FakeManipulator(current_joint_values=current or [0]*6)
     planner = planner_tests.MoveItPlannerPoseFeedbackTest().make_planner(manipulator)
@@ -74,6 +189,39 @@ def test_prefix_rejects_invalid_authority_before_motion(failure):
         planner.strict_execution_retime_enabled = False
     assert not planner.execute_cached_observation_prefix(target)[0]
     assert not manipulator.executed_plans
+
+
+def test_post_retime_spline_overshoot_never_reaches_cad_or_submission():
+    from test_controller_reference_timing import setup
+    planner, manipulator, _ = setup('prefix')
+    def retime(plan):
+        result = deepcopy(plan)
+        for point in result.joint_trajectory.points:
+            point.velocities = [0.]*6
+            point.accelerations = [0.]*6
+        result.joint_trajectory.points[-1].velocities = [-.1]*6
+        return result, 'synthetic retimed overshoot'
+    planner._retime_strict_execution_plan = retime
+    planner.observation_path_guard_required = True
+    planner.observation_path_validator = lambda plan: pytest.fail('invalid prefix reached CAD')
+    ok, message = planner.execute_cached_observation_prefix(make_pose())
+    assert not ok and 'final continuous curve exceeds' in message
+    assert not manipulator.executed_plans and planner._last_pose_plan is None
+
+
+def test_reference_changed_during_retime_cannot_rebase_clipped_prefix():
+    from test_controller_reference_timing import setup
+    planner, manipulator, _ = setup('prefix')
+    original = planner.controller_reference_provider([])
+    def retime(plan):
+        changed = deepcopy(original)
+        changed.positions[0] += 1e-6
+        planner.controller_reference_provider = lambda names: changed
+        return deepcopy(plan), 'same geometry, changed external reference'
+    planner._retime_strict_execution_plan = retime
+    ok, message = planner.execute_cached_observation_prefix(make_pose())
+    assert not ok and 'controller reference changed after speed proof' in message
+    assert not manipulator.executed_plans and planner._last_pose_plan is None
 
 
 @pytest.mark.parametrize('status', ['', 'DISABLED:NOT_REQUESTED', 'UNCONFIRMED:ENCODER_RESPONSE_TIMEOUT', 'UNCONFIRMED:ENCODER_RESPONSE_LOST', 'OVERHEAT_BLOCKED:TEMPERATURE'])

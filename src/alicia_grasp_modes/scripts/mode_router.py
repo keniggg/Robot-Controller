@@ -18,6 +18,7 @@ from std_srvs.srv import SetBool, SetBoolResponse, Trigger
 from alicia_flexible_grasp_supervisor.msg import ObjectPose, GraspState, Grasp6DPlan
 from alicia_flexible_grasp_supervisor.srv import StartGrasp, StartGraspResponse, TriggerZero
 from alicia_grasp_modes.policy import ModePolicy
+from alicia_grasp_modes.selection import validate_mode_strategy
 from alicia_grasp_modes.srv import SetGraspMode, SetGraspModeResponse
 
 
@@ -35,10 +36,7 @@ class ModeRouter:
         self.source_status = {}
         self.desired = str(rospy.get_param('~initial_mode', 'carton'))
         self.desired_strategy = str(rospy.get_param('~initial_strategy', 'two_stage'))
-        if self.desired not in ('carton', 'unknown'):
-            raise ValueError('invalid initial_mode')
-        if self.desired_strategy not in ('two_stage', 'direct'):
-            raise ValueError('invalid initial_strategy')
+        validate_mode_strategy(self.desired, self.desired_strategy)
         self.obj_pub = rospy.Publisher('/perception/object', ObjectPose, queue_size=1)
         self.mask_pub = rospy.Publisher('/perception/object_mask', Image, queue_size=1)
         self.cam_pub = rospy.Publisher('/perception/object_pose_camera', PoseStamped, queue_size=1)
@@ -189,7 +187,10 @@ class ModeRouter:
 
     def set_unknown(self, request):
         with self.lock:
-            outcome = self.switch('unknown' if request.data else 'carton')
+            try:
+                outcome = self.switch('unknown' if request.data else 'carton')
+            except ValueError as exc:
+                return SetBoolResponse(False, str(exc))
             return SetBoolResponse(outcome in ('SWITCHING', 'QUEUED'), outcome)
 
     def select(self, request):

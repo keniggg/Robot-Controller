@@ -59,6 +59,7 @@ public:
     {
         synchronized_ = false;
         clear_probe();
+        clear_committed_reference();
         if (state_ == ActuationState::PENDING) {
             reason_ = "POSITIVE_ENABLE_REQUESTED";
         }
@@ -78,6 +79,7 @@ public:
     void reset_for_positive_enable(double now_sec)
     {
         (void)now_sec;
+        initial_probe_failed_ = false;
         state_ = ActuationState::PENDING;
         reason_ = "POSITIVE_ENABLE_REQUESTED";
         synchronized_ = false;
@@ -85,6 +87,7 @@ public:
         latest_feedback_.clear();
         latest_feedback_stamp_sec_ = 0.0;
         clear_probe();
+        clear_committed_reference();
     }
 
     void set_disabled(double now_sec)
@@ -97,6 +100,7 @@ public:
         latest_feedback_.clear();
         latest_feedback_stamp_sec_ = 0.0;
         clear_probe();
+        clear_committed_reference();
     }
 
     void mark_overheat_blocked(
@@ -129,7 +133,8 @@ public:
         double stamp_sec
     )
     {
-        if (!valid_joints(joints) || !std::isfinite(stamp_sec)) {
+        if (!valid_joints(joints) || !std::isfinite(stamp_sec) ||
+            (has_feedback_ && stamp_sec < latest_feedback_stamp_sec_)) {
             return;
         }
 
@@ -137,21 +142,42 @@ public:
         latest_feedback_stamp_sec_ = stamp_sec;
         has_feedback_ = true;
 
+        // A delayed source-stamped sample from before this axis's first
+        // committed movement may refine its pre-command baseline, never count
+        // as response. Ordinary post-command streamed movement still accrues.
+        if (stream_axis_started_.size() == joints.size() &&
+            stream_axis_start_sec_.size() == joints.size() &&
+            stream_baseline_.size() == joints.size()) {
+            for (std::size_t i = 0; i < joints.size(); ++i) {
+                if (stream_axis_started_[i] && stamp_sec <= stream_axis_start_sec_[i]) {
+                    stream_baseline_[i] = joints[i];
+                }
+            }
+        }
+
         if (
             (state_ != ActuationState::PENDING &&
              state_ != ActuationState::CONFIRMED) ||
             !probe_active_ ||
+            stamp_sec - probe_start_sec_ > config_.response_timeout_sec ||
             probe_baseline_.size() != joints.size() ||
-            probe_requested_delta_.size() != joints.size()
+            probe_requested_delta_.size() != joints.size() ||
+            probe_response_start_sec_.size() != joints.size() ||
+            probe_motion_start_sec_.size() != joints.size()
         ) {
             return;
         }
 
         for (std::size_t i = 0; i < joints.size(); ++i) {
             const double requested_delta = probe_requested_delta_[i];
+            if (stamp_sec <= probe_motion_start_sec_[i]) {
+                probe_baseline_[i] = joints[i];
+                continue;
+            }
             if (
                 std::abs(requested_delta) <
-                config_.command_probe_min_delta_rad
+                    config_.command_probe_min_delta_rad ||
+                stamp_sec <= probe_response_start_sec_[i]
             ) {
                 continue;
             }
@@ -178,6 +204,10 @@ public:
     {
         if (rejection_reason != nullptr) {
             rejection_reason->clear();
+        }
+        if (initial_probe_failed_) {
+            set_rejection(rejection_reason, "INITIAL_PROBE_FAILED_REQUIRES_POSITIVE_ENABLE");
+            return false;
         }
         if (
             !valid_joints(target) ||
@@ -222,123 +252,172 @@ public:
         return true;
     }
 
+    // A successfully written reference-only/ownership hold supplies an SDK
+    // origin, never motion intent. The driver calls this only after write
+    // success, including hold-only writes which do not enter the motion path.
+    void note_committed_reference(
+        const std::vector<double>& target,
+        double stamp_sec
+    )
+    {
+        if (!valid_joints(target) || !std::isfinite(stamp_sec) ||
+            (!committed_target_.empty() && stamp_sec < committed_stamp_sec_)) {
+            return;
+        }
+        committed_target_ = target;
+        committed_stamp_sec_ = stamp_sec;
+        // A reference must not renew or cancel an active response deadline.
+        // Ownership/reset explicitly cancels the old observation separately.
+        if (!probe_active_) clear_stream();
+    }
+
     void note_streamed_target(
         const std::vector<double>& target,
         double stamp_sec
     )
     {
-        // An SDK keepalive can outlive the GUI/task request that timed out.
-        // Keep failure evidence stable until an explicit positive-enable
-        // handshake resets it; streaming an old target is not a new request.
-        if (
-            !synchronized_ ||
-            !has_feedback_ ||
-            probe_active_ ||
-            (state_ != ActuationState::PENDING &&
-             state_ != ActuationState::CONFIRMED) ||
-            !valid_joints(target) ||
-            latest_feedback_.size() != target.size() ||
-            !std::isfinite(stamp_sec) ||
+        // This API is evidence of a successful SDK write, not admission or
+        // publication of an upstream target. Failed/retired requests cannot
+        // rearm it; a new positive-enable epoch discards every old reference.
+        if (!synchronized_ || initial_probe_failed_ ||
+            (state_ != ActuationState::PENDING && state_ != ActuationState::CONFIRMED) ||
+            !valid_joints(target) || !std::isfinite(stamp_sec) ||
+            (!committed_target_.empty() && stamp_sec < committed_stamp_sec_)) {
+            return;
+        }
+        const std::vector<double> previous = committed_target_;
+        const double previous_stamp = committed_stamp_sec_;
+        committed_target_ = target;
+        committed_stamp_sec_ = stamp_sec;
+        if (!has_feedback_ || latest_feedback_.size() != target.size() ||
             stamp_sec < latest_feedback_stamp_sec_ ||
-            stamp_sec - latest_feedback_stamp_sec_ > config_.confirmation_freshness_sec
-        ) {
+            stamp_sec - latest_feedback_stamp_sec_ > config_.confirmation_freshness_sec) {
+            if (!probe_active_) clear_stream();
+            return;
+        }
+        // The first successful SDK vector is a reference. Without a prior
+        // successful write, encoder/setpoint difference cannot distinguish a
+        // cold-start alignment or retained owner hold from new motion intent.
+        // The first real step is measured from this committed SDK origin.
+        if (previous.size() != target.size()) {
+            if (!probe_active_) clear_stream();
+            return;
+        }
+        if (probe_active_ &&
+            stamp_sec > probe_start_sec_ + config_.response_timeout_sec) {
+            return; // Never extend an expired window through another write.
+        }
+        if (!probe_active_ &&
+            (stream_baseline_.size() != target.size() ||
+             stamp_sec - previous_stamp > config_.response_timeout_sec ||
+             stamp_sec - stream_start_sec_ >
+                 config_.response_timeout_sec + config_.confirmation_freshness_sec)) {
+            stream_command_baseline_ = previous;
+            stream_baseline_ = latest_feedback_;
+            stream_axis_started_.assign(target.size(), false);
+            stream_axis_start_sec_.assign(target.size(), 0.0);
+            stream_start_sec_ = stamp_sec;
+        }
+        if (stream_baseline_.size() != target.size() ||
+            stream_command_baseline_.size() != target.size() ||
+            stream_axis_started_.size() != target.size() ||
+            stream_axis_start_sec_.size() != target.size()) {
             return;
         }
 
-        if (stream_baseline_.empty()) {
-            bool unchanged = true;
-            for (std::size_t i = 0; i < target.size(); ++i) {
-                unchanged = unchanged && std::abs(target[i] - latest_feedback_[i]) <= 1e-9;
+        for (std::size_t i = 0; i < target.size(); ++i) {
+            if (probe_active_ && std::abs(probe_requested_delta_[i]) >=
+                    config_.command_probe_min_delta_rad) {
+                continue; // Existing eligible axes use the reversal rule below.
             }
-            if (unchanged) {
-                return;
-            }
-        }
-        // A confirmed servo can still be settling toward the preceding
-        // command while SDK keepalives remain unchanged. Until the FIRST new
-        // command displacement, use the latest encoder baseline: otherwise a
-        // reversal is tested against the old forward-motion origin and can
-        // falsely time out despite real reverse motion (September 13 Joint5).
-        // Once displacement has begun, freeze this baseline so small streamed
-        // increments still accumulate. The early probe_active_ return above
-        // also keeps an already armed probe's original response deadline.
-        if (state_ == ActuationState::CONFIRMED &&
-            stream_target_.size() == target.size() &&
-            stream_target_ == stream_command_baseline_) {
-            stream_baseline_ = latest_feedback_;
-        }
-
-        // Smooth trajectories arrive as small increments. Measuring each
-        // increment against the latest feedback can wait forever when the
-        // servo follows well. Keep a short, continuously streamed command
-        // window and measure the requested/actual displacement from its start.
-        bool feedback_ahead_of_command = false;
-        if (stream_baseline_.size() == target.size() &&
-            stream_target_.size() == target.size()) {
-            for (std::size_t i = 0; i < target.size(); ++i) {
-                if (state_ == ActuationState::CONFIRMED &&
-                    (target[i] - stream_command_baseline_[i]) *
-                        (latest_feedback_[i] - stream_baseline_[i]) <= 0.0) {
-                    // Motion on an uncommanded axis or against the requested
-                    // direction cannot reset the response observation window.
-                    continue;
+            const double committed_step = target[i] - previous[i];
+            const double previous_command_delta =
+                previous[i] - stream_command_baseline_[i];
+            const bool direction_reversed = stream_axis_started_[i] &&
+                committed_step * previous_command_delta < 0.0;
+            if (!stream_axis_started_[i] || direction_reversed) {
+                // Before eligibility, a reversal starts a new causal run at
+                // the preceding successful SDK vector. Earlier movement in
+                // the newly requested direction did not follow that request.
+                // The active multi-axis response deadline remains unchanged.
+                stream_command_baseline_[i] = previous[i];
+                stream_baseline_[i] = latest_feedback_[i];
+                stream_axis_started_[i] = committed_step != 0.0;
+                stream_axis_start_sec_[i] = stamp_sec;
+            } else {
+                const double command_delta = target[i] - stream_command_baseline_[i];
+                const double measured_delta = latest_feedback_[i] - stream_baseline_[i];
+                const double previous_delta = previous[i] - stream_command_baseline_[i];
+                if (command_delta * measured_delta > 0.0 &&
+                    std::abs(measured_delta) > std::abs(previous_delta) +
+                        config_.measured_response_min_delta_rad) {
+                    // Exclude this axis's response which preceded sufficient
+                    // committed command. Keep its actual SDK command origin;
+                    // never replace all axes' origins with encoder offsets.
+                    stream_baseline_[i] = latest_feedback_[i];
                 }
-                feedback_ahead_of_command = feedback_ahead_of_command ||
-                    std::abs(latest_feedback_[i] - stream_baseline_[i]) >
-                        std::abs(stream_target_[i] - stream_command_baseline_[i]) +
-                            config_.measured_response_min_delta_rad;
             }
-        }
-        if (feedback_ahead_of_command || stream_baseline_.size() != target.size() ||
-            stamp_sec < stream_start_sec_ ||
-            stamp_sec - stream_last_sec_ > config_.response_timeout_sec ||
-            stamp_sec - stream_start_sec_ >
-                config_.response_timeout_sec + config_.confirmation_freshness_sec) {
-            stream_baseline_ = latest_feedback_;
-            // For a smooth stream compare command changes and encoder changes
-            // separately. A fixed servo setpoint/encoder offset is not motion.
-            // Preserve the original immediate probe for a nontrivial step.
-            double immediate_delta = 0.0;
-            for (std::size_t i = 0; i < target.size(); ++i) {
-                immediate_delta = std::max(immediate_delta, std::abs(target[i] - latest_feedback_[i]));
-            }
-            // Once confirmed, monitor NEW command displacement. An unchanged
-            // hold with a fixed encoder/setpoint offset is not a new motion
-            // request and must not manufacture a missing-response timeout.
-            stream_command_baseline_ = state_ != ActuationState::CONFIRMED &&
-                immediate_delta >= config_.command_probe_min_delta_rad
-                ? latest_feedback_ : target;
-            stream_start_sec_ = stamp_sec;
         }
         stream_target_ = target;
         stream_last_sec_ = stamp_sec;
-        bool non_trivial = false;
-        for (std::size_t i = 0; i < target.size(); ++i) {
-            if (
-                std::abs(target[i] - stream_command_baseline_[i]) >=
-                config_.command_probe_min_delta_rad
-            ) {
-                non_trivial = true;
-                break;
+
+        if (probe_active_) {
+            for (std::size_t i = 0; i < target.size(); ++i) {
+                const double requested = probe_requested_delta_[i];
+                if (std::abs(requested) >= config_.command_probe_min_delta_rad) {
+                    const double reversal = target[i] - probe_command_extreme_[i];
+                    if (reversal * requested >= 0.0) {
+                        probe_command_extreme_[i] = target[i];
+                    } else if (std::abs(reversal) >= config_.command_probe_min_delta_rad) {
+                        const double remaining = target[i] - latest_feedback_[i];
+                        // Preserve the existing genuine reversal contract:
+                        // transmitted reversal and remaining encoder demand
+                        // must agree, then a NEW measured response is required.
+                        if (remaining * reversal > 0.0 &&
+                            std::abs(remaining) >= config_.command_probe_min_delta_rad) {
+                            probe_baseline_[i] = latest_feedback_[i];
+                            probe_requested_delta_[i] = remaining;
+                            probe_command_extreme_[i] = target[i];
+                            probe_response_start_sec_[i] = stamp_sec;
+                            probe_motion_start_sec_[i] = stamp_sec;
+                        }
+                    }
+                    continue;
+                }
+                const double delta = target[i] - stream_command_baseline_[i];
+                if (stream_axis_started_[i] &&
+                    std::abs(delta) >= config_.command_probe_min_delta_rad) {
+                    // A subthreshold offset/sign never fixes a future axis's
+                    // direction. Its own committed displacement decides it,
+                    // with a subsequent feedback frame and ORIGINAL deadline.
+                    probe_requested_delta_[i] = delta;
+                    probe_baseline_[i] = stream_baseline_[i];
+                    probe_command_extreme_[i] = target[i];
+                    probe_response_start_sec_[i] = stamp_sec;
+                    probe_motion_start_sec_[i] = stream_axis_start_sec_[i];
+                }
             }
-        }
-        if (!non_trivial) {
             return;
         }
 
+        bool non_trivial = false;
+        for (std::size_t i = 0; i < target.size(); ++i) {
+            non_trivial = non_trivial || (stream_axis_started_[i] &&
+                std::abs(target[i] - stream_command_baseline_[i]) >=
+                    config_.command_probe_min_delta_rad);
+        }
+        if (!non_trivial) return;
         probe_active_ = true;
         probe_baseline_ = stream_baseline_;
         probe_requested_delta_.resize(target.size());
+        probe_command_extreme_ = target;
+        probe_response_start_sec_.assign(target.size(), stamp_sec);
+        probe_motion_start_sec_ = stream_axis_start_sec_;
         for (std::size_t i = 0; i < target.size(); ++i) {
-            // Retain the exact delta used by the admission threshold above.
-            // Reconstructing an absolute encoder target and subtracting again
-            // can round a valid boundary delta below the threshold forever.
-            probe_requested_delta_[i] = target[i] - stream_command_baseline_[i];
+            probe_requested_delta_[i] = stream_axis_started_[i]
+                ? target[i] - stream_command_baseline_[i] : 0.0;
         }
         probe_start_sec_ = stamp_sec;
-        // Continue checking streamed motion after the initial confirmation.
-        // Keep the confirmed state while awaiting the next bounded response;
-        // fresh packets alone must not preserve it after a servo stalls.
         if (state_ != ActuationState::CONFIRMED) {
             state_ = ActuationState::PENDING;
             reason_ = "AWAITING_ENCODER_RESPONSE";
@@ -355,6 +434,9 @@ public:
             now_sec - probe_start_sec_ >
                 config_.response_timeout_sec
         ) {
+            if (state_ == ActuationState::PENDING) {
+                initial_probe_failed_ = true;
+            }
             reason_ = state_ == ActuationState::CONFIRMED
                 ? "ENCODER_RESPONSE_LOST" : "ENCODER_RESPONSE_TIMEOUT";
             state_ = ActuationState::UNCONFIRMED;
@@ -378,6 +460,14 @@ public:
     ActuationState state() const
     {
         return state_;
+    }
+
+    // A failed initial probe retires its host target until another explicit
+    // positive-enable handshake. This is not a torque/enable command, and it
+    // deliberately excludes response loss after confirmation and stale input.
+    bool initial_probe_failed() const
+    {
+        return initial_probe_failed_;
     }
 
     bool synchronized() const
@@ -443,19 +533,43 @@ private:
         }
     }
 
-    void clear_probe()
+    void clear_committed_reference()
+    {
+        committed_target_.clear();
+        committed_stamp_sec_ = 0.0;
+    }
+
+    void clear_stream()
     {
         stream_baseline_.clear();
         stream_target_.clear();
         stream_command_baseline_.clear();
+        stream_axis_started_.clear();
+        stream_axis_start_sec_.clear();
         stream_start_sec_ = 0.0;
         stream_last_sec_ = 0.0;
+    }
+
+    void clear_probe()
+    {
+        clear_stream();
         probe_active_ = false;
         probe_baseline_.clear();
         probe_requested_delta_.clear();
+        probe_command_extreme_.clear();
+        probe_response_start_sec_.clear();
+        probe_motion_start_sec_.clear();
         probe_start_sec_ = 0.0;
     }
 
+    // A successful physical SDK reference survives ordinary response/owner
+    // observation resets. A reset of command synchronization/positive enable
+    // discards it explicitly; no encoder sample can replace this origin.
+    std::vector<double> committed_target_;
+    double committed_stamp_sec_ = 0.0;
+    std::vector<bool> stream_axis_started_;
+    std::vector<double> stream_axis_start_sec_;
+    std::vector<double> probe_motion_start_sec_;
     std::vector<double> stream_baseline_;
     std::vector<double> stream_target_;
     std::vector<double> stream_command_baseline_;
@@ -465,12 +579,15 @@ private:
     ActuationState state_ = ActuationState::DISABLED;
     std::string reason_ = "NOT_REQUESTED";
     bool synchronized_ = false;
+    bool initial_probe_failed_ = false;
     bool has_feedback_ = false;
     std::vector<double> latest_feedback_;
     double latest_feedback_stamp_sec_ = 0.0;
     bool probe_active_ = false;
     std::vector<double> probe_baseline_;
     std::vector<double> probe_requested_delta_;
+    std::vector<double> probe_command_extreme_;
+    std::vector<double> probe_response_start_sec_;
     double probe_start_sec_ = 0.0;
 };
 

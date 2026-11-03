@@ -1,0 +1,5 @@
+<launch>
+  <!-- Keep last in the full stack: all consumers see one final URDF/X pair. -->
+  <include file="/home/zhuyupei/alicia_wa_full/.worktrees/protocol-v3-upgrade/.runtime/candidate_models/expanded_metric_20260929/candidate_parameters.launch"/>
+  <param name="/mujoco_digital_twin/server_url" value="http://127.0.0.1:8002"/>
+</launch>

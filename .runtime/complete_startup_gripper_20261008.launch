@@ -1,0 +1,3 @@
+<launch>
+  <node pkg="alicia_flexible_grasp_supervisor" type="compliant_gripper_controller.py" name="compliant_gripper_controller" output="screen"/>
+</launch>

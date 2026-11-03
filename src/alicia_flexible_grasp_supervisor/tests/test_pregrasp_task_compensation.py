@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import threading
 from unittest import mock
 
 import pytest
@@ -15,8 +16,12 @@ def task_case():
     node.active=True
     node._bound_execution_plan=None
     node._position_only_execute_globally_enabled=lambda:False
+    # Retain the fixture's existing high-level plan-validation dependency.
+    # Its ModeAware subclasses do not model station handoff state here.
     node._validate_bound_plan=lambda *args,**kwargs:task.PlanValidationResult(True)
-    node._invoke_plan_bound_action=lambda _p,_c,_l,action:(task.PlanValidationResult(True),action())
+    # Exercise the real atomic action wrapper and measured-aperture catch.
+    node._grasp6d_plan_lock=threading.RLock()
+    node._validate_bound_plan_locked=mock.Mock(return_value=task.PlanValidationResult(True))
     node._wait_for_motion_settle=mock.Mock(return_value=True)
     node._set_contact_endpoint_precision=mock.Mock(return_value=True)
     node._compensate_pregrasp_endpoint=mock.Mock(return_value=True)

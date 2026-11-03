@@ -4,12 +4,18 @@ import argparse
 import rospy
 from std_srvs.srv import SetBool
 from alicia_grasp_modes.srv import SetGraspMode
+from alicia_grasp_modes.selection import STRATEGIES, validate_mode_strategy
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('carton', 'unknown'))
-    parser.add_argument('--strategy', choices=('two_stage', 'direct'))
+    parser.add_argument('--strategy', choices=STRATEGIES)
     args = parser.parse_args()
+    if args.strategy:
+        try:
+            validate_mode_strategy(args.mode, args.strategy)
+        except ValueError as exc:
+            parser.error(str(exc))
     rospy.init_node('switch_grasp_mode', anonymous=True)
     if args.strategy:
         rospy.wait_for_service('/grasp_mode/select', timeout=10.)

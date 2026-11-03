@@ -1,0 +1,439 @@
+{
+  "schema": "gen18_registration_reacquire_recorded_inputs/v1",
+  "record_dir": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261011T131409.553041Z_fbd9eb44a4bb4493bdc065e0622ed215",
+  "recorded_result": "failure",
+  "requests": {
+    "13": {
+      "audit_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261011T131409.553041Z_fbd9eb44a4bb4493bdc065e0622ed215/keyframes_audits/527e6ba5a903bdf541b9e37af7345da89befdd12dc8dd288ea61c0ffbad5a2fc.json",
+      "audit_sha256": "527e6ba5a903bdf541b9e37af7345da89befdd12dc8dd288ea61c0ffbad5a2fc",
+      "selection": {
+        "generation": 18,
+        "mode": "unknown",
+        "stamp_ns": 1791724451111255407,
+        "strategy": "observe_return"
+      },
+      "request_id": 13,
+      "generation": 7,
+      "target_epoch": 4,
+      "target_track_id": "g1-t4",
+      "snapshot_stamp_ns": 1791724514384021043,
+      "phase_id": 4,
+      "retained_source_stamps_ns": [
+        1791724452711508512,
+        1791724513315634965,
+        1791724514384021043
+      ],
+      "latest_registration": {
+        "code": "REGISTERED",
+        "inlier_count": 667,
+        "ok": true,
+        "overlap_fraction": 0.8065296251511487,
+        "raw_translation_m": 0.008795994007862394,
+        "rmse_m": 0.0009511464575851869,
+        "rotation_deg": 0.06791023112838254,
+        "snapshot_to_reference_transform": [
+          [
+            0.9999992995698139,
+            0.0011820529515903346,
+            -6.00891372086668e-05,
+            0.007929619687039244
+          ],
+          [
+            -0.0011820567372052798,
+            0.9999992993859652,
+            -6.300356349668163e-05,
+            -0.001639357621351851
+          ],
+          [
+            6.001462156115594e-05,
+            6.307454813683423e-05,
+            0.9999999962099235,
+            0.0034355711016636477
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "source_clipped": false,
+        "source_stamp_ns": 1791724514384021043,
+        "support_consistency_audit": {
+          "anchor_base": [
+            -0.10248358824189217,
+            -0.36224733305108897,
+            0.005538149334759851
+          ],
+          "anchor_policy": "final_matched_reference_centroid_projected_to_reference_support",
+          "correspondence_count": 667,
+          "diagnostic_only": true,
+          "raw_maximum_footprint_separation_m": 0.0032425593773529812,
+          "raw_normal_angle_deg": 1.3882133195030726,
+          "raw_plane_separation_m": 0.0028662853534939057,
+          "transform_semantics": "moving_snapshot_base_estimate_to_phase_reference",
+          "transformed_maximum_footprint_separation_m": 0.0005615144973414761,
+          "transformed_normal_angle_deg": 1.3882133195030761,
+          "transformed_plane_separation_m": 0.00011874529656641375
+        },
+        "support_normal_angle_deg": 1.388213319503006,
+        "support_offset_diagnostic": {
+          "hard_limit_m": 0.007,
+          "measured_m": 0.0028794754254536405,
+          "warning_flag": false,
+          "warning_threshold_m": 0.004
+        },
+        "support_plane_separation_m": 0.0028794754254536405,
+        "translation_m": 0.008402719643554376
+      },
+      "geometry": {
+        "obb_center_base_m": [
+          -0.11003850456018932,
+          -0.3611521014450674,
+          0.012690040664304717
+        ],
+        "obb_size_xyz_m": [
+          0.06339594840545612,
+          0.0383730098613832,
+          0.021387792911716927
+        ],
+        "R_base_obb": [
+          [
+            -0.8545644436838982,
+            -0.5177795864050394,
+            -0.04029778521775247
+          ],
+          [
+            0.514429347637262,
+            -0.8545742074201301,
+            0.07117141492030082
+          ],
+          [
+            -0.07128855364454226,
+            0.04009019723676786,
+            0.9966497470048273
+          ]
+        ],
+        "object_points_count": 2424,
+        "object_points_sha256": "71c8e3565ce55d3e03fb5f4ed5d41778a9056670afd8a41ce1a345b9a4ae85f9"
+      },
+      "snapshot_evidence": {
+        "disjoint_window_required": false,
+        "near_field": true,
+        "source_span_ms": 531.335592,
+        "source_stamp_ns": [
+          1791724513852685451,
+          1791724514121816158,
+          1791724514384021043
+        ],
+        "unique_source_frames": 3
+      },
+      "outcome": {
+        "code": "CONTACT_SEARCH_YIELDED_FOR_MEASURED_VIEW",
+        "preview_valid": false,
+        "reason": "CONTACT_SEARCH_YIELDED_FOR_MEASURED_VIEW",
+        "valid_plan": false
+      }
+    },
+    "42": {
+      "audit_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records/20261011T131409.553041Z_fbd9eb44a4bb4493bdc065e0622ed215/keyframes_audits/3a88b0ffd52be7f55b2a5c234d4984f7a1e6695698cea7536b2c78338f57d08c.json",
+      "audit_sha256": "3a88b0ffd52be7f55b2a5c234d4984f7a1e6695698cea7536b2c78338f57d08c",
+      "selection": {
+        "generation": 18,
+        "mode": "unknown",
+        "stamp_ns": 1791724451111255407,
+        "strategy": "observe_return"
+      },
+      "request_id": 42,
+      "generation": 13,
+      "target_epoch": 4,
+      "target_track_id": "g1-t4",
+      "snapshot_stamp_ns": 1791724571988842248,
+      "phase_id": 7,
+      "retained_source_stamps_ns": [
+        1791724452711508512,
+        1791724513315634965,
+        1791724514384021043,
+        1791724570854274988
+      ],
+      "latest_registration": {
+        "code": "YAW_BOUND_EXCEEDED",
+        "inlier_count": 574,
+        "ok": false,
+        "overlap_fraction": 0.6567505720823799,
+        "raw_translation_m": 0.06889074762355671,
+        "rmse_m": 0.0015003811987438346,
+        "rotation_deg": 10.757949839873657,
+        "snapshot_to_reference_transform": [
+          [
+            0.9824742245542382,
+            -0.18620344216356416,
+            0.008525034486398521,
+            -0.0676155107478026
+          ],
+          [
+            0.1861087206032448,
+            0.9824696244307519,
+            0.01081578412874939,
+            0.013136769111699843
+          ],
+          [
+            -0.010389523664582168,
+            -0.009039645863476511,
+            0.9999051668036761,
+            -0.0012260145807713473
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "source_clipped": false,
+        "source_stamp_ns": 1791724571988842248,
+        "support_normal_angle_deg": 0.635817330483488,
+        "support_offset_diagnostic": {
+          "hard_limit_m": 0.007,
+          "measured_m": 0.0027798182280777215,
+          "warning_flag": false,
+          "warning_threshold_m": 0.004
+        },
+        "support_plane_separation_m": 0.0027798182280777215,
+        "translation_m": 0.008411579978697027
+      },
+      "geometry": {
+        "obb_center_base_m": [
+          -0.10508129901003785,
+          -0.363017599113656,
+          0.012976844880430596
+        ],
+        "obb_size_xyz_m": [
+          0.055915212427220605,
+          0.039432919518470756,
+          0.020547279919715167
+        ],
+        "R_base_obb": [
+          [
+            -0.8254450225957033,
+            -0.5623462331458275,
+            -0.04906351738998655
+          ],
+          [
+            0.5594997177985882,
+            -0.826585556964964,
+            0.06096214235261367
+          ],
+          [
+            -0.07483702596495426,
+            0.02286987283783207,
+            0.9969334924964164
+          ]
+        ],
+        "object_points_count": 874,
+        "object_points_sha256": "8f112fe28b088070b5c42e8e5ae16948adcc584511a476cf5dd226d4f40ded05"
+      },
+      "snapshot_evidence": {
+        "disjoint_window_required": false,
+        "near_field": true,
+        "source_span_ms": 596.687316,
+        "source_stamp_ns": [
+          1791724571392154932,
+          1791724571725398302,
+          1791724571988842248
+        ],
+        "unique_source_frames": 3
+      },
+      "outcome": {
+        "code": "NEAR_FIELD_NO_HARD_SAFE_CANDIDATE",
+        "preview_valid": false,
+        "reason": "NEAR_FIELD_NO_HARD_SAFE_CANDIDATE",
+        "valid_plan": false
+      }
+    }
+  },
+  "failed_source_watermark_ns": 1791724571988842248,
+  "arrival_registered_source_ns": 1791724570854274988,
+  "actual_compute_policy": "single_snapshot_direct",
+  "limitations": [
+    "No successful recovery is claimed: the actual task ended after the recorded rejection.",
+    "Request 13 is a prior station reference comparison, not the immediately preceding second-station ICP result.",
+    "Arrival source retention demonstrates prior successful fusion; its numerical ICP transform was not saved in this fixture.",
+    "Geometry rows preserve recorded fields; current request 42 raw geometry was not admitted to contact authority."
+  ],
+  "offline_replay": {
+    "source": "exact recorded current geometry plus offline reconstruction of subsequent three recorded frames",
+    "fixture_npz": "gen18_registration_reacquire_clouds.npz",
+    "fixture_npz_sha256": "262b026d86ee5f101de499472ed0a29bcc8f4014609ff85f5015688837c21f74",
+    "reference_source_ns": 1791724452711508512,
+    "config": {
+      "correspondence_max_m": 0.008,
+      "minimum_inliers": 80,
+      "minimum_overlap_fraction": 0.3,
+      "maximum_rmse_m": 0.004,
+      "maximum_translation_m": 0.025,
+      "maximum_yaw_deg": 10.0,
+      "maximum_support_normal_angle_deg": 4.0,
+      "maximum_support_offset_delta_m": 0.007,
+      "maximum_iterations": 12
+    },
+    "failed_window": {
+      "source_stamps_ns": [
+        1791724571392154932,
+        1791724571725398302,
+        1791724571988842248
+      ],
+      "snapshot_ok": true,
+      "camera_link_transform": [
+        [
+          0.22165358291472959,
+          0.8124473142820444,
+          -0.5392578703152657,
+          -0.17947465021240877
+        ],
+        [
+          -0.0010162711485105502,
+          -0.5528210590437824,
+          -0.8332993722970534,
+          -0.41100116025423783
+        ],
+        [
+          -0.9751249439810346,
+          0.18525182372544563,
+          -0.12170910168257992,
+          0.17322644412343804
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "geometry_ok": true,
+      "point_count": 874,
+      "points_sha256": "8f112fe28b088070b5c42e8e5ae16948adcc584511a476cf5dd226d4f40ded05",
+      "registration": {
+        "ok": false,
+        "code": "YAW_BOUND_EXCEEDED",
+        "transform_base": [
+          [
+            0.9824742245542382,
+            -0.18620344216356416,
+            0.008525034486398521,
+            -0.0676155107478026
+          ],
+          [
+            0.1861087206032448,
+            0.9824696244307519,
+            0.01081578412874939,
+            0.013136769111699843
+          ],
+          [
+            -0.010389523664582168,
+            -0.009039645863476511,
+            0.9999051668036761,
+            -0.0012260145807713473
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "rotation_deg": 10.757949839873657,
+        "inlier_count": 574,
+        "overlap_fraction": 0.6567505720823799,
+        "rmse_m": 0.0015003811987438346,
+        "support_normal_angle_deg": 0.635817330483488,
+        "support_plane_separation_m": 0.0027798182280777215,
+        "maximum_point_displacement_m": 0.008411579978697027
+      },
+      "recorded_transform_max_abs_difference": 0.0,
+      "recorded_points_array_equal": true,
+      "recorded_points_max_abs_difference_m": 0.0
+    },
+    "new_disjoint_window": {
+      "source_stamps_ns": [
+        1791724572260291576,
+        1791724572592914581,
+        1791724572991546630
+      ],
+      "snapshot_ok": true,
+      "camera_link_transform": [
+        [
+          0.22165358291472959,
+          0.8124473142820444,
+          -0.5392578703152657,
+          -0.17947465021240883
+        ],
+        [
+          -0.0010162711485105502,
+          -0.5528210590437824,
+          -0.8332993722970534,
+          -0.41100116025423783
+        ],
+        [
+          -0.9751249439810346,
+          0.18525182372544563,
+          -0.12170910168257992,
+          0.17322644412343804
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "geometry_ok": true,
+      "point_count": 861,
+      "points_sha256": "cb7e358d5a9e3e9dde2c5c8906ac6d105e53ecabbe331ad195b6b760f5d9f4d2",
+      "registration": {
+        "ok": true,
+        "code": "REGISTERED",
+        "transform_base": [
+          [
+            0.9999997462592795,
+            -0.0007114604336167743,
+            3.613076057643722e-05,
+            0.001234965409848758
+          ],
+          [
+            0.0007114590622237059,
+            0.999999746192676,
+            3.795504866328053e-05,
+            4.5416603863913036e-05
+          ],
+          [
+            -3.615775492151673e-05,
+            -3.792933347530203e-05,
+            0.9999999986269915,
+            0.0031124068995490284
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "rotation_deg": 0.04087406677616053,
+        "inlier_count": 614,
+        "overlap_fraction": 0.7131242740998839,
+        "rmse_m": 0.001297596076842374,
+        "support_normal_angle_deg": 0.7371916687568224,
+        "support_plane_separation_m": 0.0027522417939284116,
+        "maximum_point_displacement_m": 0.003477435649684392
+      }
+    },
+    "report_path": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log/full_latest_no_skin_20261011T000625Z/gen18_analysis/evidence_registration_replay/result.json",
+    "report_sha256": "d243653fe23a66494c6417c44c326d8ccbbbce01966024f81aa8182f7efb583a",
+    "limitations": [
+      "Future window is a counterfactual offline re-acquisition; actual GEN18 terminated before submitting it.",
+      "The failed window was rebuilt from recorded RGB-D/mask/TF with exact array equality to the real audit. The same pipeline and fixed parameters generated the disjoint succeeding window.",
+      "This fixture checks registration, not station freshness, identity authorization, fusion completeness, contact evidence or path clearance."
+    ]
+  }
+}

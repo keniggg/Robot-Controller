@@ -1,0 +1,2410 @@
+{
+  "provenance": {
+    "record_id": "20260926T020728.289663Z_33756ba562364dce9b1b1842edd4cd99",
+    "audit_sha256": "acca36cfd7d17e8378325e84c854cc5245d44387b09ac061538257f5f053d8c7",
+    "scope": "286 measured points from current-view-only gen4 frozen surface; no synthetic points or shifted geometry",
+    "original_materialized_count": 0,
+    "original_boundary_profiles": [
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0011109929606443675,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0012544763665190833,
+            "maximum_observed_tilt_deg": 11.25,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.00125447636651904,
+            "maximum_observed_tilt_deg": 11.25,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0011109929606443675,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.001688491581022308,
+          0.0027994845416666756
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 0
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016340363359774383,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016340363359774383,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016340363359774383,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016340363359774383,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016082734994948937,
+          0.003242309835472332
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 1
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018460132567557955,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018460132567557955,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018460132567557955,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018460132567557955,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0013905693209100194,
+          0.003236582577665815
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 2
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0017443249832100728,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0017443249832100728,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0017443249832100728,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0017443249832100728,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.001310195068856414,
+          0.0030545200520664868
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 3
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.001179289133922924,
+            "maximum_observed_tilt_deg": 11.25,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0011100737050670716,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0011100737050670716,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0011792891339229474,
+            "maximum_observed_tilt_deg": 11.25,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016734600686705314,
+          0.002783533773737603
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 4
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016341881692263694,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016341881692263694,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016341881692263694,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016341881692263694,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016082734994948937,
+          0.003242461668721263
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 5
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.00144439204102612,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.00144439204102612,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.00144439204102612,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.00144439204102612,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0012662611725921522,
+          0.0027106532136182723
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 6
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0015961744808228187,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0015961744808228187,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0015961744808228187,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0015961744808228187,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.001645730465985696,
+          0.0032419049468085147
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 7
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0010864744424832007,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0010864744424832007,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0010864744424832007,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0010864744424832007,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016649278832290438,
+          0.0027514023257122445
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 8
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016341881692263694,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016341881692263694,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016341881692263694,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0016341881692263694,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016082734994948937,
+          0.003242461668721263
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 9
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.001339364412200976,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.001339364412200976,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.001339364412200976,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.001339364412200976,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0013859454480227005,
+          0.0027253098602236766
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 10
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0019015804129183845,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0019015804129183845,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0019015804129183845,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0019015804129183845,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016841253004723914,
+          0.003585705713390776
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 11
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018949319403966391,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018949319403966391,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018949319403966391,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018949319403966391,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016623964440805122,
+          0.0035573283844771513
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 12
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018778135405630825,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018778135405630825,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018778135405630825,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018778135405630825,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.001666742215358888,
+          0.0035445557559219704
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 13
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018435767408959685,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018435767408959685,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018435767408959685,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0018435767408959685,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016754337579156398,
+          0.0035190104988116083
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 14
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.00166447503834411,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.00166447503834411,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.00166447503834411,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.00166447503834411,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016038480496588861,
+          0.003268323088002996
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 15
+      },
+      {
+        "boundary_tilts_deg": [],
+        "branches": [
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0015550207587010246,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0015550207587010246,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 0
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0015550207587010246,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": -1.0,
+            "variant_index": 1
+          },
+          {
+            "maximum_observed_contact_patch_overlap_m": 0.0015550207587010246,
+            "maximum_observed_tilt_deg": 0.0,
+            "maximum_safe_tilt_deg": null,
+            "required_contact_patch_overlap_m": 0.002,
+            "sample_count": 5,
+            "tilt_polarity": 1.0,
+            "variant_index": 1
+          }
+        ],
+        "contact_height_bounds_m": [
+          0.0016905216146510084,
+          0.003245542373352033
+        ],
+        "contact_height_bounds_source": "fused_measured_bilateral_surface",
+        "materialization_tilts_deg": [
+          11.25,
+          22.5,
+          33.75,
+          45.0
+        ],
+        "proposal_source_index": 16
+      }
+    ]
+  },
+  "geometry": {
+    "R_base_obb": [
+      [
+        0.04200703181061297,
+        -0.9966738667382169,
+        -0.06983274761566573
+      ],
+      [
+        0.9876330443968665,
+        0.030855686891758025,
+        0.15371693531232958
+      ],
+      [
+        -0.15105091490566772,
+        -0.07542632131775294,
+        0.9856442010982623
+      ]
+    ],
+    "available": true,
+    "frame_id": "base_link",
+    "obb_center_base_m": [
+      -0.12791216511200304,
+      -0.38482868149451727,
+      0.09102401188215574
+    ],
+    "obb_rotation_convention": "columns_are_obb_axes_expressed_in_base_link",
+    "obb_size_xyz_m": [
+      0.02429595963607089,
+      0.017723800230948737,
+      0.011024510720842146
+    ],
+    "object_points_base_m": [
+      [
+        -0.13850883140403705,
+        -0.3937188662812191,
+        0.09579437437112914
+      ],
+      [
+        -0.13839586729443176,
+        -0.39218456460170215,
+        0.09541910460373244
+      ],
+      [
+        -0.13810994025822426,
+        -0.39121917295244396,
+        0.09499661310182567
+      ],
+      [
+        -0.13739138124587982,
+        -0.39489736569359524,
+        0.09639666902744286
+      ],
+      [
+        -0.13731094009507566,
+        -0.39352941602356095,
+        0.0963490528048701
+      ],
+      [
+        -0.13758479480443464,
+        -0.3920298448507356,
+        0.09582833155356761
+      ],
+      [
+        -0.1368151384337866,
+        -0.39196604818719205,
+        0.0961244700273131
+      ],
+      [
+        -0.13743467978071056,
+        -0.3906686034836125,
+        0.09510858887748484
+      ],
+      [
+        -0.13752218828902263,
+        -0.3892539521682143,
+        0.09420704517814756
+      ],
+      [
+        -0.13677471351615283,
+        -0.3893425944833271,
+        0.09486057521023541
+      ],
+      [
+        -0.13700064189716654,
+        -0.38754541635327067,
+        0.09365126616288015
+      ],
+      [
+        -0.13665228550155942,
+        -0.3864402532901833,
+        0.09342776799749092
+      ],
+      [
+        -0.1367608353443952,
+        -0.38198981204293503,
+        0.09161971883775777
+      ],
+      [
+        -0.13597654774543086,
+        -0.3950745556139642,
+        0.09661035051059681
+      ],
+      [
+        -0.13581244892365518,
+        -0.39352603072803305,
+        0.09696059214273517
+      ],
+      [
+        -0.13572337758875055,
+        -0.39246494431410966,
+        0.0967633743606422
+      ],
+      [
+        -0.13638548617676005,
+        -0.390560960082995,
+        0.09571598212304636
+      ],
+      [
+        -0.13555046315674701,
+        -0.39091643349027927,
+        0.09635343204829558
+      ],
+      [
+        -0.13555601323768504,
+        -0.389084063700279,
+        0.09551763314552292
+      ],
+      [
+        -0.1363711861884872,
+        -0.38800468993230675,
+        0.0943814395752459
+      ],
+      [
+        -0.13555534184507917,
+        -0.3878245014785178,
+        0.09483405947811235
+      ],
+      [
+        -0.13609075651074898,
+        -0.3862827545588941,
+        0.09378228771337838
+      ],
+      [
+        -0.1352355996244935,
+        -0.3867801244442984,
+        0.0945355187354287
+      ],
+      [
+        -0.13575214463717497,
+        -0.38481540194048464,
+        0.09345234786738507
+      ],
+      [
+        -0.135796449573303,
+        -0.38296952497502845,
+        0.09274271071207058
+      ],
+      [
+        -0.1350945614360295,
+        -0.3839475802384682,
+        0.09360107631651604
+      ],
+      [
+        -0.13566025950229907,
+        -0.3817616059106104,
+        0.09242196650653149
+      ],
+      [
+        -0.1361216888037699,
+        -0.38003906545842187,
+        0.09144958688822893
+      ],
+      [
+        -0.13573212343360067,
+        -0.3804039695036356,
+        0.09186005066578114
+      ],
+      [
+        -0.1357242256508521,
+        -0.3788400676687832,
+        0.09139933917505214
+      ],
+      [
+        -0.13507314477671584,
+        -0.3791297268303794,
+        0.09180171056855332
+      ],
+      [
+        -0.13524415980996796,
+        -0.3772478846654674,
+        0.090771465392449
+      ],
+      [
+        -0.13415562613915608,
+        -0.3951553293053001,
+        0.09704586296700736
+      ],
+      [
+        -0.13418420331518852,
+        -0.3937622633853411,
+        0.09717344300731041
+      ],
+      [
+        -0.13449084817617915,
+        -0.39245784087991326,
+        0.09713081058932989
+      ],
+      [
+        -0.1342932691694509,
+        -0.39103936186819366,
+        0.09684787069962589
+      ],
+      [
+        -0.13427479297041325,
+        -0.3885659780533308,
+        0.09596084897315496
+      ],
+      [
+        -0.1340732250450473,
+        -0.389365432953951,
+        0.09638004943200056
+      ],
+      [
+        -0.13434994809829084,
+        -0.3875826915815628,
+        0.09547487018162756
+      ],
+      [
+        -0.13499743958203797,
+        -0.3860258872241158,
+        0.09441448038590067
+      ],
+      [
+        -0.13408411367644,
+        -0.38630926730049014,
+        0.09507540952442624
+      ],
+      [
+        -0.13464100662047485,
+        -0.3848975823979399,
+        0.09423545221450284
+      ],
+      [
+        -0.1338328350784237,
+        -0.3847202176953523,
+        0.09469191835335548
+      ],
+      [
+        -0.134396984399925,
+        -0.3833316958021557,
+        0.09382868914448388
+      ],
+      [
+        -0.1349271449499588,
+        -0.3810735696186493,
+        0.09275706804841397
+      ],
+      [
+        -0.13407256940365767,
+        -0.38193313841902776,
+        0.09361899223116357
+      ],
+      [
+        -0.1345584727809475,
+        -0.379930098469921,
+        0.09262775842214004
+      ],
+      [
+        -0.13398969335703562,
+        -0.3805022428546465,
+        0.09320188280815882
+      ],
+      [
+        -0.13431849573087243,
+        -0.37839087177186537,
+        0.09222108343045282
+      ],
+      [
+        -0.13362328723565137,
+        -0.37936091606960143,
+        0.09307472012879278
+      ],
+      [
+        -0.13437057911163244,
+        -0.37682918830087,
+        0.09102752118891738
+      ],
+      [
+        -0.1340008846083581,
+        -0.3773326850285683,
+        0.09180555146555298
+      ],
+      [
+        -0.13435798620119896,
+        -0.37587334732899924,
+        0.09020188644965448
+      ],
+      [
+        -0.13384807388473385,
+        -0.3749329711562413,
+        0.08970729341020117
+      ],
+      [
+        -0.13271588105455875,
+        -0.3951634896422599,
+        0.0969314793653123
+      ],
+      [
+        -0.13273225921762538,
+        -0.3930769984083937,
+        0.09765348929319088
+      ],
+      [
+        -0.13271518839240912,
+        -0.3918517049072859,
+        0.09745202984692346
+      ],
+      [
+        -0.13246489706916587,
+        -0.39223042954283444,
+        0.0976257473488017
+      ],
+      [
+        -0.13278260948846757,
+        -0.39088628575455553,
+        0.09720243488608939
+      ],
+      [
+        -0.1326396144962946,
+        -0.38922560774549336,
+        0.09675517519778092
+      ],
+      [
+        -0.1330945503732598,
+        -0.3871123589136791,
+        0.09586442127679146
+      ],
+      [
+        -0.13274734999614335,
+        -0.38757392037552013,
+        0.09614506703862986
+      ],
+      [
+        -0.1327673959772514,
+        -0.3860424118425735,
+        0.0956086214482948
+      ],
+      [
+        -0.13267574197094106,
+        -0.384571397688996,
+        0.09522273148248704
+      ],
+      [
+        -0.13324385858548493,
+        -0.3828490275606693,
+        0.09440183086007123
+      ],
+      [
+        -0.13288206957486492,
+        -0.38326891596808904,
+        0.09473259381942918
+      ],
+      [
+        -0.13286688323599077,
+        -0.3816726663612937,
+        0.09430942089966483
+      ],
+      [
+        -0.13220822238055174,
+        -0.3819282174666777,
+        0.09474790941650238
+      ],
+      [
+        -0.1327679089819631,
+        -0.38020113890732093,
+        0.09395358384853392
+      ],
+      [
+        -0.1333879855096739,
+        -0.3786214356856689,
+        0.09296568832526386
+      ],
+      [
+        -0.13269280210208184,
+        -0.37879270682576627,
+        0.09352345425661553
+      ],
+      [
+        -0.13263789194504216,
+        -0.3771276607886901,
+        0.09264981789092304
+      ],
+      [
+        -0.13237946625457497,
+        -0.37777254713657515,
+        0.09324499025252941
+      ],
+      [
+        -0.13297393762177312,
+        -0.3756338144323797,
+        0.0911089359690552
+      ],
+      [
+        -0.13265033214371053,
+        -0.376132973936857,
+        0.09191072507934409
+      ],
+      [
+        -0.1325977987287594,
+        -0.37396594422446783,
+        0.08950114476985872
+      ],
+      [
+        -0.13247767824703008,
+        -0.3745151669316898,
+        0.09032597726848897
+      ],
+      [
+        -0.13120099449145423,
+        -0.3960944336089064,
+        0.09687191851606568
+      ],
+      [
+        -0.13122254054338373,
+        -0.39502559632124834,
+        0.09699180220627052
+      ],
+      [
+        -0.13105611663645655,
+        -0.3934745879465107,
+        0.09770274183058139
+      ],
+      [
+        -0.1312406017595759,
+        -0.3917363085196103,
+        0.09749106579970997
+      ],
+      [
+        -0.13115060430549808,
+        -0.39260965742930104,
+        0.09758995930379316
+      ],
+      [
+        -0.13125158356319627,
+        -0.3905819488735088,
+        0.097211591075005
+      ],
+      [
+        -0.1311343558593216,
+        -0.38902112569915415,
+        0.09691105241751773
+      ],
+      [
+        -0.13141087097289045,
+        -0.387543466895673,
+        0.09640781539003479
+      ],
+      [
+        -0.13154534015210081,
+        -0.3856341885990394,
+        0.09592517854279152
+      ],
+      [
+        -0.13107464178070352,
+        -0.3864433936856241,
+        0.09619087995649733
+      ],
+      [
+        -0.13119700458251374,
+        -0.3845098185797536,
+        0.0957509460997462
+      ],
+      [
+        -0.13145798851470816,
+        -0.3830164046678407,
+        0.09529625786361215
+      ],
+      [
+        -0.1313373120463961,
+        -0.381483544829621,
+        0.09501654413106485
+      ],
+      [
+        -0.13137517810280608,
+        -0.3800801148789661,
+        0.09472162758221564
+      ],
+      [
+        -0.13157978019150535,
+        -0.3784134006351476,
+        0.09416369902551221
+      ],
+      [
+        -0.13094806949570204,
+        -0.3791308436000346,
+        0.09475080774209368
+      ],
+      [
+        -0.1310715503648088,
+        -0.37715123181846366,
+        0.09389111893394647
+      ],
+      [
+        -0.13137170499927966,
+        -0.3755895772969869,
+        0.09246313616396912
+      ],
+      [
+        -0.1311936135522504,
+        -0.37630657141667334,
+        0.09326596958458072
+      ],
+      [
+        -0.13128238385752267,
+        -0.37366187439152965,
+        0.0899632079985396
+      ],
+      [
+        -0.13098297297358485,
+        -0.374003894810504,
+        0.0907387303275825
+      ],
+      [
+        -0.13101278336931035,
+        -0.3746785899672191,
+        0.0917143147756229
+      ],
+      [
+        -0.13143397194974318,
+        -0.3731872017796076,
+        0.08903185252706469
+      ],
+      [
+        -0.12986576836536431,
+        -0.3964565924657276,
+        0.0968611314411929
+      ],
+      [
+        -0.12955394704604897,
+        -0.39546673421806366,
+        0.09699085439525908
+      ],
+      [
+        -0.12953383613786032,
+        -0.39352911663008633,
+        0.09739259450706882
+      ],
+      [
+        -0.13009809866263677,
+        -0.3938371025655073,
+        0.09758197328145013
+      ],
+      [
+        -0.1297727403623005,
+        -0.39197284784502284,
+        0.09731181241945064
+      ],
+      [
+        -0.1298761828952875,
+        -0.39074922290803116,
+        0.09716987305882858
+      ],
+      [
+        -0.12981400507912122,
+        -0.38936244516371604,
+        0.09691946017995831
+      ],
+      [
+        -0.1298703390556734,
+        -0.3878891437580593,
+        0.09658319372900752
+      ],
+      [
+        -0.1297713760271156,
+        -0.3861619936769932,
+        0.09628005074985738
+      ],
+      [
+        -0.1296933373160844,
+        -0.38428095199280526,
+        0.09595243573910094
+      ],
+      [
+        -0.12992316460432818,
+        -0.3850293767307186,
+        0.09606717852705758
+      ],
+      [
+        -0.12983934394329028,
+        -0.38314207972664915,
+        0.09575911265258474
+      ],
+      [
+        -0.12970464380407803,
+        -0.3813532832999931,
+        0.09558006428618415
+      ],
+      [
+        -0.12984353726737025,
+        -0.38021092834887676,
+        0.09540814017022059
+      ],
+      [
+        -0.1298402168529237,
+        -0.3790595377467716,
+        0.0951919275483164
+      ],
+      [
+        -0.12981958499849405,
+        -0.37664468220323144,
+        0.09438163344144282
+      ],
+      [
+        -0.12961768006041438,
+        -0.37741104263202324,
+        0.09480085930616593
+      ],
+      [
+        -0.13013613391097195,
+        -0.3751314475064056,
+        0.09289845125707422
+      ],
+      [
+        -0.129847350265859,
+        -0.3756923418987542,
+        0.09360164709650007
+      ],
+      [
+        -0.1295605028993596,
+        -0.37364230001819054,
+        0.0909409040089235
+      ],
+      [
+        -0.12950531383477207,
+        -0.37431826509948357,
+        0.09215958574003849
+      ],
+      [
+        -0.13001850109765747,
+        -0.37285644937008705,
+        0.08919526330299213
+      ],
+      [
+        -0.1297090777042122,
+        -0.37317171463027166,
+        0.09001204702603699
+      ],
+      [
+        -0.12775228354449214,
+        -0.3977183788559962,
+        0.09609368463058546
+      ],
+      [
+        -0.12838067744630466,
+        -0.3966961700661198,
+        0.09668047745020357
+      ],
+      [
+        -0.12835502179021593,
+        -0.3950825851665508,
+        0.09697857324480423
+      ],
+      [
+        -0.12814103752467806,
+        -0.3936050179113262,
+        0.09702027895369225
+      ],
+      [
+        -0.128365916954626,
+        -0.3923200742843807,
+        0.09706034371047442
+      ],
+      [
+        -0.12827775269175792,
+        -0.39061572385606913,
+        0.09690529813235818
+      ],
+      [
+        -0.12830627131811012,
+        -0.38905287685124545,
+        0.09667332298724962
+      ],
+      [
+        -0.12824699003427822,
+        -0.3876721087663413,
+        0.09642817627017294
+      ],
+      [
+        -0.128170294564417,
+        -0.386251167915052,
+        0.09624437013190668
+      ],
+      [
+        -0.12846941866855713,
+        -0.38491915923776077,
+        0.09611473973093035
+      ],
+      [
+        -0.12818703001290685,
+        -0.38286521325187434,
+        0.09596388554223423
+      ],
+      [
+        -0.12810494302479716,
+        -0.3837381814728048,
+        0.09602148469144742
+      ],
+      [
+        -0.12813930817055844,
+        -0.38158417474807893,
+        0.09590499516752952
+      ],
+      [
+        -0.12842126337538923,
+        -0.38023935869805725,
+        0.0958258318706375
+      ],
+      [
+        -0.12823714593626953,
+        -0.37897173496211806,
+        0.09570492673641721
+      ],
+      [
+        -0.1281958180836493,
+        -0.37721830181528143,
+        0.09528296045028055
+      ],
+      [
+        -0.12858259293549704,
+        -0.3756577091611808,
+        0.09420570274729444
+      ],
+      [
+        -0.12818819328794878,
+        -0.37597434328739454,
+        0.09466331410368356
+      ],
+      [
+        -0.12798170414581628,
+        -0.3735255800245014,
+        0.09125530845523837
+      ],
+      [
+        -0.12807606292386628,
+        -0.3740265796828378,
+        0.09223907096024414
+      ],
+      [
+        -0.12823616269179755,
+        -0.37477609315934934,
+        0.09342885716270871
+      ],
+      [
+        -0.1283491887606975,
+        -0.3727570572928968,
+        0.0894478282702642
+      ],
+      [
+        -0.12828386582166168,
+        -0.3732051686594316,
+        0.09045433604772397
+      ],
+      [
+        -0.1267250089193645,
+        -0.3979281570408932,
+        0.09616042267686307
+      ],
+      [
+        -0.1267150771995463,
+        -0.39672871956199457,
+        0.0964290227861143
+      ],
+      [
+        -0.12661741453453157,
+        -0.3952214011939972,
+        0.09654781630614533
+      ],
+      [
+        -0.12703583279251973,
+        -0.39385590489004896,
+        0.0967173165957086
+      ],
+      [
+        -0.12665684377079878,
+        -0.3922707352669229,
+        0.09657392548295089
+      ],
+      [
+        -0.1266455530056885,
+        -0.3905752979431155,
+        0.09649372848437776
+      ],
+      [
+        -0.12674518898603818,
+        -0.3892514745812715,
+        0.09639113573395845
+      ],
+      [
+        -0.1268579935794487,
+        -0.38774108042404104,
+        0.0962435803841708
+      ],
+      [
+        -0.12634593423582052,
+        -0.38603274204855065,
+        0.09599973514808627
+      ],
+      [
+        -0.1269160939136523,
+        -0.38637556182069677,
+        0.09613183104163192
+      ],
+      [
+        -0.12663754958680323,
+        -0.3846723283515472,
+        0.09591063740266974
+      ],
+      [
+        -0.12737888040999332,
+        -0.3848097228105899,
+        0.09604960468202067
+      ],
+      [
+        -0.1264048614097625,
+        -0.3831457333104298,
+        0.0958356917584548
+      ],
+      [
+        -0.12684529348001033,
+        -0.38193515565826464,
+        0.09589454103314685
+      ],
+      [
+        -0.12679660570674517,
+        -0.380217399791364,
+        0.09594278841396131
+      ],
+      [
+        -0.12667466578368064,
+        -0.37845669328127396,
+        0.09576255359050109
+      ],
+      [
+        -0.12674998060116874,
+        -0.37707439378013563,
+        0.09539168717715764
+      ],
+      [
+        -0.1270507470547791,
+        -0.3752182772320019,
+        0.0941745310346326
+      ],
+      [
+        -0.12663296597108356,
+        -0.37592664858418146,
+        0.09480113695787942
+      ],
+      [
+        -0.1269582225783944,
+        -0.37364688748123714,
+        0.09144685296121266
+      ],
+      [
+        -0.12662187859726454,
+        -0.37408342780852183,
+        0.09232572079780792
+      ],
+      [
+        -0.12679424761148217,
+        -0.37464586677330847,
+        0.09352763220531239
+      ],
+      [
+        -0.12635553236758168,
+        -0.37216015815137593,
+        0.0879900926577013
+      ],
+      [
+        -0.1267851689692714,
+        -0.37259986338495965,
+        0.08895671533008005
+      ],
+      [
+        -0.12655083620207752,
+        -0.3732595471801384,
+        0.0904186674040766
+      ],
+      [
+        -0.12460313385074724,
+        -0.396833314048645,
+        0.09587982348205482
+      ],
+      [
+        -0.12553997145863438,
+        -0.3963738767912135,
+        0.096113449796069
+      ],
+      [
+        -0.12489232146501755,
+        -0.395370319884481,
+        0.09583921419441623
+      ],
+      [
+        -0.1254932324378648,
+        -0.395002917049982,
+        0.09607083615836629
+      ],
+      [
+        -0.12486831113941121,
+        -0.39367601710246053,
+        0.09580839193014079
+      ],
+      [
+        -0.12583490009065115,
+        -0.39377533574948315,
+        0.09628734053280197
+      ],
+      [
+        -0.12468891175099503,
+        -0.3922582014612188,
+        0.09570079479555557
+      ],
+      [
+        -0.1253754112217888,
+        -0.3922143808369687,
+        0.0960725117420709
+      ],
+      [
+        -0.12492848855207396,
+        -0.3906905755002861,
+        0.09582499616694816
+      ],
+      [
+        -0.12574594877139342,
+        -0.39108858508705946,
+        0.09618158149304452
+      ],
+      [
+        -0.12507804066498057,
+        -0.3896041263859435,
+        0.09578823340223484
+      ],
+      [
+        -0.12579921222062299,
+        -0.38889067331759214,
+        0.09603532542939408
+      ],
+      [
+        -0.12532291088315534,
+        -0.3877542279342509,
+        0.09579833202211871
+      ],
+      [
+        -0.12516528176486114,
+        -0.38627993272605143,
+        0.09565189095748917
+      ],
+      [
+        -0.1252294665816136,
+        -0.38462865298032434,
+        0.09560294291555069
+      ],
+      [
+        -0.12528637215478358,
+        -0.3832896909423488,
+        0.09566094278725162
+      ],
+      [
+        -0.12519219550291302,
+        -0.3817654023113882,
+        0.09566060111182309
+      ],
+      [
+        -0.12528714242040642,
+        -0.3802680224512976,
+        0.09572212507767364
+      ],
+      [
+        -0.12512526111916739,
+        -0.3788210548077072,
+        0.09560438779102584
+      ],
+      [
+        -0.12535788210797363,
+        -0.3772717400421698,
+        0.09527982970169983
+      ],
+      [
+        -0.12511448644240725,
+        -0.37534132790359975,
+        0.09386572238640613
+      ],
+      [
+        -0.12522446119059066,
+        -0.3761444033010786,
+        0.09470573136627401
+      ],
+      [
+        -0.1251616783053088,
+        -0.3736848846254787,
+        0.09053034251029594
+      ],
+      [
+        -0.12537832142593117,
+        -0.374321355771883,
+        0.09222192181193717
+      ],
+      [
+        -0.12582177242878506,
+        -0.3748780695205832,
+        0.09355950183025977
+      ],
+      [
+        -0.12506066418576495,
+        -0.3725113705574979,
+        0.08797963162810137
+      ],
+      [
+        -0.1251616444892832,
+        -0.37301961759851376,
+        0.08897042483582239
+      ],
+      [
+        -0.12556224721134168,
+        -0.3733820348657827,
+        0.09004198709297767
+      ],
+      [
+        -0.12369408014094652,
+        -0.3967040565696314,
+        0.09497376181911371
+      ],
+      [
+        -0.12381309917163438,
+        -0.3952917519013942,
+        0.09519159544064681
+      ],
+      [
+        -0.12369947351469544,
+        -0.3936859062279178,
+        0.09517750303833913
+      ],
+      [
+        -0.12359130674273697,
+        -0.39210243536996214,
+        0.0951498199331291
+      ],
+      [
+        -0.12395674892754874,
+        -0.39094599614072595,
+        0.09529821984006825
+      ],
+      [
+        -0.12367867391897887,
+        -0.3891903431829369,
+        0.09510076500796931
+      ],
+      [
+        -0.12366542381693568,
+        -0.3875543552361319,
+        0.09505319302844732
+      ],
+      [
+        -0.1238519239008049,
+        -0.38622184746790716,
+        0.09513365908895999
+      ],
+      [
+        -0.12374082397471078,
+        -0.38475782415126447,
+        0.09511632771229303
+      ],
+      [
+        -0.12380473865898141,
+        -0.38334735306963363,
+        0.09516980767379365
+      ],
+      [
+        -0.12367248780783084,
+        -0.38176567722470484,
+        0.09523439479840483
+      ],
+      [
+        -0.12374401677210153,
+        -0.3801683778565949,
+        0.09526713825957993
+      ],
+      [
+        -0.12372957899004611,
+        -0.37872541353319855,
+        0.0950990956722188
+      ],
+      [
+        -0.12324945488119902,
+        -0.3771465981339585,
+        0.09410985930252513
+      ],
+      [
+        -0.124081753703441,
+        -0.37734085779095683,
+        0.09485715008808615
+      ],
+      [
+        -0.1234766504097921,
+        -0.3753219493869113,
+        0.09232427221129282
+      ],
+      [
+        -0.12380196479705532,
+        -0.37600709269626986,
+        0.09368399906550666
+      ],
+      [
+        -0.1234396607472626,
+        -0.3739842577161105,
+        0.08961808911071711
+      ],
+      [
+        -0.12382238245493292,
+        -0.3743526090348325,
+        0.09081545170140412
+      ],
+      [
+        -0.1242525374610433,
+        -0.37482732354299886,
+        0.09232488827221008
+      ],
+      [
+        -0.12377655053335572,
+        -0.37289041417291735,
+        0.08792890068058237
+      ],
+      [
+        -0.12397238906825168,
+        -0.3733033722460947,
+        0.08882407268754224
+      ],
+      [
+        -0.12263229959602208,
+        -0.3948582853305991,
+        0.09444032508686573
+      ],
+      [
+        -0.12285280070545135,
+        -0.3956287569675946,
+        0.09457005068630936
+      ],
+      [
+        -0.12228184687101358,
+        -0.3936438704425984,
+        0.09432432016721051
+      ],
+      [
+        -0.12295350564437751,
+        -0.3935379803909661,
+        0.09477308308904281
+      ],
+      [
+        -0.12208032258929093,
+        -0.39211836436905995,
+        0.09417154809913557
+      ],
+      [
+        -0.12273313888177076,
+        -0.3927719684513896,
+        0.09464682746958042
+      ],
+      [
+        -0.12198170819893207,
+        -0.39095955228765894,
+        0.09411045778192777
+      ],
+      [
+        -0.12276174974369616,
+        -0.39044027686384897,
+        0.0946483180638505
+      ],
+      [
+        -0.1220500572073773,
+        -0.3891788090104492,
+        0.0941932177136055
+      ],
+      [
+        -0.12188525914222009,
+        -0.38741084841775897,
+        0.0941710869468437
+      ],
+      [
+        -0.12267721648829749,
+        -0.3877460018653826,
+        0.0946017939237682
+      ],
+      [
+        -0.12201208852741861,
+        -0.38625326777699137,
+        0.09424538531925396
+      ],
+      [
+        -0.12293981489877792,
+        -0.3862575393410412,
+        0.09466391589124412
+      ],
+      [
+        -0.12177138360610609,
+        -0.38464955668612133,
+        0.09425871987014954
+      ],
+      [
+        -0.12257922031453135,
+        -0.3850423082577099,
+        0.09460915688388906
+      ],
+      [
+        -0.12200148686556615,
+        -0.38308512284140267,
+        0.09444740493214482
+      ],
+      [
+        -0.12253077290117716,
+        -0.3833263845548622,
+        0.09470586199517021
+      ],
+      [
+        -0.12167507235413305,
+        -0.38196952171335297,
+        0.0942847023317787
+      ],
+      [
+        -0.12246953049317129,
+        -0.38156408964825267,
+        0.0946999296277301
+      ],
+      [
+        -0.12183472958283456,
+        -0.3801654629951689,
+        0.09427319915434604
+      ],
+      [
+        -0.12260297071700771,
+        -0.3804657758361373,
+        0.0947359509669234
+      ],
+      [
+        -0.12214208905926852,
+        -0.3788551012218991,
+        0.09416205984632091
+      ],
+      [
+        -0.12287648177977267,
+        -0.3790670162404056,
+        0.0947414932386785
+      ],
+      [
+        -0.1217809656933414,
+        -0.37682619428548897,
+        0.09245413401621488
+      ],
+      [
+        -0.12240784865208898,
+        -0.3773420410935696,
+        0.09356509217312126
+      ],
+      [
+        -0.12213644279943599,
+        -0.3752327953461488,
+        0.09068260405748164
+      ],
+      [
+        -0.12245413109291467,
+        -0.37588895424482416,
+        0.09209520702713997
+      ],
+      [
+        -0.12259419850617115,
+        -0.37369211173824063,
+        0.08841861592545168
+      ],
+      [
+        -0.12226306020679348,
+        -0.37434915361108895,
+        0.08925086660821113
+      ],
+      [
+        -0.12249191668349654,
+        -0.37481768536425697,
+        0.09035415523466189
+      ],
+      [
+        -0.1228371752759193,
+        -0.3732374493887935,
+        0.08780024121450111
+      ],
+      [
+        -0.12131776751170814,
+        -0.39026749105165537,
+        0.09368852969559291
+      ],
+      [
+        -0.12097124940953544,
+        -0.38906794980863274,
+        0.09358485537129681
+      ],
+      [
+        -0.12091910711416524,
+        -0.3876775218980206,
+        0.09362216697813397
+      ],
+      [
+        -0.12063526418610226,
+        -0.3862964528616142,
+        0.0935522606961779
+      ],
+      [
+        -0.12080235619085729,
+        -0.3848836050568935,
+        0.09374808367230486
+      ],
+      [
+        -0.12084967429512092,
+        -0.38338236038462037,
+        0.09381122599158612
+      ],
+      [
+        -0.12050476716845593,
+        -0.38170987225904607,
+        0.0935736977590548
+      ],
+      [
+        -0.12091794127803682,
+        -0.38028558657278844,
+        0.09366679667202213
+      ],
+      [
+        -0.12034670326010546,
+        -0.37868845997914957,
+        0.09256673381571426
+      ],
+      [
+        -0.12117543025048427,
+        -0.3786101328789875,
+        0.09333576364852235
+      ],
+      [
+        -0.12032611541270948,
+        -0.3770082281951026,
+        0.0910608579662173
+      ],
+      [
+        -0.12090283383259441,
+        -0.37733273299560477,
+        0.09210940735271111
+      ],
+      [
+        -0.12055432821343734,
+        -0.37506646707585056,
+        0.08845889769071097
+      ],
+      [
+        -0.12053051458098807,
+        -0.37558486656223733,
+        0.08936632074624254
+      ],
+      [
+        -0.12098508598459695,
+        -0.3760342778002041,
+        0.09060217087476911
+      ],
+      [
+        -0.12114083413897653,
+        -0.37472167122333067,
+        0.08870483072668303
+      ],
+      [
+        -0.11983032267162443,
+        -0.3851176513061459,
+        0.09323679248052277
+      ],
+      [
+        -0.11919686750438442,
+        -0.38290438071943633,
+        0.09286535294597276
+      ],
+      [
+        -0.11968654926570972,
+        -0.38341437933607453,
+        0.09317302051261458
+      ],
+      [
+        -0.11903814063658442,
+        -0.3815305233603652,
+        0.09260392419594053
+      ],
+      [
+        -0.11967035648524814,
+        -0.3821490516900222,
+        0.09309038420666543
+      ],
+      [
+        -0.11926470672900073,
+        -0.3802912924413335,
+        0.09242330457612817
+      ],
+      [
+        -0.11889048338579107,
+        -0.37844982889108914,
+        0.09100666909522213
+      ],
+      [
+        -0.1192832565994561,
+        -0.37910032549551537,
+        0.09189295153310595
+      ],
+      [
+        -0.11917603598010224,
+        -0.3768684497977737,
+        0.08959233455960562
+      ],
+      [
+        -0.11926068282727902,
+        -0.377594686850789,
+        0.0905640674490363
+      ],
+      [
+        -0.11988044024996092,
+        -0.377941582864174,
+        0.09168410245365355
+      ],
+      [
+        -0.11994621234131816,
+        -0.3753552191342632,
+        0.08829318832146524
+      ],
+      [
+        -0.11945867939788549,
+        -0.3761786713869834,
+        0.08907886210948891
+      ],
+      [
+        -0.11827071715836834,
+        -0.37955313215526637,
+        0.09129599677872502
+      ],
+      [
+        -0.11840489788584523,
+        -0.3800603615865695,
+        0.09171650169738249
+      ],
+      [
+        -0.11792629450282258,
+        -0.37820384774763455,
+        0.08979564893538211
+      ],
+      [
+        -0.11809860671836049,
+        -0.3788788713269627,
+        0.09054613902616535
+      ],
+      [
+        -0.1181929733825889,
+        -0.377447476817425,
+        0.08918460878517476
+      ]
+    ],
+    "object_points_count": 286,
+    "object_points_sha256": "8e42ee2a91199a6d79c391bccf59ed755b85978781873b731cf43d0660ddc42b",
+    "source_mode": "instance_mask",
+    "support_inlier_ratio": 0.796277145811789,
+    "support_normal_base": [
+      -0.06983274761566573,
+      0.15371693531232958,
+      0.9856442010982623
+    ],
+    "support_offset_m": -0.03398280651554313
+  },
+  "snapshot_stamp_ns": 1790388462482565164,
+  "surface": {
+    "active": true,
+    "candidate_coordinate_frame": "current_snapshot",
+    "cross_view_registration_performed": false,
+    "evidence_kind": "current_view_only",
+    "final_registered_coordinate_frame": "phase_reference",
+    "generation": 1,
+    "phase_id": 1,
+    "point_count": 286,
+    "source_stamps_ns": [
+      1790388462482565164
+    ],
+    "stored_coordinate_frame": "phase_reference",
+    "target_epoch": 4,
+    "target_track_id": "g1-t4",
+    "view_indices": [
+      0
+    ],
+    "view_point_counts": {
+      "0": 286
+    }
+  },
+  "depth_repeatability_m": 0.00014825999625463736,
+  "depth_spatial_mad_m": 0.002649999933055369
+}

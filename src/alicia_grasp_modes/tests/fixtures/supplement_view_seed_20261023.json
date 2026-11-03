@@ -1,0 +1,458 @@
+{
+  "binding": {
+    "request_id": 56,
+    "generation": 29,
+    "target_epoch": 47,
+    "target_track_id": "g27-t47",
+    "snapshot_stamp_ns": 1792742419734998703
+  },
+  "audit": {
+    "request_id": 56,
+    "generation": 29,
+    "target_epoch": 47,
+    "target_track_id": "g27-t47",
+    "snapshot_stamp_ns": 1792742419734998703,
+    "source_kind": "exact_last_raw_rgbd_sample",
+    "source_stamp_ns": 1792742419734998703,
+    "raw_depth_sha256": "1bd687ca653e488a754f6cb072b70e1a5fb66cdfc22154437347c0e9b156a0dc",
+    "raw_depth_dtype": "uint16",
+    "raw_depth_shape": [
+      489,
+      653
+    ],
+    "raw_mask_sha256": "3ee9b09e78c9f18e2bed2d9d487539ca160abd03a2902f4434eb503529c2463e",
+    "support_points_sha256": "6fb325a611dd9754784ff44ea2548993ed4ab079cd9e9d1dba4b9dac87a18065",
+    "support_point_count": 94960,
+    "support_plane_base": [
+      -0.049921381248073285,
+      0.05514176229860246,
+      0.9972297838236126,
+      0.007894050249528776
+    ],
+    "support_distance_tolerance_m": 0.002,
+    "base_optical_sha256": "bd931b2d51f1203114cafbe4e86c15d39f034cdfce7354ff8840d4b367b3ce16",
+    "tool_camera_sha256": "e9dfdb45ddebc391221c8dfdb052175092acc7e1ca95b75e665481a222b14732",
+    "camera_parameters": {
+      "width": 653,
+      "height": 489,
+      "fx": 395.7682800292969,
+      "fy": 395.6027526855469,
+      "cx": 324.9961242675781,
+      "cy": 250.833984375,
+      "depth_scale": 9.999999747378752e-05
+    },
+    "conservative_target_corners_sha256": "4881cf9cba1e9526e6ed15249701495976bb828b553a7d9b57c21b655cee3a08",
+    "projection_prediction_only": true,
+    "synthetic_support_points": false,
+    "certifies_new_view_perception": false,
+    "frozen_tool_reference_sha256": "f0a10e7e9618682a296da5ff3ce7a87e5fe1b6d40417a28ef936d0052eea0d3e"
+  },
+  "base_from_tool": [
+    [
+      0.25943236028050526,
+      0.9544460399642893,
+      -0.14740287390608248,
+      -0.06171939396818192
+    ],
+    [
+      0.8082804087082673,
+      -0.2981181183711842,
+      -0.5077483317522772,
+      -0.2053079688439055
+    ],
+    [
+      -0.5285618519508215,
+      0.012583492969400662,
+      -0.8488015223637424,
+      0.10008557823139891
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "center_base": [
+    -0.09207031080205602,
+    -0.3572942567962135,
+    0.018280809902119693
+  ],
+  "camera": {
+    "width": 653,
+    "height": 489,
+    "fx": 395.7682800292969,
+    "fy": 395.6027526855469,
+    "cx": 324.9961242675781,
+    "cy": 250.833984375,
+    "depth_scale": 9.999999747378752e-05
+  },
+  "view_limits": {
+    "requested_visibility_limits_snapshot": {
+      "observation_camera_visibility_margin_px": 24,
+      "camera_visibility_min_depth_m": 0.07,
+      "camera_visibility_max_depth_m": 0.5
+    },
+    "effective_visibility_limits": {
+      "roi_margin_px": 24.0,
+      "minimum_depth_m": 0.07,
+      "maximum_depth_m": 0.5
+    }
+  },
+  "geometry": {
+    "R_base_obb": [
+      [
+        -0.7236068766059681,
+        -0.6884046366947566,
+        -0.049921381248073285
+      ],
+      [
+        0.686215844989043,
+        -0.7253049014976931,
+        0.05514176229860246
+      ],
+      [
+        -0.07416806735064065,
+        0.005644115571273678,
+        0.9972297838236126
+      ]
+    ],
+    "obb_size_xyz_m": [
+      0.07769312532015953,
+      0.031866351616482165,
+      0.022037320929211127
+    ],
+    "support_normal_base": [
+      -0.049921381248073285,
+      0.05514176229860246,
+      0.9972297838236126
+    ],
+    "support_offset_m": 0.007894050249528776,
+    "obb_center_base_m": [
+      -0.09207031080205602,
+      -0.3572942567962135,
+      0.018280809902119693
+    ]
+  },
+  "arrival_projection_audit": {
+    "policy": "frozen_measured_arrival_prism_endpoint_prediction",
+    "source_stamp_ns": 1792742419734998703,
+    "anchor_source_stamp_ns": 1792742418334117412,
+    "reference_binding": "{\"anchor_extent_m\": [0.0832227367102143, 0.03712036053451436, 0.02138555708460347], \"anchor_position_base\": [-0.09194232746486568, -0.3536867928954502, 0.023965722087637503], \"anchor_source_stamp_ns\": 1792742418334117412, \"reference_support_footprint_base\": [[-0.11381305813463309, -0.32048833617027794, 0.0035116708827508027], [-0.11588710403473816, -0.3205535552364548, 0.0034132184898012586], [-0.11739056257787095, -0.3208511431493322, 0.0033572803732358682], [-0.1182653451194944, -0.3213125081797781, 0.0033424985220876927], [-0.14472721562132, -0.34337971633550907, 0.003395319949098562], [-0.14504031088525202, -0.34409783907931574, 0.0034241159793837305], [-0.14528116369963676, -0.3447346256674789, 0.003451467729029532], [-0.0911377769653047, -0.4015081407332949, 0.00962605723679795], [-0.08817608954615369, -0.40428765167439334, 0.009943714777367612], [-0.08631687340253608, -0.40567498011811864, 0.010121088213493938], [-0.083113179730632, -0.40769714097566845, 0.010404019448559353], [-0.07617996588008091, -0.409771107467168, 0.010874408598911246], [-0.05155656451431854, -0.3878552615842334, 0.010740083807684674], [-0.05138671513342734, -0.38729573220895147, 0.010713986128443525], [-0.051212490128274314, -0.3865665786289486, 0.010677648985870883], [-0.050985880417354086, -0.38239498523675747, 0.010431707741921266], [-0.05127994766897745, -0.38052507064905133, 0.010301917054566472], [-0.05157817846103363, -0.37888278406181897, 0.010185951667760457], [-0.05204560005788037, -0.3779047897927512, 0.010102574094987674], [-0.052513572328528775, -0.3769829573898799, 0.010022631137132747], [-0.06545301882068678, -0.36017635728037367, 0.008347370957483936], [-0.07159409584909032, -0.352793027504303, 0.00758884936223787], [-0.10676175451977776, -0.32340773834711395, 0.0040400072264266135], [-0.11014701427393402, -0.32160071502708765, 0.0037613664414486263], [-0.11195358897872823, -0.3210097319337938, 0.003635680657260735], [-0.11318418865313937, -0.3206506254075293, 0.0035527449943782872]], \"reference_support_plane_base\": [-0.049253609882744166, 0.06144864424028615, 0.9968942501762909, 0.010587105276037569]}",
+    "footprint_sha256": "54e495e060ec2daa6a886799855bdbd6101e9a278a80d6c0827fe37db0922124",
+    "support_plane_sha256": "5001f7d2f72204de453839e3f3b45228aba14a291c61bbf0479f64150c5eab33",
+    "measured_height_m": 0.019142127793721236,
+    "prism_sha256": "2591da8905b27bcbfbbcf853fd77163eb78a92163eaf059cfae75160f51729cb",
+    "rgb_valid_sha256": "0248eb3205b79a4700e98b9326f3d6e52f8073b65f211edaf769e1c873ea57af",
+    "invalid_integral_sha256": "f03d20887bbfe343976f1c790801c6140105136c3579f4b41d42ea5348c6d8e7",
+    "camera_signature": "35ef3059c59f77be58027da63f98be64efca60882bb1cdcbe6604808214ae209",
+    "endpoint_only": true,
+    "historical_pixels_counted": 0,
+    "execution_authority": false,
+    "certifies_arrival_or_tracking": false
+  },
+  "arguments": {
+    "current_joint_positions": [
+      -1.8699225804325967,
+      0.521553467881118,
+      -0.19174759848570516,
+      -0.007669903939428206,
+      -0.39883500485026674,
+      0.010737865515199488
+    ],
+    "opening_width_m": 0.05,
+    "gaps": [
+      {
+        "angle_deg": 44.69798017112811,
+        "contact_or_motion_authorized": false,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "initial_camera_origin_base_m": [
+          -0.05879466911445952,
+          -0.21848518942855333,
+          0.23508397900620434
+        ],
+        "jaw_axis_base": [
+          0.709945173308561,
+          0.7042527874873169,
+          -0.0024212005743396714
+        ],
+        "max_inner_gap_m": 0.05,
+        "maximum_side_reach_m": 0.025,
+        "measured_common_height_m": null,
+        "minimum_points_per_side": 12,
+        "missing_side_policy": "insufficient_samples_or_weakest_independent_height",
+        "missing_side_signs": [
+          -1
+        ],
+        "negative_measured_height_m": 0.002280455372565297,
+        "negative_measured_points": 81,
+        "negative_reach_m": 0.01650852796316838,
+        "negative_support_height_bounds_m": [
+          0.008305166453169761,
+          0.010585621825735058
+        ],
+        "object_height_m": 0.021932993603774174,
+        "opening_fit_clearance_each_side_m": 0.0005,
+        "positive_measured_height_m": 0.006531934158152054,
+        "positive_measured_points": 112,
+        "positive_reach_m": 0.01650852796316838,
+        "positive_support_height_bounds_m": [
+          -0.005341967008015187,
+          0.001189967150136867
+        ],
+        "required_open_width_m": 0.03301705592633677,
+        "side_measurement_basis": "before_common_support_intersection",
+        "source_view_stamps_ns": [
+          1792742418733636379
+        ],
+        "support_height_reference": "target_center_along_support_normal",
+        "target_center_base_m": [
+          -0.09204822352636974,
+          -0.356789018817757,
+          0.018286880630584743
+        ],
+        "target_epoch": 47,
+        "target_track_id": "g27-t47",
+        "whole_obb_width_m": 0.03201705592633677
+      },
+      {
+        "angle_deg": 39.99999999999999,
+        "contact_or_motion_authorized": false,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "initial_camera_origin_base_m": [
+          -0.05879466911445952,
+          -0.21848518942855333,
+          0.23508397900620434
+        ],
+        "jaw_axis_base": [
+          0.7650970540950154,
+          0.6439050892848107,
+          0.003568446195335681
+        ],
+        "max_inner_gap_m": 0.05,
+        "maximum_side_reach_m": 0.025,
+        "measured_common_height_m": null,
+        "minimum_points_per_side": 12,
+        "missing_side_policy": "insufficient_samples_or_weakest_independent_height",
+        "missing_side_signs": [
+          -1
+        ],
+        "negative_measured_height_m": 0.002123946412342037,
+        "negative_measured_points": 77,
+        "negative_reach_m": 0.016562493528261668,
+        "negative_support_height_bounds_m": [
+          0.008466654791628433,
+          0.01059060120397047
+        ],
+        "object_height_m": 0.021932993603774174,
+        "opening_fit_clearance_each_side_m": 0.0005,
+        "positive_measured_height_m": 0.0075134605508685405,
+        "positive_measured_points": 99,
+        "positive_reach_m": 0.016562493528261668,
+        "positive_support_height_bounds_m": [
+          -0.005204657881421059,
+          0.0023088026694474814
+        ],
+        "required_open_width_m": 0.0392936659156726,
+        "side_measurement_basis": "before_common_support_intersection",
+        "source_view_stamps_ns": [
+          1792742418733636379
+        ],
+        "support_height_reference": "target_center_along_support_normal",
+        "target_center_base_m": [
+          -0.09204822352636974,
+          -0.356789018817757,
+          0.018286880630584743
+        ],
+        "target_epoch": 47,
+        "target_track_id": "g27-t47",
+        "whole_obb_width_m": 0.0382936659156726
+      },
+      {
+        "angle_deg": 49.99999999999999,
+        "contact_or_motion_authorized": false,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "initial_camera_origin_base_m": [
+          -0.05879466911445952,
+          -0.21848518942855333,
+          0.23508397900620434
+        ],
+        "jaw_axis_base": [
+          0.6419926559059509,
+          0.7666560741573719,
+          -0.009159351528873358
+        ],
+        "max_inner_gap_m": 0.05,
+        "maximum_side_reach_m": 0.025,
+        "measured_common_height_m": null,
+        "minimum_points_per_side": 12,
+        "missing_side_policy": "insufficient_samples_or_weakest_independent_height",
+        "missing_side_signs": [
+          -1
+        ],
+        "negative_measured_height_m": 0.001950495042183151,
+        "negative_measured_points": 71,
+        "negative_reach_m": 0.016577315702839674,
+        "negative_support_height_bounds_m": [
+          0.008567062024398116,
+          0.010517557066581267
+        ],
+        "object_height_m": 0.021932993603774174,
+        "opening_fit_clearance_each_side_m": 0.0005,
+        "positive_measured_height_m": 0.008281692808245818,
+        "positive_measured_points": 186,
+        "positive_reach_m": 0.016577315702839674,
+        "positive_support_height_bounds_m": [
+          -0.005726468244916232,
+          0.002555224563329586
+        ],
+        "required_open_width_m": 0.040082878713218265,
+        "side_measurement_basis": "before_common_support_intersection",
+        "source_view_stamps_ns": [
+          1792742418733636379
+        ],
+        "support_height_reference": "target_center_along_support_normal",
+        "target_center_base_m": [
+          -0.09204822352636974,
+          -0.356789018817757,
+          0.018286880630584743
+        ],
+        "target_epoch": 47,
+        "target_track_id": "g27-t47",
+        "whole_obb_width_m": 0.039082878713218264
+      },
+      {
+        "angle_deg": 35.00000000000001,
+        "contact_or_motion_authorized": false,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "initial_camera_origin_base_m": [
+          -0.05879466911445952,
+          -0.21848518942855333,
+          0.23508397900620434
+        ],
+        "jaw_axis_base": [
+          0.8181389755790925,
+          0.5749350330738978,
+          0.009915865202254143
+        ],
+        "max_inner_gap_m": 0.05,
+        "maximum_side_reach_m": 0.025,
+        "measured_common_height_m": null,
+        "minimum_points_per_side": 12,
+        "missing_side_policy": "insufficient_samples_or_weakest_independent_height",
+        "missing_side_signs": [
+          -1
+        ],
+        "negative_measured_height_m": 0.001772067833671719,
+        "negative_measured_points": 61,
+        "negative_reach_m": 0.016740615977069124,
+        "negative_support_height_bounds_m": [
+          0.008838450883240406,
+          0.010610518716912124
+        ],
+        "object_height_m": 0.021932993603774174,
+        "opening_fit_clearance_each_side_m": 0.0005,
+        "positive_measured_height_m": 0.00857304377917313,
+        "positive_measured_points": 96,
+        "positive_reach_m": 0.016740615977069124,
+        "positive_support_height_bounds_m": [
+          -0.005306344873869917,
+          0.0032666989053032123
+        ],
+        "required_open_width_m": 0.04569016188599991,
+        "side_measurement_basis": "before_common_support_intersection",
+        "source_view_stamps_ns": [
+          1792742418733636379
+        ],
+        "support_height_reference": "target_center_along_support_normal",
+        "target_center_base_m": [
+          -0.09204822352636974,
+          -0.356789018817757,
+          0.018286880630584743
+        ],
+        "target_epoch": 47,
+        "target_track_id": "g27-t47",
+        "whole_obb_width_m": 0.04469016188599991
+      },
+      {
+        "angle_deg": 54.99999999999999,
+        "contact_or_motion_authorized": false,
+        "failure_code": "BILATERAL_SURFACE_EVIDENCE_MISSING",
+        "initial_camera_origin_base_m": [
+          -0.05879466911445952,
+          -0.21848518942855333,
+          0.23508397900620434
+        ],
+        "jaw_axis_base": [
+          0.5728670780036503,
+          0.8195027937050686,
+          -0.01544286402022833
+        ],
+        "max_inner_gap_m": 0.05,
+        "maximum_side_reach_m": 0.025,
+        "measured_common_height_m": null,
+        "minimum_points_per_side": 12,
+        "missing_side_policy": "insufficient_samples_or_weakest_independent_height",
+        "missing_side_signs": [
+          -1
+        ],
+        "negative_measured_height_m": 0.001224964843963814,
+        "negative_measured_points": 63,
+        "negative_reach_m": 0.016770834411658428,
+        "negative_support_height_bounds_m": [
+          0.008579102978300304,
+          0.009804067822264118
+        ],
+        "object_height_m": 0.021932993603774174,
+        "opening_fit_clearance_each_side_m": 0.0005,
+        "positive_measured_height_m": 0.010379201021752747,
+        "positive_measured_points": 149,
+        "positive_reach_m": 0.016770834411658428,
+        "positive_support_height_bounds_m": [
+          -0.00578718203593369,
+          0.004592018985819057
+        ],
+        "required_open_width_m": 0.046440822916321116,
+        "side_measurement_basis": "before_common_support_intersection",
+        "source_view_stamps_ns": [
+          1792742418733636379
+        ],
+        "support_height_reference": "target_center_along_support_normal",
+        "target_center_base_m": [
+          -0.09204822352636974,
+          -0.356789018817757,
+          0.018286880630584743
+        ],
+        "target_epoch": 47,
+        "target_track_id": "g27-t47",
+        "whole_obb_width_m": 0.045440822916321115
+      }
+    ],
+    "depth_uncertainty_m": 0.003,
+    "side_depth_uncertainty_m": 0.003,
+    "joint_error_bounds_rad": [
+      0.06601699039494283,
+      0.06601699039494283,
+      0.06601699039494283,
+      0.06601699039494283,
+      0.06601699039494283,
+      0.06601699039494283
+    ],
+    "max_seconds": 2.0,
+    "max_directions": 2,
+    "proposal_image_reserve_px": 4.0
+  },
+  "robot_description_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "arrays_sha256": "e065f32e3806e470d021e7751d6010d6ba9075f5905c04209e0e253fcf22a7dd",
+  "model_relative_path": "deployment/2026-10-08/runtime/candidate_models/expanded_metric_20260929/alicia_expanded_metric_candidate.urdf",
+  "provenance": {
+    "record": "grasp_records/20261023T080014.824313Z_3e10cdc5160c4c0f879b83412aa4f27c",
+    "audit_sha256": "f48f61f3157566b86c3d302f9534fbd4f3d1e8cd22ab730795c49b3204da2aa0",
+    "original_source_sha256": "7736b592f243ad709afe8ccd2f667c35a5c93c14037f5218769b51c61d631c2e",
+    "original_candidates": 2,
+    "original_max_predicted_gain_m": 0.0032,
+    "historical_result": "failure",
+    "physical_success": false,
+    "source_reconstruction": "exact raw depth/mask and recorded TF; original measured support count 94960; original arrival-prism audit exact; original search reproduced"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema": 2,
+  "default_backend": "ssd",
+  "backends": {
+    "ssd": {
+      "mount_point": "/home/zhuyupei/ssd_data",
+      "filesystem_uuid": "32eb02e3-31f1-42c4-9b1a-6af81f5751e3",
+      "filesystem_type": "ext4",
+      "experiment_root": "/home/zhuyupei/ssd_data/实验记录/Robot-Controller",
+      "archive_root": "/home/zhuyupei/ssd_data/实验记录/Robot-Controller/grasp_records",
+      "ros_log_root": "/home/zhuyupei/ssd_data/实验记录/Robot-Controller/ros_log",
+      "maintenance_root": "/home/zhuyupei/ssd_data/实验记录/Robot-Controller/maintenance"
+    },
+    "sanstand": {
+      "mount_point": "/media/zhuyupei/SanStand",
+      "filesystem_uuid": "4899-D74E",
+      "filesystem_type": "exfat",
+      "experiment_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller",
+      "archive_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/grasp_records",
+      "ros_log_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/ros_log",
+      "maintenance_root": "/media/zhuyupei/SanStand/实验记录/Robot-Controller/maintenance"
+    }
+  }
+}

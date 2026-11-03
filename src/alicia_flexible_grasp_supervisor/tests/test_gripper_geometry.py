@@ -1621,8 +1621,35 @@ def test_opening_fit_clearance_allows_near_limit_narrow_side_without_shrinking_c
 
     result = evaluate_candidate(**args)
 
-    assert result.ok
+    # The contact-width fit passes, but open descent still must clear the
+    # fixed CAD padding.  With the real +0.3 mm finger-pair center offset,
+    # this 49 mm target overlaps the right padded finger by 0.4 mm.  The old
+    # expectation passed only by allowing intended contact before closure.
+    assert not result.ok
+    assert result.failed_gate == 'static_envelope'
+    assert result.failure_code == 'GRIPPER_SWEEP_COLLISION'
+    assert result.failure_reason == 'right_finger intrudes into target OBB'
     assert result.required_open_width_m == pytest.approx(0.050)
+    for allow_contact, expected_ok in ((False, False), (True, True)):
+        check = gripper_geometry._check_boxes(
+            args['grasp_T_base_tool'], GRIPPER, 0.050, 'y', 'z',
+            args['support_normal_base'], args['support_offset_m'],
+            args['obb_center_base'], args['R_base_obb'],
+            args['obb_size_xyz_m'], allow_contact, 0.0005,
+        )
+        assert check[0] is expected_ok
+
+    # A neighboring width retains a real 0.05 mm minimum padded gap while
+    # exercising the same 0.5 mm/side contact-width fit allowance.
+    safe_args = candidate_fixture(
+        obb_size_xyz_m=np.array([0.040, 0.0481, 0.060]),
+        approach_center_base=np.array([-0.050, 0.0, 0.080]),
+        opening_fit_clearance_each_side_m=0.0005,
+    )
+    safe_result = evaluate_candidate(**safe_args)
+    assert safe_result.ok
+    assert safe_result.passed_gate_count == 6
+    assert safe_result.required_open_width_m == pytest.approx(0.0491)
     assert GRIPPER.jaw_clearance_each_side_m == pytest.approx(0.002)
     assert fixed_contract_reason(GRIPPER) == ''
 

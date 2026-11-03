@@ -82,6 +82,63 @@ def test_current_silhouette_does_not_invent_missing_measurements(recorded):
     np.testing.assert_array_equal(depth, before)
 
 
+def test_all_observed_rgb_keeps_refined_mask_and_geometry_identical(recorded):
+    data = recorded
+    depth = data['depth'][0].astype(np.float32)*float(data['depth_scale'])
+    candidate = make_candidate(data, 0)
+    expected = refine_candidate(data['bgr'][0], depth, data['intrinsics'], data['T'][0], candidate, Config())
+    actual = refine_candidate(data['bgr'][0], depth, data['intrinsics'], data['T'][0], candidate, Config(),
+                              rgb_valid=np.ones(depth.shape, bool))
+    for name in ('mask', 'position_camera', 'position_base', 'extent_m', 'support_footprint_base'):
+        np.testing.assert_array_equal(getattr(actual, name), getattr(expected, name))
+    assert actual.metrics == expected.metrics
+
+
+@pytest.mark.parametrize('domain', ['seed', 'search_background'])
+def test_unobserved_rgb_rejects_refinement_without_erasing_real_depth(recorded, monkeypatch, domain):
+    import cv2
+    data = recorded
+    depth = data['depth'][0].astype(np.float32)*float(data['depth_scale'])
+    candidate = make_candidate(data, 0)
+    ys, xs = np.nonzero(candidate.mask)
+    valid = np.ones(depth.shape, bool)
+    if domain == 'seed':
+        valid[ys[0], xs[0]] = False
+    else:
+        valid[max(0, ys.min()-2), max(0, xs.min()-2)] = False
+    before_depth, before_mask, before_rgb = depth.copy(), candidate.mask.copy(), data['bgr'][0].copy()
+    def forbidden(*args):
+        pytest.fail('unobserved RGB must not train GrabCut colour models')
+    monkeypatch.setattr(cv2, 'grabCut', forbidden)
+    with pytest.raises(ValueError, match='contains_unobserved_rgb'):
+        refine_candidate(data['bgr'][0], depth, data['intrinsics'], data['T'][0], candidate, Config(), rgb_valid=valid)
+    np.testing.assert_array_equal(depth, before_depth)
+    np.testing.assert_array_equal(candidate.mask, before_mask)
+    np.testing.assert_array_equal(data['bgr'][0], before_rgb)
+
+
+def test_larger_boundary_retry_cannot_train_on_unobserved_rgb(monkeypatch):
+    import cv2
+    color = np.full((480, 640, 3), 100, np.uint8)
+    seed = np.zeros((480, 640), np.uint8); seed[230:250, 310:330] = 255
+    valid = np.ones(seed.shape, bool); valid[200, 300] = False
+    calls = []
+    def boundary(patch, labels, *args):
+        calls.append(labels.shape)
+        labels[:] = cv2.GC_BGD
+        labels[3:-3, 3:-3] = cv2.GC_PR_FGD
+    monkeypatch.setattr(cv2, 'grabCut', boundary)
+    with pytest.raises(ValueError, match='rgb_search_contains_unobserved_rgb'):
+        instance_mask_from_seed(color, seed, rgb_valid=valid)
+    assert calls == [(52, 52)]
+
+
+@pytest.mark.parametrize('valid', [np.ones((480, 640), np.uint8), np.ones((1, 1), bool)])
+def test_refinement_rejects_malformed_rgb_domain(recorded, valid):
+    with pytest.raises(ValueError, match='invalid_rgb_validity_mask'):
+        instance_mask_from_seed(recorded['bgr'][0], recorded['mask'][0], rgb_valid=valid)
+
+
 def test_no_measured_seed_cannot_create_target_from_colour(recorded):
     with pytest.raises(ValueError, match='insufficient_measured_foreground'):
         instance_mask_from_seed(recorded['bgr'][0], np.zeros_like(recorded['mask'][0]))
@@ -183,3 +240,154 @@ def test_low_profile_surface_is_not_declared_certain_background(recorded):
     assert not current.metrics['support_background_height_separated']
     assert current.metrics['measured_support_background_pixels'] == 0
     assert current.metrics['trusted_core_retained_fraction'] >= .85
+
+
+@pytest.mark.parametrize('index', [0, 1, 2])
+def test_recorded_short_side_is_not_erased_by_support_coloured_depth_ramps(index):
+    from alicia_flexible_grasp.vision.object_geometry import _fit_obb
+    with np.load(Path(__file__).parent/'fixtures'/'short_side_rgbd_20260925.npz') as data:
+        candidate = make_candidate(data, index)
+        depth = data['depth'][index].astype(np.float32)*float(data['depth_scale'])
+        before = depth.copy()
+        colour = data['bgr'][index].copy()
+        transform, plane = data['T'][index], data['plane'][index]
+        current = refine_candidate(colour, depth, data['intrinsics'], transform, candidate, Config())
+        # Independently inspected motor body and adjacent table in the crop.
+        # These image coordinates never enter the segmentation algorithm.
+        assert np.count_nonzero(current.mask[36:59, 40:61]) >= 520 - 40
+        assert np.count_nonzero(current.mask[33:65, 20:34]) <= 5
+        assert np.count_nonzero(current.mask[33:65, 69:81]) <= 5
+        assert current.bbox[2] <= 33 and 36 <= current.bbox[3] <= 44
+        assert current.metrics['support_colour_demoted_side_pixels'] > 100
+        assert current.metrics['trusted_core_retained_fraction'] >= .85
+        points = _project(depth, data['intrinsics']) @ transform[:3, :3].T + transform[:3, 3]
+        height = points @ plane[:3] + plane[3]
+        measured = ((current.mask > 0) & (depth > .03) & (height >= .004) & (height <= .12))
+        _, _, size = _fit_obb(points[measured], plane[:3], plane[3], .001, .15, .12, None)
+        # The actual measured silhouette recovers a distinct tabletop short
+        # side. A roughly square depth halo must not define grasp orientation.
+        assert size[0]/size[1] > 1.30
+        assert .017 < size[1] < .024
+        np.testing.assert_array_equal(depth, before)
+        np.testing.assert_array_equal(colour, data['bgr'][index])
+
+
+def test_support_colour_cannot_override_top_or_ambiguous_same_colour_surface():
+    from alicia_grasp_modes.measured_mask_seeds import _side_seed_colour_evidence
+    colour = np.full((30, 30, 3), (10, 20, 200), np.uint8)
+    core = np.zeros((30, 30), bool)
+    core[10:20, 10:20] = True
+    support = ~core
+    height = np.zeros((30, 30))
+    height[10:15, 10:20] = .02
+    result, evidence = _side_seed_colour_evidence(colour, core, support, height, .02, np.ones_like(height))
+    np.testing.assert_array_equal(result, core)
+    assert evidence['support_colour_demoted_side_pixels'] == 0
+    result, _ = _side_seed_colour_evidence(colour, core, np.zeros_like(core), height, .02, np.ones_like(height))
+    np.testing.assert_array_equal(result, core)
+
+
+def test_boundary_retry_recovers_complete_same_frame_instance_without_filling_depth(monkeypatch):
+    import cv2
+    color = np.full((480, 640, 3), (20, 20, 180), np.uint8)
+    color[190:270, 290:340] = (230, 230, 230)
+    seed = np.zeros((480, 640), np.uint8)
+    seed[210:265, 295:335] = 255
+    depth = np.full(seed.shape, .3, np.float32)
+    depth[190:270, 290:340] = .28
+    depth[190:210, 290:340] = 0.
+    points = _project(depth, [400., 400., 320., 240.])
+    heights = .3 - points[..., 0]
+    before = depth.copy(); before_color = color.copy(); before_seed = seed.copy()
+    calls = []
+    original = cv2.grabCut
+
+    def observed(patch, labels, *args):
+        ys, xs = np.nonzero(labels == cv2.GC_FGD)
+        # The first ROI starts (279,194), the retry (263,178).
+        origin = (279, 194) if not calls else (263, 178)
+        calls.append(set(zip((xs+origin[0]).tolist(), (ys+origin[1]).tolist())))
+        return original(patch, labels, *args)
+
+    monkeypatch.setattr(cv2, 'grabCut', observed)
+    mask, evidence = instance_mask_from_seed(color, seed,
+        geometry=(points, depth, heights, np.array([-1., 0, 0]), Config()))
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert evidence['rgb_search_attempts'] == 2
+    assert evidence['rgb_search_initial_margin_px'] == 16
+    assert evidence['rgb_search_margin_px'] == 32
+    assert evidence['rgb_search_retry_reason'] == 'rgb_instance_reaches_search_boundary'
+    assert np.count_nonzero(mask[190:270, 290:340]) == 4000
+    assert np.count_nonzero(mask) == 4000
+    assert np.count_nonzero(mask[190:210, 290:340]) == 1000
+    assert evidence['trusted_core_retained_fraction'] >= .85
+    assert evidence['rgb_to_depth_seed_area_ratio'] <= 4.
+    np.testing.assert_array_equal(depth, before)
+    np.testing.assert_array_equal(color, before_color)
+    np.testing.assert_array_equal(seed, before_seed)
+
+
+def test_first_search_success_does_not_try_larger_mask(monkeypatch):
+    import cv2
+    color = np.full((480, 640, 3), (20, 20, 180), np.uint8)
+    color[230:250, 300:322] = (15, 15, 15)
+    seed = np.zeros((480, 640), np.uint8); seed[232:248, 302:320] = 255
+    original = cv2.grabCut; calls = []
+
+    def counted(*args):
+        calls.append(1)
+        return original(*args)
+
+    monkeypatch.setattr(cv2, 'grabCut', counted)
+    _, evidence = instance_mask_from_seed(color, seed)
+    assert len(calls) == 1
+    assert evidence['rgb_search_attempts'] == 1
+    assert evidence['rgb_search_margin_px'] == 16
+    assert evidence['rgb_search_retry_reason'] == ''
+
+
+@pytest.mark.parametrize('second_failure', ['boundary', 'expansion', 'fragmented'])
+def test_retry_retains_original_rejection_and_never_attempts_third_search(monkeypatch, second_failure):
+    import cv2
+    color = np.full((480, 640, 3), 100, np.uint8)
+    seed = np.zeros((480, 640), np.uint8); seed[230:250, 310:330] = 255
+    calls = []
+
+    def forced(patch, labels, *args):
+        calls.append(labels.shape)
+        labels[:] = cv2.GC_BGD
+        if len(calls) == 1 or second_failure == 'boundary':
+            labels[3:-3, 3:-3] = cv2.GC_PR_FGD
+        elif second_failure == 'expansion':
+            labels[5:-5, 5:-5] = cv2.GC_PR_FGD
+
+    monkeypatch.setattr(cv2, 'grabCut', forced)
+    reason = dict(boundary='reaches_search_boundary', expansion='not_supported_by_depth_seed',
+                  fragmented='ambiguous_or_fragmented')[second_failure]
+    with pytest.raises(ValueError, match=reason):
+        instance_mask_from_seed(color, seed)
+    assert len(calls) == 2
+    assert calls == [(52, 52), (84, 84)]
+
+
+def test_non_boundary_failure_does_not_retry(monkeypatch):
+    import cv2
+    color = np.full((480, 640, 3), 100, np.uint8)
+    seed = np.zeros((480, 640), np.uint8); seed[230:250, 310:330] = 255
+    calls = []
+
+    def fragmented(patch, labels, *args):
+        calls.append(1); labels[:] = cv2.GC_BGD
+
+    monkeypatch.setattr(cv2, 'grabCut', fragmented)
+    with pytest.raises(ValueError, match='ambiguous_or_fragmented'):
+        instance_mask_from_seed(color, seed)
+    assert len(calls) == 1
+
+
+def test_real_image_edge_truncation_still_rejected():
+    color = np.full((480, 640, 3), (20, 20, 180), np.uint8)
+    color[:60, 290:340] = (230, 230, 230)
+    seed = np.zeros((480, 640), np.uint8); seed[10:50, 295:335] = 255
+    with pytest.raises(ValueError, match='reaches_search_boundary'):
+        instance_mask_from_seed(color, seed)

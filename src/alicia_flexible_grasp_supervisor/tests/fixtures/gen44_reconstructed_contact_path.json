@@ -1,0 +1,309 @@
+{
+  "kind": "explicit_reconstructed_G43_contact_path_provider",
+  "source_fixture_sha256": "da66a49b1141e943e1b9e734621400a4130c17443c09516fabc9bc1e8a4c50f0",
+  "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+  "plan_id": "5c6b13b03534529f4ea083be",
+  "source": "original conditional corrected-approach q and original frozen contact pose",
+  "historical_MoveIt_trajectory": false,
+  "hardware_executed": false,
+  "planner_and_response_provider_simulated": true,
+  "nominal_positions_rad": [
+    [
+      -1.9389517158874503,
+      -0.5522330836388308,
+      1.0691846091562918,
+      -0.17794177139473438,
+      -1.1336118022474886,
+      1.3130875544301088
+    ],
+    [
+      -1.9001176705397456,
+      -0.61999154160064,
+      0.9935106849569608,
+      -0.13878596088152226,
+      -0.9287372485056131,
+      1.3148437968792734
+    ]
+  ],
+  "bad_positions_rad": [
+    [
+      -1.9389517158874503,
+      -0.5522330836388308,
+      1.0691846091562918,
+      -0.17794177139473438,
+      -1.1336118022474886,
+      1.3130875544301088
+    ],
+    [
+      -1.8996409299542585,
+      -0.8209259780174926,
+      0.9986925974854932,
+      -0.16832704474958443,
+      -0.7356452940037109,
+      1.3583541962895458
+    ],
+    [
+      -1.9001176705397456,
+      -0.61999154160064,
+      0.9935106849569608,
+      -0.13878596088152226,
+      -0.9287372485056131,
+      1.3148437968792734
+    ]
+  ],
+  "waypoint_interval_sec": 4.0,
+  "sample": {
+    "accepted_gripper_opening_m": 0.04980000000000001,
+    "accepted_positions_rad": [
+      -1.9389517158874503,
+      -0.5522330836388308,
+      1.0691846091562918,
+      -0.17794177139473438,
+      -1.1336118022474886,
+      1.3130875544301088
+    ],
+    "accepted_sample_count": 5,
+    "accepted_stamp_ns": 1792301163721666994,
+    "accepted_tool_position_m": [
+      -0.125254795666097,
+      -0.3037415921954296,
+      0.07871326837703421
+    ],
+    "certifies_command_response_or_calibration": false,
+    "epoch_ns": 1792286012067798399,
+    "joint_error_sdk_counts": [
+      3.000000000000026,
+      -10.999999999999998,
+      -12.999999999999993,
+      0.9999999999999966,
+      1.0000000000001052,
+      4.999999999999999
+    ],
+    "joint_names": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "measurement_kind": "stationary_sdk_following_not_executed_endpoint",
+    "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+    "opening_stamp_ns": 1792301163721666994,
+    "orientation_error_rad": 0.03618228976435803,
+    "position_error_m": 0.012174968939939527,
+    "position_error_vector_m": [
+      0.004437893309281432,
+      0.005559078765054015,
+      -0.009880871163407245
+    ],
+    "sdk_positions_rad": [
+      -1.9435536582511073,
+      -0.5353592949720888,
+      1.0891263593988052,
+      -0.17947575218262002,
+      -1.1351457830353744,
+      1.3054176504906807
+    ],
+    "sdk_sample_count": 4,
+    "sdk_stamp_ns": 1792301163681715313,
+    "sdk_tool_position_m": [
+      -0.12969268897537845,
+      -0.30930067096048364,
+      0.08859413954044146
+    ],
+    "stamp_sec": 1792301163.7357142,
+    "stationary_window_end_ns": 1792301163681715313,
+    "stationary_window_start_ns": 1792301163381715313
+  },
+  "opening_m": 0.04980000000000001,
+  "nominal_wire_sha256": "d751098fd64f06d59698819d1ef11d6533837a361b94e7a8e114a30160fcaf5e",
+  "command_wire_sha256": "9f43764199e36483ffcfb4d91526d5446d2af4184d6ca6f7ae647c9ba19fc90a",
+  "original_nominal_full_kernel": {
+    "scope": "continuous_commanded_Link6_Link7_Link8_only",
+    "plan_id": "5c6b13b03534529f4ea083be",
+    "scene_sha256": "b4e030b4e178ea907b66f3c5342576f8672bf2f0f4ffc31487605abd1e009ec9",
+    "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+    "trajectory_sha256": "d751098fd64f06d59698819d1ef11d6533837a361b94e7a8e114a30160fcaf5e",
+    "segments": 1,
+    "interval_checks": 57,
+    "fk_checks": 60,
+    "minimum_sampled_clearance_m": 0.012550528871527957,
+    "certified_minimum_clearance_m": 0.010220771290252636,
+    "bridge": "stationary_desired_to_first_positive_time_waypoint",
+    "bridge_start_joint_positions_rad": [
+      -1.9389517158874503,
+      -0.5522330836388308,
+      1.0691846091562918,
+      -0.17794177139473438,
+      -1.1336118022474886,
+      1.3130875544301088
+    ],
+    "opening_width_m": 0.04980000000000001,
+    "following_support": null,
+    "elapsed_sec": 0.09305473200220149
+  },
+  "original_command_full_kernel": {
+    "scope": "continuous_commanded_Link6_Link7_Link8_only",
+    "plan_id": "5c6b13b03534529f4ea083be",
+    "scene_sha256": "b4e030b4e178ea907b66f3c5342576f8672bf2f0f4ffc31487605abd1e009ec9",
+    "model_sha256": "7812d6b69e854ed9f37b4e3cbd813ecd53dab3504065b2d04d287abc6fd852e0",
+    "trajectory_sha256": "9f43764199e36483ffcfb4d91526d5446d2af4184d6ca6f7ae647c9ba19fc90a",
+    "segments": 1,
+    "interval_checks": 47,
+    "fk_checks": 50,
+    "minimum_sampled_clearance_m": 0.02057669815510922,
+    "certified_minimum_clearance_m": 0.020247604435233983,
+    "bridge": "stationary_desired_to_first_positive_time_waypoint",
+    "bridge_start_joint_positions_rad": [
+      -1.9435536582511073,
+      -0.5353592949720888,
+      1.0891263593988052,
+      -0.17947575218262002,
+      -1.1351457830353744,
+      1.3054176504906807
+    ],
+    "opening_width_m": 0.04980000000000001,
+    "following_support": null,
+    "elapsed_sec": 0.0754678339981183
+  },
+  "original_bad_path_rejection": {
+    "type": "ObservationPathError",
+    "reason": "support clearance -0.057199618m at bridge-end/left_finger"
+  },
+  "compensation_derivation": {
+    "sdk_minus_encoder_rad": [
+      -0.004601942363656963,
+      0.01687378866674205,
+      0.019941750242513434,
+      -0.001533980787885636,
+      -0.0015339807878858025,
+      -0.007669903939428124
+    ],
+    "measured_start_positions_rad": [
+      -1.9389517158874503,
+      -0.5522330836388308,
+      1.0691846091562918,
+      -0.17794177139473438,
+      -1.1336118022474886,
+      1.3130875544301088
+    ],
+    "command_start_positions_rad": [
+      -1.9435536582511073,
+      -0.5353592949720888,
+      1.0891263593988052,
+      -0.17947575218262002,
+      -1.1351457830353744,
+      1.3054176504906807
+    ],
+    "fixed_goal_pose": [
+      -0.09777958961031523,
+      -0.3576605715540743,
+      0.017619411590591695,
+      0.3289240709815566,
+      0.941579620973363,
+      -0.03755319796189403,
+      0.0618589542379526
+    ],
+    "nominal_trajectory_sha256": "d751098fd64f06d59698819d1ef11d6533837a361b94e7a8e114a30160fcaf5e",
+    "compensated_trajectory_sha256": "9f43764199e36483ffcfb4d91526d5446d2af4184d6ca6f7ae647c9ba19fc90a",
+    "hardware_response_verified": false,
+    "real_grasp_success": false
+  },
+  "rigid_stage1_report": {
+    "ok": false,
+    "code": "MEASURED_APERTURE_INSUFFICIENT",
+    "reason": "measured symmetric jaw opening does not contain frozen union/model with unchanged full uncertainty and fit",
+    "physical_grip_verified": false,
+    "continuous_tracking_tube_checked": false,
+    "stage_reference_pose_index": 1,
+    "actual_T_base_tool0": [
+      [
+        -0.7477761893163706,
+        0.6452792332702064,
+        0.15635050943857534,
+        -0.10023176974975004
+      ],
+      [
+        0.6419863593626215,
+        0.7627741486130685,
+        -0.07764736054712687,
+        -0.35093192062564815
+      ],
+      [
+        -0.1693643560015342,
+        0.042312046958557406,
+        -0.984644811898363,
+        0.05697230798214392
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "projected_contact_T_base_tool0": [
+      [
+        -0.7477761893163708,
+        0.6452792332702065,
+        0.15635050943857537,
+        -0.0945456084936441
+      ],
+      [
+        0.6419863593626215,
+        0.7627741486130684,
+        -0.07764736054712688,
+        -0.3537558027784301
+      ],
+      [
+        -0.1693643560015342,
+        0.04231204695855742,
+        -0.984644811898363,
+        0.021162708125088185
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "projected_contact_center_base": [
+      -0.09561493760767606,
+      -0.3522074247703052,
+      0.016647412619279815
+    ],
+    "projected_contact_is_measured": false,
+    "projection_policy": "actual_stage_residual_applied_to_frozen_contact",
+    "union_jaw_interval_m": [
+      -0.02584870985968791,
+      0.015140806181148946
+    ],
+    "negative_reach_m": 0.02634870985968791,
+    "union_corner_projection_m": [
+      -0.02776108111144326,
+      0.016573246543117984
+    ],
+    "union_reach_policy": "original_center_jaw_line_and_full_finite_CAD_SAT",
+    "positive_reach_m": 0.015640806181148947,
+    "measured_opening_width_m": 0.04980000000000001,
+    "opening_fit_clearance_each_side_m": 0.0005000000000000004,
+    "union_required_open_width_m": 0.05269741971937582,
+    "inferred_required_open_width_m": 0.0,
+    "required_open_width_m": 0.05269741971937582,
+    "precision_reserve_m": 0.0,
+    "precision_reserve_is_hard_requirement": false,
+    "precision_preference_met": true,
+    "aperture_margin_m": -0.0028974197193758072,
+    "model_margin_after_reserve_m": 0.04980000000000001,
+    "union_aperture_margin_m": -0.0028974197193758072,
+    "effective_required_open_width_m": 0.05269741971937582,
+    "inferred_projection": null,
+    "plan_id": "5c6b13b03534529f4ea083be",
+    "contact_geometry_source": "fused_measured_bilateral_surface",
+    "frozen_union_includes_inferred_uncertainty": false
+  },
+  "helper_sha256": "fcc0f6e4cb060696bc02e75a905b9cccab9a3ef6ddc3eebe934ff77b00cdfc15",
+  "network_boundary_attempts": []
+}

@@ -162,7 +162,7 @@ def test_alternative_has_a_continuous_support_feasible_path_not_only_a_good_endp
     assert report['following_support']['minimum_support_clearance_lower_bound_m'] >= .003
 
 
-def test_production_selection_qualifies_before_ranking_duration(monkeypatch):
+def test_production_selection_rejects_support_only_branch_without_joint_reserve(monkeypatch):
     from alicia_flexible_grasp.robot.observation_preview import encode_path_evidence
     from test_remote_grasp6d_streaming import streaming_node, MutableClock, snapshot, remote_node
     from alicia_flexible_grasp.grasp.grasp6d_pipeline import MoveItResult
@@ -202,11 +202,14 @@ def test_production_selection_qualifies_before_ranking_duration(monkeypatch):
             'observation_variants': variants, 'soft_evidence': {}}
         node._stable_variant_runtime = {(3, 1): runtime}
         result = node._check_moveit_stable_candidate(NS(track_id=3, variant_index=1))
-        assert result.reachable
+        # The historical support-qualified winner sat within 0.003 rad of
+        # Joint6's lower limit. It must now fail before duration ranking.
+        assert not result.reachable
         search = runtime['observation_orientation_search']
-        assert search['selected_camera_roll_offset_deg'] == 180.
-        assert search['selected_execution_duration_lower_bound_sec'] == 38.986
-        assert search['selected_screened_duration_sec'] == 90.
+        assert all(not row['reachable'] for row in search['variant_results'])
+        last = search['variant_results'][-1]['following_support']
+        assert not last['endpoint_joint_reserve']['ok']
+        assert 'Joint6' in last['endpoint_joint_reserve']['insufficient_joints']
         assert search['variant_results'][0]['failure_code'] == 'OBSERVATION_FOLLOWING_SUPPORT_INVALID'
         assert search['variant_results'][0]['following_support']['ok'] is False
         assert search['variant_results'][0]['following_support']['failure_location'] == 'goal'
