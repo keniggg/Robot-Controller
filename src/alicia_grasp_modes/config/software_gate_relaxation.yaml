@@ -53,8 +53,9 @@
 /gui/pregrasp_plan_timeout_sec: 24
 # 0.05 -> 0.1 (software_time)
 /robot/orientation_resolution_ik_timeout_sec: 0.1
-# 2.0 -> 4.0 (software_time)
-/robot/strict_execution_controller_sync_timeout_sec: 4.0
+# Keep the base 2.0: physical-reference transactions require timeout <= 3.0.
+# This bounded controller handoff is excluded from the generic 2x timing scale.
+/robot/strict_execution_controller_sync_timeout_sec: 2.0
 # 0.006 -> 0.012 (software_error)
 /grasp/final_visual_refine_center_fallback_max_jitter_m: 0.012
 # 0.006 -> 0.012 (software_error)

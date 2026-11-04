@@ -4,6 +4,8 @@
 Use a new session on the selected experiment disk. `plan` freezes the release, user
 instruction and actual roslaunch expansion; `start` dispatches the existing
 simulation and full-stack entries; `accept` only observes their new instances.
+New manual restarts do not run a cold scan or wait for remote health before
+dispatch. The running-instance acceptance still requires the actual dependency.
 No generation/PID/selection from a previous session is treated as current.
 No operation starts a grasp, switches mode, queries temperature or disables a
 joint. The existing reviewed driver retains its positive startup enable.
@@ -47,6 +49,12 @@ CLIENT = W/'src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/visio
 HAND_EYE = W/'.runtime/candidate_models/expanded_metric_20260929/handeye_candidate_config.yaml'
 CURRENT_TEST_ROOTS = ('src/alicia_grasp_modes/tests', 'src/alicia_flexible_grasp_supervisor/tests', 'tools/tests')
 HISTORICAL_PREWARM_TEST = '.runtime/gen6_runner_prewarm_20261012/tests/test_gen6_initial_template_late_start.py'
+LIVE_STARTUP_POLICY_KEYS = (
+    '/gui/joint_direct_mode', '/alicia_d_driver_node/software_temperature_monitoring_enabled',
+    '/alicia_d_driver_node/temperature_poll_rate_hz', '/alicia_d_driver_node/self_check_poll_rate_hz',
+    '/alicia_d_driver_node/auto_torque_on_startup', '/camera/simulate', '/camera/fallback_to_simulation',
+    '/grasp/unknown_observe_return_max_observations', '/grasp/unknown_lift_after_close_enabled',
+    '/robot/strict_execution_controller_sync_timeout_sec', '/robot/strict_execution_controller_sync_duration_sec')
 
 
 def require(ok, why):
@@ -113,6 +121,8 @@ def release_evidence(release):
     require(release.get('source_count') == len(release['source_sha256']), 'release source count differs')
     if release.get('kind') == 'current_offline_release':
         return current_release_evidence(release)
+    if release.get('kind') == 'inherited_full_plus_targeted':
+        return inherited_release_evidence(release)
     require(release.get('kind') == 'targeted_compute_release'
             and release.get('full_regression_passed') is False, 'this entry expects a truthful targeted release')
     full = read_ref(release['baseline_full_regression'])
@@ -138,6 +148,120 @@ def release_evidence(release):
     return dict(baseline_full=release['baseline_full_regression'], baseline_summary=summary,
                 baseline_scope=release['baseline_full_scope'], targeted=release['actual_targeted_regression'],
                 targeted_distinct_cases=len(cases), current_full_regression_passed=False)
+
+
+def offline_regression_evidence(run, *, complete, inherited_explicit_files=()):
+    """Read actual recorded scope/phases; historical inputs are never rewritten."""
+    require(run.get('schema') == 1 and run.get('passed') is True
+            and run.get('source_unchanged') is True
+            and all(run.get(k) == [] for k in ('changed_sources', 'external_boundary_attempts',
+                'bad_files', 'duplicate_cases', 'collection_skips')), 'offline regression failed or incomplete')
+    require(run.get('complete_scope_requested') is complete
+            and run.get('offline_scope_complete') is complete, 'offline regression scope claim differs')
+    sources = run.get('source_sha256')
+    require(type(sources) is dict and bool(sources) and all(type(p) is str
+            and not Path(p).is_absolute() and '..' not in Path(p).parts
+            and type(h) is str and re.fullmatch(r'[0-9a-f]{64}', h)
+            for p, h in sources.items()), 'offline source manifest invalid')
+    files, declared, expected, cases = (run.get(k) for k in
+        ('test_files', 'declared_test_files', 'expected_case_ids', 'case_results'))
+    for label, rows in (('executed files', files), ('declared files', declared), ('case inventory', expected)):
+        require(type(rows) is list and rows and all(type(x) is str for x in rows)
+                and len(rows) == len(set(rows)), 'offline '+label+' invalid')
+    require(set(files) <= set(declared) <= set(sources)
+            and (not complete or set(files) == set(declared)), 'offline file scope differs')
+    require(all('::' in c for c in expected)
+            and {c.split('::', 1)[0] for c in expected} == set(files), 'offline collection/file scope differs')
+    require(type(cases) is list and all(type(c) is dict and type(c.get('nodeid')) is str for c in cases),
+            'offline phase inventory invalid')
+    ids = [c['nodeid'] for c in cases]
+    require(len(ids) == len(set(ids)) and set(ids) == set(expected), 'offline cases omitted, duplicated or foreign')
+    skipped = []
+    for case in cases:
+        setup, call, teardown = (case.get(k) for k in ('setup', 'call', 'teardown'))
+        require(teardown == 'passed' and ((setup == 'passed' and call in ('passed', 'skipped'))
+                or (setup == 'skipped' and call is None)), 'offline case phase failed: '+case['nodeid'])
+        if setup == 'skipped' or call == 'skipped':
+            require(type(case.get('skip_reason')) is str and bool(case['skip_reason']), 'offline skip reason missing')
+            skipped.append(dict(nodeid=case['nodeid'], reason=case['skip_reason']))
+    require(run.get('skipped_cases') == [r['nodeid'] for r in skipped], 'offline skip ledger differs')
+    summary = dict(tests=len(cases), passed=len(cases)-len(skipped), skipped=len(skipped),
+                   failed=0, collection_skipped_files=0)
+    require(run.get('summary') == summary
+            and run.get('full_regression_passed') is (complete and not skipped), 'offline summary/full claim differs')
+    exclusions, roots, explicit = (run.get(k) for k in ('excluded_files', 'test_roots', 'explicit_test_files'))
+    require(type(exclusions) is list and all(type(r) is dict and type(r.get('path')) is str
+            and type(r.get('reason')) is str and r['reason'] and r['path'] not in declared for r in exclusions)
+            and len({r['path'] for r in exclusions}) == len(exclusions), 'offline exclusions invalid')
+    require(type(roots) is list and roots and all(type(p) is str and not Path(p).is_absolute()
+            and '..' not in Path(p).parts for p in roots) and len(roots) == len(set(roots))
+            and all(any(Path(r) == Path(p) or Path(p) in Path(r).parents for p in roots)
+                    for r in CURRENT_TEST_ROOTS), 'offline test roots omitted')
+    require(type(explicit) is list and all(type(p) is str and p in sources for p in explicit)
+            and len(explicit) == len(set(explicit)), 'offline explicit files invalid')
+    require(type(inherited_explicit_files) in (list, tuple)
+            and all(type(p) is str and p in sources for p in inherited_explicit_files)
+            and len(inherited_explicit_files) == len(set(inherited_explicit_files))
+            and (not complete or not inherited_explicit_files), 'offline inherited explicit declaration invalid')
+    root_files = {p for p in sources if Path(p).name.startswith('test_') and Path(p).suffix == '.py'
+                  and any(Path(root) in Path(p).parents for root in roots)}
+    require(set(files)-root_files <= set(explicit), 'executed extra file lacks its actual explicit declaration')
+    discovered = root_files | set(explicit) | set(inherited_explicit_files)
+    require(discovered == set(declared) | {r['path'] for r in exclusions}, 'offline declared scope omitted or invented')
+    if HISTORICAL_PREWARM_TEST in sources:
+        require(HISTORICAL_PREWARM_TEST in declared, 'historical prewarm coverage omitted')
+    require(type(run.get('scope_name')) is str and bool(run['scope_name']), 'offline scope name missing')
+    return dict(summary=summary, test_file_count=len(files), skipped_cases=skipped,
+                test_roots=roots, excluded_files=exclusions, scope=run['scope_name'],
+                declared_test_file_count=len(declared), explicit_test_files=list(explicit),
+                inherited_explicit_test_files=list(inherited_explicit_files))
+
+
+def inherited_release_evidence(release):
+    """Admit a reviewed finite delta without claiming a new complete regression."""
+    require(release.get('schema') == 1 and release.get('full_regression_passed') is False,
+            'inherited release cannot claim a current full regression')
+    baseline = read_ref(release['baseline_full_regression'])
+    target = read_ref(release['actual_targeted_regression'])
+    previous = offline_regression_evidence(baseline, complete=True)
+    # A targeted run records only its selected extra files (plus the runner's
+    # historical prewarm declaration), while retaining the complete declared
+    # scope. The already validated full baseline supplies the other explicit
+    # declarations; no target row or historical case is rewritten or rerun here.
+    require(type(target.get('explicit_test_files')) is list
+            and all(type(p) is str for p in target['explicit_test_files'])
+            and set(target['explicit_test_files']) <= set(baseline['explicit_test_files']),
+            'target introduces an unreviewed explicit test declaration')
+    current = offline_regression_evidence(target, complete=False,
+        inherited_explicit_files=baseline['explicit_test_files'])
+    require(not current['skipped_cases'], 'targeted delta has unexecuted cases')
+    sources = release['source_sha256']; before = baseline['source_sha256']
+    require(target['source_sha256'] == sources and set(before) <= set(sources),
+            'targeted source inventory differs or deletes historical sources')
+    delta = {p:dict(before_sha256=before.get(p), after_sha256=sources[p])
+             for p in sorted(sources) if before.get(p) != sources[p]}
+    require(delta and release.get('source_delta') == delta, 'release source delta differs from actual manifests')
+    files = target['test_files']
+    require(release.get('targeted_test_files') == files
+            and all(p in files for p in delta if Path(p).name.startswith('test_') and Path(p).suffix == '.py'),
+            'changed test file omitted from targeted execution')
+    require(target['test_roots'] == baseline['test_roots']
+            and target['excluded_files'] == baseline['excluded_files'], 'inherited scope/exclusion policy changed')
+    review = read_ref(release['evidence_review'])
+    require(all(review.get(k) is True for k in ('passed', 'actual_import_inventory_verified',
+                'retained_baseline_cases_verified', 'original_skips_preserved'))
+            and all(review.get(k) == release[k] for k in ('baseline_full_regression',
+                'actual_targeted_regression', 'source_delta', 'targeted_test_files')),
+            'independent case/import/source review differs or incomplete')
+    source_check(sources)
+    return dict(baseline_full=release['baseline_full_regression'], baseline=previous,
+                targeted=release['actual_targeted_regression'], targeted_summary=current['summary'],
+                targeted_test_files=files, source_delta=delta, evidence_review=release['evidence_review'],
+                targeted_declaration=dict(declared_test_file_count=current['declared_test_file_count'],
+                    explicit_test_files=current['explicit_test_files'],
+                    inherited_explicit_test_files=current['inherited_explicit_test_files']),
+                baseline_cases_inherited=True, current_full_regression_passed=False,
+                test_bodies_executed_in_current_run=current['summary']['tests'])
 
 
 def current_release_evidence(release):
@@ -407,11 +531,17 @@ def prestart_health(config, contract, output):
 
 
 def validate_contract(contract, *, manual_return=False):
-    require(contract['schema'] == 1 and contract['kind'] == 'manual_full_stack_cold_start'
+    require(contract['schema'] == 1 and contract['kind'] in
+            ('manual_full_stack_cold_start', 'manual_full_stack_restart')
             and contract['workspace_root'] == str(W), 'wrong startup contract')
     require(contract.get('manual_only') is True and contract.get('automatic_grasp_authorized') is False,
             'manual-only startup contract required')
     require(type(contract.get('storage')) is dict, 'frozen storage identity required')
+    if contract['kind'] == 'manual_full_stack_restart':
+        require(contract.get('cold_check_executed') is False
+                and contract.get('remote_health_check_stage') == 'post_start_acceptance'
+                and type(contract.get('boot_id')) is str and bool(contract['boot_id']),
+                'manual restart workflow binding invalid')
     out = Path(contract['output_root'])
     storage(out, manual_return=manual_return, backend=contract['storage']['backend'], expected=contract['storage'])
     for path, digest in contract['current_sha256'].items():
@@ -461,23 +591,20 @@ def plan(args):
             paths.append(entry)
     paths.append(W/'tools/with_local_realsense_sdk.sh')
     paths.extend(Path(p) for p in config['launch_source_sha256'])
-    contract = dict(schema=1, kind='manual_full_stack_cold_start', workspace_root=str(W), output_root=str(out),
+    contract = dict(schema=1, kind='manual_full_stack_restart', workspace_root=str(W), output_root=str(out),
         release=release_ref, instruction=instruction_ref, control=ref(control_path), control_snapshot=read_ref(ref(control_path)),
         storage=selected.validate(out),
         configuration=config_ref, verification=verification, client=ref(CLIENT), allowed_backends=backend['allowed_backends'],
         driver_build=driver_ref, driver_binary_sha256=driver['binary_sha256'],
         current_sha256={str(p.resolve()):sha(p) for p in sorted(set(paths))},
         pycache_prefix=str(out/'unused_python_cache'), manual_only=True, automatic_grasp_authorized=False,
-        physical_grasp_verified=False, temperature_queried=False, torque_disable_commands_sent=False)
+        physical_grasp_verified=False, temperature_queried=False, torque_disable_commands_sent=False,
+        boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(), cold_check_executed=False,
+        remote_health_check_stage='post_start_acceptance')
     validate_contract(contract)
-    before = cold_scan(config); time.sleep(.25); after = cold_scan(config)
-    require(before['boot_id'] == after['boot_id'] and before['devices'] == after['devices'], 'cold device/boot identity changed')
-    contract['cold_boot_id'] = after['boot_id']
-    contract['cold_devices'] = after['devices']
-    health = prestart_health(config, contract, out/'prestart_remote_health')
     contract_ref = write(out/'contract.json', contract)
-    write(out/'plan.json', dict(contract=contract_ref, cold_before=before, cold_after=after,
-         prestart_remote_health=health, prepared_ns=time.time_ns(), starts_services=False))
+    write(out/'plan.json', dict(contract=contract_ref, cold_check_executed=False,
+         remote_health_check_stage='post_start_acceptance', prepared_ns=time.time_ns(), starts_services=False))
     print(json.dumps(dict(prepared=True, contract=contract_ref, verification=verification), ensure_ascii=False))
 
 
@@ -485,16 +612,21 @@ def start(contract, contract_ref):
     out, config, release = validate_contract(contract)
     selected = select_storage(contract['storage']['backend'], path=out)
     os.environ.update(selected.environment(out/'startup_ros', session=out))
-    require(Path('/proc/sys/kernel/random/boot_id').read_text().strip() == contract['cold_boot_id'], 'host boot changed')
-    cold = cold_scan(config)
-    require(cold['devices'] == contract['cold_devices'], 'device identity changed since plan')
-    health = prestart_health(config, contract, out/'dispatch_remote_health')
+    legacy = contract['kind'] == 'manual_full_stack_cold_start'
+    require(Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+            == contract['cold_boot_id' if legacy else 'boot_id'], 'host boot changed')
+    legacy_evidence = {}
+    if legacy:
+        cold = cold_scan(config)
+        require(cold['devices'] == contract['cold_devices'], 'device identity changed since plan')
+        legacy_evidence = dict(cold=cold, dispatch_remote_health=prestart_health(config, contract, out/'dispatch_remote_health'))
     validate_contract(contract)
     write(out/'start_claim.json', dict(pid=os.getpid(), claimed_ns=time.time_ns(), contract=contract_ref))
     suffix = hashlib.sha256(str(out).encode()).hexdigest()[:12]
     result = dict(contract=contract_ref, started_ns=time.time_ns(), release_label=release['generation'],
                   full_restart=True, manual_only=True, automatic_grasp_started=False, components={},
-                  dispatch_remote_health=health, cold=cold, startup_positive_enable_configured=True,
+                  cold_check_executed=legacy, remote_health_check_stage='post_start_acceptance' if not legacy else 'prestart_and_post_start',
+                  startup_positive_enable_configured=True, **legacy_evidence,
                   temperature_queried=False, torque_disable_commands_sent=False)
     try:
         for component in ('simulation', 'core'):
@@ -502,7 +634,8 @@ def start(contract, contract_ref):
                 sim = load(SIM); sim.UNIT = result['components']['simulation']['unit']
                 sim.wait_ready(timeout=40.)
                 result['simulation_ready'] = sim.service_snapshot()
-                write(out/'before_core_owner_check.json', cold_scan(config, properties(sim.UNIT)))
+                if legacy:
+                    write(out/'before_core_owner_check.json', cold_scan(config, properties(sim.UNIT)))
                 validate_contract(contract)
             unit = 'alicia-manual-full-'+component+'-'+suffix+'.service'
             entry = ['/usr/bin/python3', '-B', str(SIM), '--serve'] if component == 'simulation' else ['/bin/bash', str(ENTRY)]
@@ -662,6 +795,15 @@ def gui_windows(pid):
     return found
 
 
+def live_startup_policy(config, get_parameter):
+    values = {key:get_parameter(key) for key in LIVE_STARTUP_POLICY_KEYS}
+    for key, value in values.items():
+        require(value == config['parameters'][key]
+                and (type(config['parameters'][key]) is not bool or type(value) is bool),
+                'live startup policy differs: '+key)
+    return values
+
+
 def accept(contract, contract_ref, destination=None, verifier_revision=None, expected_runtime=None):
     out, config, release = validate_contract(contract)
     selected = select_storage(contract['storage']['backend'], path=out)
@@ -707,11 +849,7 @@ def accept(contract, contract_ref, destination=None, verifier_revision=None, exp
                       core_unit=startup['components']['core']['unit'], master_identity=process(master_pid), state=measured,
                       gui_windows=gui_windows(nodes['/alicia_supervisor_gui']['pid']))
         # Existing launch parameters were frozen before dispatch, including remote URL.
-        for key in ('/gui/joint_direct_mode','/alicia_d_driver_node/software_temperature_monitoring_enabled',
-                    '/alicia_d_driver_node/temperature_poll_rate_hz','/alicia_d_driver_node/self_check_poll_rate_hz',
-                    '/alicia_d_driver_node/auto_torque_on_startup','/camera/simulate','/camera/fallback_to_simulation',
-                    '/grasp/unknown_observe_return_max_observations','/grasp/unknown_lift_after_close_enabled'):
-            require(rospy.get_param(key) == config['parameters'][key], 'live startup policy differs: '+key)
+        result['startup_policy_parameters'] = live_startup_policy(config, rospy.get_param)
         for name,row in nodes.items():
             proc = Path('/proc')/str(row['pid'])
             env = dict(item.decode().split('=',1) for item in (proc/'environ').read_bytes().split(b'\0') if b'=' in item)

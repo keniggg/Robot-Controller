@@ -1,4 +1,4 @@
-"""Offline cold-start boundaries; never imports ROS or starts any service."""
+"""Offline manual-start boundaries; never imports ROS or starts any service."""
 from collections import deque
 import copy
 import hashlib
@@ -399,3 +399,247 @@ def test_paused_restart_keeps_control_and_instruction_binding(tmp_path,monkeypat
         fixture.contract['instruction']=fixture.write_ref('instruction.json',dict(
             source='actual_user_message',text='pause',full_restart_authorized=False,new_scene_confirmation_claimed=False))
     with pytest.raises(RuntimeError):cold.validate_contract(fixture.contract,manual_return=True)
+
+
+def inherited_fixture(tmp_path, monkeypatch):
+    monkeypatch.setattr(cold, 'W', tmp_path)
+    old_test = tmp_path/'test_current.py'; old_test.write_text('def test_old(): pass\n')
+    config = tmp_path/'config.yaml'; config.write_text('timeout: 4.0\n')
+    before = {p.name:cold.sha(p) for p in (old_test, config)}
+    old_cases = [dict(nodeid='test_current.py::test_old', setup='passed', call='passed', teardown='passed'),
+        dict(nodeid='test_current.py::test_external', setup='skipped', call=None, teardown='passed', skip_reason='external fixture absent')]
+    def run(sources, files, declared, cases, complete):
+        skips = [c['nodeid'] for c in cases if c['setup'] == 'skipped' or c['call'] == 'skipped']
+        return dict(schema=1, passed=True, source_unchanged=True, source_sha256=sources,
+            changed_sources=[], external_boundary_attempts=[], bad_files=[], duplicate_cases=[], collection_skips=[],
+            complete_scope_requested=complete, offline_scope_complete=complete,
+            test_files=files, declared_test_files=declared, expected_case_ids=[c['nodeid'] for c in cases],
+            case_results=cases, skipped_cases=skips, full_regression_passed=complete and not skips,
+            summary=dict(tests=len(cases), passed=len(cases)-len(skips), skipped=len(skips), failed=0, collection_skipped_files=0),
+            excluded_files=[], test_roots=['.'], explicit_test_files=[], scope_name='declared offline scope')
+    baseline = run(before, ['test_current.py'], ['test_current.py'], old_cases, True)
+    config.write_text('timeout: 2.0\n')
+    new_test = tmp_path/'test_new.py'; new_test.write_text('def test_timing(): pass\n')
+    sources = {p.name:cold.sha(p) for p in (old_test, config, new_test)}
+    target = run(sources, ['test_new.py'], ['test_current.py', 'test_new.py'],
+        [dict(nodeid='test_new.py::test_timing', setup='passed', call='passed', teardown='passed')], False)
+    delta = {p:dict(before_sha256=before.get(p), after_sha256=sources[p])
+             for p in sorted(sources) if before.get(p) != sources[p]}
+    release = dict(schema=1, kind='inherited_full_plus_targeted', passed=True, reviewed=True, installed=True,
+        full_regression_passed=False, source_count=len(sources), source_sha256=sources,
+        baseline_full_regression='baseline', actual_targeted_regression='target', source_delta=delta,
+        targeted_test_files=['test_new.py'], evidence_review='review')
+    review = {k:copy.deepcopy(release[k]) for k in ('baseline_full_regression', 'actual_targeted_regression',
+                                                   'source_delta', 'targeted_test_files')}
+    review.update(passed=True, actual_import_inventory_verified=True,
+                  retained_baseline_cases_verified=True, original_skips_preserved=True)
+    monkeypatch.setattr(cold, 'read_ref', lambda key:{'baseline':baseline, 'target':target, 'review':review}[key])
+    return NS(baseline=baseline, target=target, release=release, review=review)
+
+
+def test_inherited_release_keeps_historical_skips_and_actual_target_cases_separate(tmp_path, monkeypatch):
+    fixture = inherited_fixture(tmp_path, monkeypatch)
+    baseline_before = copy.deepcopy(fixture.baseline)
+    result = cold.release_evidence(fixture.release)
+    assert result['baseline']['summary'] == dict(tests=2, passed=1, skipped=1, failed=0, collection_skipped_files=0)
+    assert result['baseline']['skipped_cases'][0]['reason'] == 'external fixture absent'
+    assert result['targeted_summary']['tests'] == result['test_bodies_executed_in_current_run'] == 1
+    assert result['current_full_regression_passed'] is False
+    assert fixture.baseline == baseline_before
+
+
+def explicit_inheritance_fixture(tmp_path, monkeypatch):
+    f = inherited_fixture(tmp_path, monkeypatch)
+    names = {p:'tools/tests/'+p for p in ('test_current.py', 'test_new.py')}
+    for old, new in names.items():
+        path = tmp_path/new; path.parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path/old).rename(path)
+    for run in (f.baseline, f.target):
+        run['source_sha256'] = {names.get(p,p):h for p,h in run['source_sha256'].items()}
+        for key in ('test_files', 'declared_test_files'):
+            run[key] = [names.get(p,p) for p in run[key]]
+        for case in run['case_results']:
+            path, identifier = case['nodeid'].split('::',1)
+            case['nodeid'] = names.get(path,path)+'::'+identifier
+        run['expected_case_ids'] = [case['nodeid'] for case in run['case_results']]
+        run['skipped_cases'] = [case['nodeid'] for case in run['case_results']
+                                if case['setup'] == 'skipped' or case['call'] == 'skipped']
+        run['test_roots'] = ['src','tools']
+    extra = [cold.HISTORICAL_PREWARM_TEST, '.runtime/old_binding/tests/test_historical.py']
+    for name in extra:
+        path = tmp_path/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text('def test_history(): pass\n')
+        for run in (f.baseline, f.target):
+            run['source_sha256'][name] = cold.sha(path)
+            run['declared_test_files'].append(name)
+        f.baseline['test_files'].append(name)
+        f.baseline['case_results'].append(dict(nodeid=name+'::test_history', setup='passed', call='passed', teardown='passed'))
+    f.baseline['expected_case_ids'] = [case['nodeid'] for case in f.baseline['case_results']]
+    f.baseline['summary'].update(tests=4, passed=3)
+    f.baseline['explicit_test_files'] = extra
+    # The real targeted wrapper keeps its default prewarm declaration but does
+    # not list unselected historical runtime files here. Its declared scope is
+    # still complete; neither extra file was executed in this targeted run.
+    f.target['explicit_test_files'] = [extra[0]]
+    f.release.update(source_sha256=f.target['source_sha256'], source_count=len(f.target['source_sha256']),
+        source_delta={p:dict(before_sha256=f.baseline['source_sha256'].get(p), after_sha256=h)
+            for p,h in f.target['source_sha256'].items() if f.baseline['source_sha256'].get(p) != h},
+        targeted_test_files=list(f.target['test_files']))
+    for key in ('source_delta','targeted_test_files'): f.review[key] = copy.deepcopy(f.release[key])
+    return f, extra
+
+
+def test_targeted_scope_inherits_unselected_baseline_explicit_declarations_without_rewriting_records(tmp_path, monkeypatch):
+    f, extra = explicit_inheritance_fixture(tmp_path, monkeypatch)
+    before = copy.deepcopy((f.baseline, f.target))
+    evidence = cold.release_evidence(f.release)
+    assert (f.baseline, f.target) == before
+    assert evidence['targeted_summary']['tests'] == 1
+    assert evidence['targeted_test_files'] == ['tools/tests/test_new.py']
+    assert evidence['targeted_declaration'] == dict(declared_test_file_count=4,
+        explicit_test_files=[extra[0]], inherited_explicit_test_files=extra)
+    assert evidence['baseline']['test_file_count'] == 3
+    assert evidence['current_full_regression_passed'] is False
+
+
+@pytest.mark.parametrize('fault', ['omitted_history', 'unknown_explicit', 'invented_declared',
+                                  'selected_extra_not_explicit', 'invalid_explicit', 'complete_inherits'])
+def test_inherited_explicit_scope_cannot_hide_omissions_or_admit_unknown_extra_files(tmp_path, monkeypatch, fault):
+    f, extra = explicit_inheritance_fixture(tmp_path, monkeypatch)
+    if fault == 'omitted_history': f.target['declared_test_files'].remove(extra[1])
+    elif fault in ('unknown_explicit', 'invented_declared'):
+        path = tmp_path/'.runtime/unknown/test_extra.py'; path.parent.mkdir(parents=True); path.write_text('def test_extra(): pass\n')
+        name = str(path.relative_to(tmp_path))
+        f.target['source_sha256'][name] = cold.sha(path)
+        f.release['source_count'] += 1
+        f.target['declared_test_files'].append(name)
+        if fault == 'unknown_explicit': f.target['explicit_test_files'].append(name)
+    elif fault == 'selected_extra_not_explicit':
+        f.target['test_files'].append(extra[1])
+        f.target['expected_case_ids'].append(extra[1]+'::test_history')
+        f.target['case_results'].append(dict(nodeid=extra[1]+'::test_history', setup='passed', call='passed', teardown='passed'))
+        f.target['summary'].update(tests=2,passed=2)
+    elif fault == 'invalid_explicit': f.target['explicit_test_files'] = None
+    elif fault == 'complete_inherits':
+        with pytest.raises(RuntimeError, match='inherited explicit'):
+            cold.offline_regression_evidence(f.baseline, complete=True, inherited_explicit_files=extra)
+        return
+    with pytest.raises(RuntimeError): cold.release_evidence(f.release)
+
+
+@pytest.mark.parametrize('fault', ['baseline_incomplete', 'baseline_skip_relabelled', 'baseline_skip_reason',
+    'baseline_file_omitted', 'target_full_claim', 'target_duplicate', 'target_missing_case', 'target_failed_phase',
+    'target_skipped', 'target_boundary', 'target_source_changed', 'target_scope_invented', 'target_summary_invented',
+    'source_delta_omitted', 'source_delta_before_changed', 'source_removed', 'changed_test_omitted',
+    'review_missing_imports', 'review_wrong_target', 'review_missing_history', 'installed_bytes_changed'])
+def test_inherited_release_rejects_unproven_delta_or_relabelled_history(tmp_path, monkeypatch, fault):
+    f = inherited_fixture(tmp_path, monkeypatch)
+    if fault == 'baseline_incomplete': f.baseline['offline_scope_complete'] = False
+    elif fault == 'baseline_skip_relabelled': f.baseline['full_regression_passed'] = True
+    elif fault == 'baseline_skip_reason': f.baseline['case_results'][1].pop('skip_reason')
+    elif fault == 'baseline_file_omitted': f.baseline['declared_test_files'].append('not_executed.py')
+    elif fault == 'target_full_claim': f.release['full_regression_passed'] = True
+    elif fault == 'target_duplicate': f.target['case_results'] *= 2
+    elif fault == 'target_missing_case': f.target['case_results'] = []
+    elif fault == 'target_failed_phase': f.target['case_results'][0]['teardown'] = 'failed'
+    elif fault == 'target_skipped':
+        f.target['case_results'][0].update(call='skipped', skip_reason='not executed')
+        f.target['skipped_cases'] = list(f.target['expected_case_ids'])
+        f.target['summary'].update(passed=0, skipped=1)
+    elif fault == 'target_boundary': f.target['external_boundary_attempts'] = ['external socket']
+    elif fault == 'target_source_changed': f.target['source_sha256'] = dict(f.target['source_sha256'], **{'config.yaml':'0'*64})
+    elif fault == 'target_scope_invented': f.target['declared_test_files'].append('test_omitted.py')
+    elif fault == 'target_summary_invented': f.target['summary']['passed'] += 1
+    elif fault == 'source_delta_omitted': f.release['source_delta'].pop('config.yaml')
+    elif fault == 'source_delta_before_changed': f.release['source_delta']['config.yaml']['before_sha256'] = '0'*64
+    elif fault == 'source_removed':
+        f.release['source_sha256'].pop('config.yaml'); f.release['source_count'] -= 1
+    elif fault == 'changed_test_omitted':
+        p = tmp_path/'test_current.py'; p.write_text('def different(): pass\n')
+        f.release['source_sha256'][p.name] = cold.sha(p)
+        f.release['source_delta'][p.name] = dict(before_sha256=f.baseline['source_sha256'][p.name], after_sha256=cold.sha(p))
+    elif fault == 'review_missing_imports': f.review['actual_import_inventory_verified'] = False
+    elif fault == 'review_wrong_target': f.review['actual_targeted_regression'] = 'foreign'
+    elif fault == 'review_missing_history': f.review['retained_baseline_cases_verified'] = False
+    elif fault == 'installed_bytes_changed': (tmp_path/'config.yaml').write_text('timeout: 9.0\n')
+    with pytest.raises(RuntimeError): cold.release_evidence(f.release)
+
+
+def manual_plan_fixture(tmp_path, monkeypatch):
+    f = contract_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(cold.shutil, 'disk_usage', lambda path:NS(free=f.disk.minimum))
+    f.release['generation'] = 'test_manual_restart'
+    release_ref = f.write_ref('manual_release.json', f.release)
+    for name in ('ENTRY', 'LAUNCH', 'REMOTE', 'SIM', 'DESKTOP', 'CLIENT', 'HAND_EYE'):
+        p = f.workspace/(name.lower()+'.input'); p.write_text('frozen input\n')
+        monkeypatch.setattr(cold, name, p)
+    for name in ('tools/grasp_attempt_boundary.py', 'tools/with_local_realsense_sdk.sh',
+                 'tools/experiment_storage.py', '.runtime/candidate_simulation/run_candidate.py'):
+        p = f.workspace/name; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('frozen entry\n')
+    cfg = dict(nodes={}, parameters={}, launch_source_sha256={})
+    monkeypatch.setattr(cold, 'configuration', lambda **kwargs:copy.deepcopy(cfg))
+    backend = f.write_ref('backend.json', dict(allowed_backends=['graspnet_baseline']))
+    args = NS(session=f.disk.out.parent/'new_manual', storage_backend='ssd',
+        release=Path(release_ref['path']), release_sha256=release_ref['sha256'],
+        request=Path(f.contract['instruction']['path']), request_sha256=f.contract['instruction']['sha256'],
+        backend_binding=Path(backend['path']), control=Path(f.contract['control']['path']))
+    return f, args
+
+
+def test_default_plan_and_start_skip_cold_checks_but_keep_real_contract_validation(tmp_path, monkeypatch):
+    f, args = manual_plan_fixture(tmp_path, monkeypatch)
+    def forbidden(*args, **kwargs):
+        pytest.fail('manual restart must not call cold scan or prestart remote health')
+    monkeypatch.setattr(cold, 'cold_scan', forbidden)
+    monkeypatch.setattr(cold, 'prestart_health', forbidden)
+    commands = []
+    monkeypatch.setattr(cold.subprocess, 'run', lambda command, **kwargs:
+        (commands.append(command) or NS(returncode=0, stdout='', stderr='')))
+    monkeypatch.setattr(cold, 'load', lambda path:NS(wait_ready=lambda **kw:None, service_snapshot=lambda:{'running':True}))
+    with patch.dict(cold.os.environ):
+        cold.plan(args)
+        contract_ref = cold.ref(args.session/'contract.json'); contract = json.loads(Path(contract_ref['path']).read_text())
+        assert contract['kind'] == 'manual_full_stack_restart'
+        assert contract['cold_check_executed'] is False and 'cold_boot_id' not in contract
+        assert contract['remote_health_check_stage'] == 'post_start_acceptance'
+        cold.start(contract, contract_ref)
+    startup = json.loads((args.session/'startup.json').read_text())
+    assert startup['dispatched'] is True and startup['manual_only'] is True
+    assert startup['cold_check_executed'] is False and startup['automatic_grasp_started'] is False
+    assert len(commands) == 2 and all('--property=Restart=no' in row for row in commands)
+    assert '--setenv=ROS_LOG_DIR='+str(args.session/'core_ros') in commands[1]
+    assert 'cold' not in startup and 'dispatch_remote_health' not in startup
+    f.binary.write_bytes(b'changed driver')
+    with pytest.raises(RuntimeError, match='driver binary'):
+        cold.validate_contract(contract)
+
+
+@pytest.mark.parametrize('fault', ['workflow_flag', 'health_stage', 'boot_changed', 'source_changed'])
+def test_new_manual_workflow_keeps_binding_checks_before_dispatch(tmp_path, monkeypatch, fault):
+    f, args = manual_plan_fixture(tmp_path, monkeypatch)
+    with patch.dict(cold.os.environ):
+        cold.plan(args)
+        ref = cold.ref(args.session/'contract.json'); contract = json.loads(Path(ref['path']).read_text())
+        if fault == 'workflow_flag': contract['cold_check_executed'] = True
+        elif fault == 'health_stage': contract['remote_health_check_stage'] = 'unverified'
+        elif fault == 'boot_changed': contract['boot_id'] = 'different-boot'
+        else: cold.ENTRY.write_text('changed entry')
+        monkeypatch.setattr(cold.subprocess, 'run', lambda *a, **kw:pytest.fail('invalid contract dispatched'))
+        with pytest.raises(RuntimeError): cold.start(contract, ref)
+
+
+@pytest.mark.parametrize('fault', [None, 'timeout', 'duration', 'manual_type'])
+def test_live_policy_records_and_checks_loaded_controller_timing(fault):
+    values = {key:False for key in cold.LIVE_STARTUP_POLICY_KEYS}
+    values['/robot/strict_execution_controller_sync_timeout_sec'] = 2.0
+    values['/robot/strict_execution_controller_sync_duration_sec'] = .30
+    config = dict(parameters=copy.deepcopy(values))
+    if fault in ('timeout', 'duration'):
+        values['/robot/strict_execution_controller_sync_'+fault+'_sec'] = 4.0
+    elif fault == 'manual_type': values['/gui/joint_direct_mode'] = 0
+    if fault is None:
+        observed = cold.live_startup_policy(config, values.__getitem__)
+        assert observed == values
+        assert observed['/robot/strict_execution_controller_sync_timeout_sec'] == 2.0
+    else:
+        with pytest.raises(RuntimeError, match='live startup policy differs'):
+            cold.live_startup_policy(config, values.__getitem__)

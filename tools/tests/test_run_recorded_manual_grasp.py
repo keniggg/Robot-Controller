@@ -558,6 +558,59 @@ def test_without_launcher_revision_original_contract_validation_remains_unchange
     assert calls==[(context.contract,{'manual_return':False})]
 
 
+def inherited_context_fixture(tmp_path, monkeypatch, state='active'):
+    from test_full_stack_start import storage_fixture
+    from test_physical_reference_startup import build_inherited_assets, CHECK
+    disk = storage_fixture(tmp_path, monkeypatch)
+    workspace = tmp_path/'workspace'; workspace.mkdir()
+    evidence = build_inherited_assets(workspace, monkeypatch)
+    stack = CHECK.native_module(evidence.assets)
+    monkeypatch.setattr(stack, 'select_storage', lambda *args, **kwargs:disk.selected)
+    monkeypatch.setattr(stack.shutil, 'disk_usage', lambda path:NS(free=disk.minimum))
+    config = dict(parameters={'unchanged':True})
+    monkeypatch.setattr(stack, 'configuration', lambda **kwargs:deepcopy(config))
+    control = dict(state=state, startup_manual_only=True, automatic_grasp_authorized_now=False)
+    contract = dict(schema=1, kind='manual_full_stack_restart', workspace_root=str(workspace),
+        output_root=str(disk.out), manual_only=True, automatic_grasp_authorized=False,
+        cold_check_executed=False, remote_health_check_stage='post_start_acceptance', boot_id='bound-test-boot',
+        storage=disk.selected.validate(disk.out), current_sha256={
+            str(workspace/CHECK.NATIVE_SOURCE):evidence.assets['source_sha256'][CHECK.NATIVE_SOURCE],
+            str(workspace/CHECK.ENTRY_SOURCE):evidence.assets['source_sha256'][CHECK.ENTRY_SOURCE]},
+        control=evidence.reference('control.json',control), control_snapshot=control,
+        instruction=evidence.reference('restart_request.json',dict(source='actual_user_message',
+            text='Restart manually, then wait for my alignment instruction.', full_restart_authorized=True,
+            new_scene_confirmation_claimed=False, automatic_grasp_authorized=False)),
+        release=evidence.assets['current_release'], verification=stack.release_evidence(evidence.release),
+        configuration=evidence.reference('configuration.json',config), pycache_prefix=str(disk.out/'unused'),
+        driver_build=evidence.release['driver_build'], driver_binary_sha256=evidence.build['binary_sha256'])
+    context = entry.Context.__new__(entry.Context)
+    context.revision = None; context.contract = contract; context.stack = stack
+    return NS(context=context, evidence=evidence, disk=disk, workspace=workspace)
+
+
+def test_ordinary_recorded_context_accepts_actual_inherited_release_without_launcher_overlay(tmp_path, monkeypatch):
+    f = inherited_context_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(entry, 'launcher_revision_sources', lambda *a, **kw:pytest.fail('unexpected historical overlay'))
+    out, _, release = f.context.validate_contract()
+    assert out == f.disk.out and release == f.evidence.release
+    assert release['kind'] == 'inherited_full_plus_targeted' and 'actual_regression' not in release
+    assert f.context.contract['verification']['current_full_regression_passed'] is False
+    # Native manual admission still cannot supply the separate post-alignment grant.
+    with pytest.raises(RuntimeError, match='post-alignment'):
+        entry.validate_instruction(entry.read_ref(f.context.contract['instruction']))
+
+
+@pytest.mark.parametrize('fault', ['source', 'configuration', 'evidence', 'paused_control'])
+def test_ordinary_inherited_context_keeps_source_evidence_and_active_authority_boundaries(tmp_path, monkeypatch, fault):
+    f = inherited_context_fixture(tmp_path, monkeypatch, state='paused' if fault == 'paused_control' else 'active')
+    if fault == 'source': (f.workspace/'src/control.cpp').write_bytes(b'changed compiled source')
+    elif fault == 'configuration': monkeypatch.setattr(f.context.stack, 'configuration', lambda **kw:{'parameters':{}})
+    elif fault == 'evidence': Path(f.evidence.release['actual_targeted_regression']['path']).write_text('{}')
+    with pytest.raises(RuntimeError): f.context.validate_contract()
+    if fault == 'paused_control':
+        assert f.context.validate_contract(manual_return=True)[0] == f.disk.out
+
+
 def test_paused_manual_startup_never_supplies_automatic_attempt_authority(tmp_path,monkeypatch):
     from test_full_stack_start import contract_fixture,cold
     fixture=contract_fixture(tmp_path,monkeypatch)

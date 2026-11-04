@@ -31,6 +31,7 @@ LAUNCH_SOURCE = '.runtime/start_full_latest_gen36_20261016.sh'
 LAUNCH_XML_SOURCE = '.runtime/full_latest_gen36_single_observation_20261016.launch'
 R26_PREVIOUS_ASSETS_SHA256 = '16274da520ccd9efc35feae8bd717e2318304a85e08c7c9ac62fcd581dd6fe82'
 R26_BASE_RELEASE_SHA256 = '71e79ddb69b169fea1506e263289e8d1de6858966e11c4fa80ed24886c7d7d52'
+INHERITED_TYPED_PARENT_SHA256 = '84c223af73021caf9a431cb11ac3d3f73e7059846c399933aadda23cfbedfc84'
 R26_TYPED_CHANGED_SOURCES = frozenset((
     'src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/physical_reference_client.py',
     'src/alicia_flexible_grasp_supervisor/src/alicia_flexible_grasp/robot/mapped_contact_execution.py',
@@ -244,6 +245,8 @@ def verify_r26_python_derivation(assets):
 
 
 def verify_derivation(assets):
+    if assets.get('schema') == 6:
+        return verify_inherited_release_derivation(assets)
     if assets.get('schema') == 5:
         return verify_r26_python_derivation(assets)
     require(assets.get('schema') == 3
@@ -279,6 +282,68 @@ def verify_derivation(assets):
                 for name, digest in current_sources.items()), 'typed sources differ from current regression')
     require(regression['source_sha256'].get(LAUNCH_SOURCE) == current_artifacts[str(W/LAUNCH_SOURCE)],
             'typed launch differs from current regression')
+
+
+def verify_inherited_release_derivation(assets):
+    """Retain typed hardware semantics while admitting reviewed verifier changes."""
+    require(assets.get('kind') == 'immutable_physical_reference_startup_identity'
+            and assets.get('revision') == 'inherited_manual_restart_verifiers_v1'
+            and 'actual_regression' not in assets,
+            'inherited typed assets must not invent a current full regression')
+    require(all(assets.get(key) is False for key in ('runtime_loaded', 'physical_grasp_verified',
+                                                   'automatic_execution_authorized')),
+            'inherited offline assets cannot claim runtime/physical/automatic acceptance')
+    derivation = assets['inherited_release_derivation']
+    require(derivation['previous_assets']['sha256'] == INHERITED_TYPED_PARENT_SHA256,
+            'inherited reviewed typed parent differs')
+    previous = pinned(derivation['previous_assets'])
+    require(previous.get('schema') == 5
+            and previous.get('kind') == 'immutable_physical_reference_startup_identity'
+            and previous.get('revision') == 'r26_physical_source_admission_python_v1',
+            'inherited typed parent must be the prior reviewed Python identity')
+    for key in ('expected_nodes', 'topics', 'type_md5', 'required_parameters', 'memory_attestation',
+                'formal_build', 'checklist', 'baseline_assets', 'baseline_launch', 'post_build_source_updates'):
+        require(assets[key] == previous[key], 'inherited typed runtime/build contract changed: '+key)
+    require(assets['baseline_assets']['sha256'] == BASELINE_ASSETS_SHA256,
+            'inherited original typed baseline differs')
+    verify_storage_launch_derivation(assets, pinned(assets['baseline_assets']))
+    release = pinned(assets['current_release'])
+    require(release.get('kind') == 'inherited_full_plus_targeted' and 'actual_regression' not in release
+            and derivation.get('baseline_full_regression') == release['baseline_full_regression'],
+            'typed assets are not bound to the actual inherited release')
+    baseline = pinned(release['baseline_full_regression'])
+    before, after = previous['source_sha256'], assets['source_sha256']
+    require(set(before) == set(after)
+            and all(baseline['source_sha256'].get(p) == h for p, h in before.items()),
+            'prior typed sources differ from the recorded full baseline')
+    delta = r26_source_delta(before, after)
+    require(set(delta) == {NATIVE_SOURCE, ENTRY_SOURCE}
+            and derivation.get('typed_source_delta') == delta
+            and all(release['source_sha256'].get(p) == h for p, h in after.items()),
+            'typed source delta is not exactly the reviewed native/typed verifiers')
+    old_artifacts, artifacts = previous['current_sha256'], assets['current_sha256']
+    artifact_delta = r26_source_delta(old_artifacts, artifacts)
+    native_path = str(W/NATIVE_SOURCE)
+    require(set(old_artifacts) == set(artifacts) and set(artifact_delta) == {native_path}
+            and derivation.get('artifact_delta') == artifact_delta
+            and old_artifacts[native_path] == before[NATIVE_SOURCE]
+            and artifacts[native_path] == after[NATIVE_SOURCE],
+            'inherited typed compiled/generated/model/launch artifacts changed')
+    native = native_module(assets)
+    native.release_evidence(release)
+    selected, build = native.driver_build_evidence(release)
+    require(selected == assets['formal_build'] and build.get('formal_release_build') is True,
+            'inherited release must select the unchanged formal build')
+
+
+def verify_accepted_release_binding(assets, contract, release):
+    if assets.get('schema') == 6:
+        require(assets['current_release'] == contract['release']
+                and pinned(assets['current_release']) == release,
+                'typed identity is not bound to the accepted inherited release')
+    else:
+        require(release.get('actual_regression') == assets['actual_regression'],
+                'typed identity is not bound to the accepted current regression')
 
 
 def verify_assets(assets):
@@ -596,8 +661,7 @@ def main():
         require(pinned(prior_ref) == prior and pinned(contract_ref) == contract, 'startup evidence changed')
         validated_session, config, release = native.validate_contract(contract)
         require(validated_session == session, 'native session binding differs')
-        require(release.get('actual_regression') == assets['actual_regression'],
-                'typed identity is not bound to the accepted current regression')
+        verify_accepted_release_binding(assets, contract, release)
         require(release.get('driver_build') == assets['formal_build'], 'release does not select corrected r22 formal build')
         require(all(release['source_sha256'].get(p) == h for p, h in assets['source_sha256'].items()), 'r22 sources not bound to current full release')
         storage.validate(destination, subtree=storage.ros_log_root, expected=storage_binding)

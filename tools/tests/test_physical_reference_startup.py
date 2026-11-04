@@ -482,3 +482,157 @@ def test_r26_cannot_bypass_original_native_evidence_failure(python_derivation,ph
     elif phase=='build':v.native.driver_build_evidence=reject
     else:v.native.driver_build_evidence=lambda value:({'different':True},v.build)
     with pytest.raises(RuntimeError):CHECK.verify_derivation(v.assets)
+
+
+def build_inherited_assets(tmp_path, monkeypatch):
+    """Synthetic receipts exercise the actual new native release validator."""
+    from test_full_stack_start import cold
+    monkeypatch.setattr(CHECK, 'W', tmp_path)
+    def put(name, raw):
+        path = tmp_path/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
+        return path
+    def reference(name, value):
+        path = put('evidence/'+name, (json.dumps(value, sort_keys=True)+'\n').encode())
+        return CHECK.ref(path)
+    digest = lambda value:hashlib.sha256(value).hexdigest()
+    files = {CHECK.NATIVE_SOURCE:(ROOT/'full_stack_start.py').read_bytes(), CHECK.ENTRY_SOURCE:ENTRY.read_bytes(),
+             CHECK.STORAGE_SOURCE:(ROOT/'experiment_storage.py').read_bytes(),
+             CHECK.LAUNCH_XML_SOURCE:LAUNCH_AFTER, CHECK.LAUNCH_SOURCE:b'unchanged launch entry\n',
+             'src/control.cpp':b'unchanged compiled source\n', 'tests/test_old.py':b'def test_old(): pass\n',
+             'tests/test_inherited.py':b'def test_current(): pass\n'}
+    for name, raw in files.items(): put(name, raw)
+    before = {p:digest(raw) for p, raw in files.items() if p != 'tests/test_inherited.py'}
+    before[CHECK.NATIVE_SOURCE] = digest(b'prior native verifier\n')
+    before[CHECK.ENTRY_SOURCE] = digest(b'prior typed verifier\n')
+    after = {p:digest(raw) for p, raw in files.items()}
+    def regression(sources, target=False):
+        path = 'tests/test_inherited.py' if target else 'tests/test_old.py'
+        case = dict(nodeid=path+'::test_case', setup='passed', call='passed', teardown='passed')
+        if not target: case.update(setup='skipped', call=None, skip_reason='historical external fixture absent')
+        return dict(schema=1, passed=True, source_unchanged=True, source_sha256=sources,
+            changed_sources=[], external_boundary_attempts=[], bad_files=[], duplicate_cases=[], collection_skips=[],
+            complete_scope_requested=not target, offline_scope_complete=not target, full_regression_passed=False,
+            test_files=[path], declared_test_files=['tests/test_old.py', path] if target else [path],
+            expected_case_ids=[case['nodeid']], case_results=[case], skipped_cases=[] if target else [case['nodeid']],
+            summary=dict(tests=1, passed=int(target), skipped=int(not target), failed=0, collection_skipped_files=0),
+            excluded_files=[], test_roots=['.'], explicit_test_files=[], scope_name='synthetic recorded scope')
+    baseline, target = regression(before), regression(after, True)
+    baseline_ref = reference('full.json', baseline); target_ref = reference('targeted.json', target)
+    binary = put('devel/lib/alicia_d_driver/alicia_d_driver_node', b'unchanged compiled binary\n')
+    build = dict(returncode=0, formal_release_build=True,
+                 source_sha256={'src/control.cpp':after['src/control.cpp']}, binary_sha256=CHECK.sha(binary))
+    build_ref = reference('build.json', build)
+    release = dict(schema=1, kind='inherited_full_plus_targeted', generation='synthetic-manual-restart',
+        passed=True, reviewed=True, installed=True, source_count=len(after), source_sha256=after,
+        full_regression_passed=False, baseline_full_regression=baseline_ref, actual_targeted_regression=target_ref,
+        source_delta=CHECK.r26_source_delta(before, after), targeted_test_files=target['test_files'], driver_build=build_ref)
+    review = {key:copy.deepcopy(release[key]) for key in ('baseline_full_regression', 'actual_targeted_regression',
+                                                        'source_delta', 'targeted_test_files')}
+    review.update(passed=True, actual_import_inventory_verified=True,
+                  retained_baseline_cases_verified=True, original_skips_preserved=True)
+    release['evidence_review'] = reference('review.json', review)
+    original = dict(source_sha256={CHECK.LAUNCH_XML_SOURCE:digest(LAUNCH_BEFORE)},
+                    current_sha256={str(tmp_path/CHECK.LAUNCH_XML_SOURCE):digest(LAUNCH_BEFORE)})
+    original_ref = reference('original_assets.json', original)
+    monkeypatch.setattr(CHECK, 'BASELINE_ASSETS_SHA256', original_ref['sha256'])
+    launch_before = put('evidence/original.launch', LAUNCH_BEFORE)
+    typed_names = (CHECK.NATIVE_SOURCE, CHECK.ENTRY_SOURCE, CHECK.STORAGE_SOURCE, CHECK.LAUNCH_XML_SOURCE, 'src/control.cpp')
+    previous = dict(schema=5, kind='immutable_physical_reference_startup_identity',
+        revision='r26_physical_source_admission_python_v1', source_sha256={p:before[p] for p in typed_names},
+        current_sha256={str(tmp_path/p):before[p] for p in (CHECK.NATIVE_SOURCE, CHECK.LAUNCH_SOURCE, CHECK.LAUNCH_XML_SOURCE)},
+        expected_nodes=dict(driver='/alicia_d_driver_node', hardware='/bessica_d_hw_interface'),
+        topics={'state':dict(type='TypedState', publisher='/alicia_d_driver_node')},
+        type_md5={'TypedState':'unchanged-md5'}, required_parameters={'mapping':True}, memory_attestation=False,
+        formal_build=build_ref, checklist=reference('checklist.json', {}), baseline_assets=original_ref,
+        baseline_launch=CHECK.ref(launch_before), post_build_source_updates=[])
+    previous['current_sha256'][str(binary)] = CHECK.sha(binary)
+    previous_ref = reference('previous_assets.json', previous)
+    monkeypatch.setattr(CHECK, 'INHERITED_TYPED_PARENT_SHA256', previous_ref['sha256'])
+    assets = copy.deepcopy(previous)
+    assets.update(schema=6, revision='inherited_manual_restart_verifiers_v1', runtime_loaded=False,
+        physical_grasp_verified=False, automatic_execution_authorized=False,
+        source_sha256={p:after[p] for p in typed_names}, current_release=reference('release.json', release))
+    assets['current_sha256'][str(tmp_path/CHECK.NATIVE_SOURCE)] = after[CHECK.NATIVE_SOURCE]
+    assets['inherited_release_derivation'] = dict(previous_assets=previous_ref, baseline_full_regression=baseline_ref,
+        typed_source_delta=CHECK.r26_source_delta(previous['source_sha256'], assets['source_sha256']),
+        artifact_delta=CHECK.r26_source_delta(previous['current_sha256'], assets['current_sha256']))
+    return NS(assets=assets, previous=previous, baseline=baseline, target=target, release=release,
+              review=review, build=build, binary=binary, reference=reference)
+
+
+@pytest.fixture
+def inherited_assets(tmp_path, monkeypatch):
+    return build_inherited_assets(tmp_path, monkeypatch)
+
+
+def test_inherited_assets_use_actual_native_release_build_and_source_checks(inherited_assets):
+    f = inherited_assets
+    previous_path = Path(f.assets['inherited_release_derivation']['previous_assets']['path'])
+    previous_bytes = previous_path.read_bytes()
+    CHECK.verify_assets(f.assets)
+    stack = CHECK.native_module(f.assets)
+    evidence = stack.release_evidence(f.release)
+    assert evidence['current_full_regression_passed'] is False
+    assert evidence['baseline']['summary']['skipped'] == 1 and evidence['targeted_summary']['passed'] == 1
+    assert 'actual_regression' not in f.assets and 'actual_regression' not in f.release
+    assert previous_path.read_bytes() == previous_bytes
+    CHECK.verify_accepted_release_binding(f.assets, {'release':f.assets['current_release']}, f.release)
+
+
+@pytest.mark.parametrize('fault', ['full_alias', 'revision', 'runtime_claim', 'physical_claim', 'automatic_claim',
+    'node', 'topic', 'md5', 'parameter', 'memory', 'build_ref', 'checklist', 'baseline', 'launch',
+    'typed_inventory', 'other_typed_source', 'typed_delta', 'artifact_delta', 'compiled_artifact',
+    'old_native_artifact', 'parent_source_not_in_full', 'wrong_full_reference', 'current_source_unbound',
+    'native_bytes', 'typed_bytes', 'release_bytes', 'target_bytes', 'review_bytes', 'old_assets_bytes',
+    'parent_hash', 'coordinated_parent_parameters', 'coordinated_parent_topics', 'coordinated_parent_types'])
+def test_inherited_typed_assets_keep_hardware_semantics_and_evidence_binding(inherited_assets, fault):
+    f = inherited_assets; a = f.assets; d = a['inherited_release_derivation']
+    if fault == 'full_alias': a['actual_regression'] = f.release['baseline_full_regression']
+    elif fault == 'revision': a['revision'] = 'unreviewed'
+    elif fault == 'runtime_claim': a['runtime_loaded'] = True
+    elif fault == 'physical_claim': a['physical_grasp_verified'] = True
+    elif fault == 'automatic_claim': a['automatic_execution_authorized'] = True
+    elif fault == 'node': a['expected_nodes']['driver'] = '/foreign'
+    elif fault == 'topic': a['topics']['state']['publisher'] = '/foreign'
+    elif fault == 'md5': a['type_md5']['TypedState'] = 'changed'
+    elif fault == 'parameter': a['required_parameters']['mapping'] = False
+    elif fault == 'memory': a['memory_attestation'] = True
+    elif fault == 'build_ref': a['formal_build']['sha256'] = '0'*64
+    elif fault == 'checklist': a['checklist']['sha256'] = '0'*64
+    elif fault == 'baseline': a['baseline_assets']['sha256'] = '0'*64
+    elif fault == 'launch': a['baseline_launch']['sha256'] = '0'*64
+    elif fault == 'typed_inventory': a['source_sha256']['extra.py'] = '0'*64
+    elif fault == 'other_typed_source': a['source_sha256']['src/control.cpp'] = '0'*64
+    elif fault == 'typed_delta': d['typed_source_delta'] = {}
+    elif fault == 'artifact_delta': d['artifact_delta'] = {}
+    elif fault == 'compiled_artifact': a['current_sha256'][str(f.binary)] = '0'*64
+    elif fault == 'old_native_artifact': a['current_sha256'][str(CHECK.W/CHECK.NATIVE_SOURCE)] = f.previous['source_sha256'][CHECK.NATIVE_SOURCE]
+    elif fault == 'parent_source_not_in_full':
+        f.previous['source_sha256'][CHECK.ENTRY_SOURCE] = '0'*64
+        d['previous_assets'] = f.reference('changed_parent.json', f.previous)
+    elif fault == 'wrong_full_reference': d['baseline_full_regression'] = f.release['actual_targeted_regression']
+    elif fault == 'current_source_unbound': a['source_sha256'][CHECK.ENTRY_SOURCE] = '0'*64
+    elif fault == 'parent_hash': d['previous_assets']['sha256'] = '0'*64
+    elif fault.startswith('coordinated_parent_'):
+        key = {'parameters':'required_parameters', 'topics':'topics', 'types':'type_md5'}[fault.rsplit('_', 1)[1]]
+        f.previous[key] = {'changed':'same unreviewed replacement'}
+        a[key] = copy.deepcopy(f.previous[key])
+        d['previous_assets'] = f.reference('unreviewed_parent.json', f.previous)
+    elif fault in ('native_bytes', 'typed_bytes'):
+        (CHECK.W/(CHECK.NATIVE_SOURCE if fault == 'native_bytes' else CHECK.ENTRY_SOURCE)).write_bytes(b'changed source')
+    else:
+        reference = {'release_bytes':a['current_release'], 'target_bytes':f.release['actual_targeted_regression'],
+                     'review_bytes':f.release['evidence_review'], 'old_assets_bytes':d['previous_assets']}[fault]
+        Path(reference['path']).write_text('{}')
+    with pytest.raises(RuntimeError): CHECK.verify_assets(a)
+
+
+@pytest.mark.parametrize('fault', ['contract_reference', 'release_value', 'old_assets'])
+def test_typed_main_binds_same_accepted_release_without_fabricating_actual_regression(inherited_assets, fault):
+    f = inherited_assets; contract = dict(release=f.assets['current_release']); release = copy.deepcopy(f.release)
+    if fault == 'contract_reference': contract['release'] = f.release['baseline_full_regression']
+    elif fault == 'release_value': release['generation'] = 'foreign'
+    else:
+        with pytest.raises(RuntimeError, match='native verifier changed'): CHECK.native_module(f.previous)
+        return
+    with pytest.raises(RuntimeError): CHECK.verify_accepted_release_binding(f.assets, contract, release)
